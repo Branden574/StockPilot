@@ -44,16 +44,27 @@
  * outbox (sync.ts). Marked, not deleted: offline nothing is pulled, and a delete would
  * take this account's own count, opened before its first pull, with it.
  *
- * ONLY A PHOTO CLEAR THAT WORKED IS RECORDED (B18 review of 43256f0da). The
- * clear is best-effort (expo-image answers false, or rejects), and recording
- * the account after one that failed meant every later pull kept, and the
- * photos were never cleared. So the reset and the adopt record the account
- * only when the clear says it worked (photo-cache-wipe.ts); otherwise the
- * record is left absent, and the next pull adopts and clears again. The reset
- * forgets the record rather than keeping the previous account's: kept, every
- * later pull would reset again, wiping what this account cached since and
- * pulling in full each time; absent, the next pull adopts, which retries the
- * photo clear without wiping the rows.
+ * A PHOTO CLEAR THAT FAILED IS STILL OWED, AND RECORDED AS SUCH (B18 reviews
+ * of 43256f0da and 254fb9c72). The clear is best-effort (expo-image answers
+ * false, or rejects; photo-cache-wipe.ts says which). Recording the account
+ * after one that failed, as if it had worked, meant every later pull kept,
+ * and the photos were never cleared. Leaving the record absent instead, so
+ * that the next pull adopted and cleared again, was worse: by then the
+ * cache held this account's freshly pulled rows, and "no record" is the
+ * adopt's answer for ANY account. After this account's session ended without
+ * a wipe, the next account's pull adopted those rows instead of resetting
+ * them, and an adopt only marks rows: offline nothing is pulled, so that
+ * account read this one's items (on hand, unit cost), purchase orders and
+ * counts until a full pull of its own landed. And while the clear kept
+ * failing, every tick adopted again, forgetting this account's own cursor
+ * and persisted values and pulling in full.
+ * So the reset and the adopt record the account whatever the clear did, and
+ * a clear that failed is recorded beside it (`cache_photos_pending`, in the
+ * same write, db.ts setCacheOwner). Any other account still finds another
+ * owner recorded and resets, which wipes the rows at once, offline too, and
+ * clears the photos. This account's own pulls find the clear owed and clear
+ * the photos again, and do nothing else, until a clear works ('clear-photos'
+ * below; db.ts markPhotosCleared then forgets it).
  *
  * A WIPE THAT KEEPS THE PHOTOS KEEPS THE RECORD. A workspace switch, the
  * workspace repair and Settings > Offline cache > Clear (db.ts deleteOrgData)
@@ -75,26 +86,28 @@
  * who switch most. Their photos are still their own.
  *
  * The record changes in four places only:
- *   - the reset below records the new account once the previous one's photos,
- *     photo links and rows are gone, before its pull is sent, so a pull that
- *     then fails does not reset again at every tick and wipe what the new
- *     account has cached since (a count opened to work on offline); and when
- *     the photo clear failed it forgets the record instead;
- *   - a pull that finds no record records its account once the photos and
- *     photo links are gone, before its pull is sent, so the next account's
- *     pull resets what this one left even if none of its pulls lands, and a
- *     later tick does not clear its photos again; and when the photo clear
- *     failed it records nobody;
+ *   - the reset below records the new account once the previous one's rows
+ *     are gone and its photo clear has answered, before its pull is sent, so
+ *     a pull that then fails does not reset again at every tick and wipe what
+ *     the new account has cached since (a count opened to work on offline);
+ *     with the clear owed when it failed;
+ *   - a pull that finds no record records its account once the photo clear
+ *     has answered, before its pull is sent, so the next account's pull
+ *     resets what this one left even if none of its pulls lands, and a later
+ *     tick does not clear its photos again; with the clear owed when it
+ *     failed;
  *   - a pull that landed records the account it pulled for (sync.ts), which
- *     the two above have already recorded, and never after a photo clear of
- *     its own that failed;
- *   - a sign-out and an eviction forget it, in the SQLite wipe that runs after
- *     the photo wipe (photo-cache-wipe.ts): an app closed while the photos
- *     were being cleared still names the account, and the next one clears
- *     them again. They forget it whatever the photo clear did: with no record,
- *     the next account's pull clears the photos again.
- * The first two record the account only after the photos are gone, so an app
- * closed during the clear clears them again at its next pull.
+ *     the two above have already recorded;
+ *   - a sign-out and an eviction forget it, and any clear owed with it, in the
+ *     SQLite wipe that runs after the photo wipe (photo-cache-wipe.ts): an app
+ *     closed while the photos were being cleared still names the account, and
+ *     the next one clears them again. They forget it whatever the photo clear
+ *     did: with no record, the next account's pull clears the photos again.
+ * The first two write the record only after the clear has answered, so an app
+ * closed during the clear clears them again at its next pull. A clear owed is
+ * forgotten only by those two exits, by a reset or an adopt whose own clear
+ * worked, and by this account's own retry once it works, so an app closed
+ * during the retry tries again too.
  */
 
 /**
@@ -113,25 +126,41 @@ export const UNCONFIRMED_ROW_STAMP = 0;
  *  photos first (a sign-out, an eviction) forget it (db.ts). */
 export const CACHE_USER_META_KEY = 'cache_user_id';
 
+/** Written with the owner record when the photo clear at a reset or an adopt
+ *  failed (its value: the account recorded with it), and deleted when a later
+ *  clear works (db.ts setCacheOwner, markPhotosCleared). Any value at all
+ *  means a clear is owed: one an older release left beside another owner is
+ *  cleared off too, rather than trusted. */
+export const PHOTOS_PENDING_META_KEY = 'cache_photos_pending';
+
 export type CacheOwnerAction =
   /** Nobody signed in, or the cache is this account's: nothing to do. */
   | 'keep'
+  /** The cache is this account's, but the photo clear at its reset or its
+   *  adopt failed, so earlier accounts' photos may still be on the device.
+   *  The photos and photo links are cleared again, and nothing else: no row
+   *  is marked or wiped, no value forgotten, no reader refreshed and no full
+   *  pull forced. Until a clear works, at every pull, offline too. */
+  | 'clear-photos'
   /** No owner recorded: a fresh install, a cache a sign-out or an eviction
    *  emptied after clearing its photos, or one an older release left with
    *  anyone's photos and rows. The photos and photo links are cleared, the
    *  cursor and the persisted values forgotten, the rows marked unconfirmed,
-   *  and this account recorded if the photo clear worked, before its pull is
-   *  sent in full. */
+   *  and this account recorded (with the clear owed if it failed), before its
+   *  pull is sent in full. */
   | 'adopt'
-  /** Another account's cache: clear it and its photos, record this account,
-   *  and pull this account's in full. */
+  /** Another account's cache: clear it and its photos, record this account
+   *  (with the clear owed if it failed), and pull this account's in full. */
   | 'reset';
 
 export function cacheOwnerAction(
   storedOwner: string | null,
   liveUserId: string | null,
+  /** A photo clear is owed (PHOTOS_PENDING_META_KEY is set). */
+  photoClearOwed = false,
 ): CacheOwnerAction {
   if (!liveUserId) return 'keep';
   if (!storedOwner) return 'adopt';
-  return storedOwner === liveUserId ? 'keep' : 'reset';
+  if (storedOwner !== liveUserId) return 'reset';
+  return photoClearOwed ? 'clear-photos' : 'keep';
 }

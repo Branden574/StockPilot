@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { CACHE_USER_META_KEY } from './cache-owner';
+import { CACHE_USER_META_KEY, PHOTOS_PENDING_META_KEY } from './cache-owner';
 import { ENABLED_MODULES_META_KEY } from './enabled-modules';
 import { EFFECTIVE_PERMISSIONS_META_KEY } from './use-effective-permissions';
 import { WAREHOUSE_SCOPE_META_KEY } from './warehouse-scope';
@@ -45,9 +45,14 @@ vi.mock('./api', () => ({ api: vi.fn() }));
  * workspace repair, Settings > Offline cache > Clear) keeps the account and
  * its photos, so it keeps the record too. Only the wipes of an account leaving
  * the device, whose callers clear the photos first, forget it (wipeForSignOut,
- * wipeForEviction), and the reset for another account whose photo clear failed
- * (setCacheOwner(null), sync.ts). Pinned in (3) below; executed end to end in
+ * wipeForEviction). Pinned in (3) below; executed end to end in
  * cache-owner.sqlite.test.ts.
+ *
+ * NOR THE RECORD OF A PHOTO CLEAR STILL OWED (`cache_photos_pending`, B18
+ * review of 254fb9c72): written with the owner by setCacheOwner when the
+ * reset's or the adopt's photo clear failed, and deleted by markPhotosCleared
+ * once a later clear works. The same wipes forget it with the owner, and
+ * nothing else touches it. Pinned in (5).
  *
  * AND THE ADOPT FORGETS THE SAME KEYS (B18 review of 43256f0da). A pull that
  * finds no record forgets the cursor and every persisted org-scoped value too
@@ -151,18 +156,20 @@ describe('(3) the record of whose cache it is outlives a wipe that keeps the pho
     );
   });
 
-  it('only the sign-out and the eviction wipes forget it, inside their own transaction, and setCacheOwner(null)', () => {
+  // Mutation caught: a failed photo clear forgetting the record again
+  // (setCacheOwner(null), as at 254fb9c72): the next account then adopted the
+  // live account's rows instead of resetting them.
+  it('only the sign-out and the eviction wipes forget it, inside their own transaction', () => {
     expect(fnBody('export async function wipeForSignOut(')).toContain(
       'await forgetCacheOwner(db);',
     );
     expect(fnBody('export async function wipeForEviction(')).toContain(
       'await forgetCacheOwner(db);',
     );
-    // The reset whose photo clear failed (sync.ts): neither account's.
-    expect(fnBody('export async function setCacheOwner(')).toMatch(
-      /if \(userId === null\) await forgetCacheOwner\(db\);/,
+    expect([...code(dbSrc).matchAll(/forgetCacheOwner\(db\)/g)]).toHaveLength(2);
+    expect(fnBody('export async function setCacheOwner(')).not.toMatch(
+      /forgetCacheOwner|null|delete from meta where key = \?', \[CACHE_USER_META_KEY\]/,
     );
-    expect([...code(dbSrc).matchAll(/forgetCacheOwner\(db\)/g)]).toHaveLength(3);
   });
 
   it('forgetCacheOwner and setCacheOwner use the constant sync.ts reads and stamps', () => {
@@ -173,7 +180,7 @@ describe('(3) the record of whose cache it is outlives a wipe that keeps the pho
       /\[\s*CACHE_USER_META_KEY,\s*userId,?\s*\]/,
     );
     expect(code(syncSrc)).toContain('await setMeta(CACHE_USER_META_KEY, liveUserId)');
-    expect(code(syncSrc)).toContain('await setCacheOwner(liveUserId);');
+    expect(code(syncSrc)).toContain('await setCacheOwner(liveUserId, photosCleared);');
   });
 
   // Mutation caught: any other module writing or deleting the record, which
@@ -217,6 +224,62 @@ describe('(4) the adopt forgets the same org-scoped keys, and never the record',
       expect(body).toContain(`update ${table} set last_synced_at = \${UNCONFIRMED_ROW_STAMP};`);
     }
     expect(body).not.toMatch(/delete from (?!meta\b)/);
+  });
+});
+
+describe('(5) the record of a photo clear still owed goes with the owner record, and nowhere else', () => {
+  // Mutation caught: the owner recorded without the clear owed, or the two
+  // written apart (an app closed between them would leave one).
+  it('setCacheOwner writes it with the owner, in one queued write: set when the clear failed, deleted when it worked', () => {
+    const body = fnBody('export async function setCacheOwner(');
+    expect(body).toContain('await queuedWrite(async (db) => {');
+    expect(body).toMatch(
+      /if \(photosCleared\)\s*\{?\s*await db\.runAsync\('delete from meta where key = \?', \[PHOTOS_PENDING_META_KEY\]\);/,
+    );
+    expect(body).toMatch(/\[\s*PHOTOS_PENDING_META_KEY,\s*userId,?\s*\]/);
+    expect(body.match(/queuedWrite\(/g)).toHaveLength(1);
+  });
+
+  it('markPhotosCleared deletes it alone, in a queued write', () => {
+    const body = fnBody('export async function markPhotosCleared(');
+    expect(body).toContain('queuedWrite(');
+    expect(body).toContain("'delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]");
+    expect(body).not.toContain('CACHE_USER_META_KEY');
+  });
+
+  // Mutation caught: a sign-out or an eviction that forgets the owner and
+  // keeps the clear owed, or the reverse.
+  it('the sign-out and the eviction forget it with the owner; the same-account wipe and the adopt keep it', () => {
+    expect(fnBody('async function forgetCacheOwner(')).toContain(
+      "'delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]",
+    );
+    expect(clearBody(dbSrc)).not.toMatch(/cache_photos_pending|PHOTOS_PENDING_META_KEY/);
+    expect(fnBody('export async function markCacheUnconfirmed(')).not.toMatch(
+      /cache_photos_pending|PHOTOS_PENDING_META_KEY/,
+    );
+    expect(fnBody('export async function deleteOrgData(')).not.toMatch(
+      /cache_photos_pending|PHOTOS_PENDING_META_KEY/,
+    );
+    expect(PHOTOS_PENDING_META_KEY).toBe('cache_photos_pending');
+  });
+
+  it('no other phone source reads, writes or deletes it', () => {
+    const root = path.resolve(__dirname, '../..');
+    const sources = (dir: string): string[] =>
+      readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
+        const rel = path.join(dir, e.name);
+        if (e.isDirectory())
+          return e.name === 'node_modules' || e.name === '__fixtures__' ? [] : sources(rel);
+        return /\.(ts|tsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [rel] : [];
+      });
+    const touching = [...sources('src'), ...sources('app')].filter((f) =>
+      /cache_photos_pending|PHOTOS_PENDING_META_KEY/.test(
+        code(readFileSync(path.join(root, f), 'utf8')),
+      ),
+    );
+    expect(touching.sort()).toEqual(
+      ['src/lib/cache-owner.ts', 'src/lib/db.ts', 'src/lib/sync.ts'].map((f) => path.normalize(f)),
+    );
   });
 });
 

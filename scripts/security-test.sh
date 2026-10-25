@@ -1318,13 +1318,16 @@ MOBILE_TESTS=(
   # outlives the wipes that keep the photos (a workspace switch, the
   # workspace repair, Clear offline cache), is forgotten only after the
   # photos are gone, and names the new account once a reset has cleared the
-  # old one, never after a photo clear that failed. A pull that finds no
-  # record clears the photos and trusts none of the rows: its full pull keeps
-  # only what it returns and the counts with this account's unsent work. The
-  # count screen stores a count only for the cache, the account and the
-  # workspace it fetched it for. A stored file's one-hour link (proof of
-  # delivery, purchase order files) is signed again at the tap once it is
-  # about to expire, never opened stale.
+  # old one. A photo clear that failed is recorded beside it as still owed:
+  # that account's own pulls clear the photos again, and do nothing else,
+  # while any other account still resets. A pull that finds no record clears
+  # the photos and trusts none of the rows: its full pull keeps only what it
+  # returns and the counts with this account's unsent work. The count screen
+  # stores a count only for the cache, the account and the workspace it
+  # fetched it for, and fetches it once more when one of them changed while
+  # it was loading. A stored file's one-hour link (proof of delivery,
+  # purchase order files) is signed again at the tap once it is about to
+  # expire, never opened stale.
   src/lib/photo-cache-wipe.test.ts
   src/lib/cache-owner.sqlite.test.ts
   src/lib/db-clear-keys.wiring.test.ts

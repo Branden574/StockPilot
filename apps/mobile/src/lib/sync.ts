@@ -18,13 +18,19 @@ import {
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
   UNCONFIRMED_LINES_RELEASE_SQL,
 } from './cycle-count-snapshot-sql';
-import { CACHE_USER_META_KEY, cacheOwnerAction, UNCONFIRMED_ROW_STAMP } from './cache-owner';
+import {
+  CACHE_USER_META_KEY,
+  cacheOwnerAction,
+  PHOTOS_PENDING_META_KEY,
+  UNCONFIRMED_ROW_STAMP,
+} from './cache-owner';
 import {
   currentCacheGeneration,
   deleteOrgData,
   getDb,
   getMeta,
   markCacheUnconfirmed,
+  markPhotosCleared,
   setCacheOwner,
   setMeta,
   withDbTransaction,
@@ -249,8 +255,9 @@ export const STALE_BUNDLES_SWEEP_SQL = `delete from bundles where last_synced_at
  *     still has an unsent entry for them in the outbox: its own work, and
  *     what the count screen shows of it (the drain sends from the queued row
  *     alone). Before the upserts, an edit on a marked count that is not this
- *     account's is released, so the server's value replaces it
- *     (cycle-count-snapshot-sql.ts UNCONFIRMED_LINES_RELEASE_SQL);
+ *     account's is released, its number with it, so the server's value
+ *     replaces it, and a kept count the pull does not return shows that line
+ *     as not counted (cycle-count-snapshot-sql.ts UNCONFIRMED_LINES_RELEASE_SQL);
  *   - kits and their components: those not in the org's complete active list
  *     when the answer carries one, else those it did not return, below a
  *     page of 1000. Marked ones it did not return now go at any size: a kit
@@ -345,37 +352,35 @@ export async function pullSnapshot(
   // delta-pulled from their cursor.
   const { userId: liveUserId } = await liveOutboxScope();
   const ownerAction = liveUserId
-    ? cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId)
+    ? cacheOwnerAction(
+        await getMeta(CACHE_USER_META_KEY),
+        liveUserId,
+        (await getMeta(PHOTOS_PENDING_META_KEY)) !== null,
+      )
     : 'keep';
-  // Whether this pull may record its account as the cache's owner: false once
-  // a photo clear of its own failed (the reset and the adopt below), so that
-  // neither the record before the request nor the stamp of a pull that lands
-  // names an account whose photo clear did not work (cache-owner.ts).
-  let photosCleared = true;
   if (liveUserId && ownerAction === 'reset') {
     // The previous account's photos go with its rows (photo-cache-wipe.ts):
     // the ways a session ends without a wipe all reach this pull.
-    photosCleared = await wipeWithPhotoCaches(deleteOrgData);
-    // Nothing of the previous account is left now, so the emptied cache is
-    // this account's, recorded before the pull is sent (cache-owner.ts).
-    // deleteOrgData keeps the record (a same-account wipe keeps the photos,
-    // so it keeps the record of whose they are), and left alone it would
-    // still name the previous account after a pull that fails here (offline,
-    // a timeout): every later tick would reset again, before its network
-    // check, and wipe what this account has cached since, such as a count it
-    // opened to work on offline. A wipe that threw never reaches this line:
-    // the previous account stays recorded and the next pull resets again.
+    const photosCleared = await wipeWithPhotoCaches(deleteOrgData);
+    // Nothing of the previous account is left now but, perhaps, photos the
+    // clear could not remove, so the emptied cache is this account's,
+    // recorded before the pull is sent (cache-owner.ts). deleteOrgData keeps
+    // the record (a same-account wipe keeps the photos, so it keeps the record
+    // of whose they are), and left alone it would still name the previous
+    // account after a pull that fails here (offline, a timeout): every later
+    // tick would reset again, before its network check, and wipe what this
+    // account has cached since, such as a count it opened to work on offline.
+    // A wipe that threw never reaches this line: the previous account stays
+    // recorded and the next pull resets again.
     //
-    // Unless the photo clear failed: then the previous account's photos may
-    // still be there, and the record is FORGOTTEN, neither account's. The new
-    // account recorded would make every later pull keep, and the photos would
-    // never be cleared; the previous one kept would make every later pull
-    // reset again, as above. With no record the next pull adopts, which
-    // retries the photo clear without wiping the rows. Forgetting moves no
-    // cache generation: no row changes, deleteOrgData already moved it before
-    // this pull notes its own (below), and the next pull is the one that
-    // retries.
-    await setCacheOwner(photosCleared ? liveUserId : null);
+    // Recorded whatever the photo clear did, with the clear owed when it
+    // failed (B18 review of 254fb9c72). The record forgotten instead left the
+    // rows this pull is about to write with no owner recorded, and after this
+    // account's session ended without a wipe, the next account's pull adopted
+    // them rather than resetting them, and read them offline. Owed, this
+    // account's own pulls clear the photos again until a clear works, and
+    // nothing more ('clear-photos' below).
+    await setCacheOwner(liveUserId, photosCleared);
     force = true;
     // The live readers still hold the previous account's modules, permissions
     // and warehouse banner in memory; the persisted values are gone, so they
@@ -392,7 +397,7 @@ export async function pullSnapshot(
     // be anyone's, so the photos and photo links go. No SQLite wipe runs here,
     // so the photo wipe is a step of its own, and it goes first, as before
     // every SQLite wipe.
-    photosCleared = await clearPhotoCaches();
+    const photosCleared = await clearPhotoCaches();
     // Nor are the rows known to be this account's (B18 review of 43256f0da):
     // an older release's switch, repair or Clear erased the record while rows
     // cached after them stayed, and any later path that loses the record
@@ -409,18 +414,28 @@ export async function pullSnapshot(
     // reset. Left unrecorded until a pull landed, an account whose pulls kept
     // failing (a timeout on weak Wi-Fi, a 500) drew photos the screens sign
     // straight from storage, and after its session ended without a wipe the
-    // next account adopted them too. Recorded once the photos are gone: an
+    // next account adopted them too. Recorded once the clear has answered: an
     // app closed during the clear adopts, and clears, again at its next pull.
-    // And only when the clear worked: recorded after one that failed, every
-    // later pull would keep and the photos would never be cleared. With no
-    // record, the next pull adopts and clears again.
-    if (photosCleared) await setCacheOwner(liveUserId);
+    // And whatever it answered, with the clear owed when it failed, as at the
+    // reset: left unrecorded (as at 254fb9c72), this account's rows were the
+    // next account's to adopt, and every tick adopted again, forgetting this
+    // account's own cursor and persisted values and pulling in full.
+    await setCacheOwner(liveUserId, photosCleared);
     force = true;
     // The persisted modules, permissions and warehouse scope are gone, so the
     // live readers fall back to their defaults now, as at the reset.
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+  }
+  if (liveUserId && ownerAction === 'clear-photos') {
+    // This account's own cache, with a photo clear still owed: the one its
+    // reset or its adopt made failed, so earlier accounts' photos may still
+    // be on the device (cache-owner.ts). Cleared again, offline too, and
+    // nothing else: the rows, the cursor and the persisted values are this
+    // account's, recorded as such. The record of the clear owed goes only
+    // once a clear works; an app closed before then tries again.
+    if (await clearPhotoCaches()) await markPhotosCleared();
   }
 
   if (!(await isOnline())) return null;
@@ -700,10 +715,9 @@ export async function pullSnapshot(
     // same answer, so they are written only when the rows were.
     await setMeta('last_synced_at', snap.serverTime);
     // ...and so is whose answer it was (cache-owner.ts). The reset and the
-    // adopt above already recorded it before the request was sent, when their
-    // photo clear worked. When it failed they recorded nobody, and neither
-    // does this: the next pull adopts and clears the photos again.
-    if (liveUserId && photosCleared) await setMeta(CACHE_USER_META_KEY, liveUserId);
+    // adopt above already recorded it before the request was sent, with any
+    // photo clear still owed beside it, which this leaves as it is.
+    if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);
     // Persist the org's enabled modules so the drawer + tab gating can read
     // them synchronously between syncs (and while offline). Always written —
     // even an empty array is meaningful (the consumers treat "no persisted

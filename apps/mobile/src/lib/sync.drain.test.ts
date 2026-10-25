@@ -73,9 +73,11 @@ vi.mock('./db', () => ({
   setMeta: vi.fn(async () => {}),
   // getMeta records no owner, so every pull here adopts: it clears the photo
   // caches, marks the cached rows unconfirmed and records the account before
-  // it is sent (sync.ts).
+  // it is sent (sync.ts). No clear is ever owed, so markPhotosCleared is
+  // never reached; stubbed so the module's imports all resolve.
   setCacheOwner: vi.fn(async () => {}),
   markCacheUnconfirmed: vi.fn(async () => {}),
+  markPhotosCleared: vi.fn(async () => {}),
 }));
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',

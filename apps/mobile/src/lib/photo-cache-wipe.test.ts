@@ -8,9 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * wipes keep the photos, and the record of whose they are, is executed end to
  * end in cache-owner.sqlite.test.ts.
  *
- * And the clear says whether it worked (B18 review of 43256f0da): a pull
- * records whose cache this is only after a clear that did, so a clear that
- * failed is tried again at the next pull instead of being recorded as done.
+ * And the clear says whether it worked (B18 reviews of 43256f0da and
+ * 254fb9c72): a pull that clears the photos records a clear that failed as
+ * still owed, so it is tried again at the next pull instead of being recorded
+ * as done (executed in cache-owner.sqlite.test.ts).
  */
 
 const { image, createSignedUrl } = vi.hoisted(() => ({

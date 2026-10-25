@@ -96,6 +96,13 @@ const SAVE_DEBOUNCE_MS = 300;
 
 /** Said when the copy of this count saved on the phone cannot be read. */
 const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';
+/** A fetch the phone's cache discarded twice running (cycle-count-cache.ts
+ *  cacheCycleCount): see load and the store in loadOnce. */
+const COUNT_NOT_SAVED_AFTER_A_CHANGE =
+  'This count could not be saved on this phone: the account, the workspace or the offline copy changed while it was loading.';
+/** What one pass of the screen's load answers: 'discarded' when the cache
+ *  discarded the count that pass fetched. */
+type LoadPass = 'discarded' | undefined;
 
 /**
  * The count a box holds, as the line saver reads it: a finite number of zero
@@ -294,8 +301,9 @@ export default function CycleCountDetail() {
    */
   // NOTE: `loading` starts true and `emptyState`/`readError` start clean, so
   // load() needs no synchronous pre-await resets on mount; the retry buttons
-  // reset those flags themselves before re-invoking load().
-  const load = React.useCallback(async () => {
+  // reset those flags themselves before re-invoking load(). This is one pass
+  // of it: load() below runs a second when the cache discarded the first.
+  const loadOnce = React.useCallback(async (): Promise<LoadPass> => {
     if (!id) return;
 
     // The copy saved on this phone. A read that fails is said, never a
@@ -467,8 +475,18 @@ export default function CycleCountDetail() {
     // If that write fails the screen must say so: a throw here used to go
     // unhandled (load() is fire-and-forget) and leave an uncached count
     // spinning forever.
+    //
+    // And when the cache DISCARDS it (B18 review of 254fb9c72): a wipe was
+    // asked for while the fetch was out (a workspace switch, the repair, Clear
+    // offline cache, a sign-out, another account's first pull), the account
+    // changed, or the count is not in the active workspace, and the write
+    // answers false (cycle-count-cache.ts). Nothing new was stored, so with no
+    // copy on the phone the screen showed a count with no lines and no word of
+    // why, and with one, that older copy. So this pass stops there and answers
+    // 'discarded', and load() runs one more, under a fresh note, which stores
+    // the count for the same account in the same cache.
     try {
-      await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder);
+      if (!(await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder))) return 'discarded';
       const fresh = await getCycleCount(id);
       if (fresh) hydrateFromSnapshot(fresh);
     } catch (e) {
@@ -489,6 +507,19 @@ export default function CycleCountDetail() {
       setLinked({ kind: 'failed' });
     }
   }, [id, orgId]);
+
+  /** The count's load: one pass, and a second, under a fresh note, when the
+   *  cache discarded what the first fetched (see the store in loadOnce).
+   *  Discarded twice running, the screen says so, with Retry, rather than
+   *  show a copy: what the cache discards belongs to an account, a workspace
+   *  or a cache this screen no longer has, and so does what it read before. */
+  const load = React.useCallback(async () => {
+    if ((await loadOnce()) !== 'discarded') return;
+    if ((await loadOnce()) !== 'discarded') return;
+    setReadError(COUNT_NOT_SAVED_AFTER_A_CHANGE);
+    setEmptyState('read-failed');
+    setLoading(false);
+  }, [loadOnce]);
 
 
   React.useEffect(() => {

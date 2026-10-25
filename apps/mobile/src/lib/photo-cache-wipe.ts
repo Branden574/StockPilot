@@ -30,7 +30,8 @@ import { forgetSignedImageUrls } from './image-cache';
  * (clearPhotoCaches, sync.ts): it cannot tell whose they are, an older
  * release's wipes having forgotten the record and kept them, and it keeps the
  * rows until its full pull sorts them (marked unconfirmed, not wiped), so no
- * SQLite wipe runs there (cache-owner.ts).
+ * SQLite wipe runs there (cache-owner.ts). So does the recorded account's own
+ * pull while a photo clear is still owed: its rows are its own.
  *
  * WHICH WIPES, AND IN WHICH ORDER (B18 reviews, 2026-10-24). That next pull
  * resets only a cache recorded as ANOTHER account's; one with no record keeps
@@ -52,14 +53,16 @@ import { forgetSignedImageUrls } from './image-cache';
  * Best-effort: a cache that cannot be cleared is reported and never stops the
  * sign-out or the pull.
  *
- * AND IT SAYS WHETHER IT WORKED (B18 review of 43256f0da). It answered
- * nothing, so a pull recorded whose cache this is after a clear that had
- * failed (expo-image answering false, or rejecting), every later pull kept,
- * and the photos were never cleared. The reset and the adopt now record the
- * account only on true (sync.ts, cache-owner.ts), and on false leave no record,
- * so the next pull clears again. True only when the photo links were forgotten
- * and BOTH clears answered true; a rejection, a false, any other answer, or a
- * native call that throws as it is called is a failure, warned as before.
+ * AND IT SAYS WHETHER IT WORKED (B18 reviews of 43256f0da and 254fb9c72). It
+ * answered nothing, so a pull recorded whose cache this is after a clear that
+ * had failed (expo-image answering false, or rejecting), every later pull
+ * kept, and the photos were never cleared. The reset and the adopt now record
+ * the account whatever it answers, and on false record the clear as still
+ * owed beside it (sync.ts, cache-owner.ts), so that account's next pulls clear
+ * again until one answers true, while another account's still resets. True
+ * only when the photo links were forgotten and BOTH clears answered true; a
+ * rejection, a false, any other answer, or a native call that throws as it is
+ * called is a failure, warned as before.
  */
 export async function clearPhotoCaches(
   warn: (message: string, err: unknown) => void = (message, err) => console.warn(message, err),

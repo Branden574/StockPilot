@@ -19,9 +19,10 @@ import { describe, expect, it } from 'vitest';
  *   4. A sign-out and an account eviction clear the photo caches with the
  *      SQLite wipe, whether or not that wipe succeeds.
  *   5. A pull that finds no owner recorded clears the photo caches, with no
- *      SQLite wipe, before it records the account (sync.ts, cache-owner.ts),
- *      and records it only when the clear worked; the reset for another
- *      account records the new one only then too, and otherwise nobody.
+ *      SQLite wipe, before it records the account (sync.ts, cache-owner.ts);
+ *      it and the reset for another account record the account whatever the
+ *      clear did, with the clear owed when it failed, and this account's next
+ *      pulls clear the photos again, and do nothing else, until one works.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -139,31 +140,48 @@ describe('the photo caches go when the account leaves the device', () => {
       "if (liveUserId && ownerAction === 'reset') {",
       "if (liveUserId && ownerAction === 'adopt') {",
     );
-    expect(reset).toContain('photosCleared = await wipeWithPhotoCaches(deleteOrgData);');
+    expect(reset).toContain('const photosCleared = await wipeWithPhotoCaches(deleteOrgData);');
     expect(reset).not.toContain('clearPhotoCaches(');
-    // The new account only when the photos went; otherwise nobody
-    // (cache-owner.ts). Executed in cache-owner.sqlite.test.ts.
-    expect(reset).toContain('await setCacheOwner(photosCleared ? liveUserId : null);');
+    // The new account, whatever the clear did, with the clear owed when it
+    // failed (cache-owner.ts). Executed in cache-owner.sqlite.test.ts.
+    expect(reset).toContain('await setCacheOwner(liveUserId, photosCleared);');
   });
 
   // Mutation caught: an adopt that keeps the photos, or records the account
-  // before they are gone, or after a clear that failed. Executed in
-  // cache-owner.sqlite.test.ts.
-  it('a pull that finds no owner recorded clears the photos, marks the rows, then records the account only if the clear worked, and wipes no rows', () => {
+  // before they are gone, or records nobody after a clear that failed (the
+  // next account then adopted the rows instead of resetting them). Executed
+  // in cache-owner.sqlite.test.ts.
+  it('a pull that finds no owner recorded clears the photos, marks the rows, then records the account with the clear owed if it failed, and wipes no rows', () => {
     const adopt = between(
       SYNC,
       "if (liveUserId && ownerAction === 'adopt') {",
-      'if (!(await isOnline())) return null;',
+      "if (liveUserId && ownerAction === 'clear-photos') {",
     );
     expect(adopt).toContain(
-      '{ photosCleared = await clearPhotoCaches(); await markCacheUnconfirmed(); if (photosCleared) await setCacheOwner(liveUserId); force = true;',
+      '{ const photosCleared = await clearPhotoCaches(); await markCacheUnconfirmed(); await setCacheOwner(liveUserId, photosCleared); force = true;',
     );
     expect(adopt).not.toMatch(/deleteOrgData|wipeFor|wipeWithPhotoCaches/);
-    // The only photo clear in sync.ts that runs without a SQLite wipe.
-    expect(SYNC.split('clearPhotoCaches(')).toHaveLength(2);
-    // And a pull that lands records nobody after a clear of its own that failed.
-    expect(SYNC).toContain(
-      'if (liveUserId && photosCleared) await setMeta(CACHE_USER_META_KEY, liveUserId);',
+    // A pull that lands records the account it pulled for, as before; the
+    // clear owed is not its business.
+    expect(SYNC).toContain('if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);');
+    expect(SYNC).not.toMatch(/photosCleared\) await setMeta|&& photosCleared/);
+  });
+
+  // Mutation caught: a clear owed retried with anything more than the clear
+  // (a mark, a wipe, a full pull, the readers refreshed), or only online, or
+  // settled whatever the clear answered. Executed in
+  // cache-owner.sqlite.test.ts and sync.snapshot-removals.test.ts.
+  it("this account's own cache with a clear owed: the photos are cleared again, and that is all", () => {
+    const retry = between(
+      SYNC,
+      "if (liveUserId && ownerAction === 'clear-photos') {",
+      'if (!(await isOnline())) return null;',
     );
+    expect(retry).toBe(
+      "if (liveUserId && ownerAction === 'clear-photos') { if (await clearPhotoCaches()) await markPhotosCleared(); } ",
+    );
+    // The two photo clears in sync.ts that run without a SQLite wipe: the
+    // adopt's and this one.
+    expect(SYNC.split('clearPhotoCaches(')).toHaveLength(3);
   });
 });

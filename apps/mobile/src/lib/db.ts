@@ -5,7 +5,7 @@ import {
   ORPHANED_ADJUST_SELECT_SQL,
   PARK_ORPHANED_ADJUST_SQL,
 } from './adjust-outbox';
-import { CACHE_USER_META_KEY, UNCONFIRMED_ROW_STAMP } from './cache-owner';
+import { CACHE_USER_META_KEY, PHOTOS_PENDING_META_KEY, UNCONFIRMED_ROW_STAMP } from './cache-owner';
 import { OWNED_BY_USER_SQL } from './outbox-scope';
 
 /**
@@ -502,9 +502,10 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * would be the same account's, still signed in, and the next account would
  * adopt it.
  * So the record is forgotten only by the wipes of an account leaving the
- * device, whose callers clear the photos first (forgetCacheOwner below), and
- * by the reset whose photo clear failed (setCacheOwner(null)). deleteOrgData
- * keeps it.
+ * device, whose callers clear the photos first (forgetCacheOwner below).
+ * deleteOrgData keeps it, and the record of a photo clear still owed with it
+ * (`cache_photos_pending`, setCacheOwner below): the photos it is about stay
+ * too.
  *
  * The keys are pinned against sync.ts's writers by
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
@@ -530,36 +531,57 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
- * Forget whose cache this was (cache-owner.ts), inside the wipe of an account
- * that is LEAVING the device: wipeForSignOut and wipeForEviction. Their callers
- * run them through wipeWithPhotoCaches, which clears the photos before this
- * runs, so a record that is gone means the photos are gone too, or that their
- * clear failed and the next account's pull clears them again (an adopt). And
- * setCacheOwner(null) below, for the reset whose photo clear failed.
+ * Forget whose cache this was (cache-owner.ts), and any photo clear still owed
+ * with it, inside the wipe of an account that is LEAVING the device:
+ * wipeForSignOut and wipeForEviction, and nowhere else. Their callers run them
+ * through wipeWithPhotoCaches, which clears the photos before this runs, so a
+ * record that is gone means the photos are gone too, or that their clear
+ * failed and the next account's pull clears them again (an adopt).
  */
 async function forgetCacheOwner(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.runAsync('delete from meta where key = ?', [CACHE_USER_META_KEY]);
+  await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
 }
 
 /**
  * Record `userId` as the account the cache belongs to, in sync.ts only: the
- * cache-owner reset once the previous account's rows, photos and photo links
- * are gone, and the adopt once the photos and photo links are (see
- * cache-owner.ts). `null` forgets the record instead: the reset whose photo
- * clear failed, which must name neither the previous account (every later
- * pull would reset again) nor the new one (every later pull would keep, and
- * the photos would never be cleared). Queued like every lone write
- * (queuedWrite): a plain statement issued while another flow's transaction is
- * open would run inside it, and be undone with it on a rollback.
+ * cache-owner reset once the previous account's rows are gone, and the adopt,
+ * each once its photo clear has answered (see cache-owner.ts). Whatever the
+ * clear answered: a reset or an adopt that left NO record after a failed clear
+ * (as at 254fb9c72) let the next account adopt this account's rows instead of
+ * resetting them, and read them offline. So when the clear failed
+ * (`photosCleared` false) the record of a clear still owed is written beside
+ * it, in the same transaction, so neither can be left without the other; when
+ * it worked, any clear owed from before is settled with it. Queued like every
+ * lone write (queuedWrite): a plain statement issued while another flow's
+ * transaction is open would run inside it, and be undone with it on a
+ * rollback.
  */
-export async function setCacheOwner(userId: string | null): Promise<void> {
+export async function setCacheOwner(userId: string, photosCleared: boolean): Promise<void> {
   await queuedWrite(async (db) => {
-    if (userId === null) await forgetCacheOwner(db);
-    else
+    await db.runAsync('insert or replace into meta (key, value) values (?, ?)', [
+      CACHE_USER_META_KEY,
+      userId,
+    ]);
+    if (photosCleared) {
+      await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
+    } else {
       await db.runAsync('insert or replace into meta (key, value) values (?, ?)', [
-        CACHE_USER_META_KEY,
+        PHOTOS_PENDING_META_KEY,
         userId,
       ]);
+    }
+  });
+}
+
+/**
+ * The photo clear that was owed has now worked (sync.ts, the recorded
+ * account's own pull, cache-owner.ts 'clear-photos'). Only the record of the
+ * clear owed goes; whose cache this is stays as it was. Queued, as above.
+ */
+export async function markPhotosCleared(): Promise<void> {
+  await queuedWrite(async (db) => {
+    await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
   });
 }
 
@@ -576,8 +598,8 @@ export async function setCacheOwner(userId: string | null): Promise<void> {
  *   - the persisted org-scoped values go (modules, permissions, warehouse
  *     scope), as clearOrgScopedTables clears them, so nothing of another
  *     account's scope is shown before this account's pull lands, offline too.
- *     The record of whose cache this is is not touched: sync.ts sets it next,
- *     once the photo clear has worked;
+ *     The record of whose cache this is is not touched, nor any photo clear
+ *     owed: sync.ts sets both next, once the photo clear has answered;
  *   - every cached row is stamped UNCONFIRMED_ROW_STAMP. The full pull keeps
  *     a row it returns (it stamps it again) and, of the rest, only a count
  *     this account still has an unsent entry for (sync.ts). Marked, not

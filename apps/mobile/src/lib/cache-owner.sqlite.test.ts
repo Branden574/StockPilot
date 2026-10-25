@@ -47,6 +47,17 @@ import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
  * someone else's cursor, and their items, POs and counts were never swept. And
  * the count screen stored a count it had fetched without checking that the
  * cache and the account were still the ones it fetched for.
+ *
+ * AND NO RECORD AFTER A FAILED CLEAR (B18 review of 254fb9c72). Leaving the
+ * record absent after a failed photo clear, so that the next pull cleared
+ * again, left the live account's freshly pulled rows with no owner recorded.
+ * After its session ended without a wipe, the next account's pull adopted
+ * them instead of resetting them, and an adopt only marks the rows: offline,
+ * that account read the previous account's items, purchase orders and counts.
+ * And while the clear kept failing, every tick adopted again, forgetting the
+ * account's own cursor, modules, permissions and warehouse scope and pulling
+ * in full. Another account's unsent count released on a count this account
+ * keeps but its pull does not return also stayed as a clean, counted line.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -267,6 +278,8 @@ type Loaded = {
   photoWipe: typeof import('./photo-cache-wipe');
   perms: typeof import('./use-effective-permissions');
   scope: typeof import('./warehouse-scope');
+  /** The offline readers the scan, receive and item screens use. */
+  reads: typeof import('./db-reads');
 };
 
 let raw: DatabaseSync;
@@ -294,6 +307,7 @@ async function launch(): Promise<void> {
     photoWipe: await import('./photo-cache-wipe'),
     perms: await import('./use-effective-permissions'),
     scope: await import('./warehouse-scope'),
+    reads: await import('./db-reads'),
   };
   await m.db.getDb();
   // The first auth event only records who is signed in (use-workspace.ts).
@@ -361,6 +375,9 @@ const ids = (sql: string) => (raw.prepare(sql).all() as { id: string }[]).map((r
 const metaValue = (key: string) =>
   (raw.prepare('select value from meta where key = ?').get(key) as { value: string } | undefined)
     ?.value ?? null;
+/** The record that a photo clear at a reset or an adopt failed, and is still
+ *  owed (cache-owner.ts): the account recorded with it, or null. */
+const photoClearOwed = () => metaValue('cache_photos_pending');
 /** One cached count line, as the count screen would read it. */
 const line = (id: string) =>
   raw.prepare('select counted, local_dirty from cycle_count_lines where id = ?').get(id) as
@@ -890,11 +907,13 @@ describe('a pull that finds no owner recorded', SLOW, () => {
  *  any later path that loses it. */
 const recordLost = () => raw.exec("delete from meta where key = 'cache_user_id'");
 
-describe('a photo clear that fails records nobody', SLOW, () => {
-  // Mutation caught: the adopt recording the account whatever became of the
-  // clear (as at 43256f0da), or the landed pull's own stamp recording it.
+describe('a photo clear that fails still records the account, with the clear owed', SLOW, () => {
+  // Mutation caught: the adopt recording nobody after a clear that failed (as
+  // at 254fb9c72; the next account then adopted this one's rows, below), or
+  // recording the account with no clear owed (as at 43256f0da: every later
+  // pull kept, and the photos were never cleared).
   it.each(Object.keys(PHOTO_CLEAR_FAILS))(
-    'at a pull that finds no owner recorded, when %s: the pull still lands, records nobody, and the next pull clears again and records the account',
+    'at a pull that finds no owner recorded, when %s: the account is recorded with the clear owed, the pull lands, and the next pull clears again',
     async (failure) => {
       await aSignedInWithAPhoto();
       recordLost();
@@ -903,22 +922,25 @@ describe('a photo clear that fails records nobody', SLOW, () => {
       PHOTO_CLEAR_FAILS[failure]!();
       await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
 
-      expect(owner()).toBeNull();
+      expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBe(B);
       expect(stillCached(PHOTO_A)).toBe(true);
-      expect(items()).toContain(`item-${B}-org-1`); // the pull was not skipped
+      expect(items()).toEqual([`item-${B}-org-1`]); // the pull was not skipped
 
-      await m.sync.syncNow(); // the next tick: no record, so it clears again
+      await m.sync.syncNow(); // the next tick: the clear owed is tried again
 
       await expectForgotten(PHOTO_A);
       expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBeNull();
     },
   );
 
-  // Mutation caught: the reset recording the new account whatever became of
-  // the clear (as at 43256f0da), or keeping the previous account's record,
-  // which would reset again at every tick and wipe what B cached since.
+  // Mutation caught: the reset forgetting the record after a clear that
+  // failed (as at 254fb9c72), recording the new account with no clear owed
+  // (as at 43256f0da), or keeping the previous account's record, which would
+  // reset again at every tick and wipe what B cached since.
   it.each(Object.keys(PHOTO_CLEAR_FAILS))(
-    "at the reset for another account, when %s: the record is forgotten, neither account's, and the next pull clears again without wiping the new account's rows",
+    'at the reset for another account, when %s: the new account is recorded with the clear owed, and its next pull clears again without wiping its rows',
     async (failure) => {
       await aSignedInWithAPhoto();
       sessionEndsWithoutWipe();
@@ -928,7 +950,8 @@ describe('a photo clear that fails records nobody', SLOW, () => {
 
       expect(items()).toEqual([`item-${B}-org-1`]);
       expect(stillCached(PHOTO_A)).toBe(true);
-      expect(owner()).toBeNull();
+      expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBe(B);
 
       // B counts on the phone, then the next tick runs offline: a reset would
       // empty the cache at once, offline too.
@@ -938,20 +961,22 @@ describe('a photo clear that fails records nobody', SLOW, () => {
 
       await expectForgotten(PHOTO_A);
       expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBeNull();
       expect(items()).toEqual([`item-${B}-org-1`]);
       expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
     },
   );
 
-  // Already so before this change (the exits forget the record whatever the
-  // clear did); pinned here with the rest. The next account's own clear
-  // failing too is what 43256f0da got wrong: it recorded that account.
+  // The exits forget the record whatever the clear did, and the next account
+  // adopts and clears again. Its own clear failing too records it with the
+  // clear owed: 43256f0da recorded it with nothing owed, 254fb9c72 recorded
+  // nobody.
   it.each(
     Object.keys(ACCOUNT_EXITS).flatMap((exit) =>
       Object.keys(PHOTO_CLEAR_FAILS).map((failure) => [exit, failure] as const),
     ),
   )(
-    "%s whose photo clear fails (%s) still forgets the record: the next account's pulls clear again until a clear works, and only then record it",
+    "%s whose photo clear fails (%s) still forgets the record: the next account's pulls clear again until a clear works",
     async (exit, failure) => {
       await aSignedInWithAPhoto();
       device.userId = null; // the session is gone before the wipe runs
@@ -960,6 +985,7 @@ describe('a photo clear that fails records nobody', SLOW, () => {
       await ACCOUNT_EXITS[exit]!();
 
       expect(owner()).toBeNull();
+      expect(photoClearOwed()).toBeNull();
       expect(items()).toEqual([]);
       expect(stillCached(PHOTO_A)).toBe(true);
 
@@ -967,14 +993,226 @@ describe('a photo clear that fails records nobody', SLOW, () => {
       PHOTO_CLEAR_FAILS[failure]!(); // B's first pull: the clear fails again
       await m.sync.syncNow();
       expect(stillCached(PHOTO_A)).toBe(true);
-      expect(owner()).toBeNull();
+      expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBe(B);
 
       await m.sync.syncNow(); // the next tick: the clear works
 
       await expectForgotten(PHOTO_A);
       expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBeNull();
     },
   );
+
+  // A sign-out or an eviction takes the whole record with it: the next
+  // account finds no owner recorded, adopts, and clears the photos itself.
+  it.each(Object.keys(ACCOUNT_EXITS))(
+    '%s of an account that still owes a photo clear forgets the clear owed together with the record',
+    async (exit) => {
+      await aSignedInWithAPhoto();
+      recordLost();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      PHOTO_CLEAR_FAILS['the disk clear answers false']!();
+      await m.sync.syncNow();
+      expect(photoClearOwed()).toBe(B);
+
+      device.userId = null;
+      auth.user = null;
+      await ACCOUNT_EXITS[exit]!();
+
+      expect(owner()).toBeNull();
+      expect(photoClearOwed()).toBeNull();
+      await expectForgotten(PHOTO_A);
+    },
+  );
+
+  // Mutation caught: a workspace switch, the repair or Clear (deleteOrgData)
+  // forgetting the clear owed. The account is the same, so its pulls keep,
+  // and photos an earlier account left would never be cleared.
+  it.each(Object.keys(SAME_ACCOUNT_WIPES))(
+    "a clear still owed outlives %s: the account's next pull still clears the photos it is owed for",
+    async (wipe) => {
+      // A photo an earlier account left with no owner recorded (an older
+      // release's wipes), then A's first pull, whose clear fails.
+      device.storage.set('workspace.activeOrgId', 'org-1');
+      device.memory.add(PHOTO_B);
+      device.disk.add(PHOTO_B);
+      signIn(A);
+      PHOTO_CLEAR_FAILS['the disk clear answers false']!();
+      await m.sync.syncNow();
+      expect(owner()).toBe(A);
+      expect(photoClearOwed()).toBe(A);
+      expect(device.disk.has(PHOTO_B)).toBe(true);
+
+      await SAME_ACCOUNT_WIPES[wipe]!(); // its own pull runs after it
+      await m.sync.syncNow();
+
+      expect(device.disk.has(PHOTO_B), "an earlier account's photo on disk").toBe(false);
+      expect(owner()).toBe(A);
+      expect(photoClearOwed()).toBeNull();
+    },
+  );
+});
+
+/** How B's first pull came to clear the photos: each one clears them, and
+ *  each is run with that clear failing (PHOTO_CLEAR_FAILS). */
+const B_FIRST_PULLS: Record<string, () => Promise<void>> = {
+  'the reset for another account': async () => {
+    await aSignedInWithAPhoto();
+    sessionEndsWithoutWipe();
+  },
+  'a pull that finds the record lost': async () => {
+    await aSignedInWithAPhoto();
+    recordLost();
+    sessionEndsWithoutWipe();
+  },
+  'a pull that finds no record after a finished sign-out': async () => {
+    await aSignedInWithAPhoto();
+    device.userId = null;
+    auth.user = null;
+    await m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut);
+  },
+};
+
+/** B's answer carries an open purchase order too, so the readers have one of
+ *  B's to find. */
+const B_PO = {
+  id: 'po-b',
+  poNumber: 'PO-B',
+  status: 'ordered',
+  expectedAt: null,
+  warehouseId: 'wh-org-1',
+  lines: [{ id: 'po-b-l1', itemId: `item-${B}-org-1`, qtyOrdered: 3, qtyReceived: 0, unitCost: 2 }],
+};
+const B_SCOPE = '{"hasAllAccess":false,"warehouseNames":["B only"]}';
+
+describe('an account whose photo clear failed still owns its rows', SLOW, () => {
+  const cases = Object.keys(B_FIRST_PULLS).flatMap((start) =>
+    Object.keys(PHOTO_CLEAR_FAILS).map((failure) => [start, failure] as const),
+  );
+
+  // Mutation caught: a failed clear leaving the record absent (as at
+  // 254fb9c72). C's pull then adopted: it only marked B's rows, recorded C
+  // and stopped at the network check, so C read B's item (on hand and unit
+  // cost), B's purchase order and B's count offline until a full pull landed.
+  it.each(cases)(
+    "%s whose clear fails (%s), then B's pull lands and B's session ends without a wipe: the next account's first pull, offline, leaves none of B's rows to read",
+    async (start, failure) => {
+      await B_FIRST_PULLS[start]!();
+      device.answer = (snap, userId) => (userId === B ? { ...snap, openPOs: [B_PO] } : snap);
+      signIn(B);
+      PHOTO_CLEAR_FAILS[failure]!();
+      await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
+      expect(items()).toEqual([`item-${B}-org-1`]);
+      expect((await m.reads.listOpenPos()).map((p) => p.id)).toEqual(['po-b']);
+      await countOnThePhone('cc-b');
+      await viewPhoto(PHOTO_B);
+
+      sessionEndsWithoutWipe();
+      signIn(C);
+      device.online = false;
+      await m.sync.syncNow(); // C's first pull, offline
+
+      // What C's offline screens read (db-reads.ts, cycle-count-cache.ts).
+      expect(await m.reads.findItemByCode(`sku-${B}`)).toBeNull();
+      expect(await m.reads.getItemById(`item-${B}-org-1`)).toBeNull();
+      expect(await m.reads.listOpenPos()).toEqual([]);
+      expect(await m.reads.getPoLines('po-b')).toEqual([]);
+      expect(await m.counts.getCycleCount('cc-b')).toBeNull();
+      expect(await m.counts.listCachedCycleCounts()).toEqual([]);
+      expect(items()).toEqual([]);
+      await expectForgotten(PHOTO_A);
+      await expectForgotten(PHOTO_B);
+      expect(owner()).toBe(C);
+      expect(photoClearOwed()).toBeNull();
+      // B's unsent count is not lost: held for B in the outbox.
+      expect(queuedCounts()).toEqual([{ user_id: B, status: 'pending', count_id: 'cc-b' }]);
+    },
+  );
+
+  // Mutation caught: a pull that owes a clear adopting again (as at
+  // 254fb9c72: every tick while the clear kept failing marked the account's
+  // own rows, forgot its cursor, modules, permissions and warehouse scope, and
+  // pulled in full), or one that never tries the clear again.
+  it.each(cases)(
+    "%s whose clear fails (%s), then keeps failing: each of B's next pulls tries the photo clear again, and only that, until one works",
+    async (start, failure) => {
+      await B_FIRST_PULLS[start]!();
+      signIn(B);
+      PHOTO_CLEAR_FAILS[failure]!();
+      await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
+      await countOnThePhone('cc-b');
+      // B's own persisted values (B's answers here carry no scope).
+      raw.exec(`insert or replace into meta (key, value) values ('warehouse_scope', '${B_SCOPE}')`);
+      const countStamp = () =>
+        (
+          raw.prepare("select last_synced_at as s from cycle_counts where id = 'cc-b'").get() as {
+            s: number;
+          }
+        ).s;
+      const stamped = countStamp();
+      const disk = () => image.clearDiskCache.mock.calls.length;
+      const before = disk();
+
+      PHOTO_CLEAR_FAILS[failure]!();
+      await m.sync.syncNow(); // the next tick: the clear is tried again and fails again
+
+      expect(disk()).toBe(before + 1);
+      expect(owner()).toBe(B);
+      expect(photoClearOwed()).toBe(B);
+      // Nothing else: a delta from B's own cursor, B's count and scope kept,
+      // nothing marked unconfirmed.
+      expect(device.requests.at(-1)).toContain('?since=');
+      expect(countStamp()).toBe(stamped);
+      expect(metaValue('warehouse_scope')).toBe(B_SCOPE);
+      expect(metaValue('effective_permissions')).toBe('[]');
+      expect(metaValue('enabled_modules')).toBe('[]');
+      expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+
+      device.online = false;
+      const cursor = metaValue('last_synced_at');
+      await m.sync.syncNow(); // offline: the clear is tried again, and works
+
+      await expectForgotten(PHOTO_A);
+      expect(photoClearOwed()).toBeNull();
+      expect(owner()).toBe(B);
+      expect(metaValue('last_synced_at')).toBe(cursor);
+      expect(metaValue('warehouse_scope')).toBe(B_SCOPE);
+      expect(countStamp()).toBe(stamped);
+      expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+
+      device.online = true;
+      const settled = disk();
+      await m.sync.syncNow(); // nothing owed now: no clear, and still a delta
+      expect(disk()).toBe(settled);
+      expect(device.requests.at(-1)).toContain('?since=');
+    },
+  );
+
+  // Mutation caught: the clear owed forgotten before the retry's clear has
+  // answered. An app closed during that clear then never cleared again.
+  it('a retry the app is closed during, before the photo disk clear finished: the clear is still owed, and the next launch tries again', async () => {
+    await B_FIRST_PULLS['a pull that finds the record lost']!();
+    signIn(B);
+    PHOTO_CLEAR_FAILS['the disk clear answers false']!();
+    await m.sync.syncNow(); // B's first pull: the clear fails
+    expect(photoClearOwed()).toBe(B);
+
+    device.holdDiskClear = true;
+    void m.sync.syncNow(); // the retry, closed during its disk clear
+    await vi.waitFor(() => expect(image.clearDiskCache).toHaveBeenCalledTimes(2), WAIT);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await relaunch(); // B's session is still stored
+    expect(device.disk.has(PHOTO_A)).toBe(true);
+    expect.soft(photoClearOwed()).toBe(B);
+    await m.sync.syncNow();
+
+    expect(device.disk.has(PHOTO_A)).toBe(false);
+    expect(photoClearOwed()).toBeNull();
+    expect(owner()).toBe(B);
+  });
 });
 
 const A_CURSOR = '2026-10-20T00:00:00.000Z';
@@ -1223,6 +1461,116 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
       { user_id: A, status: 'pending', count_id: 'cc-a' },
       { user_id: B, status: 'pending', count_id: 'cc-b' },
     ]);
+  });
+
+  /** A second, clean line on A's count, which B then counts (B's own unsent
+   *  entry on A's count). */
+  const bCountsTheOtherLineOfAsCount = async () => {
+    raw.exec(`insert into cycle_count_lines
+        (id, count_id, item_id, item_name, item_sku, expected, counted, local_dirty)
+      values ('cc-a-l2', 'cc-a', 'item-y', 'Y', 'SKU-Y', 3, null, 0)`);
+    expect(await m.counts.updateLocalLine('cc-a-l2', 7)).not.toBeNull();
+  };
+  const bothEntriesHeld = () =>
+    expect(queuedCounts()).toEqual([
+      { user_id: A, status: 'pending', count_id: 'cc-a' },
+      { user_id: B, status: 'pending', count_id: 'cc-a' },
+    ]);
+
+  // Mutation caught: the release leaving the released line's value, so A's
+  // unsent 5 showed offline as the count recorded on the server (REVIEW-P2 of
+  // 254fb9c72). The count stays for B's own entry, but B's pull does not
+  // return it, so no server value replaces the line.
+  it.each([
+    ['lists no count', () => bSees({ openCycleCounts: [] })],
+    [
+      'is a full page of 50 other counts',
+      () =>
+        bSees({ openCycleCounts: Array.from({ length: 50 }, (_, i) => openCount(`cc-open-${i}`)) }),
+    ],
+  ] as const)(
+    "B keeps A's count for its own unsent entry, and B's answer %s: A's released line shows no count, not A's unsent one",
+    async (_case, answer) => {
+      await aLeavesItsCacheWithNoOwner();
+      answer();
+      signIn(B);
+      await bCountsTheOtherLineOfAsCount();
+      await m.sync.syncNow(); // B's first pull: the adopt, in full, without cc-a
+
+      expect(ids("select id from cycle_counts where id = 'cc-a'")).toEqual(['cc-a']);
+      expect(line('cc-a-l1')).toEqual({ counted: null, local_dirty: 0 });
+      expect(line('cc-a-l2')).toEqual({ counted: 7, local_dirty: 1 });
+      const shown = (await m.counts.getCycleCount('cc-a'))?.lines
+        .map((l) => [l.id, l.counted, l.localDirty])
+        .sort();
+      expect(shown).toEqual([
+        ['cc-a-l1', null, false],
+        ['cc-a-l2', 7, true],
+      ]);
+      bothEntriesHeld();
+    },
+  );
+
+  // Mutation caught: the release matched to an entry by its count rather than
+  // by its line (REVIEW-P3 of 254fb9c72): A's unsent edit would then stay as
+  // B's own on any count B also counted. Every other case puts each account's
+  // edits on counts of their own.
+  it("a count both accounts counted, at B's pull: A's line gives way to the server's count, and B's own unsent count stays", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    bSees({
+      openCycleCounts: [
+        openCount('cc-a', [
+          { id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 },
+          { id: 'cc-a-l2', itemId: 'item-y', expected: 3, counted: null },
+        ]),
+      ],
+    });
+    signIn(B);
+    await bCountsTheOtherLineOfAsCount();
+    await m.sync.syncNow();
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect(line('cc-a-l2')).toEqual({ counted: 7, local_dirty: 1 });
+    bothEntriesHeld();
+  });
+
+  // The same, at the count screen's own release (one count, before its write).
+  it("a count both accounts counted, opened on the count screen before any pull of B's lands: A's line shows the server's count, and B's own unsent count stays", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    signIn(B);
+    await bCountsTheOtherLineOfAsCount();
+    device.snapshotFails = true;
+    await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
+
+    const fetchedUnder = await m.counts.cacheWriteScope();
+    const fetchedLine = (id: string, itemId: string, counted: number | null) => ({
+      id,
+      itemId,
+      itemName: itemId,
+      itemSku: itemId,
+      itemBarcode: null,
+      expected: 4,
+      counted,
+      updatedAt: null,
+    });
+    expect(
+      await m.counts.cacheCycleCount(
+        {
+          id: 'cc-a',
+          organizationId: 'org-1',
+          warehouseId: 'wh-org-1',
+          warehouseName: 'Main',
+          status: 'in_progress',
+          startedAt: '2026-10-24T08:00:00.000Z',
+        },
+        [fetchedLine('cc-a-l1', 'item-x', 2), fetchedLine('cc-a-l2', 'item-y', null)],
+        fetchedUnder,
+      ),
+    ).toBe(true);
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect(line('cc-a-l2')).toEqual({ counted: 7, local_dirty: 1 });
+    bothEntriesHeld();
   });
 
   // Mutation caught: the full pull keeping the warehouse list when the

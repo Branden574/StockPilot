@@ -117,10 +117,19 @@ export const CACHED_CYCLE_COUNTS_LIST_SQL = `
  * is released: the server's value then replaces it, and this account is never
  * shown another account's count as its own pending one. The entry itself is
  * untouched and still held for its account. NOT EXISTS, never NOT IN (sync.ts,
- * "Unconfirmed rows").
+ * "Unconfirmed rows"). Matched by LINE: on a count both accounts counted, only
+ * the other account's lines are released.
+ *
+ * Released with its number forgotten (B18 review of 254fb9c72). A count this
+ * account still has an entry for is kept even when the pull does not return
+ * it (past the 50-count page, or out of this account's scope since), and then
+ * no server value replaces the line: released with its value, the other
+ * account's unsent number showed offline as the count recorded on the server.
+ * With none, the line shows as not counted until the server's value arrives,
+ * which the upsert and the count screen's write put back.
  */
 const releaseUnconfirmedLines = (alsoWhere: string) => `
-  update cycle_count_lines set local_dirty = 0
+  update cycle_count_lines set local_dirty = 0, counted = null
    where local_dirty = 1
      and count_id in (
        select id from cycle_counts
