@@ -42,6 +42,17 @@ interface Props {
 }
 
 /**
+ * A book copy whose stock the server could not move to Unplaced (B28): the
+ * copy exists (never an error), its stock is still where the seed put it (the
+ * original's site), and the person is sent to look, in the shared placement
+ * warning's order.
+ */
+function stockLeftAtMessage(itemName: string, locationName: string | null): string {
+  const where = locationName ? `still at ${locationName}` : 'still where it started';
+  return `Duplicated "${itemName}", but its stock could not be moved to Unplaced: it is ${where}. Check before picking.`;
+}
+
+/**
  * Modal launched by the "Duplicate" button on item-detail.
  * Pre-fills nothing visible (everything is inherited from the
  * original); user only enters the new physical location. On success,
@@ -125,12 +136,19 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
       setRackQuestion(null);
       // The copy exists either way. When its stock did not reach the rack
       // (2026-10-25), say so in the shared placement words, as Add more sizes
-      // does.
+      // does. A book copy's stock waits in Unplaced (B28); when the server
+      // could not move it there, say where it was left.
       if (result.data.placementFailed) {
         toast.warning(
           placementWarningMessage(`Duplicated "${itemName}"`, result.data.placementFailed),
           { duration: 10000 },
         );
+      } else if (result.data.stockLeftAt) {
+        toast.warning(stockLeftAtMessage(itemName, result.data.stockLeftAt.locationName), {
+          duration: 10000,
+        });
+      } else if (isBook && qty > 0) {
+        toast.success(`Duplicated "${itemName}". Its stock is in Unplaced, awaiting put-away.`);
       } else {
         toast.success(`Duplicated "${itemName}"`);
       }
@@ -248,7 +266,9 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
               disabled={pending}
             />
             <p className="text-muted-foreground text-[12px]">
-              Defaults to 0. Set the actual on-hand count at the new rack.
+              {isBook
+                ? 'Defaults to 0. The stock waits in Unplaced until it is put away into this crate.'
+                : 'Defaults to 0. Set the actual on-hand count at the new rack.'}
             </p>
           </div>
         </div>

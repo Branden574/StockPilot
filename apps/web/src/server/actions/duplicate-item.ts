@@ -15,24 +15,34 @@ import {
   type PlacementFailure,
 } from '@stockpilot/core';
 
-export async function duplicateItemAction(
-  input: DuplicateItemInput,
-): Promise<ActionResult<{ id: string; placementFailed?: PlacementFailure }>> {
+export async function duplicateItemAction(input: DuplicateItemInput): Promise<
+  ActionResult<{
+    id: string;
+    placementFailed?: PlacementFailure;
+    /** A book copy whose stock could not be moved to Unplaced (B28): where it was left. */
+    stockLeftAt?: { locationName: string | null };
+  }>
+> {
   const parsed = duplicateItemSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
     const svc = await InventoryService.forCurrentUser();
-    const { id, placementFailed } = await svc.duplicateItem(parsed.data);
+    const { id, placementFailed, stockLeftAt } = await svc.duplicateItem(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${parsed.data.originalId}`);
     // The copy exists either way. When its stock did not reach the rack the
-    // dialog named, say so (2026-10-25), as createItemAction does.
-    return ok({ id, ...(placementFailed ? { placementFailed } : {}) });
+    // dialog named, say so (2026-10-25), as createItemAction does; and when a
+    // book copy's stock could not be moved to Unplaced, where it was left.
+    return ok({
+      id,
+      ...(placementFailed ? { placementFailed } : {}),
+      ...(stockLeftAt ? { stockLeftAt } : {}),
+    });
   } catch (error) {
     if (error instanceof ServiceError) {
       // `details` is app-authored and forwarded: the new-rack question rides

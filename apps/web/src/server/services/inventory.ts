@@ -899,6 +899,15 @@ export interface ManualPlacementOutcome {
 }
 
 /**
+ * A duplicated book whose stock could not be moved to Unplaced (B28): it is
+ * still where the seed trigger put it. `locationName` names that place (a site
+ * such as "DC4"); null when even the holdings read failed.
+ */
+export interface StockLeftAtSite {
+  locationName: string | null;
+}
+
+/**
  * What a reconciliation did, per bucket. Every caller must surface every one of
  * them: the stock moved in every case, so a silent bucket is a placement the
  * operator believes relabelled something it did not.
@@ -3633,17 +3642,21 @@ export class InventoryService {
    *
    * Returns the copy's id and, like create(), whether its stock did NOT reach
    * the rack the dialog named (`placementFailed`, 2026-10-25), so the dialog
-   * can say so instead of only "Duplicated".
+   * can say so instead of only "Duplicated". A book copy's stock waits in
+   * Unplaced (see moveSeededStockToUnplaced); `stockLeftAt` is present only
+   * when it could not be moved there, and names where it was left.
    */
-  async duplicateItem(
-    input: DuplicateItemInput,
-  ): Promise<{ id: string; placementFailed: PlacementFailure | null }> {
+  async duplicateItem(input: DuplicateItemInput): Promise<{
+    id: string;
+    placementFailed: PlacementFailure | null;
+    stockLeftAt?: StockLeftAtSite;
+  }> {
     assertPermission(this.ctx, 'items:create');
 
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku, warehouse_id, charter_id')
+      .select('sku, warehouse_id, charter_id, item_type')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -3652,6 +3665,22 @@ export class InventoryService {
     }
     const sku = (original as { sku: string }).sku;
     const originalWarehouseId = (original as { warehouse_id: string | null }).warehouse_id;
+    // The branch below follows the request's type, and duplicate_inventory_item
+    // (0299) follows the ORIGINAL's: a book sent as a product would be placed
+    // onto a bare rack with its crate fields dropped, a product sent as a book
+    // would keep its stock off its rack. The dialog sends the record's own
+    // type, so a mismatch is a stale tab or a hand-made request: refused
+    // before anything is written.
+    const originalType = (original as { item_type?: unknown }).item_type;
+    if (
+      typeof originalType === 'string' &&
+      (originalType === 'book') !== (input.itemType === 'book')
+    ) {
+      throw new ServiceError(
+        'validation_error',
+        'This record is not the type this duplicate was opened for. Reload the page and try again.',
+      );
+    }
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
@@ -3799,6 +3828,15 @@ export class InventoryService {
       }
     }
 
+    // ═══ A BOOK COPY'S STOCK WAITS IN UNPLACED (B28, 2026-10-25) ═══
+    // A book is never placed by a duplicate (its crate is chosen at put-away),
+    // so its copy kept the seed above: AT the original's site. The no-rack rule
+    // (#253) puts stock nobody placed in Unplaced, awaiting put-away.
+    let stockLeftAt: StockLeftAtSite | null = null;
+    if (input.itemType === 'book' && Number(input.quantity) > 0) {
+      stockLeftAt = await this.moveSeededStockToUnplaced(newId as string, originalWarehouseId);
+    }
+
     void audit(
       {
         event: 'inventory.item.duplicated',
@@ -3809,7 +3847,111 @@ export class InventoryService {
       this.ctx,
     );
 
-    return { id: newId as string, placementFailed };
+    return { id: newId as string, placementFailed, ...(stockLeftAt ? { stockLeftAt } : {}) };
+  }
+
+  /**
+   * THE NO-RACK RULE FOR A DUPLICATED BOOK (owner rule 2026-09-24, #253; the
+   * book half B28, 2026-10-25).
+   *
+   * duplicate_inventory_item (0299) copies the original's primary location (a
+   * SITE such as "DC4", the only kind of place the primary-location picker
+   * offers), and tg_seed_initial_level (0199) seeds the copy's opening stock AT
+   * that site: counted as placed, never on the put-away list, and shown as "No
+   * rack". A product copy is then moved onto the rack its dialog names. A book
+   * copy is not (its crate is chosen at put-away, where the crate rules run:
+   * placing a book onto a bare rack is what erased Maus I's crate), so its
+   * stock stayed at the site. The rule a manual create follows since #253:
+   * stock nobody placed waits in the warehouse's Unplaced bucket, awaiting
+   * put-away, and the primary location stays a label. The copy keeps its
+   * primary location, rack and crate labels; only the holding moves.
+   *
+   * Moves every holding of the copy that sits anywhere but a system bucket to
+   * the warehouse's Unplaced bucket, through transferStock: the ledger reads
+   * 'initial' at the site and then a 'transfer' to Unplaced, the same shape as
+   * a product copy's move onto its rack. A holding the trigger already put in
+   * Unplaced (an original with no primary location) stays.
+   *
+   * FAIL-SOFT, REPORTED: the copy exists whatever happens here. A move that
+   * cannot run leaves the stock where it was seeded; the answer names that
+   * place (null when the read itself failed) so the dialog can say so, and
+   * Sentry hears of it. Null: nothing was left outside Unplaced.
+   */
+  private async moveSeededStockToUnplaced(
+    itemId: string,
+    warehouseId: string | null,
+  ): Promise<StockLeftAtSite | null> {
+    const report = (detail: string) =>
+      void reportError(new Error(detail), {
+        tag: 'inventory.duplicate.book_to_unplaced',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+      });
+
+    let rows: Array<{
+      location_id: string;
+      quantity: number;
+      locations: { name: string | null; kind: string | null; type: string | null } | null;
+    }>;
+    try {
+      rows = await this.holdingsForItemIds(
+        [itemId],
+        'item_id, location_id, quantity, locations!inner(name, kind, type)',
+      );
+    } catch (e) {
+      report(rawErrorText(e));
+      return { locationName: null };
+    }
+    // Only a holding whose place is known and is not Staging or Unplaced.
+    const seeded = rows.filter((r) => r.locations && !isSystemLocation(r.locations));
+    if (seeded.length === 0) return null;
+    const leftAt: StockLeftAtSite = { locationName: seeded[0]?.locations?.name ?? null };
+
+    // The warehouse's own Unplaced bucket (every warehouse has one: 0188's
+    // trigger and backfill), in this organization, never an archived one.
+    if (!warehouseId) {
+      report('book duplicate has no warehouse to hold its Unplaced stock');
+      return leftAt;
+    }
+    const { data: bucket, error: bucketErr } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('kind', 'unplaced')
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    const bucketId = (bucket as { id?: string } | null)?.id ?? null;
+    if (bucketErr || !bucketId) {
+      report(bucketErr ? rawErrorText(bucketErr) : 'no Unplaced bucket in the warehouse');
+      return leftAt;
+    }
+
+    let failed = false;
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const row of seeded) {
+        try {
+          await this.transferStock(
+            {
+              itemId,
+              fromLocationId: row.location_id,
+              toLocationId: bucketId,
+              quantity: Number(row.quantity),
+              notes: 'Duplicated without a placement: awaiting put-away',
+            },
+            { auditInto: transferAudits },
+          );
+        } catch (e) {
+          report(rawErrorText(e));
+          failed = true;
+        }
+      }
+    } finally {
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
+    }
+    return failed ? leftAt : null;
   }
 
   /**
