@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -20,6 +21,8 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
+  // The pager (a client component) navigates through the router.
+  useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock('next/link', async () => {
   const React = await import('react');
@@ -117,7 +120,7 @@ describe('rentals list: reminder marks on overdue rows', () => {
     expect(m.waiting).toMatch(/^Reminder goes out [A-Z][a-z]{2} \d{1,2}$/);
     expect(m['not-overdue']).toBeUndefined();
     expect(m.returned).toBeUndefined();
-    expect(list).toHaveBeenCalledWith({ status: 'all' });
+    expect(list).toHaveBeenCalledWith({ status: 'all', page: 1 });
   });
 
   it('with Rentals switched off: "Reminders off", except where one was already sent or no email is on file', async () => {
@@ -189,18 +192,68 @@ describe('rentals list: header and status views', () => {
     expect(
       links.filter((l) => l.getAttribute('aria-current') === 'page').map((l) => l.textContent),
     ).toEqual(['Out']);
-    expect(list).toHaveBeenCalledWith({ status: 'out' });
+    expect(list).toHaveBeenCalledWith({ status: 'out', page: 1 });
   });
 
   it('an invalid status falls back to Out; a valid one is current', async () => {
     render(await RentalsPage({ searchParams: Promise.resolve({ status: 'nope' }) }));
-    expect(list).toHaveBeenLastCalledWith({ status: 'out' });
+    expect(list).toHaveBeenLastCalledWith({ status: 'out', page: 1 });
     document.body.innerHTML = '';
     render(await RentalsPage({ searchParams: Promise.resolve({ status: 'overdue' }) }));
     const nav = screen.getByRole('navigation', { name: 'Filter by status' });
     expect(within(nav).getByRole('link', { name: 'Overdue' }).getAttribute('aria-current')).toBe(
       'page',
     );
-    expect(list).toHaveBeenLastCalledWith({ status: 'overdue' });
+    expect(list).toHaveBeenLastCalledWith({ status: 'overdue', page: 1 });
+  });
+});
+
+// B32: the list read `.limit(500)` and said nothing; past 500 rentals the
+// older ones were not there. It now pages 50 at a time with the exact total,
+// and the pager is the table card's footer whenever there is more than one
+// page. The status links start each view on page 1.
+describe('rentals list: pages', () => {
+  function footer(): ReactNode {
+    return (tableProps.mock.calls.at(-1)?.[0] as { footer?: ReactNode }).footer;
+  }
+
+  it('asks for the page in the URL, within the view', async () => {
+    list.mockResolvedValue({ rentals: [row('a')], total: 120, page: 2, pageSize: 50 });
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'all', page: '2' }) }));
+    expect(list).toHaveBeenLastCalledWith({ status: 'all', page: 2 });
+  });
+
+  it('more than one page: the footer says which rows and of how many, and pages within the view', async () => {
+    list.mockResolvedValue({ rentals: [row('a')], total: 120, page: 2, pageSize: 50 });
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'returned', page: '2' }) }));
+    document.body.innerHTML = '';
+    render(<>{footer()}</>);
+    expect(document.body.textContent).toContain('Showing 51–100 of 120');
+    expect(screen.getByRole('link', { name: 'Next →' }).getAttribute('href')).toBe(
+      '/dashboard/rentals?status=returned&page=3',
+    );
+    expect(screen.getByRole('link', { name: '← Prev' }).getAttribute('href')).toBe(
+      '/dashboard/rentals?status=returned',
+    );
+  });
+
+  it('the last page the service settled on is the one shown (a stale ?page= past the end)', async () => {
+    list.mockResolvedValue({ rentals: [row('a')], total: 120, page: 3, pageSize: 50 });
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'all', page: '9' }) }));
+    document.body.innerHTML = '';
+    render(<>{footer()}</>);
+    expect(document.body.textContent).toContain('Showing 101–120 of 120');
+  });
+
+  it('one page: no pager', async () => {
+    list.mockResolvedValue({ rentals: [row('a')], total: 1, page: 1, pageSize: 50 });
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'all' }) }));
+    expect(footer()).toBeUndefined();
+  });
+
+  it('a page that is not a number asks for page 1', async () => {
+    list.mockResolvedValue({ rentals: [], total: 0, page: 1, pageSize: 50 });
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'all', page: 'x' }) }));
+    expect(list).toHaveBeenLastCalledWith({ status: 'all', page: 1 });
   });
 });

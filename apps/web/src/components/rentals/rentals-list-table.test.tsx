@@ -383,3 +383,30 @@ describe('RentalsListTable at narrow widths and empty', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 });
+
+// B32: the Rentals list pages 50 at a time; its pager is the table card's
+// footer, under the rows, as the Movements table draws it.
+describe('RentalsListTable footer', () => {
+  it('draws the footer inside the table card, under the rows', () => {
+    render(
+      <RentalsListTable
+        rentals={[rental('a')]}
+        viewerRole="staff"
+        timeZone={PT}
+        footer={<nav aria-label="Pages">pager</nav>}
+      />,
+    );
+    const footer = screen.getByRole('navigation', { name: 'Pages' }).parentElement!;
+    expect(footer).toHaveAttribute('data-slot', 'rentals-table-footer');
+    const card = footer.parentElement!;
+    expect(within(card).getByRole('table', { name: 'Rentals' })).toBeTruthy();
+    expect(card.lastElementChild).toBe(footer);
+  });
+
+  it('no footer: nothing under the table', () => {
+    const { container } = render(
+      <RentalsListTable rentals={[rental('a')]} viewerRole="staff" timeZone={PT} />,
+    );
+    expect(container.querySelector('[data-slot="rentals-table-footer"]')).toBeNull();
+  });
+});

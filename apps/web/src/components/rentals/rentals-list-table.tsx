@@ -49,6 +49,8 @@ interface RentalsListTableProps {
    * detail page prints the expected return in.
    */
   timeZone: string;
+  /** The pager, drawn as the table card's footer (DESIGN-SPEC 6.9). */
+  footer?: React.ReactNode;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -258,6 +260,7 @@ export function RentalsListTable({
   itemNames,
   reminderMarks,
   timeZone,
+  footer,
 }: RentalsListTableProps) {
   const [returnTarget, setReturnTarget] = React.useState<RentalWithLines | null>(null);
   const [cancelTarget, setCancelTarget] = React.useState<RentalWithLines | null>(null);
@@ -457,6 +460,16 @@ export function RentalsListTable({
             })}
           </TableBody>
         </Table>
+        {/* The pagination footer (DESIGN-SPEC 6.9), as the Movements table
+            draws it: the range on the left, the pager on the right. */}
+        {footer ? (
+          <div
+            data-slot="rentals-table-footer"
+            className="border-border border-t px-4 py-2.5 [&>*:last-child>:last-child]:ml-auto [&>*]:w-full [&>*]:flex-wrap [&>*]:justify-between"
+          >
+            {footer}
+          </div>
+        ) : null}
       </div>
     </>
   );

@@ -8,6 +8,7 @@ import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { RentalsListTable } from '@/components/rentals/rentals-list-table';
 import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { Button } from '@/components/ui/button';
+import { Pagination } from '@/components/ui/pagination';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
@@ -68,10 +69,17 @@ function parseStatus(value: string | undefined): StatusParam {
   return value && VALID_STATUSES.has(value as StatusParam) ? (value as StatusParam) : 'out';
 }
 
+/** `?page=`: a positive whole number, else page 1 (the service clamps the
+ *  rest, including a page past the end). */
+function parsePage(value: string | undefined): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
 export default async function RentalsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; page?: string }>;
 }) {
   const moduleAccess = await checkModuleAccess('rentals');
   if (!moduleAccess.enabled) {
@@ -88,6 +96,7 @@ export default async function RentalsPage({
   }
   const params = await searchParams;
   const status = parseStatus(params.status);
+  const requestedPage = parsePage(params.page);
   const canCreate = can(ctx, 'rentals:create');
 
   const [rentalsSvc, inventorySvc] = await Promise.all([
@@ -95,11 +104,13 @@ export default async function RentalsPage({
     InventoryService.forCurrentUser(),
   ]);
 
-  // The rows, the organization's Rentals row as the overdue sweep reads it
-  // (null when unreadable: overdue rows then show only the marks that do not
-  // depend on it), and the zone for the marks' dates.
-  const [{ rentals }, remindersOn, timeZone] = await Promise.all([
-    rentalsSvc.list({ status }),
+  // One page of the view's rows with its exact total (B32: it read the 500
+  // newest and said nothing past them), the organization's Rentals row as
+  // the overdue sweep reads it (null when unreadable: overdue rows then show
+  // only the marks that do not depend on it), and the zone for the marks'
+  // dates.
+  const [{ rentals, total, page, pageSize }, remindersOn, timeZone] = await Promise.all([
+    rentalsSvc.list({ status, page: requestedPage }),
     rentalsSvc.overdueRemindersOn(),
     getOrgRowForRequest(ctx.organizationId)
       .then((org) => resolveOrgTimezone(org?.timezone))
@@ -149,13 +160,28 @@ export default async function RentalsPage({
         }))}
       />
 
-      {/* Table */}
+      {/* Table, with the pager as its footer when the view has more than
+          one page. SERIALIZABLE props only (basePath + baseParams): a
+          function prop crosses the server/client boundary and crashes the
+          page (ui/pagination.tsx). The page the service settled on is the
+          one shown: a stale ?page= past the end reads the last page. */}
       <RentalsListTable
         rentals={rentals}
         viewerRole={ctx.role}
         itemNames={itemNames}
         reminderMarks={reminderMarks}
         timeZone={timeZone}
+        footer={
+          total > pageSize || page > 1 ? (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              basePath="/dashboard/rentals"
+              baseParams={{ status }}
+            />
+          ) : undefined
+        }
       />
     </div>
   );
