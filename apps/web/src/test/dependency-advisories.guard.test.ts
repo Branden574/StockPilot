@@ -29,16 +29,20 @@ import { describe, expect, it } from 'vitest';
  *     the phone app with its own pinned metro 0.84.5 (@expo/metro).
  *   - fast-uri 3.1.8 (four advisories of 2026-10-23): ajv 8, for commitlint
  *     and as @hookform/resolvers' unused ajv peer.
+ *   - vite 6.4.3 (five advisories of 2026-10-20 and 2026-10-21, about its
+ *     development server) and @vitest/mocker 4.1.11 (GHSA-qxg6-89mg-rqv8,
+ *     GHSA-xp26-3454-mjgp): the test runner in apps/web, apps/mobile and
+ *     packages/core. vitest 4.1.12 and vite 6.4.5 fix them.
  *
  * sharp and shell-quote, fixed by #381 while their alerts (#119 and #118)
  * were still open, are held to the same rule.
  *
  * WHAT STOPS IT NOW: root package.json overrides set the floors
  * (compression@1 ^1.8.2, dompurify@3 ^3.4.17, source-map-js@1 ^1.2.2,
- * fast-uri@3 ^3.1.9), and this test reads every version the lockfile
- * resolves and fails when one is inside an advisory's vulnerable range. A
- * lockfile change that brings one back (a new dependency, a revert, a hand
- * edit) fails CI instead of waiting for an alert.
+ * fast-uri@3 ^3.1.9, vite ^6.4.4), and this test reads every version the
+ * lockfile resolves and fails when one is inside an advisory's vulnerable
+ * range. A lockfile change that brings one back (a new dependency, a revert,
+ * a hand edit) fails CI instead of waiting for an alert.
  *
  * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release; zod 3
  * (GHSA-mrhx-c7xc-m3w5) needs zod 4, a change of its own. A withdrawn
@@ -149,6 +153,29 @@ const FLOORS: Floor[] = [
     ],
   },
   {
+    pkg: 'vite',
+    advisories: [
+      'GHSA-587h-7wmj-h5pm',
+      'GHSA-698v-4r3x-3vcv',
+      'GHSA-r825-w8mm-5pxw',
+      'GHSA-rq7h-c2jc-7f22',
+      'GHSA-9jrq-w75r-8gcw',
+    ],
+    ranges: [
+      { fixed: '6.4.4' },
+      { from: '7.0.0', fixed: '7.3.7' },
+      { from: '8.0.0', fixed: '8.1.6' },
+      { from: '8.2.0', fixed: '8.2.4' },
+      { from: '8.3.0', fixed: '8.3.3' },
+    ],
+  },
+  {
+    pkg: '@vitest/mocker',
+    // GHSA-qxg6-89mg-rqv8 >=2.1.0-beta.7 <4.1.12; GHSA-xp26-3454-mjgp >=4.1.11 <4.1.12.
+    advisories: ['GHSA-qxg6-89mg-rqv8', 'GHSA-xp26-3454-mjgp'],
+    ranges: [{ from: '2.1.0-beta.7', fixed: '4.1.12' }],
+  },
+  {
     pkg: 'sharp',
     advisories: ['GHSA-wq5f-xc86-pv6w'],
     ranges: [{ fixed: '0.35.5' }],
@@ -252,6 +279,8 @@ describe('the check itself', () => {
       'source-map-js@1.2.1',
       'image-size@1.2.1',
       'fast-uri@3.1.8',
+      'vite@6.4.3',
+      "'@vitest/mocker@4.1.11'",
       'sharp@0.35.4',
       'shell-quote@1.10.0',
       "'@scope/other@1.0.0'",
@@ -262,6 +291,8 @@ describe('the check itself', () => {
       'source-map-js@1.2.1',
       'image-size@1.2.1',
       'fast-uri@3.1.8',
+      'vite@6.4.3',
+      '@vitest/mocker@4.1.11',
       'sharp@0.35.4',
       'shell-quote@1.10.0',
     ]);
@@ -272,6 +303,8 @@ describe('the check itself', () => {
           'dompurify@3.4.17',
           'source-map-js@1.2.2',
           'fast-uri@3.1.9',
+          'vite@6.4.4',
+          "'@vitest/mocker@4.1.12'",
           'sharp@0.35.5',
           'shell-quote@1.11.0',
         ]),
@@ -283,6 +316,10 @@ describe('the check itself', () => {
     expect(vulnerableLocked(fixture(['source-map-js@0.6.2', 'shell-quote@1.8.3']))).toEqual([]);
     expect(vulnerableLocked(fixture(['fast-uri@2.4.7', 'fast-uri@4.2.2']))).toHaveLength(2);
     expect(vulnerableLocked(fixture(['fast-uri@2.4.8', 'fast-uri@4.2.3']))).toEqual([]);
+    expect(vulnerableLocked(fixture(['vite@7.3.6', 'vite@8.2.0', 'vite@8.3.2']))).toHaveLength(3);
+    expect(vulnerableLocked(fixture(['vite@7.3.7', 'vite@8.1.6', 'vite@8.3.3']))).toEqual([]);
+    expect(vulnerableLocked(fixture(["'@vitest/mocker@2.1.0-beta.6'"]))).toEqual([]);
+    expect(vulnerableLocked(fixture(["'@vitest/mocker@2.1.0-beta.7'"]))).toHaveLength(1);
   });
 
   it('orders prereleases before their release and fails a version it cannot read', () => {
