@@ -379,6 +379,11 @@ describe('restoreSnapshot after an Ungroup', () => {
       binLocation: '7-B',
       quantityOnHand: 6,
     });
+    // create() asks before it creates the rack a create's stock is typed onto
+    // (2026-10-24), and nobody can answer it during a restore. Without this
+    // option a re-created record with stock whose rack is gone is refused,
+    // and the catch below counts it as a failure without a word.
+    expect(h.create.mock.calls[0]?.[1]).toEqual({ allowUnconfirmedNewRack: true });
     expect(res).toMatchObject({ updated: 1, recreated: 1, extrasFlagged: 0 });
   });
 
@@ -513,6 +518,7 @@ describe('restoreSnapshot after an Ungroup', () => {
       binLocation: '22-C',
       quantityOnHand: 4,
     });
+    expect(h.create.mock.calls[0]?.[1]).toEqual({ allowUnconfirmedNewRack: true });
     expect(res).toMatchObject({
       updated: 1,
       recreated: 1,
@@ -636,6 +642,10 @@ describe('restoreSnapshot: a version 1 point after an Ungroup (PR stage, DATA-1)
     ).toEqual([
       ['SP-PAIR', '22-C'],
       ['SP-PAIR', '22-E'],
+    ]);
+    expect(h.create.mock.calls.map((c) => c[1])).toEqual([
+      { allowUnconfirmedNewRack: true },
+      { allowUnconfirmedNewRack: true },
     ]);
     expect(res).toMatchObject({
       updated: 1,

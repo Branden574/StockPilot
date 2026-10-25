@@ -37,6 +37,7 @@ import {
   newRackLabel,
   resolveMoveSource,
   seedDestinationFromStorage,
+  SHEET_DESTINATIONS_UNREADABLE_NOTE,
   type DestinationFields,
   type MoveDestination,
   type MoveHolding,
@@ -311,6 +312,9 @@ export function MoveStockModal({
   // The holdings read itself failed: say so, rather than fall through to an
   // empty state that would describe stock the sheet never read.
   const [holdingsUnreadable, setHoldingsUnreadable] = React.useState(false);
+  // The read of the racks and crates to move INTO failed: say so and offer no
+  // move, rather than treat it as a warehouse with no racks.
+  const [destinationsUnreadable, setDestinationsUnreadable] = React.useState(false);
   const [destinations, setDestinations] = React.useState<MoveDestination[]>([]);
   // Warehouse name for the fixed put-away source — shown verbatim in the
   // new-rack confirmation copy so the phone's words match the web dialog's.
@@ -365,6 +369,7 @@ export function MoveStockModal({
     setElsewhere(NO_ELSEWHERE);
     setDestScope(UNRESTRICTED);
     setHoldingsUnreadable(false);
+    setDestinationsUnreadable(false);
     const freeForm = !putAwaySourceLocationId;
     void (async () => {
       // Source holdings: every location this item has stock in (placed racks +
@@ -471,6 +476,15 @@ export function MoveStockModal({
         }
         const destRes = await destQuery.order('name', { ascending: true });
         if (cancelled) return;
+        // A failed read is not "no racks yet" (2026-10-24). Taken as one, every
+        // typed rack read as new, Unplaced dropped out of the list, and a member
+        // who may not create racks was told there was nothing to move into. Say
+        // it and stop, as the holdings read above does.
+        if (destRes.error) {
+          setDestinationsUnreadable(true);
+          setLoading(false);
+          return;
+        }
         const str = (v: unknown) => (typeof v === 'string' ? v : null);
         ds = ((destRes.data ?? []) as Record<string, unknown>[]).map((d) => ({
           id: String(d.id),
@@ -669,7 +683,7 @@ export function MoveStockModal({
     : isNewRack
       ? newLocationReady(newLocation)
       : !!toId;
-  const canSubmit = !!fromId && destChosen && qtyValid && !submitting;
+  const canSubmit = !!fromId && destChosen && qtyValid && !submitting && !destinationsUnreadable;
 
   function holdingLabel(h: Holding): string {
     if (h.kind === 'staging') return `Staging · ${h.quantity}`;
@@ -928,6 +942,10 @@ export function MoveStockModal({
             ) : holdingsUnreadable ? (
               <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 {SHEET_HOLDINGS_UNREADABLE_NOTE}
+              </Mono>
+            ) : destinationsUnreadable ? (
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
+                {SHEET_DESTINATIONS_UNREADABLE_NOTE}
               </Mono>
             ) : sourceMissing ? (
               // The tapped worklist row is gone — someone else placed it, or it

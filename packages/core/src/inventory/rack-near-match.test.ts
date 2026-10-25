@@ -147,3 +147,61 @@ describe('describeNewRackPlacement — shared copy', () => {
     expect(d.title).toBe('Create new crate Blue #42?');
   });
 });
+
+// The item create's own question (2026-10-25). Creating the rack needs Manage
+// locations and moving the stock onto it needs Transfer stock, so a member
+// without either cannot have the stock put on a new rack by saying yes. The
+// question then says what saving really does, and never "Continuing creates it".
+describe('describeNewRackPlacement — a yes that cannot put the stock on the new rack', () => {
+  const DC4 = ['17-B', '18-B', '20-A', '22-A', '35', '35-A', '36-A'];
+
+  it('a member who cannot create racks is told so, with the near-matches still offered', () => {
+    const d = describeNewRackPlacement({
+      label: '1-B',
+      warehouseName: 'DC4',
+      quantity: 130,
+      existingLabels: DC4,
+      blockedBy: 'create_rack',
+    });
+    expect(d.exists).toBe(false);
+    expect(d.title).toBe('Rack 1-B does not exist');
+    expect(d.message).toBe(
+      '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?',
+    );
+    expect(d.suggestions).toEqual(['17-B', '18-B']);
+  });
+
+  it('a member who cannot move stock is told that instead', () => {
+    const d = describeNewRackPlacement({
+      label: '77-A',
+      quantity: 1,
+      existingLabels: [],
+      blockedBy: 'move_stock',
+    });
+    expect(d.title).toBe('Rack 77-A does not exist');
+    expect(d.message).toBe(
+      '77-A does not exist yet, and moving stock onto a rack needs the Transfer stock permission. Saving does not put the 1 unit on a rack.',
+    );
+  });
+
+  it('changes nothing for a member who can, or for a rack that exists', () => {
+    const can = describeNewRackPlacement({
+      label: '1-B',
+      warehouseName: 'DC4',
+      quantity: 130,
+      existingLabels: DC4,
+      blockedBy: null,
+    });
+    expect(can.title).toBe('Create new rack 1-B?');
+    expect(can.message).toBe(
+      '1-B does not exist in DC4 yet. Continuing creates it and moves 130 units into it. Did you mean 17-B or 18-B?',
+    );
+    const existing = describeNewRackPlacement({
+      label: '17-b',
+      quantity: 130,
+      existingLabels: DC4,
+      blockedBy: 'create_rack',
+    });
+    expect(existing).toMatchObject({ exists: true, title: '', message: '', suggestions: [] });
+  });
+});
