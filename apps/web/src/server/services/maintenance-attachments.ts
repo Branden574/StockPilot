@@ -384,9 +384,11 @@ export class MaintenanceAttachmentsService {
    * ICC), and writes the clean photo OVER the upload. The thumbnail is made
    * from the clean photo on the server and written at the name the mint
    * handed out ({uuid}-thumb.webp, derived below exactly as before),
-   * replacing whatever the client sent there (the web and phone still PUT
-   * their own before finalize; the ticket cannot replace an existing object,
-   * because the mint signs without upsert). The row describes the STORED
+   * replacing whatever a client sent there (since B29 the web and phone send
+   * none, but phones on older updates still PUT one before finalize; the
+   * ticket cannot replace an existing object, because the mint signs without
+   * upsert, which is also why the mint still hands the ticket out: those
+   * phones expect it). The row describes the STORED
    * file: its byte_size, and its width/height after orientation.
    *
    * A recorded upload is never read, rewritten or deleted by a later finalize
