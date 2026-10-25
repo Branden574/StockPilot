@@ -1,20 +1,49 @@
+import { createHash } from 'node:crypto';
+
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
+import {
+  MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS,
+  verifyMemberUnsubscribeToken,
+  type MemberEmailKind,
+} from '@/lib/email/member-unsubscribe';
 import {
   normalizeUnsubscribeEmail,
   verifyUnsubscribeToken,
 } from '@/lib/email/unsubscribe';
+import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { unsubscribeMemberEmail } from '@/server/services/member-email-unsubscribe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Public unsubscribe endpoint for order-request emails —
- * `/unsubscribe?e=<email>&t=<hmac>`. The recipients are anonymous
- * public requesters with no account, so this lives OUTSIDE the login
- * wall; the HMAC token (lib/email/unsubscribe.ts) is what stops the
- * endpoint from unsubscribing arbitrary addresses.
+ * Public unsubscribe endpoint, for two kinds of link:
+ *
+ *   - order-request emails — `/unsubscribe?e=<email>&t=<hmac>`. The
+ *     recipients are anonymous public requesters with no account; the
+ *     HMAC token (lib/email/unsubscribe.ts) is what stops the endpoint
+ *     from unsubscribing arbitrary addresses, and the opt-out lands in
+ *     public_email_unsubscribes.
+ *   - member emails (the weekly digest and its preview, schedule
+ *     reminders; B15) — `/unsubscribe?m=<kind>.<user>.<org>.<day>.<hmac>`
+ *     (lib/email/member-unsubscribe.ts). The opt-out is the member's own
+ *     switch on the Notifications page
+ *     (services/member-email-unsubscribe.ts), honoured only while the
+ *     member still belongs to the organization the link names. Every
+ *     refusal — a changed link, an unknown kind, a removed member — is the
+ *     same page, so a link says nothing about the account behind it. A
+ *     correctly signed link more than 90 days past the day its email was
+ *     built gets a "too old" page instead, on GET and POST, before any
+ *     database or limiter call: only the link is judged, so that page says
+ *     nothing about the account either.
+ *
+ * Both live OUTSIDE the login wall (the proxy does not match this path, and
+ * nothing here reads a session): a member reading the email signed out, and
+ * a mail provider's one-click POST, have no session to offer.
  *
  * Why GET must NOT record the opt-out: corporate/school email security
  * scanners prefetch every link within seconds of delivery (observed
@@ -32,6 +61,13 @@ export const dynamic = 'force-dynamic';
  *     pair advertises.
  * Both are idempotent: the upsert makes a second POST land on the same
  * "you're unsubscribed" page.
+ *
+ * Rate limits (POST only, like the other public routes, failing CLOSED):
+ * per link (its sha256, never the link itself) and per address. They are
+ * checked after the signature, so a forged link costs no database call at
+ * all, and before any read or write. GET does no database work to protect:
+ * the signature check is pure computation, and a limiter there would only
+ * add a database write for every scanner prefetch.
  */
 
 function escapeHtml(s: string): string {
@@ -53,6 +89,7 @@ h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin
 p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0}
 p.lead{margin:0 0 24px}
 strong{color:#0e0f0d;font-weight:600}
+a{color:#0e0f0d;font-weight:500;text-underline-offset:2px}
 .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#0e0f0d;color:#fafaf7;font:inherit;font-weight:500;font-size:15px;cursor:pointer}
 .btn:hover{background:#2a2c28}
 .btn:focus-visible{outline:2px solid #2f7463;outline-offset:2px}
@@ -61,6 +98,7 @@ body{background:#0c0d0a;color:#f0efe8}
 main{background:#131410;border-color:#1f201b}
 p{color:#9a9b91}
 strong{color:#f0efe8}
+a{color:#f0efe8}
 .btn{background:#f0efe8;color:#0c0d0a}
 .btn:hover{background:#d8d6cc}
 .btn:focus-visible{outline-color:#7acdb8}
@@ -70,7 +108,12 @@ strong{color:#f0efe8}
  * Plain server-rendered HTML on purpose (mirrors /auth/confirm): zero
  * JS, renders in every mail-client browser, nothing to hydrate.
  */
-function htmlPage(heading: string, bodyHtml: string, status: number): NextResponse {
+function htmlPage(
+  heading: string,
+  bodyHtml: string,
+  status: number,
+  extraHeaders: Record<string, string> = {},
+): NextResponse {
   const html = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -94,6 +137,7 @@ function htmlPage(heading: string, bodyHtml: string, status: number): NextRespon
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
       'x-robots-tag': 'noindex',
+      ...extraHeaders,
     },
   });
 }
@@ -109,8 +153,238 @@ function invalidPage(): NextResponse {
   );
 }
 
+function errorPage(): NextResponse {
+  return htmlPage(
+    'Something went wrong',
+    `<p>
+      We couldn't record your preference. Please try the link again in
+      a few minutes.
+    </p>`,
+    500,
+  );
+}
+
+// ── Member emails (B15) ──────────────────────────────────────────────
+
+/** Where a member chooses their emails when signed in. */
+const SETTINGS_PATH = '/dashboard/settings/notifications';
+
+/**
+ * The one page for every member-link refusal: a changed or forged link, an
+ * unknown kind, a link signed with no signing value configured, a member who
+ * no longer belongs to the organization, and an account that is gone or
+ * disabled. The same status and the same bytes for all of them, so a link
+ * never tells anyone whether an account or a membership exists.
+ */
+function memberInvalidPage(): NextResponse {
+  return htmlPage(
+    "This link isn't valid",
+    `<p class="lead">
+      This unsubscribe link was changed, or it's no longer active. To choose
+      which emails StockPilot sends you, sign in and open Settings, then
+      Notifications.
+    </p>
+    <p><a href="${SETTINGS_PATH}">Open notification settings</a></p>`,
+    400,
+  );
+}
+
+/**
+ * Copy per kind: what the switch is, in the Notifications page's words.
+ *
+ * Both switches are account settings (user_profiles.email_digest_optin,
+ * notification_preferences.email_schedule_reminders, one row per account), so
+ * the confirm page and the done page both say the email stops for every
+ * workspace and where to turn it back on (integrator decision 2). The confirm
+ * page never says "your account": the link works with no sign-in, so its
+ * reader may be someone the email was forwarded to, and it says so.
+ */
+const MEMBER_COPY: Record<
+  MemberEmailKind,
+  { confirmHeading: string; confirmLead: string; doneBody: string; expiredBody: string }
+> = {
+  weekly_digest: {
+    confirmHeading: 'Unsubscribe from the weekly digest?',
+    confirmLead:
+      'This stops the weekly inventory digest email for the StockPilot account this email ' +
+      "was sent to. It's an account setting, so the digest stops for every workspace the " +
+      'account belongs to. To get it again, sign in and open Settings, then Notifications.',
+    doneBody:
+      'The weekly inventory digest is off for your account now, in every workspace you ' +
+      'belong to. To turn it back on, sign in to StockPilot and open Settings, then ' +
+      'Notifications.',
+    expiredBody:
+      `Unsubscribe links work for ${MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS} days after the email is ` +
+      'sent, so this one changed nothing. To stop the weekly inventory digest, use the ' +
+      'Unsubscribe link in a newer digest, or sign in and open Settings, then Notifications.',
+  },
+  schedule_reminders: {
+    confirmHeading: 'Unsubscribe from schedule reminder emails?',
+    confirmLead:
+      'This stops the emails sent 24 hours and 1 hour before scheduled events, for the ' +
+      "StockPilot account this email was sent to. Reminders in the app and on the phone don't " +
+      "change. It's an account setting, so the emails stop for every workspace the account " +
+      'belongs to. To get them again, sign in and open Settings, then Notifications.',
+    doneBody:
+      'Schedule reminder emails are off for your account now, in every workspace you belong ' +
+      'to. Reminders in the app and on your phone still arrive. To turn the emails back on, ' +
+      'sign in to StockPilot and open Settings, then Notifications.',
+    expiredBody:
+      `Unsubscribe links work for ${MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS} days after the email is ` +
+      'sent, so this one changed nothing. To stop schedule reminder emails, use the ' +
+      'Unsubscribe link in a newer reminder, or sign in and open Settings, then Notifications.',
+  },
+};
+
+/** For the reader of a forwarded email: the link acts for the member it was sent to. */
+const FORWARDED_NOTE = "If someone forwarded this email to you, it's their account, not yours.";
+
+function memberConfirmPage(link: string, kind: MemberEmailKind): NextResponse {
+  const copy = MEMBER_COPY[kind];
+  return htmlPage(
+    copy.confirmHeading,
+    `<p class="lead">
+      ${escapeHtml(copy.confirmLead)}
+    </p>
+    <p class="lead">
+      ${escapeHtml(FORWARDED_NOTE)}
+    </p>
+    <form method="post" action="/unsubscribe">
+      <input type="hidden" name="m" value="${escapeHtml(link)}">
+      <button type="submit" class="btn">
+        Unsubscribe
+      </button>
+    </form>`,
+    200,
+  );
+}
+
+function memberDonePage(kind: MemberEmailKind): NextResponse {
+  return htmlPage(
+    "You're unsubscribed",
+    `<p>
+      ${escapeHtml(MEMBER_COPY[kind].doneBody)}
+    </p>`,
+    200,
+  );
+}
+
+/**
+ * A correctly signed link past its 90 days (integrator decision 1). It
+ * changes nothing and is answered from the link alone, with no database or
+ * limiter call. 410: the link is gone for good, and a one-click provider must
+ * not count it done. Every email carries a fresh link, and the settings page
+ * always works.
+ */
+function memberExpiredPage(kind: MemberEmailKind): NextResponse {
+  return htmlPage(
+    'This link is too old',
+    `<p class="lead">
+      ${escapeHtml(MEMBER_COPY[kind].expiredBody)}
+    </p>
+    <p><a href="${SETTINGS_PATH}">Open notification settings</a></p>`,
+    410,
+  );
+}
+
+// ── Rate limits (POST) ───────────────────────────────────────────────
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+/** POSTs per link per hour: a person's clicks plus a provider's retries. */
+const POSTS_PER_LINK_PER_HOUR = 20;
+/**
+ * POSTs per address per hour. Generous: a mail provider sends every
+ * recipient's one-click POST from its own small set of addresses.
+ */
+const POSTS_PER_IP_PER_HOUR = 120;
+
+/**
+ * The limiter's answer for a POST whose link already verified, or null when
+ * it may go on. The link bucket is keyed by the link's sha256 (a raw link in
+ * rate_limit_buckets would be a working unsubscribe link at rest). An address
+ * that cannot be resolved skips its bucket rather than sharing one counter
+ * with every other such caller (the /m share page's rule); the link bucket
+ * still applies.
+ */
+async function postRateLimited(link: string, ip: string): Promise<NextResponse | null> {
+  const linkKey = `unsubscribe:link:${createHash('sha256').update(link.toLowerCase()).digest('hex')}`;
+  const checks = [checkRateLimit(linkKey, POSTS_PER_LINK_PER_HOUR, ONE_HOUR_MS, 'closed')];
+  if (ip !== 'unknown') {
+    checks.push(
+      checkRateLimit(`unsubscribe:ip:${ip}`, POSTS_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
+    );
+  }
+  const denied = (await Promise.all(checks)).find((r) => !r.allowed);
+  if (!denied) return null;
+  const retryAfter = Math.max(1, Math.ceil((denied.resetAt - Date.now()) / 1000));
+  return htmlPage(
+    'Too many tries',
+    `<p>
+      Wait a few minutes, then use the link again.
+    </p>`,
+    429,
+    { 'retry-after': String(retryAfter) },
+  );
+}
+
+/** A form field as a string; a file or a missing field is null. */
+function formString(form: FormData | null, name: string): string | null {
+  const value = form?.get(name);
+  return typeof value === 'string' ? value : null;
+}
+
+async function memberPost(request: NextRequest, link: string): Promise<NextResponse> {
+  // Pure computation first: a forged or expired link never reaches the
+  // limiter or the database.
+  const verdict = verifyMemberUnsubscribeToken(link);
+  // Non-2xx tells a one-click provider the unsubscribe did NOT happen.
+  if (verdict.status === 'expired') return memberExpiredPage(verdict.kind);
+  if (verdict.status !== 'valid') return memberInvalidPage();
+  const { claim } = verdict;
+
+  const ip = clientIpFromRequest(request);
+  const limited = await postRateLimited(link, ip);
+  if (limited) return limited;
+
+  try {
+    const outcome = await unsubscribeMemberEmail(createAdminClient(), claim, {
+      ip: ip === 'unknown' ? null : ip,
+      userAgent: request.headers.get('user-agent'),
+    });
+    // Only a change made (or already made) is a success; every refusal (a
+    // removed member, a deleted or disabled account, and anything added
+    // later) is the forged-link page.
+    if (outcome === 'unsubscribed' || outcome === 'already_unsubscribed') {
+      return memberDonePage(claim.kind);
+    }
+    return memberInvalidPage();
+  } catch (e) {
+    // Never the link in the report: it is a working unsubscribe link.
+    void reportError(e, {
+      tag: 'unsubscribe.member.write_failed',
+      extra: { kind: claim.kind, organizationId: claim.organizationId },
+    });
+    // 5xx so Gmail/Yahoo retry the one-click POST instead of assuming
+    // success while the member keeps receiving email.
+    return errorPage();
+  }
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+
+  // A member link wins over address parameters in the same URL.
+  const link = searchParams.get('m');
+  if (link !== null) {
+    // Verification is pure computation — GET never touches the database.
+    const verdict = verifyMemberUnsubscribeToken(link);
+    if (verdict.status === 'valid') return memberConfirmPage(link, verdict.claim.kind);
+    if (verdict.status === 'expired') return memberExpiredPage(verdict.kind);
+    return memberInvalidPage();
+  }
+
   const email = searchParams.get('e');
   const token = searchParams.get('t');
 
@@ -141,20 +415,27 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   // One-click providers POST to the List-Unsubscribe URL verbatim, so
   // prefer the query string; the human confirm form carries the same
-  // pair as hidden fields instead.
+  // values as hidden fields instead.
   const { searchParams } = new URL(request.url);
+  let link = searchParams.get('m');
   let email = searchParams.get('e');
   let token = searchParams.get('t');
-  if (!email || !token) {
+  if (link === null && (!email || !token)) {
     const form = await request.formData().catch(() => null);
-    email = email ?? ((form?.get('e') as string | null) ?? null);
-    token = token ?? ((form?.get('t') as string | null) ?? null);
+    link = formString(form, 'm');
+    email = email ?? formString(form, 'e');
+    token = token ?? formString(form, 't');
   }
+
+  if (link !== null) return memberPost(request, link);
 
   if (!email || !token || !verifyUnsubscribeToken(email, token)) {
     // Non-2xx tells a one-click provider the unsubscribe did NOT happen.
     return invalidPage();
   }
+
+  const limited = await postRateLimited(token, clientIpFromRequest(request));
+  if (limited) return limited;
 
   const normalized = normalizeUnsubscribeEmail(email);
   try {
@@ -170,14 +451,7 @@ export async function POST(request: NextRequest) {
     console.error('[unsubscribe] opt-out write failed', e);
     // 5xx so Gmail/Yahoo retry the one-click POST instead of assuming
     // success while the address keeps receiving email.
-    return htmlPage(
-      'Something went wrong',
-      `<p>
-        We couldn't record your preference. Please try the link again in
-        a few minutes.
-      </p>`,
-      500,
-    );
+    return errorPage();
   }
 
   return htmlPage(

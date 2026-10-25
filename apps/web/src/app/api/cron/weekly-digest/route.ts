@@ -8,6 +8,7 @@ import {
   weeklyDigestSubject,
   weeklyDigestText,
 } from '@/lib/email/es/families/digest';
+import { memberUnsubscribeDelivery } from '@/lib/email/member-unsubscribe';
 import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -352,27 +353,35 @@ export async function GET(req: Request) {
             });
           }
 
+          // The recipient's own signed one-click link for this org's digest
+          // (lib/email/member-unsubscribe.ts): List-Unsubscribe and
+          // List-Unsubscribe-Post, and the footer's and the text part's
+          // Unsubscribe. /unsubscribe honours it signed out and on a mail
+          // provider's RFC 8058 POST by turning off this member's
+          // email_digest_optin, the settings page's own switch. Without a
+          // signing value it is the settings page, with no -Post header.
+          // Dated with the run's UTC day: the link works for 90 days.
+          const unsubscribe = memberUnsubscribeDelivery({
+            appUrl,
+            settingsUrl,
+            claim: { userId, organizationId: orgId, kind: 'weekly_digest' },
+            issuedAt: runStartedAt,
+          });
           const html = renderWeeklyDigestHtml(payload, {
             ...opts,
+            unsubscribeUrl: unsubscribe.url,
             recipientName: name,
             now: runStartedAt,
             timeZone: group.timeZone,
           });
-          const text = weeklyDigestText(payload, opts);
-          // RFC 8058 List-Unsubscribe header. Until a dedicated
-          // one-click endpoint ships, point at the in-app settings
-          // page — that's the canonical place to flip the
-          // email_digest_optin flag and Gmail / Apple Mail both
-          // surface it as the inline "Unsubscribe" link.
+          const text = weeklyDigestText(payload, { ...opts, unsubscribeUrl: unsubscribe.url });
           const res = await sendEmail({
             to,
             subject,
             html,
             text,
             from: DIGEST_FROM,
-            headers: {
-              'List-Unsubscribe': `<${settingsUrl}>`,
-            },
+            headers: unsubscribe.headers,
           });
           if (res.ok) sent += 1;
           else {
