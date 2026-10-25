@@ -41,13 +41,18 @@ vi.mock('./api', () => ({ api: vi.fn() }));
  *      its source cannot silently un-pin the wipe.
  *
  * ONE PERSISTED KEY IS KEPT ON PURPOSE: `cache_user_id`, the record of whose
- * cache this is (cache-owner.ts). A pull that finds no record keeps the rows
- * cached since the wipe that forgot it, and deleteOrgData (a workspace switch,
- * the workspace repair, Settings > Offline cache > Clear) keeps the account and
+ * cache this is (cache-owner.ts). deleteOrgData (a workspace switch, the
+ * workspace repair, Settings > Offline cache > Clear) keeps the account and
  * its photos, so it keeps the record too. Only the wipes of an account leaving
  * the device, whose callers clear the photos first, forget it (wipeForSignOut,
- * wipeForEviction). Pinned in (3) below; executed end to end in
+ * wipeForEviction), and the reset for another account whose photo clear failed
+ * (setCacheOwner(null), sync.ts). Pinned in (3) below; executed end to end in
  * cache-owner.sqlite.test.ts.
+ *
+ * AND THE ADOPT FORGETS THE SAME KEYS (B18 review of 43256f0da). A pull that
+ * finds no record forgets the cursor and every persisted org-scoped value too
+ * (db.ts markCacheUnconfirmed), but not the record, which it then sets: the
+ * same list, pinned against sync.ts's writers the same way, in (4).
  */
 
 const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8');
@@ -146,14 +151,18 @@ describe('(3) the record of whose cache it is outlives a wipe that keeps the pho
     );
   });
 
-  it('only the sign-out and the eviction wipes forget it, inside their own transaction', () => {
+  it('only the sign-out and the eviction wipes forget it, inside their own transaction, and setCacheOwner(null)', () => {
     expect(fnBody('export async function wipeForSignOut(')).toContain(
       'await forgetCacheOwner(db);',
     );
     expect(fnBody('export async function wipeForEviction(')).toContain(
       'await forgetCacheOwner(db);',
     );
-    expect([...code(dbSrc).matchAll(/forgetCacheOwner\(db\)/g)]).toHaveLength(2);
+    // The reset whose photo clear failed (sync.ts): neither account's.
+    expect(fnBody('export async function setCacheOwner(')).toMatch(
+      /if \(userId === null\) await forgetCacheOwner\(db\);/,
+    );
+    expect([...code(dbSrc).matchAll(/forgetCacheOwner\(db\)/g)]).toHaveLength(3);
   });
 
   it('forgetCacheOwner and setCacheOwner use the constant sync.ts reads and stamps', () => {
@@ -184,6 +193,30 @@ describe('(3) the record of whose cache it is outlives a wipe that keeps the pho
     expect(touching.sort()).toEqual(
       ['src/lib/cache-owner.ts', 'src/lib/db.ts', 'src/lib/sync.ts'].map((f) => path.normalize(f)),
     );
+  });
+});
+
+describe('(4) the adopt forgets the same org-scoped keys, and never the record', () => {
+  const body = fnBody('export async function markCacheUnconfirmed(');
+  const persisted = persistedMetaKeys(syncSrc);
+
+  // Mutation caught: the adopt keeping the cursor (a delta pull on another
+  // account's timeline sweeps nothing) or any persisted value, or a key added
+  // to sync.ts later and left out here.
+  it('forgets every key sync.ts writes, except the record of whose cache it is', () => {
+    const missing = persisted.filter(
+      (k) =>
+        !KEPT_BY_THE_WIPE.includes(k) && !body.includes(`delete from meta where key = '${k}';`),
+    );
+    expect(missing).toEqual([]);
+    expect(body).not.toMatch(/cache_user_id|CACHE_USER_META_KEY|forgetCacheOwner/);
+  });
+
+  it('marks every stamped table, and deletes no row', () => {
+    for (const table of ['items', 'purchase_orders', 'cycle_counts', 'bundles']) {
+      expect(body).toContain(`update ${table} set last_synced_at = \${UNCONFIRMED_ROW_STAMP};`);
+    }
+    expect(body).not.toMatch(/delete from (?!meta\b)/);
   });
 });
 

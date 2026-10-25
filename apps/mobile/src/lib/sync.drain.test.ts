@@ -72,8 +72,10 @@ vi.mock('./db', () => ({
   getMeta: vi.fn(async () => null),
   setMeta: vi.fn(async () => {}),
   // getMeta records no owner, so every pull here adopts: it clears the photo
-  // caches and records the account before it is sent (sync.ts).
+  // caches, marks the cached rows unconfirmed and records the account before
+  // it is sent (sync.ts).
   setCacheOwner: vi.fn(async () => {}),
+  markCacheUnconfirmed: vi.fn(async () => {}),
 }));
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
@@ -92,8 +94,11 @@ vi.mock('./warehouse-scope', () => ({
 // the adopt's photo clear does nothing; the reset and the adopt are tested in
 // sync.snapshot-removals.test.ts and cache-owner.sqlite.test.ts.
 vi.mock('./photo-cache-wipe', () => ({
-  wipeWithPhotoCaches: async (wipe: () => Promise<void>) => wipe(),
-  clearPhotoCaches: async () => {},
+  wipeWithPhotoCaches: async (wipe: () => Promise<void>) => {
+    await wipe();
+    return true;
+  },
+  clearPhotoCaches: async () => true,
 }));
 
 type Row = {

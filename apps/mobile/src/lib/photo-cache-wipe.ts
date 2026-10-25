@@ -29,7 +29,8 @@ import { forgetSignedImageUrls } from './image-cache';
  * And a pull that finds no owner recorded clears the photos on their own
  * (clearPhotoCaches, sync.ts): it cannot tell whose they are, an older
  * release's wipes having forgotten the record and kept them, and it keeps the
- * rows, so no SQLite wipe runs there (cache-owner.ts).
+ * rows until its full pull sorts them (marked unconfirmed, not wiped), so no
+ * SQLite wipe runs there (cache-owner.ts).
  *
  * WHICH WIPES, AND IN WHICH ORDER (B18 reviews, 2026-10-24). That next pull
  * resets only a cache recorded as ANOTHER account's; one with no record keeps
@@ -50,31 +51,60 @@ import { forgetSignedImageUrls } from './image-cache';
  *
  * Best-effort: a cache that cannot be cleared is reported and never stops the
  * sign-out or the pull.
+ *
+ * AND IT SAYS WHETHER IT WORKED (B18 review of 43256f0da). It answered
+ * nothing, so a pull recorded whose cache this is after a clear that had
+ * failed (expo-image answering false, or rejecting), every later pull kept,
+ * and the photos were never cleared. The reset and the adopt now record the
+ * account only on true (sync.ts, cache-owner.ts), and on false leave no record,
+ * so the next pull clears again. True only when the photo links were forgotten
+ * and BOTH clears answered true; a rejection, a false, any other answer, or a
+ * native call that throws as it is called is a failure, warned as before.
  */
 export async function clearPhotoCaches(
   warn: (message: string, err: unknown) => void = (message, err) => console.warn(message, err),
-): Promise<void> {
-  forgetSignedImageUrls();
-  const results = await Promise.allSettled([Image.clearMemoryCache(), Image.clearDiskCache()]);
+): Promise<boolean> {
+  let cleared = true;
+  try {
+    forgetSignedImageUrls();
+  } catch (err) {
+    cleared = false;
+    warn('[auth] could not forget the photo links', err);
+  }
+  // Each call made inside an async function, so one that throws as it is
+  // called (a native module missing from the binary) is a rejection like any
+  // other and never escapes: the pull that clears photos with no SQLite wipe
+  // is never skipped by a throw here (sync.ts).
+  const results = await Promise.allSettled([
+    (async () => Image.clearMemoryCache())(),
+    (async () => Image.clearDiskCache())(),
+  ]);
   results.forEach((result, i) => {
     const which = i === 0 ? 'memory' : 'disk';
     if (result.status === 'rejected') {
+      cleared = false;
       warn(`[auth] could not clear the photo ${which} cache`, result.reason);
-    } else if (result.value === false) {
+    } else if (result.value !== true) {
+      cleared = false;
       warn(`[auth] could not clear the photo ${which} cache`, null);
     }
   });
+  return cleared;
 }
 
 /**
  * Clear the photo caches, then run a SQLite cache wipe, whatever became of
- * the photo wipe. A SQLite wipe that fails is passed on unchanged, so its
- * caller reports it as before. Photos first: see the header.
+ * the photo wipe, and answer whether the photos were cleared (clearPhotoCaches).
+ * A SQLite wipe that fails is passed on unchanged, so its caller reports it as
+ * before. Photos first: see the header. The `finally` stays although
+ * clearPhotoCaches no longer throws: nothing here may ever skip the SQLite wipe.
  */
-export async function wipeWithPhotoCaches(wipe: () => Promise<void>): Promise<void> {
+export async function wipeWithPhotoCaches(wipe: () => Promise<void>): Promise<boolean> {
+  let photosCleared = false;
   try {
-    await clearPhotoCaches();
+    photosCleared = await clearPhotoCaches();
   } finally {
     await wipe();
   }
+  return photosCleared;
 }

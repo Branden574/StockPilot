@@ -1,5 +1,9 @@
-import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
-import { getDb, queuedWrite, withDbTransaction } from './db';
+import {
+  CACHED_CYCLE_COUNTS_LIST_SQL,
+  CYCLE_COUNT_CACHE_HEADER_SQL,
+  UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL,
+} from './cycle-count-snapshot-sql';
+import { currentCacheGeneration, getDb, queuedWrite, withDbTransaction } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
 import { markRejectedWithin } from './queue';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
@@ -66,9 +70,44 @@ export interface CycleCountSnapshot {
 }
 
 /**
+ * The cache and the account a count fetch is made for, noted BEFORE it is
+ * sent (app/cycle-count/[id].tsx), as the snapshot pull notes its own
+ * (sync.ts generationAtRequest). See cacheCycleCount.
+ */
+export interface CacheWriteScope {
+  /** db.ts currentCacheGeneration(): it moves when a wipe is asked for. */
+  generation: number;
+  /** The account whose session is stored on the device (session-scope.ts). */
+  userId: string | null;
+}
+
+/** Note the cache generation, then the account, before a fetch is sent. */
+export async function cacheWriteScope(): Promise<CacheWriteScope> {
+  const generation = currentCacheGeneration();
+  const { userId } = await liveOutboxScope();
+  return { generation, userId };
+}
+
+/**
  * Upsert a cycle count + lines into the local cache. Lines that are
  * locally dirty are NOT overwritten — those carry the user's pending
  * edit until the sync engine flushes it.
+ *
+ * ONLY INTO THE CACHE AND FOR THE ACCOUNT IT WAS FETCHED FOR (B18 reviews,
+ * 2026-10-25). The count screen stores what it just fetched, and the fetch
+ * can finish after a sign-out's wipe (the count is then written with no owner
+ * recorded, for whoever signs in next), after a workspace switch's (the
+ * workspace left's count is then cached under the new one), or after a
+ * session that ended without a wipe and another account's sign-in. So the
+ * write is discarded, and false returned, when the cache generation moved
+ * since `fetchedUnder` was noted (a wipe was asked for), the stored session
+ * is no longer that account's (or nobody's), or the count is not in the
+ * active workspace. The last because the screen fetches in the workspace it
+ * last rendered with, and a switch saves the new one and wipes before the
+ * screen is shown it (use-workspace.ts): a note taken in that window already
+ * carries the moved generation. Checked inside the queued transaction: a wipe
+ * asked for after it starts is queued behind it and clears what it wrote. A
+ * count discarded here is fetched again the next time the screen loads.
  */
 export async function cacheCycleCount(
   header: {
@@ -103,10 +142,22 @@ export async function cacheCycleCount(
     /** offlineCaptureAt() of the server row (@stockpilot/core). */
     offlineCapturedAt?: string | null;
   }>,
-): Promise<void> {
+  /** Noted with cacheWriteScope() before the fetch was sent. */
+  fetchedUnder: CacheWriteScope,
+): Promise<boolean> {
   const db = await getDb();
   const now = Date.now();
+  let written = false;
   await withDbTransaction(db, async () => {
+    if (currentCacheGeneration() !== fetchedUnder.generation) return;
+    const { userId, orgId } = await liveOutboxScope();
+    if (!userId || userId !== fetchedUnder.userId) return;
+    if (!orgId || header.organizationId !== orgId) return;
+    // A count a pull that found no owner recorded marked unconfirmed can
+    // carry another account's unsent edit, which the line writes below would
+    // keep; the header write then confirms the count, and the pull's own
+    // release no longer sees it (cycle-count-snapshot-sql.ts).
+    await db.runAsync(UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL, [header.id, userId]);
     // See CYCLE_COUNT_CACHE_HEADER_SQL: the number and notes survive a caller
     // that does not carry them.
     await db.runAsync(
@@ -178,7 +229,9 @@ export async function cacheCycleCount(
         ],
       );
     }
+    written = true;
   });
+  return written;
 }
 
 export async function getCycleCount(

@@ -2,7 +2,13 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pullSnapshot, syncNow } from './sync';
+import { UNCONFIRMED_LINES_RELEASE_SQL } from './cycle-count-snapshot-sql';
+import {
+  pullSnapshot,
+  syncNow,
+  UNCONFIRMED_COUNT_LINES_DELETE_SQL,
+  UNCONFIRMED_COUNTS_DELETE_SQL,
+} from './sync';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
 // so declaring them below keeps the import block lint-clean.
@@ -37,6 +43,8 @@ const meta = vi.hoisted(() => ({
   onRun: null as null | ((sql: string) => void),
   // What db.ts deleteOrgData clears (set per test; see beforeEach).
   wipe: null as null | (() => void),
+  // What db.ts markCacheUnconfirmed does at an adopt (see beforeEach).
+  markUnconfirmed: null as null | (() => void),
   // The account signed in on the device (session-scope.ts).
   liveUserId: 'u1' as string | null,
 }));
@@ -57,9 +65,16 @@ vi.mock('./db', () => ({
     meta.generation += 1;
     meta.wipe?.();
   }),
-  // db.ts setCacheOwner: the reset records the new account (cache-owner.ts).
-  setCacheOwner: vi.fn(async (userId: string) => {
-    meta.store.set('cache_user_id', userId);
+  // db.ts setCacheOwner: the reset and the adopt record the account once its
+  // photo clear worked; null forgets the record (cache-owner.ts).
+  setCacheOwner: vi.fn(async (userId: string | null) => {
+    if (userId === null) meta.store.delete('cache_user_id');
+    else meta.store.set('cache_user_id', userId);
+  }),
+  // db.ts markCacheUnconfirmed: the adopt forgets the cursor and the persisted
+  // values and marks every cached row unconfirmed.
+  markCacheUnconfirmed: vi.fn(async () => {
+    meta.markUnconfirmed?.();
   }),
 }));
 vi.mock('./queue', () => ({
@@ -100,7 +115,8 @@ vi.mock('expo-image', () => ({
 }));
 vi.mock('./image-cache', () => ({ forgetSignedImageUrls: photos.forgetSignedImageUrls }));
 
-/** Verbatim from db.ts SCHEMA_SQL (the tables the pull writes). */
+/** Verbatim from db.ts SCHEMA_SQL (the tables the pull writes, and the outbox,
+ *  which a full pull reads to keep a count this account has not sent yet). */
 const DDL = `
   create table warehouses (id text primary key, name text not null);
   create table items (
@@ -139,6 +155,14 @@ const DDL = `
   create table bundle_components (
     bundle_id text not null, item_id text not null, quantity real not null,
     is_optional integer not null default 0, primary key (bundle_id, item_id)
+  );
+  create table pending_actions (
+    id integer primary key autoincrement, kind text not null,
+    idempotency_key text not null unique, payload_json text not null,
+    created_at integer not null, attempts integer not null default 0,
+    last_attempt_at integer, last_error text, status text not null default 'pending',
+    -- added in place at startup by addColumnIfMissing (db.ts)
+    organization_id text, user_id text
   );`;
 
 /** expo-sqlite's async surface over node:sqlite — same methods sync.ts calls. */
@@ -217,7 +241,11 @@ beforeEach(() => {
   sqlite = new DatabaseSync(':memory:');
   sqlite.exec(DDL);
   meta.db.current = fakeDb(sqlite);
-  meta.store = new Map();
+  // The cache is the live account's own (cache-owner.ts), as on any phone it
+  // has pulled for before. The tests of a cache with no owner recorded take
+  // the record away first (noOwnerRecorded): with none, every pull adopts,
+  // and an adopt is a full pull.
+  meta.store = new Map([['cache_user_id', 'u1']]);
   meta.generation = 0;
   meta.onRun = null;
   meta.liveUserId = 'u1';
@@ -234,6 +262,18 @@ beforeEach(() => {
     ]) {
       meta.store.delete(k);
     }
+  };
+  meta.markUnconfirmed = () => {
+    for (const k of [
+      'last_synced_at',
+      'enabled_modules',
+      'effective_permissions',
+      'warehouse_scope',
+    ]) {
+      meta.store.delete(k);
+    }
+    sqlite.exec(`update items set last_synced_at = 0; update purchase_orders set last_synced_at = 0;
+      update cycle_counts set last_synced_at = 0; update bundles set last_synced_at = 0;`);
   };
   apiMock.api.mockReset();
   netMock.getNetworkStateAsync.mockResolvedValue({
@@ -266,6 +306,9 @@ beforeEach(() => {
              ('cc-dirty-l2', 'cc-dirty', 'i-keep', 1, null, 0);
   `);
 });
+
+/** A cache with no record of whose it is (cache-owner.ts adopt). */
+const noOwnerRecorded = () => meta.store.delete('cache_user_id');
 
 /** Runs a DELTA pull (a `last_synced_at` cursor is already stored). */
 async function deltaPull(snap: Snap) {
@@ -478,8 +521,8 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
 
   it('a stop never rolls back what other flows wrote meanwhile (the outbox rejection at eviction)', async () => {
     sqlite.exec(`
-      create table pending_actions (id integer primary key, status text not null);
-      insert into pending_actions (id, status) values (1, 'pending'), (2, 'failed');
+      insert into pending_actions (id, kind, idempotency_key, payload_json, created_at, status)
+        values (1, 'receive_po_line', 'k1', '{}', 1, 'pending'), (2, 'receive_po_line', 'k2', '{}', 2, 'failed');
     `);
     apiMock.api.mockResolvedValue(emptySnap({ items: fourItems() }));
     let itemWrites = 0;
@@ -605,18 +648,98 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
   });
 
+  // Changed by the B18 review of 43256f0da: an adopt no longer delta-pulls
+  // from the cursor it found and keeps the rows, which can be another
+  // account's. It is still no reset (nothing is wiped before the request).
   it('a cache with no recorded owner is adopted, not reset, and recorded as this account before the request is sent', async () => {
+    noOwnerRecorded();
+    const { deleteOrgData } = await import('./db');
+    vi.mocked(deleteOrgData).mockClear();
     let recordedAtRequest: string | null | undefined;
     apiMock.api.mockImplementation(async () => {
       recordedAtRequest = meta.store.get('cache_user_id') ?? null;
-      return emptySnap();
+      return emptySnap({ items: [item('i-keep')] });
     });
     meta.store.set('last_synced_at', '2026-09-05T11:00:00.000Z');
     await pullSnapshot();
 
-    expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
-    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(deleteOrgData).not.toHaveBeenCalled();
     expect(recordedAtRequest).toBe('u1');
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+    // Pulled in FULL: the cursor it found is not this account's to trust.
+    expect(apiMock.api.mock.calls[0]?.[0]).toBe('/api/v1/mobile/snapshot');
+    expect(ids('select id from items order by id')).toEqual(['i-keep']);
+  });
+
+  // Mutation caught: the adopt keeping the cursor or the persisted values, or
+  // leaving the live readers on them.
+  it('an adopt forgets the cursor and the persisted values before the request, and the live readers re-read', async () => {
+    noOwnerRecorded();
+    const { refreshEnabledModules } = await import('./enabled-modules');
+    const { refreshEffectivePermissions } = await import('./use-effective-permissions');
+    const { refreshWarehouseScope } = await import('./warehouse-scope');
+    vi.mocked(refreshEnabledModules).mockClear();
+    vi.mocked(refreshEffectivePermissions).mockClear();
+    vi.mocked(refreshWarehouseScope).mockClear();
+    meta.store.set('last_synced_at', '2026-09-05T11:00:00.000Z');
+    meta.store.set('effective_permissions', '["someone:else"]');
+    meta.store.set('warehouse_scope', '{"hasAllAccess":true,"warehouseNames":[]}');
+    meta.store.set('enabled_modules', '["someone-else"]');
+    apiMock.api.mockRejectedValue(new Error('offline mid-request')); // the pull never lands
+
+    await pullSnapshot();
+
+    for (const k of [
+      'last_synced_at',
+      'effective_permissions',
+      'warehouse_scope',
+      'enabled_modules',
+    ]) {
+      expect(meta.store.has(k), k).toBe(false);
+    }
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+    expect(refreshEnabledModules).toHaveBeenCalled();
+    expect(refreshEffectivePermissions).toHaveBeenCalled();
+    expect(refreshWarehouseScope).toHaveBeenCalled();
+    // The rows are only marked: what the next full pull does not return goes.
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+  });
+
+  // Mutation caught: the adopt recording the account after a clear that
+  // failed, or the landed pull's own stamp recording it.
+  it('an adopt whose photo clear fails records nobody, before the request or when the pull lands, and still pulls', async () => {
+    noOwnerRecorded();
+    photos.clearDiskCache.mockResolvedValueOnce(false);
+    apiMock.api.mockResolvedValue(emptySnap({ items: [item('i-keep')] }));
+
+    await expect(pullSnapshot()).resolves.not.toBeNull();
+
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+    expect(meta.store.has('cache_user_id')).toBe(false);
+    expect(ids('select id from items order by id')).toEqual(['i-keep']);
+
+    await pullSnapshot(); // no record still: it adopts, clears again, and records
+    expect(photos.clearDiskCache).toHaveBeenCalledTimes(2);
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+  });
+
+  // Mutation caught: the reset recording the new account after a clear that
+  // failed, or keeping the previous account's record.
+  it("a reset whose photo clear fails forgets the record, neither the previous account's nor this one's, and the next pull adopts", async () => {
+    const { deleteOrgData } = await import('./db');
+    meta.store.set('cache_user_id', 'u0');
+    photos.clearMemoryCache.mockRejectedValueOnce(new Error('memory busy'));
+    apiMock.api.mockResolvedValue(emptySnap({ items: [item('i-mine')] }));
+
+    await pullSnapshot();
+
+    expect(meta.store.has('cache_user_id')).toBe(false);
+    expect(ids('select id from items order by id')).toEqual(['i-mine']);
+
+    vi.mocked(deleteOrgData).mockClear();
+    await pullSnapshot(); // adopts: clears the photos again, wipes nothing
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(photos.clearMemoryCache).toHaveBeenCalledTimes(2);
     expect(meta.store.get('cache_user_id')).toBe('u1');
   });
 
@@ -662,7 +785,8 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
   // Mutation caught: an adopt that keeps the photos. A cache with no recorded
   // owner may hold anyone's: the release before this one forgot the record at
   // every wipe and cleared the photos at none (cache-owner.ts).
-  it('a cache with no recorded owner has its photos and links cleared, once, offline too, and keeps its rows', async () => {
+  it('a cache with no recorded owner has its photos and links cleared, once, offline too, and keeps its rows until a pull lands', async () => {
+    noOwnerRecorded();
     netMock.getNetworkStateAsync.mockResolvedValue({
       isConnected: false,
       isInternetReachable: false,
@@ -670,19 +794,29 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(await pullSnapshot()).toBeNull();
     expect(apiMock.api).not.toHaveBeenCalled();
     expect(meta.store.get('cache_user_id')).toBe('u1');
+    // Not reset: offline, the rows are still there to work with. They are
+    // only marked, and the next pull to land sorts them (below).
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(ids('select id from cycle_counts order by id')).toEqual([
+      'cc-dirty',
+      'cc-open',
+      'cc-posted',
+    ]);
     netMock.getNetworkStateAsync.mockResolvedValue({
       isConnected: true,
       isInternetReachable: true,
     });
-    await deltaPull(emptySnap());
+    apiMock.api.mockResolvedValue(emptySnap({ items: [item('i-keep')] }));
+    await pullSnapshot(); // the next tick: the cache is recorded now
 
+    // Cleared once, at the adopt, not again.
     expect(photos.clearMemoryCache).toHaveBeenCalledTimes(1);
     expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
     expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
-    // Not reset: the rows are still there, the operator's offline count too
-    // (the delta pull removed only the counts the server no longer lists).
-    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
-    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-dirty']);
+    // In full (the adopt forgot the cursor): of the marked rows, what the
+    // server returned stays.
+    expect(apiMock.api.mock.calls[0]?.[0]).toBe('/api/v1/mobile/snapshot');
+    expect(ids('select id from items order by id')).toEqual(['i-keep']);
   });
 
   // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.
@@ -699,5 +833,131 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(apiMock.api).not.toHaveBeenCalled();
     // The previous account stays recorded, so the next pull resets again.
     expect(meta.store.get('cache_user_id')).toBe('u0');
+  });
+});
+
+/**
+ * A cache adopted with no owner recorded (cache-owner.ts) has its rows marked
+ * unconfirmed (db.ts markCacheUnconfirmed: last_synced_at 0). The full pull
+ * that follows keeps what it returns, which it stamps again, and a count only
+ * while this account still has a count to send for it. The statements, run on
+ * a real SQLite here; the pull that runs them is executed end to end in
+ * cache-owner.sqlite.test.ts.
+ */
+describe('unconfirmed rows: what a full pull keeps of a cache it adopted', () => {
+  /** A record_count row as the outbox stores it (queue.ts, cycle-count-cache.ts). */
+  const queue = (
+    owner: string | null,
+    countId: string | null,
+    lineId: string | null,
+    status = 'pending',
+  ) =>
+    sqlite
+      .prepare(
+        `insert into pending_actions (kind, idempotency_key, payload_json, created_at, status, user_id)
+         values ('record_count', ?, ?, 1, ?, ?)`,
+      )
+      .run(
+        `k-${countId}-${lineId}-${status}-${owner}`,
+        JSON.stringify({
+          ...(countId ? { cycleCountId: countId } : {}),
+          ...(lineId ? { lineId } : {}),
+          countedQuantity: 9,
+        }),
+        status,
+        owner,
+      );
+  const sweep = (liveUserId: string | null) => {
+    sqlite.prepare(UNCONFIRMED_COUNT_LINES_DELETE_SQL).run(liveUserId);
+    sqlite.prepare(UNCONFIRMED_COUNTS_DELETE_SQL).run(liveUserId);
+  };
+
+  beforeEach(() => {
+    sqlite.exec('update cycle_counts set last_synced_at = 0');
+  });
+
+  // Mutation caught: a count kept for any account's entry (the every-pull
+  // rule keeps any count with a dirty line), or for none.
+  it('keeps an unconfirmed count only while this account, or a legacy row, has an entry to send for it', () => {
+    queue('u1', 'cc-dirty', 'cc-dirty-l1'); // this account's
+    queue('u0', 'cc-open', 'cc-open-l1'); // another account's, held for it
+    queue(null, 'cc-posted', 'cc-posted-l1'); // legacy: whoever drains it first (outbox-scope.ts)
+    sweep('u1');
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-dirty', 'cc-posted']);
+    expect(ids('select id from cycle_count_lines order by id')).toEqual([
+      'cc-dirty-l1',
+      'cc-dirty-l2',
+      'cc-posted-l1',
+    ]);
+    // The outbox itself is never touched.
+    expect(sqlite.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 3 });
+  });
+
+  it('an entry still in flight keeps its count; one already refused does not', () => {
+    queue('u1', 'cc-dirty', 'cc-dirty-l1', 'sending');
+    queue('u1', 'cc-open', 'cc-open-l1', 'failed');
+    queue('u1', 'cc-posted', 'cc-posted-l1', 'rejected');
+    sweep('u1');
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-dirty', 'cc-open']);
+  });
+
+  // NOT EXISTS, never NOT IN: one row whose payload names no count would make
+  // `id not in (...)` NULL for every count and quietly keep them all.
+  it('an outbox row that names no count never stops the sweep', () => {
+    queue('u1', null, null);
+    queue('u1', null, 'cc-open-l1');
+    sweep('u1');
+    expect(ids('select id from cycle_counts')).toEqual([]);
+    expect(ids('select id from cycle_count_lines')).toEqual([]);
+  });
+
+  it('a count this pull confirmed is never swept here, entry or not', () => {
+    sqlite.exec("update cycle_counts set last_synced_at = 100 where id = 'cc-open'");
+    sweep('u1');
+    expect(ids('select id from cycle_counts')).toEqual(['cc-open']);
+    expect(ids('select id from cycle_count_lines')).toEqual(['cc-open-l1']);
+  });
+
+  // Mutation caught: no release, or one that also releases this account's
+  // own edit, or edits on counts this account's pulls confirmed.
+  it("releases another account's local edit on an unconfirmed count, and keeps this account's", () => {
+    sqlite.exec(`
+      update cycle_count_lines set local_dirty = 1, counted = 4 where id = 'cc-open-l1';
+      update cycle_count_lines set local_dirty = 1, counted = 6 where id = 'cc-posted-l1';
+      update cycle_counts set last_synced_at = 100 where id = 'cc-posted';
+    `);
+    queue('u1', 'cc-dirty', 'cc-dirty-l1');
+    queue('u0', 'cc-open', 'cc-open-l1');
+    queue('u0', 'cc-posted', 'cc-posted-l1');
+    sqlite.prepare(UNCONFIRMED_LINES_RELEASE_SQL).run('u1');
+    const dirty = (id: string) =>
+      (
+        sqlite.prepare('select local_dirty from cycle_count_lines where id = ?').get(id) as {
+          local_dirty: number;
+        }
+      ).local_dirty;
+    expect(dirty('cc-dirty-l1')).toBe(1); // this account's: kept
+    expect(dirty('cc-open-l1')).toBe(0); // another's, on an unconfirmed count: released
+    expect(dirty('cc-posted-l1')).toBe(1); // on a count a pull confirmed: not this rule's
+  });
+
+  // Mutation caught: an entry that has settled still keeping the edit. The
+  // outbox's own bookkeeping keeps a line dirty only while a live entry for it
+  // is queued (cycle-count-cache.ts clearLineDirtyUnlessStillQueued).
+  it('releases an edit whose only entry was refused, and keeps one with an entry still to send', () => {
+    sqlite.exec(`
+      update cycle_count_lines set local_dirty = 1, counted = 4 where id in ('cc-open-l1', 'cc-dirty-l1');
+    `);
+    queue('u1', 'cc-open', 'cc-open-l1', 'rejected');
+    queue('u1', 'cc-dirty', 'cc-dirty-l1', 'failed');
+    sqlite.prepare(UNCONFIRMED_LINES_RELEASE_SQL).run('u1');
+    const dirty = (id: string) =>
+      (
+        sqlite.prepare('select local_dirty from cycle_count_lines where id = ?').get(id) as {
+          local_dirty: number;
+        }
+      ).local_dirty;
+    expect(dirty('cc-open-l1')).toBe(0);
+    expect(dirty('cc-dirty-l1')).toBe(1);
   });
 });

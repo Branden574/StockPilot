@@ -41,6 +41,7 @@ import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
+  cacheWriteScope,
   getCycleCount,
   pendingCountFor,
   updateLocalLine,
@@ -337,6 +338,10 @@ export default function CycleCountDetail() {
     }
     if (!orgId) return;
 
+    // The cache and the account this fetch is for, noted before it is sent:
+    // an answer that lands after a sign-out, a workspace switch or another
+    // account's sign-in is not stored (cycle-count-cache.ts cacheCycleCount).
+    const fetchedUnder = await cacheWriteScope();
     // Network fetch — populates / refreshes the cache.
     const [{ data: cc, error: ccErr }, { data: lineRows, error: lErr }] = await Promise.all([
       supabase
@@ -463,7 +468,7 @@ export default function CycleCountDetail() {
     // unhandled (load() is fire-and-forget) and leave an uncached count
     // spinning forever.
     try {
-      await cacheCycleCount(fetchedHeader, fetchedLines);
+      await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder);
       const fresh = await getCycleCount(id);
       if (fresh) hydrateFromSnapshot(fresh);
     } catch (e) {

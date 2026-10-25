@@ -4,7 +4,8 @@
  * WHY THEY LIVE HERE, ALONE: sync.ts imports expo-sqlite and cannot be loaded
  * in the node test runner, but the exact SQL is where the bug was, so the SQL
  * is exported from a module with no imports and exercised against a real
- * SQLite (node:sqlite) in cycle-count-snapshot-sql.test.ts.
+ * SQLite (node:sqlite) in cycle-count-snapshot-sql.test.ts. (The two it now
+ * imports, cache-owner.ts and outbox-scope.ts, have no imports either.)
  *
  * THE BUG (SP-011): the pull did `insert or replace into cycle_counts` with
  * seven columns and `delete from cycle_count_lines where count_id = ?` before
@@ -30,6 +31,9 @@
  *           dirty line is the operator's unsynced work and stays until the
  *           outbox settles it.
  */
+
+import { UNCONFIRMED_ROW_STAMP } from './cache-owner';
+import { OWNED_BY_USER_SQL } from './outbox-scope';
 
 export const CYCLE_COUNT_HEADER_UPSERT_SQL = `
   insert into cycle_counts
@@ -98,3 +102,45 @@ export const CACHED_CYCLE_COUNTS_LIST_SQL = `
     left join warehouses w on w.id = cc.warehouse_id
    where cc.status = 'in_progress' or cc.status is null
    order by cc.started_at desc`;
+
+/*
+ * ── Edits on a count no pull has confirmed (B18 review of 43256f0da) ───────
+ *
+ * A pull that finds no owner recorded marks every cached count
+ * UNCONFIRMED_ROW_STAMP (cache-owner.ts, db.ts markCacheUnconfirmed): it can be
+ * another account's, and so can a dirty line on it, an unsent edit only that
+ * account can send (outbox-scope.ts holds its entry for it). Both line writers
+ * keep a dirty line's local value (CYCLE_COUNT_LINE_UPSERT_SQL above, and
+ * cycle-count-cache.ts cacheCycleCount), so before either writes a marked
+ * count, each dirty line on it that no unsent record_count entry of this
+ * account's backs (OWNED_BY_USER_SQL: its own, or a legacy one with no owner)
+ * is released: the server's value then replaces it, and this account is never
+ * shown another account's count as its own pending one. The entry itself is
+ * untouched and still held for its account. NOT EXISTS, never NOT IN (sync.ts,
+ * "Unconfirmed rows").
+ */
+const releaseUnconfirmedLines = (alsoWhere: string) => `
+  update cycle_count_lines set local_dirty = 0
+   where local_dirty = 1
+     and count_id in (
+       select id from cycle_counts
+        where last_synced_at = ${UNCONFIRMED_ROW_STAMP}${alsoWhere}
+     )
+     and not exists (
+       select 1 from pending_actions
+        where kind = 'record_count'
+          and status in ('pending', 'failed', 'sending')
+          and json_extract(payload_json, '$.lineId') = cycle_count_lines.id
+          and ${OWNED_BY_USER_SQL}
+     )`;
+
+/** Params: (live user id). Every marked count, at a full pull, before its
+ *  upserts (sync.ts); a line on a count that pull does not return then goes
+ *  with the count. */
+export const UNCONFIRMED_LINES_RELEASE_SQL = releaseUnconfirmedLines('');
+
+/** Params: (count id, live user id). The one count the count screen is
+ *  storing, before its writes (cycle-count-cache.ts cacheCycleCount): its
+ *  header write stamps the count with its own time, after which the pull's
+ *  release no longer sees it. */
+export const UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL = releaseUnconfirmedLines(' and id = ?');

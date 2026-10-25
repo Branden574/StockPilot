@@ -58,8 +58,22 @@ describe('cycle-count/[id].tsx — post goes through the API twin (SP-055)', () 
 describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', () => {
   it('guards the store-then-read after the fetch and surfaces it when nothing is on screen', () => {
     expect(screen).toMatch(
-      /try \{\s+await cacheCycleCount\(fetchedHeader, fetchedLines\);\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
+      /try \{\s+await cacheCycleCount\(fetchedHeader, fetchedLines, fetchedUnder\);\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
     );
+  });
+});
+
+// B18 reviews, 2026-10-25: a fetch that finished after a sign-out's wipe, a
+// workspace switch's, or another account's sign-in wrote its count into the
+// cache it no longer belonged to. The store is guarded by what the screen
+// noted BEFORE the fetch (executed in cache-owner.sqlite.test.ts).
+describe('cycle-count/[id].tsx: the count is stored only for the cache and account it was fetched for', () => {
+  it('notes the cache and the account before the fetch is sent, and stores under that note', () => {
+    const note = screen.indexOf('const fetchedUnder = await cacheWriteScope();');
+    const fetch = screen.indexOf('fetchAllCycleCountLines(supabase, id)');
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(fetch);
+    expect(screen.match(/cacheCycleCount\(/g)).toHaveLength(1);
   });
 });
 

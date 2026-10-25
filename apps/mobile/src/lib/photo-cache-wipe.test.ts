@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * item-photo links. Before, a sign-out cleared the SQLite cache only. Which
  * wipes keep the photos, and the record of whose they are, is executed end to
  * end in cache-owner.sqlite.test.ts.
+ *
+ * And the clear says whether it worked (B18 review of 43256f0da): a pull
+ * records whose cache this is only after a clear that did, so a clear that
+ * failed is tried again at the next pull instead of being recorded as done.
  */
 
 const { image, createSignedUrl } = vi.hoisted(() => ({
@@ -36,11 +40,13 @@ beforeEach(() => {
 
 describe('clearPhotoCaches', () => {
   // Mutation caught: a sign-out that leaves either cache in place.
-  it('clears the memory and the disk photo caches', async () => {
+  it('clears the memory and the disk photo caches, and says it did', async () => {
     const { clearPhotoCaches } = await import('./photo-cache-wipe');
-    await clearPhotoCaches(vi.fn());
+    const warn = vi.fn();
+    await expect(clearPhotoCaches(warn)).resolves.toBe(true);
     expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
     expect(image.clearDiskCache).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('forgets the item-photo links this session signed, so the next account signs its own', async () => {
@@ -63,12 +69,75 @@ describe('clearPhotoCaches', () => {
     image.clearDiskCache.mockRejectedValueOnce(new Error('disk busy'));
     image.clearMemoryCache.mockResolvedValueOnce(false);
     const warn = vi.fn();
-    await expect(clearPhotoCaches(warn)).resolves.toBeUndefined();
+    await expect(clearPhotoCaches(warn)).resolves.toBe(false);
     expect(warn).toHaveBeenCalledWith('[auth] could not clear the photo memory cache', null);
     expect(warn).toHaveBeenCalledWith(
       '[auth] could not clear the photo disk cache',
       expect.any(Error),
     );
+  });
+
+  // Mutation caught: a clear that answers true (or nothing) whatever the
+  // caches did, as at 43256f0da, where the pull then recorded the account and
+  // never cleared again. Each way fails the clear on its own; the other cache
+  // is still cleared, and the call never throws.
+  const FAILURES: Record<string, () => void> = {
+    'the disk clear answers false': () => {
+      image.clearDiskCache.mockResolvedValueOnce(false);
+    },
+    'the disk clear rejects': () => {
+      image.clearDiskCache.mockRejectedValueOnce(new Error('disk busy'));
+    },
+    'the memory clear answers false': () => {
+      image.clearMemoryCache.mockResolvedValueOnce(false);
+    },
+    'the memory clear rejects': () => {
+      image.clearMemoryCache.mockRejectedValueOnce(new Error('memory busy'));
+    },
+    'the disk clear throws as it is called': () => {
+      image.clearDiskCache.mockImplementationOnce(() => {
+        throw new Error('native module missing');
+      });
+    },
+    'the memory clear throws as it is called': () => {
+      image.clearMemoryCache.mockImplementationOnce(() => {
+        throw new Error('native module missing');
+      });
+    },
+    'the disk clear answers something other than true': () => {
+      image.clearDiskCache.mockResolvedValueOnce(undefined as unknown as boolean);
+    },
+  };
+  it.each(Object.keys(FAILURES))('says it failed, and warns, when %s', async (failure) => {
+    const { clearPhotoCaches } = await import('./photo-cache-wipe');
+    FAILURES[failure]!();
+    const warn = vi.fn();
+    await expect(clearPhotoCaches(warn)).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(image.clearDiskCache).toHaveBeenCalledTimes(1);
+  });
+
+  // Mutation caught: the links' forgetting left out of the answer.
+  it('says it failed when the photo links could not be forgotten, and still clears both caches', async () => {
+    vi.doMock('./image-cache', () => ({
+      forgetSignedImageUrls: () => {
+        throw new Error('links unreadable');
+      },
+    }));
+    try {
+      const { clearPhotoCaches } = await import('./photo-cache-wipe');
+      const warn = vi.fn();
+      await expect(clearPhotoCaches(warn)).resolves.toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        '[auth] could not forget the photo links',
+        expect.any(Error),
+      );
+      expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+      expect(image.clearDiskCache).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('./image-cache');
+    }
   });
 });
 
@@ -91,24 +160,44 @@ describe('wipeWithPhotoCaches', () => {
       order.push('photos');
       return true;
     });
-    await wipeWithPhotoCaches(async () => {
-      order.push('sqlite');
-    });
+    await expect(
+      wipeWithPhotoCaches(async () => {
+        order.push('sqlite');
+      }),
+    ).resolves.toBe(true);
     expect(order).toEqual(['photos', 'sqlite']);
     expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
   });
 
-  // Mutation caught: `await clearPhotoCaches(); await wipe();` without the
-  // finally. clearPhotoCaches reports a cache it could not clear rather than
-  // throwing, but a throw must still never skip the SQLite wipe.
-  it('a photo wipe that throws still runs the SQLite wipe', async () => {
+  // Mutation caught: the wipe answering true, or nothing, after a clear that
+  // failed. The reset for another account records the new account only when
+  // this says the photos went (sync.ts).
+  it('says whether the photos were cleared, and runs the SQLite wipe either way', async () => {
     const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    image.clearDiskCache.mockResolvedValueOnce(false);
+    const wipe = vi.fn(async () => {});
+    await expect(wipeWithPhotoCaches(wipe)).resolves.toBe(false);
+    expect(wipe).toHaveBeenCalledTimes(1);
+  });
+
+  // A native call that throws as it is called (a module missing from the
+  // binary) is a failed clear like any other: clearPhotoCaches never throws,
+  // so the pull that clears photos with no SQLite wipe is never skipped
+  // (sync.ts), and the SQLite wipe here still runs.
+  it('a photo wipe whose native call throws is reported as a failed clear and still runs the SQLite wipe', async () => {
+    const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     image.clearMemoryCache.mockImplementationOnce(() => {
       throw new Error('native module missing');
     });
     const wipe = vi.fn(async () => {});
-    await expect(wipeWithPhotoCaches(wipe)).rejects.toThrow('native module missing');
+    await expect(wipeWithPhotoCaches(wipe)).resolves.toBe(false);
     expect(wipe).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      '[auth] could not clear the photo memory cache',
+      expect.any(Error),
+    );
   });
 
   // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.

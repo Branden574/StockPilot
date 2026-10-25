@@ -16,13 +16,15 @@ import {
   CYCLE_COUNT_HEADER_UPSERT_SQL,
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
+  UNCONFIRMED_LINES_RELEASE_SQL,
 } from './cycle-count-snapshot-sql';
-import { CACHE_USER_META_KEY, cacheOwnerAction } from './cache-owner';
+import { CACHE_USER_META_KEY, cacheOwnerAction, UNCONFIRMED_ROW_STAMP } from './cache-owner';
 import {
   currentCacheGeneration,
   deleteOrgData,
   getDb,
   getMeta,
+  markCacheUnconfirmed,
   setCacheOwner,
   setMeta,
   withDbTransaction,
@@ -33,7 +35,7 @@ import {
   EFFECTIVE_PERMISSIONS_META_KEY,
   refreshEffectivePermissions,
 } from './use-effective-permissions';
-import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
+import { OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision } from './outbox-scope';
 import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
@@ -224,6 +226,96 @@ export const STALE_BUNDLE_COMPONENTS_SWEEP_SQL = `
 /** Params: (this pull's `now`). */
 export const STALE_BUNDLES_SWEEP_SQL = `delete from bundles where last_synced_at < ?`;
 
+/*
+ * ── Unconfirmed rows: a cache adopted with no owner recorded ──────────────
+ *
+ * A pull that found no record of whose cache this is marked every cached row
+ * UNCONFIRMED_ROW_STAMP (db.ts markCacheUnconfirmed, cache-owner.ts): they can
+ * be another account's. The FULL pull that follows keeps what it returns for
+ * this account (each row it writes is stamped again) and drops every other
+ * marked row. What a full pull already swept, table by table, and what these
+ * statements add:
+ *   - items: every item it did not return (STALE_ITEMS_SWEEP_SQL; the route
+ *     pages them, so the list is never cut short). Nothing to add: the mark
+ *     is older than any pull, where a stamp from a clock that ran ahead
+ *     would not be;
+ *   - warehouses: replaced, but only by a non-empty list; a full pull now
+ *     replaces it with an empty one too (below);
+ *   - POs and their lines: never swept (the route caps them at 200). Marked
+ *     ones the pull did not return now go;
+ *   - counts and their lines: those it does not list, but only below its
+ *     page of 50, and never one with a dirty line, whoever made it. Marked
+ *     ones it did not return now go, at any page size, unless this account
+ *     still has an unsent entry for them in the outbox: its own work, and
+ *     what the count screen shows of it (the drain sends from the queued row
+ *     alone). Before the upserts, an edit on a marked count that is not this
+ *     account's is released, so the server's value replaces it
+ *     (cycle-count-snapshot-sql.ts UNCONFIRMED_LINES_RELEASE_SQL);
+ *   - kits and their components: those not in the org's complete active list
+ *     when the answer carries one, else those it did not return, below a
+ *     page of 1000. Marked ones it did not return now go at any size: a kit
+ *     past that page that is still active was cached on another timeline,
+ *     and the cursor this pull sets would never bring the changes it missed
+ *     (a fresh install holds none past the page either).
+ * A count is kept on the outbox's rule for whose a row is (OWNED_BY_USER_SQL:
+ * this account's, or a legacy row with no owner, which whoever drains it
+ * first sends as its own); a row queued by another account keeps nothing,
+ * and itself stays held for that account. The organization is not checked:
+ * every workspace change wipes the cached counts (deleteOrgData), so a count
+ * still cached was cached in this workspace. Items, POs and kits keep nothing
+ * for a queued row: those rows are sent from their payload, and no screen
+ * reads a cached PO.
+ *
+ * Every queued-row test is NOT EXISTS, never NOT IN: one row whose payload
+ * names no count makes `not in (...)` NULL for every row, and the statement
+ * would quietly keep everything.
+ */
+
+/** Params: (live user id). Run BEFORE UNCONFIRMED_COUNTS_DELETE_SQL: it reads them. */
+export const UNCONFIRMED_COUNT_LINES_DELETE_SQL = `
+  delete from cycle_count_lines
+   where count_id in (
+     select id from cycle_counts
+      where last_synced_at = ${UNCONFIRMED_ROW_STAMP}
+        and not exists (
+          select 1 from pending_actions
+           where kind = 'record_count'
+             and status in ('pending', 'failed', 'sending')
+             and json_extract(payload_json, '$.cycleCountId') = cycle_counts.id
+             and ${OWNED_BY_USER_SQL}
+        )
+   )`;
+
+/** Params: (live user id). */
+export const UNCONFIRMED_COUNTS_DELETE_SQL = `
+  delete from cycle_counts
+   where last_synced_at = ${UNCONFIRMED_ROW_STAMP}
+     and not exists (
+       select 1 from pending_actions
+        where kind = 'record_count'
+          and status in ('pending', 'failed', 'sending')
+          and json_extract(payload_json, '$.cycleCountId') = cycle_counts.id
+          and ${OWNED_BY_USER_SQL}
+     )`;
+
+/** No params. Run BEFORE UNCONFIRMED_POS_DELETE_SQL: it reads them. */
+export const UNCONFIRMED_PO_LINES_DELETE_SQL = `
+  delete from po_lines
+   where po_id in (select id from purchase_orders where last_synced_at = ${UNCONFIRMED_ROW_STAMP})`;
+
+/** No params. */
+export const UNCONFIRMED_POS_DELETE_SQL = `
+  delete from purchase_orders where last_synced_at = ${UNCONFIRMED_ROW_STAMP}`;
+
+/** No params. Run BEFORE UNCONFIRMED_BUNDLES_DELETE_SQL: it reads them. */
+export const UNCONFIRMED_BUNDLE_COMPONENTS_DELETE_SQL = `
+  delete from bundle_components
+   where bundle_id in (select id from bundles where last_synced_at = ${UNCONFIRMED_ROW_STAMP})`;
+
+/** No params. */
+export const UNCONFIRMED_BUNDLES_DELETE_SQL = `
+  delete from bundles where last_synced_at = ${UNCONFIRMED_ROW_STAMP}`;
+
 export async function isOnline(): Promise<boolean> {
   try {
     const state = await Network.getNetworkStateAsync();
@@ -241,7 +333,8 @@ export async function isOnline(): Promise<boolean> {
  *   request a FULL snapshot (no `?since`). Used on an org switch: the cursor
  *   belongs to the prior org's timeline, so a delta pull would be wrong — the
  *   caller (`setActiveOrg`) has already wiped the local cache, so a full pull
- *   re-scopes every table to the newly-active org.
+ *   re-scopes every table to the newly-active org. Set here too by the
+ *   cache-owner reset and adopt below.
  */
 export async function pullSnapshot(
   force = false,
@@ -254,19 +347,35 @@ export async function pullSnapshot(
   const ownerAction = liveUserId
     ? cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId)
     : 'keep';
+  // Whether this pull may record its account as the cache's owner: false once
+  // a photo clear of its own failed (the reset and the adopt below), so that
+  // neither the record before the request nor the stamp of a pull that lands
+  // names an account whose photo clear did not work (cache-owner.ts).
+  let photosCleared = true;
   if (liveUserId && ownerAction === 'reset') {
     // The previous account's photos go with its rows (photo-cache-wipe.ts):
     // the ways a session ends without a wipe all reach this pull.
-    await wipeWithPhotoCaches(deleteOrgData);
+    photosCleared = await wipeWithPhotoCaches(deleteOrgData);
     // Nothing of the previous account is left now, so the emptied cache is
     // this account's, recorded before the pull is sent (cache-owner.ts).
-    // deleteOrgData keeps the record, and left alone it would still name the
-    // previous account after a pull that fails here (offline, a timeout):
-    // every later tick would reset again, before its network check, and wipe
-    // what this account has cached since, such as a count it opened to work
-    // on offline. A wipe that threw never reaches this line: the previous
-    // account stays recorded and the next pull resets again.
-    await setCacheOwner(liveUserId);
+    // deleteOrgData keeps the record (a same-account wipe keeps the photos,
+    // so it keeps the record of whose they are), and left alone it would
+    // still name the previous account after a pull that fails here (offline,
+    // a timeout): every later tick would reset again, before its network
+    // check, and wipe what this account has cached since, such as a count it
+    // opened to work on offline. A wipe that threw never reaches this line:
+    // the previous account stays recorded and the next pull resets again.
+    //
+    // Unless the photo clear failed: then the previous account's photos may
+    // still be there, and the record is FORGOTTEN, neither account's. The new
+    // account recorded would make every later pull keep, and the photos would
+    // never be cleared; the previous one kept would make every later pull
+    // reset again, as above. With no record the next pull adopts, which
+    // retries the photo clear without wiping the rows. Forgetting moves no
+    // cache generation: no row changes, deleteOrgData already moved it before
+    // this pull notes its own (below), and the next pull is the one that
+    // retries.
+    await setCacheOwner(photosCleared ? liveUserId : null);
     force = true;
     // The live readers still hold the previous account's modules, permissions
     // and warehouse banner in memory; the persisted values are gone, so they
@@ -280,19 +389,38 @@ export async function pullSnapshot(
     // No owner recorded: a fresh install, a cache a sign-out or an eviction
     // emptied after clearing its photos, or one an older release left, whose
     // wipes forgot the record and kept the photos (cache-owner.ts). Those can
-    // be anyone's, so the photos and photo links go. Not the rows: each of
-    // those wipes emptied them, so what is there was cached since, normally by
-    // this account before this pull (a count it opened to work on offline),
-    // and a reset would lose it. No SQLite wipe runs here, so the photo wipe
-    // is a step of its own.
-    await clearPhotoCaches();
+    // be anyone's, so the photos and photo links go. No SQLite wipe runs here,
+    // so the photo wipe is a step of its own, and it goes first, as before
+    // every SQLite wipe.
+    photosCleared = await clearPhotoCaches();
+    // Nor are the rows known to be this account's (B18 review of 43256f0da):
+    // an older release's switch, repair or Clear erased the record while rows
+    // cached after them stayed, and any later path that loses the record
+    // leaves the rows, the delta cursor and the persisted scope together. So
+    // the cursor and the persisted values go now, offline too, and every row
+    // is marked unconfirmed (db.ts markCacheUnconfirmed); this pull goes in
+    // FULL, and keeps of the marked rows what it returns for this account and
+    // the counts this account still has an unsent entry for (below). Not a
+    // reset: offline nothing is pulled, and a wipe would take this account's
+    // own count, opened before this pull, with it. Run whether or not the
+    // photo clear worked: the pull is never skipped for it.
+    await markCacheUnconfirmed();
     // Then this account is recorded, before the pull is sent, as at the
     // reset. Left unrecorded until a pull landed, an account whose pulls kept
     // failing (a timeout on weak Wi-Fi, a 500) drew photos the screens sign
     // straight from storage, and after its session ended without a wipe the
     // next account adopted them too. Recorded once the photos are gone: an
     // app closed during the clear adopts, and clears, again at its next pull.
-    await setCacheOwner(liveUserId);
+    // And only when the clear worked: recorded after one that failed, every
+    // later pull would keep and the photos would never be cleared. With no
+    // record, the next pull adopts and clears again.
+    if (photosCleared) await setCacheOwner(liveUserId);
+    force = true;
+    // The persisted modules, permissions and warehouse scope are gone, so the
+    // live readers fall back to their defaults now, as at the reset.
+    refreshEnabledModules();
+    refreshEffectivePermissions();
+    refreshWarehouseScope();
   }
 
   if (!(await isOnline())) return null;
@@ -352,8 +480,23 @@ export async function pullSnapshot(
       return;
     }
 
-    // Warehouses (full replace for simplicity — small set)
-    if (snap.warehouses.length > 0) {
+    // A cache adopted with no owner recorded (cache-owner.ts): another
+    // account's unsent edit on a count must not stand as this account's once
+    // the server's value is here. Before the upserts, while the marks are
+    // there (cycle-count-snapshot-sql.ts). The pull after an adopt is
+    // always a full one (the adopt forgets the cursor); on a cache no adopt
+    // marked, this changes nothing.
+    if (since === null) {
+      await db.runAsync(UNCONFIRMED_LINES_RELEASE_SQL, [liveUserId]);
+    }
+
+    // Warehouses (full replace for simplicity — small set). A FULL pull
+    // replaces the list even when it is empty: the route sends this account's
+    // complete list on every pull (never since-filtered), and [] for an
+    // account narrowed to no warehouse. A full pull follows a wipe, a fresh
+    // install or an adopt, so the only list this can empty is one the cache
+    // adopted, possibly another account's warehouses (cache-owner.ts).
+    if (since === null || snap.warehouses.length > 0) {
       await db.runAsync('delete from warehouses');
       for (const w of snap.warehouses) {
         if (moved()) return;
@@ -539,6 +682,17 @@ export async function pullSnapshot(
         await db.runAsync(STALE_BUNDLE_COMPONENTS_SWEEP_SQL, [now]);
         await db.runAsync(STALE_BUNDLES_SWEEP_SQL, [now]);
       }
+      // A cache adopted with no owner recorded: of the rows it found, only
+      // what this pull returned (stamped again above) and the counts this
+      // account still has an unsent entry for stay, whatever the guards above
+      // kept (see "Unconfirmed rows"). No-ops on a cache no adopt marked.
+      if (moved()) return;
+      await db.runAsync(UNCONFIRMED_PO_LINES_DELETE_SQL);
+      await db.runAsync(UNCONFIRMED_POS_DELETE_SQL);
+      await db.runAsync(UNCONFIRMED_COUNT_LINES_DELETE_SQL, [liveUserId]);
+      await db.runAsync(UNCONFIRMED_COUNTS_DELETE_SQL, [liveUserId]);
+      await db.runAsync(UNCONFIRMED_BUNDLE_COMPONENTS_DELETE_SQL);
+      await db.runAsync(UNCONFIRMED_BUNDLES_DELETE_SQL);
     }
 
     if (moved()) return;
@@ -546,8 +700,10 @@ export async function pullSnapshot(
     // same answer, so they are written only when the rows were.
     await setMeta('last_synced_at', snap.serverTime);
     // ...and so is whose answer it was (cache-owner.ts). The reset and the
-    // adopt above already recorded it before the request was sent.
-    if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);
+    // adopt above already recorded it before the request was sent, when their
+    // photo clear worked. When it failed they recorded nobody, and neither
+    // does this: the next pull adopts and clears the photos again.
+    if (liveUserId && photosCleared) await setMeta(CACHE_USER_META_KEY, liveUserId);
     // Persist the org's enabled modules so the drawer + tab gating can read
     // them synchronously between syncs (and while offline). Always written —
     // even an empty array is meaningful (the consumers treat "no persisted

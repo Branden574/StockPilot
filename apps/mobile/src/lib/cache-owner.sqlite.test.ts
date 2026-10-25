@@ -36,6 +36,17 @@ import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
  * them too. And the release before this one forgot the record at every wipe
  * and cleared the photos at none, so at the first launch of this one a phone
  * with no owner recorded can hold anyone's photos.
+ *
+ * AND A FAILED PHOTO CLEAR, AND THE ROWS AN ADOPT KEPT (B18 reviews of
+ * 43256f0da). A photo clear that failed (expo-image answering false, or
+ * rejecting) still recorded the account, so every later pull kept, and the
+ * photos were never cleared. And a pull that found no record kept the rows, the
+ * delta cursor and the persisted scope it found, although they can be another
+ * account's (an older release's switch, repair and Clear erased the record
+ * while rows cached after them stayed): the next account delta-pulled from
+ * someone else's cursor, and their items, POs and counts were never swept. And
+ * the count screen stored a count it had fetched without checking that the
+ * cache and the account were still the ones it fetched for.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -68,6 +79,10 @@ const device = vi.hoisted(() => ({
   /** Photo links the server signed. */
   signed: 0,
   authListener: null as null | ((event: string, session: { user: { id: string } } | null) => void),
+  /** Every snapshot request the pull sent, by path. */
+  requests: [] as string[],
+  /** Changes the server's answer for one test (what an account can see). */
+  answer: null as null | ((snap: SnapshotAnswer, userId: string) => SnapshotAnswer),
 }));
 
 const image = vi.hoisted(() => ({ clearMemoryCache: vi.fn(), clearDiskCache: vi.fn() }));
@@ -92,8 +107,40 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+/** An open count as the snapshot lists it. */
+interface CountAnswer {
+  id: string;
+  status: string;
+  warehouseId: string | null;
+  startedAt: string;
+  assignedTo: string | null;
+  notes: string | null;
+  lines: { id: string; itemId: string; expected: number; counted: number | null }[];
+}
+
+interface SnapshotAnswer {
+  serverTime: string;
+  enabledModules: string[];
+  permissions: string[];
+  warehouses: { id: string; name: string }[];
+  items: {
+    id: string;
+    sku: string;
+    name: string;
+    barcode: string | null;
+    quantityOnHand: number;
+    unitCost: number;
+    warehouseId: string | null;
+    itemType: string;
+  }[];
+  openPOs: unknown[];
+  openCycleCounts: CountAnswer[];
+  bundles: unknown[];
+  activeBundleIds?: string[];
+}
+
 /** The snapshot the server answers for an account in a workspace. */
-function snapshotFor(userId: string, orgId: string | null) {
+function snapshotFor(userId: string, orgId: string | null): SnapshotAnswer {
   return {
     serverTime: '2026-10-24T12:00:00.000Z',
     enabledModules: [],
@@ -118,11 +165,13 @@ function snapshotFor(userId: string, orgId: string | null) {
 }
 
 vi.mock('./api', () => ({
-  api: vi.fn(async (_path: string, opts: { asUserId?: string } = {}) => {
+  api: vi.fn(async (path: string, opts: { asUserId?: string } = {}) => {
+    device.requests.push(path);
     if (!device.online || device.snapshotFails) throw new TypeError('Network request failed');
     // api.ts refuses a request whose session changed since it was asked for.
     if (opts.asUserId !== device.userId || !device.userId) throw new Error('session changed');
-    return snapshotFor(device.userId, device.storage.get('workspace.activeOrgId') ?? null);
+    const snap = snapshotFor(device.userId, device.storage.get('workspace.activeOrgId') ?? null);
+    return device.answer ? device.answer(snap, device.userId) : snap;
   }),
 }));
 
@@ -308,6 +357,43 @@ const owner = () =>
   )?.value ?? null;
 const items = () =>
   (raw.prepare('select id from items order by id').all() as { id: string }[]).map((r) => r.id);
+const ids = (sql: string) => (raw.prepare(sql).all() as { id: string }[]).map((r) => r.id);
+const metaValue = (key: string) =>
+  (raw.prepare('select value from meta where key = ?').get(key) as { value: string } | undefined)
+    ?.value ?? null;
+/** One cached count line, as the count screen would read it. */
+const line = (id: string) =>
+  raw.prepare('select counted, local_dirty from cycle_count_lines where id = ?').get(id) as
+    { counted: number | null; local_dirty: number } | undefined;
+/** The outbox's record_count rows: whose, for which count, in what state. */
+const queuedCounts = () =>
+  raw
+    .prepare(
+      `select user_id, status, json_extract(payload_json, '$.cycleCountId') as count_id
+         from pending_actions where kind = 'record_count' order by id`,
+    )
+    .all() as { user_id: string | null; status: string; count_id: string }[];
+
+/** A photo is still in either of expo-image's caches. */
+const stillCached = (p: string) => device.memory.has(p) || device.disk.has(p);
+
+/** The ways a photo clear fails: expo-image answering false or rejecting.
+ *  Each fails the NEXT call of that clear only. */
+const PHOTO_CLEAR_FAILS: Record<string, () => void> = {
+  'the disk clear answers false': () => {
+    image.clearDiskCache.mockImplementationOnce(async () => false);
+  },
+  'the disk clear rejects': () => {
+    image.clearDiskCache.mockImplementationOnce(async () => {
+      throw new Error('disk busy');
+    });
+  },
+  'the memory clear rejects': () => {
+    image.clearMemoryCache.mockImplementationOnce(async () => {
+      throw new Error('memory busy');
+    });
+  },
+};
 
 /** Generous: every statement on the stand-in database yields a macrotask, and
  *  a loaded runner stretches each one. Each test here runs a few pulls and
@@ -346,8 +432,10 @@ async function aSignedInWithAPhoto(): Promise<void> {
 
 /** The signed-in account opens a count online, so it can be counted offline
  *  (cycle-count-cache.ts: the one screen that caches rows outside the pull),
- *  and counts its line. */
+ *  and counts its line. The screen notes the cache and the account before it
+ *  fetches (app/cycle-count/[id].tsx), and stores the count under that note. */
 async function countOnThePhone(countId: string): Promise<void> {
+  const fetchedUnder = await m.counts.cacheWriteScope();
   await m.counts.cacheCycleCount(
     {
       id: countId,
@@ -369,6 +457,7 @@ async function countOnThePhone(countId: string): Promise<void> {
         updatedAt: null,
       },
     ],
+    fetchedUnder,
   );
   expect(await m.counts.updateLocalLine(`${countId}-l1`, 5)).not.toBeNull();
 }
@@ -438,6 +527,8 @@ beforeEach(async () => {
   device.holdDiskClear = false;
   device.signed = 0;
   device.authListener = null;
+  device.requests = [];
+  device.answer = null;
   auth.user = null;
   published.length = 0;
   image.clearMemoryCache.mockReset().mockImplementation(async () => {
@@ -588,14 +679,16 @@ describe('the reset for another account', SLOW, () => {
   });
 });
 
-describe('the record changes only once the photos are gone', SLOW, () => {
-  const ACCOUNT_EXITS: Record<string, () => Promise<void>> = {
-    // auth-context.tsx signOut, once the session is gone (photo-links-wiring.test.ts pins it).
-    'a sign-out': () => m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut),
-    // use-account-gate.ts, a confirmed disable (pinned there too).
-    'an account eviction': () => m.photoWipe.wipeWithPhotoCaches(() => m.db.wipeForEviction(A)),
-  };
+/** The two ways an account leaves the device, each run as A once its session
+ *  is gone. */
+const ACCOUNT_EXITS: Record<string, () => Promise<unknown>> = {
+  // auth-context.tsx signOut, once the session is gone (photo-links-wiring.test.ts pins it).
+  'a sign-out': () => m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut),
+  // use-account-gate.ts, a confirmed disable (pinned there too).
+  'an account eviction': () => m.photoWipe.wipeWithPhotoCaches(() => m.db.wipeForEviction(A)),
+};
 
+describe('the record changes only once the photos are gone', SLOW, () => {
   // Mutation caught: the SQLite wipe (which forgets the record) run before the
   // photo wipe, as it was: an app closed while the disk clear ran left photos
   // with no owner recorded, and the next account adopted them.
@@ -791,6 +884,466 @@ describe('a pull that finds no owner recorded', SLOW, () => {
     expect(image.clearDiskCache.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });
+
+/** A's record is lost while its cache stays: an older release's switch,
+ *  repair or Clear erased the record while rows cached after them stayed, or
+ *  any later path that loses it. */
+const recordLost = () => raw.exec("delete from meta where key = 'cache_user_id'");
+
+describe('a photo clear that fails records nobody', SLOW, () => {
+  // Mutation caught: the adopt recording the account whatever became of the
+  // clear (as at 43256f0da), or the landed pull's own stamp recording it.
+  it.each(Object.keys(PHOTO_CLEAR_FAILS))(
+    'at a pull that finds no owner recorded, when %s: the pull still lands, records nobody, and the next pull clears again and records the account',
+    async (failure) => {
+      await aSignedInWithAPhoto();
+      recordLost();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      PHOTO_CLEAR_FAILS[failure]!();
+      await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
+
+      expect(owner()).toBeNull();
+      expect(stillCached(PHOTO_A)).toBe(true);
+      expect(items()).toContain(`item-${B}-org-1`); // the pull was not skipped
+
+      await m.sync.syncNow(); // the next tick: no record, so it clears again
+
+      await expectForgotten(PHOTO_A);
+      expect(owner()).toBe(B);
+    },
+  );
+
+  // Mutation caught: the reset recording the new account whatever became of
+  // the clear (as at 43256f0da), or keeping the previous account's record,
+  // which would reset again at every tick and wipe what B cached since.
+  it.each(Object.keys(PHOTO_CLEAR_FAILS))(
+    "at the reset for another account, when %s: the record is forgotten, neither account's, and the next pull clears again without wiping the new account's rows",
+    async (failure) => {
+      await aSignedInWithAPhoto();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      PHOTO_CLEAR_FAILS[failure]!();
+      await m.sync.syncNow(); // B's first pull: the reset; its clear fails; the pull lands
+
+      expect(items()).toEqual([`item-${B}-org-1`]);
+      expect(stillCached(PHOTO_A)).toBe(true);
+      expect(owner()).toBeNull();
+
+      // B counts on the phone, then the next tick runs offline: a reset would
+      // empty the cache at once, offline too.
+      await countOnThePhone('cc-b');
+      device.online = false;
+      await m.sync.syncNow();
+
+      await expectForgotten(PHOTO_A);
+      expect(owner()).toBe(B);
+      expect(items()).toEqual([`item-${B}-org-1`]);
+      expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+    },
+  );
+
+  // Already so before this change (the exits forget the record whatever the
+  // clear did); pinned here with the rest. The next account's own clear
+  // failing too is what 43256f0da got wrong: it recorded that account.
+  it.each(
+    Object.keys(ACCOUNT_EXITS).flatMap((exit) =>
+      Object.keys(PHOTO_CLEAR_FAILS).map((failure) => [exit, failure] as const),
+    ),
+  )(
+    "%s whose photo clear fails (%s) still forgets the record: the next account's pulls clear again until a clear works, and only then record it",
+    async (exit, failure) => {
+      await aSignedInWithAPhoto();
+      device.userId = null; // the session is gone before the wipe runs
+      auth.user = null;
+      PHOTO_CLEAR_FAILS[failure]!();
+      await ACCOUNT_EXITS[exit]!();
+
+      expect(owner()).toBeNull();
+      expect(items()).toEqual([]);
+      expect(stillCached(PHOTO_A)).toBe(true);
+
+      signIn(B);
+      PHOTO_CLEAR_FAILS[failure]!(); // B's first pull: the clear fails again
+      await m.sync.syncNow();
+      expect(stillCached(PHOTO_A)).toBe(true);
+      expect(owner()).toBeNull();
+
+      await m.sync.syncNow(); // the next tick: the clear works
+
+      await expectForgotten(PHOTO_A);
+      expect(owner()).toBe(B);
+    },
+  );
+});
+
+const A_CURSOR = '2026-10-20T00:00:00.000Z';
+const A_SCOPE = '{"hasAllAccess":false,"warehouseNames":["A only"]}';
+
+/** A's cache with no owner recorded (recordLost): its item and the count it
+ *  counted (an unsent entry in the outbox), a PO and a kit its pulls cached,
+ *  the delta cursor on its timeline and its persisted scope, permissions and
+ *  modules. Then its session ends without a wipe. */
+async function aLeavesItsCacheWithNoOwner(): Promise<void> {
+  await aSignedInWithAPhoto();
+  await countOnThePhone('cc-a');
+  raw.exec(`
+    insert into purchase_orders (id, po_number, status, warehouse_id, expected_at, last_synced_at)
+      values ('po-a', 'PO-A', 'ordered', 'wh-a', null, 1);
+    insert into po_lines (id, po_id, item_id, qty_ordered, qty_received, unit_cost)
+      values ('po-a-l1', 'po-a', 'item-a-only', 3, 0, 0);
+    insert into bundles (id, name, sku, preassembly_enabled, phantom_item_id, phantom_qty, phantom_warehouse_id, last_synced_at)
+      values ('b-a', 'A kit', null, 0, null, 0, null, 1);
+    insert into bundle_components (bundle_id, item_id, quantity, is_optional)
+      values ('b-a', 'item-a-only', 1, 0);
+    insert or replace into meta (key, value) values ('last_synced_at', '${A_CURSOR}');
+    insert or replace into meta (key, value) values ('warehouse_scope', '${A_SCOPE}');
+    insert or replace into meta (key, value) values ('effective_permissions', '["a:only"]');
+    insert or replace into meta (key, value) values ('enabled_modules', '["a-only"]');
+  `);
+  recordLost();
+  sessionEndsWithoutWipe();
+}
+
+/** An open count as the snapshot lists it, in A's and B's warehouse. */
+const openCount = (id: string, lines: CountAnswer['lines'] = []): CountAnswer => ({
+  id,
+  status: 'in_progress',
+  warehouseId: 'wh-org-1',
+  startedAt: '2026-10-24T08:00:00.000Z',
+  assignedTo: null,
+  notes: null,
+  lines,
+});
+
+/** What B's answer changes, for this test only. */
+const bSees = (change: Partial<SnapshotAnswer>) => {
+  device.answer = (snap, userId) => (userId === B ? { ...snap, ...change } : snap);
+};
+
+describe('a pull that finds no owner recorded trusts none of the rows it finds', SLOW, () => {
+  // Mutations caught: the adopt keeping the cursor (a delta pull from A's
+  // timeline sweeps nothing), keeping the persisted values, the PO sweep, and
+  // a count kept for an unsent entry that is not this account's.
+  it("another account's rows, cursor and scope: after the next account's first pull none of them is left, and the count it counted before that pull stays", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    signIn(B);
+    await countOnThePhone('cc-b'); // before B's first pull
+    await m.sync.syncNow(); // B's first pull
+
+    expect(device.requests.at(-1)).toBe('/api/v1/mobile/snapshot'); // in full, not from A's cursor
+    expect(items()).toEqual([`item-${B}-org-1`]);
+    expect(ids('select id from purchase_orders')).toEqual([]);
+    expect(ids('select id from po_lines')).toEqual([]);
+    expect(ids('select id from bundles')).toEqual([]);
+    expect(raw.prepare('select count(*) as n from bundle_components').get()).toEqual({ n: 0 });
+    // A's count, which B cannot see, is gone with its line; B's own stays,
+    // with the count it has not sent yet.
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-b']);
+    expect(ids("select id from cycle_count_lines where count_id = 'cc-a'")).toEqual([]);
+    expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+    expect((await m.counts.getCycleCount('cc-b'))?.lines).toEqual([
+      expect.objectContaining({ id: 'cc-b-l1', counted: 5, localDirty: true }),
+    ]);
+    // The outbox is untouched: A's entry is held for A, B's is B's to send.
+    expect(queuedCounts()).toEqual([
+      { user_id: A, status: 'pending', count_id: 'cc-a' },
+      { user_id: B, status: 'pending', count_id: 'cc-b' },
+    ]);
+    // The cursor and the persisted values are B's answer's, never A's.
+    expect(metaValue('last_synced_at')).toBe('2026-10-24T12:00:00.000Z');
+    expect(metaValue('warehouse_scope')).toBeNull();
+    expect(metaValue('effective_permissions')).toBe('[]');
+    expect(metaValue('enabled_modules')).toBe('[]');
+    expect(owner()).toBe(B);
+  });
+
+  // Mutations caught: the adopt keeping the cursor or the persisted values.
+  // Offline nothing is pulled, so they must go at the adopt itself, and the
+  // next pull is in full although the cache is recorded as B's by then.
+  it("offline, the adopt forgets the other account's cursor, scope, permissions and modules at once, and the next pull is in full", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    signIn(B);
+    await countOnThePhone('cc-b');
+    device.online = false;
+    await m.sync.syncNow(); // B's first pull, offline
+
+    expect(metaValue('last_synced_at')).toBeNull();
+    expect(metaValue('warehouse_scope')).toBeNull();
+    expect(metaValue('effective_permissions')).toBeNull();
+    expect(metaValue('enabled_modules')).toBeNull();
+    expect(owner()).toBe(B);
+
+    device.online = true;
+    await m.sync.syncNow(); // the next tick
+
+    expect(device.requests.at(-1)).toBe('/api/v1/mobile/snapshot');
+    expect(items()).toEqual([`item-${B}-org-1`]);
+    expect(ids('select id from purchase_orders')).toEqual([]);
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-b']);
+    expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+  });
+
+  // Mutation caught: the adopted counts swept only by the every-pull rule,
+  // which stops at the snapshot's 50-count page.
+  it("B's answer is a full page of 50 counts: A's count still goes, and B's own stays", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    bSees({ openCycleCounts: Array.from({ length: 50 }, (_, i) => openCount(`cc-open-${i}`)) });
+    signIn(B);
+    await countOnThePhone('cc-b');
+    await m.sync.syncNow();
+
+    expect(ids("select id from cycle_counts where id in ('cc-a', 'cc-b') order by id")).toEqual([
+      'cc-b',
+    ]);
+    expect(ids("select id from cycle_count_lines where count_id = 'cc-a'")).toEqual([]);
+    expect(ids('select id from cycle_counts')).toHaveLength(51);
+    expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+  });
+
+  // Mutations caught: the adopt leaving the items, or the kits, unmarked.
+  // The full pull's own sweeps drop only rows stamped before the pull's own
+  // time, and a phone whose clock ran ahead stamped A's rows after it.
+  it("A's rows were stamped while the phone's clock ran ahead: B's first pull still drops them", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    const ahead = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    raw.prepare('update items set last_synced_at = ?').run(ahead);
+    raw.prepare('update bundles set last_synced_at = ?').run(ahead);
+    signIn(B);
+    await m.sync.syncNow();
+
+    expect(items()).toEqual([`item-${B}-org-1`]);
+    expect(ids('select id from bundles')).toEqual([]);
+    expect(raw.prepare('select count(*) as n from bundle_components').get()).toEqual({ n: 0 });
+  });
+
+  // Mutation caught: the adopted kits swept only by the full pull's own
+  // sweeps, which keep every kit the org's active list names and, without
+  // the list, stop at a page of 1000 kits.
+  it.each([
+    ['naming it in the active list', true],
+    ['with no active list', false],
+  ] as const)(
+    "B's answer is a full page of 1000 kits, %s: A's kit past the page goes, B's page stays",
+    async (_case, withActiveList) => {
+      await aLeavesItsCacheWithNoOwner();
+      const page = Array.from({ length: 1000 }, (_, i) => ({
+        id: `b-page-${String(i).padStart(4, '0')}`,
+        name: 'Kit',
+        sku: null,
+        preassemblyEnabled: false,
+        phantomItemId: null,
+        phantomQty: 0,
+        phantomWarehouseId: null,
+        components: [{ itemId: `item-${B}-org-1`, quantity: 1, isOptional: false }],
+      }));
+      bSees({
+        bundles: page,
+        ...(withActiveList ? { activeBundleIds: [...page.map((k) => k.id), 'b-a'] } : {}),
+      });
+      signIn(B);
+      await m.sync.syncNow();
+
+      expect(ids("select id from bundles where id = 'b-a'")).toEqual([]);
+      expect(
+        raw.prepare("select count(*) as n from bundle_components where bundle_id = 'b-a'").get(),
+      ).toEqual({ n: 0 });
+      expect(raw.prepare('select count(*) as n from bundles').get()).toEqual({ n: 1000 });
+      expect(raw.prepare('select count(*) as n from bundle_components').get()).toEqual({ n: 1000 });
+    },
+  );
+
+  // Mutation caught: an adopted line's local edit kept when no entry of this
+  // account's backs it. A's unsent count of 5 would show to B as B's own.
+  it("a count B can see: A's unsent count on it gives way to the server's, and A's entry stays held for A", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    bSees({
+      openCycleCounts: [
+        openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
+      ],
+    });
+    signIn(B);
+    await countOnThePhone('cc-b');
+    await m.sync.syncNow();
+
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-a', 'cc-b']);
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+    expect(queuedCounts()).toEqual([
+      { user_id: A, status: 'pending', count_id: 'cc-a' },
+      { user_id: B, status: 'pending', count_id: 'cc-b' },
+    ]);
+  });
+
+  // Mutation caught: the count screen's write confirming an adopted count
+  // with the edit on it that no entry of B's backs still kept. Its header
+  // write stamps the count with its own time, so the pull's release, which
+  // reads the marks, never sees it again.
+  it("B opens A's count on the count screen before any pull of B's lands: it shows the server's count, not A's unsent one", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    signIn(B);
+    await countOnThePhone('cc-b');
+    device.snapshotFails = true;
+    await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
+    expect(owner()).toBe(B);
+
+    const fetchedUnder = await m.counts.cacheWriteScope();
+    const header = (id: string) => ({
+      id,
+      organizationId: 'org-1',
+      warehouseId: 'wh-org-1',
+      warehouseName: 'Main',
+      status: 'in_progress',
+      startedAt: '2026-10-24T08:00:00.000Z',
+    });
+    const serverLine = (id: string, counted: number | null) => ({
+      id,
+      itemId: 'item-x',
+      itemName: 'X',
+      itemSku: 'SKU-X',
+      itemBarcode: null,
+      expected: 4,
+      counted,
+      updatedAt: null,
+    });
+    expect(
+      await m.counts.cacheCycleCount(header('cc-a'), [serverLine('cc-a-l1', 2)], fetchedUnder),
+    ).toBe(true);
+    expect(
+      await m.counts.cacheCycleCount(header('cc-b'), [serverLine('cc-b-l1', null)], fetchedUnder),
+    ).toBe(true);
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect((await m.counts.getCycleCount('cc-a'))?.lines).toEqual([
+      expect.objectContaining({ id: 'cc-a-l1', counted: 2, localDirty: false }),
+    ]);
+    // B's own count keeps the count B has not sent yet.
+    expect(line('cc-b-l1')).toEqual({ counted: 5, local_dirty: 1 });
+    expect(queuedCounts()).toEqual([
+      { user_id: A, status: 'pending', count_id: 'cc-a' },
+      { user_id: B, status: 'pending', count_id: 'cc-b' },
+    ]);
+  });
+
+  // Mutation caught: the full pull keeping the warehouse list when the
+  // answer's is empty.
+  it("B can read no warehouse: A's warehouses are not left on the phone", async () => {
+    await aLeavesItsCacheWithNoOwner();
+    expect(ids('select id from warehouses')).toEqual(['wh-org-1']);
+    bSees({ warehouses: [], items: [], openCycleCounts: [] });
+    signIn(B);
+    await m.sync.syncNow();
+
+    expect(ids('select id from warehouses')).toEqual([]);
+    expect(items()).toEqual([]);
+    expect(ids('select id from cycle_counts')).toEqual([]);
+  });
+});
+
+describe(
+  'a count the screen fetched is stored only for the cache and the account it was fetched for',
+  SLOW,
+  () => {
+    /** The count screen's fetch, answered, stored under the note it took before
+     *  sending it (app/cycle-count/[id].tsx). */
+    const storeFetchedCount = (
+      fetchedUnder: Awaited<ReturnType<typeof m.counts.cacheWriteScope>>,
+    ) =>
+      m.counts.cacheCycleCount(
+        {
+          id: 'cc-a',
+          organizationId: 'org-1',
+          warehouseId: 'wh-org-1',
+          warehouseName: 'Main',
+          status: 'in_progress',
+          startedAt: '2026-10-24T08:00:00.000Z',
+        },
+        [
+          {
+            id: 'cc-a-l1',
+            itemId: 'item-x',
+            itemName: 'X',
+            itemSku: 'SKU-X',
+            itemBarcode: null,
+            expected: 4,
+            counted: null,
+            updatedAt: null,
+          },
+        ],
+        fetchedUnder,
+      );
+    const cachedCounts = () => ids('select id from cycle_counts order by id');
+
+    // Mutation caught: no check at all (the cache generation and the account
+    // both moved here).
+    it("a fetch that lands after a sign-out's wipe is discarded: no count is left with no owner", async () => {
+      await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope(); // the screen, before its fetch
+      device.userId = null;
+      auth.user = null;
+      await m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut); // while the fetch is out
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+      expect(owner()).toBeNull();
+    });
+
+    // Mutation caught: no account check. Nothing is wiped when a session ends
+    // this way, so the cache generation has not moved.
+    it('a fetch that lands after the session ended without a wipe and another account signed in is discarded', async () => {
+      await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope();
+      sessionEndsWithoutWipe();
+      signIn(B);
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+    });
+
+    // Discarded by the cache-generation check and the workspace check alike.
+    it('a fetch that lands after a workspace switch is discarded: it belongs to the workspace left', async () => {
+      await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope();
+      await m.ws.setActiveOrg('org-2'); // its wipe, while the fetch is out
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+      await backgroundPullsSettle();
+    });
+
+    // Mutation caught: no cache-generation check. The account and the
+    // workspace are the same; only the wipe moved.
+    it('a fetch that lands after Settings > Offline cache > Clear is discarded: the cache it was fetched for is gone', async () => {
+      await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope();
+      expect(await clearOfflineCache()).toEqual({ ok: true }); // while the fetch is out
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+    });
+
+    // Mutation caught: no workspace check. A switch saves the new workspace and
+    // wipes before the screen is shown it, so a note the screen takes in that
+    // window, for the workspace it still shows, carries the moved generation.
+    it('a fetch noted after a workspace switch had wiped, for the workspace still on screen, is discarded', async () => {
+      await aSignedInWithAPhoto();
+      await m.ws.setActiveOrg('org-2'); // saved and wiped
+      const fetchedUnder = await m.counts.cacheWriteScope(); // the screen, still on org-1
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+      await backgroundPullsSettle();
+    });
+
+    it('the same account, with nothing wiped while the fetch was out: stored', async () => {
+      await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope();
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(true);
+      expect(cachedCounts()).toEqual(['cc-a']);
+    });
+  },
+);
 
 describe('Settings > Offline cache > Clear is the same-account wipe', SLOW, () => {
   // The screen's own dependencies, which the Clear rows above reproduce.
