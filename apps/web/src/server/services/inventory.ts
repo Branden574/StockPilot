@@ -5154,17 +5154,32 @@ export class InventoryService {
     }
 
     if (patch.charterId !== undefined) {
-      // Validate the (final) (warehouse, charter) pair if non-null
+      // Validate the (final) (warehouse, charter) pair if non-null, when the
+      // charter or the warehouse CHANGES. The form sends every field on every
+      // save, so checking an unchanged pair refused every other edit of a
+      // record whose charter its warehouse no longer lists (an admin unlinked
+      // it later), and only a change of either one can make the pair new.
       const finalWarehouseId =
         (updates.warehouse_id as string | undefined) ?? currentWarehouseId ?? null;
-      if (patch.charterId && finalWarehouseId) {
-        const { data: pair } = await this.ctx.supabase
+      const currentCharterId = (current as { charter_id?: string | null }).charter_id ?? null;
+      const pairChanges =
+        (patch.charterId ?? null) !== currentCharterId || finalWarehouseId !== currentWarehouseId;
+      if (patch.charterId && finalWarehouseId && pairChanges) {
+        const { data: pair, error: pairError } = await this.ctx.supabase
           .from('warehouse_charters')
           .select('charter_id')
           .eq('organization_id', this.ctx.organizationId)
           .eq('warehouse_id', finalWarehouseId)
           .eq('charter_id', patch.charterId)
           .maybeSingle();
+        // A failed read refuses (fail closed) and says so, rather than
+        // claiming the warehouse does not service the charter.
+        if (pairError) {
+          throw new ServiceError(
+            'internal_error',
+            `Could not check that the warehouse services this charter: ${pairError.message}`,
+          );
+        }
         if (!pair) {
           throw new ServiceError(
             'validation_error',
