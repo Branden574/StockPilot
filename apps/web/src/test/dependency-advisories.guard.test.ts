@@ -38,16 +38,22 @@ import { describe, expect, it } from 'vitest';
  *     apps/web, apps/mobile and packages/core. The first fixed releases are
  *     vite 6.4.4 (the lockfile resolves 6.4.5) and @vitest/mocker 4.1.12,
  *     which vitest 4.1.12 brings.
+ *   - happy-dom 20.14.5 (GHSA-834v-8h66-3h79, Dependabot #122 and #139): the
+ *     DOM of apps/web's component tests, and vitest's optional peer. It is
+ *     reachable only with JavaScript evaluation turned on, which no test
+ *     does. 21.0.4 is the only fixed release; 21.0.0 also turned CSS file
+ *     and iframe page loading off by default, which no test relies on.
  *
  * sharp and shell-quote, fixed by #381 while their alerts (#119 and #118)
  * were still open, are held to the same rule.
  *
  * WHAT STOPS IT NOW: root package.json overrides set the floors
  * (compression@1 ^1.8.2, dompurify@3 ^3.4.17, source-map-js@1 ^1.2.2,
- * fast-uri@3 ^3.1.9, vite ^6.4.4), and this test reads every version the
- * lockfile resolves and fails when one is inside an advisory's vulnerable
- * range. A lockfile change that brings one back (a new dependency, a revert,
- * a hand edit) fails CI instead of waiting for an alert.
+ * fast-uri@3 ^3.1.9, vite ^6.4.4), apps/web asks for happy-dom ^21.0.4, and
+ * this test reads every version the lockfile resolves and fails when one is
+ * inside an advisory's vulnerable range. A lockfile change that brings one
+ * back (a new dependency, a revert, a hand edit) fails CI instead of waiting
+ * for an alert.
  *
  * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release; zod 3
  * (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and #134) needs zod 4, a
@@ -202,6 +208,12 @@ const FLOORS: Floor[] = [
     ],
   },
   {
+    pkg: 'happy-dom',
+    // GHSA-834v-8h66-3h79 >=17.0.0 <=21.0.3 -> 21.0.4.
+    advisories: ['GHSA-834v-8h66-3h79'],
+    ranges: [{ from: '17.0.0', fixed: '21.0.4' }],
+  },
+  {
     pkg: 'sharp',
     // GHSA-wq5f-xc86-pv6w <0.35.5 -> 0.35.5.
     advisories: ['GHSA-wq5f-xc86-pv6w'],
@@ -309,6 +321,7 @@ describe('the check itself', () => {
       'fast-uri@3.1.8',
       'vite@6.4.3',
       "'@vitest/mocker@4.1.11'",
+      'happy-dom@21.0.3',
       'sharp@0.35.4',
       'shell-quote@1.10.0',
       "'@scope/other@1.0.0'",
@@ -321,6 +334,7 @@ describe('the check itself', () => {
       'fast-uri@3.1.8',
       'vite@6.4.3',
       '@vitest/mocker@4.1.11',
+      'happy-dom@21.0.3',
       'sharp@0.35.4',
       'shell-quote@1.10.0',
     ]);
@@ -333,6 +347,7 @@ describe('the check itself', () => {
           'fast-uri@3.1.9',
           'vite@6.4.4',
           "'@vitest/mocker@4.1.12'",
+          'happy-dom@21.0.4',
           'sharp@0.35.5',
           'shell-quote@1.11.0',
         ]),
@@ -364,6 +379,8 @@ describe('the check itself', () => {
       '@vitest/mocker@5.0.2 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp)',
     ]);
     expect(vulnerableLocked(fixture(["'@vitest/mocker@5.0.3'"]))).toEqual([]);
+    expect(vulnerableLocked(fixture(['happy-dom@16.8.1']))).toEqual([]);
+    expect(vulnerableLocked(fixture(['happy-dom@17.0.0', 'happy-dom@20.14.5']))).toHaveLength(2);
   });
 
   it('orders prereleases before their release and fails a version it cannot read', () => {

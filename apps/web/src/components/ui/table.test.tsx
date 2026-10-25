@@ -296,7 +296,10 @@ describe('Table scroll wrapper', () => {
       ),
     ],
     ['a video with controls', () => <video controls />],
-    ['an iframe', () => <iframe title="Preview" />],
+    // An empty srcDoc keeps the frame inert: happy-dom 21 does not load
+    // iframe pages, and one with no source would ask for about:blank and
+    // print the refusal.
+    ['an iframe', () => <iframe title="Preview" srcDoc="" />],
   ])('%s in a row also counts as a control', (_kind, control) => {
     widths = { scroll: 1100, client: 900 };
     render(<Orders rowControl={control()} />);
