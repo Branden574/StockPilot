@@ -28,7 +28,14 @@
 
      AMENDED 2026-10-24 (docket S14): INV-E5 added, with a row in section 8.
      The route counts quoted in it were read by its sweep test on that date;
-     the counts in section 10 were not re-derived. -->
+     the counts in section 10 were not re-derived.
+
+     AMENDED 2026-10-25 (docket S14 review): INV-E5's GET inventory was
+     wrong (it missed /auth/session-ended and the export routes), and it
+     presented the /auth/confirm login CSRF as closed for browsers that send
+     Fetch Metadata. Both corrected, with the defences added for them and the
+     section 8 row updated. The GET list was read from the route files on
+     that date; it is not a sweep. -->
 
 # Security invariants
 
@@ -1459,6 +1466,14 @@ application structure.
   decision: without that header no header tells its own post from another
   site's, so refusing would refuse every browser without Fetch Metadata on a
   page that loads no script and opens on whatever device holds the email.
+  Its page names the account the browser is already signed in as, and where a
+  link lands is fixed by its type
+  ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
+  not chosen by the link. The two `GET`s that spend something of the person's
+  ask `sentFromAnotherOrigin` (`Sec-Fetch-Site` present and neither
+  `same-origin` nor `none`): `/auth/session-ended` then clears only a session
+  GoTrue no longer has and otherwise sends the browser to the dashboard, and
+  `exportRateLimited` answers 403 before the export budget is touched.
 - **Tested at**:
   [`cross-site-request.test.ts`](../../apps/web/src/lib/auth/cross-site-request.test.ts)
   (the rule: every method, both headers, neither header, `null` and malformed
@@ -1472,19 +1487,87 @@ application structure.
   on 2026-10-24 it read 224 route files: 128 write handlers, 114 through a
   gate, 13 exempt and one re-export, and 193 gate calls); the record route's
   and release-state's `route.cross-site.test.ts` (end to end through Next's
-  App Route module); and
+  App Route module);
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
-  (login CSRF).
-- **Not covered by this rule**: a `GET` that changes state. A link from another
-  site is a `GET` the browser sends with the cookie, so such a route would need
-  its own defence. None was found on 2026-10-24: the `GET` handlers that write
-  are the cron jobs (behind `CRON_SECRET`) and the two accounting OAuth
-  callbacks, which match their `state` against the pending connection row under
-  RLS. Server actions are covered by Next's own `Origin` check, not by this
-  rule. Also not covered: a login CSRF on `/auth/confirm` from a browser that
-  sends no `Sec-Fetch-Site` (one without Fetch Metadata, or one whose header an
-  extension strips), which needs an unspent link for an account the attacker
-  holds; the log line shows whether such posts happen.
+  (login CSRF: a post from another site, the signed-in notice, the fixed
+  landing) and
+  [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
+  (each type's landings, and a sweep over the five link builders);
+  [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
+  (another origin's link, image or frame leaves a live session alone and still
+  clears a gone one); and
+  [`export-rate-limit.test.ts`](../../apps/web/src/lib/export-rate-limit.test.ts)
+  with
+  [`export-routes.limit-order.test.ts`](../../apps/web/src/app/api/export-routes.limit-order.test.ts)
+  (an export another origin's page asked for is refused before the budget,
+  the audit row and the alert, and every export route hands the limiter its
+  own request).
+- **Not covered by this rule: a `GET`.** A top-level navigation from any site
+  carries the `SameSite=Lax` cookie, and so does an image, script or frame a
+  sibling subdomain loads (the same site), so a `GET` that changes state needs
+  its own defence. The `GET` handlers that do, as read on 2026-10-25 (115 of
+  the 224 route files export one), and each one's defence:
+  - the cron jobs, behind `CRON_SECRET` (INV-E3);
+  - the two accounting OAuth callbacks, which match their `state` against the
+    pending connection row under RLS;
+  - `/auth/callback`, which creates a session from a PKCE code: the code
+    verifier is a cookie of the browser that started the flow, so a code from
+    another browser fails;
+  - `/auth/session-ended`, which ends this browser's session: for a request
+    another origin's page made it clears only a session GoTrue no longer has
+    (what the dashboard's own redirect sends there for), and a live one goes to
+    the dashboard. The app's own link, an address typed or bookmarked (`none`)
+    and a browser without Fetch Metadata sign out as before. Corrected
+    2026-10-25: the first version of this entry missed it, and any page could
+    sign the person out;
+  - the 19 export routes (18 `GET`s and the `POST` builder): each export spends
+    the person's one budget (40 an hour, fail closed), past it writes a
+    `security.export_rate_limited` audit row and sends the organization's
+    alert with their email, and five write an export audit row. Another page
+    could lock the person out of exports for an hour and make them look like
+    they were pulling data; a navigation that becomes a download leaves that
+    page in place, so it can repeat. `exportRateLimited` now refuses an export
+    another origin's page asked for, before all of that (also missed by the
+    first version of this entry);
+  - the per-minute read limits of 15 cookie `GET` routes (search, the
+    dashboard value series, the ISBN and UPC lookups, bundles, product groups
+    with their variants and linking suggestions, the order catalog,
+    storefront, photos and submissions, staging, item history, the phone
+    snapshot): each request adds one to a counter keyed by the person. A page
+    on a sibling subdomain could hold one at its limit while it is open. It
+    reads nothing (CORS), nothing is audited or sent, and the counters reset
+    every minute, so this is accepted for now; the follow-up is a resource
+    isolation rule in `withApiContext` (refuse a cookie `GET` that another
+    origin's page made as anything but a top-level navigation).
+  Whether a `GET` writes depends on the services it calls, so this list is a
+  reading, not a sweep (section 8). Server actions are covered by Next's own
+  `Origin` check, not by this rule.
+- **Also not covered: login CSRF on `/auth/confirm`, which is narrowed, not
+  closed.**
+  - Navigate and press. Another site can send a browser to `/auth/confirm` with
+    a link it holds for its own account (a reset link for its own address is
+    one form away) and with the type it likes. The page must render for that
+    navigation, because a click in webmail is a cross-site navigation too, and
+    its form then posts from the app's own page, so `Sec-Fetch-Site` says
+    `same-origin` and the press is verified. The page now names the account
+    the browser is already signed in as, another site can no longer sign the
+    browser out first, and the link lands where its type says, not on a page
+    the other site chose. A browser that is signed out, whose person presses on
+    for a link they did not ask for, is still signed in to the account the link
+    belongs to. Closing that needs the link builders to add a recipient hint,
+    signed so the page can show it ("this link signs in as j***@..."); that is
+    an owner question. The first version of this entry presented the login
+    CSRF as closed for every browser that sends Fetch Metadata; it was not.
+  - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
+    Metadata, or one whose header an extension strips), which needs an unspent
+    link for an account the attacker holds; the log line shows whether such
+    posts happen.
+  - A page on a sibling subdomain can also set cookies for the parent domain,
+    which the browser then sends to the app beside its own. Supabase's session
+    cookies do not use `__Host-` names (which a subdomain cannot set), so such
+    a page may override or spoil the session cookie (a sign-out, or its own
+    session) whatever the routes above check. Moving the session cookies to
+    `__Host-` names is the follow-up.
 
 ---
 
@@ -1781,7 +1864,7 @@ everything is machine-checked is itself a form of overclaiming.
 | INV-F3 (pattern #23)                            | Client-library behaviour in TypeScript, invisible to Postgres; a lint rule needs column-nullability type analysis           | Behavioural tests on affected paths, review                                                 |
 | INV-F4 (pattern #2)                             | Same                                                                                                                        | Guarded-write tests, review                                                                 |
 | Cron-route secret gating (INV-E3)               | No sweep exists yet; one is feasible and is listed as a follow-up                                                           | Per-route gate tests                                                                        |
-| A `GET` that changes state (INV-E5)             | Whether a `GET` writes depends on the services it calls, which a sweep over route files cannot read                         | The 2026-10-24 inventory in INV-E5, review                                                  |
+| A `GET` that changes state (INV-E5)             | Whether a `GET` writes depends on the services it calls, which a sweep over route files cannot read                         | The 2026-10-25 inventory in INV-E5, the export routes' sweep, review                        |
 
 Also worth stating: `authenticated` holds table-level `INSERT`/`UPDATE`/`DELETE`
 on essentially every table in `public`, because that is the Supabase default
