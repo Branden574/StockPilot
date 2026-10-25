@@ -657,6 +657,56 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     expect(sideReads()).toBe(0);
   });
 
+  // B23: 0393 clears the driver of an open order when the driver deletes
+  // their account. The order stays in transit: an approver keeps the raw
+  // hand-over link, and the panel is told the driver is gone so it can say
+  // who is left to hand it over.
+  it('B23: an in-transit delivery whose driver deleted their account keeps the link, and the panel hears the driver is gone', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'in_transit',
+          fulfillment_type: 'delivery',
+          in_transit_at: '2026-10-20T15:04:05.000Z',
+          assigned_delivery_user_id: null,
+          signature_token: DIGEST,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(true);
+    expect(panelProps()?.signatureToken).toBe(RAW);
+  });
+
+  it('B23: a delivery that still names its driver, or never went out, is not reported as a deleted driver', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'in_transit',
+          fulfillment_type: 'delivery',
+          in_transit_at: '2026-10-20T15:04:05.000Z',
+          assigned_delivery_user_id: 'driver-2',
+          signature_token: DIGEST,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(false);
+
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'staged_for_delivery',
+          fulfillment_type: 'delivery',
+          in_transit_at: null,
+          assigned_delivery_user_id: null,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(false);
+  });
+
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
     orderGet.mockResolvedValue(
       detailFixture({

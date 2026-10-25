@@ -306,6 +306,12 @@ export interface OrderRequestSummary {
   updatedAt: string;
   approvedAt: string | null;
   deliveredAt: string | null;
+  /**
+   * When the order went out (in_transit_at), null until then. B23: with no
+   * driver on a delivery that went out, the driver deleted their account
+   * (core deliveryDriverLabel says "Deleted user").
+   */
+  inTransitAt: string | null;
   // Phase-2 list-page surface: passed through from list() so future
   // list-page enhancements (driver column, fulfillment-type filter)
   // don't require another schema sweep.
@@ -969,7 +975,7 @@ export class OrderRequestsService {
         // query lean.
         `id, order_number, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
-         created_at, updated_at, approved_at, delivered_at,
+         created_at, updated_at, approved_at, delivered_at, in_transit_at,
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
          replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
@@ -1116,6 +1122,7 @@ export class OrderRequestsService {
         updatedAt: r.updated_at as string,
         approvedAt: (r.approved_at as string | null) ?? null,
         deliveredAt: (r.delivered_at as string | null) ?? null,
+        inTransitAt: (r.in_transit_at as string | null | undefined) ?? null,
         fulfillmentType: (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         assignedPickerName: displayProfile(pickerProfile),

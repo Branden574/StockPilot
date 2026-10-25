@@ -19,6 +19,8 @@
  * and is not decided here.
  */
 
+import { deletedDriverHandOverLine } from '@stockpilot/core';
+
 /** What decides the section; every flag is the viewer's EFFECTIVE answer. */
 export interface OrderManagerActionsInput {
   status: string | null | undefined;
@@ -35,6 +37,9 @@ export interface OrderManagerActionsInput {
   isAssignedDriver: boolean;
   /** The order has a delivery driver at all. */
   hasAssignedDriver: boolean;
+  /** B23: the delivery went out and its driver deleted their account (core
+   *  isDeliveryDriverDeleted, from the order's own columns). Omitted: false. */
+  driverDeleted?: boolean;
   /** The shared order state machine offers reopen_picking to this viewer
    *  (core availableOrderActions with canApproveOrders, the web panel's own
    *  answer). */
@@ -78,6 +83,11 @@ export interface OrderManagerActions {
   /** Close as delivered-partial at backordered, as the shared machine offers
    *  it (never on an exchange replacement: RX-2 review fix F-1). */
   closePartial: boolean;
+  /** B23: the line an approver reads at an in-transit delivery whose driver
+   *  deleted their account (core deletedDriverHandOverLine, the web panel's
+   *  words), naming the hand-over buttons this viewer has; null otherwise.
+   *  Never opens the section by itself. */
+  deletedDriverLine: string | null;
 }
 
 /** The statuses whose actions are orders:approve actions: the web page's
@@ -141,5 +151,11 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
     closePartial: approver && st === 'backordered' && input.machineOffersClosePartial !== false,
   };
   const showSection = audience && Object.values(gates).some(Boolean);
-  return { showSection, ...gates };
+  // B23: nobody else will finish this delivery. Said to the approvers who
+  // hand it over (the web panel's `approves` side), with their buttons.
+  const deletedDriverLine =
+    approver && st === 'in_transit' && input.driverDeleted === true && gates.digitalSignature
+      ? deletedDriverHandOverLine({ offersPhysicalSignature: gates.physicalSignature })
+      : null;
+  return { showSection, ...gates, deletedDriverLine };
 }

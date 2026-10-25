@@ -67,6 +67,7 @@ import {
   describeUnpickedShortfall,
   formatOrderNumber,
   formatOrderReturnSummary,
+  isDeliveryDriverDeleted,
   isManagerOrAbove,
   isNeededByRevisable,
   isPickingSettled,
@@ -1888,6 +1889,11 @@ export default async function OrderDetailPage({
                 hasRequesterNote={Boolean(request.notes?.trim())}
                 fulfillmentType={request.fulfillment_type}
                 assignedDeliveryUserId={request.assigned_delivery_user_id}
+                driverDeleted={isDeliveryDriverDeleted({
+                  fulfillmentType: request.fulfillment_type,
+                  inTransitAt: request.in_transit_at,
+                  assignedDeliveryUserId: request.assigned_delivery_user_id,
+                })}
                 signatureToken={handOverLink}
                 handOverMfaMessage={
                   handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null

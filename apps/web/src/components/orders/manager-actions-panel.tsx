@@ -64,6 +64,7 @@ import {
 } from '@/server/actions/order-requests';
 import {
   availableOrderActions,
+  deletedDriverHandOverLine,
   derivePickingStatus,
   describeDepartureRisk,
   isManagerOrAbove,
@@ -104,6 +105,10 @@ interface Props {
   hasRequesterNote: boolean;
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
+  /** B23: the delivery went out and its driver deleted their account (core
+   *  isDeliveryDriverDeleted, from the order's own columns). In transit, an
+   *  approver reads who is left to hand it over. Omitted: false. */
+  driverDeleted?: boolean;
   signatureToken: string | null;
   /** Set when the Collect signature link is held back because the viewer
    *  owes an MFA step-up (migration 0389, desk check F2): the button stays
@@ -259,6 +264,7 @@ export function ManagerActionsPanel({
   hasRequesterNote,
   fulfillmentType,
   assignedDeliveryUserId,
+  driverDeleted = false,
   signatureToken,
   handOverMfaMessage = null,
   hasSignature,
@@ -1047,6 +1053,20 @@ export function ManagerActionsPanel({
               once, in the replacement banner (core's replacementDriverLine:
               an early-released delivery not yet returned, never to the
               requester), never repeated here. */}
+
+        {/* B23: the driver deleted their account on the way (0393 cleared
+              the driver). Nobody else will finish this delivery, so the
+              approver reads who is left and with which buttons. */}
+        {status === 'in_transit' && driverDeleted && approves && (
+          <span
+            className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+            role="status"
+            data-testid="deleted-driver-line"
+          >
+            <Truck className="h-3.5 w-3.5 shrink-0" />
+            {deletedDriverHandOverLine({ offersPhysicalSignature })}
+          </span>
+        )}
 
         {(status === 'staged_for_pickup' || status === 'in_transit') &&
           (approves || isDriverHere) && (
