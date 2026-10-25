@@ -1,0 +1,84 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import ts from 'typescript';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
+
+import GlobalError from './global-error';
+
+/**
+ * The last-resort error page's "Sign out and back in" is a sign-out on
+ * purpose: its click removes what an interrupted run kept in this tab
+ * (lib/interrupted-run) before the page leaves.
+ *
+ * The page renders when the root layout itself failed, so it must not depend
+ * on anything that could be what broke: besides React it imports only modules
+ * that import nothing themselves. The second case holds it to that.
+ */
+
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('global-error: Sign out and back in', () => {
+  it('removes every interrupted-run record in this tab as it is clicked', () => {
+    // The page's crash beacon posts to /api/client-error as it mounts; nothing
+    // here may leave the test.
+    const beacon = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', beacon);
+    // The page owns <html> and <body>; rendered inside the test's container,
+    // React warns about the nesting. That is the test's arrangement, not the page's.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    render(
+      <GlobalError error={Object.assign(new Error('x'), { digest: 'd-1' })} reset={() => {}} />,
+    );
+    const link = screen.getByRole('link', { name: 'Sign out and back in' });
+    expect(link).toHaveAttribute('href', '/auth/session-ended');
+    expect(interruptedRunKeys()).toHaveLength(2);
+
+    const stay = (e: Event) => e.preventDefault();
+    document.addEventListener('click', stay);
+    try {
+      fireEvent.click(link);
+    } finally {
+      document.removeEventListener('click', stay);
+    }
+
+    expect(interruptedRunKeys()).toEqual([]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+  });
+
+  it('imports, besides React, only modules that import nothing themselves', () => {
+    const src = path.resolve(__dirname, '..');
+    const importsOf = (file: string): string[] => {
+      const sf = ts.createSourceFile(
+        file,
+        readFileSync(file, 'utf8'),
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      return sf.statements
+        .filter(ts.isImportDeclaration)
+        .map((d) => (d.moduleSpecifier as ts.StringLiteral).text);
+    };
+
+    const imported = importsOf(path.join(__dirname, 'global-error.tsx'));
+    expect(imported).toEqual(['react', '@/lib/interrupted-run', '@/lib/share-paths']);
+    for (const spec of imported.filter((s) => s.startsWith('@/'))) {
+      const file = path.join(src, `${spec.slice(2)}.ts`);
+      expect({ module: spec, imports: importsOf(file) }).toEqual({ module: spec, imports: [] });
+    }
+  });
+});

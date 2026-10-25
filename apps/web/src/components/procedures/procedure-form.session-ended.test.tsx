@@ -56,7 +56,12 @@ vi.mock('@/server/actions/procedures', () => ({
   deleteProcedureVideoAction: vi.fn(),
 }));
 
-import { INTERRUPTED_RUN_TTL_MS } from '@/lib/interrupted-run';
+import {
+  INTERRUPTED_RUN_PREFIX,
+  INTERRUPTED_RUN_TTL_MS,
+  purgeInterruptedRuns,
+} from '@/lib/interrupted-run';
+import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
 
 import { ProcedureForm } from './procedure-form';
 
@@ -210,7 +215,7 @@ describe('ProcedureForm: the session ends while staged videos upload', () => {
   });
 
   it('a redirect while recording a video keeps the way back too, however long the upload took', async () => {
-    // The second upload runs past a day: the record must be fresh from the
+    // The second upload runs past an hour: the record must be fresh from the
     // step right before the recording, not from before the upload.
     let now = 1_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -340,5 +345,46 @@ describe('ProcedureForm: the session ends while staged videos upload', () => {
     await waitFor(() =>
       expect(h.push).toHaveBeenCalledWith(`/dashboard/procedures/${PROCEDURE_ID}`),
     );
+  });
+
+  it('a sign-out on purpose while the videos upload leaves nothing: New procedure opens empty after signing in', async () => {
+    // B12 round 2. The account menu's Sign out (or a revoke) purges the tab's
+    // records while the batch is still going in this page. The batch runs on
+    // for a moment (the upload finishes) and would record its next step
+    // before the recording that the ended session answers with a redirect.
+    let finishPresign: (v: unknown) => void = () => {};
+    h.createVideoUpload
+      .mockImplementationOnce(async ({ procedureId }: { procedureId: string }) =>
+        presigned(procedureId),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishPresign = resolve;
+          }),
+      );
+    h.recordVideo
+      .mockResolvedValueOnce({ ok: true, data: {} })
+      .mockRejectedValueOnce(signInRedirect());
+
+    await createWithTwoVideos();
+    await waitFor(() => expect(h.createVideoUpload).toHaveBeenCalledTimes(2));
+    expect(interruptedRunKeys()).toEqual([`${INTERRUPTED_RUN_PREFIX}procedure-video-batch`]);
+
+    purgeInterruptedRuns();
+    expect(interruptedRunKeys()).toEqual([]);
+
+    finishPresign(presigned(PROCEDURE_ID));
+    await waitFor(() => expect(h.recordVideo).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Create procedure/i })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    cleanup();
+    renderNewForm();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(h.replace).not.toHaveBeenCalled();
   });
 });

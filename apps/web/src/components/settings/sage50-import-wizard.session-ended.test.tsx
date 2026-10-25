@@ -21,6 +21,9 @@ vi.mock('@/server/actions/sage50-import', () => ({
   importSage50Action: (...a: unknown[]) => h.importSage50(...a),
 }));
 
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
+
 import { Sage50ImportWizard } from './sage50-import-wizard';
 
 const ME = { userId: 'user-1', organizationId: 'org-1' };
@@ -212,5 +215,49 @@ describe('Sage50ImportWizard: the session ends between chunks', () => {
     expect(screen.getByText(/250 created · 0 failed \(of 250\)/)).toBeInTheDocument();
     expect(screen.queryByText(STOPPED)).toBeNull();
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it('a sign-out on purpose while the import runs leaves nothing: the wizard opens clean after signing in', async () => {
+    // B12 round 2. Three chunks: the first lands and is recorded; the person
+    // signs out from the account menu (or the session is revoked) while the
+    // second is on its way. The second still lands, and the wizard would
+    // record it before sending the third, which the ended session answers
+    // with a redirect.
+    let finishSecond: (v: unknown) => void = () => {};
+    h.importSage50
+      .mockResolvedValueOnce(chunkSummary(250, 250))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSecond = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(signInRedirect());
+
+    renderWizard();
+    fireEvent.change(screen.getByLabelText('Sage 50 CSV files'), {
+      target: { files: [itemListCsv(600)] },
+    });
+    await waitFor(() => expect(screen.getByText('600 items')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Import into StockPilot' }));
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(2));
+    expect(interruptedRunKeys()).toHaveLength(1);
+
+    purgeInterruptedRuns();
+    expect(interruptedRunKeys()).toEqual([]);
+
+    finishSecond(chunkSummary(250, 250));
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Import into StockPilot' })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    cleanup();
+    renderWizard();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.queryByText(/The last import stopped/)).toBeNull();
+    expect(screen.queryByText(/created ·/)).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { reportError } from '@/lib/error-reporter';
 import { SESSION_ENDED_PATH } from '@/lib/auth/session-ended';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 
 /**
  * RSC error boundary for the dashboard route group. Without this, a server
@@ -21,6 +22,12 @@ import { SESSION_ENDED_PATH } from '@/lib/auth/session-ended';
  * sends a signed-in visitor straight back from, so nothing happened. A plain
  * <a>, never a Next <Link>: a Link would prefetch that route, and prefetching
  * it would sign the person out just for seeing this card.
+ *
+ * The click also removes what an interrupted run kept in this tab
+ * (lib/interrupted-run), before the page leaves: this is a sign-out on
+ * purpose. The route itself cannot (sessionStorage is the browser's), and it
+ * must not: the dashboard's own redirect there, for a session that expired,
+ * keeps the record so the person gets back to their work.
  */
 export default function DashboardError({
   error,
@@ -75,7 +82,9 @@ export default function DashboardError({
           </Button>
           <Button asChild variant="ghost">
             {/* A plain <a>: a full load of a route handler (see above). */}
-            <a href={SESSION_ENDED_PATH}>Sign out and back in</a>
+            <a href={SESSION_ENDED_PATH} onClick={() => purgeInterruptedRuns()}>
+              Sign out and back in
+            </a>
           </Button>
         </div>
       </div>

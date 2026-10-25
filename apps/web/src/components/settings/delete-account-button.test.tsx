@@ -1,6 +1,12 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
 
 const replace = vi.fn();
 const push = vi.fn();
@@ -104,5 +110,46 @@ describe('DeleteAccountButton: a refusal', () => {
     await user.click(within(dialog).getByRole('button', { name: /Delete account/ }));
     expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
     resolve({ ok: true, data: undefined });
+  });
+});
+
+/**
+ * Deleting the account ends this browser's session on purpose (the action
+ * signs it out), so what an interrupted run kept in this tab
+ * (lib/interrupted-run) goes before the request leaves.
+ */
+describe('DeleteAccountButton: deleting the account', () => {
+  afterEach(() => sessionStorage.clear());
+
+  it('removes every interrupted-run record in this tab before the request leaves', async () => {
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    let keysAtRequest: string[] | null = null;
+    deleteOwnAccountAction.mockImplementation(async () => {
+      keysAtRequest = interruptedRunKeys();
+      return { ok: true, data: undefined };
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await openAndConfirm(user);
+
+    await waitFor(() => expect(deleteOwnAccountAction).toHaveBeenCalledTimes(1));
+    expect(keysAtRequest).toEqual([]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/signin'));
+  });
+
+  it('opening the dialog and cancelling removes nothing', async () => {
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete my account' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+
+    expect(deleteOwnAccountAction).not.toHaveBeenCalled();
+    expect(interruptedRunKeys()).toHaveLength(2);
   });
 });

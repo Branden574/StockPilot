@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { isSharePath } from '@/lib/share-paths';
 
 /** lib/auth/session-ended.ts SESSION_ENDED_PATH, written out (no import, see below). */
@@ -23,7 +24,15 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * (app/auth/session-ended), which ends this device's session and lands on
  * sign-in. It used to point at /signin, which the proxy bounces a signed-in
  * visitor straight back from, so nothing happened. A plain <a> (a full page
- * load), and no new import: this file must not depend on anything that broke.
+ * load). Its click first removes what an interrupted run kept in this tab
+ * (lib/interrupted-run): this is a sign-out on purpose, and the route cannot
+ * reach sessionStorage.
+ *
+ * This file must not depend on anything that broke, so besides React it
+ * imports only modules that import nothing themselves (share-paths and
+ * interrupted-run; global-error.sign-out.test.tsx checks it). That is why the
+ * route's path is written out above: lib/auth/session-ended.ts imports
+ * next/navigation.
  */
 export default function GlobalError({
   error,
@@ -162,6 +171,7 @@ export default function GlobalError({
             </a>
             <a
               href={SIGN_OUT_PATH}
+              onClick={() => purgeInterruptedRuns()}
               style={{
                 background: 'transparent',
                 color: '#d8d6cc',
