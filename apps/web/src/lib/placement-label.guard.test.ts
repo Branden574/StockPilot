@@ -79,7 +79,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { bookRackLabelFor } from '@/components/inventory/inventory-table';
+import { bookRackLabelFor, bookSiteNamesFor } from '@/components/inventory/inventory-table';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { locationFor as packingSlipLocationFor } from '@/lib/pdf/packing-slip-shared';
 import { locationFor as pickSlipLocationFor } from '@/lib/pdf/pick-slip';
@@ -634,6 +634,18 @@ describe('stock that sits only on a Site (B37)', () => {
     }),
     slip: sharedLocationFor(asBookLine(), new Map(), new Map([['i1', onSite]])),
     core: formatPlacementLabel(resolvePlacement({ ...book, holdings: [], otherHoldings: onSite })),
+    // The Books Rack column names no rack at all: its cell reads "No rack",
+    // with the Site in the title, like the Items layout's site line.
+    booksRack: bookRackLabelFor({
+      custom_fields: book.customFields,
+      placed_holdings: [],
+      other_holdings: onSite,
+    }),
+    booksSites: bookSiteNamesFor({
+      custom_fields: book.customFields,
+      placed_holdings: [],
+      other_holdings: onSite,
+    }),
   });
 
   it('the count sheet, both order slips and the core render name the Site (literals)', () => {
@@ -643,9 +655,15 @@ describe('stock that sits only on a Site (B37)', () => {
     expect(r.core).toBe('DC4 ×7');
   });
 
+  it('the Books Rack column names no rack, and knows the Site it says the stock is at', () => {
+    const r = rendered();
+    expect(r.booksRack).toBeNull();
+    expect(r.booksSites).toEqual(['DC4']);
+  });
+
   it('NONE of them prints the rack, or the crate, the label still names', () => {
     const r = rendered();
-    for (const label of [r.countSheet, r.slip.primary, r.slip.secondary, r.core]) {
+    for (const label of [r.countSheet, r.slip.primary, r.slip.secondary, r.core, r.booksRack]) {
       expect(label ?? '').not.toContain('39-C');
       expect(label ?? '').not.toContain('Red 5');
     }

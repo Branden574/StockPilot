@@ -1620,6 +1620,53 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       expect(named).toEqual(['39-B', '5-A']);
       expect(cell.textContent).toBe(`${named.length} racks +1 unset`);
     });
+
+    // B37. A placement whose stock all sits on the Site (a NULL-kind location
+    // with a site type). The rack it still names in its keys is where the
+    // stock LEFT, and a Site is not a rack: the row says "No rack", the way
+    // the Items layout's site line does, and the header counts it as unset.
+    const onSite = (id: string, sku = 'SP-THV69-MG8') =>
+      item({
+        id,
+        name: 'Persepolis',
+        sku,
+        custom_fields: { book_rack_number: '38', book_rack_row: 'A' },
+        placed_holdings: [],
+        other_holdings: [{ name: 'DC4', quantity: 6, kind: null, type: 'warehouse' }],
+      });
+
+    it('a row whose stock all sits on the Site reads "No rack", with the Site in its title (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], { items: [onSite('v1', 'SP-ONLY')] });
+      const cell = bodyRows(container)[0]!.children[RACK_CELL]!;
+      expect(cell.textContent).toBe('No rack');
+      expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+        'At DC4 (the site), not on a rack. Use Set rack to put it away.',
+      );
+      expect(cell.textContent).not.toContain('38-A');
+    });
+
+    it('the header counts a Site-only placement as unset, never as the rack its keys name (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [rack('u1', '38', 'A'), onSite('u2')],
+      });
+      const cell = headerRows(container)[0]!.children[RACK_CELL]!;
+      expect(cell.textContent).toBe('1 rack +1 unset');
+      expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+        'Placements span: 38-A (+1 with no rack set)',
+      );
+    });
+
+    it('stock on a rack AND on the Site still reads the rack: the rack rules stand (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          {
+            ...onSite('w1', 'SP-BOTH'),
+            placed_holdings: [{ name: '38-A', quantity: 4, kind: 'rack' as const }],
+          },
+        ],
+      });
+      expect(bodyRows(container)[0]!.children[RACK_CELL]!.textContent).toBe('38-A');
+    });
   });
 
   // W5. D4 was fixed on Books only. The ITEMS header's twin cell still

@@ -65,6 +65,8 @@ import {
   groupingSelectionFacts,
   type CountingUnit,
   type DisplayGroupChip,
+  type PlacedHoldingLike,
+  type PlacementResolution,
   type RackHoldingLike,
   type SizeRunGroup,
 } from '@stockpilot/core';
@@ -205,6 +207,11 @@ interface Item {
    *  what lets that column apply the crate rule. Optional so older callers
    *  render unchanged. */
   placed_holdings?: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area, a NULL-kind shelf or bin),
+   *  with kind AND type. With it the BOOKS Rack column says "No rack" for a
+   *  book whose stock all sits on the Site, instead of the rack its keys still
+   *  name (B37). Absent when the item has none, and for older callers. */
+  other_holdings?: PlacedHoldingLike[];
   /** Units this item holds in warehouses the viewer cannot see
    *  (item_holdings_elsewhere, 0371). Staff and viewers read holdings only in
    *  their own warehouses, so the rack cells above describe those; this is
@@ -3618,10 +3625,29 @@ function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
 
 /** The Books layout's Rack cell: the resolved rack label and "+N in other warehouses". */
 function BookRackContent({ item }: { item: Item }) {
-  const label = bookRackLabelFor(item);
   // 0371: this cell describes the viewer's own warehouses; the rest is
   // counted, not named.
   const elsewhere = elsewhereSuffix(item);
+  // B37: every placed unit is on a Site. A Site is not a rack, so the cell says
+  // so in the Items layout's words for a site line, rather than printing the
+  // rack the book's keys still name (or the Site's name as if it were one).
+  const sites = bookSiteNamesFor(item);
+  if (sites) {
+    return (
+      <>
+        <span
+          className="text-warning"
+          title={`At ${sites.join(', ')} (${sites.length === 1 ? 'the site' : 'the sites'}), not on a rack. Use Set rack to put it away.`}
+        >
+          No rack
+        </span>
+        {elsewhere && (
+          <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{elsewhere}</div>
+        )}
+      </>
+    );
+  }
+  const label = bookRackLabelFor(item);
   if (!label) {
     return <span className="text-muted-foreground">{elsewhere ?? '—'}</span>;
   }
@@ -3912,12 +3938,36 @@ function ElsewhereTail({ items }: { items: readonly Item[] }) {
  * `itemType: 'book'` is asserted rather than read: every caller is inside a
  * `showBookFields` branch, and that flag is what puts the row in this layout.
  */
-export function bookRackLabelFor(item: {
-  custom_fields?: Record<string, unknown> | null;
-  placed_holdings?: RackHoldingLike[];
-}): string | null {
+export function bookRackLabelFor(item: BookPlacementRow): string | null {
   const names = bookRackNamesFor(item);
   return names.length > 0 ? names.join(', ') : null;
+}
+
+/** What the Books layout's placement helpers read off a row. */
+type BookPlacementRow = {
+  custom_fields?: Record<string, unknown> | null;
+  placed_holdings?: RackHoldingLike[];
+  other_holdings?: PlacedHoldingLike[];
+};
+
+/** The shared resolver over a books row: `resolvePlacement` decides, as everywhere. */
+function bookPlacementFor(item: BookPlacementRow): PlacementResolution {
+  return resolvePlacement({
+    itemType: 'book',
+    customFields: item.custom_fields ?? null,
+    holdings: item.placed_holdings,
+    otherHoldings: item.other_holdings,
+  });
+}
+
+/**
+ * The Sites a books row's stock all sits on (core rule 0c, B37), sorted, or
+ * null when its stock is not wholly on Sites. The Rack cell says "No rack" for
+ * these, and the header does not count them as racks.
+ */
+export function bookSiteNamesFor(item: BookPlacementRow): string[] | null {
+  const res = bookPlacementFor(item);
+  return res.source === 'holdings' && res.reason === 'site' ? placementPhysicalNames(res) : null;
 }
 
 /**
@@ -3930,17 +3980,13 @@ export function bookRackLabelFor(item: {
  * the header announce "1 rack" directly above its own tooltip naming two. So
  * the header counts these, and only joins for display.
  */
-export function bookRackNamesFor(item: {
-  custom_fields?: Record<string, unknown> | null;
-  placed_holdings?: RackHoldingLike[];
-}): string[] {
-  return placementPhysicalNames(
-    resolvePlacement({
-      itemType: 'book',
-      customFields: item.custom_fields ?? null,
-      holdings: item.placed_holdings,
-    }),
-  );
+export function bookRackNamesFor(item: BookPlacementRow): string[] {
+  const res = bookPlacementFor(item);
+  // A SITE is not a rack (owner report 2026-09-24, the Items layout's "No
+  // rack"): stock wholly on one names no rack here, so the header counts the
+  // row as unset rather than as a rack called "DC4".
+  if (res.source === 'holdings' && res.reason === 'site') return [];
+  return placementPhysicalNames(res);
 }
 
 function rollupText(

@@ -472,6 +472,54 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(payload.placement['i1']!.map((l) => l.label)).not.toContain('Unplaced');
   });
 
+  // B37: the Books Rack column resolves a cached row with core's Site rule,
+  // which needs the row's OTHER placed holdings (kind AND type). The cached
+  // rows carry them exactly as the live list() does (otherHoldingsField).
+  it('carries the Site holding as other_holdings, with kind and type, beside the rack holdings (B37)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: { data: SITE_HOLDINGS_FIXTURE, error: null },
+        item_images: { data: [], error: null },
+      }),
+    );
+    const row = (await loadInventoryList('org-1', 'all', 'items')).items[0]!;
+    expect(row.other_holdings).toEqual([
+      { name: 'DC4', quantity: 4, kind: null, type: 'warehouse' },
+    ]);
+    expect(row.placed_holdings).toEqual([{ name: '1-A', quantity: 2, kind: 'rack' }]);
+  });
+
+  it('adds NO other_holdings field to a row with only rack holdings (the cache entry pays nothing for it)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: {
+          data: [
+            {
+              item_id: 'i1',
+              location_id: 'L3',
+              quantity: 2,
+              locations: { name: '1-A', kind: 'rack' },
+            },
+            {
+              item_id: 'i1',
+              location_id: 'L2',
+              quantity: 3,
+              locations: { name: 'Stage', kind: 'staging' },
+            },
+          ],
+          error: null,
+        },
+        item_images: { data: [], error: null },
+      }),
+    );
+    const row = (await loadInventoryList('org-1', 'all', 'items')).items[0]!;
+    expect(row).not.toHaveProperty('other_holdings');
+  });
+
   // Pattern #26 guard: ONE fixture, BOTH copies of the placement-line
   // decision, asserted to agree. Mutating either copy alone fails this.
   it('agrees line-for-line with InventoryService.placementBreakdown on the same holdings', async () => {
@@ -1159,7 +1207,7 @@ describe('sub-loader cache wiring', () => {
       // v6 = Items page 1 is the planned group-aware page (+ firstPage).
       // v7 (Group selected, 2026-10-12) = rows carry their display group and
       // page 1 is planned with explicit groups as units.
-      'inventory-list-v7',
+      'inventory-list-v8',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
@@ -1437,7 +1485,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     // would be written into the shared entry and served for a TTL.
     const datasetCall = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v3');
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v4');
     expect(datasetCall).toBeDefined();
     const cachedFn = datasetCall![0] as (o: string, w: string, v: string) => Promise<unknown>;
     await expect(cachedFn('org-1', 'all', 'items')).rejects.toThrow(/INSTANT_MODE_MAX_ROWS/);
@@ -1468,7 +1516,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     );
   });
 
-  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v3, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
+  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v4, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
     fetchAllRowsInvokesBuildPage();
     createAdminClientMock.mockReturnValue(
       makeRecordingAdmin({
@@ -1480,7 +1528,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
 
     const call = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v3') as
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v4') as
       | [unknown, string[], { revalidate: number; tags: string[] }]
       | undefined;
     expect(call).toBeDefined();

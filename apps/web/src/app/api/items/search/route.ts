@@ -348,6 +348,12 @@ export async function GET(req: Request): Promise<Response> {
       // item's custom_fields still name after a position-less put-away, and
       // disagreed with the very count sheet the picker produces.
       placed_holdings: (i as { placed_holdings?: unknown }).placed_holdings ?? [],
+      // Every OTHER placed holding (a Site, an area), from the same scan: an
+      // item whose stock all sits on a Site reads the Site in the picker, as
+      // on the count sheet (B37). Only when the row carries any.
+      ...((i as { other_holdings?: unknown }).other_holdings
+        ? { other_holdings: (i as { other_holdings?: unknown }).other_holdings }
+        : {}),
       updated_at: i.updated_at as string,
       image_url:
         imagesById.get(i.id as string) ?? cfThumb ?? null,

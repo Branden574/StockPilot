@@ -473,4 +473,21 @@ describe('CountItemPicker — rows and tabs', () => {
     expect(screen.getByText(`SP-R · ${place}`)).toBeInTheDocument();
     expect(screen.getByText('4 on hand')).toBeInTheDocument();
   });
+
+  it('B37: an item whose stock all sits on the Site reads the Site, not the rack it still remembers', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse([
+        {
+          ...row({ id: 's', name: 'Site Item', sku: 'SP-S', quantity_on_hand: 6 }),
+          custom_fields: { rack_number: '38', rack_row: 'A' },
+          placed_holdings: [],
+          other_holdings: [{ name: 'DC4', quantity: 6, kind: null, type: 'warehouse' }],
+        } as unknown as Row,
+      ]),
+    );
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Site Item');
+    expect(screen.getByText('SP-S · DC4 ×6')).toBeInTheDocument();
+    expect(screen.queryByText(/38-A/)).toBeNull();
+  });
 });

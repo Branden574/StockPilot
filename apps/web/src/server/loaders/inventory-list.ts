@@ -49,13 +49,13 @@ import 'server-only';
 // unstable_cache nested inside another is a footgun: Next bypasses the
 // nested READ but still writes the recompute back — recurring bug
 // pattern #13):
-//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v7'
+//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v8'
 //     (page 1 + its placement; on Items under the instant cap page 1 is
 //      PLANNED with the instant derivation, see loadInventoryRowsUncached)
 //   • lookup tables    (org)                      'inventory-lookups-v1'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v2'
-//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v3'
+//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v4'
 //     (full ≤INSTANT_MODE_MAX_ROWS row set for client-side instant mode;
 //      over-cap views THROW a sentinel → wrapper returns null, uncached)
 // The default view (loadInventoryList) consumes all four. FILTERED
@@ -90,6 +90,7 @@ import {
   can,
   isManagerOrAbove,
   type Permission,
+  type PlacedHoldingLike,
   type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
@@ -118,6 +119,7 @@ import {
 } from '@/server/services/lib/inventory-list-cache';
 import { displayGroupFields, readDisplayGroupsForOrg } from '@/server/services/lib/display-groups';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
+import { otherHoldingsField } from '@/server/services/lib/other-holdings';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export type InventoryListView = 'items' | 'books';
@@ -351,6 +353,12 @@ interface InventoryListRowBase {
    *  consumer of it can tell a crate from a rack and every one of them keeps
    *  printing the rack a position-less put-away left behind (mig 0335). */
   placed_holdings: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area, a NULL-kind shelf or bin),
+   *  with kind AND type, deduped by location_id: resolvePlacement's
+   *  `otherHoldings`, so a book whose stock all sits on the Site is not shown
+   *  on the rack its keys still name (B37). ABSENT when there are none, which
+   *  is most rows (otherHoldingsField); the live list() row has the same rule. */
+  other_holdings?: PlacedHoldingLike[];
 }
 
 /**
@@ -496,7 +504,10 @@ async function loadInventoryRows(
   // v7 (Group selected, 0400): rows carry display_group_id/name/version and
   // page 1 is planned with explicit display groups as units (a stale v6 entry
   // would plan page 1 without them and reshuffle under the dataset).
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v7'], {
+  // v8 (B37): a row whose stock sits on a Site carries `other_holdings`; a
+  // stale v7 entry would print, in the Books Rack column, the rack such a
+  // book's keys still name for a TTL post-deploy.
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v8'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -924,6 +935,7 @@ type RawItemRow = Omit<
   | 'placed_quantity'
   | 'placed_racks'
   | 'rackHoldingsCount'
+  | 'other_holdings'
   | 'image_storage_path'
   | 'image_thumb_path'
   | 'image_lqip'
@@ -979,6 +991,9 @@ function assembleInventoryRows(
   // by location_id so this matches rackHoldingsCount's grouping, not
   // placed_racks' name-dedupe.
   const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
+  // Every OTHER placed holding, with kind AND type — the live list()'s
+  // otherHoldingsByItem, same rule: resolvePlacement's `otherHoldings` (B37).
+  const otherHoldingsByItem = new Map<string, Map<string, PlacedHoldingLike>>();
   const placement: Record<string, InventoryPlacementLine[]> = {};
   for (const lvl of levels) {
     // Row-summary math uses the RAW kind — identical to the live
@@ -1007,6 +1022,18 @@ function assembleInventoryRows(
         kind: rawKind,
       });
       placedHoldingsByItem.set(lvl.item_id, byLoc);
+    } else if (lvl.locations?.name) {
+      // Placed, but not on a rack or crate (a NULL-kind Site or place, an
+      // area): only the Site rule reads it. Mirrors list() exactly.
+      const byLoc = otherHoldingsByItem.get(lvl.item_id) ?? new Map<string, PlacedHoldingLike>();
+      const prior = byLoc.get(lvl.location_id);
+      byLoc.set(lvl.location_id, {
+        name: lvl.locations.name,
+        quantity: (prior?.quantity ?? 0) + qty,
+        kind: rawKind ?? null,
+        type: lvl.locations.type ?? null,
+      });
+      otherHoldingsByItem.set(lvl.item_id, byLoc);
     }
     // The placement LINES coalesce a NULL kind to 'site' — mirroring
     // InventoryService.placementBreakdown, the OTHER copy of this decision
@@ -1075,6 +1102,7 @@ function assembleInventoryRows(
       placed_holdings: [...(placedHoldingsByItem.get(r.id)?.values() ?? [])].sort((a, b) =>
         a.name.localeCompare(b.name),
       ),
+      ...otherHoldingsField(otherHoldingsByItem.get(r.id)),
       image_storage_path: img?.storage_path ?? null,
       image_thumb_path: img?.thumb_path ?? null,
       image_lqip: img?.lqip ?? null,
@@ -1141,7 +1169,8 @@ export async function loadInventoryDataset(
   // can't serve for a TTL post-deploy.
   // v3 (Group selected, 0400): rows carry display_group_id/name/version; a
   // stale v2 entry would page and render without explicit groups.
-  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v3'], {
+  // v4 (B37): rows carry `other_holdings` (see loadInventoryRows' v8).
+  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v4'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
