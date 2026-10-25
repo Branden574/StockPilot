@@ -504,18 +504,43 @@ export async function portalSubmitOrder(
   return { id: header.id as string };
 }
 
-/** The customer's order history (this customer only, newest first). */
-export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
+/** How many of the customer's orders "Your orders" lists: the newest. */
+export const PORTAL_ORDERS_SHOWN = 50;
+
+/** The customer's order history as the portal shows it. */
+export interface PortalOrderHistory {
+  /** The newest PORTAL_ORDERS_SHOWN orders, newest first. */
+  orders: PortalOrder[];
+  /** How many orders the customer has in all; null when the answer carried
+   *  no count (the page then says nothing about more). */
+  total: number | null;
+}
+
+/**
+ * The customer's order history (this customer only, newest first): the
+ * newest PORTAL_ORDERS_SHOWN with the exact count, so the page can say how
+ * many it does not list. It read the 50 newest and said nothing past them
+ * (B32). The order ends on id, so two orders placed at the same instant never
+ * swap in and out of the 50.
+ *
+ * THROWS when the read fails: it used to answer an empty history, which the
+ * page printed as "No orders yet", a claim about the customer's orders made
+ * from an error.
+ */
+export async function portalOrders(ctx: PortalContext): Promise<PortalOrderHistory> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error, count } = await admin
     .from('order_requests')
     .select(
       'id, status, created_at, lines:order_request_lines(id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, unit_price_at_request, item:inventory_items(name))',
+      { count: 'exact' },
     )
     .eq('organization_id', ctx.organizationId)
     .eq('customer_id', ctx.customerId)
     .order('created_at', { ascending: false })
-    .limit(50);
+    .order('id', { ascending: false })
+    .limit(PORTAL_ORDERS_SHOWN);
+  if (error) throw new Error(`The order history could not be read: ${error.message}`);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
 
@@ -563,7 +588,7 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
     pendingByLine = new Map<string, number>();
   }
 
-  return rows.map((r) => {
+  const orders = rows.map((r) => {
     const lines = ((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => {
       const item = l.item as { name: string | null } | { name: string | null }[] | null;
       const itemObj = Array.isArray(item) ? item[0] : item;
@@ -588,6 +613,7 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
       returns: returnsByOrder.get(r.id as string) ?? [],
     };
   });
+  return { orders, total: typeof count === 'number' ? count : null };
 }
 
 /**

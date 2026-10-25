@@ -12,14 +12,21 @@ const portal = vi.hoisted(() => ({
   ctx: null as Record<string, unknown> | null,
   catalog: [] as unknown[],
   orders: [] as unknown[],
+  ordersTotal: 0 as number | null,
+  ordersFail: false,
   returnsEnabled: false,
 }));
 vi.mock('@/server/services/portal', () => ({
   resolvePortalContext: async () => portal.ctx,
   portalCatalog: vi.fn(async () => portal.catalog),
-  portalOrders: vi.fn(async () => portal.orders),
+  portalOrders: vi.fn(async () => {
+    if (portal.ordersFail) throw new Error('The order history could not be read: timeout');
+    return { orders: portal.orders, total: portal.ordersTotal };
+  }),
   portalReturnsEnabled: vi.fn(async () => portal.returnsEnabled),
 }));
+const reportError = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => true }));
 const shopProps = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
 vi.mock('@/components/portal/portal-shop', () => ({
@@ -35,8 +42,11 @@ beforeEach(() => {
   portal.ctx = null;
   portal.catalog = [];
   portal.orders = [];
+  portal.ordersTotal = 0;
+  portal.ordersFail = false;
   portal.returnsEnabled = false;
   shopProps.value = null;
+  reportError.mockClear();
 });
 
 describe('/portal, not a portal customer', () => {
@@ -69,6 +79,7 @@ describe('/portal, a portal customer (P5.1 step B)', () => {
     };
     portal.catalog = [{ itemId: 'i-1' }];
     portal.orders = [{ id: 'o-1' }];
+    portal.ordersTotal = 51;
     portal.returnsEnabled = true;
     const { container } = render(await PortalPage());
 
@@ -89,9 +100,34 @@ describe('/portal, a portal customer (P5.1 step B)', () => {
     expect(shopProps.value).toEqual({
       catalog: [{ itemId: 'i-1' }],
       orders: [{ id: 'o-1' }],
+      ordersTotal: 51,
+      ordersFailed: false,
       returnsEnabled: true,
       exchangesEnabled: true,
       pricingMode: 'priced',
+    });
+  });
+
+  // B32: a failed history read was an empty history ("No orders yet"). It is
+  // reported and said in "Your orders"; the catalog and ordering still work.
+  it('a history that could not be read is reported and handed on as failed, with the catalog', async () => {
+    portal.ctx = {
+      orgName: 'Redesign Lab Co',
+      orgLogoUrl: null,
+      customerName: 'Westfield Academy',
+      pricingMode: 'priced',
+    };
+    portal.catalog = [{ itemId: 'i-1' }];
+    portal.ordersFail = true;
+    render(await PortalPage());
+    expect(shopProps.value).toMatchObject({
+      catalog: [{ itemId: 'i-1' }],
+      orders: [],
+      ordersTotal: null,
+      ordersFailed: true,
+    });
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'portal.orders.read_failed',
     });
   });
 

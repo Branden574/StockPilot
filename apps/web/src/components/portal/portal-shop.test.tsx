@@ -298,3 +298,44 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
     expect(region.textContent).not.toMatch(/awaiting drop-off|pending approval|staging|\brack\b|disposition/i);
   });
 });
+
+// B32: "Your orders" listed the customer's 50 newest orders and said nothing
+// past them, and a history that could not be read showed "No orders yet".
+describe('PortalShop — Your orders, as far as they go', () => {
+  function orderNo(i: number) {
+    return {
+      id: `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      status: 'submitted',
+      created_at: '2026-10-01T15:00:00.000Z',
+      total: 0,
+      lines: [],
+      returns: [],
+    };
+  }
+  const fifty = Array.from({ length: 50 }, (_, i) => orderNo(i));
+
+  it('more orders than listed: says how many of how many', () => {
+    renderShop({ orders: fifty, ordersTotal: 1_234 });
+    expect(
+      screen.getByText(
+        'Showing your 50 most recent orders of 1,234. Your supplier can find older ones.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('every order listed (or no count): says nothing more', () => {
+    renderShop({ orders: fifty, ordersTotal: 50 });
+    expect(screen.queryByText(/most recent orders of/)).not.toBeInTheDocument();
+    renderShop({ orders: fifty, ordersTotal: null });
+    expect(screen.queryByText(/most recent orders of/)).not.toBeInTheDocument();
+  });
+
+  // Mutation caught: the empty state shown for a read that failed.
+  it('a history that could not be read says so, never "No orders yet"', () => {
+    renderShop({ orders: [], ordersTotal: null, ordersFailed: true });
+    expect(
+      screen.getByText('Your orders could not be loaded. Reload the page to try again.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No orders yet/)).not.toBeInTheDocument();
+  });
+});

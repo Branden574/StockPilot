@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
 import { PortalShop } from '@/components/portal/portal-shop';
 import { Button } from '@/components/ui/button';
+import { reportError } from '@/lib/error-reporter';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import {
   portalCatalog,
@@ -50,9 +51,14 @@ export default async function PortalPage() {
     );
   }
 
-  const [catalog, orders, returnsEnabled] = await Promise.all([
+  const [catalog, history, returnsEnabled] = await Promise.all([
     portalCatalog(ctx),
-    portalOrders(ctx),
+    // A failed history read is said in "Your orders" (never "No orders
+    // yet"), and the catalog and ordering still work (B32).
+    portalOrders(ctx).catch((err: unknown) => {
+      void reportError(err, { tag: 'portal.orders.read_failed' });
+      return null;
+    }),
     portalReturnsEnabled(ctx),
   ]);
 
@@ -79,7 +85,9 @@ export default async function PortalPage() {
 
       <PortalShop
         catalog={catalog}
-        orders={orders}
+        orders={history?.orders ?? []}
+        ordersTotal={history?.total ?? null}
+        ordersFailed={history === null}
         returnsEnabled={returnsEnabled}
         exchangesEnabled={exchangeCreateEnabled()}
         pricingMode={ctx.pricingMode}
