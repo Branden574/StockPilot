@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
 
@@ -119,6 +120,7 @@ export async function editMovementNoteAction(
     }
     return ok({ note: nextNote });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       return err(e.code, e.message);
     }

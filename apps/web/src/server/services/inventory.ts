@@ -9128,6 +9128,17 @@ export class InventoryService {
     } = {},
   ): Promise<Array<{
     itemId: string; name: string; sku: string; itemType: string; warehouseId: string | null;
+    /**
+     * B38: the ITEM's own warehouse (inventory_items.warehouse_id), beside the
+     * holding's (`warehouseId`). They differ for stock in the
+     * organization-level Staging or Unplaced bucket (0194, a location with no
+     * warehouse): it landed while the item had no warehouse, and the item has
+     * one now (it is listed only when readable, which reads it through its
+     * warehouse). Place for such a row asks for a warehouse and opens on this
+     * one, where order readiness counts the stock once placed. Rides the
+     * existing embed.
+     */
+    itemWarehouseId: string | null;
     sourceLocationId: string; sourceKind: 'staging' | 'unplaced'; quantity: number;
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
@@ -9185,7 +9196,7 @@ export class InventoryService {
     const levelsQuery = () => {
       let q = this.ctx.supabase
         .from('item_stock_levels')
-        .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
+        .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number, warehouse_id)')
         .eq('organization_id', this.ctx.organizationId)
         .in('locations.kind', ['staging', 'unplaced'])
         .gt('quantity', 0);
@@ -9429,6 +9440,7 @@ export class InventoryService {
         sku: r.inventory_items.sku,
         itemType: r.inventory_items.item_type,
         warehouseId: r.locations.warehouse_id ?? null,
+        itemWarehouseId: (r.inventory_items.warehouse_id as string | null | undefined) ?? null,
         sourceLocationId: r.location_id,
         sourceKind,
         barcode: readStagingBarcode(r.inventory_items),

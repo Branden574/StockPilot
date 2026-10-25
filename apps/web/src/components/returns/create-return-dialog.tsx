@@ -33,6 +33,7 @@ import {
   nativeCheckboxClass,
   nativeRadioClass,
 } from '@/components/returns/returns-ui';
+import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import {
   createReturnFromOrderAction,
@@ -182,7 +183,9 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
     let res: Awaited<ReturnType<typeof createReturnFromOrderAction>>;
     try {
       res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       fail(RETURN_ERROR_WORDS.internal);
       return;
     } finally {

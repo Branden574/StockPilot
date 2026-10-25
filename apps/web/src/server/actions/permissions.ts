@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
@@ -149,6 +150,7 @@ export async function setRolePermissionOverrideAction(input: {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
   }
@@ -202,6 +204,7 @@ export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to apply preset');
   }
@@ -273,6 +276,7 @@ export async function setUserPermissionOverrideAction(input: {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
   }

@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -35,6 +36,7 @@ export async function lookupBookByIsbnAction(
       })),
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

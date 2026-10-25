@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { LotsService } from '@/server/services/lots';
 import { ServiceError } from '@/server/services/context';
 
@@ -38,6 +39,7 @@ export async function recordLotPicksAction(
     }
     return ok({ recorded: parsed.data.picks.length });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
