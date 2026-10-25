@@ -867,6 +867,28 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
+  # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
+  # Origin names another host, or when neither header is present),
+  # withApiContext's cookie path refusing it before the session is read, the
+  # sweep that holds every route that can write to it or to a reviewed
+  # exemption (and every gate call to its own request), and two routes end to
+  # end through Next's route module. auth/confirm/route.test.ts below carries
+  # the login-CSRF half (a confirmation link posted from another site never
+  # signs this browser in; a browser sent there by another site is told which
+  # account it is signed in as). The GETs that spend something of the
+  # person's: another origin's page cannot end a live session
+  # (auth/session-ended) or spend the export budget (export-rate-limit, and
+  # export-routes.limit-order below holds every export route to it), and a
+  # confirmation link lands where its type says (confirm-landing).
+  src/lib/auth/cross-site-request.test.ts
+  src/lib/auth/api-context.cross-site.test.ts
+  src/test/cookie-write-routes.guard.test.ts
+  'src/app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.cross-site.test.ts'
+  src/app/api/v1/me/release-state/route.cross-site.test.ts
+  src/app/auth/session-ended/route.test.ts
+  src/lib/export-rate-limit.test.ts
+  src/lib/auth/confirm-landing.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts
@@ -919,6 +941,13 @@ WEB_TESTS=(
   # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
   # COOP, CORP. Asserted as properties, not as the literal strings.
   src/test/security-headers.test.ts
+  # D1 (Supabase stops default grants on 2026-10-30): a migration from 0402 on
+  # decides, in the same file, what anon, authenticated and service_role get
+  # on each public table, view and sequence it creates, a no-access object by
+  # an explicit REVOKE; a schema-wide grant never counts, and a schema-wide
+  # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
+  # the file on its own.
+  src/test/migration-grants.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
