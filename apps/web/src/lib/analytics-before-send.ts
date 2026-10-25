@@ -29,10 +29,11 @@ import { redactCredentialUrls } from '@/lib/redact-urls';
 
 /**
  * How deep the walk goes: the event, its properties, a bag or a list there, an
- * element in the list, and that element's attributes. A session-replay
- * snapshot's DOM sits deeper and is not walked.
+ * entry in the list (an autocaptured element, or a session-replay record), and
+ * that entry's own fields (a replay meta record's `data.href` is the page's
+ * URL). A replay snapshot's DOM tree sits deeper and is not walked.
  */
-const MAX_DEPTH = 4;
+const MAX_DEPTH = 5;
 
 function scrubValue(value: unknown, depth: number): unknown {
   if (typeof value === 'string') return redactCredentialUrls(value);

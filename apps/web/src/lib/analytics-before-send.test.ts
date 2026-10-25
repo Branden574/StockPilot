@@ -86,6 +86,26 @@ describe('scrubAnalyticsEvent', () => {
     expect(url).not.toMatch(/refresh_token=r1/);
   });
 
+  it("takes the invite token out of a session replay's page address", () => {
+    // posthog-js sends replay data as $snapshot events through the same hook;
+    // each meta record keeps the page's href (rrweb type 4).
+    const out = scrubAnalyticsEvent(
+      event({
+        event: '$snapshot',
+        properties: {
+          $snapshot_data: [
+            { type: 4, data: { href: SIGNIN, width: 1280, height: 800 }, timestamp: 1 },
+          ],
+          $session_id: 'session-1',
+        },
+      }),
+    );
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+    const [meta] = (out?.properties as { $snapshot_data: { data: { href: string } }[] })
+      .$snapshot_data;
+    expect(meta?.data.href).toBe('https://app.example.test/signin?redirect=/invite/[redacted]');
+  });
+
   it('returns an event with no credential as the very same object', () => {
     const product = event({
       event: 'item_created',
