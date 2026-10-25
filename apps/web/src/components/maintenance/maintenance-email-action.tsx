@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { recordMaintenanceDraftOpenedAction } from '@/server/actions/maintenance-requests';
 
@@ -235,6 +236,8 @@ function MaintenanceEmailActionInner({
           if ('ok' in r) setOpenCount(r.openCount);
         })
         .catch((e: unknown) => {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
           // Best-effort breadcrumb only: a lost draft-opened row means the
           // server's open-count silently undercounts (the duplicate-draft
           // dialog in handlePrimaryClick may under-warn next time), which is
@@ -259,6 +262,7 @@ function MaintenanceEmailActionInner({
       // Same best-effort .catch() as the success-path call above — a
       // rejected promise here is otherwise an unhandled rejection.
       void recordMaintenanceDraftOpenedAction(requestId).catch((e: unknown) => {
+        if (isControlFlow(e)) return;
         void reportError(e, { tag: 'maintenance.draft-opened.record', level: 'warning' });
       });
       try {

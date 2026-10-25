@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     assertPermission(ctx, 'reports:export');
     const reportsSvc = new ReportsService(ctx);
     reportsSvc.gate('inventory-valuation');
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     // ?photos=0 (or =false / =no) skips the image phase entirely.

@@ -10,6 +10,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 vi.mock('@/server/actions/embeddings', () => ({ backfillItemEmbeddingsAction: vi.fn() }));
 
 import { backfillItemEmbeddingsAction } from '@/server/actions/embeddings';
+import { hydrateAcrossClockShift } from '@/test/hydration';
 
 import { EmbeddingsBackfillPanel } from './embeddings-backfill-panel';
 
@@ -28,6 +29,25 @@ describe('EmbeddingsBackfillPanel', () => {
     expect(bar).toHaveAttribute('aria-valuemax', '100');
     expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Start backfill/ })).toBeEnabled();
+  });
+
+  // B9: the counts were `n.toLocaleString()`, the RUNTIME's locale. The page
+  // renders on the server (en-US: "11,750") and hydrates in the browser, so
+  // a German browser printed "11.750", React discarded the server HTML (error
+  // #418), and the counts read differently from the rest of the app.
+  it('prints its counts in the app format, the same on the server and in a German browser', async () => {
+    const at = Date.parse('2026-10-24T18:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => <EmbeddingsBackfillPanel initialRemaining={250} initialTotal={12_000} />,
+      { serverNow: at, browserNow: at, browserLocale: 'de-DE' },
+    );
+    try {
+      expect(run.html).toContain('11,750');
+      expect(run.errors).toEqual([]);
+      expect(run.container).toHaveTextContent('11,750 of 12,000 items embedded');
+    } finally {
+      run.unmount();
+    }
   });
 
   it('offers Re-run when nothing remains', () => {

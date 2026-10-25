@@ -21,7 +21,9 @@ const MAX_ROWS = 1000; // supabase/config.toml [api] max_rows
 type Fixture = { members: number; items: number };
 
 const state: {
-  orgs: Array<{ id: string; name: string; slug: string }>;
+  orgs: Array<{ id: string; name: string; slug: string; timezone?: string }>;
+  /** The column list the organizations read asked for. */
+  orgColumns: string;
   counts: Map<string, Fixture>;
   /** Every query issued, in order: table + whether it was a head count. */
   calls: Array<{ table: string; head: boolean; orgId: string | null }>;
@@ -29,7 +31,14 @@ const state: {
   peakInFlight: number;
   /** Tables whose count query should come back as an error. */
   failCounts: Set<string>;
-} = { orgs: [], counts: new Map(), calls: [], peakInFlight: 0, failCounts: new Set() };
+} = {
+  orgs: [],
+  orgColumns: '',
+  counts: new Map(),
+  calls: [],
+  peakInFlight: 0,
+  failCounts: new Set(),
+};
 
 let inFlight = 0;
 
@@ -79,8 +88,9 @@ vi.mock('@/lib/supabase/admin', () => ({
       };
 
       q.then = (resolve: (v: unknown) => void) => settle(resolve);
-      q.select = vi.fn((_cols: string, options?: { head?: boolean }) => {
+      q.select = vi.fn((cols: string, options?: { head?: boolean }) => {
         head = Boolean(options?.head);
+        if (table === 'organizations') state.orgColumns = cols;
         return q;
       });
       q.eq = vi.fn((col: string, value: string) => {
@@ -109,6 +119,7 @@ const B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
 beforeEach(() => {
   state.orgs = [];
+  state.orgColumns = '';
   state.counts = new Map();
   state.calls = [];
   state.peakInFlight = 0;
@@ -185,5 +196,19 @@ describe('listOrgsForPlatform — per-org counts', () => {
     expect(orgs[0]!.itemCount).toBe(0);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('listOrgsForPlatform — the Created date', () => {
+  it("reads each organization's own time zone, so its Created day is printed there (B9)", async () => {
+    state.orgs = [
+      { id: A, name: 'Alpha', slug: 'alpha', timezone: 'America/Los_Angeles' },
+      { id: B, name: 'Beta', slug: 'beta' },
+    ];
+    const { orgs } = await listOrgsForPlatform();
+    expect(state.orgColumns.split(',').map((c) => c.trim())).toContain('timezone');
+    const byId = new Map(orgs.map((o) => [o.id, o]));
+    expect(byId.get(A)!.timezone).toBe('America/Los_Angeles');
+    expect(byId.get(B)!.timezone).toBeNull();
   });
 });

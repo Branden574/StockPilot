@@ -50,7 +50,10 @@ describe('InventoryService.duplicateItem puts the copy on the dialog rack', () =
     const stub = buildStub();
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    await expect(svc.duplicateItem(BASE as never)).resolves.toBe('dup-1');
+    await expect(svc.duplicateItem(BASE as never)).resolves.toEqual({
+      id: 'dup-1',
+      placementFailed: null,
+    });
 
     const transfer = stub.rpcCalls.find((c) => c.name === 'transfer_stock');
     expect(transfer?.args).toMatchObject({

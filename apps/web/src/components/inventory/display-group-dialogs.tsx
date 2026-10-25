@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
 import { groupChoiceRadioNames } from '@/lib/inventory/grouping-radio-names';
 import { applyGroupingAction, previewGroupingAction } from '@/server/actions/item-grouping';
 import type { GroupingReview, GroupingReviewRecord } from '@/server/services/item-grouping';
@@ -152,7 +153,9 @@ function useGroupingReview(
           loading: false,
         });
       },
-      () => {
+      (e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         // No answer at all: offline, a platform error, or a deployment that
         // no longer has this action. Reads only, so a second look is safe.
         if (mine !== seq.current) return;
@@ -194,7 +197,9 @@ async function sendGrouping(
   let r: Awaited<ReturnType<typeof applyGroupingAction>>;
   try {
     r = await applyGroupingAction(body);
-  } catch {
+  } catch (e) {
+    // A redirect (the session ended) goes up as it is: nothing is shown.
+    if (isControlFlow(e)) throw e;
     // No answer: it may or may not have applied. The SAME body and key stay
     // pending, so Save replays it if it did. Never the raw error.
     return { ok: false, message: GROUPING_ERROR_WORDS.internal, stale: false };

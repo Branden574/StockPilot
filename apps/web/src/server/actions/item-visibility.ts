@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
@@ -82,6 +83,7 @@ const setItemPublicDisplaySchema = z.object({
 });
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) return err(error.code, error.message);
   console.error(error);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');

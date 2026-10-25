@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 
@@ -170,6 +171,7 @@ export async function setOrgEmailRoutingAction(
     revalidatePath('/dashboard/settings/email-routing');
     return ok({ feature: input.feature, recipients });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       // Surface details.reason (aal2_required / mfa_required) so the panel's
       // step-up modal can distinguish "challenge in place" from a hard

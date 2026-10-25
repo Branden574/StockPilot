@@ -39,6 +39,7 @@ export * from './warehouse/exception-evidence';
 export * from './warehouse/exception-escalation';
 export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
+export * from './inventory/new-rack-confirmation';
 export * from './inventory/group-by-sku';
 export * from './inventory/grouping-contract';
 export * from './inventory/display-units';

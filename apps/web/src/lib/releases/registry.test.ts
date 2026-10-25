@@ -1960,9 +1960,11 @@ describe('the ended-session fix on exceptions is published', () => {
     const [entry] = r.entries;
     const all = readerText(r).join(' ');
     // The web's old words are fail()'s generic answer, and the redirect now
-    // passes through it (#308).
+    // passes through it (#308), through the shared rethrowControlFlow
+    // (lib/control-flow.ts, Next's unstable_rethrow) since every action's
+    // catch was given it.
     const actions = readFileSync(resolve(__dirname, '../../server/actions/exceptions.ts'), 'utf8');
-    expect(actions).toContain("unstable_rethrow(e);");
+    expect(actions).toContain('rethrowControlFlow(e);');
     expect(actions).toContain("'Something went wrong. Please try again.'");
     // Old phones show only the title and the summary: it stands alone and
     // names both platforms.
@@ -7835,7 +7837,12 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
       'The notification said "Stock has been reserved." and the email said every unit was reserved',
     );
     expect(email).toContain('we’ve reserved every unit on this request.');
-    expect(email).toContain('units on this request; the rest is waiting for stock.');
+    // B9: the count's noun follows the number now (countOf: "of 1 unit" for a
+    // fractional hold of one unit), so the source no longer spells "units"
+    // before this sentence. The sentence as the email prints it, "we’ve
+    // reserved 6 of 8 units on this request; the rest is waiting for stock.",
+    // is pinned in the HTML and the text by order-requests.partial-approval.test.ts.
+    expect(email).toContain(' on this request; the rest is waiting for stock.');
   });
 
   // Review (2026-10-05): "because the rest is not in stock yet" was wrong when
