@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -31,6 +32,7 @@ export async function duplicateItemAction(
     revalidatePath(`/dashboard/inventory/${parsed.data.originalId}`);
     return ok({ id });
   } catch (error) {
+    rethrowControlFlow(error);
     if (error instanceof ServiceError) {
       return err(error.code, error.message);
     }

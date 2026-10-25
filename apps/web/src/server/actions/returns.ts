@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
@@ -37,6 +38,7 @@ import { err, ok, parseReturnBody, type ActionResult, type ExchangeCandidatesAns
  */
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) {
     const details = error.code !== 'internal_error' ? error.details : { reason: 'failed' };
     return err(error.code, error.message, details);

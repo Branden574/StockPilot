@@ -1960,9 +1960,11 @@ describe('the ended-session fix on exceptions is published', () => {
     const [entry] = r.entries;
     const all = readerText(r).join(' ');
     // The web's old words are fail()'s generic answer, and the redirect now
-    // passes through it (#308).
+    // passes through it (#308), through the shared rethrowControlFlow
+    // (lib/control-flow.ts, Next's unstable_rethrow) since every action's
+    // catch was given it.
     const actions = readFileSync(resolve(__dirname, '../../server/actions/exceptions.ts'), 'utf8');
-    expect(actions).toContain("unstable_rethrow(e);");
+    expect(actions).toContain('rethrowControlFlow(e);');
     expect(actions).toContain("'Something went wrong. Please try again.'");
     // Old phones show only the title and the summary: it stands alone and
     // names both platforms.

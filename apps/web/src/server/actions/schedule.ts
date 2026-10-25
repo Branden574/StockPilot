@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ScheduleService } from '@/server/services/schedule';
 import { ServiceError } from '@/server/services/context';
 
@@ -16,6 +17,7 @@ import {
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) return err(error.code, error.message);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }

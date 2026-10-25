@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   NOTIFICATION_PREF_KEYS,
   type NotificationPrefKey,
@@ -109,6 +110,7 @@ export async function updateNotificationPreferencesAction(
     revalidatePath('/dashboard/settings/notifications');
     return ok({ changed: changedKeys.length });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

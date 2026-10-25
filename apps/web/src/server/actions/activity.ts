@@ -3,6 +3,7 @@
 import { z } from 'zod';
 
 import { ITEM_ACTIVITY_PAGE_SIZE } from '@/lib/activity-pagination';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   ActivityService,
   UUID_RE,
@@ -16,6 +17,7 @@ import { LocationsService } from '@/server/services/locations';
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) {
     return err(error.code, error.message);
   }
