@@ -15,6 +15,7 @@ import {
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
+  MAIL_APP_BLOCKED_HEADLINE,
   MAIL_APP_SUCCESS_MESSAGE,
   NATIVE_OUTLOOK_CC_TRUSTED,
   OVERSIZED_MESSAGE,
@@ -28,6 +29,7 @@ import {
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
   shouldShowRoutingAdminNotice,
+  blockedHeadlineFor,
   successMessageFor,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
@@ -156,10 +158,12 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     await expect(openMaintenanceDraft('outlook', oversized, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     await expect(openMaintenanceDraft('mailto', oversized, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(Linking.openURL).not.toHaveBeenCalled();
   });
@@ -177,6 +181,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
@@ -242,7 +247,11 @@ describe('the double-tap latch — one unresolved open swallows every call behin
       used: null,
     });
     rejectOpen(new Error('no handler'));
-    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    await expect(first).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    });
     // ...and after the rejection settles, the button works again.
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
       outcome: 'opened',
@@ -333,6 +342,7 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
     await expect(openMaintenanceDraft('outlook', oversized, 'ios', onOpened)).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(onOpened).not.toHaveBeenCalled();
   });
@@ -343,6 +353,7 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(onOpened).not.toHaveBeenCalled();
     // One tap, one invocation — no automatic second attempt down another
@@ -607,6 +618,7 @@ describe('exported copy is the literal, brief-pinned text', () => {
       SUCCESS_MESSAGE,
       MAIL_APP_SUCCESS_MESSAGE,
       BLOCKED_HEADLINE,
+      MAIL_APP_BLOCKED_HEADLINE,
       BLOCKED_RETRY_MESSAGE,
       DUPLICATE_WARNING,
       OVERSIZED_MESSAGE,
@@ -798,5 +810,63 @@ describe('the unconfigured-admin experience (parity with the web maintenance sur
   it('routable states produce NO notice text at all', () => {
     expect(routingAdminNotice({ state: 'valid', recipients: ROUTED_DTO })).toBeNull();
     expect(routingAdminNotice({ state: 'fallback' })).toBeNull();
+  });
+});
+
+// =========================================================================
+// THE BLOCKED CARD NAMES THE APP THE PHONE TRIED TO OPEN (F1-5 phone walk,
+// 2026-09-27): after "Open in Default Email App" failed, the request screen
+// said "Outlook could not be opened automatically." The opener now reports
+// which transport it tried, and the headline follows it, the way the success
+// copy follows the transport that carried the draft.
+// =========================================================================
+
+describe('the blocked headline names the app the phone tried to open', () => {
+  it('a refused Open in Default Email App: the email app could not be opened, and Outlook is not named', async () => {
+    vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+    const res = await openMaintenanceDraft('mailto', PREPARED, 'ios', () => {});
+    expect(res).toEqual({ outcome: 'blocked', used: null, attempted: 'default-mail' });
+    const headline = blockedHeadlineFor(res.outcome === 'blocked' ? res.attempted : null);
+    expect(headline).toBe(MAIL_APP_BLOCKED_HEADLINE);
+    expect(headline.toLowerCase()).not.toContain('outlook');
+  });
+
+  it.each([
+    ['the Outlook app', PREPARED, 'outlook-native'],
+    ['Outlook on the web', PREPARED_WEB, 'outlook-web'],
+  ] as const)(
+    'a refused Open in Outlook (%s) keeps the Outlook headline (brief section 19)',
+    async (_label, prepared, transport) => {
+      vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+      const res = await openMaintenanceDraft('outlook', prepared, 'ios', () => {});
+      expect(res).toEqual({ outcome: 'blocked', used: null, attempted: transport });
+      expect(blockedHeadlineFor(transport)).toBe(BLOCKED_HEADLINE);
+    },
+  );
+
+  it('Open in Outlook sent to the email app (cc not trusted on this platform) and refused: worded as the email app', async () => {
+    vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+    const res = await openMaintenanceDraft('outlook', PREPARED, 'ios', () => {}, {
+      ios: false,
+      android: true,
+    });
+    expect(res).toEqual({ outcome: 'blocked', used: null, attempted: 'default-mail' });
+    expect(blockedHeadlineFor('default-mail')).toBe(MAIL_APP_BLOCKED_HEADLINE);
+  });
+
+  it('nothing tried (a draft no link can carry): the result says no app was asked', async () => {
+    const oversized = { ...PREPARED, linkFits: false };
+    for (const button of ['outlook', 'mailto'] as const) {
+      await expect(openMaintenanceDraft(button, oversized, 'ios', () => {})).resolves.toEqual({
+        outcome: 'blocked',
+        used: null,
+        attempted: null,
+      });
+    }
+    expect(Linking.openURL).not.toHaveBeenCalled();
+  });
+
+  it('MAIL_APP_BLOCKED_HEADLINE is the email-app twin of the Outlook headline (literal pin)', () => {
+    expect(MAIL_APP_BLOCKED_HEADLINE).toBe('Your email app could not be opened automatically.');
   });
 });
