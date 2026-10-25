@@ -154,7 +154,7 @@ export interface ReturnWorkbench {
   destinationsUnavailable: boolean;
   lines: ReturnWorkbenchLine[];
   decisions: ReturnWorkbenchDecision[];
-  /** The timeline from the original pick to the close (ReturnHistoryService). */
+  /** The timeline from the original pick to the close (return-history buildReturnChainEvents). */
   chain: ReturnChainEvent[];
   viewer: { canManageReturns: boolean; canApproveOrders: boolean; canReadDecisions: boolean };
   actions: ReturnActions;
