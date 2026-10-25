@@ -85,8 +85,9 @@ const R15 = row({ itemId: 'I15', name: 'Folding chairs', sku: 'SP-CHR-1', source
 // Composite: SAME item as R1, second holding in unplaced.
 const R16 = row({ itemId: 'I1', name: 'Acer ChromeBook 314', sku: 'SP-ACB-314', sourceKind: 'unplaced', sourceLocationId: 'unp-1', quantity: 1 });
 // PO-1092 row with NO warehouse (the organization-level bucket, 0194):
-// placeable only when the page has a warehouse to place it in (B38).
-const R17 = row({ itemId: 'I17', name: 'Standing desk', sku: 'SP-DESK-1', sourcePoNumber: 'PO-1092', receiptNumber: 'RCV-000104', receivedAt: daysAgo(3), ageDays: 3, sourceLocationId: 'stg-C', warehouseId: null });
+// placeable only when the page has a warehouse to place it in (B38). Its ITEM
+// is in wh1, which the bulk picker opens on, so it must reach the dialog too.
+const R17 = row({ itemId: 'I17', name: 'Standing desk', sku: 'SP-DESK-1', sourcePoNumber: 'PO-1092', receiptNumber: 'RCV-000104', receivedAt: daysAgo(3), ageDays: 3, sourceLocationId: 'stg-C', warehouseId: null, itemWarehouseId: 'wh1' });
 const R18 = row({ itemId: 'I18', name: 'Desk lamp', sku: 'SP-LAMP-1', sourceKind: 'unplaced', sourceLocationId: 'unp-1', receivedAt: daysAgo(3), ageDays: 3 });
 const R19 = row({ itemId: 'I19', name: 'Projector', sku: 'SP-PRJ-1', sourcePoNumber: 'PO-1092', receiptNumber: 'RCV-000105', receivedAt: daysAgo(8), ageDays: 8, sourceLocationId: 'stg-C' });
 const R20 = row({ itemId: 'I20', name: 'HDMI cables', sku: 'SP-HDMI-1', receivedAt: daysAgo(14), ageDays: 14, sourceLocationId: 'stg-A' });
@@ -124,6 +125,7 @@ const toBulk = (r: Row) => ({
   sourceLocationId: r.sourceLocationId,
   quantity: r.quantity,
   warehouseId: r.warehouseId,
+  itemWarehouseId: r.itemWarehouseId,
   bookStorage: r.bookStorage,
 });
 
@@ -209,6 +211,7 @@ describe('VERIFY selection safety', () => {
     const payload = bulkPlaceRowsSeen.at(-1) as ReturnType<typeof toBulk>[];
     expect(payload).toEqual([R1, R2, R3, R4, R17, R19].map(toBulk));
     expect(payload.find((p) => p.itemId === 'I17')!.warehouseId).toBeNull();
+    expect(payload.find((p) => p.itemId === 'I17')!.itemWarehouseId).toBe('wh1');
   });
 
   it('search that hides a selected row drops it; typing back the same text does not bring it back', () => {

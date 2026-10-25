@@ -172,6 +172,30 @@ describe('Staging: a row in the organization-level bucket (B38)', () => {
     });
   });
 
+  it("Place selected gets the item's own warehouse with the row: the picker opens on it and the bucket's units go to its rack", async () => {
+    const user = userEvent.setup();
+    mockBulkPlaceStockAction.mockResolvedValue({ ok: true, data: { placed: 1, failed: [] } });
+    renderTable();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Trail Runner' }));
+    await user.click(screen.getByRole('button', { name: /place selected/i }));
+
+    // Two warehouses are offered and Annex sorts first, so only the item's own
+    // warehouse, handed to the dialog with the row, opens the picker on Main.
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('combobox', { name: 'To warehouse' })).toHaveTextContent(
+      'Main Warehouse',
+    );
+    await user.click(within(dialog).getByRole('combobox', { name: 'To location' }));
+    await user.click(await screen.findByRole('option', { name: '1-A' }));
+    await user.click(within(dialog).getByRole('button', { name: /^place 1$/i }));
+
+    expect(mockBulkPlaceStockAction).toHaveBeenCalledOnce();
+    expect(mockBulkPlaceStockAction.mock.calls[0]![0]).toMatchObject({
+      destination: { existingLocationId: 'r-main-1a' },
+      placements: [{ itemId: 'i-org', fromLocationId: ORG_STAGING, quantity: 6 }],
+    });
+  });
+
   it('a person without stock:transfer gets no Place on it, as on any row', () => {
     renderTable({ canPlace: false });
     expect(screen.queryByRole('button', { name: /^place$/i })).toBeNull();

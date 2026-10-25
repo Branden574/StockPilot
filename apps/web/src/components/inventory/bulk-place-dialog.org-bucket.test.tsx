@@ -140,6 +140,26 @@ describe('BulkPlaceDialog: rows with no warehouse (B38)', () => {
     expect(placeButton(2)).toBeEnabled();
   });
 
+  // The single dialog's twin is in place-from-staging-dialog.org-bucket.test.
+  // Kept, the rack id would match none of the new warehouse's options: the
+  // box would show nothing, and Place would stay on for a destination that
+  // resolves to nothing.
+  it("switching the warehouse drops a rack picked in the previous one (it is not this warehouse's)", async () => {
+    const user = userEvent.setup();
+    renderDialog([row('a'), row('b')]);
+    await open(user);
+    expect(warehousePicker()).toHaveTextContent('Main Warehouse');
+    await pick(user, screen.getByRole('combobox', { name: 'To location' }), '1-A');
+    expect(placeButton(2)).toBeEnabled();
+
+    await pick(user, warehousePicker(), 'Annex');
+    expect(screen.getByRole('combobox', { name: 'To location' })).toHaveTextContent(
+      'Select destination',
+    );
+    expect(placeButton(2)).toBeDisabled();
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+  });
+
   it('a new rack is created in the picked warehouse', async () => {
     const user = userEvent.setup();
     renderDialog([row('a'), row('b')]);
