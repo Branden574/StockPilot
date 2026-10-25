@@ -1,6 +1,13 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  fakeBroadcastChannels,
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
 
 const replace = vi.fn();
 const push = vi.fn();
@@ -104,5 +111,73 @@ describe('DeleteAccountButton: a refusal', () => {
     await user.click(within(dialog).getByRole('button', { name: /Delete account/ }));
     expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
     resolve({ ok: true, data: undefined });
+  });
+});
+
+/**
+ * Deleting the account ends this browser's session on purpose (the action
+ * signs it out), so what an interrupted run kept in this tab
+ * (lib/interrupted-run) goes before the request leaves.
+ */
+describe('DeleteAccountButton: deleting the account', () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it('removes every interrupted-run record in this tab before the request leaves', async () => {
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    let keysAtRequest: string[] | null = null;
+    deleteOwnAccountAction.mockImplementation(async () => {
+      keysAtRequest = interruptedRunKeys();
+      return { ok: true, data: undefined };
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await openAndConfirm(user);
+
+    await waitFor(() => expect(deleteOwnAccountAction).toHaveBeenCalledTimes(1));
+    expect(keysAtRequest).toEqual([]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/signin'));
+  });
+
+  it('tells the other tabs of this browser before the request leaves: the action signs them out too', async () => {
+    // Review of round 2's repair: the action ends the session in every tab
+    // (the session cookies are the browser's) and sends no revoke, so another
+    // tab kept its records until their hour.
+    const tabs = fakeBroadcastChannels();
+    const otherTab = tabs.otherTab();
+    let sentAtRequest: unknown[] | null = null;
+    deleteOwnAccountAction.mockImplementation(async () => {
+      sentAtRequest = tabs.sent();
+      return { ok: true, data: undefined };
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await openAndConfirm(user);
+
+    await waitFor(() => expect(deleteOwnAccountAction).toHaveBeenCalledTimes(1));
+    expect(sentAtRequest).toEqual([{ type: 'purge' }]);
+    tabs.deliver();
+    expect(otherTab.received).toEqual([{ type: 'purge' }]);
+  });
+
+  it('opening the dialog and cancelling removes nothing and tells no other tab', async () => {
+    const tabs = fakeBroadcastChannels();
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete my account' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+
+    expect(deleteOwnAccountAction).not.toHaveBeenCalled();
+    expect(interruptedRunKeys()).toHaveLength(2);
+    expect(tabs.sent()).toEqual([]);
   });
 });

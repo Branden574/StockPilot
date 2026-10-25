@@ -3,8 +3,14 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { createClient } from '@/lib/supabase/server';
-import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
+import {
+  isAuthPagePath,
+  RETURN_PATH_HEADER,
+  SESSION_HEADER_USER_EMAIL,
+  SESSION_HEADER_USER_ID,
+} from '@/lib/supabase/middleware';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
+import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   bundleMembership,
   holdMembership,
@@ -331,15 +337,30 @@ export const getServerSession = cache(async (): Promise<ServerSession | null> =>
   return session;
 });
 
+/**
+ * Sign-in, carrying the page to come back to: `?redirect=<path and query>`,
+ * the proxy's own rule for a signed-out request (lib/supabase/middleware.ts),
+ * which the sign-in form reads back through safeRedirectPath. For a Server
+ * Action it is the page the action was sent from. The path is the proxy's on
+ * the routes in its matcher and the client's anywhere else, so it is
+ * sanitized the same way (a same-origin path or nothing), and dropped when it
+ * is a sign-in page itself.
+ */
+async function signInPath(): Promise<string> {
+  const back = safeRedirectPath((await headers()).get(RETURN_PATH_HEADER), '');
+  if (!back || isAuthPagePath(back)) return '/signin';
+  return `/signin?${new URLSearchParams({ redirect: back }).toString()}`;
+}
+
 export const requireSession = cache(async (): Promise<ServerSession> => {
   const session = await getServerSession();
-  if (!session) redirect('/signin');
+  if (!session) redirect(await signInPath());
   return session;
 });
 
 export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
   const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
-  if (!session) redirect('/signin');
+  if (!session) redirect(await signInPath());
 
   // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
   //
