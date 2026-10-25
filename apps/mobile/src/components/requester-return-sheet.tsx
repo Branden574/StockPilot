@@ -752,6 +752,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               block
               disabled={!canSend}
               accessibilityHint={disabledReason ?? undefined}
+              wrap
               onPress={() => void send()}
             >
               {sending ? RETURNS_COPY.requesterSending : RETURNS_COPY.requesterSubmit}

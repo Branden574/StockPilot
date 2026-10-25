@@ -824,14 +824,19 @@ function SheetContent({
                     </Body>
                   ))}
                 </View>
-                <Button variant="outline" disabled={!canSubmit} onPress={() => void submit('backorder')}>
+                <Button
+                  variant="outline"
+                  wrap
+                  disabled={!canSubmit}
+                  onPress={() => void submit('backorder')}
+                >
                   {shortBackorderLabel(mode)}
                 </Button>
                 {/* Review fix P7: or change the short lines' replacement (a
                     local switch: the picker asks the server, which says when
                     it needs a connection). */}
                 {mode === 'approve' && wb.viewer.canApproveOrders ? (
-                  <Button variant="outline" disabled={submitting} onPress={changeShortLines}>
+                  <Button variant="outline" wrap disabled={submitting} onPress={changeShortLines}>
                     {RETURNS_COPY.changeReplacement}
                   </Button>
                 ) : null}
@@ -891,6 +896,7 @@ function SheetContent({
 
           <Button
             block
+            wrap
             variant={mode === 'deny' || mode === 'cancel' || mode === 'cancel_replacement' ? 'destructive' : 'primary'}
             disabled={!canSubmit}
             accessibilityHint={disabledReason ?? undefined}
@@ -1013,6 +1019,7 @@ function ExchangeReview({
               <Button
                 size="sm"
                 variant="outline"
+                wrap
                 disabled={disabled}
                 style={{ minHeight: MIN_TAP }}
                 onPress={() => onAdd(l.id, null)}
@@ -1024,6 +1031,7 @@ function ExchangeReview({
             <Button
               size="sm"
               variant="outline"
+              wrap
               disabled={disabled || !online}
               style={{ minHeight: MIN_TAP }}
               onPress={() => onAdd(l.id, { itemId: null, label: null, quantity: l.quantity, free: null })}
