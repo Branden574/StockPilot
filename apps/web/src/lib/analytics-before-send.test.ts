@@ -130,6 +130,54 @@ describe('scrubAnalyticsEvent', () => {
     );
   });
 
+  it("takes the invite token out of a replay's network and console records", () => {
+    // With network capture on in the project, posthog-js records the page's own
+    // navigation, and every request after it, by URL in a plugin record (rrweb
+    // type 6); console capture records log lines the same way. The SDK never
+    // compresses these, nor a custom record (type 5).
+    const navigation = {
+      name: SIGNIN,
+      entryType: 'navigation',
+      initiatorType: 'navigation',
+      isInitial: true,
+    };
+    const records = [
+      {
+        type: 6,
+        data: { plugin: 'rrweb/network@1', payload: { requests: [navigation], isInitial: true } },
+        timestamp: 1,
+      },
+      {
+        type: 6,
+        data: {
+          plugin: 'rrweb/console@1',
+          payload: { level: 'warn', trace: [], payload: [`"Could not load ${INVITE}"`] },
+        },
+        timestamp: 2,
+      },
+      { type: 5, data: { tag: '$url_changed', payload: { href: SIGNIN } }, timestamp: 3 },
+      { type: 5, data: { tag: 'sessionIdle', payload: { threshold: 300000 } }, timestamp: 4 },
+    ];
+    const out = scrubAnalyticsEvent(
+      event({ event: '$snapshot', properties: { $snapshot_data: records } }),
+    );
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+    const sent = (out?.properties as { $snapshot_data: { data: Record<string, unknown> }[] })
+      .$snapshot_data;
+    const payload = sent[0]?.data.payload as { requests: Record<string, unknown>[] };
+    expect(payload.requests[0]).toEqual({
+      ...navigation,
+      name: 'https://app.example.test/signin?redirect=/invite/[redacted]',
+    });
+    expect(sent[1]?.data.payload).toEqual({
+      level: 'warn',
+      trace: [],
+      payload: ['"Could not load https://app.example.test/invite/[redacted]"'],
+    });
+    // A record with nothing to replace goes out as the same object.
+    expect(sent[3]).toBe(records[3]);
+  });
+
   it('takes the invite token out of a URL used as a key (heatmap points are keyed by page)', () => {
     const out = scrubAnalyticsEvent(
       event({
