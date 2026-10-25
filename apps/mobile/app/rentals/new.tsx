@@ -64,8 +64,10 @@ import {
   type RentalBorrowerMember,
 } from '@/lib/rental-borrower';
 import {
+  RENTAL_PICKER_WINDOW,
   readRentalPickerItems,
   rentalPickerStatus,
+  rentalPickerWindow,
   type RentalPickerItem,
 } from '@/lib/rental-items';
 import {
@@ -152,6 +154,9 @@ export default function NewRental() {
   const [stockError, setStockError] = React.useState<string | null>(null);
   const [itemsNonce, setItemsNonce] = React.useState(0);
   const [search, setSearch] = React.useState('');
+  // How many matching items the list draws (rentalPickerWindow): 50, and 50
+  // more for each Load more. Back to 50 when the items load again.
+  const [pickerLimit, setPickerLimit] = React.useState(RENTAL_PICKER_WINDOW);
   // The item search's border deepens to ink while it is typed in, as the
   // shared Field's does (DESIGN-SPEC 6.3: never a search with no visible focus).
   const [searchFocused, setSearchFocused] = React.useState(false);
@@ -273,6 +278,7 @@ export default function NewRental() {
       // whose item is not in the rental warehouse, so keeping it would
       // guarantee a refusal the operator cannot see the cause of.
       setCart({});
+      setPickerLimit(RENTAL_PICKER_WINDOW);
       // Every rental item, in 1000-row pages, to the web's ceiling: the web New
       // rental page's read, filter for filter (lib/rental-items.ts). It was
       // one request with `.limit(500)` by name, and the search below runs over
@@ -345,6 +351,13 @@ export default function NewRental() {
         (i.sku ?? '').toLowerCase().includes(needle),
     );
   }, [items, search]);
+
+  // The rows drawn: never every item read at once (B32), and never without a
+  // picked one.
+  const drawn = React.useMemo(
+    () => rentalPickerWindow(visibleItems, pickerLimit, cart),
+    [visibleItems, pickerLimit, cart],
+  );
 
   const lines = React.useMemo(
     () =>
@@ -595,7 +608,7 @@ export default function NewRental() {
               </Body>
             ) : (
               <View style={{ gap: 10 }}>
-                {visibleItems.map((it) => {
+                {drawn.rows.map((it) => {
                   const avail = availableFor(it);
                   const qty = cart[it.id] ?? 0;
                   const itemName = it.name ?? 'Untitled item';
@@ -652,6 +665,26 @@ export default function NewRental() {
                     </View>
                   );
                 })}
+                {drawn.loadMoreLabel ? (
+                  <Pressable
+                    onPress={() => setPickerLimit((n) => n + RENTAL_PICKER_WINDOW)}
+                    accessibilityRole="button"
+                    accessibilityLabel={drawn.loadMoreLabel}
+                    style={({ pressed }) => [
+                      styles.action,
+                      {
+                        alignItems: 'center',
+                        borderColor: c.hair2,
+                        backgroundColor: c.card,
+                        opacity: pressed ? 0.85 : 1,
+                      },
+                    ]}
+                  >
+                    <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+                      {drawn.loadMoreLabel}
+                    </Body>
+                  </Pressable>
+                ) : null}
               </View>
             )}
           </FormSection>

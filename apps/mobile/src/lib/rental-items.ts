@@ -212,6 +212,48 @@ export async function readRentalPickerItems(
   return rows;
 }
 
+/**
+ * Rental items the New rental picker draws at first, and how many more each
+ * Load more draws. The picker is a plain list inside the form's ScrollView (a
+ * FlatList does not scroll inside one), so every row it renders is drawn at
+ * once: up to RENTAL_PICKER_ROW_CEILING rows of steppers on the first paint
+ * (B32). The search still runs over every item read.
+ */
+export const RENTAL_PICKER_WINDOW = 50;
+
+/** The rows the picker draws, and what its Load more says. */
+export interface RentalPickerWindow<T> {
+  rows: T[];
+  /** Matching items not drawn. */
+  remaining: number;
+  /** "Load more (N remaining)", or null when every match is drawn. */
+  loadMoreLabel: string | null;
+}
+
+/**
+ * The first `limit` of the items that match the search (at least
+ * RENTAL_PICKER_WINDOW), plus any item with units picked further down, in its
+ * place in the order: a unit in the cart is never out of sight with no way to
+ * take it out but a search.
+ */
+export function rentalPickerWindow<T extends { id: string }>(
+  matching: readonly T[],
+  limit: number,
+  picked: Readonly<Record<string, number>>,
+): RentalPickerWindow<T> {
+  const n = Number.isFinite(limit)
+    ? Math.max(RENTAL_PICKER_WINDOW, Math.floor(limit))
+    : RENTAL_PICKER_WINDOW;
+  const rows = matching.filter((item, i) => i < n || (picked[item.id] ?? 0) > 0);
+  const remaining = matching.length - rows.length;
+  return {
+    rows,
+    remaining,
+    loadMoreLabel:
+      remaining > 0 ? `Load more (${remaining.toLocaleString('en-US')} remaining)` : null,
+  };
+}
+
 /** What the new-rental picker can offer, given which of its reads failed. */
 export interface RentalPickerStatus {
   /** True when the item list and its steppers must not be offered, and the

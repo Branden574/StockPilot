@@ -7,12 +7,14 @@ import { fakePostgrest, filterValue, inValues, uuid, type RecordedCall } from '.
 import { IdBatchReadError, settleIdBatchRead, type PageResult } from './id-batches';
 import {
   RENTAL_PICKER_ROW_CEILING,
+  RENTAL_PICKER_WINDOW,
   buildRentalItemRows,
   loadRentalItemsView,
   readRentalPickerItems,
   rentalItemsEyebrow,
   rentalItemsViewEyebrow,
   rentalPickerStatus,
+  rentalPickerWindow,
 } from './rental-items';
 
 describe('buildRentalItemRows', () => {
@@ -389,5 +391,49 @@ describe('Rentals screen wiring', () => {
     );
     expect(screen).toContain('emptyTitle="No rentals yet."');
     expect(screen).toMatch(/checkoutsFailed \|\| !shown\s*\? 'RENTALS · CHECKOUTS'/);
+  });
+});
+
+// B32: New rental drew every rental item it read (up to the 10,000-row
+// ceiling) as a row with steppers, at once, inside the form's ScrollView. It
+// draws 50, and Load more draws 50 more; the search still runs over them all.
+describe('rentalPickerWindow (New rental picker)', () => {
+  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `item-${i}` }));
+
+  it('50 items: all drawn, nothing to load', () => {
+    expect(RENTAL_PICKER_WINDOW).toBe(50);
+    const w = rentalPickerWindow(items(50), RENTAL_PICKER_WINDOW, {});
+    expect(w.rows).toHaveLength(50);
+    expect(w.remaining).toBe(0);
+    expect(w.loadMoreLabel).toBeNull();
+  });
+
+  it('51 items: 50 drawn and Load more for the last one', () => {
+    const w = rentalPickerWindow(items(51), RENTAL_PICKER_WINDOW, {});
+    expect(w.rows.map((r) => r.id)).toEqual(items(50).map((r) => r.id));
+    expect(w.remaining).toBe(1);
+    expect(w.loadMoreLabel).toBe('Load more (1 remaining)');
+  });
+
+  it('Load more draws 50 more; a large remainder is grouped', () => {
+    expect(rentalPickerWindow(items(101), 100, {}).rows).toHaveLength(100);
+    expect(rentalPickerWindow(items(101), 100, {}).loadMoreLabel).toBe('Load more (1 remaining)');
+    expect(rentalPickerWindow(items(RENTAL_PICKER_ROW_CEILING), 50, {}).loadMoreLabel).toBe(
+      'Load more (9,950 remaining)',
+    );
+  });
+
+  it('an item with units picked stays drawn past the window, in its place in the order', () => {
+    const w = rentalPickerWindow(items(300), 50, { 'item-200': 2, 'item-10': 1, 'item-250': 0 });
+    expect(w.rows).toHaveLength(51);
+    expect(w.rows.at(-1)?.id).toBe('item-200');
+    expect(w.remaining).toBe(249);
+  });
+
+  it('a limit that is not a whole number of at least 50 draws the first 50', () => {
+    for (const limit of [Number.NaN, 0, -5, 12]) {
+      expect(rentalPickerWindow(items(80), limit, {}).rows).toHaveLength(50);
+    }
+    expect(rentalPickerWindow(items(80), 70.9, {}).rows).toHaveLength(70);
   });
 });
