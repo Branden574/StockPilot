@@ -710,8 +710,8 @@ describe('GET /api/cron/schedule-reminders — one-click unsubscribe', () => {
         ]),
         'user_profiles.select': {
           data: [
-            { id: ASSIGNEE_ID, email: 'assignee@l4l.example', full_name: 'Theo Marsh' },
-            { id: MANAGER_ID, email: 'manager@l4l.example', full_name: 'Dana Reyes' },
+            { id: ASSIGNEE_ID, email: 'assignee@example.test', full_name: 'Assignee' },
+            { id: MANAGER_ID, email: 'manager@example.test', full_name: 'Manager' },
           ],
           error: null,
         },
@@ -724,8 +724,8 @@ describe('GET /api/cron/schedule-reminders — one-click unsubscribe', () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
     const sends = sendEmailMock.mock.calls.map((c) => c[0]);
     for (const [userId, to] of [
-      [ASSIGNEE_ID, 'assignee@l4l.example'],
-      [MANAGER_ID, 'manager@l4l.example'],
+      [ASSIGNEE_ID, 'assignee@example.test'],
+      [MANAGER_ID, 'manager@example.test'],
     ] as const) {
       const send = sends.find((s) => s.to === to)!;
       const link = mintMemberUnsubscribeToken({

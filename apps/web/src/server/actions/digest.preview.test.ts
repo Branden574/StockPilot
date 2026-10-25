@@ -126,10 +126,10 @@ describe('sendDigestPreviewAction: one-click unsubscribe', () => {
   beforeEach(() => {
     vi.mocked(requireOrgContext).mockResolvedValueOnce({
       organizationId: ORG,
-      organizationName: 'Harbour',
+      organizationName: 'Example workspace',
       userId: MEMBER,
-      email: 'me@harbour.test',
-      fullName: 'Mel',
+      email: 'member@example.test',
+      fullName: 'Member',
       role: 'owner',
     } as never);
   });

@@ -8,6 +8,8 @@ import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
  * stands and what changes:
  *   - only a real member of the organization the link names: accepted, not a
  *     platform admin's act-as grant. A removed member's link changes nothing;
+ *   - never a disabled account: its profile is frozen for every request
+ *     (0309, 0310), and this is a request too;
  *   - the switch the signed-in Notifications page shows, written by the same
  *     function the page's own action uses, for that member's row only;
  *   - idempotent: a second use writes and audits nothing;
@@ -32,6 +34,10 @@ const REMINDERS = { userId: MEMBER, organizationId: ORG, kind: 'schedule_reminde
 function stubWith(results: Parameters<typeof makeSupabaseStub>[0]): SupabaseStub {
   const stub = makeSupabaseStub({
     'organization_members.select': { data: [{ user_id: MEMBER }], error: null },
+    'user_profiles.select': {
+      data: [{ email_digest_optin: true, disabled_at: null }],
+      error: null,
+    },
     ...results,
   });
   adminHolder.client = stub.client;
@@ -191,10 +197,28 @@ describe('unsubscribeMemberEmail: only a real member of the organization the lin
     ]);
     // Every later read and write names the same member, never another row.
     expect(stub.chainArgs.get('user_profiles.select')).toEqual([
-      ['email_digest_optin'],
+      ['email_digest_optin, disabled_at'],
       ['id', MEMBER],
     ]);
   });
+
+  it.each([DIGEST, REMINDERS])(
+    'a disabled account ($kind) changes nothing: its profile is frozen for every request',
+    async (claim) => {
+      const stub = stubWith({
+        'user_profiles.select': {
+          data: [{ email_digest_optin: true, disabled_at: '2026-10-01T00:00:00Z' }],
+          error: null,
+        },
+      });
+      await expect(unsubscribeMemberEmail(stub.client, claim, META)).resolves.toBe(
+        'account_disabled',
+      );
+      expect(stub.fromCalls).toEqual(['organization_members', 'user_profiles']);
+      expect(stub.chainArgs.get('user_profiles.update')).toBeUndefined();
+      expect(auditRows()).toEqual([]);
+    },
+  );
 
   it('a failed membership read throws and changes nothing (the page answers 500)', async () => {
     const stub = stubWith({

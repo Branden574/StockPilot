@@ -36,12 +36,19 @@ import {
  * changes nothing; the route answers it exactly as it answers a forged link,
  * so a link says nothing about the account behind it.
  *
+ * Nor is it honoured for a disabled account. The service role passes the
+ * 0309 trigger that freezes a disabled profile for every request-facing role,
+ * and a disabled member cannot sign in to change a setting, so the link must
+ * not be the one request that still can. (Nothing is lost: the crons send a
+ * disabled account neither email.)
+ *
  * Idempotent: a switch already off is not written again and gets no second
  * audit row. A failed read or write throws, so the route answers 500 and a
  * mail provider retries its one-click POST instead of counting it done.
  */
 
-export type MemberUnsubscribeOutcome = 'unsubscribed' | 'already_unsubscribed' | 'not_member';
+export type MemberUnsubscribeOutcome =
+  'unsubscribed' | 'already_unsubscribed' | 'not_member' | 'account_disabled';
 
 /** The request, for the audit row. */
 export interface UnsubscribeRequestMeta {
@@ -69,19 +76,23 @@ export async function unsubscribeMemberEmail(
   }
   if (!membership) return 'not_member';
 
+  const { data: profileRow, error: profileError } = await admin
+    .from('user_profiles')
+    .select(`${DIGEST_OPTIN_COLUMN}, disabled_at`)
+    .eq('id', claim.userId)
+    .maybeSingle();
+  if (profileError) throw new Error(`profile read failed: ${profileError.message}`);
+  // The membership row cascades from the profile, so this is a race with an
+  // account deletion: nothing left to switch off.
+  if (!profileRow) return 'not_member';
+  const profile = profileRow as {
+    email_digest_optin?: boolean | null;
+    disabled_at?: string | null;
+  };
+  if (profile.disabled_at) return 'account_disabled';
+
   if (claim.kind === 'weekly_digest') {
-    const { data: profile, error: readError } = await admin
-      .from('user_profiles')
-      .select(DIGEST_OPTIN_COLUMN)
-      .eq('id', claim.userId)
-      .maybeSingle();
-    if (readError) throw new Error(`digest switch read failed: ${readError.message}`);
-    // The membership row cascades from the profile, so this is a race with an
-    // account deletion: nothing left to switch off.
-    if (!profile) return 'not_member';
-    if ((profile as { email_digest_optin?: boolean | null }).email_digest_optin === false) {
-      return 'already_unsubscribed';
-    }
+    if (profile.email_digest_optin === false) return 'already_unsubscribed';
     const { error: writeError } = await writeDigestPrefs(
       admin,
       claim.userId,

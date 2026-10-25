@@ -158,8 +158,8 @@ describe('GET /unsubscribe?m= shows a confirm page and changes nothing', () => {
     const res = await GET(
       getReq({
         m: digestLink(),
-        e: 'member@school.edu',
-        t: mintUnsubscribeToken('member@school.edu')!,
+        e: 'member@example.test',
+        t: mintUnsubscribeToken('member@example.test')!,
       }),
     );
     expect(await res.text()).toContain('Unsubscribe from the weekly digest?');
@@ -283,6 +283,24 @@ describe('POST /unsubscribe with a member link refuses everything else, all alik
     expect(removed).toEqual(forged);
     expect(stub.fromCalls).toEqual(['organization_members']);
     expect(stub.chainArgs.get('user_profiles.update')).toBeUndefined();
+  });
+
+  it('a disabled account gets exactly the forged-link page, and nothing is written', async () => {
+    const link = remindersLink();
+    const flipped = link.slice(0, -1) + (link.endsWith('0') ? '1' : '0');
+    wireAdmin();
+    const forged = await refusal(oneClickPost(flipped));
+
+    const stub = wireAdmin({
+      'user_profiles.select': {
+        data: [{ email_digest_optin: true, disabled_at: '2026-10-01T00:00:00Z' }],
+        error: null,
+      },
+    });
+    const disabled = await refusal(oneClickPost(link));
+
+    expect(disabled).toEqual(forged);
+    expect(stub.chainArgs.get('notification_preferences.insert')).toBeUndefined();
   });
 
   it("one member's valid link only ever changes that member's switch", async () => {

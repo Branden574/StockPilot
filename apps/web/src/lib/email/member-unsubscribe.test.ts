@@ -119,7 +119,7 @@ describe('member unsubscribe link: mint and verify', () => {
   });
 
   it("is a different signature from the order emails' address link, so neither opens the other", () => {
-    const addressLink = mintUnsubscribeToken('member@school.edu')!;
+    const addressLink = mintUnsubscribeToken('member@example.test')!;
     const link = mintMemberUnsubscribeToken(DIGEST)!;
     expect(verifyMemberUnsubscribeToken(withPart(link, 3, addressLink))).toBeNull();
   });

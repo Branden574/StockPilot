@@ -163,10 +163,10 @@ const SETTINGS_PATH = '/dashboard/settings/notifications';
 
 /**
  * The one page for every member-link refusal: a changed or forged link, an
- * unknown kind, a link signed with no signing value configured, and a member
- * who no longer belongs to the organization (or whose account is gone). The
- * same status and the same bytes for all of them, so a link never tells
- * anyone whether an account or a membership exists.
+ * unknown kind, a link signed with no signing value configured, a member who
+ * no longer belongs to the organization, and an account that is gone or
+ * disabled. The same status and the same bytes for all of them, so a link
+ * never tells anyone whether an account or a membership exists.
  */
 function memberInvalidPage(): NextResponse {
   return htmlPage(
@@ -297,8 +297,13 @@ async function memberPost(request: NextRequest, link: string): Promise<NextRespo
       ip: ip === 'unknown' ? null : ip,
       userAgent: request.headers.get('user-agent'),
     });
-    if (outcome === 'not_member') return memberInvalidPage();
-    return memberDonePage(claim.kind);
+    // Only a change made (or already made) is a success; every refusal (a
+    // removed member, a deleted or disabled account, and anything added
+    // later) is the forged-link page.
+    if (outcome === 'unsubscribed' || outcome === 'already_unsubscribed') {
+      return memberDonePage(claim.kind);
+    }
+    return memberInvalidPage();
   } catch (e) {
     // Never the link in the report: it is a working unsubscribe link.
     void reportError(e, {
