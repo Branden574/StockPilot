@@ -295,8 +295,16 @@ class CycleCountSyncEngine {
         const decision = outboxSendDecision(row, await liveOutboxScope());
         if (!decision.send) continue;
         try {
-          // Stamps a legacy row with this account, so it is never sent as another.
-          await outboxMarkSending(row.id, { orgId: decision.orgId, userId: decision.userId });
+          // Claims the row, and stamps a legacy row with this account so it is
+          // never sent as another. `row` is this pass's copy: a count replaced
+          // by a newer one of its line since (the AI scan records it directly),
+          // discarded, parked or stamped with another account is not claimed,
+          // and nothing is sent for it (outbox-scope.ts CLAIM_FOR_SEND_SQL).
+          const claimed = await outboxMarkSending(row.id, {
+            orgId: decision.orgId,
+            userId: decision.userId,
+          });
+          if (!claimed) continue;
           const controller = new AbortController();
           await this.sendRecordCount(row.payload, controller.signal, {
             orgId: decision.orgId,
