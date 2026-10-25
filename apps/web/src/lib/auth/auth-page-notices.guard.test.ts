@@ -327,6 +327,8 @@ describe('auth page notices: every reason in the URL is decided (docket B39)', (
         'apps/web/src/app/auth/callback/route.ts: /signin?error=auth_callback_failed',
         'apps/web/src/app/auth/confirm/route.ts: /signin?error=auth_callback_failed',
         'apps/web/src/app/auth/confirm/route.ts: /reset?error=link_expired',
+        'apps/web/src/app/auth/confirm/route.ts: /signin?error=link_refused',
+        'apps/web/src/app/auth/confirm/route.ts: /reset?error=link_refused',
         'apps/web/src/app/auth/session-ended/route.ts: /signin?reason=session_ended',
         'apps/web/src/server/actions/auth.ts: /signin?reset=success',
       ]),

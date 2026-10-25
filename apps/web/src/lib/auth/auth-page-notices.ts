@@ -3,9 +3,9 @@
  * the URL (docket B39).
  *
  * The auth routes answer a failed emailed link with a redirect: /auth/confirm
- * (an invite, a portal sign-in link, a refused post) and /auth/callback (no
- * code, or the exchange failed) to /signin?error=auth_callback_failed, and a
- * recovery link to /reset?error=link_expired. /signin never read its `error`,
+ * (an invite or a portal sign-in link) and /auth/callback (no code, or the
+ * exchange failed) to /signin?error=auth_callback_failed, and a recovery link
+ * to /reset?error=link_expired. /signin never read its `error`,
  * so a person whose invite or sign-in link had expired landed on a plain
  * sign-in form with no word that the link did not work, and could think it had
  * or press the same dead link again.
@@ -29,10 +29,16 @@ export interface AuthNoticeCopy {
   readonly text: string;
 }
 
-/** An emailed sign-in, invite or confirmation link that did not work. */
+/**
+ * An emailed sign-in, invite or confirmation link that did not work. The way on
+ * is on this page: the password, or Forgot?, which mails a link to the person's
+ * own inbox. Never "ask whoever sent you the link": any page can send a browser
+ * here with this value, and the sender that points to could be that page,
+ * holding a link to its own account.
+ */
 export const LINK_FAILED_NOTICE: AuthNoticeCopy = {
   tone: 'danger',
-  text: 'That link has expired or was already used. Sign in with your password, or ask whoever sent you the link for a new one.',
+  text: 'That link has expired or was already used. Sign in with your password, or choose Forgot? below to get a new link by email.',
 };
 
 /** This device's session was ended elsewhere (revoked, or signed out everywhere). */
@@ -53,9 +59,13 @@ type NoticeTable = Readonly<Record<string, Readonly<Record<string, AuthNoticeCop
 export const SIGN_IN_QUERY_NOTICES = {
   error: {
     // app/auth/callback (no code, or the code exchange failed) and
-    // app/auth/confirm (an invite or sign-in link that expired, was used, or
-    // was posted from another site).
+    // app/auth/confirm (an invite or sign-in link that expired or was used).
     auth_callback_failed: LINK_FAILED_NOTICE,
+    // app/auth/confirm refused a post from another site (docket S14) before it
+    // used the link. Nothing on purpose: the link was neither expired nor used,
+    // and any words here would be words the other site chose to put on the
+    // sign-in card.
+    link_refused: null,
   },
   reason: {
     // app/auth/session-ended.
@@ -72,9 +82,11 @@ export const SIGN_IN_QUERY_NOTICES = {
 /** Every query value the app puts on /reset, by parameter. */
 export const RESET_QUERY_NOTICES = {
   error: {
-    // app/auth/confirm: a recovery link that expired, was used, or was posted
-    // from another site.
+    // app/auth/confirm: a recovery link that expired or was used.
     link_expired: RESET_LINK_EXPIRED_NOTICE,
+    // app/auth/confirm refused a recovery link posted from another site: as on
+    // /signin, nothing on purpose.
+    link_refused: null,
   },
 } as const satisfies NoticeTable;
 

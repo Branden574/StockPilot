@@ -16,8 +16,9 @@ export default async function ResetPage({
   searchParams: Promise<{ error?: string | string[] }>;
 }) {
   const { error } = await searchParams;
-  // app/auth/confirm sends an expired, used or refused recovery link here with
-  // ?error=link_expired; every value is decided in lib/auth/auth-page-notices.ts
+  // app/auth/confirm sends an expired or used recovery link here with
+  // ?error=link_expired, and one it refused from another site with
+  // ?error=link_refused; every value is decided in lib/auth/auth-page-notices.ts
   // and none is ever printed.
   const notice = resetNotice(error);
   return (

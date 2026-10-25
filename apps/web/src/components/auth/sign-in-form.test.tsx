@@ -25,7 +25,7 @@ import { SPENT_SESSION_FRAGMENT } from '@/lib/auth/auth-page-notices';
 import { SignInForm } from './sign-in-form';
 
 const LINK_FAILED =
-  'That link has expired or was already used. Sign in with your password, or ask whoever sent you the link for a new one.';
+  'That link has expired or was already used. Sign in with your password, or choose Forgot? below to get a new link by email.';
 
 /** Puts the browser on /signin with this query and fragment. */
 function at(query: string, fragment = '') {
@@ -195,5 +195,14 @@ describe('SignInForm: an emailed link that did not work (docket B39)', () => {
     at('reset=success');
     const { container } = render(<SignInForm />);
     expect(notice(container)).toBeNull();
+  });
+
+  it('says nothing when /auth/confirm refused a post from another site (?error=link_refused)', () => {
+    // The link was neither expired nor used, and any words here would be words
+    // another site chose to put on the sign-in card.
+    at('error=link_refused');
+    const { container } = render(<SignInForm />);
+    expect(notice(container)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled();
   });
 });

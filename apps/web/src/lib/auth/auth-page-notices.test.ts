@@ -26,8 +26,17 @@ describe('the words (docket B39)', () => {
   it('says what happened to the link and what to do next, in plain words', () => {
     expect(LINK_FAILED_NOTICE).toEqual({
       tone: 'danger',
-      text: 'That link has expired or was already used. Sign in with your password, or ask whoever sent you the link for a new one.',
+      text: 'That link has expired or was already used. Sign in with your password, or choose Forgot? below to get a new link by email.',
     });
+  });
+
+  it('never sends the person back to whoever sent the link', () => {
+    // Any page can link here with ?error=auth_callback_failed, so the note can
+    // greet someone another site sent; that site must not be the one the note
+    // tells them to ask (it would hand over a link to its own account). The
+    // way on is this page: the password, or Forgot? to their own inbox.
+    expect(LINK_FAILED_NOTICE.text).not.toMatch(/whoever|sent you|sender/i);
+    expect(LINK_FAILED_NOTICE.text).toContain('Forgot?');
   });
 
   it('keeps the session-ended and reset-link words the pages showed before', () => {
@@ -43,11 +52,13 @@ describe('the words (docket B39)', () => {
 
   it('decides every value it lists: a notice, or null on purpose', () => {
     expect(SIGN_IN_QUERY_NOTICES).toEqual({
-      error: { auth_callback_failed: LINK_FAILED_NOTICE },
+      error: { auth_callback_failed: LINK_FAILED_NOTICE, link_refused: null },
       reason: { session_ended: SESSION_ENDED_NOTICE },
       reset: { success: null },
     });
-    expect(RESET_QUERY_NOTICES).toEqual({ error: { link_expired: RESET_LINK_EXPIRED_NOTICE } });
+    expect(RESET_QUERY_NOTICES).toEqual({
+      error: { link_expired: RESET_LINK_EXPIRED_NOTICE, link_refused: null },
+    });
   });
 });
 
@@ -147,6 +158,13 @@ describe('signInNotice', () => {
     expect(signInNotice(query('reset=success'), 'none')).toBeNull();
   });
 
+  it('says nothing for ?error=link_refused, on purpose: the refused link was neither expired nor used', () => {
+    expect(signInNotice(query('error=link_refused'), 'none')).toBeNull();
+    expect(signInNotice(query('error=link_refused&reason=session_ended'), 'none')).toBe(
+      SESSION_ENDED_NOTICE,
+    );
+  });
+
   it('says nothing for a value it does not know, and never echoes one', () => {
     for (const qs of [
       '',
@@ -181,6 +199,10 @@ describe('signInNotice', () => {
 describe('resetNotice', () => {
   it('says the reset link expired for ?error=link_expired', () => {
     expect(resetNotice('link_expired')).toBe(RESET_LINK_EXPIRED_NOTICE);
+  });
+
+  it('says nothing for ?error=link_refused, on purpose', () => {
+    expect(resetNotice('link_refused')).toBeNull();
   });
 
   it('says nothing for no value or one it does not know', () => {

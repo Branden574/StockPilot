@@ -2,9 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
- * /reset says why when app/auth/confirm sends an expired, used or refused
- * recovery link here (?error=link_expired), in the auth card's notice, and
- * prints no other value (lib/auth/auth-page-notices.ts decides each).
+ * /reset says why when app/auth/confirm sends an expired or used recovery link
+ * here (?error=link_expired), in the auth card's notice, says nothing for a
+ * post it refused from another site (?error=link_refused), and prints no other
+ * value (lib/auth/auth-page-notices.ts decides each).
  */
 
 vi.mock('@/server/actions/auth', () => ({ requestPasswordResetAction: vi.fn() }));
@@ -50,6 +51,12 @@ describe('/reset', () => {
       expect(container.textContent).not.toContain('Call this number');
       unmount();
     }
+  });
+
+  it('says nothing for ?error=link_refused: /auth/confirm refused a post from another site', async () => {
+    const { container } = await renderAt({ error: 'link_refused' });
+    expect(notice(container)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send reset link' })).toBeInTheDocument();
   });
 
   it('reads the first of a repeated ?error=', async () => {
