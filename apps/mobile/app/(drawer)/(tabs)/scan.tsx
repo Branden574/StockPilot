@@ -404,10 +404,12 @@ export default function Scan() {
 
   /**
    * The picker's rows, each with where its stock is (B26): the rack and crate
-   * holdings of every row in one read, the same read loadItemById makes for
-   * one item, then the one placement rule (scanCandidatePlacementLabel). A
-   * failed read leaves each line to the record's own rack keys and text, as
-   * before; it never holds the picker back.
+   * holdings of the rows in one read (the first 100, which bounds the URL; a
+   * code shared by more records is not seen in practice), the same read
+   * loadItemById makes for one item, then the one placement rule
+   * (scanCandidatePlacementLabel). A failed read, or a row past the first 100,
+   * leaves the line to the record's own rack keys and text, as before; it
+   * never holds the picker back.
    */
   async function withPlacementLabels(org: string, rows: ScanCandidate[]): Promise<ScanCandidate[]> {
     let holdings = new Map<string, RackHoldingLike[]>();
@@ -416,9 +418,10 @@ export default function Scan() {
         .from('item_stock_levels')
         .select('item_id, quantity, locations!inner(name, kind)')
         .eq('organization_id', org)
+        // in-list-bound: the records one scanned code matches, at most 100
         .in(
           'item_id',
-          rows.map((r) => r.id),
+          rows.slice(0, 100).map((r) => r.id),
         )
         .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0);
