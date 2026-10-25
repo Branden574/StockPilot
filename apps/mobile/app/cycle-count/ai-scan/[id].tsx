@@ -220,7 +220,10 @@ export default function AiScanScreen() {
               contentType: 'image/jpeg',
             },
           ],
-          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(await orgHeader(session.user.id)),
+          },
         },
       );
       if (!res.ok) {
@@ -328,7 +331,7 @@ export default function AiScanScreen() {
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${session.access_token}`,
-                ...(await orgHeader()),
+                ...(await orgHeader(session.user.id)),
               },
               body: JSON.stringify({
                 countedQuantity: w.count,
@@ -395,7 +398,10 @@ export default function AiScanScreen() {
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan/${scanId}/confirm`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(await orgHeader(session.user.id)),
+          },
         },
       ).catch(() => null);
 

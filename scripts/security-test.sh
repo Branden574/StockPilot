@@ -1359,6 +1359,10 @@ MOBILE_TESTS=(
   src/lib/workspace-keys.test.ts
   src/lib/api.org-header.test.ts
   src/lib/use-workspace.owner.test.ts
+  # Every screen that calls fetch itself passes the account of the session
+  # whose token it sends, so the workspace it names is never another
+  # account's, nor dropped when the stored session cannot be read.
+  src/lib/org-header-wiring.test.ts
 
   # Book Order Totals on the phone: an answer for another workspace, warehouse
   # or account (a sign-out, a switch) is dropped, never shown; remembered

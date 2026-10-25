@@ -1,5 +1,9 @@
+import * as path from 'node:path';
+
+import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { listTsx, parseTsx, readSource } from './__fixtures__/jsx-touch-audit';
 import { api, orgHeader } from './api';
 
 /**
@@ -15,6 +19,16 @@ import { api, orgHeader } from './api';
  * organization the caller is not a member of is a refusal, not a fallback:
  * apps/web/src/lib/auth/api-context.ts). Each 401 also asked the eviction bus
  * for a probe.
+ *
+ * THE REVIEW FINDING (automated security review of the first fix). The screens
+ * that call fetch themselves (a PO scan, an AI count photo and its saves, a
+ * chat question, a book list photo) called orgHeader() with no account, so it
+ * read the stored session on its own and took an unreadable one as nobody: a
+ * workspace this account saved was then not named, and the request landed in
+ * its default organization while the screen showed another. Or, with another
+ * account's session stored, it named that account's workspace beside this
+ * session's token. orgHeader now takes the account, and every one of those
+ * screens passes the account of the session whose token it sends.
  *
  * Executed against the real api.ts; vi.hoisted and vi.mock run before it loads.
  */
@@ -119,31 +133,136 @@ describe('api() names the saved workspace only for the account that saved it', (
   });
 });
 
-describe('orgHeader() for the screens that call fetch themselves', () => {
-  it('checks the owner against the stored session, never a refreshing getSession()', async () => {
+describe('orgHeader names the workspace for the account it is given, and reads no session', () => {
+  it('a call without the account is a type error, and reads no session either', async () => {
     save('org-a', 'u1');
-    state.stored = { present: true, userId: 'u2' };
-    await expect(orgHeader()).resolves.toEqual({});
-    state.stored = { present: true, userId: 'u1' };
-    await expect(orgHeader()).resolves.toEqual({ 'X-Organization-Id': 'org-a' });
+    // @ts-expect-error the account is required: a raw site names the session it sends
+    await orgHeader();
+    expect(supabaseMock.readDeviceAuthSession).not.toHaveBeenCalled();
     expect(supabaseMock.getSession).not.toHaveBeenCalled();
   });
 
-  it('takes the account when the caller has it', async () => {
+  it("names the account's own saved workspace, and none for another account or nobody", async () => {
     save('org-a', 'u1');
+    supabaseMock.readDeviceAuthSession.mockRejectedValue(new Error('keychain locked'));
     await expect(orgHeader('u1')).resolves.toEqual({ 'X-Organization-Id': 'org-a' });
     await expect(orgHeader('u2')).resolves.toEqual({});
     await expect(orgHeader(null)).resolves.toEqual({});
     expect(supabaseMock.readDeviceAuthSession).not.toHaveBeenCalled();
+    supabaseMock.readDeviceAuthSession.mockReset();
   });
 
-  it('an unreadable stored session names no owned workspace', async () => {
-    save('org-a', 'u1');
-    supabaseMock.readDeviceAuthSession.mockRejectedValueOnce(new Error('keychain locked'));
-    await expect(orgHeader()).resolves.toEqual({});
+  it('names a workspace saved by an older build (no owner) for anyone, as before', async () => {
+    save('org-a');
+    await expect(orgHeader('u2')).resolves.toEqual({ 'X-Organization-Id': 'org-a' });
+    await expect(orgHeader(null)).resolves.toEqual({ 'X-Organization-Id': 'org-a' });
   });
 
   it('nothing saved names nothing', async () => {
     await expect(orgHeader('u2')).resolves.toEqual({});
   });
+});
+
+/**
+ * THE SCREENS THAT CALL FETCH THEMSELVES, executed. Each one imports native
+ * modules, so vitest cannot load it; the `headers` object each one sends is
+ * read from its source and evaluated as written, against the real orgHeader,
+ * with the session the screen holds bound to its own name. That is the code
+ * the review found reading the stored session on its own.
+ */
+type Headers = Record<string, string>;
+type RawSite = { where: string; evaluate: (bindings: Record<string, unknown>) => Promise<Headers> };
+
+const APP_DIR = path.resolve(__dirname, '../../app');
+
+function rawFetchSites(): RawSite[] {
+  const sites: RawSite[] = [];
+  for (const file of listTsx(APP_DIR)) {
+    const src = readSource(file);
+    if (!src.includes('Bearer ${')) continue;
+    const sf = parseTsx(src, file);
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isPropertyAssignment(n) &&
+        n.name.getText(sf) === 'headers' &&
+        ts.isObjectLiteralExpression(n.initializer) &&
+        n.initializer.getText(sf).includes('Bearer ${')
+      ) {
+        const { line } = sf.getLineAndCharacterOfPosition(n.getStart(sf));
+        const js = ts
+          .transpile(`(async () => (${n.initializer.getText(sf)}))`, {
+            target: ts.ScriptTarget.ES2020,
+          })
+          .trim()
+          .replace(/;$/, '');
+        sites.push({
+          where: `app/${path.relative(APP_DIR, file)}:${line + 1}`,
+          evaluate: (bindings) => {
+            const names = Object.keys(bindings);
+            // The site's own expression, with its free names bound.
+            const build = new Function(...names, `return ${js};`) as (
+              ...values: unknown[]
+            ) => () => Promise<Headers>;
+            return build(...names.map((name) => bindings[name]))();
+          },
+        });
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return sites;
+}
+
+const SITES = rawFetchSites();
+
+/** The session a screen holds for account A, under every name a site uses for it. */
+const SESSION_A = { access_token: 'token-a', user: { id: 'u-a' } };
+const AS_SCREEN_HOLDS_A = {
+  session: SESSION_A,
+  sender: SESSION_A,
+  fresh: SESSION_A,
+  token: SESSION_A.access_token,
+  orgHeader,
+};
+
+describe('every screen that calls fetch itself names the workspace of the session it sends', () => {
+  it('finds the PO scan, the AI count photo and its two saves, and the two chat requests', () => {
+    expect(SITES.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(SITES.map((s) => [s.where, s] as const))(
+    '%s: saved by A, session A, stored session unreadable: names the workspace',
+    async (_where, site) => {
+      save('org-a', 'u-a');
+      supabaseMock.readDeviceAuthSession.mockRejectedValue(new Error('keychain locked'));
+      const headers = await site.evaluate(AS_SCREEN_HOLDS_A);
+      expect(headers.Authorization).toBe('Bearer token-a');
+      expect(headers['X-Organization-Id']).toBe('org-a');
+      supabaseMock.readDeviceAuthSession.mockReset();
+    },
+  );
+
+  it.each(SITES.map((s) => [s.where, s] as const))(
+    '%s: saved by B, session A: names none, whichever session is stored',
+    async (_where, site) => {
+      save('org-b', 'u-b');
+      // B's session stored (an account change under way) and an unreadable one.
+      supabaseMock.readDeviceAuthSession.mockResolvedValueOnce({ present: true, userId: 'u-b' });
+      expect(await site.evaluate(AS_SCREEN_HOLDS_A)).not.toHaveProperty('X-Organization-Id');
+      supabaseMock.readDeviceAuthSession.mockRejectedValueOnce(new Error('keychain locked'));
+      expect(await site.evaluate(AS_SCREEN_HOLDS_A)).not.toHaveProperty('X-Organization-Id');
+      supabaseMock.readDeviceAuthSession.mockReset();
+    },
+  );
+
+  it.each(SITES.map((s) => [s.where, s] as const))(
+    '%s: saved by an older build (no owner): names it, as before',
+    async (_where, site) => {
+      save('org-a');
+      supabaseMock.readDeviceAuthSession.mockRejectedValue(new Error('keychain locked'));
+      expect((await site.evaluate(AS_SCREEN_HOLDS_A))['X-Organization-Id']).toBe('org-a');
+      supabaseMock.readDeviceAuthSession.mockReset();
+    },
+  );
 });

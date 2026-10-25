@@ -32,7 +32,7 @@ describe('hydrate() saves the workspace it chooses', () => {
     // keeps the literal to that one module), read through one reader.
     expect(src).toMatch(/import \{[^}]*\bACTIVE_ORG_STORAGE_KEY\b[^}]*\} from '\.\/workspace-keys';/);
     expect(readFileSync(path.join(__dirname, 'api.ts'), 'utf8')).toMatch(
-      /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), account\)/,
+      /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), userId\)/,
     );
   });
 

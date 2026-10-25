@@ -5,7 +5,7 @@ import { notifyUnauthorized } from './account-eviction';
 import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
-import { readDeviceAuthSession, supabase } from './supabase';
+import { supabase } from './supabase';
 import { readSavedWorkspace, savedWorkspaceFor } from './workspace-keys';
 
 /**
@@ -162,23 +162,22 @@ async function authHeader(
  * use-workspace → sync → api). Every raw call site is pinned to spread this by
  * org-header-wiring.test.ts.
  *
- * Only the signed-in account's own saved workspace is named
- * (savedWorkspaceFor): another account's left on the device was refused with
- * a 401 on every request until this account's workspace load replaced it
- * (docket B10). `userId` is the account the request goes out as; api() passes
- * the one its bearer came from. Left out, it is read from the stored session,
- * which never waits on a token refresh (session-scope.ts says why), and an
- * unreadable one is nobody.
+ * Only the given account's own saved workspace is named (savedWorkspaceFor):
+ * another account's left on the device was refused with a 401 on every
+ * request until this account's workspace load replaced it (docket B10).
+ *
+ * `userId` is REQUIRED: the account of the session whose access token the
+ * request sends (api() passes the one its bearer came from; a raw call site
+ * passes `session.user.id` from the session it takes `access_token` from).
+ * orgHeader never reads a session itself. It did, from the stored session,
+ * when a raw site passed nothing (the security review of the first fix): an
+ * unreadable stored session named no workspace, so a PO scan, an AI count
+ * photo or a chat question landed in the default organization while the
+ * screen showed another, and a stored session of another account named that
+ * account's workspace beside this token.
  */
-export async function orgHeader(userId?: string | null): Promise<Record<string, string>> {
-  const account =
-    userId !== undefined
-      ? userId
-      : await readDeviceAuthSession().then(
-          (stored) => stored.userId,
-          () => null,
-        );
-  const orgId = savedWorkspaceFor(await readSavedWorkspace(AsyncStorage), account);
+export async function orgHeader(userId: string | null): Promise<Record<string, string>> {
+  const orgId = savedWorkspaceFor(await readSavedWorkspace(AsyncStorage), userId);
   return orgId ? { 'X-Organization-Id': orgId } : {};
 }
 

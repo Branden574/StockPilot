@@ -58,7 +58,7 @@ describe('the active-workspace key has one definition', () => {
     ['use-workspace.ts', /AsyncStorage\.setItem\(ACTIVE_ORG_STORAGE_KEY,/],
     ['use-workspace.ts', /AsyncStorage\.setItem\(ACTIVE_ORG_OWNER_STORAGE_KEY,/],
     ['use-workspace.ts', /savedWorkspaceFor\(saved, userId\)/],
-    ['api.ts', /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), account\)/],
+    ['api.ts', /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), userId\)/],
     ['session-scope.ts', /readSavedWorkspace\(AsyncStorage\)/],
     ['session-scope.ts', /savedWorkspaceFor\(saved, userId \?\? lastSeenUserId\)/],
   ])('%s reads or writes it through the shared module (%s)', (file, use) => {
