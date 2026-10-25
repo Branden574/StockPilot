@@ -18,6 +18,63 @@ const AUTH_ROUTES = ['/signin', '/signup', '/reset'];
 /** Header keys forwarded from middleware to the page render. */
 export const SESSION_HEADER_USER_ID = 'x-stockpilot-user-id';
 export const SESSION_HEADER_USER_EMAIL = 'x-stockpilot-user-email';
+/**
+ * The path and query this request was for: where sign-in sends the person
+ * back to. lib/auth/session.ts reads it when it sends a request with no
+ * session to /signin, so that redirect carries `?redirect=` like the one below.
+ * Set on every route in the matcher (a client's own value never survives
+ * there); anywhere else it is the client's, which is why session.ts passes it
+ * through safeRedirectPath.
+ */
+export const RETURN_PATH_HEADER = 'x-stockpilot-return-path';
+
+/** Pages a return path never points at (it would nest one sign-in in another). */
+export function isAuthPagePath(path: string): boolean {
+  return AUTH_ROUTES.some(
+    (p) => path === p || path.startsWith(`${p}/`) || path.startsWith(`${p}?`),
+  );
+}
+
+/**
+ * Next.js's own test for a Server Action sent by the browser's router
+ * (next/dist/server/lib/server-action-request-meta.js): a POST that carries
+ * the `Next-Action` header.
+ */
+function isFetchServerAction(request: NextRequest): boolean {
+  return request.method === 'POST' && request.headers.get('next-action') !== null;
+}
+
+/**
+ * Send this request to `url` in the form its sender can follow.
+ *
+ * A SERVER ACTION is a fetch() POST to the page's own URL. Answered with an
+ * HTTP redirect, the browser follows it by itself: the POST, its body and its
+ * Next-Action header go to the new URL, Next.js hands the action on to the
+ * page that owns it, this proxy bounces that request too, and Next answers
+ * `{}` (createForwardedActionResponse in next/dist/server/app-render/
+ * action-handler.js). The action client then throws "An unexpected response
+ * was received from the server." and the page shows a generic error instead
+ * of sign-in. Next.js answers its own redirect() in an action with a 200 and
+ * `x-action-redirect: <url>;<push|replace>` (same file); the router then goes
+ * to that URL and rejects the action's promise with a redirect it has already
+ * handled (server-action-reducer.js). This answers the same way, with the push
+ * Next uses for a redirect() inside an action. No Location header, or the
+ * browser would follow it again.
+ *
+ * ANY OTHER NON-GET (a form posted before the page's JavaScript loaded) gets a
+ * 303, so the browser GETs the new URL. A 307 makes it post the same form to
+ * the sign-in page.
+ */
+function redirectTo(request: NextRequest, url: NextRequest['nextUrl']): NextResponse {
+  if (isFetchServerAction(request)) {
+    return new NextResponse(null, {
+      status: 200,
+      headers: { 'x-action-redirect': `${url.pathname}${url.search};push` },
+    });
+  }
+  if (request.method !== 'GET' && request.method !== 'HEAD') return NextResponse.redirect(url, 303);
+  return NextResponse.redirect(url);
+}
 
 /**
  * Refreshes the Supabase session on every request and gates protected routes.
@@ -147,7 +204,7 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = '/signin';
     url.searchParams.set('redirect', `${pathname}${search}`);
-    const redirectRes = NextResponse.redirect(url);
+    const redirectRes = redirectTo(request, url);
     pendingCookies.forEach(({ name, value, options }) =>
       redirectRes.cookies.set(name, value, options),
     );
@@ -158,7 +215,7 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';
     url.search = '';
-    const redirectRes = NextResponse.redirect(url);
+    const redirectRes = redirectTo(request, url);
     pendingCookies.forEach(({ name, value, options }) =>
       redirectRes.cookies.set(name, value, options),
     );
@@ -170,6 +227,7 @@ export async function updateSession(request: NextRequest) {
   // Pathname is exposed so layouts/RSCs can branch on the current route
   // without re-parsing the URL (server components don't have usePathname).
   requestHeaders.set('x-pathname', request.nextUrl.pathname);
+  requestHeaders.set(RETURN_PATH_HEADER, `${pathname}${search}`);
   if (userId) {
     requestHeaders.set(SESSION_HEADER_USER_ID, userId);
     requestHeaders.set(SESSION_HEADER_USER_EMAIL, userEmail ?? '');
