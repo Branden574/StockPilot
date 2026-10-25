@@ -171,7 +171,11 @@ describe('POST /auth/confirm from another site', () => {
   });
 
   it('an unknown or missing type from another site: the refused /signin bounce', async () => {
-    for (const fields of [{ token_hash: 'held', type: 'signup' }, { token_hash: 'held' }]) {
+    const forms: Record<string, string>[] = [
+      { token_hash: 'held', type: 'signup' },
+      { token_hash: 'held' },
+    ];
+    for (const fields of forms) {
       const res = await POST(postReq(fields, { 'sec-fetch-site': 'cross-site' }));
       expect(res.headers.get('location')).toBe(`${BASE}/signin?error=link_refused`);
     }

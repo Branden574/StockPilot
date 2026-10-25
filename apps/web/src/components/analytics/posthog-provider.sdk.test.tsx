@@ -42,7 +42,7 @@ describe('PostHog on /signin, through the real SDK', () => {
     });
 
     // The provider's options, from its own init call.
-    const init = vi.spyOn(posthog, 'init').mockImplementation(() => undefined);
+    const init = vi.spyOn(posthog, 'init').mockImplementation(() => posthog);
     render(<PostHogProvider>{null}</PostHogProvider>);
     await vi.waitFor(() => expect(init).toHaveBeenCalled());
     const [, options] = init.mock.calls[0]!;
