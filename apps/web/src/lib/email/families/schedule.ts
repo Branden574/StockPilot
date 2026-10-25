@@ -137,6 +137,12 @@ function scheduleFooter(p: ScheduleReminderParams): string {
   return footer({
     kind: 'pref',
     reasonHtml: `Schedule reminders are on for ${escapeHtml(p.recipientEmail)} &mdash; they&rsquo;re preference-controlled.`,
+    // The pref boilerplate, naming the scope (B15, integrator decision 2):
+    // the reminder email switch is an account setting, so the Unsubscribe
+    // link stops it in every workspace, and Gmail's own Unsubscribe button
+    // posts the link without showing our confirm page, so this line is all
+    // a one-click reader sees first.
+    note: 'Unsubscribing stops schedule reminder emails only, in every workspace you belong to — security and account emails still arrive.',
     urls: p.urls,
   });
 }

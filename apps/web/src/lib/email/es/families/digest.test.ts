@@ -302,11 +302,17 @@ describe('weekly digest — full payload', () => {
     expect(html).toContain('Five bars rise');
   });
 
-  it('uses the pref footer with the digest archetype short note', () => {
+  it('uses the pref footer with a short note that says the unsubscribe covers every workspace', () => {
     expect(html).toContain('>Manage email preferences</a>');
     expect(html).toContain('>Unsubscribe</a>');
     expect(html).toContain('workspace members who opted in — Mondays at 7:00 AM PDT.');
-    expect(html).toContain('Unsubscribing stops this notification type only.');
+    // B15 (integrator decision 2): the digest switch is an account setting,
+    // and Gmail's own Unsubscribe button posts without showing our confirm
+    // page, so the email itself says the digest stops in every workspace.
+    expect(html).toContain(
+      'Unsubscribing stops the weekly digest only, in every workspace you belong to.',
+    );
+    expect(html).not.toContain('Unsubscribing stops this notification type only.');
     // The digest archetype SHORTENS the pref boilerplate — the long
     // variant must not appear.
     expect(html).not.toContain('security and account emails still arrive');

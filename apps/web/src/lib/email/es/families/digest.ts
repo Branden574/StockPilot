@@ -397,9 +397,13 @@ export function renderWeeklyDigestHtml(
         digestScheduleLabel(opts.timeZone, digestSendAt(now, preview ? 'next' : 'this-week')),
       )}.`,
       // The digest archetype shortens the pref boilerplate (see the
-      // FOOTER_NOTES flag in components.ts) — passed explicitly so the
-      // bytes match archetype-digest.html:118.
-      note: 'Unsubscribing stops this notification type only.',
+      // FOOTER_NOTES flag in components.ts), passed explicitly. Its words
+      // differ from archetype-digest.html:118 on purpose (B15, integrator
+      // decision 2): the digest switch is an account setting, so the
+      // Unsubscribe link stops it in every workspace, and Gmail's own
+      // Unsubscribe button posts the link without showing our confirm page,
+      // so this line is all a one-click reader sees first.
+      note: 'Unsubscribing stops the weekly digest only, in every workspace you belong to.',
       urls: {
         manage: settingsUrl,
         unsubscribe: opts.unsubscribeUrl ?? settingsUrl,

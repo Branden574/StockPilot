@@ -77,9 +77,13 @@ describe('preference footer + List-Unsubscribe', () => {
       expect(html).toContain(
         'href="https://stockpilotusa.com/dashboard/settings/notifications"',
       );
+      // B15 (integrator decision 2): the reminder email switch is an account
+      // setting, and Gmail's own Unsubscribe button posts without showing our
+      // confirm page, so the email itself says it stops in every workspace.
       expect(html).toContain(
-        'Unsubscribing stops this notification type only — security and account emails still arrive.',
+        'Unsubscribing stops schedule reminder emails only, in every workspace you belong to — security and account emails still arrive.',
       );
+      expect(html).not.toContain('Unsubscribing stops this notification type only');
       expect(html).toContain('Schedule reminders are on for theo@l4l.example');
     }
   });
