@@ -1324,10 +1324,13 @@ MOBILE_TESTS=(
   # the photos and trusts none of the rows: its full pull keeps only what it
   # returns and the counts with this account's unsent work. The count screen
   # stores a count only for the cache, the account and the workspace it
-  # fetched it for, and fetches it once more when one of them changed while
-  # it was loading. A stored file's one-hour link (proof of delivery,
-  # purchase order files) is signed again at the tap once it is about to
-  # expire, never opened stale.
+  # fetched it for, never into a cache still recorded as another account's,
+  # and fetches it once more when one of them changed while it was loading.
+  # The next account's first sync never joins a pull still out for the
+  # previous one, whose answer is discarded once the account has changed: it
+  # runs after that pull and resets at once. A stored file's one-hour link
+  # (proof of delivery, purchase order files) is signed again at the tap once
+  # it is about to expire, never opened stale.
   src/lib/photo-cache-wipe.test.ts
   src/lib/cache-owner.sqlite.test.ts
   src/lib/db-clear-keys.wiring.test.ts

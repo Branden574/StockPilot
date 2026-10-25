@@ -92,8 +92,10 @@ const device = vi.hoisted(() => ({
   authListener: null as null | ((event: string, session: { user: { id: string } } | null) => void),
   /** Every snapshot request the pull sent, by path. */
   requests: [] as string[],
-  /** Changes the server's answer for one test (what an account can see). */
-  answer: null as null | ((snap: SnapshotAnswer, userId: string) => SnapshotAnswer),
+  /** Changes the server's answer for one test (what an account can see), or
+   *  holds it on its way (holdNextAnswer). */
+  answer: null as
+    null | ((snap: SnapshotAnswer, userId: string) => SnapshotAnswer | Promise<SnapshotAnswer>),
 }));
 
 const image = vi.hoisted(() => ({ clearMemoryCache: vi.fn(), clearDiskCache: vi.fn() }));
@@ -693,6 +695,136 @@ describe('the reset for another account', SLOW, () => {
     expect(items()).toEqual([`item-${B}-org-1`]);
     expect(owner()).toBe(B);
     await expectForgotten(PHOTO_A);
+  });
+});
+
+/** The next snapshot answer is held until `release()` is called: the request
+ *  has left, with the bearer of the account signed in when it was sent (the
+ *  api stand-in checks it there, as api.ts does), and its answer is still on
+ *  its way (a slow snapshot on warehouse Wi-Fi; api.ts gives up after 20 s).
+ *  `extra` replaces parts of that answer. */
+function holdNextAnswer(extra: Partial<SnapshotAnswer> = {}): { release: () => void } {
+  let release!: () => void;
+  const arrived = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = device.answer;
+  device.answer = (snap) => {
+    device.answer = previous;
+    return arrived.then(() => ({ ...snap, ...extra }));
+  };
+  return { release: () => release() };
+}
+
+/** A warehouse, and an item in it, that only A's warehouse scope returns. */
+const A_ONLY_WAREHOUSE = { id: 'wh-a-only', name: 'A only' };
+const A_ONLY_ITEM = {
+  id: 'item-a-only',
+  sku: 'SKU-A-ONLY',
+  name: 'A only',
+  barcode: 'A-ONLY',
+  quantityOnHand: 7,
+  unitCost: 99,
+  warehouseId: A_ONLY_WAREHOUSE.id,
+  itemType: 'standard',
+};
+
+/** The app comes to the foreground as A, and the biometric lock shows: A's
+ *  pull is sent with A's bearer, and its answer, which carries the warehouse
+ *  and the item only A can read, is held. */
+async function aPullIsOut(): Promise<{ held: { release: () => void }; aSync: Promise<void> }> {
+  const held = holdNextAnswer({
+    warehouses: [...snapshotFor(A, 'org-1').warehouses, A_ONLY_WAREHOUSE],
+    items: [...snapshotFor(A, 'org-1').items, A_ONLY_ITEM],
+  });
+  const before = device.requests.length;
+  const aSync = m.sync.syncNow();
+  await vi.waitFor(() => expect(device.requests).toHaveLength(before + 1), WAIT);
+  return { held, aSync };
+}
+
+describe("a session that ends while the previous account's pull is still out", SLOW, () => {
+  // Mutation caught: syncNow joining a running sync on the cache generation
+  // alone (B18 final review of d973727f6). A session that ends without a wipe
+  // moves no generation, and B signing in to the same workspace runs no
+  // repair, so B's first sync joined A's pull: A's answer was written and
+  // recorded as A's, and B's reset waited for the next 60 s tick or
+  // foreground while B read A's rows.
+  it("B signs in while A's pull is out: once B's first sync is over, B reads none of A's rows, and A's photos are gone", async () => {
+    await aSignedInWithAPhoto();
+    const { held, aSync } = await aPullIsOut();
+    // "Use password instead": the session ends with no wipe, B signs in, and
+    // useSync runs B's first sync (use-sync.ts, on the user change).
+    sessionEndsWithoutWipe();
+    signIn(B);
+    const bFirst = m.sync.syncNow();
+    held.release(); // A's answer arrives
+    await Promise.all([aSync, bFirst]);
+
+    expect(owner()).toBe(B);
+    expect(items()).toEqual([`item-${B}-org-1`]);
+    // What B's screens read from the phone: a kit's component items, with on
+    // hand and unit cost, and the warehouse pickers.
+    expect(await m.reads.getItemById(A_ONLY_ITEM.id)).toBeNull();
+    expect((await m.reads.listWarehouses()).map((w) => w.id)).toEqual(['wh-org-1']);
+    await expectForgotten(PHOTO_A);
+    // B's own pull, in full, once A's had settled.
+    expect(device.requests.at(-1)).toBe('/api/v1/mobile/snapshot');
+  });
+
+  // Mutation caught: the same. B's first sync ended with the cache still
+  // recorded as A's, so a count B opened in the next minute was stored there,
+  // and A, signing in again before B's next tick, kept it (A's own pull keeps
+  // A's cache): B's unsent number showed as A's own pending edit, which A
+  // could post without (pendingCountFor answers 0 for B's entry).
+  it("a count B opens after its first sync is B's alone: A, signing in again before B's next tick, does not find it, and B's entry stays held for B", async () => {
+    await aSignedInWithAPhoto();
+    const { held, aSync } = await aPullIsOut();
+    sessionEndsWithoutWipe();
+    signIn(B);
+    const bFirst = m.sync.syncNow();
+    held.release();
+    await Promise.all([aSync, bFirst]);
+
+    // In the next minute B opens a count online and counts a line.
+    await countOnThePhone('cc-b');
+    // B's session is revoked elsewhere (no wipe), and A signs in again.
+    sessionEndsWithoutWipe();
+    signIn(A);
+    await m.sync.syncNow();
+
+    expect(owner()).toBe(A);
+    expect(await m.counts.getCycleCount('cc-b')).toBeNull();
+    expect(await m.counts.listCachedCycleCounts()).toEqual([]);
+    expect(await m.counts.pendingCountFor('cc-b')).toBe(0);
+    // B's count is not lost: held for B, and sent when B signs in here again.
+    expect(queuedCounts()).toEqual([{ user_id: B, status: 'pending', count_id: 'cc-b' }]);
+  });
+
+  // Mutation caught: the pull writing an answer whatever happened to the
+  // account while its request was out (only a wipe stopped it).
+  it("A's session ends while its pull is out: A's answer is not written, and A, signing in again, loses nothing", async () => {
+    await aSignedInWithAPhoto();
+    const cursor = String(metaValue('last_synced_at'));
+    const { held, aSync } = await aPullIsOut();
+    sessionEndsWithoutWipe();
+    held.release();
+    await aSync;
+
+    expect(await m.reads.getItemById(A_ONLY_ITEM.id)).toBeNull();
+    expect(items()).toEqual([`item-${A}-org-1`]);
+    expect(metaValue('last_synced_at')).toBe(cursor);
+    expect(owner()).toBe(A);
+
+    signIn(A);
+    await m.sync.syncNow();
+    // A delta from the same cursor, on A's own cache, with A's photos kept.
+    expect(device.requests.at(-1)).toBe(
+      `/api/v1/mobile/snapshot?since=${encodeURIComponent(cursor)}`,
+    );
+    expect(owner()).toBe(A);
+    expect(items()).toEqual([`item-${A}-org-1`]);
+    await expectKept(PHOTO_A);
   });
 });
 
@@ -1596,10 +1728,11 @@ describe(
      *  sending it (app/cycle-count/[id].tsx). */
     const storeFetchedCount = (
       fetchedUnder: Awaited<ReturnType<typeof m.counts.cacheWriteScope>>,
+      countId = 'cc-a',
     ) =>
       m.counts.cacheCycleCount(
         {
-          id: 'cc-a',
+          id: countId,
           organizationId: 'org-1',
           warehouseId: 'wh-org-1',
           warehouseName: 'Main',
@@ -1608,7 +1741,7 @@ describe(
         },
         [
           {
-            id: 'cc-a-l1',
+            id: `${countId}-l1`,
             itemId: 'item-x',
             itemName: 'X',
             itemSku: 'SKU-X',
@@ -1685,6 +1818,70 @@ describe(
 
     it('the same account, with nothing wiped while the fetch was out: stored', async () => {
       await aSignedInWithAPhoto();
+      const fetchedUnder = await m.counts.cacheWriteScope();
+
+      expect(await storeFetchedCount(fetchedUnder)).toBe(true);
+      expect(cachedCounts()).toEqual(['cc-a']);
+    });
+
+    // Mutation caught: no check of whose cache it is (B18 final review of
+    // d973727f6). The cache is still recorded as A's, with A's rows, while
+    // B's reset has not run: here its SQLite wipe failed (the next pull
+    // resets again), and the same holds while B's first sync waits for a
+    // pull of A's still out (below). A count stored then was A's to keep if
+    // A signed in here again first, since A's own pull keeps A's cache: B's
+    // unsent number showed as A's own pending edit.
+    it("a fetch that lands while the cache is still recorded as another account's is discarded: that account, signing in again first, never finds it", async () => {
+      await aSignedInWithAPhoto();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      device.failWipe = true;
+      await m.sync.syncNow(); // B's reset: the SQLite wipe throws, A stays recorded
+      expect.soft(owner()).toBe(A);
+
+      const fetchedUnder = await m.counts.cacheWriteScope(); // B's count screen
+      expect.soft(await storeFetchedCount(fetchedUnder, 'cc-b')).toBe(false);
+      await m.counts.updateLocalLine('cc-b-l1', 5); // B counts what the screen shows
+      // B's session is revoked elsewhere (no wipe), and A signs in again.
+      sessionEndsWithoutWipe();
+      signIn(A);
+      await m.sync.syncNow();
+
+      expect(owner()).toBe(A);
+      expect(await m.counts.getCycleCount('cc-b')).toBeNull();
+      expect(cachedCounts()).toEqual([]);
+      expect(queuedCounts()).toEqual([]);
+    });
+
+    // The same rule while B's first sync waits for A's pull, which is still
+    // out: B's reset runs only once that pull has settled.
+    it("a fetch that lands while B's first sync still waits for A's pull is discarded, and B's reset then clears A's rows", async () => {
+      await aSignedInWithAPhoto();
+      const { held, aSync } = await aPullIsOut();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      const bFirst = m.sync.syncNow();
+
+      const fetchedUnder = await m.counts.cacheWriteScope();
+      expect(await storeFetchedCount(fetchedUnder, 'cc-b')).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+      held.release();
+      await Promise.all([aSync, bFirst]);
+
+      expect(owner()).toBe(B);
+      expect(items()).toEqual([`item-${B}-org-1`]);
+      // The screen's second pass (app/cycle-count/[id].tsx) stores it now.
+      expect(await storeFetchedCount(await m.counts.cacheWriteScope(), 'cc-b')).toBe(true);
+      expect(cachedCounts()).toEqual(['cc-b']);
+    });
+
+    // The other half of the rule: with NO owner recorded, the write is
+    // stored, and the adopting pull's own rules decide what of it stays (a
+    // pull that finds no owner recorded trusts none of the rows, above).
+    // Mutation caught: a missing record read as another account's.
+    it('a fetch that lands while no owner is recorded is stored', async () => {
+      await aSignedInWithAPhoto();
+      recordLost();
       const fetchedUnder = await m.counts.cacheWriteScope();
 
       expect(await storeFetchedCount(fetchedUnder)).toBe(true);

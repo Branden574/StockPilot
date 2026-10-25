@@ -66,6 +66,18 @@
  * the photos again, and do nothing else, until a clear works ('clear-photos'
  * below; db.ts markPhotosCleared then forgets it).
  *
+ * THE NEXT ACCOUNT'S RESET NEVER WAITS FOR A TICK (B18 final review of
+ * d973727f6). A session that ends without a wipe while the previous account's
+ * pull is still out (it starts as the app comes to the foreground, under the
+ * biometric lock) moves no cache generation, and syncNow let the next
+ * account's first sync join that pull: its answer was written and recorded as
+ * the previous account's, and the reset waited for the next 60 s tick or
+ * foreground while the next account read those rows and photos. Now a pull
+ * discards an answer that lands after the account changed (account-epoch.ts),
+ * the next account's first sync runs after it, and resets, and the count
+ * screen stores nothing into a cache still recorded as another account's
+ * (cycle-count-cache.ts cacheCycleCount).
+ *
  * A WIPE THAT KEEPS THE PHOTOS KEEPS THE RECORD. A workspace switch, the
  * workspace repair and Settings > Offline cache > Clear (db.ts deleteOrgData)
  * clear the rows and keep the photos, and used to forget the record: until a

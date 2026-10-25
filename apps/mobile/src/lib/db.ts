@@ -575,6 +575,16 @@ export async function setCacheOwner(userId: string, photosCleared: boolean): Pro
 }
 
 /**
+ * Whose cache this is (cache-owner.ts), or null when none is recorded. Read by
+ * the count screen's write (cycle-count-cache.ts cacheCycleCount) inside its
+ * own transaction, so it reads the record that transaction sees: nothing is
+ * stored into a cache still recorded as another account's.
+ */
+export async function getCacheOwner(): Promise<string | null> {
+  return getMeta(CACHE_USER_META_KEY);
+}
+
+/**
  * The photo clear that was owed has now worked (sync.ts, the recorded
  * account's own pull, cache-owner.ts 'clear-photos'). Only the record of the
  * clear owed goes; whose cache this is stays as it was. Queued, as above.

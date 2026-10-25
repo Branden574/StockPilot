@@ -1,6 +1,7 @@
 import * as Network from 'expo-network';
 
 import { getAccountDisabled } from './account-disabled-state';
+import { accountEpoch } from './account-epoch';
 import {
   ADJUST_STOCK_KIND,
   adjustDrainVerdict,
@@ -346,6 +347,14 @@ export async function isOnline(): Promise<boolean> {
 export async function pullSnapshot(
   force = false,
 ): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
+  // Noted before the account is read (account-epoch.ts): once the signed-in
+  // account changes, this pull's answer belongs to an account that has left,
+  // and is discarded like an answer for a wiped cache (`moved` below). A
+  // session that ends without a wipe ("Use password instead", "Use a
+  // different account", a revoked session, an expired refresh token) moves no
+  // cache generation, so the generation alone let that answer be written and
+  // recorded as the cache's while the next account was signed in.
+  const epochAtStart = accountEpoch();
   // WHOSE cache (cache-owner.ts). Checked before the network check: an
   // offline sign-in as another account must not show the last account's rows
   // either. Another account's cache is cleared and pulled again in full, never
@@ -475,8 +484,15 @@ export async function pullSnapshot(
   // behind this transaction and clears those rows. A ROLLBACK would also undo
   // plain writes other flows made on the shared connection meanwhile (the
   // outbox rejection at account eviction, a receipt queued offline).
+  //
+  // The same once the signed-in account changes (epochAtStart above). No wipe
+  // is queued behind it then, and none is needed: what already ran is this
+  // account's own rows, still recorded as its cache, so the next account's
+  // first sync, which waits for this one (syncNow), resets them, and the same
+  // account signing in again keeps them.
   let stale = false;
-  const moved = () => (stale ||= currentCacheGeneration() !== generationAtRequest);
+  const moved = () =>
+    (stale ||= currentCacheGeneration() !== generationAtRequest || accountEpoch() !== epochAtStart);
   let modulesChanged = false;
   let permissionsChanged = false;
   let scopeChanged = false;
@@ -486,6 +502,9 @@ export async function pullSnapshot(
     // repair, a sign-out) means this answer belongs to a cache that no longer
     // exists: writing it would put the old workspace's rows, cursor, modules
     // and permissions under the new one, or a signed-out user's under the next.
+    // A change of account while it was out means it belongs to an account
+    // that has left: written, it stood under the next account, recorded as
+    // the cache's, until that account's reset.
     if (moved()) return;
     // A wipe asked for just BEFORE this pull began can still have run after
     // the cursor was read: a delta built on a cleared cursor would commit a
@@ -763,9 +782,11 @@ export async function pullSnapshot(
   });
 
   if (stale) {
-    // The switch, repair or sign-out that wiped the cache gets a fresh pull:
-    // syncNow chains one after this sync.
-    console.warn('[sync] the cache was wiped while the snapshot was loading; it was discarded');
+    // The switch, repair or sign-out that wiped the cache, or the account
+    // that signed in, gets a fresh pull: syncNow chains one after this sync.
+    console.warn(
+      '[sync] the cache was wiped, or the account changed, while the snapshot was loading; it was discarded',
+    );
     return null;
   }
   // Notify the live readers only after the new values are committed.
@@ -1021,6 +1042,8 @@ let inFlightSync: Promise<void> | null = null;
 let forcedAfterInFlight: Promise<void> | null = null;
 /** The cache generation the in-flight sync started under. */
 let inFlightGeneration = 0;
+/** The account epoch the in-flight sync started under (account-epoch.ts). */
+let inFlightEpoch = 0;
 
 /**
  * Run pull then push. Called on app open + foreground + a 60s timer.
@@ -1031,12 +1054,29 @@ let inFlightGeneration = 0;
  */
 export async function syncNow(force = false): Promise<void> {
   if (inFlightSync) {
-    // Join a running sync only when it started against the current cache. A
-    // forced pull (a workspace switch or repair), or any sync after a wipe (a
-    // sign-out, then the next sign-in's first sync), would otherwise join a
-    // pull that discards itself and leave the cache empty until the next
-    // timer. Run a full pull once the running one finishes instead.
-    if (!force && currentCacheGeneration() === inFlightGeneration) return inFlightSync;
+    // Join a running sync only when it started against the current cache and
+    // for the account signed in now. A forced pull (a workspace switch or
+    // repair), or any sync after a wipe (a sign-out, then the next sign-in's
+    // first sync), would otherwise join a pull that discards itself and leave
+    // the cache empty until the next timer. Run a full pull once the running
+    // one finishes instead.
+    //
+    // And the next account's first sync after a session that ended WITHOUT a
+    // wipe (B18 final review of d973727f6): no generation moves then, and the
+    // next account signing in to the same workspace runs no repair, so it
+    // joined the previous account's pull, still out. That pull's answer was
+    // written and recorded as the previous account's, and this account's
+    // reset (cache-owner.ts) waited for the next 60 s tick or foreground while
+    // it read the previous account's rows and photos. Run after it instead:
+    // that pull discards its answer once the account changed (pullSnapshot),
+    // and this one resets as soon as the previous one has settled.
+    if (
+      !force &&
+      currentCacheGeneration() === inFlightGeneration &&
+      accountEpoch() === inFlightEpoch
+    ) {
+      return inFlightSync;
+    }
     forcedAfterInFlight ??= inFlightSync.then(() => {
       forcedAfterInFlight = null;
       return syncNow(true);
@@ -1044,6 +1084,7 @@ export async function syncNow(force = false): Promise<void> {
     return forcedAfterInFlight;
   }
   inFlightGeneration = currentCacheGeneration();
+  inFlightEpoch = accountEpoch();
   inFlightSync = (async () => {
     try {
       await pullSnapshot(force);

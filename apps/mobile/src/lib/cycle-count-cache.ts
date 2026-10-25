@@ -3,7 +3,7 @@ import {
   CYCLE_COUNT_CACHE_HEADER_SQL,
   UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL,
 } from './cycle-count-snapshot-sql';
-import { currentCacheGeneration, getDb, queuedWrite, withDbTransaction } from './db';
+import { currentCacheGeneration, getCacheOwner, getDb, queuedWrite, withDbTransaction } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
 import { markRejectedWithin } from './queue';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
@@ -108,6 +108,18 @@ export async function cacheWriteScope(): Promise<CacheWriteScope> {
  * carries the moved generation. Checked inside the queued transaction: a wipe
  * asked for after it starts is queued behind it and clears what it wrote. A
  * count discarded here is fetched again the next time the screen loads.
+ *
+ * Nor into a cache still recorded as ANOTHER account's (B18 final review of
+ * d973727f6): that account's rows are still in it, and this account's reset
+ * (sync.ts, cache-owner.ts) has not run yet, because its first sync waits for
+ * a pull of the previous account's still out, or because the reset's SQLite
+ * wipe failed (the next pull resets again). The reset would wipe the count
+ * anyway; stored until then, it was the previous account's to keep if that
+ * account signed in here again first, since its own pull keeps its own cache,
+ * and this account's unsent number then showed as that account's own pending
+ * edit. With NO owner recorded the count is stored: the pull that adopts the
+ * cache marks it unconfirmed, and its full pull keeps it only when it returns
+ * the count or the adopting account has unsent work on it (sync.ts).
  */
 export async function cacheCycleCount(
   header: {
@@ -153,6 +165,8 @@ export async function cacheCycleCount(
     const { userId, orgId } = await liveOutboxScope();
     if (!userId || userId !== fetchedUnder.userId) return;
     if (!orgId || header.organizationId !== orgId) return;
+    const owner = await getCacheOwner();
+    if (owner && owner !== userId) return;
     // A count a pull that found no owner recorded marked unconfirmed can
     // carry another account's unsent edit, which the line writes below would
     // keep; the header write then confirms the count, and the pull's own

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { endAccountEpoch } from './account-epoch';
 import {
   UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL,
   UNCONFIRMED_LINES_RELEASE_SQL,
@@ -606,6 +607,139 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
     expect(ids('select id from warehouses')).toEqual(['wh-b']);
     expect(ids('select id from cycle_counts')).toEqual([]);
     warn.mockRestore();
+  });
+});
+
+describe('the account changes while a snapshot is loading (a session that ends without a wipe)', () => {
+  /**
+   * "Use password instead", "Use a different account", a revoked session and
+   * an expired refresh token end a session WITHOUT wiping the cache, so the
+   * cache generation does not move, and a next account signing in to the same
+   * workspace runs no workspace repair. use-workspace.ts ends the account
+   * epoch (account-epoch.ts) at each change of account: the session ending,
+   * then the next sign-in.
+   */
+  const accountChangesTo = (userId: string | null) => {
+    endAccountEpoch();
+    meta.liveUserId = userId;
+  };
+  const answerForU1 = () =>
+    emptySnap({
+      enabledModules: ['cycle_counts'],
+      warehouses: [{ id: 'wh-u1', name: 'U1 only' }],
+      items: [item('i-u1')],
+      openCycleCounts: [count('cc-u1')],
+    });
+  /** The request has left (api() checked the bearer as it was sent); its
+   *  answer is held until release() is called. */
+  const holdAnswer = (answer: () => Snap) => {
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    apiMock.api.mockImplementationOnce(async () => {
+      await loaded;
+      return answer();
+    });
+    return () => release();
+  };
+
+  // Mutation caught: syncNow joining a running sync on the cache generation
+  // alone (B18 final review of d973727f6). Joined, the next account's first
+  // sync ended with no reset: the record still named the previous account,
+  // whose answer was written and recorded as its own, and the reset waited
+  // for the next 60 s tick or foreground while the next account read those
+  // rows.
+  it("the next account's first sync does not join the pull started for the previous one: it resets, then pulls its own in full", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    meta.store.set('last_synced_at', '2026-09-01T00:00:00.000Z');
+    const release = holdAnswer(answerForU1);
+    apiMock.api.mockImplementationOnce(async () =>
+      emptySnap({ warehouses: [{ id: 'wh-u2', name: 'U2' }], items: [item('i-u2')] }),
+    );
+
+    const u1Sync = syncNow();
+    await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1)); // u1's request is out
+    accountChangesTo(null); // the session ends, nothing is wiped
+    accountChangesTo('u2'); // another account signs in to the same workspace
+    const u2FirstSync = syncNow(); // use-sync.ts, on the user change
+    release();
+    await Promise.all([u1Sync, u2FirstSync]);
+
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
+    expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
+    expect(apiMock.api.mock.calls[1]).toEqual(['/api/v1/mobile/snapshot', { asUserId: 'u2' }]);
+    expect(meta.store.get('cache_user_id')).toBe('u2');
+    expect(ids('select id from warehouses')).toEqual(['wh-u2']);
+    expect(ids('select id from items')).toEqual(['i-u2']);
+    expect(ids('select id from cycle_counts')).toEqual([]);
+    warn.mockRestore();
+  });
+
+  // Mutation caught: an answer written whatever happened to the account while
+  // its request was out (only a wipe stopped it). It belongs to an account
+  // that has left: written, it stood under the next account until that
+  // account's reset, and was recorded as the cache's.
+  it('discards an answer that lands after the account changed: no rows, no cursor, no modules', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    meta.store.set('last_synced_at', '2026-09-01T00:00:00.000Z');
+    apiMock.api.mockImplementationOnce(async () => {
+      accountChangesTo(null);
+      accountChangesTo('u2');
+      return answerForU1();
+    });
+
+    await expect(pullSnapshot()).resolves.toBeNull();
+
+    expect(ids('select id from warehouses')).toEqual([]);
+    expect(ids("select id from items where id = 'i-u1'")).toEqual([]);
+    expect(ids("select id from cycle_counts where id = 'cc-u1'")).toEqual([]);
+    expect(meta.store.get('last_synced_at')).toBe('2026-09-01T00:00:00.000Z');
+    expect(meta.store.has('enabled_modules')).toBe(false);
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('discarded'));
+    warn.mockRestore();
+  });
+
+  // Mutation caught: the account noted when the answer lands rather than
+  // before the request is sent.
+  it('an account change mid-write stops the pull at the next row, and writes no cursor or modules', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    apiMock.api.mockResolvedValue(
+      emptySnap({ enabledModules: ['cycle_counts'], items: ['i-1', 'i-2', 'i-3'].map(item) }),
+    );
+    let itemWrites = 0;
+    meta.onRun = (sql) => {
+      if (/into items/.test(sql) && ++itemWrites === 2) accountChangesTo(null);
+    };
+
+    await expect(pullSnapshot(true)).resolves.toBeNull();
+
+    expect(itemWrites).toBe(2);
+    expect(ids("select id from items where id like 'i-_' order by id")).toEqual(['i-1', 'i-2']);
+    expect(meta.store.has('last_synced_at')).toBe(false);
+    expect(meta.store.has('enabled_modules')).toBe(false);
+    warn.mockRestore();
+  });
+
+  // Mutation caught: the in-flight sync's account noted once, not at each
+  // start: after any change of account every later sync would wait for the
+  // one before it and pull in full.
+  it('the same account: a second sync asked for while one is running joins it, after an earlier change of account too', async () => {
+    accountChangesTo(null);
+    accountChangesTo('u1'); // the same account signs in again
+    meta.store.set('last_synced_at', '2026-09-01T00:00:00.000Z');
+    const release = holdAnswer(answerForU1);
+
+    const first = syncNow();
+    await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1));
+    const timerTick = syncNow();
+    release();
+    await Promise.all([first, timerTick]);
+
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+    expect(ids('select id from warehouses')).toEqual(['wh-u1']);
+    expect(meta.store.get('last_synced_at')).toBe('2026-09-05T12:00:00.000Z');
   });
 });
 
