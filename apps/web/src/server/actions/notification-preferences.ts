@@ -12,6 +12,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
+import { writeNotificationPrefs } from '@/server/services/notification-preferences';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -47,7 +48,10 @@ export async function loadNotificationPreferences(): Promise<NotificationPrefere
  * Update any subset of the calling user's notification preferences.
  * Uses an upsert (with `user_id` as the conflict target) so the first
  * write for a user who somehow lacks a row creates it; in steady state
- * the bootstrap trigger guarantees the row already exists.
+ * the bootstrap trigger guarantees the row already exists. The write is
+ * shared with the schedule reminder email's one-click unsubscribe
+ * (services/notification-preferences.ts), so the link turns off this same
+ * switch.
  *
  * Emits a `notification_preference.updated` audit row with the list of
  * changed keys in `extra.changed_keys` so we keep a forensic trail of
@@ -89,12 +93,7 @@ export async function updateNotificationPreferencesAction(
       before[k as NotificationPrefKey] = prevRow[k as NotificationPrefKey] ?? true;
     }
 
-    const { error } = await supabase
-      .from('notification_preferences')
-      .upsert(
-        { user_id: ctx.userId, ...patch },
-        { onConflict: 'user_id' },
-      );
+    const { error } = await writeNotificationPrefs(supabase, ctx.userId, patch);
     if (error) throw new ServiceError('internal_error', error.message);
 
     await audit({
