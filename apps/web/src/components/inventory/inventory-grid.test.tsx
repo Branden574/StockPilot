@@ -779,6 +779,109 @@ describe('a Grid photo that fails to load (R8)', () => {
 });
 
 /**
+ * The table's 34 px thumbnail (ListThumb) had the Grid card's defect, from
+ * before the redesign: a photo that failed to load (an expired signed
+ * address, a deleted file, an imported cover whose host is down) left the
+ * tile empty, with no hatch. It now draws the hatch a row with no photo draws,
+ * with no hover preview, on record rows and on group headers, and a new
+ * address is tried again. Mutation caught: the onError dropped, the hatch
+ * drawn another way, or the preview kept around the broken photo.
+ */
+describe('a table thumbnail that fails to load', () => {
+  const thumbOf = (container: HTMLElement, selector: string) =>
+    container.querySelector(`${selector} [data-slot="thumb"]`)! as HTMLElement;
+
+  it('a record row shows the hatch a row with no photo shows, without a hover preview', () => {
+    const { container } = renderTable();
+    const thumb = thumbOf(container, '[data-row-key="plain-1"]');
+    const img = thumb.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://img.test/bp-thumb.webp');
+    // A diet row: its preview loads the master on demand.
+    expect(previews.find((p) => p.title === 'Laptop Backpack')?.srcLoader).toBeDefined();
+    previews.length = 0;
+
+    fireEvent.error(img);
+
+    expect(thumb.querySelector('img')).toBeNull();
+    const hatch = thumb.querySelector('[data-slot="missing-photo"]');
+    expect(hatch).not.toBeNull();
+    // Drawn exactly as the hatch on Mousepad's row, which has no photo.
+    const noPhoto = thumbOf(container, '[data-row-key="plain-2"]');
+    expect(hatch!.outerHTML).toBe(noPhoto.querySelector('[data-slot="missing-photo"]')!.outerHTML);
+    // No preview of the broken photo: no address and no loader for it.
+    const after = previews.filter((p) => p.title === 'Laptop Backpack');
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((p) => p.src === null && p.srcLoader === undefined)).toBe(true);
+    // Only the photo changed: the name link is still there.
+    const tr = thumb.closest('tr') as HTMLElement;
+    expect(within(tr).getByRole('link', { name: 'Laptop Backpack' })).toBeInTheDocument();
+  });
+
+  it('a group header shows the hatch when its cover fails', () => {
+    const { container } = renderTable({
+      items: [
+        row('tee-s', {
+          name: 'Tee - S',
+          sku: 'TEE-S',
+          image_thumb_url: 'https://img.test/tee.webp',
+        }),
+        row('tee-m', { name: 'Tee - M', sku: 'TEE-M' }),
+        row('tee-l', { name: 'Tee - L', sku: 'TEE-L' }),
+      ] as never,
+    });
+    const header = container.querySelector('[data-group-key="style-group:tee"]') as HTMLElement;
+    const img = header.querySelector('[data-slot="thumb"] img')!;
+    fireEvent.error(img);
+    expect(header.querySelector('[data-slot="thumb"] img')).toBeNull();
+    expect(header.querySelector('[data-slot="thumb"] [data-slot="missing-photo"]')).not.toBeNull();
+  });
+
+  it('the failed address is not asked for again, but a new one is (a refresh signs photos again)', () => {
+    const table = (thumb: string) => (
+      <InventoryTable
+        items={[row('bp', { name: 'Backpack', image_thumb_url: thumb })] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />
+    );
+    const { container, rerender } = render(table('https://img.test/bp.webp?v=1'));
+    const thumb = () => thumbOf(container, '[data-row-key="bp"]');
+    fireEvent.error(thumb().querySelector('img')!);
+    expect(thumb().querySelector('img')).toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=1'));
+    expect(thumb().querySelector('img')).toBeNull();
+    expect(thumb().querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=2'));
+    expect(thumb().querySelector('img')).toHaveAttribute('src', 'https://img.test/bp.webp?v=2');
+    expect(thumb().querySelector('[data-slot="missing-photo"]')).toBeNull();
+  });
+
+  // The optimizer rule is unchanged (B30 decides it), as on the Grid card.
+  it('leaves the optimizer rule as it was: a thumb is served as it is, a master-only photo is optimized', () => {
+    const { container } = renderTable({
+      items: [
+        row('thumbed', {
+          image_url: 'https://img.test/thumbed-master.jpg',
+          image_thumb_url: 'https://img.test/thumbed-thumb.webp',
+        }),
+        row('legacy', { image_url: 'https://img.test/legacy-master.jpg', image_thumb_url: null }),
+      ] as never,
+    });
+    const thumbed = thumbOf(container, '[data-row-key="thumbed"]').querySelector('img')!;
+    expect(thumbed).toHaveAttribute('src', 'https://img.test/thumbed-thumb.webp');
+    expect(thumbed).toHaveAttribute('data-unoptimized', 'true');
+    const legacy = thumbOf(container, '[data-row-key="legacy"]').querySelector('img')!;
+    expect(legacy).toHaveAttribute('src', 'https://img.test/legacy-master.jpg');
+    expect(legacy).toHaveAttribute('data-unoptimized', 'false');
+  });
+});
+
+/**
  * FX2 (verified on the lab, pre-existing): a category's name was drawn in the
  * org's own colour, which fails 4.5:1 for most colours (Supplies #22c55e
  * 2.28:1, Science #14b8a6 2.49:1 on a white row; 7 of the 8 colours the

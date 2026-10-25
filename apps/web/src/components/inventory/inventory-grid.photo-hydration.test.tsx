@@ -131,7 +131,7 @@ afterEach(() => {
   Object.defineProperty(imgProto, 'src', nativeSrc);
 });
 
-async function hydrateGrid(thumb: string) {
+async function hydrateGrid(thumb: string, view: 'grid' | 'table' = 'grid') {
   // The same clock on both sides: this test is about the photo, not the time.
   const at = Date.parse('2026-10-24T18:00:00Z');
   return hydrateAcrossClockShift(
@@ -143,7 +143,7 @@ async function hydrateGrid(thumb: string) {
         initialQuery=""
         pageSize={30}
         canUngroup
-        initialView="grid"
+        initialView={view}
       />
     ),
     { serverNow: at, browserNow: at },
@@ -178,6 +178,43 @@ describe('a Grid cover that failed before the page hydrated (R8)', () => {
       const media = mediaOf(run.container);
       expect(media.querySelector('img')).toHaveAttribute('src', WORKING_COVER);
       expect(media.querySelector('[data-slot="missing-photo"]')).toBeNull();
+    } finally {
+      run.unmount();
+    }
+  });
+});
+
+/**
+ * The table's 34 px thumbnail (ListThumb) has the same onError, so a row's
+ * photo that failed before the page hydrated (the first rows load with the
+ * HTML, priority) shows the hatch too, instead of an empty tile. Mutation
+ * caught: ListThumb without onError.
+ */
+describe('a table thumbnail that failed before the page hydrated', () => {
+  const thumbOf = (container: HTMLElement) =>
+    container.querySelector('[data-row-key="bp"] [data-slot="thumb"]')! as HTMLElement;
+
+  it('shows the missing-photo hatch once the page hydrates', async () => {
+    const run = await hydrateGrid(FAILING_COVER, 'table');
+    try {
+      expect(run.html).toContain(`src="${FAILING_COVER}"`);
+      expect(run.errors).toEqual([]);
+      expect(requested).toContain(FAILING_COVER);
+      const thumb = thumbOf(run.container);
+      expect(thumb.querySelector('img')).toBeNull();
+      expect(thumb.querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+    } finally {
+      run.unmount();
+    }
+  });
+
+  it('a photo that loads keeps it through hydration', async () => {
+    const run = await hydrateGrid(WORKING_COVER, 'table');
+    try {
+      expect(run.errors).toEqual([]);
+      const thumb = thumbOf(run.container);
+      expect(thumb.querySelector('img')).toHaveAttribute('src', WORKING_COVER);
+      expect(thumb.querySelector('[data-slot="missing-photo"]')).toBeNull();
     } finally {
       run.unmount();
     }

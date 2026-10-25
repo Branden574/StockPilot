@@ -3986,6 +3986,14 @@ function rollupText(
  * the photo at once, the missing-photo hatch stands in for no photo, and the
  * 2,048 px master loads only on hover intent (on demand for payload-diet rows
  * that carry the thumb alone).
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a row with no photo does; it used to leave the 34 px
+ * tile empty. CardPhoto's rule (below): the failed address is remembered, so
+ * a new one (a refresh signs the photos again) gets a fresh attempt, and
+ * because next/image is given an onError it sets the address once more after
+ * hydration, so a photo that failed before the page came alive is caught too.
  */
 function ListThumb({
   photo,
@@ -4003,15 +4011,18 @@ function ListThumb({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
+  // The photo did not load: the hatch, and no preview of it.
+  const shown = photo && thumbSrc && failedSrc !== thumbSrc ? photo : null;
   return (
     <ImageHoverPreview
-      src={photo?.image_url ?? null}
+      src={shown?.image_url ?? null}
       // Diet rows: master on demand (org-scoped route, same 25-day-stable URL
       // the row used to carry).
       srcLoader={
-        photo && !photo.image_url && photo.image_thumb_url
-          ? () => loadMasterImageUrl(photo.id)
+        shown && !shown.image_url && shown.image_thumb_url
+          ? () => loadMasterImageUrl(shown.id)
           : undefined
       }
       alt={alt}
@@ -4021,17 +4032,18 @@ function ListThumb({
       className="shrink-0"
     >
       <Thumb size={34}>
-        {photo && thumbSrc ? (
+        {shown && thumbSrc ? (
           <Image
             src={thumbSrc}
-            unoptimized={!!photo.image_thumb_url}
+            unoptimized={!!shown.image_thumb_url}
             alt=""
             width={68}
             height={68}
             sizes="34px"
             priority={priority}
-            placeholder={photo.image_lqip ? 'blur' : 'empty'}
-            blurDataURL={photo.image_lqip ?? undefined}
+            placeholder={shown.image_lqip ? 'blur' : 'empty'}
+            blurDataURL={shown.image_lqip ?? undefined}
+            onError={() => setFailedSrc(thumbSrc)}
             className="absolute inset-0 h-full w-full object-cover"
           />
         ) : undefined}
