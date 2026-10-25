@@ -77,11 +77,16 @@ export function saveAccountMapping(
 }
 
 /**
- * The mobile `api()` client throws `Error("API <status>: <body>")` on a non-2xx
- * response. The server is the source of truth for gating, so a 403 here means
- * the module is off or the user lacks `integrations:manage` — surface a friendly
- * inline message rather than the raw error text.
+ * Whether the server refused the request with a 403. The server is the source
+ * of truth for gating, so a 403 here means the module is off or the user lacks
+ * `integrations:manage`: the screen shows its own Access denied state rather
+ * than the raw server sentence.
+ *
+ * Read from the status api() puts on its ApiError, never from the message: the
+ * message is the server's sentence. This used to test the message for
+ * "API 403", the text api() threw before its errors were typed (2026-07-31),
+ * so no refusal matched and the Access denied state never showed (docket B10).
  */
 export function isForbiddenError(err: unknown): boolean {
-  return err instanceof Error && /^API 403\b/.test(err.message);
+  return err instanceof Error && (err as { status?: unknown }).status === 403;
 }
