@@ -213,13 +213,20 @@ export async function findUnlinkedEscalationRequests(
   return result;
 }
 
-/** Organization ids in id order on even days (UTC days since 1970) and in
- *  reverse on odd days. A run cut short by its deadline leaves the end of
- *  its order unread, and the next day's run starts there, so while a run
- *  reads at least half of the organizations, each is read at least every
- *  other day, inside the three-day window. */
+/** Organization ids in id order, starting one organization later each day
+ *  (the UTC day's number since 1970, modulo how many there are). A run cut
+ *  short by its deadline reads the start of its order, and while there are
+ *  N organizations each one starts the order on one of any N consecutive
+ *  days, so each is read at least once in N days however few a run reads,
+ *  with nothing stored between runs. N days can be longer than the
+ *  three-day window, which is why each run's error alert names the
+ *  organizations it did not read; only a stored per-organization time of
+ *  the last read would bound it. An order that only alternated between two
+ *  directions never read the middle organizations while runs read fewer
+ *  than half. */
 function sweepOrder(ids: readonly string[], now: number): string[] {
-  return Math.floor(now / DAY_MS) % 2 === 0 ? [...ids] : [...ids].reverse();
+  const start = Math.floor(now / DAY_MS) % ids.length;
+  return [...ids.slice(start), ...ids.slice(0, start)];
 }
 
 /** One organization's live "Ref EX-" requests in the window (at most the

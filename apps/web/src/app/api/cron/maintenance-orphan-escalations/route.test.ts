@@ -511,27 +511,64 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
     for (const org of body.notRead) expect(err.message).toContain(org);
   });
 
-  it('reads in the opposite order the next day, so organizations a cut-short run left are read first', async () => {
-    const orgs = Array.from({ length: 2 * ORPHAN_SWEEP.orgConcurrency - 1 }, (_v, i) => `org-${i}`);
-    const readOn = async (runAt: number) => {
-      vi.setSystemTime(runAt);
-      const stub = setup({
-        orgs,
-        // The first answer arrives after the deadline.
-        onRequestRead: () => vi.setSystemTime(runAt + ORPHAN_SWEEP.deadlineMs + 1),
-      });
-      const res = await GET(req(AUTH));
-      const body = (await res.json()) as { notRead: string[] };
-      expect(body.notRead.length).toBeGreaterThan(0);
-      return requestReadOrgs(stub);
-    };
+  /**
+   * Runs the check at `runAt` with the clock moved past its deadline as the
+   * `reads`-th organization's request read starts, so the run reads exactly
+   * that many organizations, however many it reads at once: an
+   * organization's start is checked against the deadline in the same step
+   * as its read is made, before the next organization's check.
+   */
+  async function runCutShort(orgs: string[], runAt: number, reads: number) {
+    vi.setSystemTime(runAt);
+    h.reportError.mockClear();
+    const stub = setup({ orgs });
+    const from = stub.client.from.bind(stub.client) as (table: string) => unknown;
+    let started = 0;
+    stub.client.from = vi.fn((table: string) => {
+      started += table === 'maintenance_requests' ? 1 : 0;
+      if (table === 'maintenance_requests' && started === reads) {
+        vi.setSystemTime(runAt + ORPHAN_SWEEP.deadlineMs + 1);
+      }
+      return from(table);
+    });
+    const res = await GET(req(AUTH));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { read: number; notRead: string[] };
+    return { read: requestReadOrgs(stub) as string[], body };
+  }
 
-    const today = await readOn(NOW);
-    const tomorrow = await readOn(NOW + 24 * HOUR);
+  // At least twice the organizations read at once, so a run cut short can
+  // read fewer than half of them: an order that only alternates between two
+  // directions then never reads the middle ones.
+  it.each([
+    [2 * ORPHAN_SWEEP.orgConcurrency, 1],
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, 1],
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency],
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency + 1],
+  ])(
+    'with %i organizations and every run cut short after %i, the runs of that many consecutive days read every organization, and each run names the ones it did not read',
+    async (count, reads) => {
+      const orgs = Array.from({ length: count }, (_v, i) => `org-${String(i).padStart(2, '0')}`);
+      const everRead = new Set<string>();
 
-    // Neither run read every organization; the two together did.
-    expect(new Set([...today, ...tomorrow])).toEqual(new Set(orgs));
-  });
+      for (let day = 0; day < count; day += 1) {
+        const { read, body } = await runCutShort(orgs, NOW + day * 24 * HOUR, reads);
+
+        expect(read).toHaveLength(reads);
+        expect(body.read).toBe(reads);
+        expect([...read, ...body.notRead].sort()).toEqual(orgs);
+        // The run's error alert names exactly the organizations it did not read.
+        expect(incompleteAlerts()).toHaveLength(1);
+        const [err, ctx] = incompleteAlerts()[0]!;
+        expect(ctx.level).toBe('error');
+        for (const org of body.notRead) expect(err.message).toContain(org);
+        for (const org of read) expect(err.message).not.toContain(org);
+        for (const org of read) everRead.add(org);
+      }
+
+      expect([...everRead].sort()).toEqual(orgs);
+    },
+  );
 
   it('gives the reads in flight at the deadline minutes to finish before the function is stopped', () => {
     expect(maxDuration * 1000 - ORPHAN_SWEEP.deadlineMs).toBeGreaterThanOrEqual(4 * 60_000);
