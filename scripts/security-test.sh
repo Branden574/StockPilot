@@ -1250,6 +1250,21 @@ WEB_TESTS=(
   src/components/portal/portal-shop.test.tsx
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
+
+  # One-click unsubscribe in member emails (B15): a link names one member, one
+  # organization and one email kind under an HMAC keyed on UNSUBSCRIBE_SECRET,
+  # domain-separated from the address links; a changed part, an unknown kind,
+  # a malformed link and an unset signing value are all refused. GET changes
+  # nothing and touches no database. POST is rate limited per link (its hash)
+  # and per address after the signature check, failing closed; it is honoured
+  # only for an accepted, non-act-as member of the organization the link names,
+  # and every refusal (a removed member included) is the same page. It turns
+  # off exactly the switch the signed-in Notifications page shows, for that
+  # member only, through the page's own write.
+  src/lib/email/member-unsubscribe.test.ts
+  src/server/services/member-email-unsubscribe.test.ts
+  src/app/unsubscribe/route.members.test.ts
+  src/app/unsubscribe/route.settings-parity.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
