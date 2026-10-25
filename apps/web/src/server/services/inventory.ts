@@ -4856,6 +4856,75 @@ export class InventoryService {
     });
   }
 
+  /**
+   * A SKU edit moves every other live record of the ORIGINAL SKU to the new
+   * one (update()'s fan-out), in a second statement after the edited record's
+   * own UPDATE. Refuses, BEFORE either write, a move that second statement
+   * could not finish (unique index 0234: one live record per organization,
+   * SKU, charter and rack label, NULLs equal), so a refused SKU edit leaves
+   * every record where it was instead of the edited one alone on the new SKU.
+   *
+   * Two moves cannot finish:
+   *  - the edited record lands on the charter and rack of a record that moves
+   *    with it (both would then hold the new SKU there);
+   *  - a record outside the group already holds the new SKU at the charter
+   *    and rack of a record that moves.
+   * The edited record's own landing slot, when a record outside the group
+   * holds it, is left to its UPDATE: that statement is the first write and
+   * fails alone (skuTakenError, which can name the holder).
+   *
+   * Reads through the SERVICE ROLE, as the fan-out writes: the records that
+   * move, and the ones that block them, include records the editor cannot
+   * read. The organization_id filters are the tenant floor, and the refusal
+   * names no record. A read that fails refuses the edit (fail closed:
+   * fetchAllRows throws internal_error).
+   */
+  private async assertSkuGroupCanMove(
+    id: string,
+    originalSku: string,
+    newSku: string,
+    landing: { charterId: string | null; binLocation: string | null },
+  ): Promise<void> {
+    type SlotRow = { id: string; charter_id: string | null; bin_location: string | null };
+    const admin = createAdminClient();
+    const liveWithSku = (sku: string, excludeId?: string) =>
+      fetchAllRows<SlotRow>((from, to) => {
+        let q = admin
+          .from('inventory_items')
+          .select('id, charter_id, bin_location')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('sku', sku)
+          .is('deleted_at', null);
+        if (excludeId) q = q.neq('id', excludeId);
+        return q.order('id').range(from, to);
+      });
+    const [moving, holders] = await Promise.all([
+      liveWithSku(originalSku, id),
+      liveWithSku(newSku),
+    ]);
+    if (moving.length === 0) return;
+    // uuid text compares lower-case (Postgres prints it so); the rack label
+    // compares exactly, as the index does.
+    const slotOf = (charterId: string | null, binLocation: string | null) =>
+      JSON.stringify([charterId ? charterId.toLowerCase() : null, binLocation ?? null]);
+    const movingSlots = new Set(moving.map((r) => slotOf(r.charter_id, r.bin_location)));
+    const details = { reason: 'sku_taken_in_group', sku: newSku, previousSku: originalSku };
+    if (movingSlots.has(slotOf(landing.charterId, landing.binLocation))) {
+      throw new ServiceError(
+        'conflict',
+        `Another record with SKU ${originalSku} is already in the charter and rack chosen for this one, and changing the SKU moves both to SKU ${newSku}. Two records can't share a SKU there, so nothing was changed.`,
+        details,
+      );
+    }
+    if (holders.some((r) => movingSlots.has(slotOf(r.charter_id, r.bin_location)))) {
+      throw new ServiceError(
+        'conflict',
+        `Every record with SKU ${originalSku} moves to SKU ${newSku} together, and another record already uses SKU ${newSku} in the same charter and rack as one of them. Two records can't share a SKU there, so nothing was changed. Use a different SKU.`,
+        details,
+      );
+    }
+  }
+
   async update(id: string, patch: UpdateItemInput) {
     assertPermission(this.ctx, 'items:update');
 
@@ -5114,6 +5183,28 @@ export class InventoryService {
       if (key in updates) sharedUpdates[key] = updates[key];
     }
 
+    // A SKU edit moves the whole group (the fan-out below): refuse, before
+    // this record's UPDATE, a move the fan-out could not finish, so a refused
+    // edit never leaves this record alone on the new SKU. Same condition as
+    // the fan-out: a blank SKU is never grouped.
+    if (
+      typeof updates.sku === 'string' &&
+      originalSku &&
+      originalSku.trim().length > 0 &&
+      updates.sku !== originalSku
+    ) {
+      const cur = current as { charter_id?: string | null; bin_location?: string | null };
+      await this.assertSkuGroupCanMove(id, originalSku, updates.sku, {
+        charterId:
+          ('charter_id' in updates ? (updates.charter_id as string | null) : cur.charter_id) ??
+          null,
+        binLocation:
+          ('bin_location' in updates
+            ? (updates.bin_location as string | null)
+            : cur.bin_location) ?? null,
+      });
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .update(updates)
@@ -5199,17 +5290,17 @@ export class InventoryService {
       // KNOWN LIMITATION: the target row was already updated (and committed)
       // in the prior statement above, in a SEPARATE statement from this
       // sibling fan-out — there is no shared transaction wrapping the two.
-      // If this edit is a `sku` re-key and the NEW sku collides with an
-      // existing row at one sibling's (org, sku, charter_id, bin_location)
-      // (migration 0234), this UPDATE fails with 23505 below and the group is
-      // left SPLIT: the target row
-      // now sits on the new sku while its siblings are still on the old one.
-      // This is surfaced to the caller as the `conflict` error (not silent,
+      // A `sku` re-key whose NEW sku collides at one sibling's (org, sku,
+      // charter_id, bin_location) (migration 0234) is refused BEFORE the
+      // target UPDATE (assertSkuGroupCanMove), so nothing is written. What
+      // remains is a race: a record that takes such a slot between that check
+      // and this UPDATE makes it fail with 23505 below, and the group is left
+      // SPLIT: the target row on the new sku, its siblings on the old one.
+      // That is surfaced to the caller as the `conflict` error (not silent,
       // not cross-tenant — organization_id stays scoped throughout — and
-      // on-hand quantities / stock ledger are untouched), but it is a real
-      // data-shape limitation until this fan-out is done. A fully-atomic
-      // group re-key would require moving target+siblings into one
-      // transactional RPC (tracked follow-up, not yet built).
+      // on-hand quantities / stock ledger are untouched). Closing the race
+      // needs target+siblings moved in one transactional database function
+      // (designed in the B26 pull request, not yet built).
       //
       // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
       // the RLS-scoped client is subject to inventory_items_update →
