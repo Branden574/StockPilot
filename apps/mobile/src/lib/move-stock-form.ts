@@ -109,6 +109,17 @@ export type MoveSource =
   | { mode: 'choice'; holding: MoveHolding | null };
 
 /**
+ * Shown by the move sheet when its read of the racks and crates to move INTO
+ * failed (2026-10-24). That read used to be taken as "no racks yet", so every
+ * typed rack read as new ("Create new rack 17-B?" for a rack that exists, an
+ * answer that trains people to say yes), Unplaced dropped out of the list, and
+ * a member who may not create racks was told there was nothing to move into.
+ * The sheet says this instead and offers no move.
+ */
+export const SHEET_DESTINATIONS_UNREADABLE_NOTE =
+  'Could not load the racks and crates to move into. Close this and try again.';
+
+/**
  * Resolve the source holding for a freshly-opened sheet.
  *
  * `putAwaySourceLocationId` is the ONLY thing that turns on put-away mode, and

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { bulkCreateSizedVariantsSchema } from '@stockpilot/core';
+import { bodyAnswersNewRack, bulkCreateSizedVariantsSchema } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
@@ -82,7 +82,13 @@ export async function POST(req: NextRequest) {
 
   try {
     const svc = new InventoryService(ctx);
-    const { rows, placementFailed } = await svc.bulkCreateSizedVariants(parsed.data);
+    // The phone in the field asks "Create new rack?" on its own screen and
+    // sends no answer: a body without `confirmNewRack` keeps creating the
+    // rack as before. Same rule, same reason, as POST /api/v1/items.
+    const { rows, placementFailed } = await svc.bulkCreateSizedVariants(
+      parsed.data,
+      bodyAnswersNewRack(json) ? {} : { allowUnconfirmedNewRack: true },
+    );
 
     // New items change the org's cached Items/Books list — invalidate so the
     // next dashboard view sees them (mirrors POST /api/v1/items).
