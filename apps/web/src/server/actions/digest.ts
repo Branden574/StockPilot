@@ -9,16 +9,15 @@ import {
   weeklyDigestPreviewSubject,
   weeklyDigestText,
 } from '@/lib/email/es/families/digest';
+import { memberUnsubscribeDelivery } from '@/lib/email/member-unsubscribe';
 import { sendEmail } from '@/lib/email/resend';
 import { createClient } from '@/lib/supabase/server';
 import { applySectionOptIns, getDigestData } from '@/server/services/digest';
-
-export interface DigestPrefs {
-  optIn?: boolean;
-  lowStock?: boolean;
-  openPos?: boolean;
-  cycleCounts?: boolean;
-}
+import {
+  digestPrefsUpdate,
+  writeDigestPrefs,
+  type DigestPrefs,
+} from '@/server/services/notification-preferences';
 
 /**
  * Update any subset of the calling user's digest preferences:
@@ -26,26 +25,18 @@ export interface DigestPrefs {
  * - per-section flags (digest_section_*).
  *
  * Pass only the keys you want to change. RLS only lets the user update
- * their own profile row.
+ * their own profile row. The write is shared with the email's one-click
+ * unsubscribe (services/notification-preferences.ts), so the link turns off
+ * this same switch.
  */
 export async function setDigestPrefsAction(prefs: DigestPrefs) {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
-  const update: Record<string, boolean> = {};
-  if (typeof prefs.optIn === 'boolean') update.email_digest_optin = prefs.optIn;
-  if (typeof prefs.lowStock === 'boolean')
-    update.digest_section_low_stock = prefs.lowStock;
-  if (typeof prefs.openPos === 'boolean')
-    update.digest_section_open_pos = prefs.openPos;
-  if (typeof prefs.cycleCounts === 'boolean')
-    update.digest_section_cycle_counts = prefs.cycleCounts;
+  const update = digestPrefsUpdate(prefs);
   if (Object.keys(update).length === 0) {
     return { ok: true as const, data: { changed: 0 } };
   }
-  const { error } = await supabase
-    .from('user_profiles')
-    .update(update)
-    .eq('id', ctx.userId);
+  const { error } = await writeDigestPrefs(supabase, ctx.userId, update);
   if (error) {
     return {
       ok: false as const,
@@ -108,10 +99,21 @@ export async function sendDigestPreviewAction() {
   const payload = applySectionOptIns(fullPayload, sections);
   const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
   const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
+  // The Monday email's unsubscribe, for the caller in this workspace: a
+  // signed one-click link that works signed out, with its List-Unsubscribe
+  // and List-Unsubscribe-Post headers (the settings page, without the POST
+  // header, when no link can be signed). Same as the cron, so a preview
+  // behaves in the inbox as the real email does.
+  const unsubscribe = memberUnsubscribeDelivery({
+    appUrl,
+    settingsUrl,
+    claim: { userId: ctx.userId, organizationId: ctx.organizationId, kind: 'weekly_digest' },
+  });
   const opts = {
     orgName: ctx.organizationName,
     appUrl,
     settingsUrl,
+    unsubscribeUrl: unsubscribe.url,
   };
   // Registry subject: "[Preview] StockPilot weekly digest — {date}".
   const subject = weeklyDigestPreviewSubject();
@@ -125,17 +127,13 @@ export async function sendDigestPreviewAction() {
     timeZone,
   });
   const text = weeklyDigestText(payload, opts);
-  // Match the production cron's List-Unsubscribe header so preview
-  // emails behave the same way in the recipient's inbox.
   const res = await sendEmail({
     to: ctx.email,
     subject,
     html,
     text,
     from: DIGEST_FROM,
-    headers: {
-      'List-Unsubscribe': `<${settingsUrl}>`,
-    },
+    headers: unsubscribe.headers,
   });
   if (!res.ok) {
     return {

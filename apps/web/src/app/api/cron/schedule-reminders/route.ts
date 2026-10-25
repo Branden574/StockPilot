@@ -10,6 +10,7 @@ import {
   renderSchedHour,
   renderSchedTomorrow,
 } from '@/lib/email/families/schedule';
+import { memberUnsubscribeDelivery } from '@/lib/email/member-unsubscribe';
 import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
@@ -47,6 +48,11 @@ function secretsEqual(a: string, b: string): boolean {
  * `<p><strong>` body. The dedupe stamps and recipient selection above are
  * unchanged; only the rendering + send envelope (schedule@ sender,
  * List-Unsubscribe header) moved into the family.
+ *
+ * Each email's unsubscribe is the recipient's own signed one-click link for
+ * the event's organization (B15, lib/email/member-unsubscribe.ts): it works
+ * signed out and on a mail provider's RFC 8058 POST, and turns off the same
+ * email_schedule_reminders switch the settings page shows.
  */
 
 /**
@@ -306,10 +312,9 @@ export async function GET(req: Request) {
         location: ev.location_text,
         details: ev.details,
         scheduleUrl: `${appUrl}${link}`,
-        urls: { manage: settingsUrl, unsubscribe: settingsUrl, support: `${appUrl}/support` },
       } satisfies Omit<
         ScheduleReminderParams,
-        'assignedToYou' | 'firstName' | 'recipientEmail'
+        'assignedToYou' | 'firstName' | 'recipientEmail' | 'urls' | 'oneClickUnsubscribe'
       >;
 
       // Emails need addresses; one batch lookup for all recipients.
@@ -395,11 +400,28 @@ export async function GET(req: Request) {
         }
         const email = profile?.email;
         if (email && wantsEmail) {
+          // This recipient's own link, for the event's organization: it
+          // turns off their schedule reminder emails and nobody else's.
+          const unsubscribe = memberUnsubscribeDelivery({
+            appUrl,
+            settingsUrl,
+            claim: {
+              userId: uid,
+              organizationId: ev.organization_id,
+              kind: 'schedule_reminders',
+            },
+          });
           const params: ScheduleReminderParams = {
             ...sharedParams,
             assignedToYou: uid === ev.assigned_user_id,
             firstName: (profile?.full_name ?? '').trim().split(/\s+/)[0] || null,
             recipientEmail: email,
+            urls: {
+              manage: settingsUrl,
+              unsubscribe: unsubscribe.url,
+              support: `${appUrl}/support`,
+            },
+            oneClickUnsubscribe: unsubscribe.oneClick,
           };
           const rendered = isOneHour
             ? renderSchedHour(params)

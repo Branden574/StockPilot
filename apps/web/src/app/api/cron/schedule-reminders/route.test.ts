@@ -52,6 +52,8 @@ vi.mock('@/lib/email/resend', () => ({
 }));
 
 import { GET } from './route';
+import { env } from '@/lib/env';
+import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
 function buildRequest(authHeader?: string) {
   return new Request('https://test.local/api/cron/schedule-reminders', {
@@ -674,6 +676,75 @@ describe('GET /api/cron/schedule-reminders', () => {
     expect(createNotificationMock).toHaveBeenCalledTimes(2);
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0]![0].to).toBe('manager@l4l.example');
+  });
+});
+
+/**
+ * B15: each recipient's email carries their own signed one-click link, for
+ * the event's organization, in List-Unsubscribe (with List-Unsubscribe-Post),
+ * the footer's Unsubscribe and the text part. The signing value is a dull one
+ * under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts);
+ * without one the email keeps the settings page (the tests above).
+ */
+describe('GET /api/cron/schedule-reminders — one-click unsubscribe', () => {
+  const REMINDERS_SIGNING_VALUE = 'reminders-' + 'v'.repeat(24);
+  const ORG_ID = '00000000-0000-4000-8000-00000000c0c0';
+  const ASSIGNEE_ID = '00000000-0000-4000-8000-0000000000a1';
+  const MANAGER_ID = '00000000-0000-4000-8000-0000000000b2';
+  const signable = env as Record<string, string | undefined>;
+
+  beforeEach(() => {
+    signable.UNSUBSCRIBE_SECRET = REMINDERS_SIGNING_VALUE;
+  });
+  afterEach(() => {
+    delete signable.UNSUBSCRIBE_SECRET;
+  });
+
+  it("gives each recipient their own signed link for the event's organization", async () => {
+    const stub = stubFor(
+      [eventIn(0.5, { organization_id: ORG_ID, assigned_user_id: ASSIGNEE_ID })],
+      {
+        'organization_members.select': membersServed(() => [
+          { ...MANAGER, user_id: MANAGER_ID },
+          { ...ASSIGNEE, user_id: ASSIGNEE_ID },
+        ]),
+        'user_profiles.select': {
+          data: [
+            { id: ASSIGNEE_ID, email: 'assignee@l4l.example', full_name: 'Theo Marsh' },
+            { id: MANAGER_ID, email: 'manager@l4l.example', full_name: 'Dana Reyes' },
+          ],
+          error: null,
+        },
+      },
+    );
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    const sends = sendEmailMock.mock.calls.map((c) => c[0]);
+    for (const [userId, to] of [
+      [ASSIGNEE_ID, 'assignee@l4l.example'],
+      [MANAGER_ID, 'manager@l4l.example'],
+    ] as const) {
+      const send = sends.find((s) => s.to === to)!;
+      const link = mintMemberUnsubscribeToken({
+        userId,
+        organizationId: ORG_ID,
+        kind: 'schedule_reminders',
+      });
+      const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+      expect(send.headers).toEqual({
+        'List-Unsubscribe': `<${url}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      });
+      expect(send.html).toContain(`href="${url}"`);
+      expect(send.text).toContain(`Unsubscribe: ${url}`);
+      // Manage stays the settings page.
+      expect(send.html).toContain(
+        'href="https://stockpilotusa.com/dashboard/settings/notifications"',
+      );
+    }
   });
 });
 

@@ -14,16 +14,15 @@
  * envelope (sender, headers) changed.
  *
  * PREFERENCE FOOTER: email_schedule_reminders exists (mig 0258), so this
- * family renders the preference footer. The manage/unsubscribe links
- * point at /dashboard/settings/notifications — recipients are signed-in
- * org members, and the public mig-0222 suppression table is NOT consulted
- * by this cron, so a public one-click unsubscribe link would be a broken
- * promise (digest precedent: settings URL in List-Unsubscribe, no
- * List-Unsubscribe-Post since RFC 8058 one-click requires a POST
- * endpoint that actually suppresses). FLAG: the plan's blanket
- * "List-Unsubscribe + List-Unsubscribe-Post on every preference-
- * controlled email" is not satisfiable for signed-in-only preferences
- * without new backend — surfaced, not solved here.
+ * family renders the preference footer. "Manage email preferences" points
+ * at /dashboard/settings/notifications. "Unsubscribe", List-Unsubscribe and
+ * the text part's line point at the sender's signed one-click link for the
+ * recipient (B15, lib/email/member-unsubscribe.ts), which /unsubscribe
+ * honours signed out and on a mail provider's RFC 8058 POST by turning off
+ * that member's email_schedule_reminders, the same switch as the settings
+ * page; then List-Unsubscribe-Post is set too. When the sender has no signed
+ * link (no signing value configured) both point at the settings page and
+ * there is no -Post header: that page is behind sign-in and ignores a POST.
  *
  * Copy adaptation (mockup sample-world → real data, flagged):
  *  - "Assigned to you" renders only for the assignee — the cron also
@@ -70,7 +69,10 @@ function greetingText(firstName: string | null | undefined): string {
 export interface ScheduleFooterUrls {
   /** Notification-preferences page (the pref footer's manage link). */
   manage: string;
-  /** Unsubscribe link — same settings page for signed-in recipients. */
+  /**
+   * Unsubscribe link: the signed one-click link for this recipient, or the
+   * settings page when the sender could not sign one.
+   */
   unsubscribe: string;
   support: string;
 }
@@ -110,6 +112,13 @@ export interface ScheduleReminderParams {
   /** Event link, e.g. `${appUrl}/dashboard/schedule/${id}`. */
   scheduleUrl: string;
   urls: ScheduleFooterUrls;
+  /**
+   * True when `urls.unsubscribe` is the signed one-click link, which accepts
+   * a mail provider's POST: then the email advertises List-Unsubscribe-Post.
+   * REQUIRED ON PURPOSE, like dayWord: a caller must say which link it has,
+   * never inherit "one-click" for a page that ignores the POST.
+   */
+  oneClickUnsubscribe: boolean;
 }
 
 export interface RenderedScheduleEmail {
@@ -118,7 +127,7 @@ export interface RenderedScheduleEmail {
   text: string;
   /** RFC-5322 sender, verbatim from the registry. */
   from: string;
-  /** RFC-822 headers for sendEmail (List-Unsubscribe). */
+  /** RFC-822 headers for sendEmail (List-Unsubscribe[-Post]). */
   headers: Record<string, string>;
 }
 
@@ -133,10 +142,14 @@ function scheduleFooter(p: ScheduleReminderParams): string {
 }
 
 function scheduleHeaders(p: ScheduleReminderParams): Record<string, string> {
-  // Digest precedent (cron/weekly-digest): the settings page satisfies
-  // the Gmail/Yahoo List-Unsubscribe requirement; no -Post header since
-  // there is no one-click POST suppression endpoint for these prefs.
-  return { 'List-Unsubscribe': `<${p.urls.unsubscribe}>` };
+  // RFC 8058 one-click only for the signed link, which /unsubscribe honours
+  // on the provider's POST; the settings page fallback ignores a POST.
+  return p.oneClickUnsubscribe
+    ? {
+        'List-Unsubscribe': `<${p.urls.unsubscribe}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      }
+    : { 'List-Unsubscribe': `<${p.urls.unsubscribe}>` };
 }
 
 function scheduleEventCard(p: ScheduleReminderParams, compact: boolean): string {
@@ -195,6 +208,9 @@ function textLines(p: ScheduleReminderParams, subject: string, lead: string): st
     '—',
     `Schedule reminders are on for ${p.recipientEmail} — they're preference-controlled.`,
     `Manage email preferences: ${p.urls.manage}`,
+    // The signed link works signed out, so a text-only reader can
+    // unsubscribe too.
+    ...(p.oneClickUnsubscribe ? [`Unsubscribe: ${p.urls.unsubscribe}`] : []),
   ].join('\n');
 }
 

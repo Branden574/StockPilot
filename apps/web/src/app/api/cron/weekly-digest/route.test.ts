@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -68,6 +68,8 @@ vi.mock('@/server/services/digest', () => ({
 }));
 
 import { GET } from './route';
+import { env } from '@/lib/env';
+import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
 function buildRequest(authHeader?: string) {
   return new Request('https://test.local/api/cron/weekly-digest', {
@@ -533,5 +535,83 @@ describe('GET /api/cron/weekly-digest — overdue in the organization zone', () 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * B15: each digest carries the recipient's own signed one-click link for the
+ * organization it is about, in List-Unsubscribe (with List-Unsubscribe-Post)
+ * and as the footer's and the text part's Unsubscribe. The signing value is a
+ * dull one under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts);
+ * without one the digest keeps the settings page.
+ */
+describe('GET /api/cron/weekly-digest — one-click unsubscribe', () => {
+  const DIGEST_SIGNING_VALUE = 'digest-cron-' + 'v'.repeat(22);
+  const ORG_ID = '00000000-0000-4000-8000-00000000c0c0';
+  const USER_ID = '00000000-0000-4000-8000-0000000000a1';
+  const SETTINGS = 'https://stockpilotusa.com/dashboard/settings/notifications';
+  const signable = env as Record<string, string | undefined>;
+
+  function stubOneRecipient() {
+    const row = recipientRow(USER_ID, 'a@acme.test');
+    row.organization_members[0]!.organization_id = ORG_ID;
+    row.organization_members[0]!.organizations = {
+      id: ORG_ID,
+      name: 'Acme',
+      timezone: 'America/Los_Angeles',
+    };
+    return makeSupabaseStub({
+      'user_profiles.select': { data: [row], error: null },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: USER_ID, accepted_at: '2026-01-01T00:00:00Z', role: 'staff' },
+        error: null,
+      },
+    });
+  }
+
+  afterEach(() => {
+    delete signable.UNSUBSCRIBE_SECRET;
+  });
+
+  it("names the recipient and the digest's organization, with one-click", async () => {
+    signable.UNSUBSCRIBE_SECRET = DIGEST_SIGNING_VALUE;
+    adminHolder.client = stubOneRecipient().client;
+    const digest = await import('@/lib/email/es/families/digest');
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const link = mintMemberUnsubscribeToken({
+      userId: USER_ID,
+      organizationId: ORG_ID,
+      kind: 'weekly_digest',
+    });
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0]![0].headers).toEqual({
+      'List-Unsubscribe': `<${url}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    });
+    expect(digest.renderWeeklyDigestHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ settingsUrl: SETTINGS, unsubscribeUrl: url }),
+    );
+    expect(digest.weeklyDigestText).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ unsubscribeUrl: url }),
+    );
+  });
+
+  it('keeps the settings page, with no one-click header, when no link can be signed', async () => {
+    adminHolder.client = stubOneRecipient().client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(sendEmailMock.mock.calls[0]![0].headers).toEqual({
+      'List-Unsubscribe': `<${SETTINGS}>`,
+    });
   });
 });

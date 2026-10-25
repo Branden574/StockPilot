@@ -492,3 +492,40 @@ describe('plain-text part (unchanged from the legacy renderer)', () => {
     expect(text).not.toContain('Unassigned');
   });
 });
+
+/**
+ * B15: the footer's Unsubscribe (and the text part) carry the sender's signed
+ * one-click link when there is one; "Manage email preferences" stays the
+ * settings page. Without one, both keep the settings page, as before.
+ */
+describe('the unsubscribe link', () => {
+  const LINK = 'https://app.test/unsubscribe?m=weekly_digest.example';
+  const footerHref = (html: string, label: string) =>
+    html.match(new RegExp(`<a class="ink2" href="([^"]*)"[^>]*>${label}</a>`))?.[1];
+
+  it('points the footer Unsubscribe at the signed link and keeps Manage on the settings page', () => {
+    const html = renderWeeklyDigestHtml(fullPayload(), { ...OPTS, unsubscribeUrl: LINK });
+    expect(footerHref(html, 'Unsubscribe')).toBe(LINK);
+    expect(footerHref(html, 'Manage email preferences')).toBe(OPTS.settingsUrl);
+  });
+
+  it('keeps both on the settings page when the sender has no signed link', () => {
+    const html = renderWeeklyDigestHtml(fullPayload(), OPTS);
+    expect(footerHref(html, 'Unsubscribe')).toBe(OPTS.settingsUrl);
+    expect(footerHref(html, 'Manage email preferences')).toBe(OPTS.settingsUrl);
+  });
+
+  it('gives the text part an Unsubscribe line only for a signed link', () => {
+    const textOpts = { orgName: OPTS.orgName, appUrl: OPTS.appUrl, settingsUrl: OPTS.settingsUrl };
+    const signed = weeklyDigestText(fullPayload(), { ...textOpts, unsubscribeUrl: LINK });
+    expect(signed).toContain(`Manage preferences: ${OPTS.settingsUrl}`);
+    expect(signed.endsWith(`Unsubscribe: ${LINK}`)).toBe(true);
+    for (const text of [
+      weeklyDigestText(fullPayload(), textOpts),
+      weeklyDigestText(fullPayload(), { ...textOpts, unsubscribeUrl: OPTS.settingsUrl }),
+    ]) {
+      expect(text).not.toContain('Unsubscribe:');
+      expect(text.endsWith(`Manage preferences: ${OPTS.settingsUrl}`)).toBe(true);
+    }
+  });
+});

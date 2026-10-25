@@ -35,7 +35,9 @@
  *                      Mondays) in the workspace's time zone.
  * Rendering-only swap: empty-skip, membership/opt-in rechecks,
  * List-Unsubscribe headers, and digest_section_* gating all stay in the
- * cron/action wiring, byte-identical.
+ * cron/action wiring, byte-identical. The wiring hands in the footer's
+ * Unsubscribe link (`unsubscribeUrl`, B15): its signed one-click link for the
+ * recipient, the same URL as its List-Unsubscribe header.
  */
 
 import { formatCalendarDate, formatCycleCountNumber, resolveOrgTimezone } from '@stockpilot/core';
@@ -164,7 +166,14 @@ export function digestScheduleLabel(timeZone: string | null | undefined, sendAt:
 export interface WeeklyDigestRenderOptions {
   orgName: string;
   appUrl: string;
+  /** The Notifications settings page: the footer's "Manage email preferences". */
   settingsUrl: string;
+  /**
+   * The footer's "Unsubscribe": the sender's signed one-click link for this
+   * recipient (lib/email/member-unsubscribe.ts), which works signed out.
+   * Missing: the settings page, as before.
+   */
+  unsubscribeUrl?: string;
   /** Recipient's full name; missing → the design's "Hi —" fallback. */
   recipientName?: string | null;
   /** Preview variant: purple strip before the brand row, no motion. */
@@ -393,7 +402,7 @@ export function renderWeeklyDigestHtml(
       note: 'Unsubscribing stops this notification type only.',
       urls: {
         manage: settingsUrl,
-        unsubscribe: settingsUrl,
+        unsubscribe: opts.unsubscribeUrl ?? settingsUrl,
         support: `${appUrl}/dashboard/support`,
       },
     }),
@@ -424,6 +433,8 @@ export interface WeeklyDigestTextOptions {
   orgName: string;
   appUrl: string;
   settingsUrl: string;
+  /** The signed one-click link (see WeeklyDigestRenderOptions). */
+  unsubscribeUrl?: string;
 }
 
 export function weeklyDigestText(
@@ -483,5 +494,10 @@ export function weeklyDigestText(
     blocks.push(`  → ${appUrl}/dashboard/cycle-counts`, '');
   }
   blocks.push(`Manage preferences: ${settingsUrl}`);
+  // The signed link works signed out, so a text-only reader can unsubscribe
+  // too. The settings page is already the line above.
+  if (opts.unsubscribeUrl && opts.unsubscribeUrl !== settingsUrl) {
+    blocks.push(`Unsubscribe: ${opts.unsubscribeUrl}`);
+  }
   return blocks.join('\n');
 }
