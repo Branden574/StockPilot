@@ -14,8 +14,8 @@ import {
   readOpenReservations,
   readPoRunGroups,
   readPrimaryPhotos,
+  readPlacementHoldings,
   readProfilesByIds,
-  readRackHoldings,
   readReceiptTotals,
   sumReservedByItem,
 } from './id-reads';
@@ -130,36 +130,92 @@ describe('readPrimaryPhotos', () => {
   });
 });
 
-describe('readRackHoldings', () => {
-  it('keeps the rack/crate kind filter, the quantity filter, and the org scope', async () => {
+describe('readPlacementHoldings', () => {
+  it('reads every placed kind with its type, org-scoped, quantity > 0, batched and ordered', async () => {
     const client = fakePostgrest(
       rowsServer((call) =>
-        (inValues(call, 'item_id') ?? []).flatMap((id) => [
-          { item_id: id, quantity: '5', locations: { name: '38-A', kind: 'rack' } },
-          { item_id: id, quantity: 2, locations: [{ name: 'Blue Shelf', kind: 'crate' }] },
-          { item_id: id, quantity: 1, locations: null },
-        ]),
+        (inValues(call, 'item_id') ?? []).map((id) => ({
+          item_id: id,
+          quantity: 1,
+          locations: { name: '38-A', kind: 'rack', type: 'shelf' },
+        })),
       ),
     );
-    const holdings = await readRackHoldings(client, ORG, ids(150));
+    await readPlacementHoldings(client, ORG, ids(150));
     expect(client.calls).toHaveLength(2);
     expectBatched(client.calls, 'item_id');
     for (const c of client.calls) {
       expect(c.table).toBe('item_stock_levels');
-      expect(c.select).toBe('item_id, quantity, locations!inner(name, kind)');
+      expect(c.select).toBe('item_id, quantity, locations!inner(name, kind, type)');
       expect(filterValue(c, 'eq', 'organization_id')).toBe(ORG);
-      expect(inValues(c, 'locations.kind')).toEqual(['rack', 'crate']);
       expect(filterValue(c, 'gt', 'quantity')).toBe(0);
+      // NO kind filter: a Site's kind is NULL, and any filter on the kind in
+      // the query (rack and crate only, or "not a bucket") loses its rows.
+      expect(c.filters.filter(([, col]) => col === 'locations.kind')).toEqual([]);
+      expect(c.order).toEqual([['id', true]]);
     }
-    expect(holdings.get(uuid(0))).toEqual([
+  });
+
+  it('splits one read: racks and crates, then Sites and areas; never a bucket', async () => {
+    const client = fakePostgrest(
+      rowsServer((call) =>
+        (inValues(call, 'item_id') ?? []).flatMap((id) => [
+          { item_id: id, quantity: '5', locations: { name: '38-A', kind: 'rack', type: 'shelf' } },
+          {
+            item_id: id,
+            quantity: 2,
+            locations: [{ name: 'Blue Shelf', kind: 'crate', type: null }],
+          },
+          { item_id: id, quantity: 7, locations: { name: 'DC4', kind: null, type: 'warehouse' } },
+          { item_id: id, quantity: 3, locations: { name: 'Dock', kind: 'area', type: null } },
+          { item_id: id, quantity: 4, locations: { name: 'Staging', kind: 'staging', type: null } },
+          {
+            item_id: id,
+            quantity: 6,
+            locations: { name: 'Unplaced', kind: 'unplaced', type: null },
+          },
+          { item_id: id, quantity: 1, locations: null },
+        ]),
+      ),
+    );
+    const holdings = await readPlacementHoldings(client, ORG, ids(2));
+    // The rack half is exactly what the old rack-and-crate read returned.
+    expect(holdings.rack.get(uuid(0))).toEqual([
       { name: '38-A', quantity: 5, kind: 'rack' },
       { name: 'Blue Shelf', quantity: 2, kind: 'crate' },
     ]);
+    expect(holdings.other.get(uuid(0))).toEqual([
+      { name: 'DC4', quantity: 7, kind: null, type: 'warehouse' },
+      { name: 'Dock', quantity: 3, kind: 'area', type: null },
+    ]);
+  });
+
+  it('an item with only Site stock has no rack entry, and one with none has neither', async () => {
+    const client = fakePostgrest(
+      rowsServer((call) =>
+        (inValues(call, 'item_id') ?? [])
+          .filter((id) => id === uuid(0))
+          .map((id) => ({
+            item_id: id,
+            quantity: 7,
+            locations: { name: 'DC4', kind: null, type: 'warehouse' },
+          })),
+      ),
+    );
+    const holdings = await readPlacementHoldings(client, ORG, ids(2));
+    expect(holdings.rack.has(uuid(0))).toBe(false);
+    expect(holdings.other.get(uuid(0))).toEqual([
+      { name: 'DC4', quantity: 7, kind: null, type: 'warehouse' },
+    ]);
+    expect(holdings.rack.has(uuid(1))).toBe(false);
+    expect(holdings.other.has(uuid(1))).toBe(false);
   });
 
   it('rethrows a failed batch rather than answering "no holdings" (which would show the stale rack label)', async () => {
     const client = fakePostgrest(failingOn('item_id', uuid(210)));
-    await expect(readRackHoldings(client, ORG, ids(300))).rejects.toBeInstanceOf(IdBatchReadError);
+    await expect(readPlacementHoldings(client, ORG, ids(300))).rejects.toBeInstanceOf(
+      IdBatchReadError,
+    );
   });
 });
 

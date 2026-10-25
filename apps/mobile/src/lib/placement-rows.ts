@@ -53,6 +53,7 @@ import {
   holdingsElsewhereTotal,
   resolvePlacement,
   type ItemElsewhere,
+  type PlacedHoldingLike,
   type RackHoldingLike,
 } from '@stockpilot/core';
 
@@ -101,6 +102,13 @@ export interface PlacementRowsInput {
    * viewers, their own warehouses plus locations with no warehouse.
    */
   holdings: readonly RackHoldingLike[];
+  /**
+   * Every OTHER placed holding (a Site, an area, a NULL-kind shelf or bin),
+   * with kind AND type, from the SAME read as `holdings`: core's rule 0c names
+   * the Site when every placed unit sits on one (B37). Absent: the card reads
+   * as it did before.
+   */
+  otherHoldings?: readonly PlacedHoldingLike[];
   /**
    * The item's stock in warehouses the member cannot see (0371), from
    * item_holdings_elsewhere (src/lib/holdings-elsewhere.ts). Absent or null:
@@ -182,11 +190,17 @@ export function buildPlacementRows(input: PlacementRowsInput): PlacementRow[] {
     itemType: input.itemType,
     customFields: null,
     holdings: input.holdings,
+    otherHoldings: input.otherHoldings,
   });
   const holdingsRowShown = placement.source === 'holdings';
   if (holdingsRowShown) {
     rows.push({
-      label: placement.reason === 'split' ? 'SPLIT STOCK' : 'IN CRATE',
+      label:
+        placement.reason === 'split'
+          ? 'SPLIT STOCK'
+          : placement.reason === 'site'
+            ? 'AT SITE'
+            : 'IN CRATE',
       value: formatPlacementLabel(placement) ?? '',
     });
   }

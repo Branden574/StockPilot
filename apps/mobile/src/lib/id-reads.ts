@@ -15,7 +15,13 @@
  * or ./image-cache here (supabase.ts pulls in expo-secure-store).
  */
 
-import type { CountingUnit, RackHoldingLike, SizeScaleValueOrder } from '@stockpilot/core';
+import {
+  partitionPlacementHoldings,
+  type CountingUnit,
+  type PlacedHoldingLike,
+  type RackHoldingLike,
+  type SizeScaleValueOrder,
+} from '@stockpilot/core';
 
 import {
   fetchAllRowsByIds,
@@ -119,19 +125,46 @@ export async function readPrimaryPhotos(
   return out;
 }
 
-// ── Rack / crate holdings ───────────────────────────────────────────────────
+// ── Placed holdings (racks, crates, Sites) ──────────────────────────────────
 
-type LocationEmbed = { name: string | null; kind: string | null };
+type LocationEmbed = { name: string | null; kind: string | null; type?: string | null };
+
+/** Each item's placed holdings, split the way core `resolvePlacement` reads them. */
+export interface PlacementHoldingsByItem {
+  /** Rack and crate rows: `resolvePlacement`'s `holdings`. */
+  rack: ReadonlyMap<string, RackHoldingLike[]>;
+  /**
+   * Every other placed row (a Site, an area, a NULL-kind shelf or bin), with
+   * kind AND type: `resolvePlacement`'s `otherHoldings`, so a book whose stock
+   * all sits on the Site is named by the Site, not by the rack its keys still
+   * name (B37).
+   */
+  other: ReadonlyMap<string, PlacedHoldingLike[]>;
+}
+
+/** No holdings known: before the first read, and after a failed one. */
+export const NO_PLACEMENT_HOLDINGS: PlacementHoldingsByItem = { rack: new Map(), other: new Map() };
 
 /**
  * Where each item's stock physically is: its item_stock_levels rows with
- * quantity > 0 at a rack or crate. Moved verbatim from the Books list.
+ * quantity > 0 on any location but the Staging and Unplaced buckets, split by
+ * core `partitionPlacementHoldings`. Moved from the Books list.
+ *
+ * ONE read for both halves, so they load or fail together: core names the Site
+ * only when an item has no rack or crate holding, and a lost rack read beside
+ * a good Site read would name the Site for stock that is on a rack.
+ *
+ * Every kind is read and the buckets are dropped here, not in the query: a
+ * Site's `locations.kind` IS NULL, and a filter that leaves out the buckets in
+ * SQL drops the NULL rows with them (the 0292 trap). This read used to keep
+ * only racks and crates, so a book whose stock had all gone to the Site kept
+ * printing the rack it left.
  */
-export async function readRackHoldings(
+export async function readPlacementHoldings(
   client: IdReadClient,
   orgId: string,
   itemIds: readonly (string | null | undefined)[],
-): Promise<Map<string, RackHoldingLike[]>> {
+): Promise<PlacementHoldingsByItem> {
   const rows = await fetchAllRowsByIds<{
     item_id: string;
     quantity: number | string | null;
@@ -140,24 +173,39 @@ export async function readRackHoldings(
     itemIds,
     (batch) => (from, to) =>
       typed(
-        idReadSelect(client, 'item_stock_levels', 'item_id, quantity, locations!inner(name, kind)')
+        idReadSelect(
+          client,
+          'item_stock_levels',
+          'item_id, quantity, locations!inner(name, kind, type)',
+        )
           .eq('organization_id', orgId)
           .in('item_id', batch)
-          .in('locations.kind', ['rack', 'crate'])
           .gt('quantity', 0)
           .order('id', { ascending: true })
           .range(from, to),
       ),
   );
-  const byItem = new Map<string, RackHoldingLike[]>();
+  const byItem = new Map<string, PlacedHoldingLike[]>();
   for (const lvl of rows) {
     const l = Array.isArray(lvl.locations) ? lvl.locations[0] : lvl.locations;
     if (!l?.name) continue;
     const arr = byItem.get(lvl.item_id) ?? [];
-    arr.push({ name: l.name, quantity: Number(lvl.quantity) || 0, kind: l.kind ?? null });
+    arr.push({
+      name: l.name,
+      quantity: Number(lvl.quantity) || 0,
+      kind: l.kind ?? null,
+      type: l.type ?? null,
+    });
     byItem.set(lvl.item_id, arr);
   }
-  return byItem;
+  const rack = new Map<string, RackHoldingLike[]>();
+  const other = new Map<string, PlacedHoldingLike[]>();
+  for (const [itemId, placed] of byItem) {
+    const { holdings, otherHoldings } = partitionPlacementHoldings(placed);
+    if (holdings.length > 0) rack.set(itemId, holdings);
+    if (otherHoldings.length > 0) other.set(itemId, otherHoldings);
+  }
+  return { rack, other };
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────

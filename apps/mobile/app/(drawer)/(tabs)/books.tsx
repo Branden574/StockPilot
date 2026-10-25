@@ -30,7 +30,6 @@ import {
   formatPlacementLabel,
   resolvePlacement,
   type DisplayGroupRef,
-  type RackHoldingLike,
 } from '@stockpilot/core';
 
 import {
@@ -73,7 +72,7 @@ import {
 } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
 import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
-import { readPrimaryPhotos, readRackHoldings } from '@/lib/id-reads';
+import { NO_PLACEMENT_HOLDINGS, readPlacementHoldings, readPrimaryPhotos } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
   buildGroupUnits,
@@ -255,8 +254,11 @@ export default function BooksScreen() {
   // batched request per load (the list already holds the whole filtered set,
   // capped at POSTGREST_MAX_ROWS), because without `locations.kind` the card
   // cannot tell a book that has moved into a crate from one still on its rack,
-  // and prints the departed rack. See placement-resolution.ts.
-  const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(new Map());
+  // and prints the departed rack. See placement-resolution.ts. The same read
+  // carries every OTHER placed holding (`other`: a Site, an area), without
+  // which a book whose stock all sits on the Site printed the rack it left
+  // (B37).
+  const [holdings, setHoldings] = React.useState(NO_PLACEMENT_HOLDINGS);
   // Why the holdings above are empty when they did not load. The cards then
   // fall back to the stored custom_fields rack label, which can be out of date,
   // so the screen says so instead of passing the stale label off as current.
@@ -497,17 +499,17 @@ export default function BooksScreen() {
       // date. Nothing is cached, so the next load reads again.
       const ids = bookRows.map((b) => b.id);
       if (ids.length > 0) {
-        const holdingsRead = await settleIdBatchRead(readRackHoldings(supabase, orgId, ids));
+        const holdingsRead = await settleIdBatchRead(readPlacementHoldings(supabase, orgId, ids));
         if (!isCurrent()) return;
         if (holdingsRead.ok) {
           setHoldings(holdingsRead.value);
         } else {
           console.warn('books holdings', holdingsRead.message);
-          setHoldings(new Map());
+          setHoldings(NO_PLACEMENT_HOLDINGS);
           setHoldingsError(holdingsRead.message);
         }
       } else {
-        setHoldings(new Map());
+        setHoldings(NO_PLACEMENT_HOLDINGS);
       }
       // A load is the one moment the underlying data may have changed, so the
       // thumbnail cache is invalidated HERE and only here — pull-to-refresh and
@@ -634,7 +636,9 @@ export default function BooksScreen() {
   // printed rack 38-A for a book whose stock had moved entirely into "Blue
   // Shelf". The decision is now resolvePlacement's; this callback only picks
   // the compact rendering the narrow card has room for (bare "38-A", not
-  // "Rack 38-A · Crate Red 5").
+  // "Rack 38-A · Crate Red 5"). A book whose stock all sits on the Site reads
+  // the Site and its count ("DC4 ×7"), as one wholly in a crate reads the
+  // crate (B37).
   //
   // `bin_location` is deliberately NOT fed in. It would rank ahead of charter
   // and site for a row with no holdings and no rack pair, which is a different
@@ -647,7 +651,8 @@ export default function BooksScreen() {
       const res = resolvePlacement({
         itemType: 'book',
         customFields: b.custom_fields,
-        holdings: holdings.get(b.id),
+        holdings: holdings.rack.get(b.id),
+        otherHoldings: holdings.other.get(b.id),
       });
       const charter = b.charter_id ? (charterMap.get(b.charter_id) ?? null) : null;
       const loc = b.primary_location_id ? (locationMap.get(b.primary_location_id) ?? null) : null;

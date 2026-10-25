@@ -25,6 +25,7 @@
 import {
   ELSEWHERE_UNAVAILABLE_NOTE,
   type ItemElsewhere,
+  type PlacedHoldingLike,
   type RackHoldingLike,
 } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
@@ -404,5 +405,100 @@ describe('0371 — incomplete holdings refute nothing', () => {
         elsewhere: NONE,
       }),
     ).toEqual(['IN CRATE']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// B37 — STOCK THAT SITS ONLY ON A SITE
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A Site is a NULL-kind location with a site type. A move onto one rewrites no
+// rack key and no bin, and the card read only rack and crate holdings, so a
+// book whose stock had all gone to the Site showed nothing but the rack it had
+// left (and, with no rack pair, the stale bin). The card now gets every other
+// placed holding from the same read, and core's rule 0c names the Site.
+
+describe('B37 — a card whose stock sits only on a Site', () => {
+  const site = (name: string, quantity: number, type = 'warehouse'): PlacedHoldingLike => ({
+    name,
+    quantity,
+    kind: null,
+    type,
+  });
+
+  it('names the Site, with its count, in its own row', () => {
+    const over = { itemType: 'book', otherHoldings: [site('DC4', 7)] };
+    expect(labelsOf(over)).toEqual(['AT SITE']);
+    expect(valueOf(over, 'AT SITE')).toBe('DC4 ×7');
+  });
+
+  it('the Site row displaces the stale BIN, as the crate row does', () => {
+    expect(
+      labelsOf({ itemType: 'product', binLocation: '38-A', otherHoldings: [site('DC4', 7)] }),
+    ).toEqual(['AT SITE']);
+    expect(
+      labelsOf({ itemType: 'book', binLocation: 'Bay 3', otherHoldings: [site('DC4', 7)] }),
+    ).toEqual(['AT SITE']);
+  });
+
+  it('two Sites are one row naming both', () => {
+    expect(
+      valueOf({ itemType: 'book', otherHoldings: [site('DC4', 5), site('Annex', 3)] }, 'AT SITE'),
+    ).toBe('Annex ×3 · DC4 ×5');
+  });
+
+  it('DEFAULT KEPT (owner question): the remembered RACK row still stands beside it', () => {
+    // The RACK row is what the item REMEMBERS, gated on holdingsContradictRack,
+    // which B37 does not change: Site holdings are no rack evidence to it.
+    expect(
+      labelsOf({
+        itemType: 'book',
+        rackNumber: '38',
+        rackRow: 'A',
+        crateColor: 'red',
+        crateNumber: '5',
+        otherHoldings: [site('DC4', 7)],
+      }),
+    ).toEqual(['AT SITE', 'RACK', 'CRATE']);
+  });
+
+  it('stock on a rack AND on the Site keeps the rack rules exactly', () => {
+    const over = {
+      itemType: 'book',
+      rackNumber: '38',
+      rackRow: 'A',
+      holdings: [rack('38-A', 4)],
+      otherHoldings: [site('DC4', 7)],
+    };
+    expect(labelsOf(over)).toEqual(['RACK']);
+  });
+
+  it('stock in a crate AND on the Site keeps the crate rule exactly', () => {
+    expect(
+      labelsOf({
+        itemType: 'book',
+        rackNumber: '40',
+        rackRow: 'B',
+        holdings: [crate('Gray #BIN')],
+        otherHoldings: [site('DC4', 7)],
+      }),
+    ).toEqual(['IN CRATE']);
+  });
+
+  it('an AREA, or a NULL-kind shelf, is not a Site: the card reads as before', () => {
+    const area: PlacedHoldingLike = { name: 'Dock', quantity: 2, kind: 'area', type: null };
+    const shelf = site('Shelf 7', 2, 'shelf');
+    for (const other of [[area], [shelf], [site('DC4', 7), area]]) {
+      expect(labelsOf({ itemType: 'book', binLocation: 'Bay 3', otherHoldings: other })).toEqual([
+        'BIN',
+      ]);
+    }
+  });
+
+  it('with no other holdings carried, the card is exactly what it was', () => {
+    expect(labelsOf({ itemType: 'book', binLocation: 'Bay 3' })).toEqual(['BIN']);
+    expect(labelsOf({ itemType: 'book', binLocation: 'Bay 3', otherHoldings: [] })).toEqual([
+      'BIN',
+    ]);
   });
 });

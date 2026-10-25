@@ -728,6 +728,7 @@ const SCAN_WORDS = [
   'Location',
   'Split stock',
   'In crate',
+  'At site',
   'Bin/shelf',
   'Elsewhere',
   'Rack',
@@ -1011,7 +1012,7 @@ describe('Scan tab: the flows and their gates are unchanged', () => {
     const box = code.slice(code.indexOf('<View style={styles.locationBox}>'));
     const order = [
       '<LocRow label="Location" value={item.primary_location_name} />',
-      "label={placement.reason === 'split' ? 'Split stock' : 'In crate'}",
+      "placement.reason === 'split'",
       '<LocRow label="Bin/shelf" value={item.bin_location} />',
       '{elsewhereLoc && <LocRow label="Elsewhere" value={elsewhereLoc.value} />}',
       '{elsewhereNote && <Text style={styles.locNote}>{elsewhereNote}</Text>}',

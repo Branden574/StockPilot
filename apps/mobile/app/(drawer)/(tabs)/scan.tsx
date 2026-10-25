@@ -32,10 +32,12 @@ import {
   getCrateColor,
   holdingsContradictRack,
   itemPhotoPath,
+  partitionPlacementHoldings,
   randomPhotoFileBase,
   readDisplayStorage,
   resolvePlacement,
   type ItemElsewhere,
+  type PlacedHoldingLike,
   type RackHoldingLike,
 } from '@stockpilot/core';
 
@@ -103,6 +105,10 @@ interface FoundItem {
    *  is potentially misleading (it names one rack while stock sits on
    *  several) — the location box prefers this breakdown in that case. */
   rackHoldings: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area), from the same read, with
+   *  kind AND type. When every placed unit sits on a Site, the sheet names the
+   *  Site instead of the rack the item's keys still name (B37). */
+  otherHoldings: PlacedHoldingLike[];
   /** Since 0371 `rackHoldings` are only the holdings this member can SEE. This
    *  is the rest, as totals from item_holdings_elsewhere: 'none' for a manager
    *  (no call is made), 'unavailable' when the read failed, which the sheet
@@ -289,18 +295,27 @@ export default function Scan() {
     // No single-warehouse context on this screen (staff scan from
     // anywhere) — list every holding wherever it physically sits, same
     // as the web scanner/lookup API (apps/web/src/app/api/v1/items/lookup).
+    //
+    // Every placed kind, with the location TYPE (B37): a Site is a NULL-kind
+    // row that only its type tells from a legacy shelf, and the rack/crate
+    // filter this read had left a book whose stock all sat on the Site with
+    // nothing but the rack it had left. Staging and Unplaced are dropped by
+    // partitionPlacementHoldings below, not in the query (a NOT IN filter
+    // drops the NULL-kind rows too: the 0292 trap).
     const { data: holdingRows } = await supabase
       .from('item_stock_levels')
-      .select('quantity, locations!inner(name, kind)')
+      .select('quantity, locations!inner(name, kind, type)')
       .eq('organization_id', orgId)
       .eq('item_id', id)
-      .in('locations.kind', ['rack', 'crate'])
       .gt('quantity', 0);
-    const rackHoldings: RackHoldingLike[] = ((holdingRows ?? []) as unknown as {
-      quantity: number;
-      locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
-    }[])
-      .map((h): RackHoldingLike | null => {
+    type HoldingLocation = { name: string; kind: string | null; type: string | null };
+    const placed: PlacedHoldingLike[] = (
+      (holdingRows ?? []) as unknown as {
+        quantity: number;
+        locations: HoldingLocation | HoldingLocation[] | null;
+      }[]
+    )
+      .map((h): PlacedHoldingLike | null => {
         const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
         // `kind` was already being SELECTed above and thrown away right here.
         // Carrying it is what lets resolvePlacement tell "the stock is in a
@@ -309,10 +324,18 @@ export default function Scan() {
         // custom_fields still (deliberately) name after a position-less
         // put-away. See packages/core/src/inventory/placement-resolution.ts.
         return l?.name
-          ? { name: l.name, quantity: Number(h.quantity) || 0, kind: l.kind ?? null }
+          ? {
+              name: l.name,
+              quantity: Number(h.quantity) || 0,
+              kind: l.kind ?? null,
+              type: l.type ?? null,
+            }
           : null;
       })
-      .filter((h): h is RackHoldingLike => h !== null);
+      .filter((h): h is PlacedHoldingLike => h !== null);
+    // The rack and crate rows (exactly the rows this read returned before), and
+    // the rest, from the one read, so the two can never disagree.
+    const { holdings: rackHoldings, otherHoldings } = partitionPlacementHoldings(placed);
     const elsewhere = await elsewhereRead;
 
     const r = row as Record<string, unknown>;
@@ -334,6 +357,7 @@ export default function Scan() {
       custom_fields: (r.custom_fields as Record<string, unknown> | null) ?? null,
       image_url: imageUrl,
       rackHoldings,
+      otherHoldings,
       elsewhere,
     };
   }
@@ -929,6 +953,7 @@ export default function Scan() {
         customFields: item.custom_fields,
         binLocation: item.bin_location,
         holdings: item.rackHoldings,
+        otherHoldings: item.otherHoldings,
       })
     : null;
   // WHAT THE ITEM REMEMBERS, as opposed to where the stock is. Same resolver,
@@ -1184,9 +1209,17 @@ export default function Scan() {
                     // says which way: 'split' = stock on more than one rack/crate
                     // (one label names only one of them); 'crate' = every holding
                     // is a crate, so the item's rack keys survive naming a rack
-                    // the stock has left (mig 0335 preserves them on purpose).
+                    // the stock has left (mig 0335 preserves them on purpose);
+                    // 'site' = every placed unit is on a Site, which no rack key
+                    // or bin names (B37).
                     <LocRow
-                      label={placement.reason === 'split' ? 'Split stock' : 'In crate'}
+                      label={
+                        placement.reason === 'split'
+                          ? 'Split stock'
+                          : placement.reason === 'site'
+                            ? 'At site'
+                            : 'In crate'
+                      }
                       value={formatPlacementLabel(placement) ?? ''}
                     />
                   ) : (

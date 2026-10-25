@@ -1748,7 +1748,7 @@ it must not.
   but a book split between a Main crate and an Annex crate reads as Main-only
   there, while the web Books list says "+N in other warehouses". The phone
   Books list can reuse `readHoldingsElsewhere` (in parallel with
-  `readRackHoldings`) when this is picked up.
+  `readPlacementHoldings`) when this is picked up.
 - **Rollout (0371)**: the file sets `lock_timeout = '5s'` around its policy
   changes (ACCESS EXCLUSIVE on `item_stock_levels`); a push that meets a
   long-running reader fails with 55P03 and is retried, instead of queueing

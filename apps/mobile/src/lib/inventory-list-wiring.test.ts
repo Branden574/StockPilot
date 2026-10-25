@@ -309,9 +309,9 @@ describe('books list — a failed read says so, never passes for an empty or cur
     // and its error was only logged: the cards silently fell back to the
     // stored custom_fields rack label, which can be out of date.
     const body = loadBody(books);
-    expect(body).toContain('settleIdBatchRead(readRackHoldings(supabase, orgId, ids))');
+    expect(body).toContain('settleIdBatchRead(readPlacementHoldings(supabase, orgId, ids))');
     expect(body).toMatch(
-      /if \(holdingsRead\.ok\) \{\s*setHoldings\(holdingsRead\.value\);\s*\} else \{[\s\S]*?setHoldings\(new Map\(\)\);\s*setHoldingsError\(holdingsRead\.message\);/,
+      /if \(holdingsRead\.ok\) \{\s*setHoldings\(holdingsRead\.value\);\s*\} else \{[\s\S]*?setHoldings\(NO_PLACEMENT_HOLDINGS\);\s*setHoldingsError\(holdingsRead\.message\);/,
     );
     expect(body).not.toContain(".from('item_stock_levels')");
     expect(books).toContain(
