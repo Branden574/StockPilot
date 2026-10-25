@@ -42,6 +42,8 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveCharterAction,
   createCharterAction,
@@ -241,8 +243,19 @@ function CharterTableRow({
   async function confirmArchive() {
     setArchiveBusy(true);
     setConfirmError(null);
-    const res = await archiveCharterAction(row.id);
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveCharterAction>>;
+    try {
+      res = await archiveCharterAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('archive the charter');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -256,8 +269,19 @@ function CharterTableRow({
   async function confirmRestore() {
     setRestoreBusy(true);
     setConfirmError(null);
-    const res = await restoreCharterAction(row.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreCharterAction>>;
+    try {
+      res = await restoreCharterAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('restore the charter');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);

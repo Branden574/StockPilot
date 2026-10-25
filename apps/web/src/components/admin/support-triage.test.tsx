@@ -6,10 +6,13 @@
  * so React threw error #418. The day is printed once the page has hydrated.
  */
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { describe, expect, it, vi } from 'vitest';
 
 import { filterChipClass } from '@/components/patterns/chip';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { hydrateAcrossClockShift, inZone, BROWSER_ZONE } from '@/test/hydration';
+import { offline } from '@/test/rejected-request';
 
 import type { SupportTicketRow } from '@/server/services/support-tickets';
 
@@ -196,5 +199,21 @@ describe('SupportTriage keeps each ticket card working in the redesign', () => {
       `mailto:dana@example.com?subject=Re: ${encodeURIComponent('Scanner stops after one scan')}`,
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+});
+
+// B40: a save that got no answer (offline, a server error, a deploy) used to
+// leave Save spinning with nothing said.
+describe('SupportTriage when the save gets no answer', () => {
+  it('stops the spinner, keeps the draft and says the ticket was not updated', async () => {
+    updateTicket.mockRejectedValueOnce(offline());
+    render(<SupportTriage tickets={[TICKET]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('update the ticket')),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 /**
  * Vendor item mappings in the redesign (W-AD-05): every add-form field is
@@ -82,6 +86,30 @@ describe('VendorMappingsManager', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(actions.remove).toHaveBeenCalledWith('m1'));
     expect(await within(dialog).findByText('Not allowed.')).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('VendorMappingsManager when the request gets no answer', () => {
+  it('Delete stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.remove.mockRejectedValueOnce(offline());
+    render(
+      <VendorMappingsManager
+        mappings={[MAPPING]}
+        suppliers={[{ id: 's1', name: 'Staples' }]}
+        items={[{ id: 'i1', sku: 'AA-24', name: 'AA batteries' }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage('delete the vendor mapping'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('delete the vendor mapping'));
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
   });
 });

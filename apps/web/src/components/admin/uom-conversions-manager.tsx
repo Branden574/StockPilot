@@ -27,6 +27,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   deleteUomConversionAction,
   upsertUomConversionAction,
@@ -94,15 +96,24 @@ export function UomConversionsManager({
       return;
     }
     setBusy(true);
-    const r = await upsertUomConversionAction({
-      itemId,
-      fromUom: fromUom.toUpperCase(),
-      toUom: toUom.toUpperCase(),
-      numerator: num,
-      denominator: den,
-      roundingRule: rounding,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof upsertUomConversionAction>>;
+    try {
+      r = await upsertUomConversionAction({
+        itemId,
+        fromUom: fromUom.toUpperCase(),
+        toUom: toUom.toUpperCase(),
+        numerator: num,
+        denominator: den,
+        roundingRule: rounding,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('save the conversion'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -121,8 +132,19 @@ export function UomConversionsManager({
     if (!deleteTargetId) return;
     setDeleteBusy(true);
     setDeleteError(null);
-    const r = await deleteUomConversionAction(deleteTargetId);
-    setDeleteBusy(false);
+    let r: Awaited<ReturnType<typeof deleteUomConversionAction>>;
+    try {
+      r = await deleteUomConversionAction(deleteTargetId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('delete the conversion');
+      setDeleteError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setDeleteBusy(false);
+    }
     if (!r.ok) {
       setDeleteError(r.error.message);
       toast.error(r.error.message);

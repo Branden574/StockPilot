@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 /**
  * The admin Charters list and dialog in the redesign (W-AD-02, W-AD-02a):
@@ -148,5 +152,23 @@ describe('ChartersManager', () => {
     fireEvent.click(create);
     await new Promise((r) => setTimeout(r, 50));
     expect(actions.create).not.toHaveBeenCalled();
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('ChartersManager when the request gets no answer', () => {
+  it('Archive stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.archive.mockRejectedValueOnce(offline());
+    renderManager([NO_ADDRESS]);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage('archive the charter'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('archive the charter'));
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 /**
  * UoM conversions in the redesign (W-AD-06): every add-form field is named
  * by its label with its defaults, the table keeps its columns, ratio and the
@@ -90,6 +93,23 @@ describe('UomConversionsManager', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(actions.remove).toHaveBeenCalledWith('u1'));
     expect(await within(dialog).findByText('Not allowed.')).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('UomConversionsManager when the request gets no answer', () => {
+  it('Delete stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.remove.mockRejectedValueOnce(offline());
+    render(<UomConversionsManager conversions={[CONVERSION]} items={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage('delete the conversion'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
   });
 });

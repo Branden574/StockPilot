@@ -41,6 +41,8 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveWarehouseAction,
   createWarehouseAction,
@@ -222,8 +224,19 @@ function WarehouseTableRow({
   async function confirmArchive() {
     setArchiveBusy(true);
     setConfirmError(null);
-    const res = await archiveWarehouseAction(row.id);
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveWarehouseAction>>;
+    try {
+      res = await archiveWarehouseAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('archive the warehouse');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -237,8 +250,19 @@ function WarehouseTableRow({
   async function confirmRestore() {
     setRestoreBusy(true);
     setConfirmError(null);
-    const res = await restoreWarehouseAction(row.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreWarehouseAction>>;
+    try {
+      res = await restoreWarehouseAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('restore the warehouse');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);

@@ -12,6 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useHydrated } from '@/lib/use-hydrated';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updateSupportTicketAction } from '@/server/actions/support-tickets';
 
 import type {
@@ -183,13 +185,22 @@ function TicketCard({
   async function save() {
     const sent = draft;
     setBusy(true);
-    const res = await updateSupportTicketAction({
-      id: ticket.id,
-      status: sent.status,
-      priority: sent.priority,
-      adminNotes: sent.notes,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof updateSupportTicketAction>>;
+    try {
+      res = await updateSupportTicketAction({
+        id: ticket.id,
+        status: sent.status,
+        priority: sent.priority,
+        adminNotes: sent.notes,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('update the ticket'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) return toast.error(res.error.message);
     toast.success('Ticket updated.');
     onSaved(sent);
