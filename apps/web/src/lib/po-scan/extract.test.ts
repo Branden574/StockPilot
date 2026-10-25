@@ -28,7 +28,7 @@ import {
   lineNeedsMappingConfirmation,
 } from '@stockpilot/core';
 
-import { extractPoFromMedia, PO_SCHEMA } from './extract';
+import { extractPoFromMedia, MAX_SCAN_TEXT_LEN, PO_SCHEMA } from './extract';
 
 const MEDIA = [{ base64: 'AAAA', mimeType: 'image/jpeg' }];
 
@@ -313,5 +313,16 @@ describe('extractPoFromMedia: apparel names a size run can group', () => {
       'Carolina Blue, Carolina Blue - M',
       'Setup charge',
     ]);
+  });
+
+  it('never makes a description longer than the scan bound', async () => {
+    // 499 printed characters; moving the size would make 501.
+    const printed = `S:${'B'.repeat(497)}`;
+    respond(po([baseLine({ description: printed, quantity: 4 })]));
+
+    const out = await extractPoFromMedia(MEDIA);
+
+    expect(out.lines[0]!.description).toBe(printed);
+    expect(out.lines[0]!.description.length).toBeLessThanOrEqual(MAX_SCAN_TEXT_LEN);
   });
 });

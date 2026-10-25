@@ -116,6 +116,30 @@ describe('normalizeApparelName: the size', () => {
     );
   });
 
+  it('reads only its own size words: an inherited object member is never a size', () => {
+    // The part comes from the scanned document. Indexed into a plain object,
+    // "constructor" and "__proto__" read Object.prototype members (a function,
+    // an object), which counted as a size and ended the name in
+    // "function Object() { [native code] }" or "[object Object]".
+    for (const word of [
+      'constructor',
+      '__proto__',
+      'toString',
+      'valueOf',
+      'hasOwnProperty',
+      'isPrototypeOf',
+      'Size: constructor',
+    ]) {
+      const printed = `Gildan Tee - ${word} - Navy`;
+      expect(normalizeApparelName(printed, 4)).toBe(printed);
+    }
+    // A real size beside one of them still moves (the inherited name is just
+    // a word of the name).
+    expect(normalizeApparelName('Constructor Tee - Small - Navy', 4)).toBe(
+      'Constructor Tee - Navy - S',
+    );
+  });
+
   it('writes every size word as a token the size-run grouping reads back', () => {
     for (const [word, token] of Object.entries(APPAREL_SIZE_WORDS)) {
       const name = normalizeApparelName(`Polo - ${word} - Navy`, 1);
@@ -138,7 +162,7 @@ describe('normalizeApparelLineNames', () => {
       line({ lineNumber: 2, description: '1 - Setup : Small', quantity: 1, lineType: 'fee' }),
       line({ lineNumber: 3, description: 'Persepolis', quantity: 10 }),
     ];
-    const out = normalizeApparelLineNames(lines);
+    const out = normalizeApparelLineNames(lines, 500);
     expect(out.map((l) => l.description)).toEqual([
       'Carolina Blue - S',
       '1 - Setup : Small',
@@ -148,5 +172,27 @@ describe('normalizeApparelLineNames', () => {
     expect(out[0]).toEqual({ ...lines[0], description: 'Carolina Blue - S' });
     expect(out[1]).toBe(lines[1]);
     expect(out[2]).toBe(lines[2]);
+  });
+
+  // Moving a size to the end can add characters ("S:Blue" is 6, "Blue - S"
+  // is 8). The scan bounds every description (extract.ts MAX_SCAN_TEXT_LEN);
+  // a result past the bound keeps the printed description rather than a cut
+  // one, which could end mid-token.
+  it('keeps the printed description when the new name would pass the length bound', () => {
+    const colour = (n: number) => 'B'.repeat(n);
+    // 2 + 494 = 496 printed; 494 + 4 = 498 renamed: within the bound.
+    const fits = line({ description: `S:${colour(494)}`, quantity: 4 });
+    // 2 + 496 = 498 printed; 496 + 4 = 500 renamed: exactly the bound.
+    const atBound = line({ description: `S:${colour(496)}`, quantity: 4 });
+    // 2 + 497 = 499 printed; 497 + 4 = 501 renamed: one past it.
+    const over = line({ description: `S:${colour(497)}`, quantity: 4 });
+
+    const [a, b, c] = normalizeApparelLineNames([fits, atBound, over], 500);
+
+    expect(a!.description).toBe(`${colour(494)} - S`);
+    expect(b!.description).toBe(`${colour(496)} - S`);
+    expect(b!.description).toHaveLength(500);
+    expect(c).toBe(over);
+    expect(c!.description).toHaveLength(499);
   });
 });

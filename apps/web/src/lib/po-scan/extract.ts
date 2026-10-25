@@ -485,8 +485,9 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
   // that is the line's quantity and move a printed apparel size to the end,
   // so the sizes of one garment group as a size run (see
   // normalizeApparelLineNames). After the dedupe, which matches the printed
-  // titles. The stored document keeps the words as printed.
-  parsed.lines = normalizeApparelLineNames(parsed.lines);
+  // titles. The stored document keeps the words as printed, and a new name
+  // never passes the text bound above.
+  parsed.lines = normalizeApparelLineNames(parsed.lines, MAX_SCAN_TEXT_LEN);
 
   return parsed;
 }

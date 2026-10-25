@@ -14,9 +14,10 @@ type ExtractedLine = ExtractedPo['lines'][number];
  * adult alpha sizes only: "Youth Small" or a shoe's "10.5" is a different size
  * system, and folding it into an adult run would group two products as one.
  * apparel-names.test.ts checks that every token here reads back through the
- * core helpers.
+ * core helpers. Read it through sizeTokenOf, never by indexing it with a word
+ * from a document (see SIZE_TOKEN_BY_WORD).
  */
-export const APPAREL_SIZE_WORDS: Readonly<Record<string, string>> = {
+export const APPAREL_SIZE_WORDS: Readonly<Record<string, string>> = Object.freeze({
   xs: 'XS',
   'x small': 'XS',
   xsmall: 'XS',
@@ -57,7 +58,28 @@ export const APPAREL_SIZE_WORDS: Readonly<Record<string, string>> = {
   '6xl': '6XL',
   '6x': '6XL',
   '6x large': '6XL',
-};
+});
+
+/** The tokens the size-run grouping reads (core size-run.ts, XS..6XL). */
+const SIZE_TOKENS: ReadonlySet<string> = new Set([
+  'XS',
+  'S',
+  'M',
+  'L',
+  'XL',
+  '2XL',
+  '3XL',
+  '4XL',
+  '5XL',
+  '6XL',
+]);
+
+/** APPAREL_SIZE_WORDS as a Map, so a lookup reads the table's own words only.
+ *  Indexing the object with a part of a scanned name read inherited members:
+ *  "constructor" and "__proto__" came back as a function and an object, which
+ *  counted as a size and ended the name in "function Object() { [native
+ *  code] }" or "[object Object]". */
+const SIZE_TOKEN_BY_WORD: ReadonlyMap<string, string> = new Map(Object.entries(APPAREL_SIZE_WORDS));
 
 /** "<count> - " or "<count>: " at the very start of a description. A dash or a
  *  colon only: "3 Ring Binder" and "2 x 4 Lumber" start with numbers that are
@@ -76,7 +98,8 @@ function sizeTokenOf(part: string): string | null {
     .replace(/[\s-]+/g, ' ')
     .trim()
     .replace(/^size /, '');
-  return APPAREL_SIZE_WORDS[key] ?? null;
+  const token = SIZE_TOKEN_BY_WORD.get(key);
+  return token !== undefined && SIZE_TOKENS.has(token) ? token : null;
 }
 
 /**
@@ -139,11 +162,20 @@ export function normalizeApparelName(description: string, quantity: number): str
  * Applies normalizeApparelName to every INVENTORY line of a scan. Tax, freight,
  * fee and service lines are left as printed, and so is every field other than
  * the description: the line's `size` stays what the document printed.
+ *
+ * `maxLength` is the scan's text bound (extract.ts MAX_SCAN_TEXT_LEN). Moving
+ * a size to the end can add a few characters ("S:Blue" -> "Blue - S"), and a
+ * cut name could end mid-token, so a line whose new name would be longer than
+ * the bound keeps its printed description.
  */
-export function normalizeApparelLineNames(lines: ExtractedLine[]): ExtractedLine[] {
+export function normalizeApparelLineNames(
+  lines: ExtractedLine[],
+  maxLength: number,
+): ExtractedLine[] {
   return lines.map((l) => {
     if (l.lineType !== 'inventory') return l;
     const description = normalizeApparelName(l.description, l.quantity);
-    return description === l.description ? l : { ...l, description };
+    if (description === l.description || description.length > maxLength) return l;
+    return { ...l, description };
   });
 }
