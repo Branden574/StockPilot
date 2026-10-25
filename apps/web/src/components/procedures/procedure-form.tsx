@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
 import { BatchProgress } from '@/lib/upload-with-progress';
 import {
@@ -213,6 +214,9 @@ export function ProcedureForm({
           arr.map((s) => (s.tempId === entry.tempId ? { ...s, status: 'recorded' } : s)),
         );
       } catch (e) {
+        // A redirect (the session ended) stops the batch: the router is
+        // already navigating, so no file is marked failed.
+        if (isControlFlow(e)) throw e;
         allOk = false;
         const msg = e instanceof Error ? e.message : 'Upload failed';
         setStaged((arr) =>

@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
 import { parseCsv } from '@/lib/csv';
 import {
   applySage50Valuation,
@@ -164,6 +165,8 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
           if (offset === 0) agg.suppliers = res.data.suppliers;
         }
       } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         // Transport-level failure (offline, body too large, timeout) — keep the
         // parsed state and show a toast instead of crashing to the error page.
         toast.error(e instanceof Error ? e.message : 'Import failed — please try again.');
