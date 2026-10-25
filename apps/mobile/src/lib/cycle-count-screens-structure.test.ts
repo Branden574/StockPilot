@@ -4,6 +4,8 @@ import * as vm from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { countFromText } from '@stockpilot/core';
+
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
 import { buttonTone, meterColor, meterTrack, pillTone } from '../components/ui/tones';
 import {
@@ -15,6 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { notACountMessage, reviewNotACountMessage } from './count-box-words';
 import { palette, type Palette } from './theme';
 
 /**
@@ -184,6 +187,8 @@ function screenFunctions(
   names: string[],
   /** Top-level constants the functions read (taken from the same source). */
   consts: string[] = [],
+  /** What the functions import, by name (the real imports, from the test). */
+  imports: Record<string, unknown> = {},
 ): Record<string, (...args: unknown[]) => unknown> {
   const sf = treeOf(file);
   const constParts = sf.statements
@@ -207,7 +212,10 @@ function screenFunctions(
     `${[...constParts, ...parts].join('\n')}\n({ ${names.join(', ')} });`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
-  return new vm.Script(js).runInNewContext({}) as Record<string, (...args: unknown[]) => unknown>;
+  return new vm.Script(js).runInNewContext({ ...imports }) as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
 }
 
 /** An opaque colour laid at `alpha` over another, as '#rrggbb'. */
@@ -457,13 +465,35 @@ describe('count screen: offline capture and the Post rule', () => {
   // the server before that line's count, which then posted without it and
   // had its queued count refused. The screen's own rules, run: what a box
   // counts as, and whether an edit is still waiting for its save.
-  it('what a box counts as: a number of zero or more, never an emptied box or a lone minus', () => {
-    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox']);
+  //
+  // Every count box reads by core countFromText: a plain number of zero or
+  // more, never the number in front of a second point or a comma (parseFloat
+  // saved "1.2.3" as 1.2 and "2,5" as 2), and never a sign, exponent or other
+  // base (the web's Number() saved "1e3" as 1000).
+  it('a box holds a count only when it holds a plain number of zero or more', () => {
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox'], [], {
+      countFromText,
+    });
     const verdicts = Object.fromEntries(
-      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', '-', 'abc', '.'].map((raw) => [
-        raw,
-        countFromBox!(raw),
-      ]),
+      [
+        '',
+        '   ',
+        '0',
+        ' 0 ',
+        '12',
+        '2.5',
+        '.25',
+        '-1',
+        '-',
+        'abc',
+        '.',
+        '1.2.3',
+        '2,5',
+        '1e3',
+        '0x10',
+        '+5',
+        '5abc',
+      ].map((raw) => [raw, countFromBox!(raw)]),
     );
     expect(verdicts).toEqual({
       '': null,
@@ -472,11 +502,20 @@ describe('count screen: offline capture and the Post rule', () => {
       ' 0 ': 0,
       '12': 12,
       '2.5': 2.5,
+      '.25': 0.25,
       '-1': null,
       '-': null,
       abc: null,
       '.': null,
+      '1.2.3': null,
+      '2,5': null,
+      '1e3': null,
+      '0x10': null,
+      '+5': null,
+      '5abc': null,
     });
+    expect(importsFrom(COUNT, '@stockpilot/core')).toContain('countFromText');
+    expect(codeOnly(src)).not.toMatch(/parseFloat/);
   });
 
   // B4(a): a box's draft is dropped only once its own save has finished (the
@@ -515,12 +554,12 @@ describe('count screen: offline capture and the Post rule', () => {
   // not show (emptying a box and then tapping the point key left it that
   // way). Post now names those lines and waits. The screen's own rules, run.
   it('Post names the boxes that hold something that is not a count, and says what to do', () => {
-    const { linesNotACount, notACountMessage } = screenFunctions(COUNT, [
-      'isEmptyBox',
-      'countFromBox',
-      'linesNotACount',
-      'notACountMessage',
-    ]);
+    const { linesNotACount } = screenFunctions(
+      COUNT,
+      ['isEmptyBox', 'countFromBox', 'linesNotACount'],
+      [],
+      { countFromText },
+    );
     const lines = [
       { id: 'l1', itemName: 'Pencils', counted: 5 },
       { id: 'l2', itemName: 'Erasers', counted: null },
@@ -535,16 +574,20 @@ describe('count screen: offline capture and the Post rule', () => {
     // screen's order.
     expect(named({ l3: '-', l1: '.' })).toEqual(['l1', 'l3']);
     expect(named({ l2: '-4', l1: 'abc' })).toEqual(['l1', 'l2']);
-    expect(notACountMessage!(['Pencils'])).toBe(
+    // A second point or a comma: named, never saved as the number before it.
+    expect(named({ l1: '1.2.3', l2: '2,5', l3: '4' })).toEqual(['l1', 'l2']);
+    // The words, shared with the AI review (count-box-words.ts).
+    expect(importsFrom(COUNT, '@/lib/count-box-words')).toEqual(['notACountMessage']);
+    expect(notACountMessage(['Pencils'])).toBe(
       'The count box for Pencils does not hold a number. Type the count, or empty the box to leave the line uncounted.',
     );
-    expect(notACountMessage!(['Pencils', 'Erasers'])).toBe(
+    expect(notACountMessage(['Pencils', 'Erasers'])).toBe(
       'The count boxes for Pencils and Erasers do not hold a number. Type each count, or empty a box to leave its line uncounted.',
     );
-    expect(notACountMessage!(['A', 'B', 'C'])).toBe(
+    expect(notACountMessage(['A', 'B', 'C'])).toBe(
       'The count boxes for A, B and C do not hold a number. Type each count, or empty a box to leave its line uncounted.',
     );
-    expect(notACountMessage!(['A', 'B', 'C', 'D', 'E'])).toBe(
+    expect(notACountMessage(['A', 'B', 'C', 'D', 'E'])).toBe(
       'The count boxes for A, B, C and 2 more do not hold a number. Type each count, or empty a box to leave its line uncounted.',
     );
   });
@@ -1341,6 +1384,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     '%',
     'Nothing to save',
     'Tap a line to confirm the AI count or enter a manual value.',
+    'Check the counts',
     'No cached lines',
     'Open this cycle count from the list once while online so it can be cached for AI scanning.',
     'Could not load this count',
@@ -1379,6 +1423,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
       AI_SCAN,
       ['lineCountToWrite'],
       ['AI_CONFIDENCE_THRESHOLD'],
+      { countFromText },
     );
     const write = (override: string | null, result?: { count: number; confidence: number }) =>
       lineCountToWrite!({
@@ -1409,6 +1454,13 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     expect(write('', undefined)).toBeNull();
     expect(write('-1', sure)).toBeNull();
     expect(write('abc')).toBeNull();
+    // A second point, a comma, an exponent or another base: nothing, never
+    // a number read out of them (Number() wrote "1e3" as 1000).
+    expect(write('1.2.3', sure)).toBeNull();
+    expect(write('2,5')).toBeNull();
+    expect(write('1e3', unsure)).toBeNull();
+    expect(write('0x10')).toBeNull();
+    expect(importsFrom(AI_SCAN, '@stockpilot/core')).toEqual(['countFromText']);
   });
 
   // B4(b): the review writes a typed number as the count screen saves the
@@ -1419,13 +1471,56 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
       AI_SCAN,
       ['lineCountToWrite'],
       ['AI_CONFIDENCE_THRESHOLD'],
+      { countFromText },
     );
-    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox']);
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox'], [], {
+      countFromText,
+    });
     for (const raw of ['0', '1', '2.7', '0.5', '.25', '12.5', '3.1416', ' 4.2 ', '1000000']) {
       const written = lineCountToWrite!({ line: { id: 'l1' }, override: raw });
       expect(written, raw).toBe(countFromBox!(raw));
       expect(written, raw).toBe(Number(raw));
     }
+    // And nothing where the count screen saves nothing.
+    for (const raw of ['', ' ', '-', '-2', '.', '1.2.3', '2,5', '1e3', '+5', 'abc']) {
+      expect(lineCountToWrite!({ line: { id: 'l1' }, override: raw }), raw).toBeNull();
+      expect(countFromBox!(raw), raw).toBeNull();
+    }
+  });
+
+  // x3: a box typed over with something that is not a number writes nothing,
+  // and Confirm used to say nothing of it, so the line silently kept its old
+  // count while the person read their own number in the box. Confirm now
+  // names those lines and waits, as the count screen's Post does. The
+  // screen's own rule, run, and where Confirm asks it.
+  it('Confirm names the boxes typed over with something that is not a number, and writes nothing', () => {
+    const { overrideNotACount } = screenFunctions(AI_SCAN, ['overrideNotACount'], [], {
+      countFromText,
+    });
+    const notACount = (override: string | null) =>
+      overrideNotACount!({ line: { id: 'l1' }, override });
+    // Left alone, emptied, or a count: nothing to name.
+    for (const override of [null, '', '   ', '0', '7', '2.5', '.25'])
+      expect(notACount(override), String(override)).toBe(false);
+    // Typed over with something that is not a number: named.
+    for (const override of ['-', '-1', '.', '1.2.3', '2,5', '1e3', 'abc'])
+      expect(notACount(override), override).toBe(true);
+    const body = functionBody(AI_SCAN, 'onConfirm');
+    expect(body).toMatch(
+      /const notCounts = phase\.reviewLines\.filter\(overrideNotACount\);\s*if \(notCounts\.length > 0\) \{\s*Alert\.alert\(\s*'Check the counts',\s*reviewNotACountMessage\(notCounts\.map\(\(rl\) => rl\.line\.itemName\)\),\s*\);\s*return;\s*\}/,
+    );
+    // Before anything is decided or written.
+    expect(body.indexOf('const notCounts = ')).toBeLessThan(body.indexOf('const toWrite'));
+    expect(body.indexOf('const notCounts = ')).toBeLessThan(
+      body.indexOf("setPhase({ kind: 'saving' })"),
+    );
+    expect(importsFrom(AI_SCAN, '@/lib/count-box-words')).toEqual(['reviewNotACountMessage']);
+    expect(reviewNotACountMessage(['Atlas'])).toBe(
+      'The count box for Atlas does not hold a number. Type the count, or empty the box to save nothing for that line.',
+    );
+    expect(reviewNotACountMessage(['Atlas', 'Bible', 'Codex', 'Dune'])).toBe(
+      'The count boxes for Atlas, Bible, Codex and 1 more do not hold a number. Type each count, or empty a box to save nothing for its line.',
+    );
   });
 
   it('Confirm counts is the one ink Button, off while saving', () => {

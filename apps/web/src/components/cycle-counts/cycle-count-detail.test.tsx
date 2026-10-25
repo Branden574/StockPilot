@@ -342,6 +342,104 @@ describe('CycleCountDetail — failed line save', () => {
 });
 
 /**
+ * A box is read by the rule every count box reads by, here and on the phone
+ * (core countFromText): a plain number of 0 or more. A box that held
+ * something else (a second point, a comma, a minus sign) was left as typed,
+ * saving nothing and saying nothing, while a post applied the count saved
+ * before; and Number() saved "1e3" as 1000 and "0x10" as 16. The line now
+ * says so, saves nothing and puts the saved count back, as it does for a
+ * negative number, so the box never shows a count other than the one a post
+ * applies.
+ */
+describe('CycleCountDetail: a box that does not hold a count', () => {
+  const NOT_A_NUMBER = 'Enter a number of 0 or more, such as 5 or 2.5.';
+
+  function rowFor(name: string): HTMLElement {
+    const row = screen.getByText(name).closest('tr');
+    if (!row) throw new Error(`no row for ${name}`);
+    return row as HTMLElement;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(['1.2.3', '2,5', '1e3', '0x10', '+5', '-1', '-', '.', 'abc'])(
+    '"%s" over a saved count saves nothing, says so on the line, and puts the saved count back',
+    async (typed) => {
+      render(<CycleCountDetail {...baseProps} canAdjust />);
+      // Widget: counted 4, expected 5.
+      const row = rowFor('Widget');
+      const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: typed } });
+      // While the box holds it, no variance it will never apply.
+      expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('—');
+      fireEvent.blur(input);
+
+      await waitFor(() => {
+        expect(within(row).getByRole('alert')).toHaveTextContent(NOT_A_NUMBER);
+      });
+      expect(toast.error).toHaveBeenCalledWith(NOT_A_NUMBER);
+      expect(recordCycleCountLineAction).not.toHaveBeenCalled();
+      expect(clearCycleCountLineAction).not.toHaveBeenCalled();
+      expect(input.value).toBe('4');
+      expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('-1');
+    },
+  );
+
+  it('over an uncounted line, the box empties again and the line stays uncounted', async () => {
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+    // Gadget: expected 2, uncounted.
+    const row = rowFor('Gadget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2,5' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(within(row).getByRole('alert')).toHaveTextContent(NOT_A_NUMBER);
+    });
+    expect(recordCycleCountLineAction).not.toHaveBeenCalled();
+    expect(input.value).toBe('');
+    expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('—');
+  });
+
+  it.each([
+    ['2.5', 2.5],
+    ['.5', 0.5],
+    [' 7 ', 7],
+    ['0', 0],
+  ])('a plain number "%s" saves %s', async (typed, saved) => {
+    vi.mocked(recordCycleCountLineAction).mockResolvedValue({ ok: true } as never);
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+    const row = rowFor('Gadget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: typed } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(recordCycleCountLineAction).toHaveBeenCalledWith({
+        cycleCountId: 'cc-1',
+        lineId: 'line-2',
+        countedQuantity: saved,
+      });
+    });
+    expect(within(row).queryByRole('alert')).toBeNull();
+  });
+
+  it('reads the box by the shared rule (core countFromText), as the phone does', async () => {
+    const source = (await import('node:fs')).readFileSync(
+      (await import('node:path')).resolve(__dirname, 'cycle-count-detail.tsx'),
+      'utf8',
+    );
+    // The save, the blur and the live variance all read by it; nothing reads
+    // a box with Number() or parseFloat any more.
+    expect(source.match(/countFromText\(/g)?.length).toBe(3);
+    expect(source).not.toMatch(/Number\((raw|trimmed|trimmedDraft|draft)\)/);
+    expect(source).not.toMatch(/parseFloat/);
+  });
+});
+
+/**
  * THE REDESIGNED COUNT PAGE (M6) keeps the four whole-count numbers, the
  * "x of y counted · z with variance" line, the server-side line filters and
  * the entry / posting split: posting is a manager's step behind the

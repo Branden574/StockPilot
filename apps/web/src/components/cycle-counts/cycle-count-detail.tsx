@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import {
   CYCLE_COUNT_MANAGER_POSTS_COPY,
+  countFromText,
   cycleCountCloseGate,
   offlineCaptureLabel,
   variantLabel,
@@ -125,6 +126,9 @@ interface Props {
       table's scroll region. */
   titleId?: string;
 }
+
+/** What a count line says when its box does not hold a count of 0 or more. */
+const COUNT_NOT_A_NUMBER = 'Enter a number of 0 or more, such as 5 or 2.5.';
 
 /** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
 const EDGE = 'first:pl-[18px] last:pr-[18px]';
@@ -298,9 +302,13 @@ export function CycleCountDetail({
   // back — otherwise the box keeps an unsaved number and renders a variance
   // that looks exactly like a saved line while the DB still says uncounted.
   async function saveCount(line: CycleCountLineWithItem, raw: string): Promise<boolean> {
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value < 0) {
-      const message = 'Enter a non-negative number.';
+    // The rule every count box reads by, here and on the phone (core
+    // countFromText): a plain number of 0 or more. A negative number, a second
+    // point or a comma ("1.2.3", "2,5"), an exponent or a sign ("1e3", "+5")
+    // is refused and nothing is saved; Number() saved "1e3" as 1000.
+    const value = countFromText(raw);
+    if (value === null) {
+      const message = COUNT_NOT_A_NUMBER;
       toast.error(message);
       setLineError({ id: line.id, message });
       return false;
@@ -790,9 +798,9 @@ function CountRow({
   // count — so an empty box reads as "uncounted" (variance —) instead of
   // showing the stale saved variance after you clear it. A counted 0 still
   // shows its variance because draft is "0", not "".
-  const trimmedDraft = draft.trim();
-  const draftNum = trimmedDraft === '' ? NaN : Number(trimmedDraft);
-  const effectiveCounted = Number.isFinite(draftNum) ? draftNum : null;
+  // Read by the rule a save reads by (countFromText), so a box that will not
+  // save shows no variance it will never apply.
+  const effectiveCounted = countFromText(draft);
   const variance = effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
   const variantText = variantLabel({
     jerseyNumber: line.item?.jersey_number ?? null,
@@ -887,8 +895,15 @@ function CountRow({
                   if (current != null && !(await onClear())) revertDraftToServerValue();
                   return;
                 }
-                const next = Number(trimmed);
-                if (Number.isFinite(next) && next !== current) {
+                // A box that holds something that is not a count (a second
+                // point, a comma, a minus sign) used to be left as it was,
+                // saving nothing and saying nothing, while a post applied the
+                // count saved before. The save now refuses it, says so on the
+                // line and puts the saved count back, as for a negative
+                // number, so the box never shows a count other than the one
+                // a post applies.
+                const next = countFromText(trimmed);
+                if (next === null || next !== current) {
                   if (!(await onSave(trimmed))) revertDraftToServerValue();
                 }
               }}

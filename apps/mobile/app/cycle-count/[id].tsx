@@ -17,6 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  countFromText,
   exceptionUnrecognizedCopy,
   offlineCaptureAt,
   offlineCaptureLabel,
@@ -37,6 +38,7 @@ import {
   type CloseGateState,
 } from '@/lib/count-close-gate';
 import { showWriteCta } from '@/lib/cta-gating';
+import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
@@ -103,15 +105,17 @@ function isEmptyBox(raw: string): boolean {
 }
 
 /**
- * The count a box holds, as the line saver reads it: a finite number of zero
- * or more, or null for an empty box and anything else (a lone minus sign is
- * not a count). The saver and Post both read a box through this one rule, so
+ * The count a box holds, as the line saver reads it: a plain number of zero
+ * or more, or null for an empty box and anything else (core countFromText,
+ * the rule the web count screen and the AI review read a box by too). A lone
+ * minus sign, a second point ("1.2.3") or a comma ("2,5") is not a count, and
+ * is never read as the number before it: parseFloat saved "1.2.3" as 1.2 and
+ * "2,5" as 2. The saver and Post both read a box through this one rule, so
  * they cannot disagree.
  */
 function countFromBox(raw: string): number | null {
   if (isEmptyBox(raw)) return null;
-  const num = Number.parseFloat(raw);
-  return Number.isFinite(num) && num >= 0 ? num : null;
+  return countFromText(raw);
 }
 
 /**
@@ -137,9 +141,10 @@ function hasUnsavedEdit(draft: Readonly<Record<string, string>>): boolean {
 
 /**
  * The lines whose box holds something that is not a count of zero or more (a
- * lone minus sign, a stray point). The saver saves nothing for such a box, so
- * its line keeps the count saved before, and a post would apply a number the
- * box does not show. Post names them and waits (B4a).
+ * lone minus sign, a stray point, a second point, a comma: countFromBox). The
+ * saver saves nothing for such a box, so its line keeps the count saved
+ * before, and a post would apply a number the box does not show. Post names
+ * them and waits (B4a).
  */
 function linesNotACount<L extends { id: string }>(
   draft: Readonly<Record<string, string>>,
@@ -149,21 +154,6 @@ function linesNotACount<L extends { id: string }>(
     const raw = draft[l.id];
     return raw !== undefined && !isEmptyBox(raw) && countFromBox(raw) === null;
   });
-}
-
-/** What Post says while count boxes hold something that is not a number. */
-function notACountMessage(itemNames: readonly string[]): string {
-  const shown = itemNames.slice(0, 3);
-  const more = itemNames.length - shown.length;
-  const named =
-    more > 0
-      ? `${shown.join(', ')} and ${more} more`
-      : shown.length > 1
-        ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`
-        : (shown[0] ?? '');
-  return itemNames.length === 1
-    ? `The count box for ${named} does not hold a number. Type the count, or empty the box to leave the line uncounted.`
-    : `The count boxes for ${named} do not hold a number. Type each count, or empty a box to leave its line uncounted.`;
 }
 
 /**
