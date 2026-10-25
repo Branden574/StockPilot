@@ -95,6 +95,28 @@ export function fetchSiteIsElsewhere(req: Request): boolean {
   return site !== null && site !== 'same-origin';
 }
 
+/**
+ * The browser's own word that a page on another origin made it send this
+ * request: Sec-Fetch-Site is present and is neither `same-origin` nor `none`.
+ * For a GET that spends something of the person's, which the write rule below
+ * never judges: their session (/auth/session-ended) and their export budget
+ * (lib/export-rate-limit.ts). A link another site shows, a redirect it starts,
+ * an image or a script it loads all say `same-site` or `cross-site` (for a
+ * navigation, about every URL it went through), whatever the method.
+ *
+ * `none` is the person's own act (an address they typed, a bookmark, a link
+ * opened from another app), which no page can produce, so it is not another
+ * origin. With no Sec-Fetch-Site (a browser without Fetch Metadata, plain http,
+ * the phone, a server-side fetch) there is no word either way, so this is
+ * false; a GET carries no Origin to judge instead. Any other value (none is
+ * defined) is another origin, so only the two this origin and the person send
+ * are let through.
+ */
+export function sentFromAnotherOrigin(req: Request): boolean {
+  const site = req.headers.get('sec-fetch-site');
+  return site !== null && site !== 'same-origin' && site !== 'none';
+}
+
 /** The hosts this request was addressed to, each as URL.host normalises it. */
 function addressedHosts(req: Request): Set<string> {
   const hosts = new Set<string>();

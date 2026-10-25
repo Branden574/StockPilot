@@ -10,6 +10,7 @@ import {
   isSameOriginBrowserRequest,
   isWriteMethod,
   refusesCrossSiteCookieWrite,
+  sentFromAnotherOrigin,
 } from './cross-site-request';
 
 /**
@@ -305,6 +306,59 @@ describe('fetchSiteIsElsewhere: the Sec-Fetch-Site half on its own', () => {
     );
     for (const site of ['same-site', 'cross-site', 'none']) {
       expect(fetchSiteIsElsewhere(req({ 'sec-fetch-site': site })), site).toBe(true);
+    }
+  });
+});
+
+// A GET is never judged by the write rule, so a GET that spends something of
+// the person's (their session on /auth/session-ended, their export budget)
+// asks this instead: did a page on another origin make the browser send it?
+// `none` is the person's own act (a typed address, a bookmark, a link opened
+// from another app), which no page can produce, so it is not another origin.
+describe('sentFromAnotherOrigin: a page on another origin made this request', () => {
+  it.each(['cross-site', 'same-site'])('Sec-Fetch-Site %s: yes, whatever the method', (site) => {
+    for (const method of ['GET', 'HEAD', 'POST']) {
+      expect(sentFromAnotherOrigin(req({ 'sec-fetch-site': site }, { method })), method).toBe(true);
+    }
+  });
+
+  it('a top-level navigation, an image and a fetch from another origin are all another origin', () => {
+    for (const [mode, dest] of [
+      ['navigate', 'document'],
+      ['no-cors', 'image'],
+      ['no-cors', 'script'],
+      ['navigate', 'iframe'],
+      ['cors', 'empty'],
+    ]) {
+      const r = req(
+        { 'sec-fetch-site': 'same-site', 'sec-fetch-mode': mode!, 'sec-fetch-dest': dest! },
+        { method: 'GET' },
+      );
+      expect(sentFromAnotherOrigin(r), `${mode} ${dest}`).toBe(true);
+    }
+  });
+
+  it("same-origin (the app's own page) and none (the person's own act): no", () => {
+    expect(sentFromAnotherOrigin(req({ 'sec-fetch-site': 'same-origin' }, { method: 'GET' }))).toBe(
+      false,
+    );
+    expect(sentFromAnotherOrigin(req({ 'sec-fetch-site': 'none' }, { method: 'GET' }))).toBe(false);
+  });
+
+  it('no Sec-Fetch-Site (a browser without Fetch Metadata, the phone, a server-side fetch): no', () => {
+    expect(sentFromAnotherOrigin(req({}, { method: 'GET' }))).toBe(false);
+    // Origin alone does not decide it: a GET navigation carries none, and the
+    // write rule above is what judges Origin.
+    expect(sentFromAnotherOrigin(req({ origin: 'https://evil.example' }, { method: 'GET' }))).toBe(
+      false,
+    );
+  });
+
+  it('an unknown or empty value: yes (only same-origin and none are this origin or the person)', () => {
+    for (const site of ['', 'cross-origin', 'Same-Origin']) {
+      expect(sentFromAnotherOrigin(req({ 'sec-fetch-site': site }, { method: 'GET' })), site).toBe(
+        true,
+      );
     }
   });
 });
