@@ -489,9 +489,12 @@ describe('count screen: offline capture and the Post rule', () => {
     expect(codeOnly(src)).not.toContain('Number.parseFloat(draftVal)');
   });
 
+  // Re-pinned by docket B10 (the save was a bare `await updateLocalLine`): a
+  // count the phone did not save is said, and the box keeps it
+  // (count-save-refusal.test.ts runs the saver).
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) return;\s*await updateLocalLine\(lineId, num\);[\s\S]*?void cycleCountSync\.forceSync\(\);/,
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) return;\s*try \{\s*await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}[\s\S]*?void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
   });

@@ -1,6 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { OutboxOwnerUnknownError, type LiveScope } from './outbox-scope';
+import {
+  OutboxOwnerUnknownError,
+  OutboxWorkspaceLoadingError,
+  type LiveScope,
+} from './outbox-scope';
 import { readDeviceAuthSession } from './supabase';
 import { readSavedWorkspace, savedWorkspaceFor, type SavedWorkspace } from './workspace-keys';
 
@@ -48,32 +52,53 @@ async function readSessionUserId(): Promise<string | null> {
 
 const NOTHING_SAVED: SavedWorkspace = { orgId: null, ownerId: null };
 
-export async function liveOutboxScope(): Promise<LiveScope> {
+/** The saved workspace (a storage fault reads as nothing saved) and the stored session's account. */
+async function readLive(): Promise<{ saved: SavedWorkspace; userId: string | null }> {
   const [saved, userId] = await Promise.all([
     readSavedWorkspace(AsyncStorage).catch(() => NOTHING_SAVED),
     readSessionUserId(),
   ]);
+  return { saved, userId };
+}
+
+export async function liveOutboxScope(): Promise<LiveScope> {
+  const { saved, userId } = await readLive();
   // Only the account's own saved workspace (workspace-keys.ts
-  // savedWorkspaceFor), as api() names it: a row queued in the second after a
-  // different account signed in, before its workspace load saved its own
-  // choice, was stamped with the previous account's organization and refused
-  // when sent (docket B10). Signed out, the owner is the account last seen
-  // this run, the one a row written now is queued for (outboxWriteScope).
+  // savedWorkspaceFor), as api() names it (docket B10): the drains send a row
+  // that has no organization of its own (a legacy row) under it, never under
+  // another account's. A new row is not queued at all while the saved
+  // workspace is another account's (outboxWriteScope). Signed out, the owner
+  // is the account last seen this run, the one a row written now is queued
+  // for.
   return { orgId: savedWorkspaceFor(saved, userId ?? lastSeenUserId), userId };
 }
 
 /**
- * The owner to STAMP on a row being queued now. Never null: this code writes no
- * legacy (NULL-owner) rows, which any account would adopt and send as its own.
- * The live account when one is readable, else the last one seen this run;
- * with neither, the write is refused (OutboxOwnerUnknownError) rather than
- * queued for nobody.
+ * The owner and workspace to STAMP on a row being queued now.
+ *
+ * The owner is never null: this code writes no legacy (NULL-owner) rows, which
+ * any account would adopt and send as its own. The live account when one is
+ * readable, else the last one seen this run; with neither, the write is
+ * refused (OutboxOwnerUnknownError) rather than queued for nobody.
+ *
+ * The workspace is the one that owner saved (savedWorkspaceFor). While the
+ * saved workspace is ANOTHER account's (the moment after a different account
+ * signs in, before its workspace load saves its own choice, or longer when
+ * that load fails offline), the write is refused too
+ * (OutboxWorkspaceLoadingError: try again in a moment). Stamped with no
+ * workspace, the row would be sent under whichever one is saved when it is
+ * sent, after a switch the wrong one (S4a); stamped with the other account's,
+ * the server refuses it and the change is lost. Nothing saved (a fresh
+ * install before its first workspace load) stamps none, and a workspace saved
+ * by an older build (no owner) is stamped, both as before.
  */
 export async function outboxWriteScope(): Promise<{ orgId: string | null; userId: string }> {
-  const scope = await liveOutboxScope();
-  const userId = scope.userId ?? lastSeenUserId;
+  const { saved, userId: live } = await readLive();
+  const userId = live ?? lastSeenUserId;
   if (!userId) throw new OutboxOwnerUnknownError();
-  return { orgId: scope.orgId, userId };
+  const orgId = savedWorkspaceFor(saved, userId);
+  if (saved.orgId && !orgId) throw new OutboxWorkspaceLoadingError();
+  return { orgId, userId };
 }
 
 /**

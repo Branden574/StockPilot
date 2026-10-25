@@ -113,6 +113,36 @@ export class OutboxOwnerUnknownError extends Error {
 }
 
 /**
+ * Thrown by enqueue() and updateLocalLine() while the saved workspace belongs
+ * to ANOTHER account than the one the row is queued for (docket B10): the
+ * moment after a different account signs in, before its workspace load saves
+ * its own choice, or longer when that load fails offline. The row's
+ * workspace cannot be named then. Queued with none, it would be sent under
+ * whichever workspace is saved when it is sent, after a switch the wrong one
+ * (S4a); queued with the other account's, the server refuses it and the
+ * change is lost. Nothing is written. Retryable: the same save works once
+ * this account's workspace has loaded.
+ */
+export class OutboxWorkspaceLoadingError extends Error {
+  constructor() {
+    super('Your workspace is still loading. Try again in a moment.');
+    this.name = 'OutboxWorkspaceLoadingError';
+  }
+}
+
+/**
+ * The sentence a screen shows for a change the outbox refused to queue
+ * (OutboxOwnerUnknownError, OutboxWorkspaceLoadingError), or null for any
+ * other failure, whose own text is not written for people. Either way nothing
+ * was saved.
+ */
+export function outboxRefusalSentence(e: unknown): string | null {
+  return e instanceof OutboxOwnerUnknownError || e instanceof OutboxWorkspaceLoadingError
+    ? e.message
+    : null;
+}
+
+/**
  * last_error for another account's queued count of a line that a later count
  * on this device replaced. Newest-wins per line holds across accounts: sending
  * the older count when its owner returns would overwrite the newer one on the

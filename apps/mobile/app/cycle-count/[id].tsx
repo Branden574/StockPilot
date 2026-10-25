@@ -36,6 +36,7 @@ import {
   rememberedCloseGate,
   type CloseGateState,
 } from '@/lib/count-close-gate';
+import { countNotSavedAlert } from '@/lib/count-save-refusal';
 import { showWriteCta } from '@/lib/cta-gating';
 import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -236,15 +237,28 @@ export default function CycleCountDetail() {
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
   // to be dropped (see draft-debouncer.ts). Created once; the save touches
   // only stable state setters and module functions.
-  const [lineSaver] = React.useState(() =>
-    createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
+  const [lineSaver] = React.useState(() => {
+    const saver = createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
         // An empty box persists no clear; nor does anything that is not a
         // count of zero or more (countFromBox).
         const num = countFromBox(raw);
         if (num === null) return;
 
-        await updateLocalLine(lineId, num);
+        try {
+          await updateLocalLine(lineId, num);
+        } catch (e) {
+          // Not saved and not queued: the outbox refused it (no account, or
+          // the workspace still loading) or the phone's store failed. Said
+          // (count-save-refusal.ts); the box keeps the number, so Post still
+          // waits for it, and Try again saves it again.
+          const { title, message } = countNotSavedAlert(e);
+          Alert.alert(title, message, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
+          ]);
+          return;
+        }
         setLines((curr) =>
           curr.map((l) =>
             // A new local count replaces the server's, so its capture time
@@ -260,8 +274,9 @@ export default function CycleCountDetail() {
         await cycleCountSync.refreshPendingCount();
         void cycleCountSync.forceSync();
       })();
-    }),
-  );
+    });
+    return saver;
+  });
 
   // Resolve the user's org once — needed to scope server fetches.
 

@@ -43,10 +43,20 @@ vi.mock('./supabase', async () => {
   };
 });
 
-const saved = vi.hoisted(() => ({ orgId: 'org-a' as string | null }));
+// The saved workspace and the account that saved it (workspace-keys.ts). No
+// owner (an older build's) unless a test sets one.
+const saved = vi.hoisted(() => ({
+  orgId: 'org-a' as string | null,
+  ownerId: null as string | null,
+}));
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
-    getItem: async (key: string) => (key === 'workspace.activeOrgId' ? saved.orgId : null),
+    getItem: async (key: string) =>
+      key === 'workspace.activeOrgId'
+        ? saved.orgId
+        : key === 'workspace.activeOrgUserId'
+          ? saved.ownerId
+          : null,
   },
 }));
 
@@ -54,14 +64,17 @@ type Scope = typeof import('./session-scope');
 let scope: Scope;
 /** From the same (reset) module graph session-scope throws it from. */
 let OwnerUnknown: typeof import('./outbox-scope').OutboxOwnerUnknownError;
+let WorkspaceLoading: typeof import('./outbox-scope').OutboxWorkspaceLoadingError;
 
 beforeEach(async () => {
   auth.stored = { present: true, userId: 'u1' };
   auth.read = null;
   saved.orgId = 'org-a';
+  saved.ownerId = null;
   vi.resetModules(); // a fresh "last seen" per test
   scope = await import('./session-scope');
   OwnerUnknown = (await import('./outbox-scope')).OutboxOwnerUnknownError;
+  WorkspaceLoading = (await import('./outbox-scope')).OutboxWorkspaceLoadingError;
 });
 
 describe('liveOutboxScope reads the STORED session, never a refreshing getSession()', () => {
@@ -107,6 +120,60 @@ describe('outboxWriteScope never names NULL as the owner', () => {
   });
 
   it('with no account at all this run, refuses instead of queueing a row anyone would adopt', async () => {
+    auth.stored = { present: false, userId: null };
+    await expect(scope.outboxWriteScope()).rejects.toBeInstanceOf(OwnerUnknown);
+  });
+});
+
+/**
+ * A queued row's workspace is the one the account it is stamped for saved
+ * (docket B10). That account is the only one whose session may send the row
+ * (api() asUserId), so the row's workspace and the token it goes out with are
+ * one account's. While the saved workspace is ANOTHER account's (the moment
+ * after a different account signs in, before its workspace load saves its own
+ * choice, or longer if that load fails offline), a new row is refused with a
+ * sentence to try again (integrator decision 2): stamped with no workspace it
+ * would be sent under whichever one is saved when it is sent, after a switch
+ * the wrong one (the S4a defect); main stamped the other account's, which the
+ * server refused, and the write was lost.
+ */
+describe("the outbox stamps only the stamped account's own saved workspace", () => {
+  it('the stored account saved it: stamped with it', async () => {
+    saved.ownerId = 'u1';
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+  });
+
+  it('another account saved it: the readers see no workspace, and a new row is refused to try again', async () => {
+    saved.ownerId = 'u0';
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
+    const refusal = await scope.outboxWriteScope().catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(WorkspaceLoading);
+    expect((refusal as Error).message).toBe(
+      'Your workspace is still loading. Try again in a moment.',
+    );
+  });
+
+  it("just after the session ended, the account last seen gets its own workspace, and another's is refused", async () => {
+    saved.ownerId = 'u1';
+    await scope.liveOutboxScope(); // u1 seen this run
+    auth.stored = { present: false, userId: null };
+    expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    saved.ownerId = 'u0';
+    await expect(scope.outboxWriteScope()).rejects.toBeInstanceOf(WorkspaceLoading);
+  });
+
+  it('nothing saved (a fresh install before its first workspace load): stamped with no workspace, as on main', async () => {
+    saved.orgId = null;
+    expect(await scope.outboxWriteScope()).toEqual({ orgId: null, userId: 'u1' });
+  });
+
+  it('a workspace saved by an older build (no owner): stamped with it, as on main', async () => {
+    expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+  });
+
+  it('with no account at all, the owner refusal comes first', async () => {
+    saved.ownerId = 'u0';
     auth.stored = { present: false, userId: null };
     await expect(scope.outboxWriteScope()).rejects.toBeInstanceOf(OwnerUnknown);
   });
@@ -188,7 +255,13 @@ describe('end to end with the real auth-js client (offline, access token expired
         token_type: 'bearer',
         expires_in: 3600,
         expires_at: now - 30,
-        user: { id: 'u1', aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-09-24T00:00:00Z' },
+        user: {
+          id: 'u1',
+          aud: 'authenticated',
+          app_metadata: {},
+          user_metadata: {},
+          created_at: '2026-09-24T00:00:00Z',
+        },
       }),
     );
     client = new GoTrueClient({
@@ -245,7 +318,9 @@ describe('wiring: every owner and session-presence read goes through the stored 
     const auth = code(read('./auth-context.tsx'));
     expect(auth.match(/hasSession: hasStoredSession,/g)).toHaveLength(2);
     expect(auth).not.toMatch(/function hasSession\(/);
-    expect(auth).toMatch(/import \{ hasStoredSession, liveOutboxScope \} from '\.\/session-scope';/);
+    expect(auth).toMatch(
+      /import \{ hasStoredSession, liveOutboxScope \} from '\.\/session-scope';/,
+    );
   });
 
   it('the client persists under the key the reader reads, with the user in that one entry', () => {
@@ -261,7 +336,10 @@ describe('wiring: every owner and session-presence read goes through the stored 
     const enqueue = fnBody(code(read('./queue.ts')), 'export async function enqueue(');
     expect(enqueue).toContain('await outboxWriteScope()');
     expect(enqueue).not.toContain('liveOutboxScope');
-    const update = fnBody(code(read('./cycle-count-cache.ts')), 'export async function updateLocalLine(');
+    const update = fnBody(
+      code(read('./cycle-count-cache.ts')),
+      'export async function updateLocalLine(',
+    );
     expect(update).toContain('await outboxWriteScope()');
     expect(update).not.toContain('liveOutboxScope');
     // No "nobody" branch that could delete another account's held row.

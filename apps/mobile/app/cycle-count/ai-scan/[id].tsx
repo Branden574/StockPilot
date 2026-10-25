@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { partialSaveMessage } from '@/lib/count-save-refusal';
 import {
   getCycleCount,
   outboxAck,
@@ -34,6 +35,7 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
+import { outboxRefusalSentence } from '@/lib/outbox-scope';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -322,6 +324,10 @@ export default function AiScanScreen() {
       // ABSOLUTE counted_quantity (not an increment), so re-recording a line
       // is idempotent and retry is always safe.
       const failed: string[] = [];
+      // The outbox's sentence when it refused a line's copy on the phone (no
+      // account, or the workspace still loading): said in place of the
+      // connection, which was not the cause.
+      let refusal: string | null = null;
       for (const w of toWrite) {
         try {
           const res = await fetch(
@@ -375,6 +381,7 @@ export default function AiScanScreen() {
         } catch (lineErr) {
           console.warn('[cycle-count] line save failed', w.lineId, lineErr);
           failed.push(w.lineId);
+          refusal ??= outboxRefusalSentence(lineErr);
         }
       }
 
@@ -383,11 +390,7 @@ export default function AiScanScreen() {
         // and retry. Re-confirming re-sends every line, but record is an
         // idempotent absolute SET so already-saved lines are unaffected.
         await cycleCountSync.refreshPendingCount();
-        Alert.alert(
-          'Partially saved',
-          `${toWrite.length - failed.length} of ${toWrite.length} counts saved. ` +
-            `${failed.length} couldn't save — check your connection and tap Confirm to retry.`,
-        );
+        Alert.alert('Partially saved', partialSaveMessage(toWrite.length, failed.length, refusal));
         setPhase(reviewPhase);
         return;
       }

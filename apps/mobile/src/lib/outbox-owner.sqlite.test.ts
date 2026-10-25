@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
-import { REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import { REPLACED_BY_LATER_COUNT, outboxSendDecision } from './outbox-scope';
 
 /**
  * Outbox ownership in SQL (S4a), run against the REAL schema: db.ts opens a
@@ -23,18 +23,24 @@ import { REPLACED_BY_LATER_COUNT } from './outbox-scope';
  *   - another account's held row is never deleted automatically, and only a
  *     held row can be discarded from Unsent work;
  *   - this code never writes a NULL owner, and a disabled account's eviction
- *     parks only that account's work (and legacy rows), never another's.
+ *     parks only that account's work (and legacy rows), never another's;
+ *   - a new row is queued only under the workspace its own account saved:
+ *     while the saved workspace is another account's, both writers refuse and
+ *     write nothing (docket B10).
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('expo-sqlite', () => ({ openDatabaseAsync: sqlite.open }));
 
 /**
- * The device right now: the saved workspace, and the account whose session is
- * STORED (userId null = none stored; `unreadable` = stored, owner unreadable).
+ * The device right now: the saved workspace and the account that saved it
+ * (ownerId null = saved by an older build, which recorded no owner), and the
+ * account whose session is STORED (userId null = none stored; `unreadable` =
+ * stored, owner unreadable).
  */
 const live = vi.hoisted(() => ({
   orgId: 'org-a' as string | null,
+  ownerId: null as string | null,
   userId: 'u1' as string | null,
   unreadable: false,
 }));
@@ -58,19 +64,28 @@ vi.mock('./supabase', async () => {
 });
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
-    getItem: async (key: string) => (key === 'workspace.activeOrgId' ? live.orgId : null),
+    getItem: async (key: string) =>
+      key === 'workspace.activeOrgId'
+        ? live.orgId
+        : key === 'workspace.activeOrgUserId'
+          ? live.ownerId
+          : null,
   },
 }));
 
 type Queue = typeof import('./queue');
 type Cache = typeof import('./cycle-count-cache');
+type Scope = typeof import('./session-scope');
 
 let raw: DatabaseSync;
 let queue: Queue;
 let cache: Cache;
+/** The same module instance queue.ts and cycle-count-cache.ts read. */
+let scope: Scope;
 
 beforeEach(async () => {
   live.orgId = 'org-a';
+  live.ownerId = null;
   live.userId = 'u1';
   live.unreadable = false;
   raw = new DatabaseSync(':memory:');
@@ -79,6 +94,7 @@ beforeEach(async () => {
   vi.resetModules(); // a fresh getDb memo per test
   queue = await import('./queue');
   cache = await import('./cycle-count-cache');
+  scope = await import('./session-scope');
   await (await import('./db')).getDb(); // the real ensureSchema
 });
 
@@ -462,6 +478,123 @@ describe('this code never writes a NULL-owner row', () => {
     expect(await cache.discardHeldAction(1)).toBe(false);
     expect(await cache.discardHeldAction(2)).toBe(false);
     expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 2 });
+  });
+});
+
+/**
+ * docket B10 (integrator decision 2). The saved workspace records the account
+ * that saved it, and a new row is stamped with the workspace ITS account
+ * saved. In the moment after a different account signs in (before its
+ * workspace load saves its own choice, or longer when that load fails
+ * offline) the saved workspace is the previous account's. A row queued then
+ * was stamped with no workspace, and a row with none is sent under whichever
+ * workspace is saved when it is sent: after a switch, the wrong one (the S4a
+ * defect). Both writers now refuse it with a sentence to try again.
+ */
+describe("a new row is queued only under its own account's saved workspace", () => {
+  const SENTENCE = 'Your workspace is still loading. Try again in a moment.';
+  const rows = () =>
+    raw.prepare('select kind, organization_id, user_id from pending_actions order by id').all();
+
+  it("another account's saved workspace: both writers refuse with the sentence and write nothing", async () => {
+    live.ownerId = 'u0';
+    cacheLine('l1');
+
+    await expect(cache.updateLocalLine('l1', 2)).rejects.toMatchObject({
+      name: 'OutboxWorkspaceLoadingError',
+      message: SENTENCE,
+    });
+    await expect(
+      queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 }),
+    ).rejects.toMatchObject({ name: 'OutboxWorkspaceLoadingError', message: SENTENCE });
+
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 0 });
+    expect(
+      raw.prepare("select counted, local_dirty from cycle_count_lines where id = 'l1'").get(),
+    ).toEqual({ counted: null, local_dirty: 0 });
+  });
+
+  it('just after the session ended, the account last seen is refused in the same way', async () => {
+    live.ownerId = 'u0';
+    expect(await cache.totalPendingCount()).toBe(0); // the screen read its counters as u1
+    live.userId = null; // revoked: auth-js removed the stored session
+    cacheLine('l1');
+    await expect(cache.updateLocalLine('l1', 4)).rejects.toMatchObject({
+      name: 'OutboxWorkspaceLoadingError',
+    });
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 0 });
+  });
+
+  it("the account's own saved workspace: both writers stamp it", async () => {
+    live.ownerId = 'u1';
+    cacheLine('l1');
+    await cache.updateLocalLine('l1', 2);
+    await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    expect(rows()).toEqual([
+      { kind: 'record_count', organization_id: 'org-a', user_id: 'u1' },
+      { kind: 'distribute_bundle', organization_id: 'org-a', user_id: 'u1' },
+    ]);
+  });
+
+  it('nothing saved (a fresh install before its first workspace load): stamped with no workspace, as before', async () => {
+    live.orgId = null;
+    live.ownerId = 'u0'; // an owner key with no workspace beside it names nothing
+    cacheLine('l1');
+    await cache.updateLocalLine('l1', 2);
+    await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    expect(rows()).toEqual([
+      { kind: 'record_count', organization_id: null, user_id: 'u1' },
+      { kind: 'distribute_bundle', organization_id: null, user_id: 'u1' },
+    ]);
+  });
+
+  it('a workspace saved by an older build (no owner): stamped with it, as before', async () => {
+    await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    expect(rows()).toEqual([
+      { kind: 'distribute_bundle', organization_id: 'org-a', user_id: 'u1' },
+    ]);
+  });
+
+  /**
+   * The drains' own two calls, with the real modules (outbox-scope.test.ts
+   * pins that both drains make exactly these): the send decision on the live
+   * scope, then markSending with its organization and account.
+   */
+  async function firstSend(id: number) {
+    const row = (await queue.listPending()).find((r) => r.id === id)!;
+    const decision = outboxSendDecision(row, await scope.liveOutboxScope());
+    if (decision.send) {
+      await queue.markSending(id, { orgId: decision.orgId, userId: decision.userId });
+    }
+    return decision;
+  }
+
+  it("a legacy row is still adopted at its first send, under the account's own saved workspace", async () => {
+    live.ownerId = 'u1';
+    seed({ id: 1, user: null, org: null, kind: 'receive_po_line' });
+
+    expect(await firstSend(1)).toEqual({ send: true, orgId: 'org-a', userId: 'u1', adopt: true });
+    expect(owners()).toEqual([
+      { id: 1, status: 'sending', organization_id: 'org-a', user_id: 'u1', last_error: null },
+    ]);
+  });
+
+  it("while the saved workspace is another account's, a legacy row is adopted by the live account and never stamped with that workspace", async () => {
+    live.ownerId = 'u0';
+    seed({ id: 1, user: null, org: null, kind: 'receive_po_line' });
+
+    expect(await firstSend(1)).toEqual({ send: true, orgId: null, userId: 'u1', adopt: true });
+    expect(owners()).toEqual([
+      { id: 1, status: 'sending', organization_id: null, user_id: 'u1', last_error: null },
+    ]);
+  });
+
+  it("a row queued under the account's own workspace keeps it when another account's is saved later", async () => {
+    live.ownerId = 'u1';
+    const { id } = await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    live.orgId = 'org-b';
+    live.ownerId = 'u0';
+    expect(await firstSend(id)).toEqual({ send: true, orgId: 'org-a', userId: 'u1', adopt: false });
   });
 });
 

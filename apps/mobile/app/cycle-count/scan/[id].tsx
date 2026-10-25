@@ -20,6 +20,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
+import { countNotSavedAlert } from '@/lib/count-save-refusal';
 import {
   getCycleCount,
   updateLocalLine,
@@ -126,10 +127,22 @@ function CycleCountScanScreenInner() {
   }, [user, id]);
 
 
-  async function recordCount(line: CachedCycleCountLine, qty: number) {
-    if (!Number.isFinite(qty) || qty < 0) return;
+  /** Saves one count on the phone and queues it. False when nothing was saved (said). */
+  async function recordCount(line: CachedCycleCountLine, qty: number): Promise<boolean> {
+    if (!Number.isFinite(qty) || qty < 0) return false;
     setBusy(true);
-    await updateLocalLine(line.id, qty);
+    try {
+      await updateLocalLine(line.id, qty);
+    } catch (e) {
+      // Not saved and not queued: the outbox refused it (no account, or the
+      // workspace still loading) or the phone's store failed. Said
+      // (count-save-refusal.ts), and the scanner takes the next scan: left
+      // busy, it ignored every scan after this one.
+      setBusy(false);
+      const { title, message } = countNotSavedAlert(e);
+      Alert.alert(title, message);
+      return false;
+    }
     setScannedMap((m) => new Map(m).set(line.id, qty));
     setLines((curr) =>
       curr.map((l) =>
@@ -139,6 +152,7 @@ function CycleCountScanScreenInner() {
     await cycleCountSync.refreshPendingCount();
     void cycleCountSync.forceSync();
     setBusy(false);
+    return true;
   }
 
   function findLineByCode(code: string): CachedCycleCountLine | null {
@@ -193,8 +207,9 @@ function CycleCountScanScreenInner() {
       Alert.alert('Invalid count', 'Enter a non-negative number.');
       return;
     }
-    await recordCount(sheet.line, num);
-    setSheet(null);
+    // Closed once saved. A count the phone did not save stays in the sheet,
+    // so Save tries the same number again.
+    if (await recordCount(sheet.line, num)) setSheet(null);
   }
 
   if (!permission) {

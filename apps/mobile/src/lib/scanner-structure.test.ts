@@ -380,8 +380,11 @@ describe('count scanner: the counting rules are unchanged', () => {
       /if \(!Number\.isFinite\(num\) \|\| num < 0\) \{\s*Alert\.alert\('Invalid count', 'Enter a non-negative number\.'\);\s*return;\s*\}/,
     );
     expect(body).not.toMatch(/num <= 0|num < 1|num === 0/);
+    // Re-pinned by docket B10 (was `return;`): recordCount answers whether it
+    // saved, so the sheet stays open for a count the phone did not save
+    // (count-save-refusal.test.ts runs it).
     expect(functionBody(src, COUNT_SCANNER, 'recordCount')).toMatch(
-      /if \(!Number\.isFinite\(qty\) \|\| qty < 0\) return;/,
+      /if \(!Number\.isFinite\(qty\) \|\| qty < 0\) return false;/,
     );
   });
 
