@@ -518,28 +518,37 @@ export interface PortalOrderHistory {
 
 /**
  * The customer's order history (this customer only, newest first): the
- * newest PORTAL_ORDERS_SHOWN with the exact count, so the page can say how
- * many it does not list. It read the 50 newest and said nothing past them
- * (B32). The order ends on id, so two orders placed at the same instant never
- * swap in and out of the 50.
+ * newest PORTAL_ORDERS_SHOWN, and how many orders there are in all, so the
+ * page can say how many it does not list. It read the 50 newest and said
+ * nothing past them (B32). The order ends on id, so two orders placed at the
+ * same instant never swap in and out of the 50.
  *
- * THROWS when the read fails: it used to answer an empty history, which the
- * page printed as "No orders yet", a claim about the customer's orders made
- * from an error.
+ * The total is a read of its own, run beside the order read: a head-only
+ * count of the customer's order ids. Asked on the read that embeds every
+ * order's lines and item names, `count: 'exact'` is computed apart from the
+ * LIMIT, so the limit stopped bounding that read's work (integrator decision
+ * 4). A count that fails is `total: null` (the page then says nothing about
+ * more) and is reported; it never fails the page.
+ *
+ * THROWS when the order read fails: it used to answer an empty history, which
+ * the page printed as "No orders yet", a claim about the customer's orders
+ * made from an error.
  */
 export async function portalOrders(ctx: PortalContext): Promise<PortalOrderHistory> {
   const admin = createAdminClient();
-  const { data, error, count } = await admin
-    .from('order_requests')
-    .select(
-      'id, status, created_at, lines:order_request_lines(id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, unit_price_at_request, item:inventory_items(name))',
-      { count: 'exact' },
-    )
-    .eq('organization_id', ctx.organizationId)
-    .eq('customer_id', ctx.customerId)
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(PORTAL_ORDERS_SHOWN);
+  const [{ data, error }, total] = await Promise.all([
+    admin
+      .from('order_requests')
+      .select(
+        'id, status, created_at, lines:order_request_lines(id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, unit_price_at_request, item:inventory_items(name))',
+      )
+      .eq('organization_id', ctx.organizationId)
+      .eq('customer_id', ctx.customerId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(PORTAL_ORDERS_SHOWN),
+    portalOrderCount(admin, ctx),
+  ]);
   if (error) throw new Error(`The order history could not be read: ${error.message}`);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -613,7 +622,33 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrderHisto
       returns: returnsByOrder.get(r.id as string) ?? [],
     };
   });
-  return { orders, total: typeof count === 'number' ? count : null };
+  return { orders, total };
+}
+
+/**
+ * How many orders the customer has with this organization: a head-only count
+ * of order ids (no rows come back), with the order read's filters. null when
+ * the count fails, throws or answers no number; reported, never thrown.
+ */
+async function portalOrderCount(
+  admin: ReturnType<typeof createAdminClient>,
+  ctx: PortalContext,
+): Promise<number | null> {
+  try {
+    const { count, error } = await admin
+      .from('order_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .eq('customer_id', ctx.customerId);
+    if (error) {
+      void reportError(new Error(error.message), { tag: 'portal.orders.count', level: 'warning' });
+      return null;
+    }
+    return typeof count === 'number' ? count : null;
+  } catch (err) {
+    void reportError(new Error(rawErrorText(err)), { tag: 'portal.orders.count', level: 'warning' });
+    return null;
+  }
 }
 
 /**
