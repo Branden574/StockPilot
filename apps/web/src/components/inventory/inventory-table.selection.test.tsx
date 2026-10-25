@@ -287,21 +287,25 @@ describe('B23: a shared view whose owner deleted their account', () => {
     renderWith({ ownerId: null, isShared: true, canRemove: true });
     expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete view Restock' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ }),
+    ).toBeNull();
   });
 
   it('a member gets only Apply', () => {
     renderWith({ ownerId: null, isShared: true, canRemove: false });
     expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete view/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ }),
+    ).toBeNull();
   });
 
   it("a teammate's view still reads Shared by a teammate, and the owner's Shared by you", () => {
     const teammate = renderWith({ ownerId: 'u-2', isShared: true, canRemove: false });
-    expect(teammate.container.querySelector('span[title^="Shared by"]')?.getAttribute('title')).toBe(
-      'Shared by a teammate',
-    );
+    expect(
+      teammate.container.querySelector('span[title^="Shared by"]')?.getAttribute('title'),
+    ).toBe('Shared by a teammate');
     teammate.unmount();
     const own = renderWith({ ownerId: 'u-1', isShared: true, canRemove: true });
     expect(own.container.querySelector('span[title^="Shared by"]')?.getAttribute('title')).toBe(

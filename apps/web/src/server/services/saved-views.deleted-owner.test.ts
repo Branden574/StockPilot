@@ -121,11 +121,36 @@ describe('SavedViewsService.list: a shared view whose owner deleted their accoun
       canRemove[role] = Object.fromEntries(views.map((v) => [v.id, v.canRemove]));
     }
     expect(canRemove).toEqual({
-      owner: { 'v-own': true, 'v-own-shared': true, 'v-teammate-shared': false, 'v-orphan-shared': true },
-      admin: { 'v-own': true, 'v-own-shared': true, 'v-teammate-shared': false, 'v-orphan-shared': true },
-      manager: { 'v-own': true, 'v-own-shared': true, 'v-teammate-shared': false, 'v-orphan-shared': false },
-      staff: { 'v-own': true, 'v-own-shared': true, 'v-teammate-shared': false, 'v-orphan-shared': false },
-      viewer: { 'v-own': true, 'v-own-shared': true, 'v-teammate-shared': false, 'v-orphan-shared': false },
+      owner: {
+        'v-own': true,
+        'v-own-shared': true,
+        'v-teammate-shared': false,
+        'v-orphan-shared': true,
+      },
+      admin: {
+        'v-own': true,
+        'v-own-shared': true,
+        'v-teammate-shared': false,
+        'v-orphan-shared': true,
+      },
+      manager: {
+        'v-own': true,
+        'v-own-shared': true,
+        'v-teammate-shared': false,
+        'v-orphan-shared': false,
+      },
+      staff: {
+        'v-own': true,
+        'v-own-shared': true,
+        'v-teammate-shared': false,
+        'v-orphan-shared': false,
+      },
+      viewer: {
+        'v-own': true,
+        'v-own-shared': true,
+        'v-teammate-shared': false,
+        'v-orphan-shared': false,
+      },
     });
   });
 });

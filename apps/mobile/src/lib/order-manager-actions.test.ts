@@ -149,7 +149,11 @@ describe('orderManagerActions: Physical signature is a manager by role or the dr
 // account. The order stays in transit and an approver hands it over as
 // before; the section says who is left to do it, with the web panel's words.
 describe('orderManagerActions: an in-transit delivery whose driver deleted their account (B23)', () => {
-  const gone: Partial<OrderManagerActionsInput> = { hasAssignedDriver: false, isAssignedDriver: false, driverDeleted: true };
+  const gone: Partial<OrderManagerActionsInput> = {
+    hasAssignedDriver: false,
+    isAssignedDriver: false,
+    driverDeleted: true,
+  };
 
   it('a manager reads the line naming both hand-over buttons, and keeps both buttons', () => {
     const a = at(manager, 'in_transit', gone);
@@ -170,7 +174,10 @@ describe('orderManagerActions: an in-transit delivery whose driver deleted their
     expect(at(manager, 'completed', gone).deletedDriverLine).toBeNull();
     expect(at({ ...manager, isViewerRole: true }, 'in_transit', gone).deletedDriverLine).toBeNull();
     expect(at(base, 'in_transit', gone).deletedDriverLine).toBeNull();
-    expect(at(revokedManager, 'in_transit', gone)).toMatchObject({ showSection: false, deletedDriverLine: null });
+    expect(at(revokedManager, 'in_transit', gone)).toMatchObject({
+      showSection: false,
+      deletedDriverLine: null,
+    });
   });
 });
 

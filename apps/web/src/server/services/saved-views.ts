@@ -267,7 +267,10 @@ export class SavedViewsService {
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
-    q = whose === 'own' ? q.eq('user_id', this.ctx.userId) : q.is('user_id', null).eq('is_shared', true);
+    q =
+      whose === 'own'
+        ? q.eq('user_id', this.ctx.userId)
+        : q.is('user_id', null).eq('is_shared', true);
     const { data, error } = await q.select('id');
     if (error) throw new ServiceError('internal_error', error.message);
     return Array.isArray(data) && data.length > 0;

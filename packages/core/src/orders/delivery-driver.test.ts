@@ -19,40 +19,76 @@ const WENT_OUT = '2026-10-20T15:04:05.000Z';
 describe('isDeliveryDriverDeleted', () => {
   it('is true for a delivery that went in transit and names no driver', () => {
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: WENT_OUT, assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(true);
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: WENT_OUT, assignedDeliveryUserId: undefined }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: undefined,
+      }),
     ).toBe(true);
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: WENT_OUT, assignedDeliveryUserId: '' }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: '',
+      }),
     ).toBe(true);
   });
 
   it('is false while the order still names its driver', () => {
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: WENT_OUT, assignedDeliveryUserId: 'driver-1' }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: 'driver-1',
+      }),
     ).toBe(false);
   });
 
   it('is false for a delivery that never went in transit (nobody was required yet)', () => {
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: null, assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: null,
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(false);
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: undefined, assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: undefined,
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(false);
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'delivery', inTransitAt: '', assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'delivery',
+        inTransitAt: '',
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(false);
   });
 
   it('is false for a pickup, which never has a driver', () => {
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: 'pickup', inTransitAt: WENT_OUT, assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: 'pickup',
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(false);
     expect(
-      isDeliveryDriverDeleted({ fulfillmentType: null, inTransitAt: WENT_OUT, assignedDeliveryUserId: null }),
+      isDeliveryDriverDeleted({
+        fulfillmentType: null,
+        inTransitAt: WENT_OUT,
+        assignedDeliveryUserId: null,
+      }),
     ).toBe(false);
   });
 });

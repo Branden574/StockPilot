@@ -1067,14 +1067,18 @@ describe('ManagerActionsPanel — an in-transit delivery whose driver deleted th
     'The driver of this delivery deleted their account. Record the hand-over here with Collect signature.';
 
   it('a manager reads the line naming both hand-over buttons, and keeps both buttons and Cancel', () => {
-    render(<ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'manager' })} />);
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'manager' })} />,
+    );
     expect(screen.getByTestId('deleted-driver-line')).toHaveTextContent(LINE_BOTH);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Physical signature/ })).toBeEnabled();
   });
 
   it('a staff approver reads the line naming only Collect signature, the button they have', () => {
-    render(<ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'staff' })} />);
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'staff' })} />,
+    );
     expect(screen.getByTestId('deleted-driver-line')).toHaveTextContent(LINE_COLLECT);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Physical signature/ })).toBeNull();
@@ -1083,19 +1087,33 @@ describe('ManagerActionsPanel — an in-transit delivery whose driver deleted th
   it('says nothing while the order names its driver, before it goes out, or to a viewer', () => {
     const named = render(
       <ManagerActionsPanel
-        {...baseProps({ ...gone, assignedDeliveryUserId: 'driver-2', driverDeleted: false, canApprove: true, viewerRole: 'manager' })}
+        {...baseProps({
+          ...gone,
+          assignedDeliveryUserId: 'driver-2',
+          driverDeleted: false,
+          canApprove: true,
+          viewerRole: 'manager',
+        })}
       />,
     );
     expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
     named.unmount();
     const staged = render(
       <ManagerActionsPanel
-        {...baseProps({ ...gone, status: 'staged_for_delivery', canApprove: true, canAssignDelivery: true, viewerRole: 'manager' })}
+        {...baseProps({
+          ...gone,
+          status: 'staged_for_delivery',
+          canApprove: true,
+          canAssignDelivery: true,
+          viewerRole: 'manager',
+        })}
       />,
     );
     expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
     staged.unmount();
-    render(<ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'viewer' })} />);
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'viewer' })} />,
+    );
     expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
   });
 });

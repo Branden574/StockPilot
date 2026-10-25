@@ -214,7 +214,9 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const stub = makeStub({
         'maintenance_requests.select': { data: { ...RESOLVED_ROW, requester_user_id: null }, error: null },
       });
-      const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
+      const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, {
+        appUrl: APP_URL,
+      });
       expect(res).toEqual({ sent: false, reason: 'requester_deleted' });
       expect(sendEmailMock).not.toHaveBeenCalled();
       expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);

@@ -154,7 +154,12 @@ describe('zendeskConnector: a requester who deleted their account after the even
         .map((m, i) => [m, reads[0]!.args[i]] as const)
         .filter(([m]) => m === 'eq')
         .map(([, a]) => a);
-      expect(eqs).toEqual(expect.arrayContaining([['organization_id', 'org1'], ['id', 'o1']]));
+      expect(eqs).toEqual(
+        expect.arrayContaining([
+          ['organization_id', 'org1'],
+          ['id', 'o1'],
+        ]),
+      );
     },
   );
 
@@ -200,7 +205,12 @@ describe('zendeskConnector: a requester who deleted their account after the even
     createTicket.mockResolvedValueOnce(10);
     const { deps: d, reads } = depsWith(() => ({ data: null, error: { message: 'unused' } }));
     const r = await zendeskConnector.handleOutboxEvent(
-      evt('order.problem', { orderRequestId: 'o1', reason: 'x', requesterEmail: null, requesterName: null }),
+      evt('order.problem', {
+        orderRequestId: 'o1',
+        reason: 'x',
+        requesterEmail: null,
+        requesterName: null,
+      }),
       conn,
       secrets,
       d,

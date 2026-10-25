@@ -46,17 +46,15 @@ const BUILDERS: Record<string, TopicBuilder> = {
 const ORDER_REQUESTER_TOPICS = new Set(['public_request.created', 'order.problem']);
 
 /** The admin client surface the requester check reads through. */
+type RequesterRead = PromiseLike<{
+  data: { requester_deleted_at: string | null } | null;
+  error: { message: string } | null;
+}>;
+type OrderById = { eq(column: 'id', value: string): { maybeSingle(): RequesterRead } };
 type OrderReader = {
   from(table: 'order_requests'): {
     select(columns: 'requester_deleted_at'): {
-      eq(column: 'organization_id', value: string): {
-        eq(column: 'id', value: string): {
-          maybeSingle(): PromiseLike<{
-            data: { requester_deleted_at: string | null } | null;
-            error: { message: string } | null;
-          }>;
-        };
-      };
+      eq(column: 'organization_id', value: string): OrderById;
     };
   };
 };
