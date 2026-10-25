@@ -3373,8 +3373,8 @@ export default function OrderDetail() {
 
           {/* The order's returns — number, status, what came back and how it
               was dispositioned, and the NOTES. The notes are where an
-              in-person swap is recorded today (SO-000085: "Size S … swapped
-              out for Ladies size M" — the replacement is on no order line), so
+              in-person swap is recorded today (SO-000085: a size S "swapped
+              out" for a size M — the replacement is on no order line), so
               they must be readable where a human looks at the order. Listed
               for every viewer (RLS decided what came back). There is no native
               returns screen to navigate to, so each RMA renders inline.

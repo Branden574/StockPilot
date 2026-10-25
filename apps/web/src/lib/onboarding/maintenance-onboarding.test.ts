@@ -29,12 +29,12 @@ const ALL_DEFINED_TOURS = Object.values(toursModule) as TourDefinition[];
 /**
  * Review-fix wave (Fix 2): the master §20 list (brief
  * `.superpowers/sdd/maintenance-requests-brief.md:280`) is `Ticket created`,
- * `Request submitted to Zendesk`, `DC4 notified`, `Andrew notified`,
+ * `Request submitted to Zendesk`, `DC4 notified`, `Jordan notified`,
  * `Ticket assigned`, `Email sent`. The original sweep used a bare `'sent'`
  * substring as a stand-in for `Email sent` — that's a false-positive
  * landmine (`'present'`, `'consent'`, `'sent to the maintenance team'` all
  * contain `sent` as a substring) and it also never caught `Ticket assigned`,
- * `Request submitted [to Zendesk]`, `DC4 notified`, or `Andrew notified`
+ * `Request submitted [to Zendesk]`, `DC4 notified`, or `Jordan notified`
  * individually. Every entry below is phrase-level (never a bare word) and
  * lowercase (the check lowercases `text` before matching, so casing in the
  * list itself is cosmetic — kept lowercase to make that explicit). `zendesk`

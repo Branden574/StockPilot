@@ -26,7 +26,7 @@ export function truncate(value: string, max: number): string {
  * outer edges and `tCell` has no horizontal padding, so a cell whose content
  * fills its width paints straight into its neighbour. That is the
  * owner-reported 2026-07-22 defect on the receipts table —
- * "R-20260721-223330-e7a08bJul 21, 2026" with no gap at all.
+ * "R-20260721-223330-0e0e05Jul 21, 2026" with no gap at all.
  *
  * Padding alone does not fix it. Verified by rendering a real PDF and reading
  * glyph positions back out of the content stream: a cell whose ENTIRE content
@@ -185,8 +185,8 @@ export interface PoPdfLine {
  * The totals row alone ("Accepted 200") answers HOW MUCH but not WHAT: a
  * receipt covering five shirt sizes printed one opaque number, and the person
  * reading the PDF a month later could not reconstruct which items that receiver
- * actually signed for. Owner ask 2026-08-20 (CVLYII-001460): the breakdown is
- * the traceability, so it prints under every receipt.
+ * actually signed for. Owner ask 2026-08-20: the breakdown is the
+ * traceability, so it prints under every receipt.
  */
 export interface PoPdfReceiptLine {
   sku: string;

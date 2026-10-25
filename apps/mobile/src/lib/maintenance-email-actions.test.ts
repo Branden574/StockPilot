@@ -100,7 +100,7 @@ function ccOf(url: string): string | undefined {
  *  it: BARE on the native/mailto links, and as the tenant-verified OWA
  *  name-addr chip on the web one. Anything else — absent, empty, split into a
  *  second recipient — fails. */
-const ACCEPTED_CC_FORMS = ['arosas@cvwest.org', 'Andrew Rosas <arosas@cvwest.org>'];
+const ACCEPTED_CC_FORMS = ['jstone@site1.test', 'Jordan Stone <jstone@site1.test>'];
 
 describe('mobile email actions (string assertions ONLY — never a real open in tests)', () => {
   it('THE FIX: on a native-stamped draft the outlook button opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
@@ -112,7 +112,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
     expect(url.startsWith('http')).toBe(false);
     // CC GATE at the actual call site — not just in the composer:
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('CC GATE: exactly ONE openURL invocation per tap — the deep link is never auto-retried (duplicate compose screens)', async () => {
@@ -128,7 +128,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(true);
-    expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(ccOf(url)).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('a canOpenURL rejection is read as "not installed", so the probe can never hand this feature a false true', async () => {
@@ -148,7 +148,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
       used: 'default-mail',
     });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
-    expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test')).toBe(true);
   });
 
   it('linkFits=false refuses to open either transport', async () => {
@@ -376,7 +376,7 @@ describe('the maintenance email is fitted against the url this phone will open',
       'Two staff members have reported headaches from the noise, and the afternoon study group has been moved to the library as a result.',
     ].join(' '),
     category: 'Heating or air conditioning',
-    requesterEmail: 'jane.smith@learn4life.org',
+    requesterEmail: 'jane.smith@sampleorg.test',
     requesterPhone: '(555) 555-0199',
     siteName: 'Fresno Learning Center',
     department: 'Operations',
@@ -488,7 +488,7 @@ describe('the maintenance email is fitted against the url this phone will open',
     expect(res).toEqual({ outcome: 'opened', used: 'default-mail' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('composeTransportForProbe: only a PROVED native app selects the shorter budget', () => {
@@ -599,7 +599,7 @@ describe('exported copy is the literal, brief-pinned text', () => {
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
+      'Jordan notified',
       'Ticket assigned',
       'Email sent',
     ];

@@ -161,8 +161,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // Banner instead of redirect: the previous redirect-on-every-page-load
   // approach raced with Chrome's prefetch behavior and triggered the
   // "Throttling navigation to prevent the browser from hanging" warning,
-  // which renders as a black/blank screen on certain sections (Andrew,
-  // Chrome, no MFA enrolled). The banner is always visible above the
+  // which renders as a black/blank screen on certain sections (a manager
+  // on Chrome, no MFA enrolled). The banner is always visible above the
   // page content until the user enrolls; can't loop, can't throttle,
   // and behaves the same across browsers.
   // An org row this member cannot read is held to the strictest policy, not

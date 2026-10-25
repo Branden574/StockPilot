@@ -35,7 +35,7 @@ const RESET = process.argv.includes('--reset');
 // ── Config ──────────────────────────────────────────────────────────────────
 const PROD_URL = 'https://xizpqmhhslgzbuqtjubv.supabase.co';
 const REAL_ORG_ID = '63c13e64-92a6-4ea4-9936-6a2c26a85b4a'; // never touch this one
-const OWNER_USER_ID = '270ed6d2-af71-49b7-a4be-a82f21685a7f'; // branden574@gmail.com
+const OWNER_USER_ID = '270ed6d2-af71-49b7-a4be-a82f21685a7f'; // the owner's account
 const DEMO = {
   name: 'StockPilot Demo Co',
   slug: 'stockpilot-demo',

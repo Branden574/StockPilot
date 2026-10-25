@@ -302,11 +302,11 @@ describe('updateProfileNameAction', () => {
   });
 
   it('accepts a valid name, audits, and revalidates', async () => {
-    const result = await updateProfileNameAction({ fullName: '  Branden  ' });
+    const result = await updateProfileNameAction({ fullName: '  Carsten  ' });
     expect(result.ok).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard', 'layout');
     const args = stubHolder.stub!.chainArgs.get('user_profiles.update');
-    expect(args?.[0]?.[0]).toEqual({ full_name: 'Branden' });
+    expect(args?.[0]?.[0]).toEqual({ full_name: 'Carsten' });
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'user.profile.updated' }),
     );
@@ -323,7 +323,7 @@ describe('updateProfileNameAction', () => {
     });
     expect(result.ok).toBe(true);
     const args = stubHolder.stub!.chainArgs.get('user_profiles.update');
-    expect(args?.[0]?.[0]).toEqual({ full_name: 'Branden' });
+    expect(args?.[0]?.[0]).toEqual({ full_name: 'Carsten' });
   });
 });
 

@@ -126,7 +126,7 @@ export interface DeliveryRequestItemRef {
  * "there is no parameter for a caller to poison". Two things make an explicit
  * parameter the stronger position now that the builder is shared:
  *
- *  1. HONESTY ABOUT TENANCY. `dc4@learn4life.org` is one customer's mailbox.
+ *  1. HONESTY ABOUT TENANCY. A warehouse intake is one customer's mailbox.
  *     A shared platform package silently mailing every org's delivery requests
  *     to one tenant's intake is a worse property than a parameter. The literal
  *     still has exactly one home (`./delivery-request-recipients.ts`) so the
@@ -406,8 +406,8 @@ function shortenedDisclosure(listed: number, total: number): string {
  * and printing "Address:" with nothing under it implies the system captured
  * something it did not.
  *
- * Values are reproduced verbatim, typos included (KVA Tulare's address really
- * says "Calfornia"). Silently correcting a site address inside a delivery
+ * Values are reproduced verbatim, typos included (a real site row may say
+ * "Calfornia"). Silently correcting a site address inside a delivery
  * instruction would be a worse failure than reproducing the owner's data.
  */
 export function formatSiteAddressLines(address: DeliveryRequestAddress | null): string[] {
@@ -728,10 +728,10 @@ export function buildDeliveryRequestDraft(
  * HISTORY (the record lives here because git is the only other place it
  * exists). This originally built `${OUTLOOK_COMPOSE_BASE}?to=...&cc=...&
  * subject=...&body=...`, each value encoded once. The owner tested that exact
- * URL against the real L4L Microsoft 365 tenant (2026-08-01): Outlook Web
- * opened the compose window with To, Subject and Body populated correctly, but
- * Cc was EMPTY — Andrew (arosas@cvwest.org, a mandatory CC) silently never
- * received the request. Microsoft Q&A confirms plain `cc=` on
+ * URL against the first tenant's real Microsoft 365 tenant (2026-08-01):
+ * Outlook Web opened the compose window with To, Subject and Body populated
+ * correctly, but Cc was EMPTY — the warehouse lead (the mandatory CC) silently
+ * never received the request. Microsoft Q&A confirms plain `cc=` on
  * `mail/deeplink/compose` is effectively unimplemented; this was not a bug in
  * this codebase, it is how the endpoint behaves.
  *
@@ -751,9 +751,10 @@ export function buildDeliveryRequestDraft(
  *
  * DISPLAY NAMES (2026-08-01, second tenant test): the owner verified that this
  * same `mailtouri` parser handles name-addr forms ("Name <addr>") cleanly IN
- * THE PATH POSITION — his test URL produced OWA compose chips reading 'Fresno
- * Warehouse DC4 <dc4@learn4life.org>' (To) and 'Andrew Rosas
- * <arosas@cvwest.org>' (Cc), correct addresses underneath.
+ * THE PATH POSITION — his test URL produced one OWA compose chip per
+ * recipient, each the display name over its address (shaped like 'Fresno
+ * Warehouse DC4 <dc4@sampleorg.test>' (To) and 'Jordan Stone
+ * <jstone@site1.test>' (Cc)), correct addresses underneath.
  *
  * CORRECTION on the RFC: name-addr itself is RFC 5322 mailbox syntax, not RFC
  * 6068. RFC 6068 (the mailto: URI scheme) admits a name-addr string only as the
@@ -799,7 +800,7 @@ export function buildDeliveryRequestOutlookUrl(draft: DeliveryRequestDraft): str
  * mandatory CC, same `%20` encoder: only the transport differs.
  *
  * BARE ADDRESSES, deliberately. The name-addr compose chips
- * (`Fresno Warehouse DC4 <dc4@learn4life.org>`) are a VERIFIED OWA-Web
+ * (`Fresno Warehouse DC4 <dc4@sampleorg.test>`) are a VERIFIED OWA-Web
  * `mailtouri` parser extension and stop at that boundary — the native app is a
  * different, unverified parser, and a name-addr it mis-splits costs exactly the
  * silent CC drop this whole feature is built around. `composeOutlookMobileUrl`
@@ -958,7 +959,7 @@ export interface PreparedDeliveryRequest {
  *
  * A DEGRADATION LADDER, NOT A CLIFF (2026-08-13, SO-000080). This used to be
  * two rungs: the full body, else a body with the heading and no rows at all.
- * Marissa's 11-line order took the second and DC4 received a delivery request
+ * A site requester's 11-line order took the second and DC4 received a request
  * naming no items — while, measured, six of those rows would have fitted and
  * the shortened row format fits all eleven. Nothing ever tried. The rungs now:
  *

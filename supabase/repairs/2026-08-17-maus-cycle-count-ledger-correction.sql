@@ -39,18 +39,18 @@
 --     user_id NULL. apply_level_delta explicitly allows the null-subject
 --     connection (0331 header).
 --
--- PETER'S RECOUNT — READ BEFORE RUNNING
---   Peter is recounting Maus. If his recount posts BEFORE this runs, this
---   correction is STILL valid — it fixes the ledger's chain (Σ quantity_change
---   is 15 short of the on-hand progression because of the -35 row), not the
---   shelf — but the ON-HAND delta must then be re-evaluated by the
---   coordinator: a recount is an authoritative statement of what the shelf
---   holds, and adding 15 to on-hand on top of it would over-state the shelf
---   by 15 unless the coordinator has established otherwise. The ledger row
---   as authorised (+15 with previous/new = on-hand/on-hand+15) is only
---   internally consistent if on-hand also moves +15, so "ledger only" is
---   not a mode this script offers; if the on-hand delta is judged wrong the
---   script must not be run as-is.
+-- THE STAFF RECOUNT — READ BEFORE RUNNING
+--   A staff member is recounting Maus. If that recount posts BEFORE this runs,
+--   this correction is STILL valid — it fixes the ledger's chain (Σ
+--   quantity_change is 15 short of the on-hand progression because of the -35
+--   row), not the shelf — but the ON-HAND delta must then be re-evaluated by
+--   the coordinator: a recount is an authoritative statement of what the shelf
+--   holds, and adding 15 to on-hand on top of it would over-state the shelf by
+--   15 unless the coordinator has established otherwise. The ledger row as
+--   authorised (+15 with previous/new = on-hand/on-hand+15) is only internally
+--   consistent if on-hand also moves +15, so "ledger only" is not a mode this
+--   script offers; if the on-hand delta is judged wrong the script must not be
+--   run as-is.
 --   OBSERVED AT WRITE TIME (prod, SELECT only, 2026-08-17 ~19:20 UTC):
 --     325f8e05  2026-08-17 18:06 UTC  adjust  +40  39 -> 79  "Recounted for
 --               accuracy. Added 40 to current on hand, for a total of 79."
@@ -178,7 +178,7 @@ begin
     raise exception 'REFUSED: row % is not the -35 / 124 -> 89 cycle-count row this script corrects; re-check the diagnosis.', v_bad_row;
   end if;
 
-  -- Peter's recount guard (see header): any movement after 2026-08-17 18:00 UTC
+  -- The staff recount guard (see header): any movement after 2026-08-17 18:00 UTC
   -- means a recount-era adjustment may already have posted; the coordinator
   -- must re-evaluate the on-hand delta and pass -v ACK_POST_RECOUNT=1.
   select count(*) into v_later

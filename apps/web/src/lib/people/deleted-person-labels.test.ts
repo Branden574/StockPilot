@@ -17,8 +17,8 @@ const STAMP = '2026-11-04T18:22:05.123456+00:00';
 describe('auditActorName (/dashboard/audit)', () => {
   it('names a live actor, then their email', () => {
     expect(
-      auditActorName({ actor: { fullName: 'Marissa', email: 'm@x.org' }, actorDeleted: false }),
-    ).toBe('Marissa');
+      auditActorName({ actor: { fullName: 'Rebecca', email: 'm@x.org' }, actorDeleted: false }),
+    ).toBe('Rebecca');
     expect(
       auditActorName({ actor: { fullName: null, email: 'm@x.org' }, actorDeleted: false }),
     ).toBe('m@x.org');
@@ -36,7 +36,7 @@ describe('auditActorName (/dashboard/audit)', () => {
 
 describe('orderTimelineActor (order page timeline)', () => {
   it('names a live member, else "Unknown user" for one the reader cannot see', () => {
-    expect(orderTimelineActor({ full_name: 'Doua', email: null }, { user_id: 'u1' })).toBe('Doua');
+    expect(orderTimelineActor({ full_name: 'Lena', email: null }, { user_id: 'u1' })).toBe('Lena');
     expect(orderTimelineActor(null, { user_id: 'u1' })).toBe('Unknown user');
   });
   it('says "Public" for a public-link step and "Deleted user" for a stamped one', () => {

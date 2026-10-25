@@ -100,15 +100,15 @@
   ];
 
   const SITES = [
-    { id: "fresno-main", name: "Fresno — Main Campus",      sub: "2822 W Fig Ave" },
-    { id: "fresno-na",   name: "Fresno — North Annex",      sub: "1145 E Shaw Ave" },
-    { id: "bakers",      name: "Bakersfield Center",        sub: "500 Ming Ave" },
-    { id: "modesto",     name: "Modesto Site",              sub: "1620 Coffee Rd" },
-    { id: "visalia",     name: "Visalia Learning Center",   sub: "310 NW 3rd Ave" },
+    { id: "fresno-main", name: "Fresno — Main Campus",      sub: "2800 W Sample Ave" },
+    { id: "fresno-na",   name: "Fresno — North Annex",      sub: "1100 E Test Ave" },
+    { id: "bakers",      name: "Bakersfield Center",        sub: "500 Example Ave" },
+    { id: "modesto",     name: "Modesto Site",              sub: "1600 Demo Rd" },
+    { id: "visalia",     name: "Visalia Learning Center",   sub: "300 NW Sample St" },
   ];
 
   const PEOPLE = [
-    { id: "you",  name: "Branden Vincent Walker", sub: "Super Admin · you" },
+    { id: "you",  name: "Carsten Hartley Fowler", sub: "Super Admin · you" },
     { id: "mg",   name: "Maria Gutierrez",        sub: "Site Coordinator · Fresno" },
     { id: "dc",   name: "DeShawn Carter",         sub: "Teacher · North Annex" },
     { id: "at",   name: "Alyssa Tran",            sub: "Front Office · Fresno" },

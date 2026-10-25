@@ -9,7 +9,7 @@ this document has already outlived one such drift.
 ## Why this document exists
 
 Learn4Life's warehouse ticketing runs on Zendesk's **email intake**: mail sent
-to `dc4@learn4life.org` becomes a Zendesk ticket. Two StockPilot features
+to `dc4@sampleorg.test` becomes a Zendesk ticket. Two StockPilot features
 compose mail to that address — the **delivery-request assistant** (web
 storefront, web order-detail page, and the mobile order screen) and the
 **maintenance-request email** (web and mobile). Ticket creation therefore
@@ -71,12 +71,12 @@ Defined once, in `packages/core/src/orders/delivery-request-recipients.ts:58-61`
 (delivery) and `packages/core/src/maintenance/constants.ts:14-17`
 (maintenance) — both currently the same pair:
 
-- **To: `dc4@learn4life.org`** — the ticket-creating intake. Mail here becomes
+- **To: `dc4@sampleorg.test`** — the ticket-creating intake. Mail here becomes
   a Zendesk ticket through Zendesk's email channel, which is entirely outside
   StockPilot's observation. Nothing in this repository calls a Zendesk API for
   this flow (the separate Zendesk console work, PR #39/#40, is unrelated to
   intake mail).
-- **Cc: `arosas@cvwest.org`** — Andrew Rosas receives a **direct copy**. This
+- **Cc: `jstone@site1.test`** — Jordan Stone receives a **direct copy**. This
   CC is the workflow's acceptance gate: the builder throws rather than compose
   a draft without it (`packages/core/src/orders/delivery-request.ts:135-140`),
   and every transport is separately pinned to carry it
@@ -84,7 +84,7 @@ Defined once, in `packages/core/src/orders/delivery-request-recipients.ts:58-61`
   **The copy is the only promise.** Existing Zendesk rules MAY use the CC to
   route or assign, but StockPilot cannot observe that, so no StockPilot copy
   may promise it. The allowed sentence is interpolated, never retyped:
-  "A copy will also be sent to arosas@cvwest.org"
+  "A copy will also be sent to jstone@site1.test"
   (`packages/core/src/orders/delivery-request-recipients.ts:138-139`,
   `packages/core/src/maintenance/constants.ts:39-40`). "This ticket will be
   assigned to him" is not an allowed sentence.
@@ -98,8 +98,8 @@ in this document; the validation seam it will pass through is
 ### Display-name chips
 
 On the Outlook Web transport only, the addresses ride as name-addr strings —
-`Fresno Warehouse DC4 <dc4@learn4life.org>` and
-`Andrew Rosas <arosas@cvwest.org>` (`delivery-request-recipients.ts:91-94`,
+`Fresno Warehouse DC4 <dc4@sampleorg.test>` and
+`Jordan Stone <jstone@site1.test>` (`delivery-request-recipients.ts:91-94`,
 tenant-verified 2026-08-01). The native app, `mailto:` and clipboard transports
 all carry **bare addresses**, deliberately
 (`packages/core/src/orders/delivery-request.test.ts:131-144`). The intake
@@ -161,7 +161,7 @@ Header block, exact shape (pinned `storefront-logic.test.ts:619,729,793-794`):
 DELIVERY REQUEST — StockPilot
 
 Order: SO-000049
-Requested by: Marissa Delgado (mdelgado@learn4life.org)
+Requested by: Rebecca Lindsey (rlindsey@sampleorg.test)
 Fulfillment method: Delivery
 ```
 
@@ -185,7 +185,7 @@ DC4
 
 DELIVERY DESTINATION
 CVW Clovis (CVW-CLO)
-1295 Shaw Ave
+1200 Test Ave
 Fresno, California 93612
 ```
 
@@ -201,7 +201,7 @@ PICKUP FROM
 DC4 will-call desk
 
 COLLECTED BY
-Branden Vincent-Walker (branden@cvwest.org)
+Carsten Hartley-Fowler (carsten@site1.test)
 ```
 
 Then, in order: `NEEDED BY` (org-timezone rendered, zone named, omitted when
@@ -279,7 +279,7 @@ Needs a Zendesk-side check (or an owner decision accepting the risk) first:
 
 - **The To address.** Changing it points the feature at a different or
   nonexistent intake. This is the whole contract.
-- **The CC address or its removal.** The copy to Andrew is the workflow's
+- **The CC address or its removal.** The copy to the DC4 lead is the workflow's
   acceptance gate, and any Zendesk routing rules that DO reference the CC are
   invisible to us.
 - **Subject wording** — the literal `Delivery Request` / `Pickup Request`
@@ -301,14 +301,14 @@ Needs a Zendesk-side check (or an owner decision accepting the risk) first:
 StockPilot has no read access to the Zendesk instance. Each of the following
 is assumed but has never been verified from this side:
 
-1. Ticket creation is unconditional — any mail to `dc4@learn4life.org` becomes
+1. Ticket creation is unconditional — any mail to `dc4@sampleorg.test` becomes
    a ticket, with no allowlist, no subject filter, and no suspended-ticket
    trap that a first-time sender (a new employee's address) could fall into.
 2. No trigger, automation, view or SLA rule matches on the subject literals
    `Delivery Request` or `[StockPilot Maintenance`. If any does, subject
    changes (including the pickup-subject change shipped 2026-08-16) need
    coordination.
-3. The CC to `arosas@cvwest.org` is a courtesy copy only, and no Zendesk rule
+3. The CC to `jstone@site1.test` is a courtesy copy only, and no Zendesk rule
    routes or assigns based on it. If a rule exists, changing the CC (including
    the per-org routing work in flight) needs coordination.
 4. Nothing parses the body — the `Order:` line, the item rows, the block
@@ -320,7 +320,7 @@ is assumed but has never been verified from this side:
 6. Replies from Zendesk go to the employee (the requester), and no
    StockPilot-side mailbox is expected to receive or act on them.
 7. The intake accepts mail from every domain employees actually send from
-   (`@cvwest.org`, `@learn4life.org`, personal accounts if any are in use).
+   (the customer's own mail domains, personal accounts if any are in use).
 
 Until confirmed, treat every one of these as unknown, not as false: the rule
 for copy remains that StockPilot promises only what it can observe, which is

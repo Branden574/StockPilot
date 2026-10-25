@@ -467,7 +467,7 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
+      'Jordan notified',
       'Ticket assigned',
       'Email sent',
     ];
@@ -733,7 +733,7 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
+      'Jordan notified',
       'Ticket assigned',
       'Email sent',
       // §GC-4 additions (Maintenance Resolved plan) — this surface gains

@@ -156,8 +156,8 @@ function FootersBoard(){
   return (
     <Board w={640}>
       <BoardTitle sub="Four footers, matched to the catalog’s real preference behavior — no fake unsubscribe on essential mail, no jargon for external recipients.">Footer variants</BoardTitle>
-      <F label="Essential transactional — security, invites, confirmations, receipts" kind="ess" reason="Sent to branden574@gmail.com because a password reset was requested for this account."></F>
-      <F label="Preference-controlled — order status, schedule, digest" kind="pref" reason="Order-status updates for requests placed by branden574@gmail.com."></F>
+      <F label="Essential transactional — security, invites, confirmations, receipts" kind="ess" reason="Sent to owner@example.com because a password reset was requested for this account."></F>
+      <F label="Preference-controlled — order status, schedule, digest" kind="pref" reason="Order-status updates for requests placed by owner@example.com."></F>
       <F label="External recipient — portal invite, signer receipt" kind="ext" reason="You’re receiving this because L4L North Region uses StockPilot to run their supplier portal. No StockPilot account is required."></F>
       <F label="Internal — support tickets" kind="int" reason="Routed to the support queue by ticket rules (High → immediate)."></F>
     </Board>);

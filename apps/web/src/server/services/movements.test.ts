@@ -414,7 +414,7 @@ describe('MovementsService.list', () => {
   // two-surface split this resolution exists to close.
 
   it("resolves a 'Return restock (return <uuid>)' reason to the return number", async () => {
-    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const returnId = 'e000001f-0000-4000-8000-00000000001f';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -448,7 +448,7 @@ describe('MovementsService.list', () => {
   });
 
   it('drops the parenthetical rather than leaking a uuid when the return cannot be resolved', async () => {
-    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const returnId = 'e000001f-0000-4000-8000-00000000001f';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -779,7 +779,7 @@ describe('MovementsService.exportRows', () => {
   });
 
   it('resolves a return reference in the CSV exactly as the screen does', async () => {
-    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const returnId = 'e000001f-0000-4000-8000-00000000001f';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [

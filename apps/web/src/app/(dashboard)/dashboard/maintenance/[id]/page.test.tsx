@@ -202,10 +202,10 @@ beforeEach(() => {
     emailRouting: {
       state: 'valid',
       recipients: {
-        to: 'dc4@learn4life.org',
-        cc: 'arosas@cvwest.org',
+        to: 'dc4@sampleorg.test',
+        cc: 'jstone@site1.test',
         toName: 'Fresno Warehouse DC4',
-        ccName: 'Andrew Rosas',
+        ccName: 'Jordan Stone',
       },
     },
   }));
@@ -282,7 +282,7 @@ describe('internal notes gating (brief §5/§23 — manage-only, never a request
       buildCtx({
         userId: 'mgr-1',
         permissions: ['maintenance_requests:manage'],
-        membersData: [{ user_id: 'mgr-1', user: { id: 'mgr-1', full_name: 'Andrew Rosas', email: 'andrew@l4l.org' } }],
+        membersData: [{ user_id: 'mgr-1', user: { id: 'mgr-1', full_name: 'Jordan Stone', email: 'jordan@example.org' } }],
       }) as never,
     );
     get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
@@ -413,7 +413,7 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
+    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -900,7 +900,7 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
+    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',

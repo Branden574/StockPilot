@@ -6,7 +6,7 @@
 **Audience:** the implementation planner. Every claim below carries `file:line` or a prod SQL query.
 
 **Feature under audit:** after an employee places an order, the order-success surface offers a
-prefilled Outlook compose deep link to `dc4@learn4life.org` (which becomes a Zendesk ticket via
+prefilled Outlook compose deep link to `dc4@sampleorg.test` (which becomes a Zendesk ticket via
 *email intake*, not the Zendesk API), prefilling requester, destination, requested date and every
 line item; falls back to `mailto:` then clipboard; never auto-sends; never claims a ticket exists.
 
@@ -349,7 +349,7 @@ Reasoning, in order of strength:
 
 **Migrations you might be tempted to write, and the honest counter-argument:**
 
-- *A destination-mailbox config column.* There is genuinely nowhere to put `dc4@learn4life.org` today
+- *A destination-mailbox config column.* There is genuinely nowhere to put `dc4@sampleorg.test` today
   (see §OPEN QUESTIONS). But an env var or a `lib/site.ts` constant solves it with zero DDL, and the
   brief says avoid migrations unless the schema cannot represent the data. **Defer; ask the owner.**
 - *A `delivery_instructions` / `building` / `room` column.* These fields do not exist (see FIELD
@@ -373,12 +373,12 @@ Prod counts from `xizpqmhhslgzbuqtjubv` (78 order_requests, 150 order_request_li
 | **Requester phone** | `order_requests.requester_phone` | **EXISTS but effectively dead on this path.** The internal storefront hardcodes `requesterPhone: null` (`orders-storefront.tsx:763`). Only 10/78 prod rows have one (all from the public-link path). |
 | **Fulfillment method** | `order_requests.fulfillment_type text NOT NULL DEFAULT 'delivery'`, CHECK `order_requests_fulfillment_type_chk` ∈ `{'pickup','delivery'}` | **EXISTS and is reliable.** ⚠️ DB default is `'delivery'` but the server action's zod default is `'pickup'` (`actions/order-requests.ts:52`) — a rolling-deploy safety for old clients. Do not assume they agree. |
 | **Delivery destination (site)** | `order_requests.delivery_charter_id` → `charters.id` (FK `order_requests_delivery_charter_id_fkey`, ON DELETE RESTRICT). UI calls a charter a **"site"**. | **EXISTS — but see the constraint hole below.** Guarded by `order_requests_delivery_target_chk`: `(delivery AND charter NOT NULL) OR (pickup AND charter NULL)`. |
-| — destination **street/city/state/zip** | `charters.address` **jsonb**, keys `line1`, `line2`, `city`, `region`, `postalCode`, `country` (camelCase; **`region`, not `state`**) | **EXISTS in DB, ABSENT everywhere the feature can currently see it.** 12/16 charters have an address; 4 have `null`. Not in `loadChartersForWarehouse` (`orders-new-catalog.ts:240-263`), not in `OrderRequestsService.get()`. Verified prod sample: `CVW Clovis → {"city":"Fresno","line1":"1295 Shaw Ave","region":"California","country":"United States","postalCode":"93612"}`. ⚠️ Data quality is imperfect — `KVA Tulare` has `"region":"Calfornia"` (sic) and `"city":"Fresno"` for a Tulare address. |
+| — destination **street/city/state/zip** | `charters.address` **jsonb**, keys `line1`, `line2`, `city`, `region`, `postalCode`, `country` (camelCase; **`region`, not `state`**) | **EXISTS in DB, ABSENT everywhere the feature can currently see it.** 12/16 charters have an address; 4 have `null`. Not in `loadChartersForWarehouse` (`orders-new-catalog.ts:240-263`), not in `OrderRequestsService.get()`. Verified prod sample: `CVW Clovis → {"city":"Fresno","line1":"1200 Test Ave","region":"California","country":"United States","postalCode":"93612"}`. ⚠️ Data quality is imperfect — `KVA Tulare` has `"region":"Calfornia"` (sic) and `"city":"Fresno"` for a Tulare address. |
 | — destination **building** | — | **ABSENT.** No `building` field on `charters.address`, on `order_requests`, or anywhere in the public schema. |
 | — destination **room** | — | **ABSENT.** Same. If DC4 needs "deliver to Room 214, B Wing" there is nowhere to put it except `order_requests.notes` free text. |
 | — destination **contact name** | `charters.contact_name` | **Schema-present, DATA-ABSENT: 0 of 16 charters populated.** Will render blank. |
 | — destination **contact email** | `charters.contact_email` (citext) | **Schema-present, DATA-ABSENT: 0 of 16.** |
-| — destination **contact phone** | `charters.contact_phone` | **Schema-present, near-empty: 1 of 16** (`CVW-Mendota → +18773605327`). |
+| — destination **contact phone** | `charters.contact_phone` | **Schema-present, near-empty: 1 of 16** (one site has a number; it is not reproduced here). |
 | **Pickup destination** | `order_requests.pickup_location_notes` (text) | **Schema-present, DATA-ABSENT: 0 of 78 prod rows.** The storefront hardcodes `pickupLocationNotes: null` (`orders-storefront.tsx:766`) and instead renders a synthetic label `` `${warehouseName} will-call desk` `` (`:1155-1157`). A real pickup address would have to come from `warehouses.address` (jsonb) via `warehouse_id`. |
 | **Origin warehouse** | `order_requests.warehouse_id` NOT NULL → `warehouses` (`name`, `code`, `address` jsonb, `contact_name`, `contact_email`, `contact_phone`) | EXISTS and always resolvable. `OrderRequestDetail.warehouseName` already resolves the name. |
 | **Requested date** | `order_requests.needed_by` **`timestamp with time zone`**, nullable | **EXISTS in DB, ABSENT from the modal's props.** Only **8 of 78** prod rows have one — "no requested date" is the common case, and the UI labels it "Needed by — Optional" (`storefront-cart.tsx:258-260`). **Good news: it is timestamptz + captured via `<input type="datetime-local">` (`storefront-cart.tsx:261-268`) normalised through `new Date(...).toISOString()` (`orders-storefront.tsx:761`), so it carries a real instant — the brief's date-only day-shift risk does not apply here.** Render with `formatOrgDateTime`. |
@@ -390,12 +390,12 @@ Prod counts from `xizpqmhhslgzbuqtjubv` (78 order_requests, 150 order_request_li
 | **Line: per-line note** | `order_request_lines.notes` (text) | **Schema-present, DEAD on this path.** The storefront maps only `{itemId, quantity}` (`orders-storefront.tsx:773`) and **0 of 150** prod line rows have a note. |
 | **Line: bundle expansion** | — | **ABSENT.** `order_request_lines` has no `bundle_id` / `parent_line_id` / component expansion. A bundle appears as one line whose `item_id` points at an `inventory_items.is_bundle = true` row. Expanding it requires an explicit `bundle_components` join. |
 | **Order notes / message** | `order_requests.notes` (text, zod max 2000) | EXISTS, 32 of 78 populated. This is the requester-facing message and is safe to include. |
-| **Internal notes** | `order_requests.internal_notes` (text) | EXISTS — **staff-only. MUST NOT appear in an outbound email to `dc4@learn4life.org`.** Written by manager actions at `order-requests.ts:1874,2963`. |
+| **Internal notes** | `order_requests.internal_notes` (text) | EXISTS — **staff-only. MUST NOT appear in an outbound email to `dc4@sampleorg.test`.** Written by manager actions at `order-requests.ts:1874,2963`. |
 | **Order status at send time** | `order_requests.status` | EXISTS. A freshly placed internal order is inserted as **`'pending_approval'`** (`order-requests.ts:931`) — **not approved, not scheduled.** The full CHECK enum is 14 values: `pending_confirmation, pending_approval, approved, pick_slip_generated, picking_in_progress, picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit, backordered, completed, denied, cancelled`. |
 | **Priority / urgency / rush** | — | **ABSENT.** `order_requests` has no `priority`, `urgency`, `rush`, or `is_expedited` column. The only `priority` column in the entire public schema is `support_tickets.priority`. **The brief's priority field does not exist for orders.** |
 | **Delivery instructions** | — | **ABSENT.** No `delivery_instructions` / `dropoff_instructions` / `ship_to` column. A schema-wide scan for `instruction\|dropoff\|drop_off\|ship_to\|deliver_to` matched only `public_request_links.instructions` (unrelated — public-link page copy). |
 | **Destination address snapshot** | — | **ABSENT.** Unlike `unit_cost_at_request` (which snapshots price at request time), no address or contact is copied onto `order_requests`. Editing a charter's address retroactively changes what every historical order "was shipped to". |
-| **`dc4@learn4life.org`** | — | **ABSENT from code AND DB.** Zero hits for `dc4@` or `learn4life.org` in `apps/web/src`, `apps/mobile`, `packages`, `docs` (only match is an unrelated Zendesk subdomain placeholder at `components/zendesk/zendesk-quick-access.tsx:71`). `public.organizations` has 33 columns and none is an ops/settings email; there is **no `organization_settings` table**. `warehouses.contact_email` for L4L's DC4 holds `arosas@cvwest.org` — **not** the DC4 intake address. |
+| **`dc4@sampleorg.test`** | — | **ABSENT from code AND DB.** Zero hits for `dc4@` or the customer's mail domain in `apps/web/src`, `apps/mobile`, `packages`, `docs` (only match is an unrelated Zendesk subdomain placeholder at `components/zendesk/zendesk-quick-access.tsx:71`). `public.organizations` has 33 columns and none is an ops/settings email; there is **no `organization_settings` table**. `warehouses.contact_email` for L4L's DC4 holds `jstone@site1.test` — **not** the DC4 intake address. |
 
 ### The honest substitute for "delivery destination"
 
@@ -424,9 +424,9 @@ For **pickup** orders there is no destination at all in the data — only the sy
 
 *Not decided here. Each one is a place where the brief assumes something the codebase contradicts.*
 
-1. **Where does `dc4@learn4life.org` live?** It exists nowhere in code or DB, and there is no org-level
+1. **Where does `dc4@sampleorg.test` live?** It exists nowhere in code or DB, and there is no org-level
    or warehouse-level config field to hold it (`organizations` has no settings/ops email column; there
-   is no `organization_settings` table; `warehouses.contact_email` for DC4 is `arosas@cvwest.org`).
+   is no `organization_settings` table; `warehouses.contact_email` for DC4 is `jstone@site1.test`).
    Three options: (a) hard-code next to `SITE_URL` in `apps/web/src/lib/site.ts`; (b)
    `NEXT_PUBLIC_DELIVERY_REQUEST_EMAIL` env var — requires edits in **three** code locations plus
    `.env.example` plus Vercel (§4); (c) a new config column — the only option needing a migration.

@@ -81,7 +81,7 @@ describe('isMovementNoteEditable', () => {
   it('refuses the post-0231 leak: reason is PO {number}, notes still the sentinel', () => {
     // The 80 prod rows this whole change exists for. The old reason-only test
     // called these editable, and saving would have destroyed the receipt link.
-    expect(isMovementNoteEditable('PO CVW-002201', SENTINEL)).toBe(false);
+    expect(isMovementNoteEditable('PO DEMO-002201', SENTINEL)).toBe(false);
     expect(isMovementNoteEditable('receipt_reversal', SENTINEL)).toBe(false);
   });
 
@@ -94,7 +94,7 @@ describe('isMovementNoteEditable', () => {
   });
 
   it('allows every ordinary row, including a PO row with a genuine note', () => {
-    expect(isMovementNoteEditable('PO CVW-002201', 'Pallet arrived damp')).toBe(true);
+    expect(isMovementNoteEditable('PO DEMO-002201', 'Pallet arrived damp')).toBe(true);
     expect(isMovementNoteEditable('Damaged in transit', null)).toBe(true);
     expect(isMovementNoteEditable(null, null)).toBe(true);
     expect(isMovementNoteEditable(null, 'Free-text note')).toBe(true);

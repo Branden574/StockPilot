@@ -22,10 +22,10 @@ import { MaintenanceReview } from './maintenance-review';
 const VALID_ROUTING: OrgEmailRoutingState = {
   state: 'valid',
   recipients: {
-    to: 'dc4@learn4life.org',
-    cc: 'arosas@cvwest.org',
+    to: 'dc4@sampleorg.test',
+    cc: 'jstone@site1.test',
     toName: 'Fresno Warehouse DC4',
-    ccName: 'Andrew Rosas',
+    ccName: 'Jordan Stone',
   },
 };
 
@@ -148,7 +148,7 @@ describe('MaintenanceReview x email routing states', () => {
     );
     expect(
       screen.getByText(
-        'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+        'This request will be emailed to dc4@sampleorg.test. A copy will also be sent to jstone@site1.test.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Open in Outlook/i })).toBeInTheDocument();
@@ -170,8 +170,8 @@ describe('MaintenanceReview x email routing states', () => {
     expect(screen.queryByTestId('maintenance-routing-hint')).toBeNull();
     // The record flow survives; the compiled tenant addresses do not appear.
     expect(screen.getByText('Review maintenance request')).toBeInTheDocument();
-    expect(container.textContent).not.toContain('learn4life');
-    expect(container.textContent).not.toContain('cvwest');
+    expect(container.textContent).not.toContain('sampleorg');
+    expect(container.textContent).not.toContain('site1');
     // The saved sentence no longer promises an Outlook window that will
     // never open.
     expect(screen.getByText('Your request has been saved in StockPilot.')).toBeInTheDocument();
@@ -212,6 +212,6 @@ describe('MaintenanceReview x email routing states', () => {
     const hint = screen.getByTestId('maintenance-routing-hint');
     expect(hint).toHaveTextContent('Email routing for maintenance requests is invalid');
     expect(hint).toHaveTextContent('must be exactly one plain email address');
-    expect(container.textContent).not.toContain('learn4life');
+    expect(container.textContent).not.toContain('sampleorg');
   });
 });

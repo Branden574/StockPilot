@@ -19,7 +19,7 @@ const LEGACY = `Order pick (order_request ${ORDER_ID})`;
 const LABELS = new Map([[ORDER_ID, 'SO-000060']]);
 
 /** The shape the SHIPPED return RPCs (0153/0154/0197) write today. */
-const RETURN_ID = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+const RETURN_ID = 'e000001f-0000-4000-8000-00000000001f';
 const LEGACY_RETURN = `Return restock (return ${RETURN_ID})`;
 const RETURN_LABELS = new Map([[RETURN_ID, 'RMA-000012']]);
 
@@ -30,8 +30,8 @@ describe('legacyOrderRefId', () => {
 
   it('reads cancel_order_request rows too — same parenthetical, different prose', () => {
     expect(
-      legacyOrderRefId('Order cancelled (order_request 1d265b37-4b5c-49bb-bc12-07b0ad270cff)'),
-    ).toBe('1d265b37-4b5c-49bb-bc12-07b0ad270cff');
+      legacyOrderRefId('Order cancelled (order_request 10000004-0000-4000-8000-000000000004)'),
+    ).toBe('10000004-0000-4000-8000-000000000004');
   });
 
   it('lowercases so the id always matches a map keyed off the database value', () => {
@@ -43,7 +43,7 @@ describe('legacyOrderRefId', () => {
     expect(legacyOrderRefId(undefined)).toBeNull();
     expect(legacyOrderRefId('')).toBeNull();
     expect(legacyOrderRefId('Cycle count adjustment')).toBeNull();
-    expect(legacyOrderRefId('PO CVW-002201')).toBeNull();
+    expect(legacyOrderRefId('PO DEMO-002201')).toBeNull();
   });
 
   // A return id here would be handed to /dashboard/orders/{id} by every
@@ -51,7 +51,7 @@ describe('legacyOrderRefId', () => {
   // order. `legacyRefMatch` is what reads returns.
   it('is null for a RETURN reference even though the module resolves those', () => {
     expect(legacyOrderRefId(LEGACY_RETURN)).toBeNull();
-    expect(legacyOrderRefId('Something (receipt ecbd03b4-2fbe-4e0a-8507-021a9bd3feed)')).toBeNull();
+    expect(legacyOrderRefId('Something (receipt e000001f-0000-4000-8000-00000000001f)')).toBeNull();
   });
 
   it('does not match a non-uuid in the parenthetical', () => {
@@ -94,14 +94,14 @@ describe('legacyRefMatch — the kind matters, not just the id', () => {
 
 describe('collectLegacyRefIdsByKind — one lookup per KIND, never per row', () => {
   it('splits the page into its order and return buckets, deduped', () => {
-    const other = '1d265b37-4b5c-49bb-bc12-07b0ad270cff';
+    const other = '10000004-0000-4000-8000-000000000004';
     expect(
       collectLegacyRefIdsByKind([
         { reason: LEGACY },
         { reason: LEGACY },
         { reason: LEGACY_RETURN },
         { reason: `Order cancelled (order_request ${other})` },
-        { reason: 'PO CVW-002201' },
+        { reason: 'PO DEMO-002201' },
         { reason: null },
       ]),
     ).toEqual({ order_request: [ORDER_ID, other], return: [RETURN_ID] });
@@ -125,13 +125,13 @@ describe('returnNumberLabels', () => {
 
 describe('collectLegacyOrderRefIds — one lookup per page, not per row', () => {
   it('dedupes ids across rows and skips rows with no reference', () => {
-    const other = '1d265b37-4b5c-49bb-bc12-07b0ad270cff';
+    const other = '10000004-0000-4000-8000-000000000004';
     expect(
       collectLegacyOrderRefIds([
         { reason: LEGACY },
         { reason: LEGACY },
         { reason: `Order cancelled (order_request ${other})` },
-        { reason: 'PO CVW-002201' },
+        { reason: 'PO DEMO-002201' },
         { reason: null },
         { reason: undefined },
       ]),
@@ -320,15 +320,15 @@ describe('movementOrderRefId — what the link points at', () => {
   it('ignores reference columns of another type', () => {
     expect(
       movementOrderRefId({
-        reason: 'Return restock (return ecbd03b4-2fbe-4e0a-8507-021a9bd3feed)',
+        reason: 'Return restock (return e000001f-0000-4000-8000-00000000001f)',
         reference_type: 'return',
-        reference_id: 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed',
+        reference_id: 'e000001f-0000-4000-8000-00000000001f',
       }),
     ).toBeNull();
   });
 
   it('is null when there is nothing to link to', () => {
-    expect(movementOrderRefId({ reason: 'PO CVW-002201' })).toBeNull();
+    expect(movementOrderRefId({ reason: 'PO DEMO-002201' })).toBeNull();
     expect(movementOrderRefId({})).toBeNull();
   });
 });

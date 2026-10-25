@@ -8,12 +8,12 @@ const baseDetail = {
     organization_id: 'org-1',
     warehouse_id: 'wh-1',
     requester_user_id: null,
-    requester_email: 'branden.walker@cvsouth.org',
-    requester_name: 'Doua Vang',
+    requester_email: 'carsten.fowler@school.test',
+    requester_name: 'Lena Hale',
     requester_org_label: 'Clovis',
     source: 'internal' as const,
     status: 'pick_slip_generated' as const,
-    notes: 'Delivery for Doua Vang to Clovis',
+    notes: 'Delivery for Lena Hale to Clovis',
     requester_phone: null,
     delivery_charter_id: null,
     pickup_location_notes: null,
@@ -36,10 +36,10 @@ const baseDetail = {
     completed_by: null,
   },
   warehouseName: 'DC4',
-  requesterDisplay: 'Doua Vang',
+  requesterDisplay: 'Lena Hale',
   // Resolved requester fields the templates now read (see get()).
-  requesterName: 'Doua Vang',
-  requesterEmail: 'branden.walker@cvsouth.org',
+  requesterName: 'Lena Hale',
+  requesterEmail: 'carsten.fowler@school.test',
   reservations: [],
   lines: [
     {
@@ -103,7 +103,7 @@ describe('renderPickSlipPdf', () => {
   it('pre-prints the claimed picker name (and omits it when unclaimed)', async () => {
     const claimed = await renderPickSlipPdf({
       ...baseDetail,
-      assignedPickerName: 'Daniel Hernandez',
+      assignedPickerName: 'Devon Keller',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     const unclaimed = await renderPickSlipPdf({
@@ -152,7 +152,7 @@ describe('renderPickSlipPdf', () => {
         requester_email: null,
       },
       requesterName: 'Jane Doe',
-      requesterEmail: 'jane@cvsouth.org',
+      requesterEmail: 'jane@school.test',
     };
     const buf = await renderPickSlipPdf(selfSubmit);
     expect(buf).toBeInstanceOf(Buffer);

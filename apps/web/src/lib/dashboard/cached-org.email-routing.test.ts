@@ -83,7 +83,7 @@ describe('getOrgEmailRouting', () => {
     expect(result.state).toBe('invalid');
     if (result.state !== 'invalid') throw new Error('expected invalid');
     expect(result.reason).toMatch(/must be exactly one plain email address/);
-    expect(JSON.stringify(result)).not.toContain('learn4life');
+    expect(JSON.stringify(result)).not.toContain('sampleorg');
   });
 });
 

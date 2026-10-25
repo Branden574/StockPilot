@@ -179,7 +179,7 @@ function bookFixture(overrides: Record<string, unknown> = {}) {
   return {
     id: ITEM_ID,
     name: 'Into Algebra 1',
-    sku: 'sp-8n8lr-8nd',
+    sku: 'sp-8dem6-ab1',
     barcode: '9780358118480',
     model_number: null,
     item_type: 'book',

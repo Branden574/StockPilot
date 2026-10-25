@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parsePdfText } from './pdf';
 
 const FIXTURE = readFileSync(
-  join(__dirname, 'fixtures/po-cvsii-001824.txt'),
+  join(__dirname, 'fixtures/po-demo-000101.txt'),
   'utf8',
 );
 
@@ -12,7 +12,7 @@ describe('parsePdfText (Staples format)', () => {
   const po = parsePdfText(FIXTURE);
 
   it('extracts the PO number', () => {
-    expect(po.poNumber).toBe('PO-CVSII-001824');
+    expect(po.poNumber).toBe('PO-DEMO-000101');
   });
 
   it('extracts the vendor', () => {
@@ -23,8 +23,8 @@ describe('parsePdfText (Staples format)', () => {
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });
 
-  it('extracts a Fresno shipping address', () => {
-    expect(po.shippingAddress).toMatch(/Fresno/i);
+  it('extracts an Anytown shipping address', () => {
+    expect(po.shippingAddress).toMatch(/Anytown/i);
   });
 
   it('produces at least 13 line rows', () => {

@@ -408,27 +408,27 @@ describe('formatSiteAddressLines', () => {
   it('renders a full US address as street / city-region-postal / country', () => {
     expect(
       formatSiteAddressLines({
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: null,
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       }),
-    ).toEqual(['1295 Shaw Ave', 'Fresno, California 93612', 'United States']);
+    ).toEqual(['1200 Test Ave', 'Fresno, California 93612', 'United States']);
   });
 
   it('keeps line2 as its own line when present', () => {
     expect(
       formatSiteAddressLines({
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: 'Suite 200',
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       }),
-    ).toEqual(['1295 Shaw Ave', 'Suite 200', 'Fresno, California 93612', 'United States']);
+    ).toEqual(['1200 Test Ave', 'Suite 200', 'Fresno, California 93612', 'United States']);
   });
 
   it('returns NO lines at all for a null address — 4 of 16 sites have none', () => {
@@ -442,8 +442,8 @@ describe('formatSiteAddressLines', () => {
   });
 
   it('omits the city line entirely when city, region and postal are all missing', () => {
-    expect(formatSiteAddressLines({ line1: '1295 Shaw Ave', country: 'United States' })).toEqual([
-      '1295 Shaw Ave',
+    expect(formatSiteAddressLines({ line1: '1200 Test Ave', country: 'United States' })).toEqual([
+      '1200 Test Ave',
       'United States',
     ]);
   });
@@ -491,7 +491,7 @@ function makeDraftInput(overrides: Partial<DeliveryRequestInput> = {}): Delivery
       name: 'CVW Clovis',
       code: 'CVW-CLO',
       address: {
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: null,
         city: 'Fresno',
         region: 'California',
@@ -499,8 +499,8 @@ function makeDraftInput(overrides: Partial<DeliveryRequestInput> = {}): Delivery
         country: 'United States',
       },
     },
-    requestedFor: 'Branden Vincent-Walker',
-    requesterEmail: 'branden@cvwest.org',
+    requestedFor: 'Carsten Hartley-Fowler',
+    requesterEmail: 'carsten@site1.test',
     neededByLocal: '2026-08-05T09:00',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
@@ -521,14 +521,14 @@ describe('buildDeliveryRequestDraft — recipients', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     expect(draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
     expect(draft.cc).toBe(DELIVERY_REQUEST_EMAIL.cc);
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 
   it('never puts either recipient in the body — the CC is a real field, not prose', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
-    expect(draft.body).not.toContain('dc4@learn4life.org');
-    expect(draft.body).not.toContain('arosas@cvwest.org');
+    expect(draft.body).not.toContain('dc4@sampleorg.test');
+    expect(draft.body).not.toContain('jstone@site1.test');
   });
 
   it('accepts NO recipient argument — there is no parameter for a caller to poison', () => {
@@ -547,8 +547,8 @@ describe('buildDeliveryRequestDraft — recipients', () => {
         },
       }),
     );
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 });
 
@@ -644,7 +644,7 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).toContain('Fulfillment method: Delivery');
     expect(body).toContain('FROM (WAREHOUSE)\nDC4');
     expect(body).toContain('DELIVERY DESTINATION\nCVW Clovis (CVW-CLO)');
-    expect(body).toContain('1295 Shaw Ave');
+    expect(body).toContain('1200 Test Ave');
     expect(body).toContain('Fresno, California 93612');
   });
 
@@ -838,13 +838,13 @@ describe('buildDeliveryRequestDraft — pickup body (owner decision: pickup gets
   it('names where to collect from and who is collecting', () => {
     const { body } = pickup();
     expect(body).toContain('PICKUP FROM\nDC4 will-call desk');
-    expect(body).toContain('COLLECTED BY\nBranden Vincent-Walker (branden@cvwest.org)');
+    expect(body).toContain('COLLECTED BY\nCarsten Hartley-Fowler (carsten@site1.test)');
   });
 
   it('prints NO destination block and no empty or invented address', () => {
     const { body } = pickup();
     expect(body).not.toContain('DELIVERY DESTINATION');
-    expect(body).not.toContain('1295 Shaw Ave');
+    expect(body).not.toContain('1200 Test Ave');
     expect(body).not.toContain('Address:');
   });
 
@@ -1016,8 +1016,8 @@ describe('buildDeliveryRequestDraft — plain text and safety', () => {
 describe('buildDeliveryRequestDraft — condensed mode', () => {
   it('keeps both recipients, the subject and the counts', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
     expect(draft.subject).toBe('Delivery Request — CVW Clovis');
     expect(draft.condensed).toBe(true);
     expect(draft.body).toContain('ITEMS (2 lines, 7 units)');
@@ -1052,7 +1052,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
     };
     const draft = buildDeliveryRequestDraft(input, { condensed: true });
     expect(draft.body).not.toContain('APP-POLO-W');
-    expect(draft.body).not.toContain('1295 Shaw Ave');
+    expect(draft.body).not.toContain('1200 Test Ave');
     expect(draft.body.length).toBeLessThan(buildDeliveryRequestDraft(input).body.length);
   });
 
@@ -1112,15 +1112,15 @@ describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () 
 
   it('keeps both recipients at that size', () => {
     const draft = buildDeliveryRequestDraft(bigInput(), { condensed: true });
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 });
 
 /*
  * THE DEGRADATION LADDER (2026-08-13, order SO-000080).
  *
- * Marissa's order — 11 lines, 295 units — produced an email whose entire item
+ * A site requester's order — 11 lines, 295 units — produced an email whose entire item
  * section was the heading `ITEMS (11 lines, 295 units)`. DC4 received a
  * delivery request naming no items. The cause was not the URL limit: it was
  * that condensing was ALL-OR-NOTHING. `{ condensed: true }` dropped every row
@@ -1559,7 +1559,7 @@ describe('prepareDeliveryRequest — the ladder, measured end to end', () => {
       '11. Trash Liner 40 Gallon Clear — SP-BN4ZT-KR0 — qty 5',
     );
     expect(prepared.clipboardText).toContain('SP-ZE7TG-XK6');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 
   it("SO-000080's requester is unrecorded, and the draft says so instead of inventing one", () => {
@@ -1652,7 +1652,7 @@ describe('buildOutlookComposeUrl', () => {
     // browser's mailto protocol handler instead, whose parser must honor cc
     // per RFC 6068. The old plain-param shape must be GONE, not merely
     // duplicated alongside the new one — a lingering `cc=` would be a trap
-    // that looks correct but silently drops Andrew again.
+    // that looks correct but silently drops the CC again.
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const url = new URL(buildOutlookComposeUrl(draft));
     const mailtouri = url.searchParams.get('mailtouri');
@@ -1660,7 +1660,7 @@ describe('buildOutlookComposeUrl', () => {
     // The path segment is now a percent-encoded name-addr, not a bare
     // address — starts with the encoded display name, ends in the encoded
     // "<addr>?" boundary.
-    expect(mailtouri!.startsWith('mailto:Fresno%20Warehouse%20DC4%20%3Cdc4%40learn4life.org%3E?')).toBe(
+    expect(mailtouri!.startsWith('mailto:Fresno%20Warehouse%20DC4%20%3Cdc4%40sampleorg.test%3E?')).toBe(
       true,
     );
 
@@ -1670,7 +1670,7 @@ describe('buildOutlookComposeUrl', () => {
     expect(url.searchParams.get('body')).toBeNull();
 
     const inner = new URLSearchParams(mailtouri!.slice(mailtouri!.indexOf('?') + 1));
-    expect(inner.get('cc')).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(inner.get('cc')).toBe('Jordan Stone <jstone@site1.test>');
     expect(inner.get('subject')).toBe(draft.subject);
     expect(inner.get('body')).toBe(draft.body);
   });
@@ -1702,17 +1702,17 @@ describe('buildOutlookComposeUrl', () => {
     const queryStart = mailtouri.indexOf('?');
     const path = decodeURIComponent(mailtouri.slice(0, queryStart));
     const query = mailtouri.slice(queryStart + 1);
-    expect(path).toBe('mailto:Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(path).not.toContain('arosas');
+    expect(path).toBe('mailto:Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(path).not.toContain('jstone');
     expect(query.match(/(?:^|&)cc=/g)).toHaveLength(1);
-    expect(new URLSearchParams(query).getAll('cc')).toEqual(['Andrew Rosas <arosas@cvwest.org>']);
+    expect(new URLSearchParams(query).getAll('cc')).toEqual(['Jordan Stone <jstone@site1.test>']);
   });
 
   it('never concatenates the CC into the To address', () => {
     const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
     const to = decodeCompose(url).to;
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(to).not.toContain('arosas');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(to).not.toContain('jstone');
     expect(to).not.toContain(',');
   });
 
@@ -1725,7 +1725,7 @@ describe('buildOutlookComposeUrl', () => {
     expect(decoded.body).toBe(draft.body);
     expect(decoded.body).toContain('Ampersand & plus + hash # question ? equals =');
     expect(decoded.subject).toBe(draft.subject);
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('the mailtouri inner body round-trips WITHOUT an order link or the drafted-in-StockPilot footer', () => {
@@ -1751,13 +1751,13 @@ describe('buildOutlookComposeUrl', () => {
       ),
     );
     const decoded = decodeCompose(url);
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('keeps the CC in condensed mode', () => {
     const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true }));
-    expect(decodeCompose(url).cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decodeCompose(url).cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('the RAW outer URL never contains a literal "+" — both encoding layers use %20-style encoding, never form-encoding', () => {
@@ -1774,17 +1774,17 @@ describe('buildOutlookComposeUrl', () => {
     expect(decodeCompose(url).body).toContain('Size L+ jerseys');
   });
 
-  it('carries the tenant-verified display-name chips — "Fresno Warehouse DC4 <addr>" (To) and "Andrew Rosas <addr>" (Cc) — with the routing address appearing exactly once inside each', () => {
+  it('carries the tenant-verified display-name chips — "Fresno Warehouse DC4 <addr>" (To) and "Jordan Stone <addr>" (Cc) — with the routing address appearing exactly once inside each', () => {
     // The owner's mailtouri test (2026-08-01) produced OWA compose chips
-    // reading 'Fresno Warehouse DC4 <dc4@learn4life.org>' and 'Andrew Rosas
-    // <arosas@cvwest.org>' with the correct addresses underneath. This pins
+    // reading 'Fresno Warehouse DC4 <dc4@sampleorg.test>' and 'Jordan Stone
+    // <jstone@site1.test>' with the correct addresses underneath. This pins
     // the exact byte shape that verification confirmed.
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const decoded = decodeCompose(buildOutlookComposeUrl(draft));
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
-    expect(decoded.to.match(/dc4@learn4life\.org/g)).toHaveLength(1);
-    expect(decoded.cc.match(/arosas@cvwest\.org/g)).toHaveLength(1);
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
+    expect(decoded.to.match(/dc4@sampleorg\.test/g)).toHaveLength(1);
+    expect(decoded.cc.match(/jstone@site1\.test/g)).toHaveLength(1);
     expect(decoded.subject).toBe(draft.subject);
     expect(decoded.body).toBe(draft.body);
   });
@@ -1793,14 +1793,14 @@ describe('buildOutlookComposeUrl', () => {
 describe('buildMailtoUrl', () => {
   it('puts the To address in the PATH and the cc in the query string', () => {
     const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(url.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
   });
 
   it('carries cc, subject and body, decodable back to the originals', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const url = buildMailtoUrl(draft);
     const params = new URLSearchParams(url.slice(url.indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
     expect(params.get('subject')).toBe(draft.subject);
     expect(params.get('body')).toBe(draft.body);
   });
@@ -1808,7 +1808,7 @@ describe('buildMailtoUrl', () => {
   it('carries the CC exactly once and never inside the To path segment', () => {
     const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
     expect(url.match(/[?&]cc=/g)).toHaveLength(1);
-    expect(url.slice(0, url.indexOf('?'))).toBe('mailto:dc4@learn4life.org');
+    expect(url.slice(0, url.indexOf('?'))).toBe('mailto:dc4@sampleorg.test');
   });
 
   it('keeps the CC in condensed mode and with everything optional missing', () => {
@@ -1817,7 +1817,7 @@ describe('buildMailtoUrl', () => {
       { condensed: true },
     );
     const params = new URLSearchParams(buildMailtoUrl(bare).slice(buildMailtoUrl(bare).indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
   });
 
   it('encodes spaces as %20, never as + — RFC 6068 mailto clients render a literal + as a plus sign, not a space', () => {
@@ -1839,8 +1839,8 @@ describe('buildClipboardText', () => {
   it('emits labelled TO / CC / SUBJECT / MESSAGE blocks', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const text = buildClipboardText(draft);
-    expect(text).toContain('TO: dc4@learn4life.org');
-    expect(text).toContain('CC: arosas@cvwest.org');
+    expect(text).toContain('TO: dc4@sampleorg.test');
+    expect(text).toContain('CC: jstone@site1.test');
     expect(text).toContain(`SUBJECT: ${draft.subject}`);
     expect(text).toContain('MESSAGE:');
     expect(text).toContain(draft.body);
@@ -1855,14 +1855,14 @@ describe('buildClipboardText', () => {
 
   it('names BOTH recipients — copy instructions that omit the CC are non-compliant', () => {
     const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(text).toContain('dc4@learn4life.org');
-    expect(text).toContain('arosas@cvwest.org');
+    expect(text).toContain('dc4@sampleorg.test');
+    expect(text).toContain('jstone@site1.test');
   });
 
   it('keeps both recipients in condensed mode', () => {
     const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true }));
-    expect(text).toContain('TO: dc4@learn4life.org');
-    expect(text).toContain('CC: arosas@cvwest.org');
+    expect(text).toContain('TO: dc4@sampleorg.test');
+    expect(text).toContain('CC: jstone@site1.test');
   });
 });
 
@@ -1871,8 +1871,8 @@ describe('prepareDeliveryRequest', () => {
     const prepared = prepareDeliveryRequest(makeDraftInput());
     expect(prepared.draft.condensed).toBe(false);
     expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
-    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
     expect(prepared.linkFits).toBe(true);
   });
 
@@ -1919,8 +1919,8 @@ describe('prepareDeliveryRequest', () => {
     // The clipboard path has no URL-length limit and must still carry the
     // complete body — recipients plus content that condensing would have
     // dropped (the order notes).
-    expect(prepared.clipboardText).toContain('TO: dc4@learn4life.org');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('TO: dc4@sampleorg.test');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
     expect(prepared.clipboardText).toContain('Please stage these by Friday.');
     expect(prepared.clipboardText).toContain('APP-POLO-W');
   });
@@ -1935,7 +1935,7 @@ describe('prepareDeliveryRequest', () => {
     const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
     expect(prepared.draft.condensed).toBe(true);
     expect(prepared.clipboardText).toContain('SKU-BIG-99');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 
   it('keeps both recipients — and their display-name chips — on a condensed 100-line order', () => {
@@ -1945,8 +1945,8 @@ describe('prepareDeliveryRequest', () => {
     );
     const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
     const decoded = decodeCompose(prepared.outlookUrl);
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('no user-controlled field can move the recipients OR the display names, at any size or mode', () => {
@@ -1976,12 +1976,12 @@ describe('prepareDeliveryRequest', () => {
     const innerQuery = mailtouri.slice(mailtouri.indexOf('?') + 1);
     expect(innerQuery.match(/(?:^|&)cc=/g)).toHaveLength(1);
     expect(new URLSearchParams(innerQuery).getAll('cc')).toEqual([
-      'Andrew Rosas <arosas@cvwest.org>',
+      'Jordan Stone <jstone@site1.test>',
     ]);
 
     const decoded = decodeCompose(prepared.outlookUrl);
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 });
 
@@ -2003,12 +2003,12 @@ describe('per-org recipients thread through the web wrappers', () => {
     expect(prepared.draft.to).toBe('intake@other-tenant.invalid');
     expect(prepared.draft.cc).toBe('copy@other-tenant.invalid');
     // The compiled RECIPIENT addresses appear nowhere. (The fixture's
-    // requester email is a cvwest.org address and legitimately rides in the
+    // requester email is a site1.test address and legitimately rides in the
     // BODY — the assertion is about the routing, so it names the compiled
     // mailboxes themselves.)
     for (const text of [prepared.outlookUrl, prepared.mailtoUrl, prepared.clipboardText]) {
-      expect(text).not.toContain('learn4life');
-      expect(text).not.toContain('arosas');
+      expect(text).not.toContain('sampleorg');
+      expect(text).not.toContain('jstone');
     }
     expect(prepared.mailtoUrl).toContain('copy%40other-tenant.invalid');
   });

@@ -232,7 +232,7 @@ function wireFullAdmin(
       error: null,
     },
     'user_profiles.select.maybeSingle': {
-      data: { full_name: 'Morgan Diaz', email: 'morgan@l4l.org' },
+      data: { full_name: 'Morgan Diaz', email: 'morgan@example.org' },
       error: null,
     },
   });

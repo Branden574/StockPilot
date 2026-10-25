@@ -76,8 +76,8 @@ describe('MaintenanceRequestForm', () => {
   it('(13) there is NO recipient field anywhere — To/CC are not user-editable', () => {
     renderForm();
     expect(screen.queryByLabelText(/to\b/i)).toBeNull();
-    expect(screen.queryByDisplayValue('dc4@learn4life.org')).toBeNull();
-    expect(screen.queryByDisplayValue('arosas@cvwest.org')).toBeNull();
+    expect(screen.queryByDisplayValue('dc4@sampleorg.test')).toBeNull();
+    expect(screen.queryByDisplayValue('jstone@site1.test')).toBeNull();
   });
 
   it('submits valid values and hands the new id to onSaved', async () => {

@@ -78,8 +78,8 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       warehouseName: 'DC4',
       method: 'delivery' as const,
       deliverTo: 'CVW Clovis',
-      requestedFor: 'Branden Vincent-Walker',
-      requesterEmail: 'branden@cvwest.org',
+      requestedFor: 'Carsten Hartley-Fowler',
+      requesterEmail: 'carsten@site1.test',
       orgTimezone: 'America/Los_Angeles',
     },
     neededBy: '2026-08-05T09:00',
@@ -87,7 +87,7 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       id: 'ch-1',
       name: 'CVW Clovis',
       code: 'CVW-CLO',
-      address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
+      address: { line1: '1200 Test Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
     },
     deliveryRecipients: TEST_ROUTING,
     submitting: false,
@@ -109,8 +109,8 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       replay: false,
       viaWithdraw: false,
     },
-    viewerLabel: 'Branden Vincent-Walker',
-    viewerEmail: 'branden@cvwest.org',
+    viewerLabel: 'Carsten Hartley-Fowler',
+    viewerEmail: 'carsten@site1.test',
     onClose: vi.fn(),
     onConfirm: vi.fn(),
     onViewOrder: vi.fn(),
@@ -146,8 +146,8 @@ describe('ReviewModal success stage', () => {
         warehouseName: 'DC4',
         method: 'pickup',
         deliverTo: 'DC4 will-call desk',
-        requestedFor: 'Branden Vincent-Walker',
-        requesterEmail: 'branden@cvwest.org',
+        requestedFor: 'Carsten Hartley-Fowler',
+        requesterEmail: 'carsten@site1.test',
         orgTimezone: 'America/Los_Angeles',
       },
       destination: null,
@@ -260,8 +260,8 @@ describe('ReviewModal accessibility', () => {
         warehouseName: 'DC4',
         method: 'delivery',
         deliverTo: 'CVW Clovis',
-        requestedFor: 'Branden Vincent-Walker',
-        requesterEmail: 'branden@cvwest.org',
+        requestedFor: 'Carsten Hartley-Fowler',
+        requesterEmail: 'carsten@site1.test',
         orgTimezone: 'America/Los_Angeles',
       },
       neededBy: '',
@@ -331,8 +331,8 @@ describe('ReviewModal accessibility', () => {
         warehouseName: 'DC4',
         method: 'delivery',
         deliverTo: 'CVW Clovis',
-        requestedFor: 'Branden Vincent-Walker',
-        requesterEmail: 'branden@cvwest.org',
+        requestedFor: 'Carsten Hartley-Fowler',
+        requesterEmail: 'carsten@site1.test',
         orgTimezone: 'America/Los_Angeles',
       },
       neededBy: '',
@@ -444,8 +444,8 @@ describe('success overlay without delivery routing', () => {
     // The rest of the success screen is unchanged.
     expect(screen.getByRole('button', { name: /View order/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Done$/i })).toBeInTheDocument();
-    expect(container.textContent).not.toContain('learn4life');
-    expect(container.textContent).not.toContain('cvwest');
+    expect(container.textContent).not.toContain('sampleorg');
+    expect(container.textContent).not.toContain('site1');
   });
 
   it('still renders the email action when routing resolved (control)', () => {

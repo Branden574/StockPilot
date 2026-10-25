@@ -280,7 +280,7 @@ const FORBIDDEN_PHRASES = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Andrew notified',
+  'Jordan notified',
   'Ticket assigned',
   'Ticket closed',
   'Ticket resolved',

@@ -34,9 +34,9 @@ describe('ZendeskQuickAccess', () => {
     const input = screen.getByRole('textbox', { name: /Your Zendesk subdomain/ });
     const field = input.parentElement!;
     expect(field).toHaveClass('focus-within:ring-2', 'focus-within:ring-ring');
-    fireEvent.change(input, { target: { value: 'learn4life' } });
+    fireEvent.change(input, { target: { value: 'sampleorg' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(h.save).toHaveBeenCalledWith({ subdomain: 'learn4life' }));
+    await waitFor(() => expect(h.save).toHaveBeenCalledWith({ subdomain: 'sampleorg' }));
   });
 
   // DESIGN-SPEC 2.4 item 3: a form control is never edged by the hairline

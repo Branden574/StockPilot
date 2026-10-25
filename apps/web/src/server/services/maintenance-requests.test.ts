@@ -2364,7 +2364,7 @@ describe('emailInput', () => {
       // constants — which would wire this org's maintenance mail to another
       // tenant's real intake.
       expect(emailRouting).toEqual({ state: 'unset' });
-      expect(JSON.stringify(emailRouting)).not.toContain('learn4life');
+      expect(JSON.stringify(emailRouting)).not.toContain('sampleorg');
     });
 
     it('MUTATION KILL — INVALID: a malformed stored cc fails CLOSED with the guard reason; no recipients escape', async () => {
@@ -2385,7 +2385,7 @@ describe('emailInput', () => {
       if (emailRouting.state !== 'invalid') throw new Error('expected invalid');
       expect(emailRouting.reason).toMatch(/must be exactly one plain email address/);
       expect(JSON.stringify(emailRouting)).not.toContain('attacker');
-      expect(JSON.stringify(emailRouting)).not.toContain('learn4life');
+      expect(JSON.stringify(emailRouting)).not.toContain('sampleorg');
     });
 
     it('DEPLOY WINDOW (42703): a missing column fails OPEN to the compiled pair — the only path that ever returns it', async () => {
@@ -2400,10 +2400,10 @@ describe('emailInput', () => {
       expect(emailRouting).toEqual({
         state: 'valid',
         recipients: {
-          to: 'dc4@learn4life.org',
-          cc: 'arosas@cvwest.org',
+          to: 'dc4@sampleorg.test',
+          cc: 'jstone@site1.test',
           toName: 'Fresno Warehouse DC4',
-          ccName: 'Andrew Rosas',
+          ccName: 'Jordan Stone',
         },
       });
     });

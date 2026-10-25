@@ -100,7 +100,7 @@ beforeEach(() => {
 });
 
 describe('resolveMaintenanceAudience — permission resolution (never _notify_recipients)', () => {
-  it('permission test 10 (the Andrew case): a VIEWER granted read_all via user_permission_overrides IS included; a staff member with no grants is NOT', async () => {
+  it('permission test 10 (the DC4-lead case): a VIEWER granted read_all via user_permission_overrides IS included; a staff member with no grants is NOT', async () => {
     buildAdmin({
       members: [
         { user_id: 'andrew', role: 'viewer' },

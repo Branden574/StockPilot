@@ -75,7 +75,7 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Andrew notified',
+  'Jordan notified',
   'Ticket assigned',
   'Email sent',
 ];

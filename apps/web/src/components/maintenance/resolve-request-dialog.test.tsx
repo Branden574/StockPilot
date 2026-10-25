@@ -137,7 +137,7 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
+    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',

@@ -118,7 +118,7 @@ beforeEach(() => {
   });
   svc.resolveLineResults.mockResolvedValue({});
   svc.uploaderProfiles.mockResolvedValue(
-    new Map([[UPLOADER, { full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' }]]),
+    new Map([[UPLOADER, { full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' }]]),
   );
 });
 
@@ -128,16 +128,16 @@ const sourceLine = () => screen.getByText(/^Source file: fall\.pdf/);
 describe('PO import detail: who uploaded it', () => {
   it('says "Uploaded by <full name>" beside the source file', async () => {
     await renderDetail();
-    expect(sourceLine()).toHaveTextContent('Source file: fall.pdf · Uploaded by Marissa Lopez');
+    expect(sourceLine()).toHaveTextContent('Source file: fall.pdf · Uploaded by Rebecca Lowry');
     expect(svc.uploaderProfiles).toHaveBeenCalledWith([UPLOADER]);
   });
 
   it('falls back to the email', async () => {
     svc.uploaderProfiles.mockResolvedValue(
-      new Map([[UPLOADER, { full_name: null, email: 'marissa@cvwest.org' }]]),
+      new Map([[UPLOADER, { full_name: null, email: 'rebecca@site1.test' }]]),
     );
     await renderDetail();
-    expect(sourceLine()).toHaveTextContent('Uploaded by marissa@cvwest.org');
+    expect(sourceLine()).toHaveTextContent('Uploaded by rebecca@site1.test');
   });
 
   it('says "Former member" when the profile is no longer readable', async () => {

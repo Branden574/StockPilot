@@ -29,12 +29,12 @@ function newInviteStub() {
   return makeSupabaseStub({
     'organization_invites.select': { data: null, error: null },
     'organization_invites.insert': {
-      data: { id: 'invite-1', token: 'tokHvwVujKf', email: 'theo@l4lnorth.com' },
+      data: { id: 'invite-1', token: 'tokHvwVujKf', email: 'theo@north.example' },
       error: null,
     },
     'organization_members.select': { data: null, error: null },
     'user_profiles.select': {
-      data: { full_name: 'Branden Vincent Walker', email: 'branden@l4lnorth.com' },
+      data: { full_name: 'Carsten Hartley Fowler', email: 'carsten@north.example' },
       error: null,
     },
   });
@@ -46,7 +46,7 @@ function existingInviteStub() {
     'organization_invites.select': {
       data: {
         id: 'invite-1',
-        email: 'theo@l4lnorth.com',
+        email: 'theo@north.example',
         role: 'staff',
         token: 'tokHvwVujKf',
         accepted_at: null,
@@ -56,7 +56,7 @@ function existingInviteStub() {
     },
     'organization_invites.update': { data: null, error: null },
     'user_profiles.select': {
-      data: { full_name: 'Branden Vincent Walker', email: 'branden@l4lnorth.com' },
+      data: { full_name: 'Carsten Hartley Fowler', email: 'carsten@north.example' },
       error: null,
     },
   });
@@ -73,10 +73,10 @@ describe('TeamService.invite — a failed send is not a success', () => {
     const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
     await expect(
       svc.invite({
-        email: 'theo@l4lnorth.com',
+        email: 'theo@north.example',
         role: 'viewer',
         organizationName: 'L4L North Region',
-        inviterName: 'Branden',
+        inviterName: 'Carsten',
         allWarehouses: true,
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
@@ -87,10 +87,10 @@ describe('TeamService.invite — a failed send is not a success', () => {
     const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
     await expect(
       svc.invite({
-        email: 'theo@l4lnorth.com',
+        email: 'theo@north.example',
         role: 'viewer',
         organizationName: 'L4L North Region',
-        inviterName: 'Branden',
+        inviterName: 'Carsten',
         allWarehouses: true,
       }),
       // A refusal with no way forward is a support ticket. `internal_error`
@@ -101,10 +101,10 @@ describe('TeamService.invite — a failed send is not a success', () => {
   it('still succeeds on a good send', async () => {
     const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
     const out = await svc.invite({
-      email: 'theo@l4lnorth.com',
+      email: 'theo@north.example',
       role: 'viewer',
       organizationName: 'L4L North Region',
-      inviterName: 'Branden',
+      inviterName: 'Carsten',
       allWarehouses: true,
     });
     expect(out.acceptUrl).toMatch(/\/i\/[A-Za-z0-9_-]+$/);

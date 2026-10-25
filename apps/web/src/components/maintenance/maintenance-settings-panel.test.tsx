@@ -23,7 +23,7 @@ import { MaintenanceSettingsPanel } from './maintenance-settings-panel';
 
 const MEMBERS = [
   { userId: 'u-1', name: 'Jane Smith' },
-  { userId: 'u-2', name: 'Andrew Rosas' },
+  { userId: 'u-2', name: 'Jordan Stone' },
 ];
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof MaintenanceSettingsPanel>> = {}) {
@@ -47,7 +47,7 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Andrew notified',
+  'Jordan notified',
   'Ticket assigned',
   'Email sent',
   'Zendesk comment',
@@ -121,14 +121,14 @@ describe('MaintenanceSettingsPanel — notification audience', () => {
       'None',
     );
     expect(
-      screen.getByRole('combobox', { name: 'Notification audience for Andrew Rosas' }),
+      screen.getByRole('combobox', { name: 'Notification audience for Jordan Stone' }),
     ).toHaveTextContent('None');
   });
 
   it('reflects an initial notifyAudience value', () => {
     renderPanel({ initialNotifyAudience: { 'u-2': 'urgent_only' } });
     expect(
-      screen.getByRole('combobox', { name: 'Notification audience for Andrew Rosas' }),
+      screen.getByRole('combobox', { name: 'Notification audience for Jordan Stone' }),
     ).toHaveTextContent('Urgent only');
   });
 
@@ -150,8 +150,8 @@ describe('MaintenanceSettingsPanel — recipients pin (mutation self-check 3)', 
     // fixed in this release. Contact support to change them." — that
     // support path now exists, so the fixed display is gone.
     const { container } = renderPanel();
-    expect(container.textContent).not.toContain('dc4@learn4life.org');
-    expect(container.textContent).not.toContain('arosas@cvwest.org');
+    expect(container.textContent).not.toContain('dc4@sampleorg.test');
+    expect(container.textContent).not.toContain('jstone@site1.test');
     expect(container.textContent).not.toContain('fixed in this release');
     const link = screen.getByRole('link', { name: /Configure email routing/i });
     expect(link).toHaveAttribute('href', '/dashboard/settings/email-routing');

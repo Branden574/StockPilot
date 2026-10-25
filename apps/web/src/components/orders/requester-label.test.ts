@@ -36,8 +36,8 @@ describe('summaryRequesterLabel', () => {
 
   it('a name wins, with the org label', () => {
     expect(
-      summaryRequesterLabel(row({ requesterName: 'Doua Vang', requesterOrgLabel: 'Clovis' })),
-    ).toBe('Doua Vang · Clovis');
+      summaryRequesterLabel(row({ requesterName: 'Lena Hale', requesterOrgLabel: 'Clovis' })),
+    ).toBe('Lena Hale · Clovis');
   });
 
   it('a deleted requester whose row already held a name keeps showing it', () => {

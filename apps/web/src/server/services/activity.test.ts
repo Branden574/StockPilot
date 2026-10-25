@@ -1242,7 +1242,7 @@ function movementRow(overrides: Record<string, unknown> = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('ActivityService.forItem masks the receipt sentinel by SHAPE, not by reason', () => {
   const cases: Array<{ label: string; reason: string }> = [
-    { label: '0231+ receipt row', reason: 'PO CVW-002201' },
+    { label: '0231+ receipt row', reason: 'PO DEMO-002201' },
     { label: 'receipt reversal row', reason: 'receipt_reversal' },
     { label: 'pre-0231 receipt row', reason: 'receipt_line' },
   ];
@@ -1270,7 +1270,7 @@ describe('ActivityService.forItem masks the receipt sentinel by SHAPE, not by re
   it('a genuine note on a 0231+ receipt row still shows and stays editable', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
-        data: [movementRow({ reason: 'PO CVW-002201', notes: 'Pallet arrived damp' })],
+        data: [movementRow({ reason: 'PO DEMO-002201', notes: 'Pallet arrived damp' })],
         error: null,
       },
       'audit_logs.select': { data: [], error: null },

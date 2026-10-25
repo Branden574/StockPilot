@@ -861,7 +861,7 @@ export class PurchaseOrdersService {
    * This discarded the RPC error and fell back to `PO-${Date.now()}`. The
    * function was MISSING from production from 2026-05-20 until 0350, so every
    * auto-numbered PO silently got an epoch timestamp (27 of them, e.g.
-   * PO-1788277456195) and nobody could see why. The fallback still exists — a
+   * PO-1700000000505) and nobody could see why. The fallback still exists — a
    * PO must never fail to get a number — but a failure is now reported, so the
    * next time an RPC goes missing it is a Sentry event and not three months of
    * ugly supplier-facing documents.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the L4L-only Maintenance Requests module end-to-end — form, saved request with a stable `MR-2026-000123` number, photo uploads with server-side verification, a review screen that opens a fully prefilled Outlook Web draft to `dc4@learn4life.org` CC `arosas@cvwest.org` (with mailto and clipboard fallbacks and duplicate-draft protection), revocable share links for photos, list/detail on web AND mobile, permissions + RLS, notifications, and honest status language throughout — with zero Zendesk API surface.
+**Goal:** Build the L4L-only Maintenance Requests module end-to-end — form, saved request with a stable `MR-2026-000123` number, photo uploads with server-side verification, a review screen that opens a fully prefilled Outlook Web draft to `dc4@sampleorg.test` CC `jstone@site1.test` (with mailto and clipboard fallbacks and duplicate-draft protection), revocable share links for photos, list/detail on web AND mobile, permissions + RLS, notifications, and honest status language throughout — with zero Zendesk API surface.
 
 **Architecture:** The owner-tested Outlook transport is extracted from `apps/web/src/components/orders/storefront/storefront-logic.ts` into `packages/core/src/email/outlook-compose.ts` (the only workspace package mobile can import), with the delivery-request exports kept as byte-identical delegating wrappers so all four existing pinning test suites stay green unchanged. Everything maintenance-shaped is net-new but built on named house patterns: migration 0314 clones the 0297 module recipe + the 0254 advisory-lock numbering trigger + the 0261 share-token shape; the server layer is `ServiceContext` services behind `assertModuleEnabled` + `has_permission()` RLS; web routes follow the cycle-counts/returns page conventions and mobile follows the support-feature Bearer route-pair, shipping pure-JS OTA onto the live 1.1.0 binary. StockPilot records only what it can observe — a request was Saved, a draft was Opened — and Outlook/Zendesk own everything after that.
 
@@ -15,13 +15,13 @@
 Binding on every task. "Brief §n" = `.superpowers/sdd/maintenance-requests-brief.md`; "Audit §n / landmine n / Qn" = `docs/superpowers/specs/2026-08-05-maintenance-requests-audit.md`.
 
 1. **Outlook transport = the tenant-verified mechanics, verbatim.** `OUTLOOK_COMPOSE_BASE = 'https://outlook.cloud.microsoft/mail/deeplink/compose'` (never `outlook.office.com` — the domain-migration redirect eats the compose path); a SINGLE `mailtouri=` param wrapping an inner `mailto:` URI (plain `to=/cc=/subject=/body=` params are asserted ABSENT — OWA silently drops plain `cc=`); `encodeDraftQuery` = `k + '=' + encodeURIComponent(v)` joined with `&` — `%20` for spaces, NEVER URLSearchParams (`+` renders literally in RFC 6068 clients); `DRAFT_URL_LIMIT = 1800`; `window.open(url, '_blank')` with NO features string (`'noopener'` returns null even on success — the exact blocked-popup signal) and the component severs `opened.opener = null` manually in try/catch. Brief §16's conceptual snippet (office.com + URLSearchParams + noopener features) is ADJUDICATED OUT — recorded in the brief file itself at lines 258-262.
-2. **NO-SEND PROHIBITION.** `dc4@learn4life.org` and `arosas@cvwest.org` are REAL addresses reaching a real Zendesk intake and a real person. Every test STRING-ASSERTS URLs and bodies; no test, no manual step, and no verification walk may EVER open a real compose window against them, navigate a `mailto:`, or exercise the popup-blocked path in a real browser (`window.location.assign` is unstubbable in Chromium — component tests only, via `Object.defineProperty`). The Task 25 manual walk stops at the review screen and inspects URLs via DevTools copy, never by clicking Open.
+2. **NO-SEND PROHIBITION.** `dc4@sampleorg.test` and `jstone@site1.test` are REAL addresses reaching a real Zendesk intake and a real person. Every test STRING-ASSERTS URLs and bodies; no test, no manual step, and no verification walk may EVER open a real compose window against them, navigate a `mailto:`, or exercise the popup-blocked path in a real browser (`window.location.assign` is unstubbable in Chromium — component tests only, via `Object.defineProperty`). The Task 25 manual walk stops at the review screen and inspects URLs via DevTools copy, never by clicking Open.
 3. **Shared utility lives in `packages/core`** (`packages/core/src/email/outlook-compose.ts` — plain TS, no `'use server'`/`'server-only'`), because `apps/mobile/package.json:29` shows mobile's ONLY workspace dependency is `@stockpilot/core`. Delivery-request keeps delegating wrappers in `storefront-logic.ts` with the SAME exported names and signatures so `storefront-logic.test.ts`, `delivery-request-action.test.tsx`, `site.test.ts`, and `storefront-overlays.test.tsx` stay green BYTE-IDENTICAL (zero edits to those four files; Task 5 runs them as its gate).
 4. **Module gating = `organization_modules` + `MODULE_REGISTRY`**, id `maintenance_requests`, tier `'optional'`, `defaultOnFor: []` (the zendesk shape, registry.ts:651-665). The L4L org id is resolved from PROD DATA at ship time: the Task 26 ship checklist runs `select id, name from organizations where name ilike '%learn%'` against prod, confirms `63c13e64-92a6-4ea4-9936-6a2c26a85b4a` (already double-sourced at `org-sweep.ts:18` and `0031_reset_l4l_fresno_test_data.sql:3`), and then runs a one-off enable UPDATE. NEVER name-matching, NEVER hardcoded in a migration — migration 0314 only grandfathers `enabled=false` rows.
 5. **4 new permissions bump the 0207-mirror pgTAP count 111 → 119.** Verified: `supabase/tests/0207_permission_overrides.test.sql:41-45` pins `role_default_permissions` at exactly 111 rows today. 0314 seeds 8 rows (`submit` × admin/manager/staff/viewer + `read_all` × admin/manager + `manage` × admin/manager; `configure` seeds ZERO rows — owner-only via the has_permission owner short-circuit) and Task 1 edits the literal AND appends to the itemized provenance message in the same format.
 6. **Every maintenance table carries `organization_id` + RLS** per the audit recipe: `enable row level security` PLUS explicit `grant select, insert, update, delete ... to authenticated` (or everything 42501s); write policies ADDITIVE (`has_org_role(organization_id, 'manager') or has_permission(organization_id, '...')`); requester-scoped SELECT inverts to `requester_user_id = auth.uid() or has_permission(...)`; child tables gate through an EXISTS join to the parent. `(select public.module_enabled(organization_id, 'maintenance_requests'))` appears on INSERT/UPDATE (write) policies ONLY — never on SELECT — so disabling the module stops new writes without hiding history (audit Q3).
 7. **MIGRATIONS BEFORE WEB DEPLOY at ship.** Guards fail closed; code deployed before 0314/0315 are pushed = total feature outage (the account-disable program proved this). Ship order in Task 26: `supabase db push --linked` FIRST, then merge/deploy, then OTA.
-8. **Accurate status language ONLY.** Local states: `Saved`, `Email draft opened`, `Archived`, `Cancelled`. NEVER: `Ticket created`, `Request submitted to Zendesk`, `DC4 notified`, `Andrew notified`, `Ticket assigned`, `Email sent`. Forbidden-phrase sweep tests (the delivery pattern, `delivery-request-action.test.tsx:742-756`) are cloned at every layer that renders copy (Tasks 7, 14, 15, 18, 20, 21).
+8. **Accurate status language ONLY.** Local states: `Saved`, `Email draft opened`, `Archived`, `Cancelled`. NEVER: `Ticket created`, `Request submitted to Zendesk`, `DC4 notified`, `Jordan notified`, `Ticket assigned`, `Email sent`. Forbidden-phrase sweep tests (the delivery pattern, `delivery-request-action.test.tsx:742-756`) are cloned at every layer that renders copy (Tasks 7, 14, 15, 18, 20, 21).
 9. **NO Zendesk API, OAuth, tokens, webhooks, or sync anywhere.** No `zendesk` import, no ticket-id column, no status polling. The Task 24 gate greps the diff for `zendesk` (case-insensitive) and requires zero hits outside comments/docs explaining the boundary.
 10. **Every notification link passes `apps/mobile/src/lib/web-path-rewrite.ts`** for all THREE doors (`+native-intent.ts:19`, `use-push-notifications.ts:103`, `(drawer)/notifications.tsx:145`). The `/dashboard/*` catch-all silently rewrites unknown paths to home, so the `/dashboard/maintenance*` REWRITES rules + tests (Task 18) are SHIP-BLOCKERS for Phase F.
 11. **Attachments: server-minted signed-upload URL + finalize step** with MAGIC-BYTE sniffing (PNG/JPEG/WEBP signature walk — the only in-repo parser is `readImageDimensions` at `inventory-export-xlsx.ts:58-95`, lifted into a new `image-signature.ts`) + `checkRateLimit` on BOTH mint and request creation (audit Q8 — closes the no-magic-byte and no-rate-limit holes; the direct browser→storage order-attachments flow is NOT copied). HEIC transcodes client-side to JPEG before upload on both platforms (heic2any via `compressImageVariants` on web; `resizeForUpload` forced-JPEG on mobile); the bucket is pinned to `png/jpeg/webp` like 0260:29-35. Mobile uploads use `fetch(uri).arrayBuffer()` or `FileSystem.createUploadTask` — NEVER `blob()` (0-byte uploads).
@@ -32,8 +32,8 @@ Binding on every task. "Brief §n" = `.superpowers/sdd/maintenance-requests-brie
 16. **Description sanitizer = NEW newline-preserving control-strip** `sanitizeDescriptionBlock` (strips C0 except `\n`, strips DEL, normalizes CRLF, caps consecutive newlines at 2) — `toPlainTextLine` COLLAPSES newlines and is correct for SUBJECTS only (audit Q14; the subject path uses the collapsing `sanitizeSubjectLine`). Condense policy per audit Q13: the condensed draft preserves recipients (constants, always), subject, request number, requester name + site, a truncated description with the byte-intact contiguous disclosure sentence, and the ONE share link; it drops location detail, related-record detail, and access instructions first. `clipboardText` is ALWAYS built from the FULL draft. `linkFits === false` opens NOTHING — not even mailto.
 17. **No emojis anywhere** (code, copy, commits, docs). **No Claude/Anthropic co-author trailer** on any commit — history is `Branden574` only. Plain professional prose in all user-facing copy.
 18. **Web test-harness idioms are mandatory:** `DialogContent` bakes `max-w-lg` — wide dialogs override per call site via className, never by editing `ui/dialog.tsx`; happy-dom lacks ARIAMixin — assert aria via `toHaveAttribute('aria-live', 'polite')` attribute form; `supabase-mock.ts` replays canned `'<table>.<op>'` data and IGNORES filters — pin query shapes via `chains`/`chainArgs` call-recording assertions AND pgTAP; `Object.defineProperty` (not `vi.stubGlobal`) for `window.location`/`navigator.clipboard`, restoring captured descriptors in `beforeEach`; definite-assignment (`let release!: () => void`) under strict tsconfig; decode inner `mailtouri` by slicing at the first `?` (opaque-path scheme), never `new URL().searchParams`; `makeServiceContext` defaults to the FULL `DEFAULT_MODULE_IDS` — gate tests use a ctx WITHOUT `maintenance_requests`.
-19. **TEST-TAUTOLOGY RULE.** Every cross-task contract value (recipient addresses, compose base, URL limit, subject prefix, status labels, route paths, pref keys, permission strings, bucket id, share expiry) gets a LITERAL-pin test — assert against the literal string `'dc4@learn4life.org'`, never against the same live constant the implementation reads (8 tautologies shipped in the export-builder program before this rule). Where a test imports a constant, it must ALSO pin the literal at least once per suite.
-20. **LOCAL COMMITS ONLY during execution** on branch `feat/maintenance-requests`. Never push, never merge, never `supabase db push`, never OTA — the controller ships at the end via the Task 26 checklist (db push → merge → OTA → L4L enable SQL → prod verify → Andrew grant via UI).
+19. **TEST-TAUTOLOGY RULE.** Every cross-task contract value (recipient addresses, compose base, URL limit, subject prefix, status labels, route paths, pref keys, permission strings, bucket id, share expiry) gets a LITERAL-pin test — assert against the literal string `'dc4@sampleorg.test'`, never against the same live constant the implementation reads (8 tautologies shipped in the export-builder program before this rule). Where a test imports a constant, it must ALSO pin the literal at least once per suite.
+20. **LOCAL COMMITS ONLY during execution** on branch `feat/maintenance-requests`. Never push, never merge, never `supabase db push`, never OTA — the controller ships at the end via the Task 26 checklist (db push → merge → OTA → L4L enable SQL → prod verify → DC4 lead grant via UI).
 21. **Pattern #24:** never `alter policy ... with check` when touching both clauses — drop + recreate the policy verbatim. **Pattern #23:** `requireOrgContext` throws NEXT_REDIRECT in /api routes — API routes use `withApiContext`; best-effort actions use plain `createClient` reads; `audit()` from Bearer routes MUST pass `ctx`. PostgREST `not.in` drops NULL rows — lifecycle filters stay JS-side; SQL uses `is distinct from`.
 22. **`seed_org_modules()` is rewritten WHOLESALE**: 0314 copies the 0297:26-87 body byte-for-byte and appends ONLY the `('maintenance_requests','optional', false)` row. An omission silently stops seeding for every future org.
 23. **Notifications:** `createNotification()` is the ONE code insert path; the 0028 AFTER-INSERT trigger is the ONE push path (never also push from code). Pref keys live in the regular module `lib/notification-prefs.ts` (never a `'use server'` file); gates are fail-OPEN (only explicit `false` mutes). Maintenance audiences resolve from EFFECTIVE PERMISSION GRANTS (`effectivePermissions(role, roleOverrides, userOverrides)`) — never widen `_notify_recipients()`. Reminder cron stamps its dedupe column FIRST via `.is(guard, null)` guarded update.
@@ -187,11 +187,11 @@ select plan(26);
 
 insert into auth.users (id, email) values
   (:requester, 'req@test.local'), (:other_staff, 'staff2@test.local'),
-  (:mgr, 'mgr@test.local'), (:andrew, 'andrew@test.local'), (:outsider, 'out@test.local'),
+  (:mgr, 'mgr@test.local'), (:andrew, 'jordan@test.local'), (:outsider, 'out@test.local'),
   (:org_owner, 'owner@test.local');
 insert into public.user_profiles (id, full_name) values
   (:requester, 'Req One'), (:other_staff, 'Staff Two'), (:mgr, 'Mgr Three'),
-  (:andrew, 'Andrew Rosas'), (:outsider, 'Out Sider'), (:org_owner, 'Org Owner')
+  (:andrew, 'Jordan Stone'), (:outsider, 'Out Sider'), (:org_owner, 'Org Owner')
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -283,14 +283,14 @@ select is((select count(*)::int from public.maintenance_request_notes), 1, 'mana
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000001';
 select is((select count(*)::int from public.maintenance_request_notes), 0, 'requester cannot read internal notes');
 
--- ── Andrew: viewer + per-user override grant of read_all sees everything ────
+-- ── Jordan: viewer + per-user override grant of read_all sees everything ────
 set local role to postgres;
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
 values (:org_a, :andrew, 'maintenance_requests:read_all', true);
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000004';
 set local role to 'authenticated';
 select is((select count(*)::int from public.maintenance_requests), 2,
-  'per-user override grants Andrew all-request visibility');
+  'per-user override grants Jordan all-request visibility');
 
 -- ── Owner: full access always (has_permission owner short-circuit) ──────────
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000006';
@@ -1429,8 +1429,8 @@ git commit -m "refactor(orders): delivery compose delegates to the shared core t
 
 **Interfaces:**
 - Produces (consumed by Tasks 7-21):
-  - `L4L_MAINTENANCE_EMAIL: Readonly<{ to: 'dc4@learn4life.org'; cc: 'arosas@cvwest.org' }>`
-  - `L4L_MAINTENANCE_EMAIL_NAMES: Readonly<{ to: 'Fresno Warehouse DC4'; cc: 'Andrew Rosas' }>`
+  - `L4L_MAINTENANCE_EMAIL: Readonly<{ to: 'dc4@sampleorg.test'; cc: 'jstone@site1.test' }>`
+  - `L4L_MAINTENANCE_EMAIL_NAMES: Readonly<{ to: 'Fresno Warehouse DC4'; cc: 'Jordan Stone' }>`
   - `MAINTENANCE_CC_NOTICE: string`
   - `MAINTENANCE_CATEGORIES: readonly string[]` (the Brief §7 twelve)
   - `MAINTENANCE_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const` + `MaintenancePriority`
@@ -1522,8 +1522,8 @@ import {
 
 describe('maintenance recipient constants', () => {
   it('pins the exact addresses (LITERALS — Global Constraint 19)', () => {
-    expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@learn4life.org');
-    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@sampleorg.test');
+    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('jstone@site1.test');
     expect(Object.isFrozen(L4L_MAINTENANCE_EMAIL)).toBe(true);
   });
   it('display names are free of RFC 5322 specials', () => {
@@ -1534,7 +1534,7 @@ describe('maintenance recipient constants', () => {
   });
   it('CC notice promises only what StockPilot can observe', () => {
     expect(MAINTENANCE_CC_NOTICE).toBe(
-      'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to arosas@cvwest.org.',
+      'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to jstone@site1.test.',
     );
     for (const banned of ['assigned', 'Ticket created', 'notified']) {
       expect(MAINTENANCE_CC_NOTICE).not.toContain(banned);
@@ -1586,26 +1586,26 @@ Expected: FAIL — modules do not exist.
  * recipient argument — it reads this object — so there is no parameter for a
  * caller to poison. Frozen so a stray assignment throws in strict mode.
  *
- * These are REAL addresses: dc4@learn4life.org feeds a live Zendesk email
- * intake and arosas@cvwest.org is a real person. No test, tool, or
+ * These are REAL addresses: dc4@sampleorg.test feeds a live Zendesk email
+ * intake and jstone@site1.test is a real person. No test, tool, or
  * verification step may ever open a compose window or navigate a mailto
  * against them — string assertions only (plan Global Constraint 2).
  */
 export const L4L_MAINTENANCE_EMAIL = Object.freeze({
-  to: 'dc4@learn4life.org',
-  cc: 'arosas@cvwest.org',
+  to: 'dc4@sampleorg.test',
+  cc: 'jstone@site1.test',
 } as const);
 
 /** Cosmetic OWA chip names — same values the delivery assistant verified on
  *  the live tenant. Must stay free of RFC 5322 specials (< > , " @ ;). */
 export const L4L_MAINTENANCE_EMAIL_NAMES = Object.freeze({
   to: 'Fresno Warehouse DC4',
-  cc: 'Andrew Rosas',
+  cc: 'Jordan Stone',
 } as const);
 
 /** Accuracy, not optimism: no "assigned", no "ticket created", no "notified". */
 export const MAINTENANCE_CC_NOTICE =
-  'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to arosas@cvwest.org.';
+  'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to jstone@site1.test.';
 
 export const MAINTENANCE_CATEGORIES = [
   'Facilities', 'Electrical', 'Plumbing', 'Heating or air conditioning',
@@ -1810,7 +1810,7 @@ const FULL_INPUT: MaintenanceEmailInput = {
   priority: 'high',
   submittedAtDisplay: 'August 5, 2026 at 9:15 AM',
   requesterName: 'Jane Smith',
-  requesterEmail: 'jane.smith@learn4life.org',
+  requesterEmail: 'jane.smith@sampleorg.test',
   requesterPhone: '(555) 555-0199',
   siteName: 'Fresno Learning Center',
   department: 'Operations',
@@ -1838,9 +1838,9 @@ const MINIMAL_INPUT: MaintenanceEmailInput = {
 describe('buildMaintenanceEmailDraft — recipients and subject', () => {
   const draft = buildMaintenanceEmailDraft(FULL_INPUT);
 
-  it('(1) To is the literal DC4 address; (2) CC is the literal Andrew address', () => {
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+  it('(1) To is the literal DC4 address; (2) CC is the literal CC address', () => {
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 
   it('(3) subject keeps the requester wording; (4) subject includes the request number, never the UUID', () => {
@@ -1853,8 +1853,8 @@ describe('buildMaintenanceEmailDraft — recipients and subject', () => {
   });
 
   it('recipients never appear in the BODY (they enter at the compose layer only)', () => {
-    expect(draft.body).not.toContain('dc4@learn4life.org');
-    expect(draft.body).not.toContain('arosas@cvwest.org');
+    expect(draft.body).not.toContain('dc4@sampleorg.test');
+    expect(draft.body).not.toContain('jstone@site1.test');
   });
 });
 
@@ -1927,7 +1927,7 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
     expect(body.trim().endsWith('StockPilot Request: MR-2026-000123')).toBe(true);
   });
   it('never claims a send happened (forbidden-phrase sweep, brief section 20)', () => {
-    for (const phrase of ['Ticket created', 'Request submitted to Zendesk', 'DC4 notified', 'Andrew notified', 'Ticket assigned', 'Email sent']) {
+    for (const phrase of ['Ticket created', 'Request submitted to Zendesk', 'DC4 notified', 'Jordan notified', 'Ticket assigned', 'Email sent']) {
       expect(body).not.toContain(phrase);
     }
   });
@@ -1939,8 +1939,8 @@ describe('prepareMaintenanceEmail — transport', () => {
   it('(19) Outlook URL: cloud.microsoft base, single mailtouri, name-addr chips', () => {
     expect(prepared.outlookUrl.startsWith(`${OUTLOOK_COMPOSE_BASE}?mailtouri=`)).toBe(true);
     const { to, params } = decodeCompose(prepared.outlookUrl);
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
   it('(14)(16) special characters encode once — decode recovers the exact body, %20 never +', () => {
     const { params } = decodeCompose(prepared.outlookUrl);
@@ -1949,11 +1949,11 @@ describe('prepareMaintenanceEmail — transport', () => {
     expect(prepared.outlookUrl).not.toContain('+');
   });
   it('(20) mailto URL is bare-address RFC 6068 with cc/subject/body params', () => {
-    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=')).toBe(true);
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=')).toBe(true);
   });
   it('(21) clipboard carries labelled TO and CC blocks', () => {
-    expect(prepared.clipboardText).toContain('TO: dc4@learn4life.org');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('TO: dc4@sampleorg.test');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
   it('fits: normal input uses the FULL draft', () => {
     expect(prepared.draft.condensed).toBe(false);
@@ -4148,8 +4148,8 @@ describe('MaintenanceRequestForm', () => {
   it('(13) there is NO recipient field anywhere — To/CC are not user-editable', () => {
     renderForm();
     expect(screen.queryByLabelText(/to\b/i)).toBeNull();
-    expect(screen.queryByDisplayValue('dc4@learn4life.org')).toBeNull();
-    expect(screen.queryByDisplayValue('arosas@cvwest.org')).toBeNull();
+    expect(screen.queryByDisplayValue('dc4@sampleorg.test')).toBeNull();
+    expect(screen.queryByDisplayValue('jstone@site1.test')).toBeNull();
   });
 
   it('submits valid values and hands the new id to onSaved', async () => {
@@ -4499,7 +4499,7 @@ Behavioral spec (each line is a test):
 2. Duplicate-draft dialog (brief §21): when `openCount > 0`, clicking `Open in Outlook` shows a dialog FIRST — `A maintenance email draft was already opened for this request. Sending multiple copies may create duplicate Zendesk tickets.` with `Cancel` / `Open Another Draft`. `Open Another Draft` runs the same R3 handler. Reopening is never permanently blocked.
 3. Popup blocked (`window.open` returns null): show `Outlook could not be opened automatically.`, keep the request, offer Try Outlook Again / Open in Default Email App / Copy Email Details / Download Photos for Outlook. The mailto navigation fires at most once per mount (`mailtoAttemptedRef`).
 4. `linkFits === false`: NOTHING opens — not even mailto; the clipboard path is presented as the way to send.
-5. Copy: writes `prepared.clipboardText` via `navigator.clipboard.writeText`; toast exactly `Maintenance request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.`; on clipboard failure a SELECTABLE `<textarea readOnly value={clipboardText}>` appears.
+5. Copy: writes `prepared.clipboardText` via `navigator.clipboard.writeText`; toast exactly `Maintenance request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.`; on clipboard failure a SELECTABLE `<textarea readOnly value={clipboardText}>` appears.
 6. Success message exactly: `Outlook opened with your maintenance request. Review the information, attach any downloaded photos you want included directly, and click Send.` — mirrored to an `aria-live="polite"` region; a SECOND live region renders INSIDE any open DialogContent (Radix aria-hides siblings — landmine 10).
 7. Never render forbidden phrases; a fetch spy proves the open click makes no network call before the open (the record action is mocked and called after).
 8. Helper text on the review screen exactly: `Your request has been saved in StockPilot. Outlook will open with the email details filled in, but the email will not be sent automatically.` and the photos note: `Outlook cannot add StockPilot photos automatically. The photo links will be included in the message, and you can download the photos here if you want to attach them directly.`
@@ -4571,7 +4571,7 @@ describe('Open in Outlook (component tests 7, 14)', () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
     const [url, target, features] = openSpy.mock.calls[0]!;
     expect(String(url)).toContain('outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=');
-    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@learn4life.org')));
+    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@sampleorg.test')));
     expect(target).toBe('_blank');
     expect(features).toBeUndefined(); // 'noopener' would return null even on success
     const handle = openSpy.mock.results[0]!.value as { opener: unknown };
@@ -4629,7 +4629,7 @@ describe('popup blocked (component test 8; brief section 19)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
     expect(await screen.findByText('Outlook could not be opened automatically.')).toBeInTheDocument();
     expect(assignSpy).toHaveBeenCalledTimes(1);
-    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@learn4life\.org\?cc=arosas%40cvwest\.org/);
+    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@sampleorg\.test\?cc=jstone%40site1\.test/);
     for (const label of ['Try Outlook Again', 'Open in Default Email App', 'Copy Email Details']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -4663,9 +4663,9 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const written = vi.mocked(navigator.clipboard.writeText).mock.calls[0]![0] as string;
-    expect(written).toContain('TO: dc4@learn4life.org');
-    expect(written).toContain('CC: arosas@cvwest.org');
-    expect(await screen.findByText('Maintenance request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.')).toBeInTheDocument();
+    expect(written).toContain('TO: dc4@sampleorg.test');
+    expect(written).toContain('CC: jstone@site1.test');
+    expect(await screen.findByText('Maintenance request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.')).toBeInTheDocument();
   });
   it('clipboard failure reveals a selectable textarea with the full content', async () => {
     vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error('denied'));
@@ -4673,14 +4673,14 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const area = await screen.findByRole('textbox');
     expect(area).toHaveAttribute('readonly');
-    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
+    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
   });
 });
 
 describe('honesty sweep (component test 14; brief section 20)', () => {
   it('the rendered component never contains a forbidden phrase in any state', async () => {
     const { container } = renderAction();
-    for (const banned of ['Ticket created', 'Request submitted to Zendesk', 'DC4 notified', 'Andrew notified', 'Ticket assigned', 'Email sent']) {
+    for (const banned of ['Ticket created', 'Request submitted to Zendesk', 'DC4 notified', 'Jordan notified', 'Ticket assigned', 'Email sent']) {
       expect(container.textContent).not.toContain(banned);
     }
   });
@@ -4818,7 +4818,7 @@ git commit -m "feat(maintenance): detail page with StockPilot-only timeline, not
 - Modify: `apps/web/src/app/(dashboard)/dashboard/settings/page.tsx` (hub tile — hand-maintained array at :13-129; forgetting it makes the page URL-only)
 
 **Interfaces:**
-- Consumes: `organization_modules.settings` jsonb (the b2b pricingMode precedent); `can(ctx, 'maintenance_requests:configure')`; the roles matrix at `/dashboard/settings/roles` (Andrew's grants happen THERE — this page links to it, it does not duplicate the matrix).
+- Consumes: `organization_modules.settings` jsonb (the b2b pricingMode precedent); `can(ctx, 'maintenance_requests:configure')`; the roles matrix at `/dashboard/settings/roles` (the DC4 lead's grants happen THERE — this page links to it, it does not duplicate the matrix).
 - Produces: settings shape (Task 11's route + Task 21's notify already read it):
 
 ```ts
@@ -4838,7 +4838,7 @@ interface MaintenanceModuleSettings {
 Run: `pnpm --filter web test -- maintenance-settings`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement.** Page: configure-gated (`can(ctx, 'maintenance_requests:configure')` else `redirect('/dashboard/settings')`); loads settings + accepted members (for the audience map rows); renders the panel. Panel (client): category list editor (add/remove strings, min 1), `includeShareLinksInEmail` switch with helper `When off, the email lists the photo count but carries no link.`, per-member audience select (All new requests / Urgent only / None), a prominent Link `Manage who can view or manage all requests` → `/dashboard/settings/roles` (the per-user exceptions matrix — Andrew's grant path, zero new code), and the recipients display: read-only To/CC values with the note `Recipients are fixed in this release. Contact support to change them.` Hub tile: append `{ href: '/dashboard/settings/maintenance', title: 'Maintenance requests', description: 'Categories, notification audiences, and photo link settings.' }` in the hand-maintained array following its exact object shape (Read the array first; match icon key style).
+- [ ] **Step 3: Implement.** Page: configure-gated (`can(ctx, 'maintenance_requests:configure')` else `redirect('/dashboard/settings')`); loads settings + accepted members (for the audience map rows); renders the panel. Panel (client): category list editor (add/remove strings, min 1), `includeShareLinksInEmail` switch with helper `When off, the email lists the photo count but carries no link.`, per-member audience select (All new requests / Urgent only / None), a prominent Link `Manage who can view or manage all requests` → `/dashboard/settings/roles` (the per-user exceptions matrix — the DC4 lead's grant path, zero new code), and the recipients display: read-only To/CC values with the note `Recipients are fixed in this release. Contact support to change them.` Hub tile: append `{ href: '/dashboard/settings/maintenance', title: 'Maintenance requests', description: 'Categories, notification audiences, and photo link settings.' }` in the hand-maintained array following its exact object shape (Read the array first; match icon key style).
 
 - [ ] **Step 4: Run to verify pass.** `pnpm --filter web test -- maintenance-settings && pnpm --filter web typecheck` → PASS.
 
@@ -5214,7 +5214,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
   it('mailto action opens the RFC 6068 URL with the CC intact', async () => {
     await expect(openMailtoDraft(PREPARED)).resolves.toBe('opened');
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
-    expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test')).toBe(true);
   });
   it('linkFits=false refuses to open either transport', async () => {
     const oversized = { ...PREPARED, linkFits: false };
@@ -5310,7 +5310,7 @@ export function notifyMaintenanceEvent(args: { organizationId: string; event: Ma
 ```ts
 // 1. resolveMaintenanceAudience computes via effectivePermissions: a VIEWER
 //    with a user_permission_overrides grant of read_all IS included (the
-//    Andrew case, permission test 10); a staff member without grants is NOT.
+//    DC4-lead case, permission test 10); a staff member without grants is NOT.
 // 2. The actor is excluded from their own new_request fan-out.
 // 3. notifyAudience map: a user set to 'none' is dropped; 'urgent_only' is
 //    dropped for event new_request but kept for urgent_request.
@@ -5430,7 +5430,7 @@ Expected: ALL green, including the four delivery pinning suites (R1) and 0207 at
 grep -rni "zendesk" apps/web/src/components/maintenance apps/web/src/server/services/maintenance* \
   apps/web/src/app/api/v1/maintenance-requests apps/mobile/app/maintenance packages/core/src/maintenance
 # Forbidden phrases in maintenance sources (GC 8) — expect ZERO hits:
-grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Andrew notified\|Ticket assigned\|Email sent" \
+grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Jordan notified\|Ticket assigned\|Email sent" \
   apps/web/src/components/maintenance apps/mobile/app/maintenance packages/core/src/maintenance
 # No emoji anywhere in the diff (GC 17):
 git diff main --unified=0 | grep -P "[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]" || echo "no emojis"
@@ -5454,7 +5454,7 @@ git commit -m "docs(maintenance): verification log with real gate output"
 No Playwright CI gate exists and `location.assign` is unstubbable in real Chromium; this scripted walk + the Task 14 component tests ARE the Brief §31 E2E, and the report says so. **NO-SEND RULES BIND EVERY STEP (GC 2): in a real browser, NEVER click `Open in Outlook` unpatched, NEVER trigger the mailto path, NEVER open `/m/<token>` links in an email client.**
 
 - [ ] **Step 1: Local walk (full flow, window.open monkeypatched).** Local stack up (`supabase db reset`, dev server; note: `apps/web/.env.local` points at LOCAL supabase — sign-in is BLOCKED if the stack is down). Enable the module for the dev org via local SQL. Then walk the Brief §31 E2E checklist, numbered:
-  1. Sign in. 2. Create a request. 3. Custom subject typed. 4. Description typed. 5. Site selected. 6. Two photos uploaded (one HEIC to prove transcode). 7. Review screen shows all of it. 8. Exactly ONE request row exists (refresh the list). 9. In DevTools Console run `window.open = (u) => { console.log('INTERCEPTED', u); return { opener: {} }; }` — THEN click `Open in Outlook`: the URL is INTERCEPTED, nothing opens. 10. Logged URL contains `dc4%2540learn4life.org` (double-encoded To). 11. Contains `arosas%2540cvwest.org` in the cc hfield. 12. Subject param carries the typed subject + MR number. 13. Body param carries the description. 14. Body carries the `/m/<token>` share link. 15. No email was sent (nothing to check — nothing opened; the draft-opened stamp is the ONLY side effect). 16. The request now shows `Email draft opened`. 17. Visible in My Requests. 18. A manager account sees it in All Requests. 19. A second staff account CANNOT open its detail URL. 20. A second org's account gets no row (list empty, detail 404s).
+  1. Sign in. 2. Create a request. 3. Custom subject typed. 4. Description typed. 5. Site selected. 6. Two photos uploaded (one HEIC to prove transcode). 7. Review screen shows all of it. 8. Exactly ONE request row exists (refresh the list). 9. In DevTools Console run `window.open = (u) => { console.log('INTERCEPTED', u); return { opener: {} }; }` — THEN click `Open in Outlook`: the URL is INTERCEPTED, nothing opens. 10. Logged URL contains `dc4%2540sampleorg.test` (double-encoded To). 11. Contains `jstone%2540site1.test` in the cc hfield. 12. Subject param carries the typed subject + MR number. 13. Body param carries the description. 14. Body carries the `/m/<token>` share link. 15. No email was sent (nothing to check — nothing opened; the draft-opened stamp is the ONLY side effect). 16. The request now shows `Email draft opened`. 17. Visible in My Requests. 18. A manager account sees it in All Requests. 19. A second staff account CANNOT open its detail URL. 20. A second org's account gets no row (list empty, detail 404s).
   Also: popup-blocked panel via `window.open = () => null` (mailto assign will fire — patch `window.location.assign` in the console FIRST: `Object.defineProperty` is not available over `location` in Chromium, so instead verify this branch ONLY via the Task 14 component tests and record that limitation here — do NOT attempt it live); duplicate-draft dialog on second click; copy fallback content pasted into a scratch text file (NOT a mail client); share page opens in an incognito tab; revoke → the same URL 404s.
 - [ ] **Step 2: Record the walk** step-by-step with screenshots/notes appended to the verification log, including the two explicitly-not-exercised paths (real popup-block, real mailto) and why.
 - [ ] **Step 3: Commit the updated log.**
@@ -5469,7 +5469,7 @@ git commit -m "docs(maintenance): manual walk record for the E2E checklist"
 **Files:**
 - Create: `docs/superpowers/reports/2026-08-05-maintenance-requests-report.md`
 
-- [ ] **Step 1: Write the Brief §33 report** with these sections, each grounded in the built code: Repository inspection (systems reused, with file:line); User workflow; **Zendesk boundary** (the email to DC4 creates the ticket via Zendesk email intake; Outlook/Zendesk own replies; StockPilot never knows whether Send was clicked, the ticket number, status, or comments; replying to the thread keeps updates on the same ticket per the org's Zendesk email configuration); Photo behavior (storage, magic-byte verification, share-link generation, download, why Outlook cannot auto-attach); Permissions (requester / read_all / manage / owner-configure / Andrew's per-user grant path); Files changed; Data model (tables, indexes, RLS policies verbatim); Tests (EVERY command + actual result, lifted from the verification log); Limitations (no direct Zendesk integration; no confirmed ticket creation; no status tracking; no comment sync; no automatic attachment insertion; photo links require the share link or app access; users must click Send; Q2 residual risk: another org's admin could self-enable the optional module — drafts would still target the L4L constants; C4/C8/C10 scope cuts); Future option (an approved Zendesk API integration could create tickets directly, attach photos, return ticket numbers, sync status, display comments, allow in-app replies — explicitly not in this phase).
+- [ ] **Step 1: Write the Brief §33 report** with these sections, each grounded in the built code: Repository inspection (systems reused, with file:line); User workflow; **Zendesk boundary** (the email to DC4 creates the ticket via Zendesk email intake; Outlook/Zendesk own replies; StockPilot never knows whether Send was clicked, the ticket number, status, or comments; replying to the thread keeps updates on the same ticket per the org's Zendesk email configuration); Photo behavior (storage, magic-byte verification, share-link generation, download, why Outlook cannot auto-attach); Permissions (requester / read_all / manage / owner-configure / the DC4 lead's per-user grant path); Files changed; Data model (tables, indexes, RLS policies verbatim); Tests (EVERY command + actual result, lifted from the verification log); Limitations (no direct Zendesk integration; no confirmed ticket creation; no status tracking; no comment sync; no automatic attachment insertion; photo links require the share link or app access; users must click Send; Q2 residual risk: another org's admin could self-enable the optional module — drafts would still target the L4L constants; C4/C8/C10 scope cuts); Future option (an approved Zendesk API integration could create tickets directly, attach photos, return ticket numbers, sync status, display comments, allow in-app replies — explicitly not in this phase).
 
 - [ ] **Step 2: Append the SHIP CHECKLIST for the controller** (LOCAL work ends here — GC 20; order is BINDING, GC 7):
 
@@ -5491,9 +5491,9 @@ git commit -m "docs(maintenance): manual walk record for the E2E checklist"
    NEVER click Open in Outlook in prod), verify mobile drawer + deep link,
    then DISABLE the module for Demo Co again and record both SQL statements
    and timestamps in the report.
-7. Andrew's grant via the UI (zero new code): /dashboard/settings/roles ->
+7. The DC4 lead's grant via the UI (zero new code): /dashboard/settings/roles ->
    per-user exceptions -> grant maintenance_requests:read_all + :manage to
-   Andrew's member row; confirm his session updates WITHOUT re-login
+   the DC4 lead's member row; confirm their session updates WITHOUT re-login
    (broadcastPermissionsChanged) on web and mobile.
 8. Owner hand-test on the live L4L tenant: one real request, owner reviews
    the Outlook draft and decides whether to press Send. StockPilot's job
@@ -5521,8 +5521,8 @@ git commit -m "docs(maintenance): engineering report and ship checklist"
 | 4 | Detailed issue description | 6, 13 (form test 2) |
 | 5 | Request saved before Outlook opens | 13 (save -> redirect to review), 14 (action requires a saved request id) |
 | 6 | Human-readable request number | 1 (0254-clone trigger), 6 (formatter tests), 12 (list render) |
-| 7 | Outlook To = dc4@learn4life.org | 6 (literal pin), 7 (email tests 1/19), 14 (open URL assertion) |
-| 8 | Outlook CC = arosas@cvwest.org | 6, 7 (tests 2/19), 14 |
+| 7 | Outlook To = dc4@sampleorg.test | 6 (literal pin), 7 (email tests 1/19), 14 (open URL assertion) |
+| 8 | Outlook CC = jstone@site1.test | 6, 7 (tests 2/19), 14 |
 | 9 | Subject = employee issue + request number | 7 (tests 3/4) |
 | 10 | Body includes complete description | 7 (tests 5/15) |
 | 11 | Requester info auto-populated | 8 (session/profile snapshots test) |
@@ -5540,7 +5540,7 @@ git commit -m "docs(maintenance): engineering report and ship checklist"
 | 23 | Requesters see own requests | 1 (pgTAP), 8 (list mine), 12 |
 | 24 | Authorized users see all | 1 (pgTAP manager), 8 (scope all), 12 |
 | 25 | Owner controls all-request access | 3 (configure owner-only, C2), 16 (roles-matrix link) |
-| 26 | Andrew sees all when configured | 1 (pgTAP override test), 21 (audience test 1), 26 step 7 |
+| 26 | The DC4 lead sees all when configured | 1 (pgTAP override test), 21 (audience test 1), 26 step 7 |
 | 27 | Other orgs cannot access | 1 (pgTAP cross-org), 8 (org scoping pins) |
 | 28 | Duplicate-draft warnings | 8 (recordDraftOpened), 14 (dialog tests), 20 (Alert) |
 | 29 | Popup-blocked fallbacks | 14 (blocked suite) |
@@ -5640,7 +5640,7 @@ git commit -m "docs(maintenance): engineering report and ship checklist"
 
 ## Coverage — Brief §31 test lists
 
-**Email-builder (21):** all in `packages/core/src/maintenance/email.test.ts` (Task 7), tagged `(1)`-`(21)` in test names. **Permission (10):** (1)-(3) 0314 pgTAP requester block; (4) pgTAP manager; (5) pgTAP assign-owner; (6) pgTAP notes; (7) pgTAP owner-visibility check; (8) pgTAP cross-org; (9) pgTAP module-off insert + Task 8 module-disabled test; (10) pgTAP Andrew override + Task 21 audience test 1. **Photo (12):** (1)(2) `image-signature.test.ts` + attachments test 4; (3) Task 13 (heic2any) + Task 19 test 1 (forced JPEG); (4) attachments test 3 + sniffer rejects; (5) attachments test 7; (6) sniffer fake-MIME + attachments tests 5/6; (7) Task 13 variants thumb + Task 19 step 4; (8) attachments test 8 (prefix forgery) + 0314 attachment RLS; (9)(10) share-links test 5 (revoked/expired -> generic null); (11) Task 14 test "removing a photo updates the email preview" (photoCount rerender); (12) Task 10 (signing failure skips one photo, page still renders) + Task 14 (open path independent of photos). **Component (14):** (1)-(4) Task 13 form tests; (5) Task 13 photos-panel test; (6) Task 14 review render; (7)-(9) Task 14 open/blocked/copy suites; (10) Task 14 download-anchor presence test; (11) Task 14 duplicate-draft suite; (12) Task 15 (saved request + detail edit — no client-state loss possible); (13) Task 13 form test 13; (14) Task 14 honesty sweep. **E2E web (20):** Task 25 Step 1's numbered script (satisfied per GC 26; deviation documented). **Mobile:** form submission (Task 19 simulator + upload tests), camera/library (Task 19), item scan association (Task 20 launch point), Outlook/deep-link action (Task 20 tests), copy fallback (Task 20 selectable TextInput), permission-based list visibility (Task 18 canReadAll gate), request detail (Task 20), local notifications deep link (Task 18 rewrite tests + Task 21 link pin).
+**Email-builder (21):** all in `packages/core/src/maintenance/email.test.ts` (Task 7), tagged `(1)`-`(21)` in test names. **Permission (10):** (1)-(3) 0314 pgTAP requester block; (4) pgTAP manager; (5) pgTAP assign-owner; (6) pgTAP notes; (7) pgTAP owner-visibility check; (8) pgTAP cross-org; (9) pgTAP module-off insert + Task 8 module-disabled test; (10) pgTAP DC4-lead override + Task 21 audience test 1. **Photo (12):** (1)(2) `image-signature.test.ts` + attachments test 4; (3) Task 13 (heic2any) + Task 19 test 1 (forced JPEG); (4) attachments test 3 + sniffer rejects; (5) attachments test 7; (6) sniffer fake-MIME + attachments tests 5/6; (7) Task 13 variants thumb + Task 19 step 4; (8) attachments test 8 (prefix forgery) + 0314 attachment RLS; (9)(10) share-links test 5 (revoked/expired -> generic null); (11) Task 14 test "removing a photo updates the email preview" (photoCount rerender); (12) Task 10 (signing failure skips one photo, page still renders) + Task 14 (open path independent of photos). **Component (14):** (1)-(4) Task 13 form tests; (5) Task 13 photos-panel test; (6) Task 14 review render; (7)-(9) Task 14 open/blocked/copy suites; (10) Task 14 download-anchor presence test; (11) Task 14 duplicate-draft suite; (12) Task 15 (saved request + detail edit — no client-state loss possible); (13) Task 13 form test 13; (14) Task 14 honesty sweep. **E2E web (20):** Task 25 Step 1's numbered script (satisfied per GC 26; deviation documented). **Mobile:** form submission (Task 19 simulator + upload tests), camera/library (Task 19), item scan association (Task 20 launch point), Outlook/deep-link action (Task 20 tests), copy fallback (Task 20 selectable TextInput), permission-based list visibility (Task 18 canReadAll gate), request detail (Task 20), local notifications deep link (Task 18 rewrite tests + Task 21 link pin).
 
 ---
 
