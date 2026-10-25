@@ -460,27 +460,36 @@ export async function restoreSnapshot(
       } else {
         // Missing (never existed or was deleted) → re-create, preserving the bin
         // so it doesn't collide with the (sku, bin) uniqueness index.
-        await svc.create({
-          name: it.name,
-          sku,
-          barcode: it.barcode,
-          description: it.description,
-          binLocation: it.binLocation,
-          categoryId,
-          supplierId,
-          primaryLocationId,
-          warehouseId: it.warehouseId ?? fallbackWarehouseId,
-          unitCost: it.unitCost,
-          retailPrice: it.retailPrice,
-          quantityOnHand: it.quantityOnHand,
-          reorderPoint: it.reorderPoint,
-          reorderQuantity: it.reorderQuantity,
-          unitOfMeasure: it.unitOfMeasure,
-          trackingType: 'none',
-          itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
-          customFields: {},
-          status: finalStatus,
-        });
+        //
+        // `allowUnconfirmedNewRack`: create() now asks before it creates the
+        // rack a create's stock is typed onto (2026-10-24). Nobody typed this
+        // rack: the point names it, and the restore is putting the item back
+        // where the point had it, as it always did. Asking would instead
+        // fail the item's re-create and count it as a failure.
+        await svc.create(
+          {
+            name: it.name,
+            sku,
+            barcode: it.barcode,
+            description: it.description,
+            binLocation: it.binLocation,
+            categoryId,
+            supplierId,
+            primaryLocationId,
+            warehouseId: it.warehouseId ?? fallbackWarehouseId,
+            unitCost: it.unitCost,
+            retailPrice: it.retailPrice,
+            quantityOnHand: it.quantityOnHand,
+            reorderPoint: it.reorderPoint,
+            reorderQuantity: it.reorderQuantity,
+            unitOfMeasure: it.unitOfMeasure,
+            trackingType: 'none',
+            itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
+            customFields: {},
+            status: finalStatus,
+          },
+          { allowUnconfirmedNewRack: true },
+        );
         recreated++;
       }
     } catch {

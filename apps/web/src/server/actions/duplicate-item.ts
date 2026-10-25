@@ -32,9 +32,20 @@ export async function duplicateItemAction(
     return ok({ id });
   } catch (error) {
     if (error instanceof ServiceError) {
-      return err(error.code, error.message);
+      // `details` is app-authored and forwarded: the new-rack question rides
+      // it ("Create new rack 1-B?", 2026-10-24), and without it the dialog
+      // could only show a sentence it cannot answer. Except for
+      // internal_error, whose detail is raw database text that stays on the
+      // server (S13), the same rule as the inventory actions' toResult.
+      return err(
+        error.code,
+        error.message,
+        error.code === 'internal_error' ? undefined : error.details,
+      );
     }
     console.error(error);
-    return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+    // Never a raw exception message (database or network internals) to the
+    // client. It used to return error.message here.
+    return err('internal_error', 'Something went wrong. Please try again.');
   }
 }
