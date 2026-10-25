@@ -49,8 +49,10 @@ interface BulkResult {
  * function ceiling.
  *
  * ISBN collisions with existing items are detected via the service's
- * pre-flight barcode lookup and counted as `skipped`, matching the prior
- * per-row "conflict = skip" semantic.
+ * pre-flight lookup and counted as `skipped`, matching the prior per-row
+ * "conflict = skip" semantic. A book matches in either ISBN form (ISBN-10 or
+ * ISBN-13), and a book listed twice in one import (or in both forms) is
+ * created once.
  */
 export async function bulkCreateBooksAction(
   input: BulkBookInput,

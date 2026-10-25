@@ -73,6 +73,7 @@ import {
   formatStockQuantity,
   hasRackPosition,
   historyNote,
+  isbnSearchKeys,
   collectLegacyRefIdsByKind,
   newRackBlockerFor,
   newRackConfirmationDetail,
@@ -4655,17 +4656,34 @@ export class InventoryService {
       }
     }
 
-    // Pre-flight: which barcodes already exist? Count those as skipped,
-    // build payloads only for the survivors.
+    // Pre-flight: which items already exist? Count those as skipped, build
+    // payloads only for the survivors.
     //
-    // Batched (up to 500 barcodes, and a long barcode costs more URL than a
-    // uuid) and FAIL-CLOSED: the error used to be ignored, so a failed read
-    // looked like "none exist" and created duplicates of every item already
-    // in the org. A failed batch throws before anything is inserted.
-    const allBarcodes = input.items.map((i) => i.barcode);
+    // A BOOK is identified by its ISBN in EITHER form. The barcode string used
+    // to be compared exactly, so the same book came in again whenever the list
+    // gave the other form of its ISBN (0306406152 for a book stocked as
+    // 9780306406157, or the hyphenated print form), and one import carrying
+    // both forms made two records of one book. A book's keys are therefore the
+    // barcode as given plus, for a checksum-valid ISBN, both of its digit
+    // forms (isbnSearchKeys: the rule the item search and the Book Order
+    // Totals report use). Anything else (a product, a code that is not an
+    // ISBN) keeps the exact barcode, as before.
+    //
+    // Batched (up to 500 items, so at most 1,500 keys, and a long barcode
+    // costs more URL than a uuid) and FAIL-CLOSED: the error used to be
+    // ignored, so a failed read looked like "none exist" and created
+    // duplicates of every item already in the org. A failed batch throws
+    // before anything is inserted. Deleted records still count, as they
+    // always have: Settings > Recovery can restore one, and a second record
+    // of the same book would then sit beside it.
+    const keysOf = (i: (typeof input.items)[number]): string[] => {
+      const isbnKeys = i.itemType === 'book' ? isbnSearchKeys(i.barcode) : null;
+      return [...new Set([i.barcode, ...(isbnKeys ?? [])])];
+    };
+    const itemKeys = input.items.map(keysOf);
     const ctx = this.ctx;
     const existing = await fetchAllRowsByIds<{ barcode: string }>(
-      allBarcodes,
+      [...new Set(itemKeys.flat())],
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
@@ -4677,7 +4695,16 @@ export class InventoryService {
     );
     const existingSet = new Set(existing.map((r) => r.barcode));
 
-    const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
+    // A key also counts as taken once an EARLIER row of this same import
+    // claimed it, so one import never creates two records of one book (the
+    // same ISBN twice, or its two forms). The first row wins.
+    const claimed = new Set<string>();
+    const survivors = input.items.filter((_, idx) => {
+      const keys = itemKeys[idx] ?? [];
+      if (keys.some((k) => existingSet.has(k) || claimed.has(k))) return false;
+      for (const k of keys) claimed.add(k);
+      return true;
+    });
     const skipped = input.items.length - survivors.length;
 
     if (survivors.length === 0) {
