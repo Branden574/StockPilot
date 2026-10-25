@@ -1761,9 +1761,10 @@ export default function OrderDetail() {
       setOrder(shown);
     }
     const attachmentsRead = await loadAttachments();
-    // Read-only carrier tracking. The wrapper soft-gates: if the shipping
-    // module is off, the member lacks access, or there is simply no shipment,
-    // it returns null and the section below stays hidden.
+    // Read-only carrier tracking. The wrapper soft-gates: with the shipping
+    // module off it does not ask at all (the server answered every order view
+    // with a 403, docket B10); if the member lacks access or there is simply
+    // no shipment, it returns null and the section below stays hidden.
     const shipmentRead = await getOrderShipment(id);
     setShipment(shipmentRead);
     // Kept in memory for this app session only (never written to the
