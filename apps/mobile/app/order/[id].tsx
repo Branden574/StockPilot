@@ -190,6 +190,7 @@ import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departu
 import { focusScrollY, initialSignArrival, orderScreenFocus, physicalSignatureTitle, stepSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
+import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
 import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
@@ -1845,6 +1846,11 @@ export default function OrderDetail() {
       return true;
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
+      // A refusal means the order on screen is not the one the server holds
+      // (someone else moved it on): read it again so the status and the
+      // buttons are current, still under the busy key. No answer (a timeout)
+      // leaves it as shown. The read never turns the refusal into a throw.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
       return false;
     } finally {
       setActing(null);
