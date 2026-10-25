@@ -427,27 +427,32 @@ export default function Scan() {
   }
 
   /**
-   * The picker's rows, each with where its stock is (B26): the rack and crate
+   * The picker's rows, each with where its stock is (B26): the placed
    * holdings of the rows in one read (the first 100, which bounds the URL; a
    * code shared by more records is not seen in practice), the same read
    * loadItemById makes for one item, then the one placement rule
    * (scanCandidatePlacementLabel). A failed read, or a row past the first 100,
    * leaves the line to the record's own rack keys and text, as before; it
    * never holds the picker back.
+   *
+   * Every placed kind, with the location TYPE (B37), split by
+   * scanHoldingsByItem: a record whose stock all sits on a Site is named by
+   * the Site. A Site is a NULL-kind row only its type tells from a legacy
+   * shelf, and a filter that keeps only racks and crates drops it (the 0292
+   * trap); one read, so the racks and the Site load or fail together.
    */
   async function withPlacementLabels(org: string, rows: ScanCandidate[]): Promise<ScanCandidate[]> {
-    let holdings = new Map<string, RackHoldingLike[]>();
+    let holdings: ReturnType<typeof scanHoldingsByItem> = { rack: new Map(), other: new Map() };
     try {
       const { data, error } = await supabase
         .from('item_stock_levels')
-        .select('item_id, quantity, locations!inner(name, kind)')
+        .select('item_id, quantity, locations!inner(name, kind, type)')
         .eq('organization_id', org)
         // in-list-bound: the records one scanned code matches, at most 100
         .in(
           'item_id',
           rows.slice(0, 100).map((r) => r.id),
         )
-        .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0);
       if (!error) holdings = scanHoldingsByItem((data ?? []) as unknown as ScanHoldingRow[]);
     } catch {
@@ -459,7 +464,8 @@ export default function Scan() {
         itemType: r.itemType,
         customFields: r.customFields,
         binLocation: r.binLocation,
-        holdings: holdings.get(r.id) ?? [],
+        holdings: holdings.rack.get(r.id) ?? [],
+        otherHoldings: holdings.other.get(r.id),
       }),
     }));
   }

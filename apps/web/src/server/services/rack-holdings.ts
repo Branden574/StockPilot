@@ -182,9 +182,10 @@ export async function fetchPlacementHoldingsByItem(
  * the FULL breakdown when an item's stock is split across more than one
  * rack/crate, instead of trusting a single (possibly stale) bin_location
  * label. The walk-to surfaces that also need the Site rule (the order slips,
- * the cycle-count sheet, the rentals catalog, the grouping review) read
- * `fetchPlacementHoldingsByItem` instead; this keeps the scanner lookup's
- * `rackHoldings` and the returns workbench on the rows they always had.
+ * the cycle-count sheet, the rentals catalog, the grouping review, the scanner
+ * lookup's label) read `fetchPlacementHoldingsByItem` instead, and the scanner
+ * lookup's `rackHoldings` is its `rack` half; this keeps the returns workbench
+ * on the rows it always had.
  */
 export async function fetchRackHoldingsByItem(
   ctx: Pick<ServiceContext, 'supabase' | 'organizationId'>,

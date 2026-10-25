@@ -4,7 +4,7 @@ import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@s
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
-import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,8 +19,9 @@ export interface ItemLookupMatch {
   /**
    * Where this record's stock is, by the one placement rule (core
    * resolvePlacement): the racks or crate its holdings name when the stock is
-   * split or all in a crate, else its rack keys ("Rack 37-B"), else its rack
-   * text. Null when none is known. It was the raw rack text alone, which
+   * split or all in a crate, the Site when every placed unit sits on one
+   * ("DC4 ×7", B37), else its rack keys ("Rack 37-B"), else its rack text.
+   * Null when none is known. It was the raw rack text alone, which
    * named one shelf for split stock, a rack the stock had left for crated
    * stock, and nothing for a book whose rack lives in its rack keys.
    */
@@ -44,7 +45,8 @@ export interface ItemLookupMatch {
   unitOfMeasure: string | null;
   /**
    * Rack/crate HOLDINGS (item_stock_levels) this item's stock actually
-   * sits on — empty when unplaced. `placementLabel` already names every
+   * sits on — empty when unplaced, and when the stock sits only on a Site
+   * (which `placementLabel` names). `placementLabel` already names every
    * holding of a split item; this is the same truth as data, for a caller
    * that lists the holdings itself.
    */
@@ -130,14 +132,16 @@ export async function GET(req: NextRequest) {
 
   // No single-warehouse context for a bare code lookup (unlike a pick
   // slip, which is scoped to one order's warehouse) — list every holding
-  // wherever it physically sits.
-  const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+  // wherever it physically sits. One read for the racks and crates and every
+  // other placed holding (B37): the label names the Site when every placed
+  // unit sits on one, while `rackHoldings` stays the racks and crates alone.
+  const placementHoldings = await fetchPlacementHoldingsByItem(
     ctx,
     finalRows.map((r) => r.id),
   );
 
   const matches: ItemLookupMatch[] = finalRows.map((row) => {
-    const rackHoldings = rackHoldingsByItemId.get(row.id) ?? [];
+    const rackHoldings = placementHoldings.rack.get(row.id) ?? [];
     return {
       id: row.id,
       sku: row.sku,
@@ -151,6 +155,7 @@ export async function GET(req: NextRequest) {
           customFields: row.custom_fields ?? null,
           binLocation: row.bin_location,
           holdings: rackHoldings,
+          otherHoldings: placementHoldings.other.get(row.id),
         }),
       ),
       quantityOnHand: Number(row.quantity_on_hand) || 0,
