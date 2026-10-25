@@ -595,26 +595,47 @@ describe('CycleCountDetail: Review & post', () => {
  * least 600 px wide, so at 390 px a one-item search put the count box past the
  * screen's edge (about a 111 px sideways swipe, where before it needed none).
  * Without the floor the six columns still needed 600 to 647 px of their own,
- * so below sm the SKU, Expected and Variance columns fold into the Item cell:
- * the item, its box and Clear count show whole on the screen, and from sm up
- * the line is the six columns as before. happy-dom lays nothing out; the lab
- * measured 320 to 1280 px in Chromium and WebKit. These pin the classes and
- * the words.
+ * so under 640 px of card the SKU, Expected and Variance columns fold into
+ * the Item cell: the item, its box and Clear count show whole, and from 640
+ * px of card up the line is the six columns as before.
+ *
+ * The fold follows the CARD's width (a container query), not the window's:
+ * beside the sidebar an iPad in portrait (768 to 834 px) leaves the card 474
+ * to 540 px and 200% zoom of a 1280 px window 574 px, all past the window's
+ * sm, so a viewport rule drew the six columns there with their floor, and a
+ * searched line's Variance and Clear count sat past the card's edge. happy-dom
+ * lays nothing out; the lab measured both engines from 320 to 1280 px. These
+ * pin the classes and the words.
  */
 describe('CycleCountDetail: the count on a phone', () => {
-  const FOLDED = ['hidden', 'sm:table-cell'];
+  const FOLDED = ['hidden', '@min-[640px]:table-cell'];
 
-  // Mutation caught: the 600 px floor at every width.
-  it('keeps the 600 px floor from sm up only', () => {
+  // Mutation caught: the card not a container (the queries would answer to
+  // the page's own container, which is wider than the card).
+  it('folds by the count card, the nearest container around the lines', () => {
     render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
     const table = screen.getByRole('table');
-    expect(table).toHaveClass('sm:min-w-[600px]');
+    let el: HTMLElement | null = table.parentElement;
+    while (el && !el.classList.contains('@container')) el = el.parentElement;
+    expect(el).not.toBeNull();
+    // The card itself: the bordered panel that also holds the status row
+    // and the line search.
+    expect(el).toHaveClass('bg-card', 'rounded-lg', 'border', 'overflow-hidden');
+    expect(el).toContainElement(screen.getByPlaceholderText('Search by name, SKU, barcode…'));
+  });
+
+  // Mutation caught: the 600 px floor at every width, or by the window.
+  it('keeps the 600 px floor from 640 px of card up only', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
+    const table = screen.getByRole('table');
+    expect(table).toHaveClass('@min-[640px]:min-w-[600px]');
     expect(table).not.toHaveClass('min-w-[600px]');
+    expect(table).not.toHaveClass('sm:min-w-[600px]');
   });
 
   // Mutation caught: a column left out of the fold (its cell stays at every
   // width), or Item, Counted or Clear count folded away.
-  it('folds SKU, Expected and Variance below sm and keeps Item, Counted and Clear count', () => {
+  it('folds SKU, Expected and Variance under 640 px of card and keeps Item, Counted and Clear count', () => {
     render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
     const table = screen.getByRole('table');
     const heads = within(table).getAllByRole('columnheader');
@@ -635,20 +656,23 @@ describe('CycleCountDetail: the count on a phone', () => {
       expect(heads[i]).not.toHaveClass('hidden');
       expect(cells[i]).not.toHaveClass('hidden');
     }
-    // The Item column takes 112 px at least below sm (a 320 px phone shows the
-    // item, its box and Clear count side by side) and 160 from sm up, as before.
-    expect(cells[0]).toHaveClass('min-w-28', 'sm:min-w-[160px]');
+    // The Item column takes 112 px at least while folded (a 320 px phone
+    // shows the item, its box and Clear count side by side) and 160 from 640
+    // px of card up, as before.
+    expect(cells[0]).toHaveClass('min-w-28', '@min-[640px]:min-w-[160px]');
+    // Nothing in the line folds by the window any more.
+    expect(table.innerHTML).not.toMatch(/\bsm:(hidden|table-cell|min-w)/);
   });
 
   // Mutation caught: the folded line left out, shown from sm up as well, or
   // not following the box as it is typed.
-  it('shows the SKU, Expected and Variance under the name below sm, the variance following the box', () => {
+  it('shows the SKU, Expected and Variance under the name while folded, the variance following the box', () => {
     render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
     // Widget: SKU W-1, expected 5, counted 4.
     const item = screen.getByText('Widget').closest('td')!;
-    expect(within(item).getByText('W-1')).toHaveClass('sm:hidden', 'font-mono');
+    expect(within(item).getByText('W-1')).toHaveClass('@min-[640px]:hidden', 'font-mono');
     const folded = within(item).getByTestId('count-line-folded-numbers');
-    expect(folded).toHaveClass('sm:hidden');
+    expect(folded).toHaveClass('@min-[640px]:hidden');
     expect(folded).toHaveTextContent('Expected 5 · Variance -1');
     expect(within(folded).getByText('-1')).toHaveClass('text-destructive');
 
@@ -672,10 +696,11 @@ describe('CycleCountDetail: the count on a phone', () => {
     const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
     const tips = screen.getAllByRole('button', { name: 'What is the Expected quantity?' });
     expect(tips).toHaveLength(2);
-    // From sm up, in the Expected column's header; below sm, beside Counted.
+    // From 640 px of card up, in the Expected column's header; while
+    // folded, beside Counted.
     expect(heads[2]).toContainElement(tips[0]!);
     expect(heads[3]).toContainElement(tips[1]!);
-    expect(tips[1]!.parentElement).toHaveClass('sm:hidden');
+    expect(tips[1]!.parentElement).toHaveClass('@min-[640px]:hidden');
   });
 
   // A read-only reader (no stock:adjust) gets the same fold, with the counted

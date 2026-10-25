@@ -133,10 +133,19 @@ const COUNT_NOT_A_NUMBER = 'Enter a number of 0 or more, such as 5 or 2.5.';
 /** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
 const EDGE = 'first:pl-[18px] last:pr-[18px]';
 
-/** A count-line column shown from sm up; below sm its value is in the Item cell. */
-const FOLDED = 'hidden sm:table-cell';
+/**
+ * The count lines fold by the width of their own card (a container query on
+ * the card), not the window's: under 640 px of card the SKU, Expected and
+ * Variance columns fold into the Item cell. Beside the sidebar an iPad in
+ * portrait (768 to 834 px) leaves the card 474 to 540 px, and 200% zoom of a
+ * 1280 px window 574 px, all past the window's sm, so a viewport rule drew the
+ * six columns there with their 600 px floor and a searched line's Variance
+ * and Clear count sat past the card's edge. Six columns of a short line need
+ * 623 px, so from 640 px of card they fit.
+ */
+const FOLDED = 'hidden @min-[640px]:table-cell';
 
-/** What Expected means, for the Expected column's help (and the Counted column's below sm). */
+/** What Expected means, for the Expected column's help (and the Counted column's while folded). */
 const EXPECTED_HELP = (
   <p>
     The system quantity when the line was counted (the quantity at session start until then).
@@ -457,7 +466,8 @@ export function CycleCountDetail({
             </div>
           )}
 
-          <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+          {/* @container: the count lines fold by this card's width (FOLDED). */}
+          <div className="border-border bg-card @container min-w-0 overflow-hidden rounded-lg border">
             {/* Status and who acts next: Cancel and Review & post for a
                 manager, the sentence for staff who count but do not post. */}
             <div className="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-[18px] py-2.5">
@@ -533,12 +543,13 @@ export function CycleCountDetail({
               />
             </div>
 
-            {/* From sm up the line is six columns, at least 600 px. Below sm the
-                SKU, Expected and Variance columns fold into the Item cell
-                (FOLDED), so a phone shows the item, its count box and Clear
-                count side by side: at 390 px the six columns needed 600 to 647
-                px, and the count box started past the screen's edge. */}
-            <Table scrollLabelledBy={titleId} className="sm:min-w-[600px]">
+            {/* From 640 px of card up the line is six columns, at least 600 px.
+                Under that the SKU, Expected and Variance columns fold into the
+                Item cell (FOLDED), so a phone or a tablet beside the sidebar
+                shows the item, its count box and Clear count side by side: at
+                390 px the six columns needed 600 to 647 px, and the count box
+                started past the screen's edge. */}
+            <Table scrollLabelledBy={titleId} className="@min-[640px]:min-w-[600px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className={EDGE}>Item</TableHead>
@@ -553,7 +564,7 @@ export function CycleCountDetail({
                     <span className="inline-flex items-center gap-1.5">
                       Counted
                       {/* The Expected column's help, here while that column is folded. */}
-                      <span className="inline-flex sm:hidden">
+                      <span className="@min-[640px]:hidden inline-flex">
                         <HelpTip label="the Expected quantity">{EXPECTED_HELP}</HelpTip>
                       </span>
                     </span>
@@ -828,14 +839,15 @@ function CountRow({
 
   return (
     <TableRow>
-      {/* 112 px wide at least below sm, so a 320 px phone shows the item, its
-          box and Clear count side by side; 160 from sm up, as before. A
-          13-digit barcode keeps its one line, so a line with one and with
-          Clear count is 5 px wider than a 320 px card, its controls whole. */}
-      <TableCell className={cn(EDGE, 'min-w-28 max-w-[320px] sm:min-w-[160px]')}>
+      {/* 112 px wide at least while folded, so a 320 px phone shows the item,
+          its box and Clear count side by side; 160 from 640 px of card up, as
+          before. A 13-digit barcode keeps its one line, so a line with one
+          and with Clear count is 5 px wider than a 320 px card, its controls
+          whole. */}
+      <TableCell className={cn(EDGE, '@min-[640px]:min-w-[160px] min-w-28 max-w-[320px]')}>
         <div className="font-medium [overflow-wrap:anywhere]">{line.item?.name ?? 'Unknown'}</div>
-        {/* The SKU column's value, here below sm where that column is folded. */}
-        <div className="text-ink-2 font-mono text-[12px] [overflow-wrap:anywhere] sm:hidden">
+        {/* The SKU column's value, here while that column is folded. */}
+        <div className="text-ink-2 @min-[640px]:hidden font-mono text-[12px] [overflow-wrap:anywhere]">
           {skuText}
         </div>
         {/* WHICH VARIANT this row is. Six sizes of one shoe otherwise differ
@@ -853,10 +865,10 @@ function CountRow({
         {capturedText && (
           <div className="text-muted-foreground truncate text-[12px]">{capturedText}</div>
         )}
-        {/* The Expected and Variance columns' values, here below sm. The
+        {/* The Expected and Variance columns' values, here while folded. The
             variance follows the box as it is typed, as its column does. */}
         <div
-          className="text-muted-foreground mt-0.5 text-[12px] tabular-nums sm:hidden"
+          className="text-muted-foreground @min-[640px]:hidden mt-0.5 text-[12px] tabular-nums"
           data-testid="count-line-folded-numbers"
         >
           Expected <span className="font-mono">{expectedText}</span> · Variance{' '}
