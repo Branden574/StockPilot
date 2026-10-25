@@ -204,13 +204,20 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
-    it('a null requester_user_id does NOT trigger self_resolve (nothing to compare resolved_by against) — proceeds normally', async () => {
+    // B23 (re-pinned; this case used to send). Every request is created with
+    // requester_user_id = the member who filed it (the service's one insert,
+    // the 0314 insert policy, and 0362 refuses a change), and the auth.users
+    // foreign key nulls it only when that member deletes their account. So a
+    // null requester is a deleted account, and its kept email snapshot is
+    // never emailed again (A3), as the draft-reminder cron already treats it.
+    it('a null requester_user_id (the requester deleted their account) -> requester_deleted: nothing claimed, nothing sent to the kept address', async () => {
       const stub = makeStub({
         'maintenance_requests.select': { data: { ...RESOLVED_ROW, requester_user_id: null }, error: null },
       });
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
-      expect(res).toEqual({ sent: true });
-      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(res).toEqual({ sent: false, reason: 'requester_deleted' });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('resolution_email_sent_at already set (cheap pre-check) -> already_sent, no update even attempted', async () => {

@@ -24,7 +24,10 @@ import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-sh
  *
  * Guard order (each a SILENT skip — `sendEmail` is never reached for any of
  * them): row exists -> `status === 'resolved'` -> `requester_email_snapshot`
- * non-null -> `requester_user_id !== resolved_by` (self-resolve: you don't
+ * non-null -> `requester_user_id` non-null (B23: every request is filed with
+ * the member's id, and only their account deletion nulls it, so the kept
+ * snapshot address is never emailed again, A3) -> `requester_user_id !==
+ * resolved_by` (self-resolve: you don't
  * email someone about their own click; mirrors resolve()'s in-app
  * suppression, same two ids) -> cheap `resolution_email_sent_at` pre-check
  * -> the AUTHORITATIVE guarded claim (`.is('resolution_email_sent_at',
@@ -47,6 +50,7 @@ export type MaintenanceResolvedEmailResult =
         | 'request_not_found'
         | 'not_resolved'
         | 'no_requester_email'
+        | 'requester_deleted'
         | 'self_resolve'
         | 'already_sent'
         | 'lost_race'
@@ -158,6 +162,12 @@ export async function maybeSendMaintenanceResolvedEmail(
 
     if (request.status !== 'resolved') return { sent: false, reason: 'not_resolved' };
     if (!request.requester_email_snapshot) return { sent: false, reason: 'no_requester_email' };
+    // B23: the requester deleted their account. Every request is created with
+    // requester_user_id = the member who filed it (the one insert, the 0314
+    // insert policy; 0362 refuses a change), and the auth.users foreign key
+    // nulls it only on that deletion. The snapshot keeps their address on the
+    // record (O-A3-6); it is never emailed again (A3).
+    if (!request.requester_user_id) return { sent: false, reason: 'requester_deleted' };
     // Self-resolve: you don't email someone about their own click. Compares
     // the same two ids resolve()'s in-app notify suppression does
     // (requester_user_id vs the acting user — here, resolved_by).

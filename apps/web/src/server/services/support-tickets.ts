@@ -303,7 +303,7 @@ export async function updateSupportTicket(
   // re-save while already resolved must not resend it).
   const { data: before, error: readErr } = await admin
     .from('support_tickets')
-    .select('status, email, name, subject')
+    .select('status, email, name, subject, organization_id, submitted_by')
     .eq('id', id)
     .maybeSingle();
   if (readErr) throw new Error(`support_tickets read: ${readErr.message}`);
@@ -323,12 +323,37 @@ export async function updateSupportTicket(
 
   // Owner decision 2026-07-20: the support-resolved concept is LIVE.
   // Fires only on the open/in_progress -> resolved crossing; best-effort.
-  const b = before as { status: TicketStatus; email: string; name: string | null; subject: string };
-  if (patch.status === 'resolved' && b.status !== 'resolved' && b.status !== 'closed') {
+  const b = before as {
+    status: TicketStatus;
+    email: string;
+    name: string | null;
+    subject: string;
+    organization_id: string | null;
+    submitted_by: string | null;
+  };
+  if (
+    patch.status === 'resolved' &&
+    b.status !== 'resolved' &&
+    b.status !== 'closed' &&
+    !submitterAccountDeleted(b)
+  ) {
     void sendResolvedNotice(id, b).catch((e) =>
       reportError(e, { tag: 'support-tickets.resolved', extra: { id } }),
     );
   }
+}
+
+/**
+ * B23: a ticket filed in the app (the dashboard action, the phone's
+ * /api/v1/support) always names its organization and the member who filed it;
+ * a public one names neither. The user_profiles foreign key nulls submitted_by
+ * only when that member deletes their account, so an organization with nobody
+ * is a deleted member's ticket: its kept address is never emailed again (A3).
+ * (A ticket whose organization was deleted too reads as public: neither is
+ * named any more.)
+ */
+function submitterAccountDeleted(t: { organization_id: string | null; submitted_by: string | null }): boolean {
+  return t.organization_id !== null && t.submitted_by === null;
 }
 
 async function sendResolvedNotice(
