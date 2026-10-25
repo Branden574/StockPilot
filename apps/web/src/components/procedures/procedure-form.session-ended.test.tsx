@@ -60,6 +60,7 @@ import {
   INTERRUPTED_RUN_PREFIX,
   INTERRUPTED_RUN_TTL_MS,
   purgeInterruptedRuns,
+  sweepInterruptedRuns,
 } from '@/lib/interrupted-run';
 import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
 
@@ -103,6 +104,15 @@ function renderNewForm(account = ME) {
   );
 }
 
+/** A promise the test settles itself: a Server Action still on its way. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function makeFile(name: string): File {
   return new File([new Uint8Array(64)], name, { type: 'video/mp4' });
 }
@@ -140,6 +150,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // A batch a test leaves going in this page would hold the next test's form.
+  purgeInterruptedRuns();
 });
 
 describe('ProcedureForm: the session ends while staged videos upload', () => {
@@ -386,5 +398,83 @@ describe('ProcedureForm: the session ends while staged videos upload', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(h.replace).not.toHaveBeenCalled();
+  });
+
+  it('a sign-out on purpose while the procedure is being saved leaves nothing: New procedure opens empty after signing in', async () => {
+    // The batch used to join the page's runs only at its first record, after
+    // the save came back, so a sign-out while the save was on its way found
+    // nothing to stop: the save landed, the batch recorded its procedure, and
+    // the refused upload kept that record for after signing in.
+    const save = deferred<unknown>();
+    h.createProcedure.mockImplementation(() => save.promise);
+    // The session ended with the sign-out: the first upload is refused.
+    h.createVideoUpload.mockRejectedValue(signInRedirect());
+
+    await createWithTwoVideos();
+    await waitFor(() => expect(h.createProcedure).toHaveBeenCalledTimes(1));
+    expect(interruptedRunKeys()).toEqual([]);
+
+    purgeInterruptedRuns();
+    save.resolve({ ok: true, data: { id: PROCEDURE_ID } });
+
+    await waitFor(() => expect(h.createVideoUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Create procedure/i })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    cleanup();
+    renderNewForm();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(h.replace).not.toHaveBeenCalled();
+  });
+
+  it('an organization switch while the procedure is being saved: the batch keeps no record for the first organization', async () => {
+    // The shell rendering for another account (here the same person in
+    // another organization) stops a batch whose save is still on its way.
+    const save = deferred<unknown>();
+    h.createProcedure.mockImplementation(() => save.promise);
+    let keysAtFirstUpload: string[] | null = null;
+    h.createVideoUpload.mockImplementation(async ({ procedureId }: { procedureId: string }) => {
+      keysAtFirstUpload ??= interruptedRunKeys();
+      return presigned(procedureId);
+    });
+
+    await createWithTwoVideos();
+    await waitFor(() => expect(h.createProcedure).toHaveBeenCalledTimes(1));
+    sweepInterruptedRuns({ userId: ME.userId, organizationId: 'org-2' });
+    save.resolve({ ok: true, data: { id: PROCEDURE_ID } });
+
+    await waitFor(() =>
+      expect(h.push).toHaveBeenCalledWith(`/dashboard/procedures/${PROCEDURE_ID}`),
+    );
+    expect(keysAtFirstUpload).toEqual([]);
+    expect(interruptedRunKeys()).toEqual([]);
+  });
+
+  it('a redirect answering the save itself shows nothing, keeps nothing and is not left unhandled', async () => {
+    // The session ended before the procedure was saved: nothing exists to go
+    // back to, and the router is already on its way to sign-in.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      h.createProcedure.mockRejectedValue(signInRedirect());
+
+      await createWithTwoVideos();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /Create procedure/i })).toBeEnabled(),
+      );
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(unhandled).toEqual([]);
+      expect(h.toastError).not.toHaveBeenCalled();
+      expect(h.push).not.toHaveBeenCalled();
+      expect(h.createVideoUpload).not.toHaveBeenCalled();
+      expect(interruptedRunKeys()).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

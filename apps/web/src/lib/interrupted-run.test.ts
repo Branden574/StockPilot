@@ -2,12 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  beginRun,
+  expireInterruptedRuns,
   finishRun,
   INTERRUPTED_RUN_PREFIX,
   INTERRUPTED_RUN_TTL_MS,
   leaveRunUnfinished,
   purgeInterruptedRuns,
   recordRun,
+  type RunAccount,
   sweepInterruptedRuns,
   takeInterruptedRun,
 } from './interrupted-run';
@@ -19,8 +22,9 @@ import {
  * answered with a redirect, the browser loads sign-in, and that memory is
  * gone. The record below is what the page the person comes back to reads
  * instead. It is kept for an hour at most, and only while somebody can need
- * it: a deliberate end of the session removes every record in the tab, and
- * the app shell removes every record that is not the signed-in account's.
+ * it: a deliberate end of the session removes every record in the tab, the app
+ * shell removes every record that is not the signed-in account's, and a record
+ * over an hour old goes on any page of the app.
  */
 
 const KIND = 'test-run';
@@ -36,8 +40,20 @@ function parseId(value: unknown): { id: string } | null {
   return typeof id === 'string' ? { id } : null;
 }
 
+/** A run that has recorded this step and is still going in this page. */
+function going(kind: string, account: RunAccount, id: string) {
+  const run = beginRun(kind, account);
+  recordRun(run, { id });
+  return run;
+}
+
+/** A run that a redirect cut short in this page, after recording this step. */
+function cutShort(kind: string, account: RunAccount, id: string) {
+  leaveRunUnfinished(going(kind, account, id));
+}
+
 /** A record as recordRun() writes it, for a run that ended in another page. */
-function stored(account: { userId: string; organizationId: string }, at: number, id = 'p-1') {
+function stored(account: RunAccount, at: number, id = 'p-1') {
   return JSON.stringify({ v: 1, ...account, at, payload: { id } });
 }
 
@@ -69,31 +85,47 @@ function mapStorage(refuseRemoving: (key: string) => boolean = () => false) {
   };
 }
 
+/** A sessionStorage stand-in that refuses every call. */
+function refusingStorage() {
+  const refuse = (): never => {
+    throw new DOMException('blocked', 'SecurityError');
+  };
+  return {
+    get length(): number {
+      return refuse();
+    },
+    key: refuse,
+    getItem: refuse,
+    setItem: refuse,
+    removeItem: refuse,
+    clear: refuse,
+  };
+}
+
 beforeEach(() => {
   sessionStorage.clear();
 });
 
 afterEach(() => {
-  // A run a test leaves going (or marked ended) in this page would change the
-  // next test's outcome. Ending each kind clears both.
-  finishRun(KIND);
-  finishRun(OTHER_KIND);
-  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // A run a test leaves going in this page, or a timer it leaves armed, would
+  // change the next test's outcome: the purge ends every run and the timer.
+  purgeInterruptedRuns();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('interrupted run record', () => {
   it('is handed once to the page the person comes back to when a redirect cut the run short', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
-    leaveRunUnfinished(KIND);
+    cutShort(KIND, ME, 'p-1');
 
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
     expect(sessionStorage.getItem(KEY)).toBeNull();
   });
 
-  it('survives a page load: the next page finds it with no live run in it', async () => {
-    recordRun(KIND, ME, { id: 'p-1' });
+  it('survives a page load: the next page finds it with no run going in it', async () => {
+    going(KIND, ME, 'p-1');
 
     // A reload, or the browser going to sign-in, starts every module afresh.
     vi.resetModules();
@@ -103,15 +135,22 @@ describe('interrupted run record', () => {
   });
 
   it('is not handed out while the run is still going in this page, and is kept', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
+    going(KIND, ME, 'p-1');
+
+    expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+  });
+
+  it('nor while a run of its kind has begun and not yet recorded anything', () => {
+    sessionStorage.setItem(KEY, stored(ME, Date.now()));
+    beginRun(KIND, ME);
 
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
     expect(sessionStorage.getItem(KEY)).not.toBeNull();
   });
 
   it('is removed when the run ends on the page', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
-    finishRun(KIND);
+    finishRun(going(KIND, ME, 'p-1'));
 
     expect(sessionStorage.getItem(KEY)).toBeNull();
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
@@ -120,11 +159,11 @@ describe('interrupted run record', () => {
   it('holds the latest step: each step rewrites it and restarts its hour', () => {
     const now = vi.spyOn(Date, 'now');
     now.mockReturnValue(1_000_000);
-    recordRun(KIND, ME, { id: 'p-1' });
+    const run = going(KIND, ME, 'p-1');
     // A long batch: the next step comes almost an hour later.
     now.mockReturnValue(1_000_000 + INTERRUPTED_RUN_TTL_MS - 1);
-    recordRun(KIND, ME, { id: 'p-2' });
-    leaveRunUnfinished(KIND);
+    recordRun(run, { id: 'p-2' });
+    leaveRunUnfinished(run);
     now.mockReturnValue(1_000_000 + INTERRUPTED_RUN_TTL_MS + MINUTE);
 
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-2' });
@@ -135,14 +174,12 @@ describe('interrupted run record', () => {
     const now = vi.spyOn(Date, 'now');
 
     now.mockReturnValue(1_000_000);
-    recordRun(KIND, ME, { id: 'p-1' });
-    leaveRunUnfinished(KIND);
+    cutShort(KIND, ME, 'p-1');
     now.mockReturnValue(1_000_000 + 59 * MINUTE);
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
 
     now.mockReturnValue(1_000_000);
-    recordRun(KIND, ME, { id: 'p-2' });
-    leaveRunUnfinished(KIND);
+    cutShort(KIND, ME, 'p-2');
     now.mockReturnValue(1_000_000 + 61 * MINUTE);
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
     expect(sessionStorage.getItem(KEY)).toBeNull();
@@ -151,8 +188,7 @@ describe('interrupted run record', () => {
   it('is dropped, never shown, once it is more than an hour old', () => {
     const now = vi.spyOn(Date, 'now');
     now.mockReturnValue(1_000_000);
-    recordRun(KIND, ME, { id: 'p-1' });
-    leaveRunUnfinished(KIND);
+    cutShort(KIND, ME, 'p-1');
     now.mockReturnValue(1_000_000 + INTERRUPTED_RUN_TTL_MS + 1);
 
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
@@ -161,8 +197,7 @@ describe('interrupted run record', () => {
 
   it('is never handed to another account signed in on this tab, and is dropped', () => {
     for (const other of [OTHER_USER, OTHER_ORG]) {
-      recordRun(KIND, ME, { id: 'p-1' });
-      leaveRunUnfinished(KIND);
+      cutShort(KIND, ME, 'p-1');
 
       expect(takeInterruptedRun(KIND, other, parseId)).toBeNull();
       // Dropped: the first account does not get it later either.
@@ -188,35 +223,46 @@ describe('interrupted run record', () => {
   });
 
   it('keeps each kind of run apart', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
-    recordRun(OTHER_KIND, ME, { id: 'p-2' });
-    leaveRunUnfinished(KIND);
+    going(OTHER_KIND, ME, 'p-2');
+    cutShort(KIND, ME, 'p-1');
 
     // The other run is still going here; this one was cut short.
     expect(takeInterruptedRun(OTHER_KIND, ME, parseId)).toBeNull();
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
   });
 
-  it('never throws when the browser refuses storage, and hands nothing out', () => {
-    const refusing = {
-      length: 0,
-      key: () => null,
-      getItem: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      removeItem: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      setItem: () => {
-        throw new DOMException('quota', 'QuotaExceededError');
-      },
-    };
-    vi.stubGlobal('sessionStorage', refusing);
+  it('a run that ends on the page removes only the record it wrote, not one a later run of its kind wrote since', () => {
+    // The New procedure form opened again while the first batch runs on, and
+    // a second batch started there.
+    const first = going(KIND, ME, 'p-1');
+    const second = going(KIND, ME, 'p-2');
 
-    expect(() => recordRun(KIND, ME, { id: 'p-1' })).not.toThrow();
-    expect(() => leaveRunUnfinished(KIND)).not.toThrow();
+    finishRun(first);
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+
+    // The second is cut short: its record is what the next page finds.
+    leaveRunUnfinished(second);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-2' });
+  });
+
+  it('a run that ends having recorded nothing leaves the record stored before it', () => {
+    sessionStorage.setItem(KEY, stored(ME, Date.now()));
+    finishRun(beginRun(KIND, ME));
+
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
+  });
+
+  it('never throws when the browser refuses storage, and hands nothing out', () => {
+    vi.stubGlobal('sessionStorage', refusingStorage());
+
+    const run = beginRun(KIND, ME);
+    expect(recordRun(run, { id: 'p-1' })).toBe(false);
+    expect(() => leaveRunUnfinished(run)).not.toThrow();
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
-    expect(() => finishRun(KIND)).not.toThrow();
+    expect(() => finishRun(beginRun(KIND, ME))).not.toThrow();
+    expect(() => purgeInterruptedRuns()).not.toThrow();
+    expect(() => sweepInterruptedRuns(ME)).not.toThrow();
+    expect(() => expireInterruptedRuns()).not.toThrow();
   });
 
   it('never throws when reading sessionStorage itself throws (site data blocked)', () => {
@@ -228,12 +274,14 @@ describe('interrupted run record', () => {
       },
     });
     try {
-      expect(() => recordRun(KIND, ME, { id: 'p-1' })).not.toThrow();
-      expect(() => leaveRunUnfinished(KIND)).not.toThrow();
+      const run = beginRun(KIND, ME);
+      expect(recordRun(run, { id: 'p-1' })).toBe(false);
+      expect(() => leaveRunUnfinished(run)).not.toThrow();
       expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
-      expect(() => finishRun(KIND)).not.toThrow();
+      expect(() => finishRun(beginRun(KIND, ME))).not.toThrow();
       expect(() => purgeInterruptedRuns()).not.toThrow();
       expect(() => sweepInterruptedRuns(ME)).not.toThrow();
+      expect(() => expireInterruptedRuns()).not.toThrow();
     } finally {
       if (original) Object.defineProperty(globalThis, 'sessionStorage', original);
       else delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
@@ -263,36 +311,52 @@ describe('a deliberate end of the session in this tab (purgeInterruptedRuns)', (
   });
 
   it('a run still going in this page writes nothing more, and leaves nothing for after signing in', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
+    const run = going(KIND, ME, 'p-1');
 
     purgeInterruptedRuns();
     // The batch goes on for a moment (an upload finishing) and records its
     // next step before the action that the ended session refuses.
-    expect(recordRun(KIND, ME, { id: 'p-2' })).toBe(false);
-    leaveRunUnfinished(KIND);
+    expect(recordRun(run, { id: 'p-2' })).toBe(false);
+    leaveRunUnfinished(run);
 
     expect(recordKeysLeft()).toEqual([]);
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
   });
 
-  it('once that run has ended, a new run of the same kind keeps its record again', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
-    purgeInterruptedRuns();
-    leaveRunUnfinished(KIND);
+  it('a run whose first save is still on its way writes nothing either', () => {
+    // beginRun goes before the first save; the person signs out while it is
+    // on its way; the save lands and the run would record it.
+    const run = beginRun(KIND, ME);
 
-    expect(recordRun(KIND, ME, { id: 'p-3' })).toBe(true);
-    leaveRunUnfinished(KIND);
+    purgeInterruptedRuns();
+    expect(recordRun(run, { id: 'p-1' })).toBe(false);
+    leaveRunUnfinished(run);
+
+    expect(recordKeysLeft()).toEqual([]);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
+  });
+
+  it('a run that begins after it keeps its record again', () => {
+    const before = going(KIND, ME, 'p-1');
+    purgeInterruptedRuns();
+    leaveRunUnfinished(before);
+
+    const after = beginRun(KIND, ME);
+    expect(recordRun(after, { id: 'p-3' })).toBe(true);
+    leaveRunUnfinished(after);
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-3' });
   });
 
-  it('a run that was not going is not held back by a purge', () => {
-    recordRun(OTHER_KIND, ME, { id: 'p-1' });
-    finishRun(OTHER_KIND);
-
+  it('a stopped run that ends later leaves a newer run of its kind alone', () => {
+    const stopped = going(KIND, ME, 'p-1');
     purgeInterruptedRuns();
+    const newer = going(KIND, ME, 'p-2');
 
-    expect(recordRun(KIND, ME, { id: 'p-2' })).toBe(true);
-    expect(recordRun(OTHER_KIND, ME, { id: 'p-3' })).toBe(true);
+    finishRun(stopped);
+
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+    leaveRunUnfinished(newer);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-2' });
   });
 
   it('removes what the browser lets it when one removal is refused, and never throws', () => {
@@ -309,25 +373,19 @@ describe('a deliberate end of the session in this tab (purgeInterruptedRuns)', (
   });
 
   it('never throws when the browser refuses to list or read storage', () => {
-    vi.stubGlobal('sessionStorage', {
-      get length(): number {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      key: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      getItem: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      removeItem: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-      setItem: () => {
-        throw new DOMException('blocked', 'SecurityError');
-      },
-    });
+    vi.stubGlobal('sessionStorage', refusingStorage());
 
     expect(() => purgeInterruptedRuns()).not.toThrow();
+  });
+
+  it('leaves no timer behind: nothing is left to remove at its hour', () => {
+    vi.useFakeTimers();
+    going(KIND, ME, 'p-1');
+    expect(vi.getTimerCount()).toBe(1);
+
+    purgeInterruptedRuns();
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -367,27 +425,43 @@ describe('the signed-in app shell renders for an account (sweepInterruptedRuns)'
   });
 
   it('a run of another account still going in this page writes nothing more', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
+    const run = going(KIND, ME, 'p-1');
 
     // Someone else signed in on this tab (in another tab of this browser), and
     // this tab's next page renders the shell for them.
     sweepInterruptedRuns(OTHER_USER);
 
     expect(recordKeysLeft()).toEqual([]);
-    expect(recordRun(KIND, ME, { id: 'p-2' })).toBe(false);
-    leaveRunUnfinished(KIND);
+    expect(recordRun(run, { id: 'p-2' })).toBe(false);
+    leaveRunUnfinished(run);
     expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
   });
 
-  it('a run of this account still going in this page keeps its record and goes on', () => {
-    recordRun(KIND, ME, { id: 'p-1' });
+  it('a run of another account whose first save is still on its way writes nothing either', () => {
+    for (const other of [OTHER_USER, OTHER_ORG]) {
+      const run = beginRun(KIND, ME);
+
+      sweepInterruptedRuns(other);
+
+      expect(recordRun(run, { id: 'p-1' })).toBe(false);
+      leaveRunUnfinished(run);
+      expect(recordKeysLeft()).toEqual([]);
+    }
+  });
+
+  it('a run of this account keeps its record and goes on, whether or not it has recorded yet', () => {
+    const recorded = going(KIND, ME, 'p-1');
+    const firstSaveOnItsWay = beginRun(OTHER_KIND, ME);
 
     sweepInterruptedRuns(ME);
 
     expect(recordKeysLeft()).toEqual([KEY]);
-    expect(recordRun(KIND, ME, { id: 'p-2' })).toBe(true);
-    leaveRunUnfinished(KIND);
+    expect(recordRun(recorded, { id: 'p-2' })).toBe(true);
+    expect(recordRun(firstSaveOnItsWay, { id: 'p-3' })).toBe(true);
+    leaveRunUnfinished(recorded);
+    leaveRunUnfinished(firstSaveOnItsWay);
     expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-2' });
+    expect(takeInterruptedRun(OTHER_KIND, ME, parseId)).toEqual({ id: 'p-3' });
   });
 
   it('never throws when the browser refuses storage, and removes what it is allowed to', () => {
@@ -399,5 +473,84 @@ describe('the signed-in app shell renders for an account (sweepInterruptedRuns)'
     expect(() => sweepInterruptedRuns(ME)).not.toThrow();
 
     expect([...map.keys()]).toEqual([`${INTERRUPTED_RUN_PREFIX}locked`]);
+  });
+});
+
+describe('a record over an hour old goes on any page (expireInterruptedRuns, and its timer)', () => {
+  it('as a page loads: removes every record over an hour old or unreadable, whoever its account, and hands nothing out', () => {
+    const now = 10_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const key = (kind: string) => `${INTERRUPTED_RUN_PREFIX}${kind}`;
+    sessionStorage.setItem(KEY, stored(ME, now - 59 * MINUTE));
+    sessionStorage.setItem(key('other-user-fresh'), stored(OTHER_USER, now - 10 * MINUTE));
+    sessionStorage.setItem(key('mine-old'), stored(ME, now - 61 * MINUTE));
+    sessionStorage.setItem(key('other-org-old'), stored(OTHER_ORG, now - 120 * MINUTE));
+    sessionStorage.setItem(key('not-json'), '{not json');
+    sessionStorage.setItem(key('v2'), JSON.stringify({ v: 2, ...ME, at: now, payload: {} }));
+    sessionStorage.setItem('theme', 'dark');
+
+    expireInterruptedRuns();
+
+    // The sign-in page knows no account: a fresh record stays for whichever
+    // account's page takes it.
+    expect(recordKeysLeft()).toEqual([key('other-user-fresh'), KEY]);
+    expect(sessionStorage.getItem('theme')).toBe('dark');
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
+  });
+
+  it('a record a run left in a page that stays open goes at its hour, with no page load', () => {
+    // The redirect to sign-in is a navigation inside the app: the page the
+    // run was cut short in stays loaded, and the tab sits on sign-in.
+    vi.useFakeTimers({ now: 1_000_000 });
+    cutShort(KIND, ME, 'p-1');
+
+    vi.advanceTimersByTime(59 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+
+    vi.advanceTimersByTime(2 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('a record found as the page loads goes at its hour while the page stays open', () => {
+    vi.useFakeTimers({ now: 10_000_000 });
+    sessionStorage.setItem(KEY, stored(OTHER_USER, 10_000_000 - 30 * MINUTE));
+
+    expireInterruptedRuns();
+    vi.advanceTimersByTime(29 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+
+    vi.advanceTimersByTime(2 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('each step of a run still going restarts its hour, so the timer never removes a fresh record', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const run = going(KIND, ME, 'p-1');
+    vi.advanceTimersByTime(50 * MINUTE);
+    recordRun(run, { id: 'p-2' });
+
+    // The first step's hour passes: the record holds the second step's.
+    vi.advanceTimersByTime(11 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+    leaveRunUnfinished(run);
+    vi.advanceTimersByTime(48 * MINUTE);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-2' });
+
+    // And the second step's hour removes it in turn.
+    const later = going(KIND, ME, 'p-3');
+    leaveRunUnfinished(later);
+    vi.advanceTimersByTime(61 * MINUTE);
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('never throws when the browser refuses storage, from its timer or from a page load', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    cutShort(KIND, ME, 'p-1');
+    expect(vi.getTimerCount()).toBe(1);
+    vi.stubGlobal('sessionStorage', refusingStorage());
+
+    // The timer fires with the browser refusing storage.
+    expect(() => vi.advanceTimersByTime(2 * INTERRUPTED_RUN_TTL_MS)).not.toThrow();
+    expect(() => expireInterruptedRuns()).not.toThrow();
   });
 });

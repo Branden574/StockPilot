@@ -20,13 +20,15 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * plain hex (page #0c0d0a, ink #f0efe8, ink-3 #9a9b91, hairlines #1f201b /
  * #2a2b25, danger #e87a5e): the theme tokens may not exist here either.
  *
- * "Sign out and back in" goes to the cookie-clearing sign-out route
- * (app/auth/session-ended), which ends this device's session and lands on
- * sign-in. It used to point at /signin, which the proxy bounces a signed-in
- * visitor straight back from, so nothing happened. A plain <a> (a full page
- * load). Its click first removes what an interrupted run kept in this tab
- * (lib/interrupted-run): this is a sign-out on purpose, and the route cannot
- * reach sessionStorage.
+ * "Sign out and back in" loads the cookie-clearing sign-out route
+ * (app/auth/session-ended) in this tab, which ends this device's session and
+ * lands on sign-in. It used to point at /signin, which the proxy bounces a
+ * signed-in visitor straight back from, so nothing happened. Its click first
+ * removes what an interrupted run kept in this tab (lib/interrupted-run): this
+ * is a sign-out on purpose, and the route cannot reach sessionStorage. So it
+ * is a button, never a link to the route: a link can be opened in another tab
+ * (a middle-click, the context menu, a long press), which signs the whole
+ * browser out while this tab runs nothing and keeps its records.
  *
  * This file must not depend on anything that broke, so besides React it
  * imports only modules that import nothing themselves (share-paths and
@@ -34,6 +36,12 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * route's path is written out above: lib/auth/session-ended.ts imports
  * next/navigation.
  */
+function signOutAndBackIn(): void {
+  purgeInterruptedRuns();
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full page load of a route handler: only a document request lets it clear the session cookies and land on sign-in, and router.push() would also need the router this page cannot rely on.
+  window.location.assign(SIGN_OUT_PATH);
+}
+
 export default function GlobalError({
   error,
   reset,
@@ -169,22 +177,23 @@ export default function GlobalError({
             >
               Go to dashboard
             </a>
-            <a
-              href={SIGN_OUT_PATH}
-              onClick={() => purgeInterruptedRuns()}
+            <button
+              type="button"
+              onClick={signOutAndBackIn}
               style={{
                 background: 'transparent',
                 color: '#d8d6cc',
                 border: '1px solid #1f201b',
                 borderRadius: 6,
                 padding: '7px 12px',
+                fontFamily: 'inherit',
                 fontSize: 13,
                 fontWeight: 500,
-                textDecoration: 'none',
+                cursor: 'pointer',
               }}
             >
               Sign out and back in
-            </a>
+            </button>
           </div>
         </div>
       </body>

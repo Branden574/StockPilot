@@ -18,10 +18,12 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { isControlFlow } from '@/lib/control-flow';
 import {
+  beginRun,
   finishRun,
   leaveRunUnfinished,
   recordRun,
   takeInterruptedRun,
+  type RunHandle,
 } from '@/lib/interrupted-run';
 import { createClient } from '@/lib/supabase/client';
 import { BatchProgress } from '@/lib/upload-with-progress';
@@ -181,14 +183,13 @@ export function ProcedureForm({
    * false if any failed. Mutates `staged` (via setStaged) to reflect
    * per-file status.
    */
-  async function runStagedUploads(procedureId: string): Promise<boolean> {
+  async function runStagedUploads(procedureId: string, run: RunHandle): Promise<boolean> {
     const supabase = createClient();
     let allOk = true;
     // Before each Server Action: the batch is still going, for this procedure.
     // A redirect answering that action ends the page, and this record with
     // its procedure id is what is left (see VIDEO_BATCH_RUN).
-    const recordBatch = () =>
-      recordRun(VIDEO_BATCH_RUN, { userId, organizationId }, { procedureId });
+    const recordBatch = () => recordRun(run, { procedureId });
     // Snapshot the array now — the indices we use for orderIdx must be
     // stable across the loop even as we update per-item status.
     const snapshot = staged;
@@ -300,6 +301,10 @@ export function ProcedureForm({
       return;
     }
     setBusy(true);
+    // Create mode with videos staged: the batch (see VIDEO_BATCH_RUN), which
+    // ends below. Every way out of this handler that does not end it on the
+    // page stops it in the finally, where what it recorded stays.
+    let run: RunHandle | null = null;
     const payload = {
       title: t,
       description: description.trim() || null,
@@ -327,14 +332,28 @@ export function ProcedureForm({
         return;
       }
 
-      const res = await createProcedureAction(payload);
+      // The batch is going on in this page from here, before the procedure is
+      // saved: a sign-out, or the shell coming to render for another account,
+      // while the save is on its way stops it from keeping any record
+      // (lib/interrupted-run).
+      if (staged.length > 0) run = beginRun(VIDEO_BATCH_RUN, { userId, organizationId });
+      let res: Awaited<ReturnType<typeof createProcedureAction>>;
+      try {
+        res = await createProcedureAction(payload);
+      } catch (e) {
+        // A redirect (the session ended before the procedure was saved): the
+        // router is already on its way to sign-in, nothing was saved, and
+        // nothing is shown. Anything else is thrown on as before.
+        if (isControlFlow(e)) return;
+        throw e;
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;
       }
       const newId = res.data.id;
 
-      if (staged.length === 0) {
+      if (!run) {
         toast.success('Procedure created.');
         router.push(`/dashboard/procedures/${newId}`);
         router.refresh();
@@ -343,20 +362,19 @@ export function ProcedureForm({
 
       let allOk: boolean;
       try {
-        allOk = await runStagedUploads(newId);
+        allOk = await runStagedUploads(newId, run);
       } catch (e) {
         // The batch stopped before it ended on this page, and the procedure
-        // exists: its record stays, so this form, opened again in this tab,
-        // goes on to the procedure. A redirect (the session ended) is already
-        // taking the browser to sign-in and is not shown; anything else is
-        // thrown on as before.
-        leaveRunUnfinished(VIDEO_BATCH_RUN);
+        // exists: its record stays (the finally below), so this form, opened
+        // again in this tab, goes on to the procedure. A redirect (the session
+        // ended) is already taking the browser to sign-in and is not shown;
+        // anything else is thrown on as before.
         setUploadCursor(null);
         if (isControlFlow(e)) return;
         throw e;
       }
       // Ended on this page, which goes to the procedure below.
-      finishRun(VIDEO_BATCH_RUN);
+      finishRun(run);
       if (allOk) {
         toast.success('Procedure created with videos.');
         router.push(`/dashboard/procedures/${newId}`);
@@ -369,6 +387,10 @@ export function ProcedureForm({
         router.refresh();
       }
     } finally {
+      // Not ended on the page (a redirect, a refused save, anything thrown):
+      // the batch stops here, and what it recorded stays for the form opened
+      // again in this tab. A no-op once finishRun has ended it.
+      if (run) leaveRunUnfinished(run);
       setBusy(false);
     }
   }

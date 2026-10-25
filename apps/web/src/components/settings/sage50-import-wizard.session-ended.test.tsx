@@ -21,7 +21,7 @@ vi.mock('@/server/actions/sage50-import', () => ({
   importSage50Action: (...a: unknown[]) => h.importSage50(...a),
 }));
 
-import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { purgeInterruptedRuns, sweepInterruptedRuns } from '@/lib/interrupted-run';
 import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
 
 import { Sage50ImportWizard } from './sage50-import-wizard';
@@ -64,6 +64,15 @@ function chunkSummary(total: number, created: number) {
   };
 }
 
+/** A promise the test settles itself: a chunk still being imported. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function itemListCsv(rows: number): File {
   const lines = ['Item ID,Item Description,Item Class'];
   for (let i = 1; i <= rows; i++) lines.push(`SKU-${i},Widget ${i},Stock item`);
@@ -97,6 +106,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // An import a test leaves going in this page would hold the next test's wizard.
+  purgeInterruptedRuns();
 });
 
 describe('Sage50ImportWizard: the session ends between chunks', () => {
@@ -259,5 +270,59 @@ describe('Sage50ImportWizard: the session ends between chunks', () => {
 
     expect(screen.queryByText(/The last import stopped/)).toBeNull();
     expect(screen.queryByText(/created ·/)).toBeNull();
+  });
+
+  it('a sign-out on purpose while the FIRST chunk is being imported leaves nothing: the wizard opens clean', async () => {
+    // The import used to join the page's runs only at its first record, after
+    // the first chunk came back (250 items, seconds or more), so a sign-out in
+    // that time found nothing to stop: the chunk landed, the wizard recorded
+    // its summary with the rows of its errors, and the refused second chunk
+    // kept that record for after signing in.
+    const first = deferred<unknown>();
+    h.importSage50
+      .mockImplementationOnce(() => first.promise)
+      .mockRejectedValueOnce(signInRedirect());
+
+    await importThreeHundredItems();
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(1));
+    expect(interruptedRunKeys()).toEqual([]);
+
+    purgeInterruptedRuns();
+    first.resolve(chunkSummary(250, 248));
+
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Import into StockPilot' })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    cleanup();
+    renderWizard();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.queryByText(/The last import stopped/)).toBeNull();
+    expect(screen.queryByText(/created ·/)).toBeNull();
+  });
+
+  it('an organization switch while the first chunk is being imported: the import keeps no record for the first organization', async () => {
+    // The shell rendering for another account (here the same person in
+    // another organization) stops an import whose first chunk is on its way.
+    const first = deferred<unknown>();
+    let keysAtSecondChunk: string[] | null = null;
+    h.importSage50
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(async () => {
+        keysAtSecondChunk = interruptedRunKeys();
+        return chunkSummary(50, 50);
+      });
+
+    await importThreeHundredItems();
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(1));
+    sweepInterruptedRuns({ userId: ME.userId, organizationId: 'org-2' });
+    first.resolve(chunkSummary(250, 250));
+
+    await waitFor(() => expect(h.toastSuccess).toHaveBeenCalledWith('Imported 300 of 300 items'));
+    expect(keysAtSecondChunk).toEqual([]);
+    expect(interruptedRunKeys()).toEqual([]);
   });
 });

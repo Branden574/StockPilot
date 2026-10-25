@@ -16,7 +16,7 @@ import GlobalError from './global-error';
 /**
  * The last-resort error page's "Sign out and back in" is a sign-out on
  * purpose: its click removes what an interrupted run kept in this tab
- * (lib/interrupted-run) before the page leaves.
+ * (lib/interrupted-run), then loads the sign-out route in this tab.
  *
  * The page renders when the root layout itself failed, so it must not depend
  * on anything that could be what broke: besides React it imports only modules
@@ -41,22 +41,22 @@ describe('global-error: Sign out and back in', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     sessionStorage.clear();
     seedInterruptedRuns();
+    const keysAtLoad: string[][] = [];
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {
+      keysAtLoad.push(interruptedRunKeys());
+    });
     render(
       <GlobalError error={Object.assign(new Error('x'), { digest: 'd-1' })} reset={() => {}} />,
     );
-    const link = screen.getByRole('link', { name: 'Sign out and back in' });
-    expect(link).toHaveAttribute('href', '/auth/session-ended');
+    expect(screen.queryByRole('link', { name: 'Sign out and back in' })).toBeNull();
     expect(interruptedRunKeys()).toHaveLength(2);
 
-    const stay = (e: Event) => e.preventDefault();
-    document.addEventListener('click', stay);
-    try {
-      fireEvent.click(link);
-    } finally {
-      document.removeEventListener('click', stay);
-    }
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and back in' }));
 
-    expect(interruptedRunKeys()).toEqual([]);
+    // The records went first, then this tab loaded the sign-out route.
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith('/auth/session-ended');
+    expect(keysAtLoad).toEqual([[]]);
     expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
   });
 

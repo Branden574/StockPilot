@@ -15,10 +15,11 @@ import ts from 'typescript';
  *     is set). Called, or given to a form as its action;
  *   - in a 'use client' module, a call to `<client>.auth.signOut(...)` (the
  *     forced sign-out when this session is revoked);
- *   - a link to the cookie-clearing sign-out route (/auth/session-ended:
- *     "Sign out and back in"), written as the path, as SESSION_ENDED_PATH, or
- *     as a constant holding the path; and, in a 'use client' module, a call or
- *     an assignment that navigates there. The SERVER's own redirect there
+ *   - the cookie-clearing sign-out route (/auth/session-ended: "Sign out and
+ *     back in"), written as the path, as SESSION_ENDED_PATH, or as a constant
+ *     holding the path: a link to it, a form (or a button's formAction) that
+ *     submits to it, and, in a 'use client' module, a call or an assignment
+ *     that navigates there. The SERVER's own redirect there
  *     (lib/auth/session-ended.ts, for a session that expired) is not one: an
  *     expired session keeps its record, which is what the record is for.
  *
@@ -28,12 +29,18 @@ import ts from 'typescript';
  *     (a purge in a branch, after the call or inside a callback does not
  *     count);
  *   - a form action: the same form's onSubmit runs purgeInterruptedRuns()
- *     (React runs onSubmit before the form's action);
- *   - a link: the same element's onClick runs it (before the page leaves);
+ *     (React runs onSubmit before the form's action, and the browser fires
+ *     submit in this tab wherever the submission opens); a button's
+ *     formAction: the same button's onClick runs it;
+ *   - a link: always reported. A link can be opened in another tab (a
+ *     middle-click, the context menu, a long press), which signs the browser
+ *     out while this tab runs nothing, so even a link whose onClick purges
+ *     leaves the records there. Use a button whose click purges and then
+ *     loads the route;
  *   - a handler counts when it IS purgeInterruptedRuns, or calls it before its
  *     first await.
- * A server component cannot attach a handler, so a sign-out link or form in
- * one is reported: render a client component (components/auth/sign-out-form).
+ * A server component cannot attach a handler, so a sign-out form in one is
+ * reported: render a client component (components/auth/sign-out-form).
  * Any other use of those Server Actions (passed on as a value) is reported
  * too: the guard cannot follow it.
  *
@@ -77,7 +84,7 @@ const PURGE = 'purgeInterruptedRuns';
 const PROBLEMS: Record<SiteHow, string> = {
   call: `ends the session without ${PURGE}() first: call it in an earlier statement of the same function, outside any branch, before the request leaves`,
   'form-action': `a form whose action ends the session needs onSubmit={() => ${PURGE}()} (React runs onSubmit before the action); a server component cannot have one, so render a client component such as components/auth/sign-out-form.tsx`,
-  link: `a link to the sign-out route needs onClick={() => ${PURGE}()}; a server component cannot have one, so render it in a client component`,
+  link: `a link to the sign-out route can be opened in another tab (a middle-click, the context menu), which signs the browser out while this tab runs nothing: use a button whose onClick runs ${PURGE}() and then loads the route`,
   navigation: `navigates to the sign-out route without ${PURGE}() first, in an earlier statement of the same function`,
   value: `passed on as a value, which this guard cannot follow: call it from a function that runs ${PURGE}() first`,
 };
@@ -415,8 +422,9 @@ function scanFile(file: ScanFile): SignOutSite[] {
       }
     }
 
-    // Links to the sign-out route, in any module that renders one.
-    if (ts.isJsxAttribute(n) && n.name.getText() === 'href') {
+    // Links and forms to the sign-out route, in any module that renders one.
+    if (ts.isJsxAttribute(n)) {
+      const name = n.name.getText();
       const init = n.initializer;
       const value =
         init && ts.isJsxExpression(init)
@@ -425,7 +433,13 @@ function scanFile(file: ScanFile): SignOutSite[] {
             ? init
             : undefined;
       if (isRouteValue(value, bindings.routeNames)) {
-        add(n, SIGN_OUT_ROUTE, 'link', elementHandlerPurges(jsxElementOf(n), 'onClick'));
+        if (name === 'href') {
+          // Never this tab's alone: see PROBLEMS.link.
+          add(n, SIGN_OUT_ROUTE, 'link', false);
+        } else if (name === 'action' || name === 'formAction') {
+          const handler = name === 'action' ? 'onSubmit' : 'onClick';
+          add(n, SIGN_OUT_ROUTE, 'form-action', elementHandlerPurges(jsxElementOf(n), handler));
+        }
       }
     }
 

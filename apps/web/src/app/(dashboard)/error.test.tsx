@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -24,21 +24,31 @@ import DashboardError from './error';
 /**
  * CONFLICTS D1: "Sign out and back in" linked to /signin, which the proxy
  * sends a signed-in visitor straight back from, so it never signed anyone out.
- * It now loads the cookie-clearing sign-out route, as a plain anchor: a Next
- * Link would prefetch that route, and the prefetch alone would sign out.
+ * It now loads the cookie-clearing sign-out route in this tab, as a full page
+ * load (never a Next Link: prefetching that route would sign out). It is a
+ * button, not a link: see the second block.
  */
 describe('the dashboard error card', () => {
   const error = Object.assign(new Error('boom'), { digest: 'abc123' });
 
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
   it('"Sign out and back in" really signs out: a full load of the sign-out route', () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     render(<DashboardError error={error} reset={() => {}} />);
-    const signOut = screen.getByRole('link', { name: 'Sign out and back in' });
-    expect(signOut).toHaveAttribute('href', '/auth/session-ended');
-    expect(signOut).not.toHaveAttribute('data-next-link');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and back in' }));
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith('/auth/session-ended');
   });
 
   it('keeps its words, the error id, Try again and Go to overview', () => {
     const reset = vi.fn();
+    vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     render(<DashboardError error={error} reset={reset} />);
     expect(
       screen.getByRole('heading', { level: 1, name: 'Something broke loading this page' }),
@@ -62,32 +72,38 @@ describe('the dashboard error card', () => {
  * an interrupted run kept in this tab (lib/interrupted-run) before the page
  * leaves. The route cannot: sessionStorage is the browser's, and the same
  * route is where the dashboard sends an EXPIRED session, which keeps its
- * record.
+ * record. So the control is a button: a link to the route could be opened in
+ * another tab (a middle-click, the context menu), which signs the browser out
+ * while this tab runs nothing and keeps its records.
  */
 describe('the dashboard error card: Sign out and back in', () => {
   const error = Object.assign(new Error('boom'), { digest: 'abc123' });
 
-  /** Clicks the link without happy-dom following it (the page leaving is not what is checked). */
-  function clickWithoutLeaving(link: HTMLElement) {
-    const stay = (e: Event) => e.preventDefault();
-    document.addEventListener('click', stay);
-    try {
-      fireEvent.click(link);
-    } finally {
-      document.removeEventListener('click', stay);
-    }
+  /** Spies on the page load, noting what this tab still held when it began. */
+  function watchPageLoad() {
+    const keysAtLoad: string[][] = [];
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {
+      keysAtLoad.push(interruptedRunKeys());
+    });
+    return { assign, keysAtLoad };
   }
 
-  afterEach(() => sessionStorage.clear());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  });
 
-  it('removes every interrupted-run record in this tab as it is clicked', () => {
+  it('removes every interrupted-run record in this tab before the sign-out route loads', () => {
     sessionStorage.clear();
     seedInterruptedRuns();
+    const { assign, keysAtLoad } = watchPageLoad();
     render(<DashboardError error={error} reset={() => {}} />);
 
-    clickWithoutLeaving(screen.getByRole('link', { name: 'Sign out and back in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and back in' }));
 
-    expect(interruptedRunKeys()).toEqual([]);
+    expect(assign).toHaveBeenCalledWith('/auth/session-ended');
+    expect(keysAtLoad).toEqual([[]]);
     expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
   });
 
@@ -99,22 +115,27 @@ describe('the dashboard error card: Sign out and back in', () => {
     expect(interruptedRunKeys()).toHaveLength(2);
   });
 
-  it('a browser that refuses storage still follows the link', () => {
+  it('nothing on the card can open the sign-out route in another tab', () => {
     render(<DashboardError error={error} reset={() => {}} />);
-    const link = screen.getByRole('link', { name: 'Sign out and back in' });
-    let leftWithDefault = false;
-    const watch = (e: Event) => {
-      leftWithDefault = !e.defaultPrevented;
-      e.preventDefault();
-    };
+
+    expect(screen.getByRole('button', { name: 'Sign out and back in' })).toHaveAttribute(
+      'type',
+      'button',
+    );
+    expect(screen.queryByRole('link', { name: 'Sign out and back in' })).toBeNull();
+    expect(document.querySelectorAll('a[href^="/auth/session-ended"]')).toHaveLength(0);
+  });
+
+  it('a browser that refuses storage still signs out', () => {
+    const { assign } = watchPageLoad();
+    render(<DashboardError error={error} reset={() => {}} />);
+    const button = screen.getByRole('button', { name: 'Sign out and back in' });
     const restore = blockSessionStorage();
-    document.addEventListener('click', watch);
     try {
-      expect(() => fireEvent.click(link)).not.toThrow();
+      expect(() => fireEvent.click(button)).not.toThrow();
     } finally {
-      document.removeEventListener('click', watch);
       restore();
     }
-    expect(leftWithDefault).toBe(true);
+    expect(assign).toHaveBeenCalledWith('/auth/session-ended');
   });
 });

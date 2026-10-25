@@ -20,8 +20,10 @@ import { scanSignOutSites, type ScanFile, type SignOutSite } from '@/test/sign-o
  * forced sign-out when this session is revoked. sessionStorage is the
  * browser's, so only client code can do it. The server's own redirect to
  * /auth/session-ended (an expired session) is not one of them, and keeps the
- * record. See src/test/sign-out-purge-scan.ts for exactly what is found and
- * what counts as first.
+ * record. No control may be a LINK to that route: a link can be opened in
+ * another tab (a middle-click, the context menu), which signs the browser out
+ * while this tab runs nothing. See src/test/sign-out-purge-scan.ts for exactly
+ * what is found and what counts as first.
  */
 
 const WEB_SRC = path.resolve(__dirname, '..');
@@ -81,6 +83,7 @@ const PLANTED: ScanFile[] = [
       `import { signOutAction, signOutAction as leave } from '@/server/actions/auth';`,
       `import * as authActions from '@/server/actions/auth';`,
       `import { deleteOwnAccountAction } from '@/server/actions/profile';`,
+      `import Link from 'next/link';`,
       `declare const supabase: { auth: { signOut(o: unknown): Promise<void> } };`,
       `declare const router: { push(p: string): void };`,
       `declare const flag: boolean;`,
@@ -108,9 +111,15 @@ const PLANTED: ScanFile[] = [
       `      <a href="/auth/session-ended" onClick={() => purgeInterruptedRuns()}>purged</a>`,
       `      <a href={LOCAL_ROUTE} onClick={purgeInterruptedRuns}>purged by reference</a>`,
       `      <a href="/auth/session-ended?next=1" onClick={async () => { await Promise.resolve(); purgeInterruptedRuns(); }}>purged too late</a>`,
+      `      <Link href={SESSION_ENDED_PATH} onClick={() => purgeInterruptedRuns()}>client link</Link>`,
       `      <a href="/signin">not the route</a>`,
       `      <form action={signOutAction}><button type="submit">bare form</button></form>`,
       `      <form action={signOutAction} onSubmit={() => purgeInterruptedRuns()}><button type="submit">purged form</button></form>`,
+      `      <button type="button" onClick={() => { purgeInterruptedRuns(); window.location.assign(SESSION_ENDED_PATH); }}>purged button</button>`,
+      `      <button type="button" onClick={() => window.location.assign(SESSION_ENDED_PATH)}>bare button</button>`,
+      `      <form action={SESSION_ENDED_PATH} method="get" onSubmit={() => purgeInterruptedRuns()}><button type="submit">purged route form</button></form>`,
+      `      <form action="/auth/session-ended"><button type="submit">bare route form</button></form>`,
+      `      <button formAction={LOCAL_ROUTE}>bare route formAction</button>`,
       `    </div>`,
       `  );`,
       `}`,
@@ -168,8 +177,14 @@ describe('sign-out purge guard: self-test on planted code', () => {
       'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links link /auth/session-ended',
+      'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links form-action signOutAction',
       'planted-client.tsx Links form-action signOutAction',
+      'planted-client.tsx Links navigation /auth/session-ended',
+      'planted-client.tsx Links navigation /auth/session-ended',
+      'planted-client.tsx Links form-action /auth/session-ended',
+      'planted-client.tsx Links form-action /auth/session-ended',
+      'planted-client.tsx Links form-action /auth/session-ended',
     ]);
   });
 
@@ -187,17 +202,44 @@ describe('sign-out purge guard: self-test on planted code', () => {
       'planted-client.tsx (top level) value signOutAction',
       'planted-client.tsx localSignOut call auth.signOut',
       'planted-client.tsx navigates navigation /auth/session-ended',
-      // <a href={SESSION_ENDED_PATH}>bare</a>, and the one that purges after an await.
+      // Every link to the route, the ones whose click purges first among them.
+      'planted-client.tsx Links link /auth/session-ended',
+      'planted-client.tsx Links link /auth/session-ended',
+      'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links link /auth/session-ended',
       'planted-client.tsx Links form-action signOutAction',
+      'planted-client.tsx Links navigation /auth/session-ended',
+      'planted-client.tsx Links form-action /auth/session-ended',
+      'planted-client.tsx Links form-action /auth/session-ended',
     ]);
     for (const f of findings) expect(f.problem).toMatch(/purgeInterruptedRuns|cannot follow/);
   });
 
-  it('a link that purges only after an await is reported, the two that purge first are not', () => {
-    const links = sites.filter((s) => s.how === 'link' && s.file.endsWith('planted-client.tsx'));
-    expect(links.map((s) => s.problem === null)).toEqual([false, true, true, false]);
+  it('reports every link to the sign-out route, even one whose click purges first; a button or a form that purges first passes', () => {
+    // A link opened in another tab (a middle-click, the context menu) signs
+    // the browser out without running its onClick here.
+    const toRoute = sites.filter(
+      (s) =>
+        s.file.endsWith('planted-client.tsx') &&
+        s.fn === 'Links' &&
+        s.what === '/auth/session-ended',
+    );
+    expect(toRoute.map((s) => `${s.how} ${s.problem === null ? 'passes' : 'reported'}`)).toEqual([
+      'link reported',
+      'link reported',
+      'link reported',
+      'link reported',
+      'link reported',
+      'navigation passes',
+      'navigation reported',
+      'form-action passes',
+      'form-action reported',
+      'form-action reported',
+    ]);
+    for (const link of toRoute.filter((s) => s.how === 'link')) {
+      expect(link.problem).toMatch(/opened in another tab/);
+    }
   });
 });
 
@@ -212,8 +254,8 @@ describe('sign-out purge guard: apps/web/src', () => {
     // A new control is fine: it shows up here and must purge first (below).
     expect(at).toEqual(
       expect.arrayContaining([
-        'app/(dashboard)/error.tsx link /auth/session-ended',
-        'app/global-error.tsx link /auth/session-ended',
+        'app/(dashboard)/error.tsx navigation /auth/session-ended',
+        'app/global-error.tsx navigation /auth/session-ended',
         'components/auth/mfa-challenge-form.tsx call signOutAction',
         'components/auth/reset-complete-form.tsx call completePasswordResetAction',
         'components/auth/sign-out-form.tsx form-action signOutAction',
@@ -226,5 +268,9 @@ describe('sign-out purge guard: apps/web/src', () => {
 
   it('every one of them removes the interrupted-run records before its request leaves', () => {
     expect(findings.map((f) => describeSite(f, WEB_SRC))).toEqual([]);
+  });
+
+  it('none of them is a link to the sign-out route', () => {
+    expect(sites.filter((s) => s.how === 'link').map((s) => describeSite(s, WEB_SRC))).toEqual([]);
   });
 });

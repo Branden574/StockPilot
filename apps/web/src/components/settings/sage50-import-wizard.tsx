@@ -17,6 +17,7 @@ import {
 import { isControlFlow } from '@/lib/control-flow';
 import { parseCsv } from '@/lib/csv';
 import {
+  beginRun,
   finishRun,
   leaveRunUnfinished,
   recordRun,
@@ -177,6 +178,11 @@ export function Sage50ImportWizard({
           skippedReason: null,
         },
       };
+      // The import is going on in this page from here, before its first chunk
+      // is sent: a sign-out, or the shell coming to render for another
+      // account, while that chunk is still being imported stops it from
+      // keeping any record (lib/interrupted-run).
+      const run = beginRun(SAGE50_IMPORT_RUN, { userId, organizationId });
       try {
         for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
           const chunk = items.slice(offset, offset + CHUNK_SIZE);
@@ -192,7 +198,7 @@ export function Sage50ImportWizard({
             vendors,
           });
           if (!res.ok) {
-            finishRun(SAGE50_IMPORT_RUN);
+            finishRun(run);
             toast.error(res.error.message);
             // Surface what DID land before the failing chunk.
             if (agg.items.total > 0) setSummary(agg);
@@ -211,13 +217,13 @@ export function Sage50ImportWizard({
             processed: agg.items.total,
             fileTotal: items.length,
           };
-          recordRun(SAGE50_IMPORT_RUN, { userId, organizationId }, sofar);
+          recordRun(run, sofar);
         }
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         // The record of what landed stays for the wizard after sign-in.
-        if (isControlFlow(e)) return leaveRunUnfinished(SAGE50_IMPORT_RUN);
-        finishRun(SAGE50_IMPORT_RUN);
+        if (isControlFlow(e)) return leaveRunUnfinished(run);
+        finishRun(run);
         // Transport-level failure (offline, body too large, timeout) — keep the
         // parsed state and show a toast instead of crashing to the error page.
         toast.error(e instanceof Error ? e.message : 'Import failed — please try again.');
@@ -225,7 +231,7 @@ export function Sage50ImportWizard({
         setProgress(null);
         return;
       }
-      finishRun(SAGE50_IMPORT_RUN);
+      finishRun(run);
       setProgress(null);
       setSummary(agg);
       toast.success(

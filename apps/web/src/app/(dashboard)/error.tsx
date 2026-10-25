@@ -19,16 +19,25 @@ import { purgeInterruptedRuns } from '@/lib/interrupted-run';
  * "Sign out and back in" really signs out: it is a full page load of the
  * cookie-clearing route (app/auth/session-ended), which ends this device's
  * session and lands on sign-in. It used to link to /signin, which the proxy
- * sends a signed-in visitor straight back from, so nothing happened. A plain
- * <a>, never a Next <Link>: a Link would prefetch that route, and prefetching
- * it would sign the person out just for seeing this card.
+ * sends a signed-in visitor straight back from, so nothing happened.
  *
- * The click also removes what an interrupted run kept in this tab
- * (lib/interrupted-run), before the page leaves: this is a sign-out on
- * purpose. The route itself cannot (sessionStorage is the browser's), and it
- * must not: the dashboard's own redirect there, for a session that expired,
- * keeps the record so the person gets back to their work.
+ * Its click first removes what an interrupted run kept in this tab
+ * (lib/interrupted-run): this is a sign-out on purpose. The route itself
+ * cannot (sessionStorage is the browser's), and it must not: the dashboard's
+ * own redirect there, for a session that expired, keeps the record so the
+ * person gets back to their work.
+ *
+ * So it is a button, never a link to the route. A link can be opened in
+ * another tab (a middle-click, the context menu, a long press), which signs
+ * the whole browser out while this tab runs nothing and keeps its records. A
+ * Next <Link> would also prefetch the route, and prefetching it would sign
+ * the person out just for seeing this card.
  */
+function signOutAndBackIn(): void {
+  purgeInterruptedRuns();
+  window.location.assign(SESSION_ENDED_PATH);
+}
+
 export default function DashboardError({
   error,
   reset,
@@ -80,11 +89,9 @@ export default function DashboardError({
           <Button asChild variant="outline">
             <Link href="/dashboard">Go to overview</Link>
           </Button>
-          <Button asChild variant="ghost">
-            {/* A plain <a>: a full load of a route handler (see above). */}
-            <a href={SESSION_ENDED_PATH} onClick={() => purgeInterruptedRuns()}>
-              Sign out and back in
-            </a>
+          {/* A button, not a link: nothing here can sign out from another tab (see above). */}
+          <Button type="button" variant="ghost" onClick={signOutAndBackIn}>
+            Sign out and back in
           </Button>
         </div>
       </div>
