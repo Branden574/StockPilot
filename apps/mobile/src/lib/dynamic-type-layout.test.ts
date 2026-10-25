@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FOOTER_CLEARANCE,
+  ITEM_TAB_WIDEST_LABEL_EM,
   LONGEST_STOCK_PILL_CHARS,
   ROW_STACK_FONT_SCALE,
   TRAILING_COLUMN_MAX_WIDTH,
   footerReservation,
+  itemTabLabelRoom,
+  itemTabLabelSize,
+  itemTabStackedLabelRoom,
   pillWidth,
+  shouldStackItemTabs,
   shouldStackRow,
 } from './dynamic-type-layout';
 
@@ -190,5 +195,75 @@ describe('TRAILING_COLUMN_MAX_WIDTH', () => {
     // section 3 keeps uncapped and reflowing — gains width at every size
     // rather than losing it.
     expect(TRAILING_COLUMN_MAX_WIDTH).toBeLessThanOrEqual(122);
+  });
+});
+
+/**
+ * The item screen's tabs (docket B10): Movements was cut to "MOVEMEN…" at
+ * larger text, then (redesign) shrunk below the user's size to fit. Neither is
+ * allowed: past the width the label needs, the tabs stack.
+ *
+ * iOS text sizes as RN's fontScale: Large (default) 1, xLarge 1.118, xxLarge
+ * 1.235, xxxLarge 1.353, AX1 1.786 and up. Phone widths in points: 320
+ * (Display Zoom on a small phone), 375, 390, 393, 402, 430, 440; iPad mini
+ * portrait 744.
+ */
+describe('shouldStackItemTabs', () => {
+  const PHONES = [320, 375, 390, 393, 402, 430, 440];
+
+  it('keeps the tabs side by side at the default size on every phone', () => {
+    for (const width of PHONES) expect(shouldStackItemTabs(width, 1), `${width}pt`).toBe(false);
+  });
+
+  it('keeps them side by side through xLarge and xxLarge on a 375pt phone and wider', () => {
+    for (const width of PHONES.filter((w) => w >= 375)) {
+      for (const scale of [1.118, 1.235]) {
+        expect(shouldStackItemTabs(width, scale), `${width}pt at ${scale}`).toBe(false);
+      }
+    }
+  });
+
+  it('stacks them at the ceiling on every phone, where Movements needs about 117pt', () => {
+    for (const width of PHONES) {
+      for (const scale of [1.786, 2.143, 3.571]) {
+        expect(shouldStackItemTabs(width, scale), `${width}pt at ${scale}`).toBe(true);
+      }
+    }
+  });
+
+  it('keeps them side by side on an iPad at every size', () => {
+    for (const scale of [1, 1.353, 1.786, 3.571])
+      expect(shouldStackItemTabs(744, scale)).toBe(false);
+  });
+
+  it('stacks exactly when the label is wider than its segment', () => {
+    // 390pt at xxxLarge: Movements needs 93.8pt of a 93.3pt segment.
+    expect(itemTabLabelRoom(390)).toBeCloseTo(93.333, 3);
+    expect(ITEM_TAB_WIDEST_LABEL_EM * itemTabLabelSize(1.353)).toBeCloseTo(93.77, 2);
+    expect(shouldStackItemTabs(390, 1.353)).toBe(true);
+    // 393pt at the same size: a 94.3pt segment holds it.
+    expect(shouldStackItemTabs(393, 1.353)).toBe(false);
+  });
+
+  it('a stacked label has room for Movements at the ceiling on the narrowest screen', () => {
+    expect(itemTabStackedLabelRoom(320)).toBe(254);
+    expect(ITEM_TAB_WIDEST_LABEL_EM * itemTabLabelSize(99)).toBeLessThanOrEqual(
+      itemTabStackedLabelRoom(320),
+    );
+  });
+
+  it('the label grows with the text and stops at 22pt', () => {
+    expect(itemTabLabelSize(1)).toBe(13);
+    expect(itemTabLabelSize(1.5)).toBeCloseTo(19.5, 10);
+    expect(itemTabLabelSize(1.786)).toBeCloseTo(22, 10);
+    expect(itemTabLabelSize(3.571)).toBeCloseTo(22, 10);
+    expect(itemTabLabelSize(0.823)).toBeCloseTo(10.699, 3);
+  });
+
+  it('treats a bad measurement as the default size and a side-by-side row', () => {
+    for (const bad of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY, null, undefined]) {
+      expect(itemTabLabelSize(bad)).toBe(13);
+      expect(shouldStackItemTabs(bad, 3.571)).toBe(false);
+    }
   });
 });

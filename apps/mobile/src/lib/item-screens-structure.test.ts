@@ -15,6 +15,12 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import {
+  ITEM_TAB_WIDEST_LABEL_EM,
+  itemTabLabelRoom,
+  itemTabLabelSize,
+  itemTabStackedLabelRoom,
+} from './dynamic-type-layout';
 import { SERIAL_STATUSES } from './serials';
 import { TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
@@ -1314,19 +1320,29 @@ describe('Dynamic Type policy unchanged', () => {
     const code = flat(codeOnly(sourceOf(ITEM)));
     expect(code).toContain('const TAB_CAP = capTo(13, TYPE_CEILING.control);');
     expect(code).toContain('maxFontSizeMultiplier={TAB_CAP}');
-    // A label that outgrows its segment shrinks instead of being cut.
+    // Re-pinned by docket B10 (was `numberOfLines={1} maxFontSizeMultiplier=
+    // {TAB_CAP} adjustsFontSizeToFit minimumFontScale={TAB_MIN_FONT_SCALE}`):
+    // a label is never shrunk below the size the user chose (the Dynamic Type
+    // policy forbids adjustsFontSizeToFit). A label wider than its segment
+    // stacks the tabs instead (the next two tests).
     expect(code).toContain(
-      'numberOfLines={1} maxFontSizeMultiplier={TAB_CAP} adjustsFontSizeToFit minimumFontScale={TAB_MIN_FONT_SCALE}',
+      'numberOfLines={1} maxFontSizeMultiplier={TAB_CAP} color={active ? c.ink : c.ink3}',
     );
+    expect(code).not.toContain('adjustsFontSizeToFit');
+    expect(code).not.toContain('minimumFontScale');
+    expect(code).not.toContain('TAB_MIN_FONT_SCALE');
     expect(code).toContain('maxFontSizeMultiplier={capTo(17, TYPE_CEILING.control)}');
     expect(code).toContain('maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}');
   });
 
-  // The segmented track takes about 23pt from each column. Measured with
-  // fontkit on the bundled InterTight_600SemiBold.ttf: Movements advances
-  // 117.3pt at 22pt (the cap), without the negative tracking that narrows it.
-  it('the widest tab label fits the narrowest segment at its shrink floor', () => {
-    const MOVEMENTS_SEMIBOLD_AT_CAP = 117.3;
+  // The segmented track takes about 23pt from each column. Re-pinned by
+  // docket B10 (was: Movements fits the narrowest segment at the shrink floor
+  // TAB_MIN_FONT_SCALE): the stacking rule (shouldStackItemTabs,
+  // dynamic-type-layout.test.ts) measures the segment these styles draw, at
+  // the label's cap. Measured with fontkit on the bundled
+  // InterTight_600SemiBold.ttf: Movements advances 117.3pt at 22pt (the cap),
+  // without the negative tracking that narrows it.
+  it('the stacking rule measures the segments these styles draw, at the label cap', () => {
     const num = (block: string, key: string) => {
       const m = new RegExp(`(?:^|[ ,])${key}: (\\d+(?:\\.\\d+)?),`).exec(block);
       expect(m, `${key} in ${block}`).not.toBeNull();
@@ -1334,22 +1350,46 @@ describe('Dynamic Type policy unchanged', () => {
     };
     const row = styleBlock(ITEM, 'tabsRow');
     const tab = styleBlock(ITEM, 'tab');
+    const trackSide = num(row, 'marginHorizontal') + num(row, 'borderWidth') + num(row, 'padding');
+    const tabSide = num(tab, 'borderWidth') + num(tab, 'paddingHorizontal');
     const segment = (screen: number) =>
-      (screen -
-        2 * num(row, 'marginHorizontal') -
-        2 * num(row, 'borderWidth') -
-        2 * num(row, 'padding') -
-        2 * num(row, 'gap')) /
-        3 -
-      2 * num(tab, 'borderWidth') -
-      2 * num(tab, 'paddingHorizontal');
+      (screen - 2 * trackSide - 2 * num(row, 'gap')) / 3 - 2 * tabSide;
+    const stackedLine = (screen: number) => screen - 2 * trackSide - 2 * tabSide;
+    for (const screen of [320, 375, 390, 393, 402, 430, 440, 744, 1024]) {
+      expect(itemTabLabelRoom(screen), `${screen}pt`).toBeCloseTo(segment(screen), 10);
+      expect(itemTabStackedLabelRoom(screen), `${screen}pt`).toBeCloseTo(stackedLine(screen), 10);
+    }
     expect(segment(320)).toBeCloseTo(70, 5);
-    const floor = /const TAB_MIN_FONT_SCALE = (\d+(?:\.\d+)?);/.exec(codeOnly(sourceOf(ITEM)));
-    expect(floor).not.toBeNull();
-    // A 320pt zoomed screen at the cap, and at the default 13pt with no shrink.
-    expect(Number(floor![1]) * MOVEMENTS_SEMIBOLD_AT_CAP).toBeLessThanOrEqual(segment(320));
-    expect((MOVEMENTS_SEMIBOLD_AT_CAP * 13) / 22).toBeLessThanOrEqual(segment(320));
+    // The rule's label cap is the screen's TAB_CAP.
     expect(capTo(13, TYPE_CEILING.control) * 13).toBe(22);
+    expect(itemTabLabelSize(capTo(13, TYPE_CEILING.control))).toBeCloseTo(22, 10);
+    expect(itemTabLabelSize(10)).toBeCloseTo(22, 10);
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 22).toBeCloseTo(117.3, 1);
+    // The default 13pt fits a 320pt zoomed screen side by side; stacked, the
+    // ceiling fits it with room.
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 13).toBeLessThanOrEqual(segment(320));
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 22).toBeLessThanOrEqual(stackedLine(320));
+  });
+
+  // Mutations caught: the stacking rule left unread (the tabs cut or shrunk
+  // again), read with a stale scale, or a stacked tab still flex: 1 in a
+  // column (each tab would share a height the track does not have).
+  it('the tabs stack, one per line, when the widest label is wider than its segment', () => {
+    const screen = flat(codeOnly(functionNamed(treeOf(ITEM), 'ItemDetail').getText(treeOf(ITEM))));
+    expect(screen).toContain('const { width: windowWidth, fontScale } = useWindowDimensions();');
+    expect(screen).toContain('const stackTabs = shouldStackItemTabs(windowWidth, fontScale);');
+    expect(screen).toContain(
+      'style={[ styles.tabsRow, stackTabs ? styles.tabsStacked : null, { backgroundColor: c.sunk, borderColor: c.hair }, ]}',
+    );
+    expect(screen.split('stacked={stackTabs}').length - 1).toBe(3);
+    const button = flat(codeOnly(functionNamed(treeOf(ITEM), 'TabButton').getText(treeOf(ITEM))));
+    expect(button).toContain('stacked: boolean;');
+    expect(button).toContain('styles.tab, stacked ? styles.tabStacked : null,');
+    expect(styleBlock(ITEM, 'tabsStacked')).toBe(" flexDirection: 'column', ");
+    expect(styleBlock(ITEM, 'tabStacked')).toBe(' flex: 0, ');
+    // A stacked tab keeps its 44pt and its centred label.
+    expect(styleBlock(ITEM, 'tab')).toContain('minHeight: MIN_TAP');
+    expect(styleBlock(ITEM, 'tab')).toContain("alignItems: 'center',");
   });
 
   // A fixed height clipped the typed text: every typed box grows with it.

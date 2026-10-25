@@ -157,7 +157,7 @@ import {
   serialSourceLabel,
   validateSerialInput,
 } from '@/lib/serials';
-import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { shouldStackItemTabs, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -513,6 +513,10 @@ export default function ItemDetail() {
   const { c } = useTheme();
   const { orgId } = useOrg();
   const { role } = useRole();
+  // The three tabs stack, one per line, when Movements at the user's text size
+  // is wider than its segment (docket B10), rather than being cut or shrunk.
+  const { width: windowWidth, fontScale } = useWindowDimensions();
+  const stackTabs = shouldStackItemTabs(windowWidth, fontScale);
   const [item, setItem] = React.useState<Item | null>(null);
   // Ungroup (0399): other records this member can read with the same SKU.
   const [skuSiblings, setSkuSiblings] = React.useState<number | null>(null);
@@ -1929,24 +1933,32 @@ export default function ItemDetail() {
         </View>
 
         {/* Tab bar: the reference's segmented switch (DESIGN-SPEC 6.5), a
-            recessed track with the chosen tab on the card. */}
+            recessed track with the chosen tab on the card. Stacked one per
+            line when the widest label is wider than its segment. */}
         <View
           accessibilityRole="tablist"
-          style={[styles.tabsRow, { backgroundColor: c.sunk, borderColor: c.hair }]}
+          style={[
+            styles.tabsRow,
+            stackTabs ? styles.tabsStacked : null,
+            { backgroundColor: c.sunk, borderColor: c.hair },
+          ]}
         >
           <TabButton
             label="Overview"
             active={tab === 'overview'}
+            stacked={stackTabs}
             onPress={() => setTab('overview')}
           />
           <TabButton
             label="Movements"
             active={tab === 'movements'}
+            stacked={stackTabs}
             onPress={() => setTab('movements')}
           />
           <TabButton
             label="Activity"
             active={tab === 'activity'}
+            stacked={stackTabs}
             onPress={() => setTab('activity')}
           />
         </View>
@@ -2467,10 +2479,13 @@ export default function ItemDetail() {
 function TabButton({
   label,
   active,
+  stacked,
   onPress,
 }: {
   label: string;
   active: boolean;
+  /** One tab per line: the tab takes the track's width, not a third of it. */
+  stacked: boolean;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -2486,6 +2501,7 @@ function TabButton({
       accessibilityState={{ selected: active }}
       style={({ pressed }) => [
         styles.tab,
+        stacked ? styles.tabStacked : null,
         {
           borderColor: active ? c.ink3 : 'transparent',
           backgroundColor: active ? c.card : 'transparent',
@@ -2497,15 +2513,14 @@ function TabButton({
           inside a word — uncapped, Movements breaks mid-word at 2x. The
           control ceiling is the segmented-control policy from lib/theme.
           The segmented track takes about 23pt from each column, so at the
-          larger sizes on a narrow screen a label can still outgrow its
-          segment: iOS shrinks it to fit (down to TAB_MIN_FONT_SCALE) instead
-          of cutting Movements to "Moveme…". */}
+          larger sizes on a narrow screen Movements can still outgrow its
+          segment: the screen then stacks the tabs (shouldStackItemTabs), so
+          the label is never cut to "Moveme…" nor shrunk below the size the
+          user chose. */}
       <Body
         size={13}
         numberOfLines={1}
         maxFontSizeMultiplier={TAB_CAP}
-        adjustsFontSizeToFit
-        minimumFontScale={TAB_MIN_FONT_SCALE}
         color={active ? c.ink : c.ink3}
         style={{ fontFamily: active ? FONT.displaySemi : FONT.display }}
       >
@@ -2515,18 +2530,14 @@ function TabButton({
   );
 }
 
-/** The tab labels are segmented-control chrome: 13pt against the control ceiling. */
-const TAB_CAP = capTo(13, TYPE_CEILING.control);
-
 /**
- * How far a tab label may shrink to fit its segment rather than be cut. Each
- * segment is (screen - 56) / 3 - 18pt wide: 70pt on a 320pt zoomed screen.
- * Movements in Inter Tight semibold advances about 117.3pt at the 22pt cap,
- * so 0.6 (70.4pt) would sit on the edge there; 0.55 (64.5pt) fits with room.
- * iOS takes the largest scale that fits, so the floor is reached only when
- * nothing larger fits.
+ * The tab labels are segmented-control chrome: 13pt against the control
+ * ceiling. Each segment is (screen - 56) / 3 - 18pt wide, 70pt on a 320pt
+ * zoomed screen, and Movements in Inter Tight semibold advances about 117.3pt
+ * at the 22pt cap: past the width it needs, the tabs stack
+ * (shouldStackItemTabs in lib/dynamic-type-layout).
  */
-const TAB_MIN_FONT_SCALE = 0.55;
+const TAB_CAP = capTo(13, TYPE_CEILING.control);
 
 /**
  * One quick-adjust step (−5 / −1 / +1 / +5): the reference's stepper button,
@@ -4268,6 +4279,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     marginHorizontal: 20,
   },
+  // The tabs one per line (shouldStackItemTabs): the gap and padding stay.
+  tabsStacked: {
+    flexDirection: 'column',
+  },
   // A 44pt target that grows with its label (minHeight, never height).
   tab: {
     flex: 1,
@@ -4279,6 +4294,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // A stacked tab is as tall as its label and as wide as the track: flex: 1
+  // in a column would share out a height the track does not have.
+  tabStacked: {
+    flex: 0,
   },
   quickAdjust: {
     flexDirection: 'row',

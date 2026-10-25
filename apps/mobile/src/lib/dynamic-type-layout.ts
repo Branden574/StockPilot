@@ -139,3 +139,76 @@ export const LONGEST_STOCK_PILL_CHARS = 8;
 export const TRAILING_COLUMN_MAX_WIDTH = Math.ceil(
   pillWidth(LONGEST_STOCK_PILL_CHARS, ROW_STACK_FONT_SCALE),
 );
+
+/**
+ * The item screen's Overview / Movements / Activity tabs (`app/item/[id].tsx`,
+ * styles `tabsRow` and `tab`): three equal segments in a recessed track. The
+ * track keeps a 20pt screen margin, a 1pt border and 3pt of padding a side,
+ * and a 4pt gap between segments; each tab a 1pt border and 8pt of padding a
+ * side. None of it scales with text, so it is fixed points here.
+ */
+const ITEM_TAB_TRACK_SIDE = 20 + 1 + 3;
+const ITEM_TAB_GAP = 4;
+const ITEM_TAB_SIDE = 1 + 8;
+/**
+ * The tab label: 13pt chrome capped at the control ceiling, the screen's
+ * `TAB_CAP = capTo(13, TYPE_CEILING.control)`. Inlined so this module stays
+ * dependency-free; item-screens-structure.test.ts holds the two together.
+ */
+const ITEM_TAB_LABEL_SIZE = 13;
+const ITEM_TAB_LABEL_CAP = 22 / ITEM_TAB_LABEL_SIZE;
+
+/**
+ * The widest tab label, Movements, in the open tab's face: InterTight
+ * SemiBold advances 5.3311em (measured with fontkit on the bundled
+ * InterTight_600SemiBold.ttf; Overview is 4.2866em, Activity 3.4189em). The
+ * figure leaves out the label's negative tracking, which narrows it by about
+ * 1.4pt, so the check below errs toward stacking, never toward a cut label.
+ */
+export const ITEM_TAB_WIDEST_LABEL_EM = 5.3311;
+
+/** The room in points one tab gives its label, side by side, in a window `windowWidth` wide. */
+export function itemTabLabelRoom(windowWidth: number): number {
+  return (windowWidth - 2 * ITEM_TAB_TRACK_SIDE - 2 * ITEM_TAB_GAP) / 3 - 2 * ITEM_TAB_SIDE;
+}
+
+/** The room in points one tab gives its label once the tabs are stacked, one per line. */
+export function itemTabStackedLabelRoom(windowWidth: number): number {
+  return windowWidth - 2 * ITEM_TAB_TRACK_SIDE - 2 * ITEM_TAB_SIDE;
+}
+
+/**
+ * The tab label's size in points: 13pt grown with the user's text size, up to
+ * the 22pt ceiling. A scale that is not a finite, positive number is the
+ * default size.
+ */
+export function itemTabLabelSize(fontScale: number | null | undefined): number {
+  const raw =
+    typeof fontScale === 'number' && Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+  return ITEM_TAB_LABEL_SIZE * Math.min(raw, ITEM_TAB_LABEL_CAP);
+}
+
+/**
+ * Should the item screen's three tabs stack, one per line?
+ *
+ * They stack when the widest label, at the size the user's text setting gives
+ * it, is wider than its segment. The label is never shrunk below that size
+ * (the policy forbids adjustsFontSizeToFit) and never cut to "Moveme…" (docket
+ * B10): one word has no place to wrap, so the fix is width. Stacked, each
+ * label has the track's whole width (254pt on a 320pt screen, more than twice
+ * what Movements needs at the ceiling).
+ *
+ * At the default size the tabs stay side by side on every phone, 320pt
+ * included; at the 22pt ceiling they stack on every phone and stay side by
+ * side on an iPad. A window width that is not a finite, positive number keeps
+ * them side by side, as shouldStackRow does with a bad scale.
+ */
+export function shouldStackItemTabs(
+  windowWidth: number | null | undefined,
+  fontScale: number | null | undefined,
+): boolean {
+  if (typeof windowWidth !== 'number' || !Number.isFinite(windowWidth) || windowWidth <= 0) {
+    return false;
+  }
+  return ITEM_TAB_WIDEST_LABEL_EM * itemTabLabelSize(fontScale) > itemTabLabelRoom(windowWidth);
+}
