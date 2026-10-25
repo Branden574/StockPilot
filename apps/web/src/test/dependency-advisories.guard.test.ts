@@ -55,7 +55,9 @@ import { describe, expect, it } from 'vitest';
  * back (a new dependency, a revert, a hand edit) fails CI instead of waiting
  * for an alert.
  *
- * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release; zod 3
+ * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release, so its
+ * alert is dismissed instead; NODE_FORGE_DEPENDENTS below checks the reason
+ * for that (only Expo's command-line tools depend on it). zod 3
  * (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and #134) needs zod 4, a
  * change of its own (#381 refuses over-long lists on the two public routes
  * until then). A withdrawn advisory (sprintf-js, GHSA-hp3w-g68c-fv3c) is not
@@ -272,6 +274,142 @@ function vulnerableLocked(lockfile: string, floors: Floor[] = FLOORS): string[] 
   return found;
 }
 
+/**
+ * node-forge has no fixed release (GHSA-86w9-cpqp-85rv, Dependabot #112:
+ * every version up to 1.4.0, none patched), so its alert is dismissed instead
+ * of fixed, for one reason: only Expo's command-line tools load it, on a
+ * developer machine or a build server. That stays true while node-forge and
+ * @expo/code-signing-certificates (through which those tools also load it)
+ * have no dependents but these:
+ *
+ *   - @expo/cli loads node-forge itself to read local signing certificates
+ *     for `expo run:ios` (build/src/run/ios/codeSigning/Security.js), and
+ *     loads @expo/code-signing-certificates for development code signing
+ *     (build/src/utils/codesigning.js).
+ *   - expo-updates' own command-line tool loads
+ *     @expo/code-signing-certificates in its codesigning:generate and
+ *     codesigning:configure commands (cli/build/generateCodeSigningAsync.js
+ *     and configureCodeSigningAsync.js). Nothing else in expo-updates loads
+ *     it, its app runtime included.
+ *
+ * Only apps/mobile reaches them (expo > @expo/cli, and expo-updates). The
+ * iOS export's source map holds expo-updates' runtime but neither package.
+ * A new dependent fails the check below. Before naming it here, find out
+ * whether it runs in the phone app or on the web server: if it does, the
+ * alert cannot stay dismissed.
+ */
+const NODE_FORGE_DEPENDENTS: Record<string, string[]> = {
+  'node-forge': ['@expo/cli', '@expo/code-signing-certificates'],
+  '@expo/code-signing-certificates': ['@expo/cli', 'expo-updates'],
+};
+
+/** The package name in a lockfile key: `@scope/name@1.0.0(peer@2.0.0)` is `@scope/name`. */
+function packageName(key: string): string {
+  const name = /^((?:@[^@/'\s]+\/)?[^@'\s]+)@[^@'\s]/.exec(key)?.[1];
+  if (name === undefined) throw new Error(`not a package key: ${key}`);
+  return name;
+}
+
+/**
+ * The real package behind an aliased dependency (`alias: real@1.0.0`), or null
+ * for a plain version. A version has no `@` before its first `(`.
+ */
+function aliasOf(value: string): string | null {
+  return /^((?:@[^@/'\s(]+\/)?[^@'\s(]+)@\d/.exec(value)?.[1] ?? null;
+}
+
+const DEPENDENCY_LISTS = new Set(['dependencies', 'devDependencies', 'optionalDependencies']);
+
+/**
+ * Who depends on each package: the packages whose `snapshots:` entry lists it,
+ * and the workspace packages (as `workspace apps/mobile`) whose `importers:`
+ * entry lists it. A dependency installed under an alias also counts for the
+ * real package. Throws rather than returning nothing when the file does not
+ * have that shape.
+ */
+function dependents(lockfile: string): Map<string, Set<string>> {
+  const lines = lockfile.split('\n');
+  if (lines[0] !== "lockfileVersion: '9.0'") {
+    throw new Error(`unexpected lockfile version line: ${lines[0]}`);
+  }
+  const importersAt = lines.indexOf('importers:');
+  const packagesAt = lines.indexOf('packages:');
+  const snapshotsAt = lines.indexOf('snapshots:');
+  if (importersAt < 0 || packagesAt < importersAt || snapshotsAt < packagesAt) {
+    throw new Error('no importers:, packages: and snapshots: sections, in that order');
+  }
+  const out = new Map<string, Set<string>>();
+  // Both sections hold one entry per line at two spaces, with its dependency
+  // lists at four and their entries at six.
+  const read = (
+    section: string[],
+    ownerOf: (key: string) => string,
+    dependenciesOn: (line: string) => string[],
+  ): void => {
+    let owner: string | undefined;
+    let listing = false;
+    for (const line of section) {
+      const key = /^ {2}'?(\S.*?)'?:(?: \{\})?$/.exec(line)?.[1];
+      if (key !== undefined) {
+        owner = ownerOf(key);
+        listing = false;
+        continue;
+      }
+      const list = /^ {4}(\w+):/.exec(line)?.[1];
+      if (list !== undefined) {
+        listing = DEPENDENCY_LISTS.has(list);
+        continue;
+      }
+      if (!listing || owner === undefined) continue;
+      for (const pkg of dependenciesOn(line)) {
+        out.set(pkg, (out.get(pkg) ?? new Set<string>()).add(owner));
+      }
+    }
+  };
+  read(
+    lines.slice(importersAt + 1, packagesAt),
+    (key) => `workspace ${key}`,
+    (line) => {
+      const name = /^ {6}'?([^'\s][^']*?)'?:$/.exec(line)?.[1];
+      if (name !== undefined) return [name];
+      const version = /^ {8}version: '?([^'\s]+?)'?$/.exec(line)?.[1];
+      const real = version === undefined ? null : aliasOf(version);
+      return real === null ? [] : [real];
+    },
+  );
+  read(lines.slice(snapshotsAt + 1), packageName, (line) => {
+    const m = /^ {6}'?([^'\s][^']*?)'?: '?([^'\s]+?)'?$/.exec(line);
+    if (!m?.[1] || !m[2]) return [];
+    const real = aliasOf(m[2]);
+    return real === null ? [m[1]] : [m[1], real];
+  });
+  return out;
+}
+
+/**
+ * Each dependent of a package in `named` that its list does not name, as
+ * `package <- dependent`. Throws when a package is locked but nothing seems to
+ * depend on it, since that means the lockfile was not read.
+ */
+function unnamedDependents(
+  lockfile: string,
+  named: Record<string, string[]> = NODE_FORGE_DEPENDENTS,
+): string[] {
+  const locked = lockedVersions(lockfile);
+  const all = dependents(lockfile);
+  const found: string[] = [];
+  for (const [pkg, allowed] of Object.entries(named)) {
+    const by = [...(all.get(pkg) ?? [])].sort();
+    if (locked.has(pkg) && by.length === 0) {
+      throw new Error(`${pkg} is locked but nothing depends on it: the lockfile was not read`);
+    }
+    for (const dependent of by) {
+      if (!allowed.includes(dependent)) found.push(`${pkg} <- ${dependent}`);
+    }
+  }
+  return found;
+}
+
 const LOCKFILE = readFileSync(join(REPO_ROOT, 'pnpm-lock.yaml'), 'utf8');
 
 describe('the lockfile resolves no version an advisory fixed here covers', () => {
@@ -396,5 +534,99 @@ describe('the check itself', () => {
       /lockfile version/,
     );
     expect(() => vulnerableLocked("lockfileVersion: '9.0'\n\nimporters:\n")).toThrow(/packages:/);
+  });
+});
+
+describe('node-forge, which has no fixed release, stays inside Expo command-line tools', () => {
+  it('has no dependent that the dismissal of its alert does not name', () => {
+    expect(unnamedDependents(LOCKFILE)).toEqual([]);
+  });
+
+  it('reads who depends on what in the real lockfile', () => {
+    const all = dependents(LOCKFILE);
+    expect(all.size).toBeGreaterThan(1000);
+    expect([...(all.get('react') ?? [])]).toEqual(
+      expect.arrayContaining(['workspace apps/web', 'workspace apps/mobile']),
+    );
+    // A development dependency counts too (the root's TypeScript).
+    expect([...(all.get('typescript') ?? [])]).toContain('workspace .');
+  });
+
+  type Lists = { dependencies?: string[]; optionalDependencies?: string[] };
+  const graph = (workspace: Record<string, string[]>, snapshots: Record<string, Lists>): string =>
+    [
+      "lockfileVersion: '9.0'",
+      '',
+      'importers:',
+      '',
+      ...Object.entries(workspace).flatMap(([path, deps]) => [
+        `  ${path}:`,
+        '    dependencies:',
+        ...deps.flatMap((d) => [
+          `      ${d}:`,
+          '        specifier: ^1.0.0',
+          '        version: 1.0.0',
+        ]),
+        '',
+      ]),
+      'packages:',
+      '',
+      ...Object.keys(snapshots).flatMap((k) => [
+        `  ${k}:`,
+        '    resolution: {integrity: sha512-x}',
+        '',
+      ]),
+      'snapshots:',
+      '',
+      ...Object.entries(snapshots).flatMap(([k, lists]) => {
+        const body = Object.entries(lists).flatMap(([list, deps]) => [
+          `    ${list}:`,
+          ...deps.map((d) => `      ${d}`),
+        ]);
+        return body.length === 0 ? [`  ${k}: {}`, ''] : [`  ${k}:`, ...body, ''];
+      }),
+    ].join('\n');
+
+  const expoTools: Record<string, Lists> = {
+    "'@expo/cli@57.0.24(expo@57.0.22)'": {
+      dependencies: ["'@expo/code-signing-certificates': 0.0.6", 'node-forge: 1.4.0'],
+    },
+    "'@expo/code-signing-certificates@0.0.6'": { dependencies: ['node-forge: 1.4.0'] },
+    'expo-updates@57.0.22(expo@57.0.22)': {
+      dependencies: ["'@expo/code-signing-certificates': 0.0.6"],
+    },
+    'node-forge@1.4.0': {},
+  };
+
+  it('passes the dependents it names, and flags any other, however it is listed', () => {
+    expect(unnamedDependents(graph({ 'apps/mobile': ['expo-updates'] }, expoTools))).toEqual([]);
+    expect(
+      unnamedDependents(
+        graph(
+          { 'apps/web': ['node-forge'] },
+          {
+            ...expoTools,
+            'server-lib@2.0.0': { optionalDependencies: ['node-forge: 1.4.0'] },
+            'other-lib@1.0.0': { dependencies: ['forge: node-forge@1.4.0'] },
+            'some-tool@1.0.0': { dependencies: ["'@expo/code-signing-certificates': 0.0.6"] },
+          },
+        ),
+      ),
+    ).toEqual([
+      'node-forge <- other-lib',
+      'node-forge <- server-lib',
+      'node-forge <- workspace apps/web',
+      '@expo/code-signing-certificates <- some-tool',
+    ]);
+  });
+
+  it('fails closed when it cannot read who asks for a locked node-forge', () => {
+    expect(() => unnamedDependents(graph({}, { 'node-forge@1.4.0': {} }))).toThrow(
+      /nothing depends on it/,
+    );
+    expect(() => dependents("lockfileVersion: '9.0'\n\npackages:\n\nsnapshots:\n")).toThrow(
+      /importers:/,
+    );
+    expect(() => dependents("lockfileVersion: '10.0'\n\nimporters:\n")).toThrow(/lockfile version/);
   });
 });
