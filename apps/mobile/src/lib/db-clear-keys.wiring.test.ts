@@ -41,12 +41,13 @@ vi.mock('./api', () => ({ api: vi.fn() }));
  *      its source cannot silently un-pin the wipe.
  *
  * ONE PERSISTED KEY IS KEPT ON PURPOSE: `cache_user_id`, the record of whose
- * cache this is (cache-owner.ts). A pull that finds no record adopts the device
- * as it is, photos included, and deleteOrgData (a workspace switch, the
- * workspace repair, Settings > Offline cache > Clear) keeps the photos, so it
- * keeps the record too. Only the wipes of an account leaving the device, whose
- * callers clear the photos first, forget it (wipeForSignOut, wipeForEviction).
- * Pinned in (3) below; executed end to end in cache-owner.sqlite.test.ts.
+ * cache this is (cache-owner.ts). A pull that finds no record keeps the rows
+ * cached since the wipe that forgot it, and deleteOrgData (a workspace switch,
+ * the workspace repair, Settings > Offline cache > Clear) keeps the account and
+ * its photos, so it keeps the record too. Only the wipes of an account leaving
+ * the device, whose callers clear the photos first, forget it (wipeForSignOut,
+ * wipeForEviction). Pinned in (3) below; executed end to end in
+ * cache-owner.sqlite.test.ts.
  */
 
 const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8');

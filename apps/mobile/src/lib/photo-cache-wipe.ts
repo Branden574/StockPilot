@@ -26,21 +26,27 @@ import { forgetSignedImageUrls } from './image-cache';
  * The SQLite wipe runs whether or not the photo wipe succeeded, and the photo
  * wipe whether or not the SQLite one does: a SQLite failure used to skip it.
  *
- * WHICH WIPES, AND IN WHICH ORDER (B18 review, 2026-10-24). That next pull
- * resets only a cache recorded as ANOTHER account's: one with no record is
- * adopted, photos and all (cache-owner.ts). So:
- *   - only these account changes clear the photos. A workspace switch, the
- *     workspace repair and Settings > Offline cache > Clear keep the account,
- *     its photos and the record of whose they are (db.ts deleteOrgData). They
- *     used to forget the record, and the next account then adopted the
- *     previous one's photos;
+ * And a pull that finds no owner recorded clears the photos on their own
+ * (clearPhotoCaches, sync.ts): it cannot tell whose they are, an older
+ * release's wipes having forgotten the record and kept them, and it keeps the
+ * rows, so no SQLite wipe runs there (cache-owner.ts).
+ *
+ * WHICH WIPES, AND IN WHICH ORDER (B18 reviews, 2026-10-24). That next pull
+ * resets only a cache recorded as ANOTHER account's; one with no record keeps
+ * its rows (cache-owner.ts). So:
+ *   - only these account changes, and that pull, clear the photos. A
+ *     workspace switch, the workspace repair and Settings > Offline cache >
+ *     Clear keep the account, its photos and the record of whose they are
+ *     (db.ts deleteOrgData). They used to forget the record, and the next
+ *     account then adopted the previous one's photos;
  *   - the photos go FIRST, then the SQLite wipe. The sign-out's and the
  *     eviction's wipes forget the record: run before the photo wipe, as they
  *     were, an app closed while the disk cache was still being cleared
  *     (expo-image clears it in the background and answers once it has
  *     finished) left photos with no owner recorded. Now the record is
- *     forgotten only once the photos are gone, and the reset records the new
- *     account only after both.
+ *     forgotten only once the photos are gone, the reset records the new
+ *     account only after both, and the pull with no owner recorded records
+ *     its account only after the photos.
  *
  * Best-effort: a cache that cannot be cleared is reported and never stops the
  * sign-out or the pull.

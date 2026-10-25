@@ -494,10 +494,16 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * used to go with them ("an emptied cache belongs to nobody"), but these
  * tables are not the only thing an account leaves: its photos stay in
  * expo-image's caches and its photo links in memory, and only the account
- * changes clear those (photo-cache-wipe.ts). A pull that finds no record
- * adopts whatever is on the device, so the record is forgotten only by the
- * wipes whose callers clear the photos first, a sign-out and an eviction
- * (forgetCacheOwner below). deleteOrgData keeps it.
+ * changes clear those (photo-cache-wipe.ts). And a pull that finds no record
+ * clears the photos but keeps the rows, that is whatever was cached after the
+ * wipe that forgot it (a count opened to work on offline). After a sign-out
+ * or an eviction that is normally the next account's own, since the account
+ * that left has no session any more. After a switch, the repair or Clear it
+ * would be the same account's, still signed in, and the next account would
+ * adopt it.
+ * So the record is forgotten only by the wipes of an account leaving the
+ * device, whose callers clear the photos first (forgetCacheOwner below).
+ * deleteOrgData keeps it.
  *
  * The keys are pinned against sync.ts's writers by
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
@@ -581,7 +587,8 @@ export function currentCacheGeneration(): number {
  * It KEEPS the record of whose cache this is (cache-owner.ts), as it keeps
  * the photos: a switch, the workspace repair and Settings > Offline cache >
  * Clear leave the account unchanged. Forgetting it here let the next account
- * adopt the previous one's photos after a session that ended without a wipe.
+ * adopt the previous one's photos, and the counts it opened since, after a
+ * session that ended without a wipe.
  *
  * NOTE for callers: clearing the persisted values is only half of an
  * in-session switch. `useEffectivePermissions()` / `useWarehouseScope()` hold

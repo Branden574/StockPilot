@@ -26,6 +26,16 @@ import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
  * and the previous account's photos stayed in expo-image's memory and disk
  * caches, and its photo links in memory. The repair can even run inside the
  * next account's own sign-in, before its first pull.
+ *
+ * AND A PULL THAT FOUND NO RECORD (B18 review of da5337b23). It adopted the
+ * device as it was, photos included, and recorded nobody until a pull landed.
+ * An account whose pulls kept failing (online, but the snapshot timing out on
+ * weak Wi-Fi, a 500, a 429) was never recorded while it drew photos the Items
+ * list, item detail and scan sign straight from storage, and cached the counts
+ * it opened; after its session ended without a wipe, the next account adopted
+ * them too. And the release before this one forgot the record at every wipe
+ * and cleared the photos at none, so at the first launch of this one a phone
+ * with no owner recorded can hold anyone's photos.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -328,7 +338,62 @@ async function aSignedInWithAPhoto(): Promise<void> {
   expect(owner()).toBe(A);
   expect(items()).toEqual([`item-${A}-org-1`]);
   await viewPhoto(PHOTO_A);
+  // Photo clears are counted from here: A's own first pull found no owner
+  // recorded and cleared the (still empty) photo caches before recording A.
+  image.clearMemoryCache.mockClear();
+  image.clearDiskCache.mockClear();
 }
+
+/** The signed-in account opens a count online, so it can be counted offline
+ *  (cycle-count-cache.ts: the one screen that caches rows outside the pull),
+ *  and counts its line. */
+async function countOnThePhone(countId: string): Promise<void> {
+  await m.counts.cacheCycleCount(
+    {
+      id: countId,
+      organizationId: 'org-1',
+      warehouseId: 'wh-org-1',
+      warehouseName: 'Main',
+      status: 'in_progress',
+      startedAt: '2026-10-24T08:00:00.000Z',
+    },
+    [
+      {
+        id: `${countId}-l1`,
+        itemId: 'item-x',
+        itemName: 'X',
+        itemSku: 'SKU-X',
+        itemBarcode: null,
+        expected: 4,
+        counted: null,
+        updatedAt: null,
+      },
+    ],
+  );
+  expect(await m.counts.updateLocalLine(`${countId}-l1`, 5)).not.toBeNull();
+}
+
+/** origin/main's clearOrgScopedTables (db.ts at 96901a1b5), verbatim. It was
+ *  the SQLite part of every cache wipe of the release before this one (a
+ *  sign-out, an eviction, a workspace switch, the workspace repair, Clear
+ *  offline cache, the reset for another account), and none of them cleared the
+ *  photos (its auth-context.tsx: `wipeCache: wipeForSignOut`): each forgot the
+ *  record and kept them. */
+const PREVIOUS_RELEASE_WIPE = `
+    delete from items;
+    delete from warehouses;
+    delete from purchase_orders;
+    delete from po_lines;
+    delete from cycle_counts;
+    delete from cycle_count_lines;
+    delete from bundles;
+    delete from bundle_components;
+    delete from meta where key = 'last_synced_at';
+    delete from meta where key = 'enabled_modules';
+    delete from meta where key = 'effective_permissions';
+    delete from meta where key = 'warehouse_scope';
+    delete from meta where key = 'cache_user_id';
+`;
 
 /** Settings > Offline cache > Clear, with the same dependencies the screen
  *  passes (app/(drawer)/settings.tsx; pinned below). */
@@ -479,37 +544,15 @@ describe('the reset for another account', SLOW, () => {
     expect.soft(owner()).toBe(B);
 
     // B opens a count online, so it can be counted offline, then counts.
-    await m.counts.cacheCycleCount(
-      {
-        id: 'cc-b',
-        organizationId: 'org-1',
-        warehouseId: 'wh-org-1',
-        warehouseName: 'Main',
-        status: 'in_progress',
-        startedAt: '2026-10-24T08:00:00.000Z',
-      },
-      [
-        {
-          id: 'l-b1',
-          itemId: 'item-x',
-          itemName: 'X',
-          itemSku: 'SKU-X',
-          itemBarcode: null,
-          expected: 4,
-          counted: null,
-          updatedAt: null,
-        },
-      ],
-    );
+    await countOnThePhone('cc-b');
     await viewPhoto(PHOTO_B);
     device.online = false;
-    expect(await m.counts.updateLocalLine('l-b1', 5)).not.toBeNull();
 
     await m.sync.syncNow(); // the next tick, offline
 
     const count = await m.counts.getCycleCount('cc-b');
     expect(count?.lines).toEqual([
-      expect.objectContaining({ id: 'l-b1', counted: 5, localDirty: true }),
+      expect.objectContaining({ id: 'cc-b-l1', counted: 5, localDirty: true }),
     ]);
     await expectKept(PHOTO_B);
     expect(owner()).toBe(B);
@@ -601,9 +644,10 @@ describe('the record changes only once the photos are gone', SLOW, () => {
 
   // Mutation caught: a sign-out or an eviction that keeps the record. The next
   // account's first pull would then reset a cache already emptied, and wipe
-  // whatever it had cached before that pull ran.
+  // whatever it had cached before that pull ran: here a count it opened (from
+  // a notification, say) and counted before its first pull.
   it.each(Object.keys(ACCOUNT_EXITS))(
-    '%s that finishes forgets the record: the next account adopts the emptied cache without clearing it again',
+    '%s that finishes forgets the record: the next account adopts the emptied cache, keeping the count it counted before its first pull',
     async (exit) => {
       await aSignedInWithAPhoto();
       device.userId = null;
@@ -614,12 +658,138 @@ describe('the record changes only once the photos are gone', SLOW, () => {
       await expectForgotten(PHOTO_A);
 
       signIn(B);
+      await countOnThePhone('cc-b');
       await m.sync.syncNow();
 
-      expect(image.clearDiskCache).toHaveBeenCalledTimes(1);
+      expect((await m.counts.getCycleCount('cc-b'))?.lines).toEqual([
+        expect.objectContaining({ id: 'cc-b-l1', counted: 5, localDirty: true }),
+      ]);
+      expect(items()).toEqual([`item-${B}-org-1`]);
       expect(owner()).toBe(B);
     },
   );
+});
+
+describe('a pull that finds no owner recorded', SLOW, () => {
+  /** How this release leaves a phone with no owner recorded. */
+  const NO_OWNER: Record<string, () => Promise<void>> = {
+    'after a finished sign-out': async () => {
+      await aSignedInWithAPhoto();
+      device.userId = null;
+      auth.user = null;
+      await m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut);
+    },
+    'on a fresh install': async () => {
+      device.storage.set('workspace.activeOrgId', 'org-1');
+    },
+  };
+  const modes = ['online', 'offline'] as const;
+
+  // Mutation caught: the adopt recording nobody until a pull lands, as at
+  // da5337b23.
+  it.each(Object.keys(NO_OWNER).flatMap((start) => modes.map((mode) => [start, mode] as const)))(
+    "%s, an account whose pulls never land is still recorded: after its session ends without a wipe, the next account's first pull (%s) clears the photos, links and count it left",
+    async (start, mode) => {
+      await NO_OWNER[start]!();
+      expect(owner()).toBeNull();
+
+      signIn(B);
+      device.snapshotFails = true; // online, but the snapshot times out (weak warehouse Wi-Fi)
+      await m.sync.syncNow(); // B's first pull: no owner recorded, then no answer
+      expect.soft(owner()).toBe(B);
+      // The Items list, item detail and scan sign photos straight from
+      // storage, not from the snapshot, so B's photos load anyway, and a count
+      // B opens is cached for offline counting.
+      await viewPhoto(PHOTO_B);
+      await countOnThePhone('cc-b');
+
+      sessionEndsWithoutWipe();
+      signIn(C);
+      device.snapshotFails = false;
+      device.online = mode === 'online';
+      await m.sync.syncNow(); // C's first pull
+
+      await expectForgotten(PHOTO_B);
+      expect(await m.counts.getCycleCount('cc-b')).toBeNull();
+      expect(owner()).toBe(C);
+    },
+  );
+
+  /** How the release before this one left photos with no owner recorded. */
+  const PREVIOUS_RELEASE_LEFT: Record<string, () => Promise<void>> = {
+    // Its sign-out: the usual end of a shift on a shared phone.
+    'its sign-out': async () => {
+      device.userId = null;
+      auth.user = null;
+      raw.exec(PREVIOUS_RELEASE_WIPE);
+      await relaunch(); // this release starts at the next cold start
+    },
+    // Its workspace switch whose pull never landed; then, on this release, a
+    // session that ends without a wipe.
+    'its workspace switch whose pull never landed': async () => {
+      raw.exec(PREVIOUS_RELEASE_WIPE);
+      await relaunch();
+      sessionEndsWithoutWipe();
+    },
+  };
+
+  // Mutation caught: an adopt that keeps the photos, as at da5337b23.
+  it.each(
+    Object.keys(PREVIOUS_RELEASE_LEFT).flatMap((left) =>
+      modes.map((mode) => [left, mode] as const),
+    ),
+  )(
+    "photos the previous release left with no owner recorded, after %s: the next account's first pull (%s) clears them",
+    async (left, mode) => {
+      await aSignedInWithAPhoto();
+      await PREVIOUS_RELEASE_LEFT[left]!();
+      expect(owner()).toBeNull();
+      expect(device.disk.has(PHOTO_A)).toBe(true);
+
+      signIn(B);
+      device.online = mode === 'online';
+      await m.sync.syncNow();
+
+      expect(device.disk.has(PHOTO_A), "A's photo on disk for B").toBe(false);
+      expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+      expect(owner()).toBe(B);
+    },
+  );
+
+  // Mutation caught: the account recorded before the photo clear finished.
+  it('an adopt the app is closed during, before the photo disk clear finished: no owner is recorded yet, and the next launch clears the photos again', async () => {
+    await aSignedInWithAPhoto();
+    await PREVIOUS_RELEASE_LEFT['its sign-out']!();
+    signIn(B);
+    device.holdDiskClear = true;
+    void m.sync.syncNow();
+    await vi.waitFor(() => expect(image.clearDiskCache).toHaveBeenCalledTimes(1), WAIT);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await relaunch(); // B's session is still stored
+    expect(device.disk.has(PHOTO_A)).toBe(true);
+    expect.soft(owner()).toBeNull();
+    await m.sync.syncNow();
+
+    expect(device.disk.has(PHOTO_A)).toBe(false);
+    expect(owner()).toBe(B);
+  });
+
+  // Mutation caught: an adopt that clears the photos and records nobody. Every
+  // tick whose pull fails would adopt again and clear the account's own photos.
+  it("the adopting account's photos are cleared once, before its first pull: what it draws after is kept through pulls that keep failing, online and offline", async () => {
+    await NO_OWNER['on a fresh install']!();
+    signIn(B);
+    device.snapshotFails = true;
+    await m.sync.syncNow(); // the adopt, then no answer
+    await viewPhoto(PHOTO_B);
+    await m.sync.syncNow(); // the next tick: no answer again
+    device.online = false;
+    await m.sync.syncNow(); // and offline
+
+    await expectKept(PHOTO_B);
+    expect(image.clearDiskCache.mock.calls.length).toBeLessThanOrEqual(1);
+  });
 });
 
 describe('Settings > Offline cache > Clear is the same-account wipe', SLOW, () => {

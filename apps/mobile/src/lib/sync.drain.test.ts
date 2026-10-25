@@ -71,6 +71,9 @@ vi.mock('./db', () => ({
   currentCacheGeneration: vi.fn(() => 0),
   getMeta: vi.fn(async () => null),
   setMeta: vi.fn(async () => {}),
+  // getMeta records no owner, so every pull here adopts: it clears the photo
+  // caches and records the account before it is sent (sync.ts).
+  setCacheOwner: vi.fn(async () => {}),
 }));
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
@@ -85,10 +88,12 @@ vi.mock('./warehouse-scope', () => ({
   refreshWarehouseScope: vi.fn(),
 }));
 // photo-cache-wipe.ts pulls in expo-image (native). The drain never resets the
-// cache (getMeta records no owner), so the wipe is only passed through; the
-// reset is tested in sync.snapshot-removals.test.ts.
+// cache (getMeta records no owner), so the wipe is only passed through, and
+// the adopt's photo clear does nothing; the reset and the adopt are tested in
+// sync.snapshot-removals.test.ts and cache-owner.sqlite.test.ts.
 vi.mock('./photo-cache-wipe', () => ({
   wipeWithPhotoCaches: async (wipe: () => Promise<void>) => wipe(),
+  clearPhotoCaches: async () => {},
 }));
 
 type Row = {

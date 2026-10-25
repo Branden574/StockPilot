@@ -34,7 +34,7 @@ import {
   refreshEffectivePermissions,
 } from './use-effective-permissions';
 import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
-import { wipeWithPhotoCaches } from './photo-cache-wipe';
+import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
 import { unconfirmedStock } from './unconfirmed-stock';
@@ -251,7 +251,10 @@ export async function pullSnapshot(
   // either. Another account's cache is cleared and pulled again in full, never
   // delta-pulled from their cursor.
   const { userId: liveUserId } = await liveOutboxScope();
-  if (liveUserId && cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
+  const ownerAction = liveUserId
+    ? cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId)
+    : 'keep';
+  if (liveUserId && ownerAction === 'reset') {
     // The previous account's photos go with its rows (photo-cache-wipe.ts):
     // the ways a session ends without a wipe all reach this pull.
     await wipeWithPhotoCaches(deleteOrgData);
@@ -272,6 +275,24 @@ export async function pullSnapshot(
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+  }
+  if (liveUserId && ownerAction === 'adopt') {
+    // No owner recorded: a fresh install, a cache a sign-out or an eviction
+    // emptied after clearing its photos, or one an older release left, whose
+    // wipes forgot the record and kept the photos (cache-owner.ts). Those can
+    // be anyone's, so the photos and photo links go. Not the rows: each of
+    // those wipes emptied them, so what is there was cached since, normally by
+    // this account before this pull (a count it opened to work on offline),
+    // and a reset would lose it. No SQLite wipe runs here, so the photo wipe
+    // is a step of its own.
+    await clearPhotoCaches();
+    // Then this account is recorded, before the pull is sent, as at the
+    // reset. Left unrecorded until a pull landed, an account whose pulls kept
+    // failing (a timeout on weak Wi-Fi, a 500) drew photos the screens sign
+    // straight from storage, and after its session ended without a wipe the
+    // next account adopted them too. Recorded once the photos are gone: an
+    // app closed during the clear adopts, and clears, again at its next pull.
+    await setCacheOwner(liveUserId);
   }
 
   if (!(await isOnline())) return null;
@@ -524,7 +545,8 @@ export async function pullSnapshot(
     // The cursor, modules, permissions and warehouse scope are part of the
     // same answer, so they are written only when the rows were.
     await setMeta('last_synced_at', snap.serverTime);
-    // ...and so is whose answer it was (cache-owner.ts).
+    // ...and so is whose answer it was (cache-owner.ts). The reset and the
+    // adopt above already recorded it before the request was sent.
     if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);
     // Persist the org's enabled modules so the drawer + tab gating can read
     // them synchronously between syncs (and while offline). Always written —

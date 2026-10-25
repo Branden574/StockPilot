@@ -605,10 +605,18 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
   });
 
-  it('a cache with no recorded owner (pulled before this change) is adopted, not reset', async () => {
-    const path = await deltaPull(emptySnap());
-    expect(path).toContain('?since=');
+  it('a cache with no recorded owner is adopted, not reset, and recorded as this account before the request is sent', async () => {
+    let recordedAtRequest: string | null | undefined;
+    apiMock.api.mockImplementation(async () => {
+      recordedAtRequest = meta.store.get('cache_user_id') ?? null;
+      return emptySnap();
+    });
+    meta.store.set('last_synced_at', '2026-09-05T11:00:00.000Z');
+    await pullSnapshot();
+
+    expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
     expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(recordedAtRequest).toBe('u1');
     expect(meta.store.get('cache_user_id')).toBe('u1');
   });
 
@@ -640,16 +648,41 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
   });
 
-  it("this account's own cache, and one with no recorded owner, keep their photos", async () => {
+  it("this account's own cache keeps its photos", async () => {
     meta.store.set('cache_user_id', 'u1');
     await deltaPull(emptySnap());
-    meta.store.delete('cache_user_id');
     await deltaPull(emptySnap());
 
     expect(apiMock.api).toHaveBeenCalledTimes(2);
     expect(photos.clearMemoryCache).not.toHaveBeenCalled();
     expect(photos.clearDiskCache).not.toHaveBeenCalled();
     expect(photos.forgetSignedImageUrls).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: an adopt that keeps the photos. A cache with no recorded
+  // owner may hold anyone's: the release before this one forgot the record at
+  // every wipe and cleared the photos at none (cache-owner.ts).
+  it('a cache with no recorded owner has its photos and links cleared, once, offline too, and keeps its rows', async () => {
+    netMock.getNetworkStateAsync.mockResolvedValue({
+      isConnected: false,
+      isInternetReachable: false,
+    });
+    expect(await pullSnapshot()).toBeNull();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+    netMock.getNetworkStateAsync.mockResolvedValue({
+      isConnected: true,
+      isInternetReachable: true,
+    });
+    await deltaPull(emptySnap());
+
+    expect(photos.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
+    expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
+    // Not reset: the rows are still there, the operator's offline count too
+    // (the delta pull removed only the counts the server no longer lists).
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-dirty']);
   });
 
   // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.
