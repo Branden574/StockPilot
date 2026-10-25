@@ -10,7 +10,7 @@ import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
-import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 
 // @react-pdf/renderer needs Node APIs (Buffer, fs-style streams) — Edge
 // runtime is a non-starter. `force-dynamic` keeps Vercel from trying to
@@ -99,8 +99,10 @@ export async function GET(
     // lists holdings physically in X. Split items (>1 holding) get the
     // full breakdown in the LOCATION column instead of a single
     // (possibly stale/misleading) bin_location label — see locationFor
-    // in lib/pdf/pick-slip.tsx.
-    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+    // in lib/pdf/pick-slip.tsx. The same read carries every other placed
+    // holding, so an item whose stock all sits on a Site prints the Site,
+    // not the rack its label still names (B37).
+    const placementHoldings = await fetchPlacementHoldingsByItem(
       ctx,
       itemIds,
       detail.request.warehouse_id,
@@ -110,7 +112,8 @@ export async function GET(
     const pdf = await renderPickSlipPdf(detail, {
       imageUrlByItemId,
       orgTimezone,
-      rackHoldingsByItemId,
+      rackHoldingsByItemId: placementHoldings.rack,
+      otherHoldingsByItemId: placementHoldings.other,
     });
     const body = new Uint8Array(pdf.byteLength);
     body.set(pdf);

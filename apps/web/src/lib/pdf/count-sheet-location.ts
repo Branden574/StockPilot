@@ -1,6 +1,7 @@
 import {
   formatPlacementLabel,
   resolvePlacement,
+  type PlacedHoldingLike,
   type RackHoldingLike,
 } from '@stockpilot/core';
 
@@ -25,6 +26,11 @@ export function countSheetLocationLabel(row: {
    *  use the label. Carry `kind` (fetchRackHoldingsByItem does) or the
    *  crate rule cannot fire — see resolvePlacement. */
   rackHoldings?: RackHoldingLike[];
+  /** Every OTHER placed holding (Sites, areas), from the same read as
+   *  `rackHoldings` (fetchPlacementHoldingsByItem). With it, an item whose
+   *  stock all sits on a Site prints the Site, not the rack its label still
+   *  names (B37). Omitted, the cell reads as before. */
+  otherHoldings?: PlacedHoldingLike[];
 }): string | null {
   return formatPlacementLabel(
     resolvePlacement({
@@ -33,6 +39,7 @@ export function countSheetLocationLabel(row: {
       binLocation: row.bin_location,
       siteName: row.primaryLocationName,
       holdings: row.rackHoldings,
+      otherHoldings: row.otherHoldings,
     }),
   );
 }

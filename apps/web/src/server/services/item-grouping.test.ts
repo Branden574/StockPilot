@@ -54,7 +54,7 @@ vi.mock('./context', () => ({
 }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: h.invalidate }));
 vi.mock('next/cache', () => ({ revalidateTag: h.revalidateTag }));
-vi.mock('./rack-holdings', () => ({ fetchRackHoldingsByItem: h.holdings }));
+vi.mock('./rack-holdings', () => ({ fetchPlacementHoldingsByItem: h.holdings }));
 
 import { embedInventoryItem } from '@/lib/ai/embeddings';
 
@@ -154,7 +154,7 @@ beforeEach(() => {
   h.invalidate.mockReset();
   h.revalidateTag.mockReset();
   h.holdings.mockReset();
-  h.holdings.mockResolvedValue(new Map());
+  h.holdings.mockResolvedValue({ rack: new Map(), other: new Map() });
   h.kept = [];
   h.embeds = [];
   vi.mocked(keepAlive).mockClear();
@@ -508,6 +508,7 @@ describe('ItemGroupingService.previewSplit', () => {
   it("names each record's rack from its rack keys and holdings, as the lists do, not from bin_location alone", async () => {
     const BOOK = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
     const SPLIT = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const ON_SITE = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
     const row = (id: string, over: Record<string, unknown>) => ({
       id,
       sku: '9780000000001',
@@ -525,8 +526,8 @@ describe('ItemGroupingService.previewSplit', () => {
       warehouse: { name: 'DC4' },
       ...over,
     });
-    h.holdings.mockResolvedValue(
-      new Map([
+    h.holdings.mockResolvedValue({
+      rack: new Map([
         [BOOK, [{ name: '37-B', quantity: 3, kind: 'rack' }]],
         [
           SPLIT,
@@ -536,21 +537,30 @@ describe('ItemGroupingService.previewSplit', () => {
           ],
         ],
       ]),
-    );
+      // B37: a record whose stock all sits on the Site names the Site, not
+      // the rack its keys still name.
+      other: new Map([[ON_SITE, [{ name: 'DC4', quantity: 3, kind: null, type: 'warehouse' }]]]),
+    });
     const { svc } = harness([], {
       inventory_items: [{ id: BOOK, sku: '9780000000001' }],
       'inventory_items:candidates': [
         row(BOOK, { custom_fields: { book_rack_number: '37', book_rack_row: 'B' } }),
         row(SPLIT, { bin_location: 'Green #1 on rack 37-B', created_at: '2026-01-02T00:00:00Z' }),
         row(A, { item_type: 'product', bin_location: '  ', created_at: '2026-01-03T00:00:00Z' }),
+        row(ON_SITE, {
+          custom_fields: { book_rack_number: '39', book_rack_row: 'C' },
+          bin_location: '39-C',
+          created_at: '2026-01-04T00:00:00Z',
+        }),
       ],
     });
     const out = await svc.previewSplit([BOOK]);
-    expect(h.holdings).toHaveBeenCalledWith(expect.anything(), [BOOK, SPLIT, A]);
+    expect(h.holdings).toHaveBeenCalledWith(expect.anything(), [BOOK, SPLIT, A, ON_SITE]);
     expect(out.candidates.map((c) => [c.id, c.placementLabel])).toEqual([
       [BOOK, 'Rack 37-B'],
       [SPLIT, '12-C ×1 · 5-A ×2'],
       [A, null],
+      [ON_SITE, 'DC4 ×3'],
     ]);
   });
 

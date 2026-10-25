@@ -19,7 +19,7 @@ vi.mock('@/server/services/cycle-counts', () => ({ CycleCountsService: vi.fn() }
 vi.mock('@/server/services/product-groups', () => ({ ProductGroupsService: vi.fn() }));
 vi.mock('@/server/services/warehouses', () => ({ WarehousesService: vi.fn() }));
 vi.mock('@/server/services/rack-holdings', () => ({
-  fetchRackHoldingsByItem: vi.fn(async () => new Map()),
+  fetchPlacementHoldingsByItem: vi.fn(async () => ({ rack: new Map(), other: new Map() })),
 }));
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
 vi.mock('@react-pdf/renderer', async (importOriginal) => {

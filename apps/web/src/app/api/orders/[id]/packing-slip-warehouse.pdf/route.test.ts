@@ -34,7 +34,9 @@ vi.mock('@/server/services/item-images', () => ({
     primaryImagesForServerDecoding = async () => new Map();
   },
 }));
-vi.mock('@/server/services/rack-holdings', () => ({ fetchRackHoldingsByItem: vi.fn(async () => new Map()) }));
+vi.mock('@/server/services/rack-holdings', () => ({
+  fetchPlacementHoldingsByItem: vi.fn(async () => ({ rack: new Map(), other: new Map() })),
+}));
 vi.mock('qrcode', () => ({ default: { toDataURL: async (url: string) => `qr:${url}` } }));
 const get = vi.fn();
 vi.mock('@/server/services/order-requests', () => ({

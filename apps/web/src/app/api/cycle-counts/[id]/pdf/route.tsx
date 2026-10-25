@@ -13,7 +13,7 @@ import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/ser
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { ProductGroupsService } from '@/server/services/product-groups';
-import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export const runtime = 'nodejs';
@@ -119,11 +119,10 @@ export async function GET(
     // passes no scope, so a holding is reported wherever it physically
     // sits. Split items (>1 holding) get the full breakdown instead of a
     // single (possibly stale/misleading) label — see countSheetLocationLabel.
-    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
-      ctx,
-      itemIds,
-      header.warehouse_id,
-    );
+    // The same read carries every other placed holding, so an item whose
+    // stock all sits on a Site prints the Site, not the rack its label still
+    // names (B37).
+    const placementHoldings = await fetchPlacementHoldingsByItem(ctx, itemIds, header.warehouse_id);
 
     for (const row of lookupRows) {
       const locField = row.locations;
@@ -133,7 +132,8 @@ export async function GET(
         custom_fields: row.custom_fields,
         bin_location: row.bin_location,
         primaryLocationName: loc?.name ?? null,
-        rackHoldings: rackHoldingsByItemId.get(row.id),
+        rackHoldings: placementHoldings.rack.get(row.id),
+        otherHoldings: placementHoldings.other.get(row.id),
       });
       binByItem.set(row.id, label);
     }

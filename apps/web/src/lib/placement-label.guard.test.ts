@@ -597,6 +597,91 @@ describe('every formatter names the SAME physical location', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ARM 1d — STOCK THAT SITS ONLY ON A SITE (B37)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A Site is a NULL-kind location with a site type; a move onto one rewrites no
+// rack label, and the rack and crate rules never see its row. So every
+// formatter printed the rack the label still names for a book whose stock had
+// all gone to the Site. The fix is rule 0c in core, fed by each item's OTHER
+// placed holdings (`otherHoldings`, read in the same query as the rack ones).
+// Not in FIXTURES above: the storefront is holdings-blind and cannot agree on
+// this one (its own pin below says so), which would break ARM 1c's agreement.
+
+describe('stock that sits only on a Site (B37)', () => {
+  const book = {
+    itemType: 'book' as const,
+    customFields: {
+      book_rack_number: '39',
+      book_rack_row: 'C',
+      book_crate_color: 'red',
+      book_crate_number: '5',
+    },
+    binLocation: '39-C',
+  };
+  const onSite = [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }];
+  const asBookLine = () =>
+    asLine({ what: 'site', ...book, holdings: [], walkTo: ['DC4'] } satisfies Fixture);
+
+  const rendered = () => ({
+    countSheet: countSheetLocationLabel({
+      item_type: book.itemType,
+      custom_fields: book.customFields,
+      bin_location: book.binLocation,
+      primaryLocationName: 'DC4',
+      rackHoldings: [],
+      otherHoldings: onSite,
+    }),
+    slip: sharedLocationFor(asBookLine(), new Map(), new Map([['i1', onSite]])),
+    core: formatPlacementLabel(resolvePlacement({ ...book, holdings: [], otherHoldings: onSite })),
+  });
+
+  it('the count sheet, both order slips and the core render name the Site (literals)', () => {
+    const r = rendered();
+    expect(r.countSheet).toBe('DC4 ×7');
+    expect(r.slip).toEqual({ primary: 'DC4 ×7', secondary: null });
+    expect(r.core).toBe('DC4 ×7');
+  });
+
+  it('NONE of them prints the rack, or the crate, the label still names', () => {
+    const r = rendered();
+    for (const label of [r.countSheet, r.slip.primary, r.slip.secondary, r.core]) {
+      expect(label ?? '').not.toContain('39-C');
+      expect(label ?? '').not.toContain('Red 5');
+    }
+  });
+
+  it('Site stock BESIDE a rack holding changes nothing: the rack rules stand', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '2', rack_row: 'C' },
+        bin_location: '2-C',
+        primaryLocationName: 'DC4',
+        rackHoldings: [{ name: '2-C', quantity: 12, kind: 'rack' }],
+        otherHoldings: onSite,
+      }),
+    ).toBe('Rack 2-C');
+  });
+
+  it('KNOWN LIMIT: the orders storefront carries no holdings, so it still prints the bin', () => {
+    // Recorded, like the storefront's other known limit above. If this ever
+    // flips to the Site, the storefront gained holdings and this pin, and
+    // the bin-first exception, should be retired together.
+    expect(
+      ordersCatalogRackLabelFor({
+        item_type: 'book',
+        bin_location: book.binLocation,
+        rack_number: null,
+        rack_row: null,
+        book_rack_number: '39',
+        book_rack_row: 'C',
+      }),
+    ).toBe('39-C');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ARM 2 — THE INVENTORY. A fourteenth copy cannot land unnoticed.
 // ═══════════════════════════════════════════════════════════════════════════
 //

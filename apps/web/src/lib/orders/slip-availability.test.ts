@@ -48,7 +48,7 @@ vi.mock('@/lib/pdf/image-prefetch', () => ({ prefetchImagesAsDataUris: vi.fn(asy
 vi.mock('@/lib/pdf/packing-slip-customer', () => ({ renderCustomerPackingSlipPdf: vi.fn() }));
 vi.mock('@/lib/pdf/pick-slip', () => ({ renderPickSlipPdf: vi.fn() }));
 vi.mock('@/server/services/item-images', () => ({ ItemImagesService: class {} }));
-vi.mock('@/server/services/rack-holdings', () => ({ fetchRackHoldingsByItem: vi.fn() }));
+vi.mock('@/server/services/rack-holdings', () => ({ fetchPlacementHoldingsByItem: vi.fn() }));
 const get = vi.fn();
 vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: class {

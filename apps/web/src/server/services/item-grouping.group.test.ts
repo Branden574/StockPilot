@@ -36,7 +36,7 @@ vi.mock('./context', () => ({
 }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: h.invalidate }));
 vi.mock('next/cache', () => ({ revalidateTag: h.revalidateTag }));
-vi.mock('./rack-holdings', () => ({ fetchRackHoldingsByItem: h.holdings }));
+vi.mock('./rack-holdings', () => ({ fetchPlacementHoldingsByItem: h.holdings }));
 vi.mock('./item-images', () => ({
   ItemImagesService: class {
     primaryImagesWithThumbsForItems = h.images;
@@ -155,7 +155,7 @@ beforeEach(() => {
   h.invalidate.mockReset();
   h.revalidateTag.mockReset();
   h.holdings.mockReset();
-  h.holdings.mockResolvedValue(new Map());
+  h.holdings.mockResolvedValue({ rack: new Map(), other: new Map() });
   h.images.mockReset();
   h.images.mockResolvedValue(new Map());
 });
@@ -196,8 +196,8 @@ describe('Group selected: the gate runs before anything else', () => {
 
 describe('Group selected: the review', () => {
   it('asks item_grouping_preview as the caller for the distinct ids and the target, and names each record', async () => {
-    h.holdings.mockResolvedValue(
-      new Map([
+    h.holdings.mockResolvedValue({
+      rack: new Map([
         [
           A,
           [
@@ -206,7 +206,8 @@ describe('Group selected: the review', () => {
           ],
         ],
       ]),
-    );
+      other: new Map(),
+    });
     h.images.mockResolvedValue(
       new Map([[A, { url: 'https://img/a', thumbUrl: 'https://img/a-thumb', lqip: null }]]),
     );

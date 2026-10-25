@@ -30,7 +30,7 @@ import {
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { embedInBackground } from './lib/embed-in-background';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { fetchRackHoldingsByItem } from './rack-holdings';
+import { fetchPlacementHoldingsByItem } from './rack-holdings';
 
 /**
  * Grouping writes, shared by the web actions (server/actions/item-grouping.ts)
@@ -239,8 +239,9 @@ export class ItemGroupingService {
     // The rack and crate holdings, under the caller's RLS (batched, paged): the
     // review line names where each record IS, by the same rule the lists use,
     // so a book whose bin_location is blank still shows its rack (fix round 1,
-    // P2). A failed batch degrades to the stored keys, never to an error.
-    const holdings = await fetchRackHoldingsByItem(
+    // P2), and a record whose stock all sits on a Site names the Site (B37).
+    // A failed batch degrades to the stored keys, never to an error.
+    const holdings = await fetchPlacementHoldingsByItem(
       this.ctx,
       list.map((r) => r.id as string),
     );
@@ -254,7 +255,8 @@ export class ItemGroupingService {
           itemType,
           customFields: (r.custom_fields as Record<string, unknown> | null) ?? null,
           binLocation,
-          holdings: holdings.get(r.id as string) ?? [],
+          holdings: holdings.rack.get(r.id as string) ?? [],
+          otherHoldings: holdings.other.get(r.id as string) ?? [],
         }),
       );
       return {
@@ -454,7 +456,7 @@ export class ItemGroupingService {
     // Each read is decoration: a failure degrades to "no name / no picture",
     // never to an error, and none is cached (pattern #13).
     const [holdings, images, charters, warehouses] = await Promise.all([
-      fetchRackHoldingsByItem(this.ctx, recordIds),
+      fetchPlacementHoldingsByItem(this.ctx, recordIds),
       // Loaded on demand: the image service pulls in the data cache helpers,
       // which the split path (and its tests) never need.
       import('./item-images')
@@ -476,7 +478,8 @@ export class ItemGroupingService {
             itemType: r.itemType,
             customFields: r.customFields,
             binLocation: r.binLocation,
-            holdings: holdings.get(r.id) ?? [],
+            holdings: holdings.rack.get(r.id) ?? [],
+            otherHoldings: holdings.other.get(r.id) ?? [],
           }),
         ),
         imageUrl: img?.thumbUrl ?? img?.url ?? null,

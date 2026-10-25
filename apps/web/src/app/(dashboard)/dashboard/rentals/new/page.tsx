@@ -19,7 +19,7 @@ import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fet
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
-import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 import { can, resolvePlacement } from '@stockpilot/core';
 
 /**
@@ -231,13 +231,15 @@ export default async function NewRentalPage({
 
   // The three reads below need only the item ids, so they run together
   // rather than one after another (each is its own trip to the database).
-  const [rackHoldingsByItemId, reservedByItem, categoryNames] = await Promise.all([
+  const [placementHoldings, reservedByItem, categoryNames] = await Promise.all([
     // Rack/crate HOLDINGS for the catalog, scoped to the warehouse the page is
     // showing. WHERE THE STOCK IS, as against what each row's custom_fields
     // remember — without this the card label preferred the item's rack pair
     // over everything, and a put-away into a position-less crate (mig 0335)
-    // leaves that pair naming the rack the stock has left.
-    fetchRackHoldingsByItem(
+    // leaves that pair naming the rack the stock has left. The same read
+    // carries every other placed holding, so an item whose stock all sits on
+    // a Site names the Site (B37).
+    fetchPlacementHoldingsByItem(
       { supabase, organizationId: ctx.organizationId },
       rentalItemIds,
       warehouseId,
@@ -296,7 +298,8 @@ export default async function NewRentalPage({
       itemType: it.item_type,
       customFields: it.custom_fields,
       binLocation: it.bin_location,
-      holdings: rackHoldingsByItemId.get(it.id),
+      holdings: placementHoldings.rack.get(it.id),
+      otherHoldings: placementHoldings.other.get(it.id),
     });
     const rackLabel =
       res.source === 'holdings'

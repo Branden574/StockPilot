@@ -1,4 +1,4 @@
-import { formatOrderNumber, type RackHoldingLike } from '@stockpilot/core';
+import { formatOrderNumber, type PlacedHoldingLike, type RackHoldingLike } from '@stockpilot/core';
 import {
   Image as PdfImage,
   Path,
@@ -618,6 +618,10 @@ export interface LinesTableOptions {
    *  the order's warehouse. Drives the LOCATION column's split-item
    *  breakdown in `locationFor`; omitted/empty falls back to the label. */
   rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
+  /** Every OTHER placed holding (Sites, areas), from the SAME read as
+   *  `rackHoldingsByItemId` (fetchPlacementHoldingsByItem): an item whose
+   *  stock all sits on a Site prints the Site (B37). */
+  otherHoldingsByItemId?: Map<string, PlacedHoldingLike[]>;
 }
 
 /**
@@ -643,6 +647,7 @@ export function LinesTable({
     showLocation = false,
     imageUrlByItemId = new Map(),
     rackHoldingsByItemId,
+    otherHoldingsByItemId,
   } = options;
   let totalQty = 0;
   let totalBO = 0;
@@ -670,7 +675,7 @@ export function LinesTable({
         const requested = Number(l.quantity_requested) || 0;
         const bo = Math.max(0, requested - picked);
         const imgUrl = l.item ? imageUrlByItemId.get(l.item.id) : undefined;
-        const loc = locationFor(l, rackHoldingsByItemId);
+        const loc = locationFor(l, rackHoldingsByItemId, otherHoldingsByItemId);
         const cf = (l.item?.custom_fields ?? {}) as Record<string, unknown>;
         const author = typeof cf.book_author === 'string' ? cf.book_author : null;
         return (

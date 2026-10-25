@@ -232,4 +232,35 @@ describe('countSheetLocationLabel', () => {
       }),
     ).toBe('Blue Shelf ×12');
   });
+
+  it('B37: a book whose stock all sits on the Site prints the Site, not the rack its keys still name', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'book',
+        custom_fields: {
+          book_rack_number: '39',
+          book_rack_row: 'C',
+          book_crate_color: 'red',
+          book_crate_number: '5',
+        },
+        bin_location: '39-C',
+        primaryLocationName: 'DC4',
+        rackHoldings: [],
+        otherHoldings: [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }],
+      }),
+    ).toBe('DC4 ×7');
+  });
+
+  it('B37: Site stock beside a rack holding keeps the rack label, as before', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '38', rack_row: 'A' },
+        bin_location: '38-A',
+        primaryLocationName: 'DC4',
+        rackHoldings: [{ name: '38-A', quantity: 8, kind: 'rack' }],
+        otherHoldings: [{ name: 'DC4', quantity: 4, kind: null, type: 'warehouse' }],
+      }),
+    ).toBe('Rack 38-A');
+  });
 });
