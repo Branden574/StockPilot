@@ -30,6 +30,9 @@ function lineage(over: Partial<PoImportLineage> = {}): PoImportLineage {
   return { predecessor: null, successors: [], ...over };
 }
 
+/** The organization's zone, as the page resolves it. */
+const TZ = 'America/Los_Angeles';
+
 describe('PoImportLineageNotice', () => {
   it('never claims the linked successor is the live import', () => {
     // PoImportsService.resolveLineage walks exactly ONE hop
@@ -37,7 +40,7 @@ describe('PoImportLineageNotice', () => {
     // 4db2d72c -> 90f9fc56 -> 568a0712 the successor rendered here is itself
     // superseded, so "that newer import is the live one" is false and sends
     // the user to a page that says it was replaced too.
-    render(<PoImportLineageNotice lineage={lineage({ successors: [ref()] })} />);
+    render(<PoImportLineageNotice lineage={lineage({ successors: [ref()] })} timeZone={TZ} />);
 
     expect(screen.getByText(/replaced by a later import/i)).toBeInTheDocument();
     expect(screen.queryByText(/is the live one/i)).not.toBeInTheDocument();
@@ -45,7 +48,7 @@ describe('PoImportLineageNotice', () => {
   });
 
   it('links to the resolved successor so the chain can be walked a hop at a time', () => {
-    render(<PoImportLineageNotice lineage={lineage({ successors: [ref()] })} />);
+    render(<PoImportLineageNotice lineage={lineage({ successors: [ref()] })} timeZone={TZ} />);
     expect(screen.getByRole('link', { name: /open the newer import/i })).toHaveAttribute(
       'href',
       '/dashboard/purchase-orders/imports/90f9fc56-0000-4000-8000-000000000000',
@@ -53,7 +56,7 @@ describe('PoImportLineageNotice', () => {
   });
 
   it('renders nothing when the import is neither superseded nor a redo', () => {
-    const { container } = render(<PoImportLineageNotice lineage={lineage()} />);
+    const { container } = render(<PoImportLineageNotice lineage={lineage()} timeZone={TZ} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
@@ -66,6 +69,7 @@ describe('lineage notice prefers the human name (mig 0333)', () => {
           predecessor: ref({ displayName: 'August DC4 Book Order' }),
           successors: [],
         }}
+        timeZone={TZ}
       />,
     );
     expect(screen.getByText(/August DC4 Book Order/)).toBeInTheDocument();
@@ -77,8 +81,36 @@ describe('lineage notice prefers the human name (mig 0333)', () => {
     render(
       <PoImportLineageNotice
         lineage={{ predecessor: ref({ displayName: null }), successors: [] }}
+        timeZone={TZ}
       />,
     );
     expect(screen.getByText(/PO-CVW-002201\.pdf/)).toBeInTheDocument();
+  });
+});
+
+describe('lineage notice dates the later import as a calendar day', () => {
+  // People track imports against a calendar (owner request 2026-09-24, the
+  // imports list's Uploaded column). The notice said "imported again 2 weeks
+  // ago", which drifts as the page sits open and names no day at all.
+  // 2026-09-10 02:30 UTC is the evening of Sep 9 in California.
+  const later = ref({ createdAt: '2026-09-10T02:30:00Z' });
+
+  it("names the day in the organization's zone, with the time on hover, never a relative time", () => {
+    render(<PoImportLineageNotice lineage={lineage({ successors: [later] })} timeZone={TZ} />);
+    const when = screen.getByText('Sep 9, 2026');
+    expect(when.tagName).toBe('TIME');
+    expect(when).toHaveAttribute('dateTime', '2026-09-10T02:30:00Z');
+    expect(when).toHaveAttribute('title', 'Sep 9, 2026, 7:30 PM');
+    expect(screen.getByText(/this file was imported again on/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/\bago\b|\bin \d+ (day|week|month|year)s?\b|yesterday|tomorrow/i),
+    ).toBeNull();
+  });
+
+  it("follows the organization's zone, not the server's or the viewer's", () => {
+    render(
+      <PoImportLineageNotice lineage={lineage({ successors: [later] })} timeZone="Asia/Tokyo" />,
+    );
+    expect(screen.getByText('Sep 10, 2026')).toHaveAttribute('title', 'Sep 10, 2026, 11:30 AM');
   });
 });
