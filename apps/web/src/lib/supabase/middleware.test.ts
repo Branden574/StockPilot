@@ -316,6 +316,15 @@ describe('updateSession — a Server Action sent while signed out', () => {
     expect(redirect?.type).toBe('push');
   });
 
+  it('keeps a ; in the page query from cutting that redirect short (the client splits on ;)', async () => {
+    mockSignedOut();
+
+    const res = await updateSession(actionReq('/dashboard/items?q=a;b'));
+
+    expect(res.headers.get('x-action-redirect')?.split(';')).toHaveLength(2);
+    expect(actionRedirect(res)?.url.searchParams.get('redirect')).toBe('/dashboard/items?q=a;b');
+  });
+
   it('carries the cookie deletions of a failed refresh on that answer', async () => {
     getClaims.mockImplementation(async () => {
       cookieAdapter?.setAll([{ name: 'sb-test-auth-token', value: '', options: {} }]);
