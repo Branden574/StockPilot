@@ -68,6 +68,16 @@ const PAGE_URL = new RegExp(
   'g',
 );
 
+/** A query part as the page reads it; a computed part, or one that is not valid percent-encoding, stays as written. */
+function decoded(part: string): string {
+  if (part.includes(HOLE)) return part.replaceAll(HOLE, '<computed>');
+  try {
+    return decodeURIComponent(part.replaceAll('+', ' '));
+  } catch {
+    return part;
+  }
+}
+
 function literalText(node: ts.Node): string | null {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
   if (ts.isTemplateExpression(node)) {
@@ -109,13 +119,12 @@ function scan(file: string, rel: string): Finding[] {
         for (const pair of m[2]!.split('&')) {
           if (!pair) continue;
           const eq = pair.indexOf('=');
-          const key = decodeURIComponent(eq < 0 ? pair : pair.slice(0, eq));
           const raw = eq < 0 ? '' : pair.slice(eq + 1);
           findings.push({
             file: rel,
             page,
-            key,
-            value: raw.includes(HOLE) ? null : decodeURIComponent(raw),
+            key: decoded(eq < 0 ? pair : pair.slice(0, eq)),
+            value: raw.includes(HOLE) ? null : decoded(raw),
           });
         }
       }

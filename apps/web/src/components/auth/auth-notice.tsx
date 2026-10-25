@@ -17,17 +17,13 @@ const TONE = {
  * No directive: the /reset page renders it on the server and the sign-in form
  * in the browser.
  */
-export function AuthNotice({ notice, className }: { notice: AuthNoticeCopy; className?: string }) {
+export function AuthNotice({ notice }: { notice: AuthNoticeCopy }) {
   return (
     <p
       data-slot="auth-notice"
       data-tone={notice.tone}
       role={notice.tone === 'danger' ? 'alert' : 'status'}
-      className={cn(
-        'rounded-md px-3 py-2 text-[13px] leading-[19.5px]',
-        TONE[notice.tone],
-        className,
-      )}
+      className={cn('rounded-md px-3 py-2 text-[13px] leading-[19.5px]', TONE[notice.tone])}
     >
       {notice.text}
     </p>
