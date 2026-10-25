@@ -13,7 +13,7 @@ import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock'
  * Before this fix the notice went out regardless.
  */
 
-const sendEmail = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const sendEmail = vi.hoisted(() => vi.fn(async (_message: { to: string }) => ({ ok: true })));
 vi.mock('@/lib/email/resend', () => ({ sendEmail }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 const adminHandle = vi.hoisted(() => ({ client: null as unknown }));
