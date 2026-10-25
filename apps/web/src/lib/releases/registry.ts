@@ -28,6 +28,384 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'unsubscribe-rack-question-fixes-2026-10',
+    revision: 1,
+    // Four changes merged on 2026-10-25, all live in production web build
+    // 8008cab0e0c0 (e84d123d9: /api/version answered it from 15:41:34Z, built
+    // 15:39:59Z):
+    // - S14 #388, 75809d577 (14:28:30Z): no page on another origin can sign a
+    //   browser out or spend its export budget, and the confirmation page names
+    //   the account a browser is already signed in to;
+    // - B15 #390, d42b7f5b2 (14:47:38Z): members unsubscribe from the weekly
+    //   digest and schedule reminder emails without signing in;
+    // - B16 #389, 0dc89dbcd (15:03:50Z), its web half only: adding an item asks
+    //   before it creates a rack. The phone half (New item's words for a member
+    //   who cannot create racks, and Move stock's note when the racks and crates
+    //   cannot load) ships with the next phone update and is told then; phones
+    //   already asked before a new rack (#249, fixes-and-improvements-2026-09-25);
+    // - B9 #391, e84d123d9 (15:39:38Z): Archive anyway, number formats, one-unit
+    //   order emails, the settings error state and two hover times in the
+    //   organization's zone.
+    // No migration, and nothing for phones to wait for: every change is the
+    // web's or the emails'. The summary says "On the web" before the web-only
+    // changes, because a phone shows only the title and the summary, and the one
+    // linked page (notification settings) has no phone twin, so a phone shows
+    // no button (whats-new.tsx showCta, web-path-rewrite.ts).
+    // Walks and checks after the deploys, 2026-10-25:
+    // - S14, on production after #388's deploy (14:48Z to 14:51Z, Chromium,
+    //   signed in to Demo Co): a cross-site click on the sign-out route while
+    //   signed in landed on the dashboard, still signed in; the user menu's Sign
+    //   out still signed out; an export asked for with another site's Fetch
+    //   Metadata got 403 with the "Start this download from StockPilot" words,
+    //   while the Reorder forecast CSV downloaded from its own page; three phone
+    //   (Bearer) calls passed; a confirmation link opened while signed in named
+    //   the signed-in account in the notice's words. The logs showed one refusal
+    //   per probe and no 5xx. Not walked: a browser tab opening an export link
+    //   from webmail (the probe sent a browser's cross-site headers), the PDFs,
+    //   slips and exports that open in a new tab or by fetch (all same-origin
+    //   from StockPilot's pages), Safari and Firefox (both send Sec-Fetch-Site
+    //   over https in the versions the app supports, cross-site-request.ts:35-40),
+    //   and a reset or email change completed since the deploy
+    //   (auth/confirm/route.test.ts).
+    // - B15: not walkable. A member's real link exists only in a sent email (the
+    //   digest preview or the two scheduled jobs), and the walk sent none, so no
+    //   link was opened or pressed in production. After the deploy the signing
+    //   value's name was present for production, so the emails carry the signed
+    //   link, and a cookie-less one-click POST to /unsubscribe with an unsigned
+    //   link got the app's own "This link isn't valid" page (400), so a mail
+    //   provider's POST reaches the app. The page, the switches, the 90 days and
+    //   the footer words rest on the code checks in the entry and on
+    //   unsubscribe/route.members.test.ts, route.settings-parity.test.tsx and
+    //   lib/email/member-unsubscribe.test.ts.
+    // - B16 and B9, Demo Co on production, 15:57Z to 16:19Z, headless Chrome as
+    //   the demo account, behind a guard that let through only requests the
+    //   server refuses before any write, each read back: New item with 3 units
+    //   on a missing rack asked "Create new rack 91-ZZ?", naming the warehouse
+    //   and the 3 units, and Go back saved nothing and kept the form; a near miss
+    //   of 31-B asked about 31-A and offered "Use 31-B instead"; Duplicate onto a
+    //   missing rack asked the same question; archiving a rack that holds 17
+    //   units showed the refusal inside the window with Archive anyway (Cancel
+    //   pressed); the Items and Movements pagers printed en-US numbers; in a
+    //   German browser the Movement volume tooltip, a PO's Receipts, the receive
+    //   window and Settings, AI printed en-US numbers, with no hydration error.
+    //   Nothing was created, changed or archived. Not walked, because they write
+    //   or Demo Co has no data for them: Create rack and save, a suggestion
+    //   pressed, Save anyway for a member who cannot create racks, a size run,
+    //   Add more sizes (no sized item on a missing rack), New book, Duplicate's
+    //   warning, Archive anyway pressed, a list of 1,000 rows or more, a disabled
+    //   member, a procedure comment, the order emails and a failing settings
+    //   page. Each rests on the code checks in its entry and the tests named
+    //   there.
+    // Left out on purpose: S14's refusal of API writes another page sends (no
+    // change for StockPilot's pages or the phone), the fixed landing for each
+    // confirmation type, the sign and release-state refusals and the new log
+    // lines; B15's Gmail sentence (no walk saw Gmail's own button or the
+    // DKIM-signed headers), Yahoo, the plain-text line, the rate limits and the
+    // audit row; B16's phone half, the empty product group a refused sports item
+    // no longer leaves, and two failure-path messages; B9's pager on a public
+    // request link's page (public_links:manage only), the location actions'
+    // failure message, and what only platform staff see (the console's dates,
+    // Last active, the scheduled-job audit mark).
+    // Who is told: every member (five entries have no audience: the two S14
+    // entries, B15's, the browser-language counts and the settings error); each
+    // other entry names the permission, and the module where there is one, that
+    // its page or action checks, quoted in its comment.
+    status: 'published',
+    title:
+      'Unsubscribe without signing in, a question before a new rack on the web, and other websites cannot sign you out',
+    summary:
+      'The Unsubscribe link in the weekly inventory digest and schedule reminder emails now opens a page that works without signing in. On the web, adding an item asks before its stock goes onto a rack that does not exist yet, a link on another website can no longer sign you out or start an export with your account, archiving a location that still holds stock offers Archive anyway, and page numbers print with commas. Order emails now say 1 unit and 1 line.',
+    publishedAt: '2026-10-25T17:01:00Z',
+    entries: [
+      {
+        // platform: web (the emails and the page they open). From: B15 #390. Checked at
+        // e84d123d9: the footer link, es/families/digest.ts:409, families/schedule.ts:258 and
+        // api/cron/schedule-reminders/route.ts:423, the preview actions/digest.ts:108-112; no
+        // sign-in, proxy.ts:32-44 does not match /unsubscribe; the page names the email,
+        // unsubscribe/route.ts:207 and :222; opening changes nothing, :381-383; pressing turns it
+        // off, :430, :350 and :357-358; the settings page's own switches,
+        // member-email-unsubscribe.ts:96-100 and :117-119 (actions/digest.ts:39,
+        // actions/notification-preferences.ts:96); every workspace, digest.ts:406 and
+        // schedule.ts:145; the push switch untouched, member-email-unsubscribe.ts:27-29 and
+        // schedule-reminders/route.ts:386; 90 days, lib/email/member-unsubscribe.ts:77 and
+        // :214-216; a forwarded email, unsubscribe/route.ts:240. Before: the footer and
+        // List-Unsubscribe pointed at the settings page (d42b7f5b2^ digest.ts:396 and
+        // weekly-digest/route.ts:374), which needs a session (lib/auth/session.ts:336). No
+        // audience: the linked page checks only the session (settings/notifications/page.tsx:15
+        // requireSession, :52 requireOrgContext), as OPEN_TO_EVERY_MEMBER in registry.test.ts
+        // records, and any member may turn the digest on.
+        id: 'unsubscribe-digest-and-reminder-emails',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'Unsubscribe from the weekly digest and schedule reminder emails without signing in',
+        whatChanged:
+          'The Unsubscribe link at the bottom of the weekly inventory digest, the digest preview and schedule reminder emails now opens a StockPilot page that works without signing in. The page says which email it stops, and pressing Unsubscribe there turns that email off. Opening the link changes nothing by itself.',
+        whyItMatters:
+          'The link used to open your notification settings, which need you to sign in, so reading the email while signed out, on a phone for example, led to the sign-in page first.',
+        howItAffectsYou:
+          "Unsubscribing turns off the same switch as Settings, Notifications: Email me a weekly inventory digest, or Schedule reminders under Email notifications. It is an account setting, so the email stops in every workspace you belong to, as the email's footer and the page say. Schedule reminders in the app and on your phone are not changed. A link works for 90 days after its email was sent; an older one opens a page that changes nothing. The link needs no sign-in, so anyone you forward the email to could use it to turn that email off for you.",
+        whatToDo:
+          'No action needed. To get an email again, turn it back on in Settings, Notifications. For an email older than 90 days, use the Unsubscribe link in a newer one.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+      {
+        // platform: web (the phone half ships with the next phone update). From: B16 #389.
+        // Checked at e84d123d9: refused before any write, services/inventory.ts:3268 and
+        // :3278-3281 (stock on a typed rack only), a size run once :4204-4207, Duplicate
+        // :3714-3721 (not books, duplicate-item-dialog.tsx:119); in that warehouse,
+        // services/locations.ts:412-415; the words, core inventory/rack-near-match.ts:301-306;
+        // a suggestion only for a near miss, at most three, :126 and :170-191; Go back,
+        // placement-confirm-dialog.tsx:255-257; Create rack and save, new-rack-question.ts:23
+        // and inventory.ts:8832-8835; who cannot create racks or move stock, core
+        // inventory/new-rack-confirmation.ts:73-74, Save anyway new-rack-question.ts:31, the
+        // warning core inventory/placement-warning.ts:38-41; New book's Bin / shelf,
+        // item-form.tsx:1507 and :2206-2207; Add more sizes uses the item's own rack,
+        // add-sized-variants-button.tsx:123; the edit page and Set rack do not ask,
+        // item-form.tsx:1212 and inventory.ts:8453. Walked: the question, a near miss and Go back
+        // on New item, and the question on Duplicate. Audience: who can add items,
+        // inventory/new/page.tsx:42 and books/new/page.tsx:57 can(ctx, 'items:create'), and
+        // item-detail.tsx:535 for Duplicate.
+        id: 'web-asks-before-new-rack',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'On the web, adding an item asks before it creates a new rack',
+        whatChanged:
+          "On the web, when the stock of an item you add would go onto a rack that does not exist in that warehouse, saving stops and asks “Create new rack 1-B?”, with the number of units that would move onto it. This covers New item (once for a whole size run), New book (the rack named in Bin / shelf), Add more sizes (which uses the item's own rack) and Duplicate (not for books). When a rack in that warehouse has a similar name, the question offers it, such as “Use 17-B instead”, which saves onto that rack and creates no new one.",
+        whyItMatters:
+          "Adding an item on the web never asked about the rack. For anyone who can create racks and move stock, a mistyped rack number became a new rack, and the item's stock was moved onto it. For anyone else, the item was saved with its stock off the rack.",
+        howItAffectsYou:
+          'Go back saves nothing and keeps what you typed. Create rack and save creates the rack and puts the stock on it. If you cannot create racks (the Manage locations permission) or move stock (Transfer stock), the question reads “Rack 1-B does not exist”, says why, and its button is Save anyway: the item is saved, its stock is not put on a rack, and a warning names the rack. A rack that already exists is used with no question, and an item saved with no stock is not asked about. Changing the rack of an item you already have, on its edit page or with Set rack, does not ask.',
+        whatToDo:
+          'No action needed. When the question appears, check the rack it names before you create it.',
+        audience: { anyPermission: ['items:create'] },
+      },
+      {
+        // platform: web (the phone sends a Bearer token and is never judged,
+        // cross-site-request.ts:182 and export-rate-limit.ts:90). From: S14 #388. Checked at
+        // e84d123d9: auth/session-ended/route.ts:48-49 sends a live session that another
+        // origin sent there to the dashboard (before, the GET signed out with no check); every
+        // export and printout route passes its request to exportRateLimited, which refuses
+        // another origin's request with CROSS_SITE_EXPORT_MESSAGE before the hourly budget,
+        // export-rate-limit.ts:20-21, :90-95 and :98 (40 an hour); same-origin and the
+        // person's own act (none) pass, cross-site-request.ts:115-118. Purchase order
+        // attachments are signed storage links, not these routes
+        // (server/services/po-attachments.ts:70), hence an export or printout StockPilot
+        // makes. The refusal is the route's JSON answer, which carries the words, hence
+        // "answers". No audience: anyone signed in could be signed out, and the exports span
+        // many permissions.
+        id: 'other-websites-cannot-sign-you-out-or-download',
+        category: 'fixed',
+        area: 'Web app',
+        title:
+          'Links on other websites can no longer sign you out or start downloads with your account',
+        whatChanged:
+          "On the web, a link or page on another website can no longer sign you out of StockPilot. A link that would have signed you out now opens your dashboard, and you stay signed in. A link to an export or printout StockPilot makes, such as a CSV export, a report, a purchase order PDF or a pick slip, no longer downloads when it is opened from a page on another website, such as webmail or a chat app in your browser. It answers “Start this download from StockPilot. A link on another website can't start it.” instead.",
+        whyItMatters:
+          'Before, any website could sign you out of StockPilot with a link, and a page on another website could start StockPilot exports and printouts with your signed-in account. Each one counted toward the exports you can run in an hour, so another website could use them up and stop your own exports and printouts for up to an hour.',
+        howItAffectsYou:
+          "Signing out, and downloading from StockPilot's own pages, work as they did. If you open a link to one of these files from webmail or a chat app in your browser, you see that message instead of the file. Nothing changes in the mobile app.",
+        whatToDo:
+          'No action needed. If a download link says to start the download from StockPilot, open the page in StockPilot and download it from there.',
+      },
+      {
+        // platform: the emails. From: B9 #391. Checked at e84d123d9: lib/email/es/count.ts:11
+        // (the singular only for exactly one); es/registry.ts:405 (Reserved ... across ...) and
+        // :511 (1 line is being picked and packed); lib/email/order-requests.ts:695 (The
+        // reserved unit went back); es/families/fulfillment.ts:303 and :307 (The remaining unit
+        // is, was or were delivered). Sent to the order's requester
+        // (services/order-requests.ts:5151 resolveRecipient). Not walked: an email in Demo Co
+        // needs an order placed; the email tests pin the words. Audience as web-orders-fixes:
+        // orders:request or orders:approve, with the Orders module.
+        id: 'order-emails-one-unit-one-line',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order emails say 1 unit and 1 line',
+        whatChanged:
+          'Order emails now say 1 unit and 1 line where they said 1 units and 1 lines, for example Reserved 1 unit across 1 line, and the verb follows the count, as in 1 line is being picked and packed. A sentence about a single unit now reads The reserved unit went back to stock, or The remaining unit is backordered.',
+        whyItMatters:
+          'An order of one unit or one line read 1 units or 1 lines, and a single backordered unit read The remaining 1 units are backordered.',
+        howItAffectsYou:
+          'Only the words that go with a count of exactly one changed. Every other count reads as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: web (no phone screen archives a location; the only caller is
+        // locations-manager.tsx:172). From: B9 #391. Checked at e84d123d9: the refusal's
+        // details now reach the window, server/actions/locations.ts:31 (before, :18 dropped them
+        // from the guard's first day, 44f9e5a65, so Archive anyway never appeared); the words,
+        // services/locations.ts:704-706 and core inventory/stock-writeoff.ts:169 and :233-234;
+        // the window, locations-manager.tsx:179, :373 and :375, other refusals :182-183, a
+        // restore :199 and :392, read out by ui/destructive-confirm.tsx:199 (role alert);
+        // Archive anyway only sets deleted_at, services/locations.ts:554. Walked: the refusal
+        // and Archive anyway on a rack holding stock (Cancel pressed). Audience: Archive and
+        // Restore show only with locations:manage, locations/page.tsx:41 can(ctx,
+        // 'locations:manage') and locations-manager.tsx:306; no module, locations is core.
+        id: 'location-archive-anyway',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Archive anyway now appears for a location that still holds stock',
+        whatChanged:
+          'On the Locations page, when you archive a location that still holds stock, the window now says how many units are there and names up to three of the items, and its button becomes Archive anyway. If an archive or a restore is refused for any other reason, the reason also shows inside the window, where a screen reader reads it out.',
+        whyItMatters:
+          'Before, the stock message showed only as a passing notice and Archive anyway never appeared, so a location that still held stock could not be archived on the web.',
+        howItAffectsYou:
+          'Archive anyway does not move the stock. As the window says, it stays counted in on hand, attached to the archived location, which is hidden from pick lists and item forms. To avoid that, move the stock or write it off before you archive. You can restore an archived location from the Archived view.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: ui/pagination.tsx:94-98 and :122
+        // (the range, the total and Page N of M through formatNumber), inventory-table.tsx:3348,
+        // :3385 and :3239; formatNumber is en-US, lib/utils.ts:12-13. Pages: Items, Books
+        // (books-inventory-table.tsx:20), Rentals items (rentals/items/page.tsx:249), Movements
+        // (movements/page.tsx:287 and :352, 50 to a page at :41), PO imports
+        // (purchase-orders/imports/page.tsx:365) and a location's page
+        // (location-verification.tsx:192-196). Maintenance's pager prints Page N only
+        // (maintenance/page.tsx:335-340), so it is not named. Walked: Items and Movements, in
+        // en-US form; no Demo Co list reaches 1,000 rows. Audience: items:read, in every role's
+        // defaults, which these lists need.
+        id: 'pager-numbers-with-commas',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Page numbers under lists print with commas',
+        whatChanged:
+          "On Items, Books, Rentals items, Movements, PO imports and a location's page, the row range, total and page numbers under the list now print with commas, for example Showing 1–50 of 12,345.",
+        whyItMatters:
+          'These numbers printed without commas, such as 12345, while the item totals on Items and Books already had them.',
+        howItAffectsYou: 'Only the way these numbers are printed changes. Paging works as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web (the page an emailed link opens). From: S14 #388. Checked at e84d123d9:
+        // auth/confirm/route.ts:165-175 (the signed-in account), :178-183 (the notice's words)
+        // and :214 (one template for every link type); the links members get open this page,
+        // lib/auth/password-reset-email.ts:48 (recovery) and server/services/email-change.ts:147
+        // (email_change); pressing verifies the link and sets its session, :268. Team invites
+        // open their own invite page, which #388 did not change, and members get no emailed
+        // sign-in link, so neither is named. Walked: the notice on a sign-in link's page opened
+        // signed in, in production. No audience: every member can reset a password or change
+        // their email.
+        id: 'reset-and-email-change-pages-name-your-account',
+        category: 'improved',
+        area: 'Account',
+        title: 'Password reset and email change pages name the account you are signed in to',
+        whatChanged:
+          "When you open a password reset or email change link from StockPilot in a browser that is already signed in, the page now names the email address that browser is signed in as. It adds: “If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.”",
+        whyItMatters:
+          "Before, pressing the button signed the browser in to the account the link belongs to, in place of any account it was already signed in to, without saying so. On a shared computer, or with a link you did not ask for, you could end up working in someone else's account without noticing.",
+        howItAffectsYou:
+          'When you open your own link while signed in, for example to confirm an email change, the notice names your own address. That is expected: press the button to continue as before. In a browser that is not signed in to StockPilot, the page looks as it did.',
+        whatToDo:
+          'No action needed. If the page names an account you did not expect, or you did not ask for the link, close the page without pressing the button.',
+      },
+      {
+        // platform: web. From: B16 #389. Checked at e84d123d9: duplicate-item-dialog.tsx:129-136
+        // (a warning when placementFailed, otherwise the success notice) and :137-139 (the
+        // copy's page opens); server/actions/duplicate-item.ts:27 and :35;
+        // services/inventory.ts:3777-3800 and :3812; the words, core
+        // inventory/placement-warning.ts:38-41. Before: an unconditional success notice. Not
+        // walked: it needs Save anyway by a member who cannot create racks. Audience:
+        // item-detail.tsx:535 can(ctx, 'items:create') shows Duplicate.
+        id: 'duplicate-says-when-stock-not-placed',
+        category: 'fixed',
+        area: 'Inventory',
+        title: "On the web, Duplicate says when the copy's stock did not reach its rack",
+        whatChanged:
+          "On the web, when the stock of a duplicated item could not be put on the rack you entered, Duplicate now shows a warning that names the rack and says the stock is still where it started. Before, it showed only Duplicated and the item's name.",
+        whyItMatters:
+          'The copy was saved with the new rack as its label while its stock could still be where it was first recorded, and nothing said so.',
+        howItAffectsYou:
+          'When the stock reaches the rack, Duplicate says Duplicated as before. Either way the copy is saved and its page opens.',
+        whatToDo:
+          "No action needed. If the warning appears, check where the copy's stock is before you pick it.",
+        audience: { anyPermission: ['items:create'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: po/receipt-history.tsx:223 and
+        // :251; po-receive-dialog.tsx:540 and :595-597 (Lot capture, lot-tracked lines only);
+        // ui/chart.tsx:281, reached only by movement-volume-widget.tsx:66 (the other charts pass
+        // their own formatter, chart.tsx:240); embeddings-backfill-panel.tsx:89-90 under
+        // settings/ai/page.tsx:63; formatNumber is en-US. receipt-history.test.tsx hydrates in
+        // de-DE with no error. Walked in a German browser: en-US numbers and no hydration error
+        // (no count reached 1,000). Other client code still prints in the browser's language,
+        // hence More counts. No audience: the counts sit on pages with different gates.
+        id: 'counts-same-in-every-browser-language',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'More counts print the same in every browser language',
+        whatChanged:
+          "These counts now use the same format, such as 1,500, whatever language your browser is set to: the quantities in a purchase order's Receipts section, the Lot capture count in the receive window, the Movement volume chart's tooltip on the Overview, and the count of items embedded under Semantic search embeddings in Settings, AI.",
+        whyItMatters:
+          "In a browser set to another language, such as German, these counts used that language's format (1.500). The Receipts section and Settings, AI are drawn on the server first, so the difference also made the browser draw that part of the page again.",
+        howItAffectsYou: 'Only the format of these numbers changes.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: settings/error.tsx (new) :59, :70,
+        // :74, :76 and :82, below settings/layout.tsx:35-38, whose settings menu stays; before,
+        // (dashboard)/error.tsx:51 replaced the whole settings area. Not walked: a settings page
+        // cannot be made to fail in production; settings/error.test.tsx covers it. No audience:
+        // every member can open a settings page.
+        id: 'settings-page-error-keeps-menu',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'A settings page that cannot load keeps the settings menu',
+        whatChanged:
+          "If one settings page cannot load, the page's own space now shows its title, “We couldn't load this settings page”, an error id and Try again, and the settings menu stays on screen.",
+        whyItMatters:
+          'Before, the settings menu and the page were both replaced by “Something broke loading this page”, so reaching another settings page meant going back to Settings first.',
+        howItAffectsYou:
+          'The other settings pages stay in the settings menu while one page is failing, and Try again loads the failed page again.',
+        whatToDo: 'Press Try again. If it keeps failing, send the error id to support.',
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: team/page.tsx:43 and :167 (the
+        // organization's zone, resolveOrgTimezone) and team-manager.tsx:443-446
+        // (formatOrgDateTime), pinned by team-manager.disabled-badge.test.tsx:185; the default
+        // zone is UTC, supabase/migrations/0001_init.sql:34; Workspace timezone,
+        // org-timezone-editor.tsx:93. Not walked: Demo Co has no disabled member. Audience: the
+        // page needs members:invite (team/page.tsx:28 can(ctx, 'members:invite')), and only
+        // owners and admins see the badge (team-manager.tsx:304 and :438).
+        id: 'team-disabled-time-org-zone',
+        category: 'fixed',
+        area: 'Team',
+        title: "The Disabled time on the Team page uses your organization's time zone",
+        whatChanged:
+          "On the Team page, pointing at a member's Disabled badge shows when they were disabled in your organization's time zone, for example Disabled Oct 24, 2026, 6:30 PM.",
+        whyItMatters:
+          "It showed the server's time (UTC) without saying so, so an evening disable in the Pacific read as early the next morning.",
+        howItAffectsYou:
+          'The time uses the time zone set in Settings, Organization. An organization that has not set one uses UTC, so its times stay in UTC.',
+        whatToDo:
+          'No action needed. If the time is not your local time, set Workspace timezone in Settings, Organization.',
+        audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: procedures/[id]/page.tsx:32 and
+        // :138 (the organization's zone), comment-thread.tsx:136 (formatOrgDateTime in the hover
+        // title) and :145 (how long ago, unchanged). Not walked: Demo Co has no procedure
+        // comment. Audience as web-procedures-fixes: the Procedures module
+        // (services/procedures.ts:283 assertModuleEnabled) and items:update (the sidebar
+        // entry's requires).
+        id: 'procedure-comment-times-org-zone',
+        category: 'fixed',
+        area: 'Procedures',
+        title: "Comment times in a procedure's Discussion use your organization's time zone",
+        whatChanged:
+          "In a procedure's Discussion, pointing at a comment's time shows its date and time in your organization's time zone, for example Oct 24, 2026, 6:30 PM.",
+        whyItMatters:
+          "It showed the server's time (UTC) without saying so, so an evening comment in the Pacific read as early the next morning.",
+        howItAffectsYou:
+          'The comment still shows how long ago it was posted. The time zone is the one set in Settings, Organization, and an organization that has not set one uses UTC.',
+        whatToDo:
+          'No action needed. If the time is not your local time, an owner or admin can set the time zone in Settings, Organization.',
+        audience: { anyPermission: ['items:update'], modules: ['procedures'] },
+      },
+    ],
+  },
+  {
     id: 'redesign-2026-10',
     revision: 1,
     // The full-app redesign (PR #369, redesign/full-app at 036002d43): every web
