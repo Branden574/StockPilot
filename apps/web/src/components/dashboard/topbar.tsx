@@ -133,7 +133,17 @@ export function Topbar({
   // it shrinks (useTrailFit). On a touch tablet, where every icon button is
   // 44px, the picker had given up its width first and read "Al…" (P68-01).
   // Under 520px there is no trail, and the picker's name truncates when the
-  // bar is too narrow for it, as before (a long name on a phone). Before
+  // bar is too narrow for it, as before (a long name on a phone). Under 358px
+  // (a phone narrower than 390px: 375 and 360 are common) the bar packs
+  // tighter so "All warehouses" stays whole there too, as it did before the
+  // redesign, without shrinking any 44px touch button: its gaps go from 8px
+  // to 4px, the account button drops its extra 4px, and the picker leaves out
+  // its warehouse icon. At 375px the picker had 143px for the 157px its whole
+  // name needs, at 360px 128px. At 320px a name is still cut, as it was. The
+  // gap is the bar's own, and a container query never styles its own
+  // container (it answers to one around it), so the gap follows the window
+  // instead: under 390px. Below 768px the bar is the window's whole width
+  // (the sidebar is an overlay there), so that is the bar's 358px inside. Before
   // (2026-09-28/29): the buttons shrank to 14px and the account avatar was
   // pushed past the right edge, 13px at 390px and entirely at 768px with the
   // sidebar, clipped by the shell's overflow-hidden (no page scroll).
@@ -145,7 +155,7 @@ export function Topbar({
   return (
     <header
       ref={headerRef}
-      className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 sm:gap-3 sm:px-6"
+      className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 max-[390px]:gap-1 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >
       <SidebarToggleButton

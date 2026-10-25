@@ -69,7 +69,14 @@ export function WarehouseFilterPicker({
         aria-label={name}
         title={name}
       >
-        <Warehouse aria-hidden strokeWidth={1.6} className="size-3.5 shrink-0" />
+        {/* Left out on a phone narrower than 390px (a top bar under 358px
+            inside; the bar is the container), where its 22px is what keeps
+            "All warehouses" whole beside the 44px touch buttons. */}
+        <Warehouse
+          aria-hidden
+          strokeWidth={1.6}
+          className="@max-[358px]:hidden size-3.5 shrink-0"
+        />
         {/* min-w-0: in a narrow top bar the name truncates rather than
             pushing the buttons after it past the edge. */}
         <span className="min-w-0 max-w-[160px] truncate">{shown}</span>

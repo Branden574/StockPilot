@@ -197,6 +197,59 @@ describe('the trail gives way before the warehouse picker', () => {
 });
 
 /**
+ * On a phone narrower than 390px (375 and 360 are common) the redesign's 44px
+ * touch buttons left the picker 143px and 128px, short of the 157px "All
+ * warehouses" needs, so it read "All warehous…" or "All wareh…" on every page,
+ * where the bar before the redesign showed it whole. Under a 358px bar (inside
+ * width; the bar is the container) the bar packs tighter: its gaps go from 8px
+ * to 4px, the account button drops its extra 4px and the picker leaves out its
+ * warehouse icon, which gives the picker 155px at 375px and 140px at 360px
+ * against the 135px the name needs without the icon (the lab measured both
+ * engines). No touch button shrinks, and nothing changes from a 358px bar up.
+ * The gaps are the bar's own, and a container query never styles its own
+ * container, so they follow the window (under 390px, the bar's whole width
+ * below 768px): the first version gave the bar `@max-[358px]:gap-1`, which
+ * did nothing, and at 360px the name was still cut by 2 to 3px.
+ * Mutation caught: any of the three left out, a touch button shrunk, or the
+ * gap put back on a container query of the bar's own.
+ */
+describe('a phone narrower than 390px keeps "All warehouses" whole', () => {
+  it('under a 358px bar the gaps, the account button and the picker pack tighter', () => {
+    const bar = renderBar();
+    expect(classesOf(bar)).toEqual(
+      expect.arrayContaining(['@container', 'gap-2', 'max-[390px]:gap-1', 'px-4']),
+    );
+    // The bar is the container its controls query, never one it queries
+    // itself: a container query on its own classes would answer to whatever
+    // container is around the bar, if any, and not to the bar.
+    expect(classesOf(bar).filter((c) => /^@(min|max)-/.test(c))).toEqual([]);
+    const picker = within(bar).getByRole('button', { name: /^Filter by/ });
+    const [icon] = Array.from(picker.querySelectorAll('svg'));
+    expect(classesOf(icon!)).toEqual(
+      expect.arrayContaining(['@max-[358px]:hidden', 'size-3.5', 'shrink-0']),
+    );
+    const account = within(bar).getByRole('button', { name: /^Account menu for/ });
+    expect(classesOf(account)).toEqual(expect.arrayContaining(['ml-1', '@max-[358px]:ml-0']));
+  });
+
+  it('every touch button stays 44px', () => {
+    const bar = renderBar();
+    const touch = [
+      within(bar).getByRole('button', { name: 'Show sidebar' }),
+      within(bar).getByRole('link', { name: /^Notifications/ }),
+      within(bar).getByRole('button', { name: /what.s new/i }),
+      within(bar).getByRole('button', { name: /^Account menu for/ }),
+    ];
+    for (const el of touch) {
+      expect(classesOf(el), el.getAttribute('aria-label') ?? '').toContain(
+        '[@media(pointer:coarse)]:size-11',
+      );
+      expect(classesOf(el).some((c) => c.startsWith('@max-[358px]:size'))).toBe(false);
+    }
+  });
+});
+
+/**
  * The steps themselves, in a bar whose widths are stubbed (happy-dom has no
  * layout): a ResizeObserver the test fires, the bar's inside width, the
  * picker's width and the measuring copy's widths.

@@ -81,7 +81,7 @@ export function UserMenu({
           variant="ghost"
           size="icon"
           aria-label={`Account menu for ${fullName ?? email}`}
-          className="ring-offset-background hover:ring-border focus-visible:ring-ring ml-1 size-8 shrink-0 rounded-full p-0 hover:bg-transparent hover:ring-2 focus-visible:ring-2 [@media(pointer:coarse)]:size-11"
+          className="ring-offset-background hover:ring-border focus-visible:ring-ring @max-[358px]:ml-0 ml-1 size-8 shrink-0 rounded-full p-0 hover:bg-transparent hover:ring-2 focus-visible:ring-2 [@media(pointer:coarse)]:size-11"
         >
           <Avatar className="size-7">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
