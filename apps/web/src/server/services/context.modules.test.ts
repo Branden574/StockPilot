@@ -26,5 +26,7 @@ describe('assertModuleEnabled', () => {
     expect(serviceErrorStatus('conflict')).toBe(409);
     expect(serviceErrorStatus('unauthenticated')).toBe(401);
     expect(serviceErrorStatus('internal_error')).toBe(500);
+    // B25: a service's own rate limit (RateLimitedError).
+    expect(serviceErrorStatus('rate_limited')).toBe(429);
   });
 });

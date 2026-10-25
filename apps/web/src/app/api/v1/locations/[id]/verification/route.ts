@@ -1,10 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { checkRateLimit } from '@/lib/rate-limit';
 import {
   verificationErrorResponse,
-  verificationRateLimitedResponse,
   verificationUnauthenticatedResponse,
 } from '@/lib/verification/error-response';
 import { assertPermission, ServiceError } from '@/server/services/context';
@@ -12,12 +10,6 @@ import { VerificationService } from '@/server/services/verification';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-/** Reads a minute for one user. The phone reads a page when the screen opens,
- *  on each page turn, on pull to refresh and on Try again; it gathers a
- *  recount from the list the server sends, so it never reads every page in a
- *  row from a server that has this limit. */
-const LOCATION_VERIFICATION_PER_MINUTE = 60;
 
 /**
  * GET /api/v1/locations/[id]/verification?page=N — the location page (F1-3):
@@ -33,9 +25,15 @@ const LOCATION_VERIFICATION_PER_MINUTE = 60;
  * has the one error shape and is never cached (verificationErrorResponse; a
  * 401 carries a message too). When the reader's warehouses do not cover the
  * location, `holdingsVisible` is false and no rows are listed (never an empty
- * location). 429 past LOCATION_VERIFICATION_PER_MINUTE reads a minute for one
- * user (Retry-After, the same shape, not cached). Any other failure is a 500
- * whose message is "Couldn't load verification". Read-only.
+ * location). 429 once the reader has read 60 location pages in a minute,
+ * here or on the web page (VerificationService.location spends from one
+ * bucket for both; Retry-After, the same shape, not cached). Any other
+ * failure is a 500 whose message is "Couldn't load verification". Read-only.
+ *
+ * The phone reads a page when the screen opens, on each page turn, on pull to
+ * refresh and on Try again; it gathers a recount from the list the server
+ * sends (recountItemIds), so it never reads every page in a row from a server
+ * that has the limit.
  *
  * `page` is 1-based and defaults to 1; a page past the end answers the last
  * page (the response says which page it is).
@@ -50,17 +48,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // the MFA step-up, is refused before the page is judged.
     assertPermission(ctx, 'items:read');
     const page = pageParam(new URL(req.url).searchParams.get('page'));
-    // Every page, not just the first, reads ALL of the location's holdings
-    // and their summaries (the totals and the recount list cover every row),
-    // so a light per-user limit caps a tight loop. It is spent only by a read
-    // that will happen: the refusals above read nothing. Keyed on the
-    // verified user; fails open like the other signed-in routes.
-    const rl = await checkRateLimit(
-      `location-verification:user:${ctx.userId}`,
-      LOCATION_VERIFICATION_PER_MINUTE,
-      60_000,
-    );
-    if (!rl.allowed) return verificationRateLimitedResponse(rl.resetAt);
+    // The per-person limit is spent inside location(), after its own checks
+    // and before any read, so this route and the web page share one bucket.
+    // Past it, RateLimitedError: verificationErrorResponse answers the 429.
     const result = await new VerificationService(ctx).location(id, { page });
     return NextResponse.json(
       { organizationId: ctx.organizationId, ...result },

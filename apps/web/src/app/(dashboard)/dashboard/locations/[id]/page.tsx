@@ -33,9 +33,13 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
  * it, for a location that does not exist in this organization, or for a
  * malformed link, the page says "Couldn't load verification" and why, in the
  * phone's words (core verificationRefusalCopy: not found and not visible are
- * the same answer, so existence is not leaked). Any other failure is reported
- * and says "Couldn't load verification", never an empty page. A manager who
- * can start counts also gets "Recount items here".
+ * the same answer, so existence is not leaked). Past the per-person limit on
+ * location page reads, which this page and the phone's route spend together
+ * (VerificationService.location), it says "Too many reads in a short time.
+ * Try again in a minute." under the same heading: an answer, not reported.
+ * Any other failure is reported and says "Couldn't load verification", never
+ * an empty page. A manager who can start counts also gets "Recount items
+ * here".
  *
  * `?page=` is 1-based; anything else reads as page 1, and a page past the end
  * shows the last page (the service clamps it).
@@ -73,7 +77,8 @@ export default async function LocationPage({
   } catch (e) {
     if (isNextControlFlowError(e)) throw e;
     // A refusal the service authored is an answer, not a failure: said, not
-    // reported.
+    // reported. That includes its rate limit (RateLimitedError, code
+    // rate_limited), which core words as "Too many reads".
     const refusal =
       e instanceof ServiceError ? verificationRefusalOf(e.code, e.details?.reason) : null;
     if (refusal) return <Refused refusal={refusal} />;

@@ -5,6 +5,7 @@ import {
   locationRowVerificationCopy,
   locationVerificationTotalsCopy,
   parseItemVerificationSummary,
+  VERIFICATION_RATE_LIMITED_COPY,
   type ModuleId,
 } from '@stockpilot/core';
 
@@ -303,7 +304,9 @@ describe('GET /api/v1/locations/[id]/verification', () => {
 
   // B25 (F1-3 review L3): every page reads ALL of the location's holdings and
   // their summaries, so a tight loop was uncapped. A light per-user limit,
-  // after the checks that read nothing, and before any read.
+  // after the checks that read nothing, and before any read. It is spent in
+  // VerificationService.location itself, so the web page shares the bucket
+  // (location-verification-limit.test.tsx).
   it('429 past 60 reads a minute for one user: the one error shape, Retry-After, not cached, nothing read', async () => {
     const stub = ctxWith();
     vi.mocked(checkRateLimit).mockResolvedValueOnce({
@@ -317,10 +320,15 @@ describe('GET /api/v1/locations/[id]/verification', () => {
     const retryAfter = Number(res.headers.get('retry-after'));
     expect(retryAfter).toBeGreaterThanOrEqual(1);
     expect(retryAfter).toBeLessThanOrEqual(30);
-    expect(await res.json()).toMatchObject({
+    const body = await res.json();
+    expect(body).toEqual({
       error: 'rate_limited',
-      message: 'Too many requests. Wait a moment and try again.',
+      message: 'Too many reads in a short time. Try again in a minute.',
+      retryAt: expect.any(Number),
     });
+    // The phone reads the status (verification-api.ts describeVerificationError).
+    expect(body.message).toBe(VERIFICATION_RATE_LIMITED_COPY);
+    expect(reportError).not.toHaveBeenCalled();
     expect(stub.fromCalls).toHaveLength(0);
     expect(stub.rpcCalls).toHaveLength(0);
     // Keyed on the VERIFIED user, 60 a minute, failing open like the other
@@ -341,6 +349,10 @@ describe('GET /api/v1/locations/[id]/verification', () => {
     expect((await GET(bearer(URL_), params(LOC))).status).toBe(403);
     ctxWith();
     expect((await GET(bearer(`${URL_}?page=abc`), params(LOC))).status).toBe(400);
+    ctxWith();
+    expect(
+      (await GET(bearer('https://t.local/api/v1/locations/x/verification'), params('x'))).status,
+    ).toBe(400);
     expect(checkRateLimit).not.toHaveBeenCalled();
   });
 

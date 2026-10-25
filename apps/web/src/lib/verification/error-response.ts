@@ -1,9 +1,18 @@
 import { NextResponse } from 'next/server';
 
-import { VERIFICATION_SESSION_ENDED_COPY, VERIFICATION_UNAVAILABLE_COPY } from '@stockpilot/core';
+import {
+  VERIFICATION_RATE_LIMITED_COPY,
+  VERIFICATION_SESSION_ENDED_COPY,
+  VERIFICATION_UNAVAILABLE_COPY,
+} from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
-import { ServiceError, serviceErrorStatus, type ServiceContext } from '@/server/services/context';
+import {
+  RateLimitedError,
+  ServiceError,
+  serviceErrorStatus,
+  type ServiceContext,
+} from '@/server/services/context';
 
 const NO_STORE = { 'Cache-Control': 'private, no-store' };
 
@@ -14,16 +23,19 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' };
  * A refusal the service authored (403 without items:read or at the MFA
  * step-up, 404 for an item or location the reader cannot see, 400 for a bad
  * id) keeps its own words and `details` (the phone branches on
- * details.reason, e.g. aal2_required). ANY other failure is a read that did
- * not complete, and says exactly that: 500 with "Couldn't load verification".
- * It is never answered as an empty summary, which the phone would render as
- * "No physical count on record." Raw database text never leaves the server.
+ * details.reason, e.g. aal2_required). A read the service's rate limit
+ * refused (RateLimitedError, VerificationService.location) is the 429 below,
+ * with Retry-After. ANY other failure is a read that did not complete, and
+ * says exactly that: 500 with "Couldn't load verification". It is never
+ * answered as an empty summary, which the phone would render as "No physical
+ * count on record." Raw database text never leaves the server.
  */
 export function verificationErrorResponse(
   e: unknown,
   tag: string,
   ctx: Pick<ServiceContext, 'organizationId'>,
 ): NextResponse {
+  if (e instanceof RateLimitedError) return verificationRateLimitedResponse(e.resetAt);
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return NextResponse.json(
       { error: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) },
@@ -46,14 +58,10 @@ export function verificationUnauthenticatedResponse(): NextResponse {
   );
 }
 
-/** The sentence for a read the rate limiter refused: the words the phone
- *  shows for any 429 from these routes (verification-api.ts
- *  describeVerificationError), and the exceptions routes' sentence. */
-export const VERIFICATION_RATE_LIMITED_COPY = 'Too many requests. Wait a moment and try again.';
-
 /** Too many reads: 429 in the same shape, never cached, with Retry-After
  *  (whole seconds, at least 1) and `retryAt` (epoch ms), as the exceptions
- *  routes answer it. */
+ *  routes answer it. The `message` is core's sentence, the one the web page
+ *  and the phone show for it. */
 export function verificationRateLimitedResponse(resetAt: number): NextResponse {
   return NextResponse.json(
     { error: 'rate_limited', message: VERIFICATION_RATE_LIMITED_COPY, retryAt: resetAt },

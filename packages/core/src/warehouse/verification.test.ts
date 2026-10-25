@@ -22,6 +22,7 @@ import {
   VERIFICATION_MOVEMENTS_UNKNOWN_COPY,
   VERIFICATION_NEVER_COUNTED_COPY,
   VERIFICATION_NOT_COUNTABLE_COPY,
+  VERIFICATION_RATE_LIMITED_COPY,
   VERIFICATION_SESSION_ENDED_COPY,
   VERIFICATION_UNAVAILABLE_COPY,
   verificationIssueChipCopy,
@@ -966,5 +967,19 @@ describe('verificationRefusalOf / verificationRefusalCopy', () => {
     expect(verificationRefusalCopy('aal2_required', 'item')).toMatch(/authenticator app/);
     expect(verificationRefusalCopy('mfa_required', 'item')).toMatch(/two-factor/);
     expect(VERIFICATION_SESSION_ENDED_COPY).toBe('Your session has ended. Sign in again.');
+  });
+  // B25: a read the per-person limit refused is an answer with its own plain
+  // sentence (the web page and the phone say it alike), never a failed read
+  // (null) and never "You do not have permission".
+  it('a rate-limited read is its own refusal, in one plain sentence for both subjects', () => {
+    expect(verificationRefusalOf('rate_limited', 'rate_limited')).toBe('rate_limited');
+    expect(verificationRefusalOf('rate_limited', undefined)).toBe('rate_limited');
+    expect(VERIFICATION_RATE_LIMITED_COPY).toBe(
+      'Too many reads in a short time. Try again in a minute.',
+    );
+    expect(verificationRefusalCopy('rate_limited', 'location')).toBe(
+      VERIFICATION_RATE_LIMITED_COPY,
+    );
+    expect(verificationRefusalCopy('rate_limited', 'item')).toBe(VERIFICATION_RATE_LIMITED_COPY);
   });
 });

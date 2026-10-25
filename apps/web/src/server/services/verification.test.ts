@@ -41,7 +41,9 @@ vi.mock('@/lib/auth/warehouse', () => {
   };
 });
 
-import { ServiceError } from './context';
+import { checkRateLimit } from '@/lib/rate-limit';
+
+import { RateLimitedError, ServiceError } from './context';
 import {
   LOCATION_HOLDINGS_CAP,
   LOCATION_VERIFICATION_PAGE_SIZE,
@@ -144,6 +146,11 @@ function ctx(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkRateLimit).mockResolvedValue({
+    allowed: true,
+    count: 1,
+    resetAt: Date.now() + 60_000,
+  });
 });
 
 describe('mapSummaryRow', () => {
@@ -989,5 +996,73 @@ describe('VerificationService.location', () => {
       ctx(locationStub({ visible: { data: false, error: null } })),
     ).location(LOC);
     expect(outOfScope.recountItemIds).toEqual([]);
+  });
+});
+
+// B25 (integrator decision, 2026-10-25): the per-person limit on location
+// page reads lives in location() itself, so the web page and the phone's
+// route spend from ONE bucket (location-verification-limit.test.tsx runs
+// both). Only location() is limited: item() and summaries() (the item card,
+// the exception detail) are not.
+describe('VerificationService rate limit: location() only', () => {
+  const refused = () =>
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: false,
+      count: 60,
+      resetAt: Date.now() + 42_000,
+    });
+
+  it("location() spends one read from the person's bucket: 60 a minute, keyed on the verified user, failing open", async () => {
+    const stub = locationStub();
+    await new VerificationService(ctx(stub, { userId: 'u-reader' })).location(LOC);
+    // Exactly these three arguments: no 'closed' mode, so a limiter outage
+    // lets reads through, as on the app's other signed-in routes.
+    expect(vi.mocked(checkRateLimit).mock.calls).toEqual([
+      ['location-verification:user:u-reader', 60, 60_000],
+    ]);
+  });
+
+  it('past the limit, location() throws RateLimitedError (code rate_limited, resetAt) before any read', async () => {
+    refused();
+    const stub = locationStub();
+    const err = await new VerificationService(ctx(stub)).location(LOC).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitedError);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({
+      code: 'rate_limited',
+      message: 'Too many reads in a short time. Try again in a minute.',
+      details: { reason: 'rate_limited' },
+    });
+    expect((err as RateLimitedError).resetAt).toBeGreaterThan(Date.now());
+    expect(stub.fromCalls).toHaveLength(0);
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('a refusal that reads nothing (no items:read, a malformed id) spends nothing', async () => {
+    const stub = locationStub();
+    await expect(
+      new VerificationService(
+        ctx(stub, { role: 'viewer', permissions: new Set(['members:read']) }),
+      ).location(LOC),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(new VerificationService(ctx(stub)).location('not-a-uuid')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('item() and summaries() are not limited: they answer with the bucket spent, and never touch it', async () => {
+    refused();
+    const item = await new VerificationService(ctx(itemStub())).item(ITEM);
+    expect(item.itemId).toBe(ITEM);
+    const summaries = await new VerificationService(
+      ctx(
+        makeSupabaseStub({
+          'rpc:item_verification_summaries': summariesRpc(new Map([[ITEM, row(ITEM)]])),
+        }),
+      ),
+    ).summaries([ITEM]);
+    expect([...summaries.keys()]).toEqual([ITEM]);
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 });

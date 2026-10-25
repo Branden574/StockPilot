@@ -60,6 +60,7 @@ describe('actionStatusForCode', () => {
       'plan_limit_exceeded',
       'module_disabled',
       'conflict',
+      'rate_limited',
       'internal_error',
     ];
     for (const code of codes)

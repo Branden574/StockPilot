@@ -59,7 +59,7 @@ vi.mock('@/server/actions/exceptions', () => ({
   startRecountAction: vi.fn(),
 }));
 
-import { ServiceError } from '@/server/services/context';
+import { RateLimitedError, ServiceError } from '@/server/services/context';
 import type { LocationVerification, LocationVerificationRow } from '@/server/services/verification';
 
 import LocationPage from './page';
@@ -245,6 +245,31 @@ describe('Location page', () => {
       expect(reportError).not.toHaveBeenCalled();
     },
   );
+
+  // B25 (integrator decision): the per-person limit on location page reads
+  // is spent in VerificationService.location, so this page shares it with
+  // the phone's route. Past it the page is an answer, in a plain sentence,
+  // not a failure: nothing reported, no "Reload the page", no empty location.
+  it('past the read limit: "Couldn\'t load verification" and a plain "Too many reads" sentence, not reported', async () => {
+    location.mockRejectedValue(
+      new RateLimitedError(
+        'Too many reads in a short time. Try again in a minute.',
+        Date.now() + 30_000,
+      ),
+    );
+    await renderPage();
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load verification");
+    expect(screen.getByTestId('location-refusal')).toHaveTextContent(
+      'Too many reads in a short time. Try again in a minute.',
+    );
+    expect(screen.queryByText(/Reload the page/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not counted|0 items|No open exceptions/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Locations' })).toHaveAttribute(
+      'href',
+      '/dashboard/locations',
+    );
+    expect(reportError).not.toHaveBeenCalled();
+  });
 
   it('any other failure says "Couldn\'t load verification", never an empty location, and is reported', async () => {
     location.mockRejectedValue(new ServiceError('internal_error', 'relation exploded'));
