@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   isPositionedCrate,
   PLACE_DEST_COLUMNS,
@@ -40,6 +41,7 @@ import {
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) {
     // `details` is APP-AUTHORED structured metadata (e.g. the book-crate
     // confirmation payload the client retries on) and is forwarded — except
@@ -1001,6 +1003,7 @@ export async function transferStockAction(
       ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
+    rethrowControlFlow(e);
     // Same insufficient_stock → friendly-message mapping as placeStockAction
     // (raw RPC text lives on internalDetail post-S13 sanitization).
     if (
@@ -1224,6 +1227,7 @@ export async function placeStockAction(
       ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
+    rethrowControlFlow(e);
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
     // text surfaces verbatim in the RPC error. The service wraps any RPC error
     // as ServiceError('internal_error', error.message); the raw text now lives

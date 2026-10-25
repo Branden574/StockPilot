@@ -40,6 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
 import { keepsSkuRadioLabel } from '@/lib/inventory/grouping-radio-names';
 import { labelsItemsHref } from '@/lib/inventory/labels-selection';
 import {
@@ -187,7 +188,9 @@ export function UngroupSelectedDialog({
         setLoaded(r.data);
         setLoading(false);
       },
-      () => {
+      (e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         if (mine !== seq.current) return;
         setLoaded(null);
         setPreviewError({ message: failureWords(), retry: true });
@@ -237,7 +240,9 @@ export function UngroupSelectedDialog({
     let r: Awaited<ReturnType<typeof ungroupSelectedAction>>;
     try {
       r = await ungroupSelectedAction(body);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // No answer: it may or may not have applied. The SAME body and keys
       // stay pending, so Save replays what applied. Never the raw error.
       setSaveError({ message: GROUPING_ERROR_WORDS.internal, stale: false });

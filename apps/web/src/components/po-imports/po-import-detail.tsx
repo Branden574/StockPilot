@@ -50,6 +50,7 @@ import {
 
 import { MappingConfirmation } from '@/components/po-imports/mapping-confirmation';
 
+import { isControlFlow } from '@/lib/control-flow';
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
 import { BLOCKING_LINE_RESULTS, LINE_RESULT_LABELS, type LineResult } from '@stockpilot/core';
@@ -408,7 +409,9 @@ export function PoImportDetail({
       setConfirmOpen(false);
       toast.success('Import approved. Expected inbound PO created.');
       router.push(`/dashboard/purchase-orders/${r.data.poId}`);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       toast.error(
         'Could not reach the server to approve this import. If StockPilot just updated (see the reload prompt), reload the page and try again.',
       );
