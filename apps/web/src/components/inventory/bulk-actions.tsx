@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { tagColor } from '@/components/tags/tag-color';
 import {
   LABELS_URL_FALLBACK_MAX,
   labelsItemsHref,
@@ -1285,7 +1286,8 @@ function TagsDialog({
             <div className="flex flex-wrap gap-1.5">
               {tags.map((t) => {
                 const on = selected.has(t.id);
-                const swatch = t.color ?? '#94a3b8';
+                // The stored colour only in the #rrggbb form the app writes (docket T14).
+                const swatch = tagColor(t.color);
                 return (
                   <button
                     key={t.id}

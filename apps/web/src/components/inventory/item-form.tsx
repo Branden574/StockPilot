@@ -54,6 +54,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { tagColor } from '@/components/tags/tag-color';
 import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
@@ -2673,7 +2674,8 @@ export function ItemForm({
           <div className="flex flex-wrap gap-2">
             {tags.map((t) => {
               const on = selectedTagIds.has(t.id);
-              const swatch = t.color ?? '#94a3b8';
+              // The stored colour only in the #rrggbb form the app writes (docket T14).
+              const swatch = tagColor(t.color);
               return (
                 <button
                   key={t.id}

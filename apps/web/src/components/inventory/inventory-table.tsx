@@ -20,6 +20,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
+import { CategoryLabel } from '@/components/inventory/category-label';
 import {
   GroupSelectedDialog,
   RemoveFromGroupDialog,
@@ -3459,43 +3460,8 @@ const PAGER_EDGE_DISABLED =
 // so every one of these renders the SAME words, figures, titles and tones in a
 // table cell and on a card. Changing one changes both.
 
-type CategoryLookup = { name: string; color: string | null };
-
-/**
- * The Category cell: the category's name in its own colour with its dot, or a
- * dash. `wrap` (the table): a name may wrap between its words, and the dot
- * stays beside the first line (7 px down is the centre of a 20.25 px line, so a
- * one-line name sits exactly where it did); a Grid card passes nothing.
- */
-function CategoryLabel({
-  category,
-  wrap = false,
-}: {
-  category: CategoryLookup | null | undefined;
-  wrap?: boolean;
-}) {
-  return category ? (
-    <span
-      className={wrap ? 'inline-flex items-start gap-1.5' : 'inline-flex items-center gap-1.5'}
-      style={category.color ? { color: category.color } : undefined}
-    >
-      {category.color && (
-        <span
-          aria-hidden
-          className={
-            wrap
-              ? 'mt-[7.125px] h-1.5 w-1.5 shrink-0 rounded-full'
-              : 'h-1.5 w-1.5 shrink-0 rounded-full'
-          }
-          style={{ backgroundColor: category.color }}
-        />
-      )}
-      {category.name}
-    </span>
-  ) : (
-    <span className="text-muted-foreground">—</span>
-  );
-}
+// The Category cell (CategoryLabel) lives in ./category-label: it draws the
+// category's stored colour, which it checks first (docket T14).
 
 /** The Charter cell: the charter's code (its name as the title), or "Generic". */
 function CharterLabel({ item, lookups }: { item: Item; lookups: Lookups }) {

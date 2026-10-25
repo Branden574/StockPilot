@@ -11,6 +11,7 @@ import {
   procedureListHref,
   type ProcedureListState,
 } from './list-query';
+import { procedureCategoryColor } from './procedure-fallback-band';
 
 interface CategoryOption {
   id: string;
@@ -115,7 +116,7 @@ export function ProcedureFilters({
                 aria-hidden
                 data-slot="category-dot"
                 className="size-2 shrink-0 rounded-full"
-                style={{ backgroundColor: c.color ?? '#475569' }}
+                style={{ backgroundColor: procedureCategoryColor(c.color) }}
               />
               {c.name}
             </FilterChipLink>

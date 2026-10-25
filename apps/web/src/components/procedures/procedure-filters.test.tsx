@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { parseProcedureListParams } from './list-query';
@@ -87,5 +88,28 @@ describe('ProcedureFilters', () => {
       <ProcedureFilters state={parseProcedureListParams({})} categories={[]} warehouses={[]} />,
     );
     expect(screen.queryByRole('link', { name: 'All categories' })).toBeNull();
+  });
+});
+
+describe('ProcedureFilters: a category colour that is not #rrggbb (docket T14)', () => {
+  it('draws the slate dot in the server HTML, never the stored text', () => {
+    const html = renderToString(
+      <ProcedureFilters
+        state={parseProcedureListParams({})}
+        categories={[
+          { id: 'c-x', name: 'Injected', color: '#000;position:fixed;inset:0;z-index:2147483647' },
+          { id: 'c-safety', name: 'Safety', color: '#dc2626' },
+          { id: 'c-recv', name: 'Receiving', color: null },
+        ]}
+        warehouses={[]}
+      />,
+    );
+    expect(html).not.toContain('position:');
+    expect(html).not.toContain('z-index');
+    expect([...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1])).toEqual([
+      'background-color:#475569',
+      'background-color:#dc2626',
+      'background-color:#475569',
+    ]);
   });
 });

@@ -2,6 +2,7 @@ export * from './auth';
 export * from './organization';
 export * from './inventory';
 export * from './common';
+export * from './hex-color';
 export * from './po-imports';
 export * from './receipts';
 export * from './uom-conversions';
