@@ -19,6 +19,12 @@ import { Pill } from '@/components/ui/pill';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { api, ApiError } from '@/lib/api';
 import {
+  distributeKeyFor,
+  distributeNotSavedAlert,
+  distributeSignature,
+  type DistributeKey,
+} from '@/lib/bundle-distribute-attempt';
+import {
   computeDistributionPreview,
   defaultDistributeWarehouseId,
   type DistributionPreview,
@@ -101,6 +107,11 @@ export default function BundleDetail() {
   const [qty, setQty] = React.useState('1');
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // The key of a distribution whose outcome is unknown and that is in no
+  // queue (the server was not reached and the phone could not queue it):
+  // trying the same request again sends the same key, so the server makes it
+  // once (bundle-distribute-attempt.ts).
+  const keptKey = React.useRef<DistributeKey | null>(null);
 
   React.useEffect(() => {
     void (async () => {
@@ -205,8 +216,18 @@ export default function BundleDetail() {
     // Minted BEFORE the first request and reused by the outbox replay, so the
     // server can recognise a retry. Without it, a response lost after the
     // server committed (or api()'s own 20 s timeout) meant the queued replay
-    // distributed AGAIN: components drawn twice, two distribution rows.
-    const idempotencyKey = newIdempotencyKey();
+    // distributed AGAIN: components drawn twice, two distribution rows. A try
+    // that may have reached the server and could not be queued keeps its key
+    // for the next try of the same request (docket B10).
+    const signature = distributeSignature({
+      bundleId: bundle.id,
+      quantity: n,
+      warehouseId,
+      allowShortage,
+    });
+    keptKey.current = distributeKeyFor(keptKey.current, signature, newIdempotencyKey);
+    const idempotencyKey = keptKey.current.key;
+    let outcomeUnknown = false;
     setBusy(true);
     try {
       // Try direct send first; fall back to queue if offline.
@@ -235,17 +256,27 @@ export default function BundleDetail() {
       }
       // Transport failure, timeout or 5xx: the server may or may not have
       // committed. Queue the SAME key so the replay is absorbed if it did.
-      await enqueue(
-        'distribute_bundle',
-        {
-          bundleId: bundle.id,
-          quantity: n,
-          warehouseId,
-          allowShortage,
-          notes: 'Mobile distribute (offline)',
-        },
-        { idempotencyKey },
-      );
+      try {
+        await enqueue(
+          'distribute_bundle',
+          {
+            bundleId: bundle.id,
+            quantity: n,
+            warehouseId,
+            allowShortage,
+            notes: 'Mobile distribute (offline)',
+          },
+          { idempotencyKey },
+        );
+      } catch (queueError) {
+        // The outbox refused it (no account, or the workspace still loading)
+        // or the phone's store failed. Said, where it used to escape unseen;
+        // the key is kept, so trying again sends this same request.
+        outcomeUnknown = true;
+        const { title, message } = distributeNotSavedAlert(e, queueError);
+        Alert.alert(title, message);
+        return;
+      }
       void syncNow();
       Alert.alert(
         'Queued',
@@ -253,6 +284,8 @@ export default function BundleDetail() {
         [{ text: 'OK', onPress: () => router.back() }],
       );
     } finally {
+      // Sent, refused by the server, or queued: the next tap is a new request.
+      if (!outcomeUnknown) keptKey.current = null;
       setBusy(false);
     }
   }
