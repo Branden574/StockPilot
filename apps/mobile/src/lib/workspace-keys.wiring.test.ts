@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
+import { ACTIVE_ORG_OWNER_STORAGE_KEY, ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
 
 /**
  * ONE active-workspace key (recurring pattern #26).
@@ -37,23 +37,33 @@ describe('the active-workspace key has one definition', () => {
     expect(ACTIVE_ORG_STORAGE_KEY).toBe('workspace.activeOrgId');
   });
 
-  it('appears as a literal in workspace-keys.ts only', () => {
-    const files = ROOTS.flatMap((r) => sourceFiles(r));
-    // Vacuity control: the sweep must have found the app's sources.
-    expect(files.some((f) => f.endsWith(path.join('lib', 'api.ts')))).toBe(true);
-    const holders = files
-      .filter((f) => code(readFileSync(f, 'utf8')).includes('workspace.activeOrgId'))
-      .map((f) => path.basename(f));
-    expect(holders).toEqual(['workspace-keys.ts']);
-  });
+  it.each([ACTIVE_ORG_STORAGE_KEY, ACTIVE_ORG_OWNER_STORAGE_KEY])(
+    '%s appears as a literal in workspace-keys.ts only',
+    (key) => {
+      const files = ROOTS.flatMap((r) => sourceFiles(r));
+      // Vacuity control: the sweep must have found the app's sources.
+      expect(files.some((f) => f.endsWith(path.join('lib', 'api.ts')))).toBe(true);
+      const holders = files
+        .filter((f) => code(readFileSync(f, 'utf8')).includes(key))
+        .map((f) => path.basename(f));
+      expect(holders).toEqual(['workspace-keys.ts']);
+    },
+  );
 
+  // Re-pinned by docket B10 (was a bare getItem of the workspace key in
+  // api.ts and session-scope.ts): the readers read the workspace and its
+  // owner through one reader, and name it only for its owner
+  // (workspace-keys.test.ts, api.org-header.test.ts).
   it.each([
     ['use-workspace.ts', /AsyncStorage\.setItem\(ACTIVE_ORG_STORAGE_KEY,/],
-    ['api.ts', /AsyncStorage\.getItem\(ACTIVE_ORG_STORAGE_KEY\)/],
-    ['session-scope.ts', /AsyncStorage\.getItem\(ACTIVE_ORG_STORAGE_KEY\)/],
-  ])('%s reads or writes it through the shared constant', (file, use) => {
+    ['use-workspace.ts', /AsyncStorage\.setItem\(ACTIVE_ORG_OWNER_STORAGE_KEY,/],
+    ['use-workspace.ts', /savedWorkspaceFor\(saved, userId\)/],
+    ['api.ts', /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), account\)/],
+    ['session-scope.ts', /readSavedWorkspace\(AsyncStorage\)/],
+    ['session-scope.ts', /savedWorkspaceFor\(saved, userId \?\? lastSeenUserId\)/],
+  ])('%s reads or writes it through the shared module (%s)', (file, use) => {
     const src = code(readFileSync(path.join(__dirname, file), 'utf8'));
-    expect(src).toMatch(/import \{ ACTIVE_ORG_STORAGE_KEY \} from '\.\/workspace-keys';/);
+    expect(src).toMatch(/import \{[^}]*\} from '\.\/workspace-keys';/);
     expect(src).toMatch(use);
   });
 });

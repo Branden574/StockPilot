@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { OutboxOwnerUnknownError, type LiveScope } from './outbox-scope';
 import { readDeviceAuthSession } from './supabase';
-import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
+import { readSavedWorkspace, savedWorkspaceFor, type SavedWorkspace } from './workspace-keys';
 
 /**
  * The workspace and account live on the device right now, for the outbox
@@ -46,12 +46,20 @@ async function readSessionUserId(): Promise<string | null> {
   }
 }
 
+const NOTHING_SAVED: SavedWorkspace = { orgId: null, ownerId: null };
+
 export async function liveOutboxScope(): Promise<LiveScope> {
-  const [orgId, userId] = await Promise.all([
-    AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY).catch(() => null),
+  const [saved, userId] = await Promise.all([
+    readSavedWorkspace(AsyncStorage).catch(() => NOTHING_SAVED),
     readSessionUserId(),
   ]);
-  return { orgId: orgId || null, userId };
+  // Only the account's own saved workspace (workspace-keys.ts
+  // savedWorkspaceFor), as api() names it: a row queued in the second after a
+  // different account signed in, before its workspace load saved its own
+  // choice, was stamped with the previous account's organization and refused
+  // when sent (docket B10). Signed out, the owner is the account last seen
+  // this run, the one a row written now is queued for (outboxWriteScope).
+  return { orgId: savedWorkspaceFor(saved, userId ?? lastSeenUserId), userId };
 }
 
 /**

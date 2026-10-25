@@ -8,14 +8,20 @@ import { refreshEnabledModules } from './enabled-modules';
 import { syncNow } from './sync';
 import { supabase } from './supabase';
 import { chooseActiveOrg } from './workspace-choice';
-import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
+import {
+  ACTIVE_ORG_OWNER_STORAGE_KEY,
+  ACTIVE_ORG_STORAGE_KEY,
+  readSavedWorkspace,
+  savedWorkspaceFor,
+} from './workspace-keys';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
  * single-org assumption baked into `use-org.ts` by adding:
  *
  *   • full list of the user's accepted memberships (one per org),
- *   • the active org id, persisted under ACTIVE_ORG_STORAGE_KEY (workspace-keys.ts),
+ *   • the active org id, persisted under ACTIVE_ORG_STORAGE_KEY (workspace-keys.ts)
+ *     with the account that chose it under ACTIVE_ORG_OWNER_STORAGE_KEY,
  *   • full list of warehouses the user can read in the active org,
  *   • the active warehouse id (or `null` for "all warehouses"),
  *     persisted under `workspace.activeWarehouseId.<orgId>`.
@@ -198,11 +204,18 @@ async function hydrate(userId: string): Promise<void> {
 async function loadWorkspace(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
-  const [memberships, persisted, profileDefault] = await Promise.all([
+  const [memberships, saved, profileDefault] = await Promise.all([
     loadOrgs(userId),
-    AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY),
+    readSavedWorkspace(AsyncStorage),
     loadProfileDefaultOrg(userId),
   ]);
+  // Only this account's own saved workspace (docket B10): the one the request
+  // header names (api.ts orgHeader). Another account's, left by a fallback
+  // sign-out or a session the server ended, is not this account's choice even
+  // where it is also a member, and choosing it while the first requests went
+  // out without it would put the screen and the snapshot pull in two
+  // workspaces.
+  const persisted = savedWorkspaceFor(saved, userId);
   // See workspace-choice.ts: the same order the server uses, and the choice is
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
   // screen shows. Before, a choice made after sign-out lived only in memory and
@@ -236,9 +249,13 @@ async function loadWorkspace(userId: string) {
   }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
-  if (activeOrgId && choice.persist) {
+  // Saved with its owner. A workspace saved before owners were recorded, or
+  // over another account's owner, gets this account's, so its requests keep
+  // naming it.
+  if (activeOrgId && (choice.persist || saved.ownerId !== userId)) {
     try {
       await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, activeOrgId);
+      await AsyncStorage.setItem(ACTIVE_ORG_OWNER_STORAGE_KEY, userId);
     } catch (err) {
       // Still show the workspace (the server answers for the same default
       // when no header is saved); a failed save must not leave loading stuck.
@@ -362,6 +379,18 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   if (orgId === cached.activeOrgId) return;
   switchesStarted += 1;
   await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, orgId);
+  // Whose choice it is (workspace-keys.ts): the account signed in now. With
+  // none known, no owner is kept, so the saved workspace reads as an older
+  // build's (named as before) rather than as another account's. Written after
+  // the workspace, and a failure does not stop the switch: a stale owner can
+  // only make the next requests name no workspace (the server's default)
+  // until the next load records it, never name a workspace the screen left.
+  try {
+    if (epochUserId) await AsyncStorage.setItem(ACTIVE_ORG_OWNER_STORAGE_KEY, epochUserId);
+    else await AsyncStorage.removeItem(ACTIVE_ORG_OWNER_STORAGE_KEY);
+  } catch (err) {
+    console.warn('[workspace] saving whose workspace this is failed', err);
+  }
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and
   // reset the delta cursor BEFORE the pull below. Without this, the local
   // items/POs/counts/bundles lists would transiently show the previous org's

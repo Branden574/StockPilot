@@ -52,9 +52,15 @@ describe('raw Bearer call sites carry X-Organization-Id (SP-017)', () => {
 
   it('api.ts exports orgHeader and uses it itself', () => {
     const api = readFileSync(path.join(__dirname, 'api.ts'), 'utf8');
-    expect(api).toMatch(/export async function orgHeader\(\)/);
+    // Re-pinned by docket B10 (was `orgHeader()` with no argument): the saved
+    // workspace is named only for the account the request goes out as
+    // (api.org-header.test.ts runs it). A raw call site passes nothing and the
+    // stored session's account is used.
+    expect(api).toMatch(/export async function orgHeader\(userId\?: string \| null\)/);
     // The saved workspace, unless the caller names the request's own
-    // (the outbox sends each queued row under the org it was queued in).
-    expect(api).toMatch(/\.\.\.\(opts\.orgId \? \{ 'X-Organization-Id': opts\.orgId \} : await orgHeader\(\)\)/);
+    // (the outbox sends each queued row under the org it was queued in),
+    // checked against the account whose bearer the same session read gave.
+    expect(api).toMatch(/const auth = await authHeader\(opts\.asUserId\);/);
+    expect(api).toMatch(/\.\.\.\(opts\.orgId \? \{ 'X-Organization-Id': opts\.orgId \} : await orgHeader\(auth\.userId\)\)/);
   });
 });
