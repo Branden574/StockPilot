@@ -57,6 +57,7 @@ import {
   type ShortfallPoLoad,
   type ShortfallPoOffer,
 } from '@/lib/orders/shortfall-po';
+import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import { draftShortfallPosAction, loadShortfallPoAction } from '@/server/actions/order-readiness';
 
@@ -207,7 +208,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         orderId: forOrder,
         supplierIds: shortfallSupplierIds(shown),
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return null;
       res = null;
     }
     if (seq !== loadSeq.current) return null;
@@ -326,7 +329,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         lines: check.lines,
         idempotencyKey: next.key,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       res = null;
     }
     inFlight.current = false;

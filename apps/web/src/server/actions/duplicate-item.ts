@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -34,6 +35,7 @@ export async function duplicateItemAction(
     // dialog named, say so (2026-10-25), as createItemAction does.
     return ok({ id, ...(placementFailed ? { placementFailed } : {}) });
   } catch (error) {
+    rethrowControlFlow(error);
     if (error instanceof ServiceError) {
       // `details` is app-authored and forwarded: the new-rack question rides
       // it ("Create new rack 1-B?", 2026-10-24), and without it the dialog

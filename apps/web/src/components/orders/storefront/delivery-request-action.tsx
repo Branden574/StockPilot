@@ -19,6 +19,7 @@ import {
 } from '@stockpilot/core';
 
 import { capture } from '@/lib/analytics';
+import { isControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { recordDeliveryRequestDraftedAction } from '@/server/actions/delivery-request';
 
@@ -206,7 +207,9 @@ function DeliveryRequestActionInner({
     recordDeliveryRequestDraftedAction({
       orderId: input.orderId,
       isCondensed: prepared.draft.condensed,
-    }).catch(() => {
+    }).catch((e: unknown) => {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The RPC itself can reject (offline); bookkeeping is best-effort and
       // must never surface to the employee who already has their draft.
     });

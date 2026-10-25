@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { withContext } from '@/server/services/context';
 
 /** Persist the Getting-started dismissal cross-device (mig 0257). */
@@ -13,7 +14,8 @@ export async function dismissOnboardingAction(): Promise<void> {
       .update({ onboarding_dismissed_at: new Date().toISOString() })
       .eq('id', ctx.userId);
     revalidatePath('/dashboard');
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     // Best-effort — the panel is already hidden optimistically client-side.
   }
 }

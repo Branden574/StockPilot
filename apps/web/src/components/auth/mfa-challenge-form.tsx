@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { challengeFactorAction } from '@/server/actions/mfa';
 import { signOutAction } from '@/server/actions/auth';
 import { consumeMfaRecoveryCodeAction } from '@/server/actions/mfa-recovery';
@@ -94,6 +95,9 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
   }
 
   async function cancel() {
+    // A sign-out on purpose leaves nothing an interrupted run kept in this tab
+    // (lib/interrupted-run). Before the request, which answers with a redirect.
+    purgeInterruptedRuns();
     await signOutAction();
     router.replace('/signin');
     router.refresh();

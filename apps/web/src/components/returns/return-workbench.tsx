@@ -43,6 +43,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { useHydrated } from '@/lib/use-hydrated';
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import {
@@ -346,7 +347,9 @@ export function ReturnWorkbench({
     setFollowUp(null);
     try {
       return await call();
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return null;
       toast.error(RETURN_ERROR_WORDS.internal);
       setDialogError(RETURN_ERROR_WORDS.internal);
       router.refresh();

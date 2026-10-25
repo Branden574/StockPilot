@@ -11,6 +11,7 @@ import {
 
 import { RecountDialog } from '@/components/exceptions/recount-dialog';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import { listItemsRecountTargetsAction } from '@/server/actions/exceptions';
 
 type Targets =
@@ -67,7 +68,9 @@ export function LocationRecountButton({
     let res: Awaited<ReturnType<typeof listItemsRecountTargetsAction>> | null;
     try {
       res = await listItemsRecountTargetsAction(itemIds);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The request itself failed: the same as a failed read, never a dialog
       // stuck on "Checking...".
       res = null;
