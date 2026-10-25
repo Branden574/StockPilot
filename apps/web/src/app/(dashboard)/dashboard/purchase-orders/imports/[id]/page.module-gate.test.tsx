@@ -35,6 +35,14 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => access.current),
 }));
+// The page reads the organization's zone for the lineage notice
+// (page.lineage-timezone.test.tsx covers it).
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1' })),
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 vi.mock('@/server/services/context', () => ({
   ServiceError: class ServiceError extends Error {
     constructor(
