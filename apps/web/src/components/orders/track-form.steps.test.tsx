@@ -13,8 +13,9 @@ import { TrackForm } from './track-form';
  * delivered (core's PICKUP_COMPLETED_STATUS_LABEL, the word the order page,
  * the orders list and the phone already use). Both signature paths stamp
  * signed_at at every hand-over, in full or in part, and completed_at only when
- * nothing is still owed (0395 confirm_physical_signature and
- * confirm_order_signature), so "Signed for" is its own step, before the last.
+ * nothing is still owed (0248 confirm_order_signature, 0395
+ * confirm_physical_signature), so "Signed for" is its own step, before the
+ * last.
  */
 
 vi.mock('@/components/orders/delivery-map', () => ({ DeliveryMap: () => null }));
@@ -219,8 +220,9 @@ describe('/r/track steps: signed for, the rest still owed', () => {
 });
 
 describe('/r/track steps: a paper hand-over', () => {
-  // confirm_physical_signature stamps signed_at and completed_at exactly as
-  // the sign page does (0395), so a paper signature reads Signed for too.
+  // confirm_physical_signature (0395) stamps signed_at and completed_at
+  // exactly as the sign page's confirm_order_signature (0248) does, so a
+  // paper signature reads Signed for too.
   it('reads Signed for like a digital one, and the page never names the method or the signer', async () => {
     const { container } = await look({
       status: 'completed',

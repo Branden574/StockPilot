@@ -75,8 +75,8 @@ export const SIGNED_FOR_STEP_LABEL = 'Signed for';
  *     always agree.
  *   - Signed for comes before the last step. Both signature paths, on screen
  *     and on paper, stamp signed_at at every hand-over, in full or in part,
- *     and completed_at only when nothing is still owed (0395
- *     confirm_order_signature and confirm_physical_signature), so a short
+ *     and completed_at only when nothing is still owed (0248
+ *     confirm_order_signature, 0395 confirm_physical_signature), so a short
  *     hand-over shows Signed for done and the last step still to come.
  *   - An order completed with no signature (completed before signatures were
  *     recorded) has no Signed for step: it never happened and never will.
