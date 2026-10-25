@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
 
-import { ModuleCheckFailed } from '@/components/dashboard/module-check-failed';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { RentalCreateForm } from '@/components/rentals/rental-create-form';
@@ -81,11 +80,7 @@ export default async function NewRentalPage({
   // reads nothing.
   const moduleAccess = await checkModuleAccess('rentals');
   if (!moduleAccess.enabled) {
-    return moduleAccess.checkFailed ? (
-      <ModuleCheckFailed moduleId="rentals" />
-    ) : (
-      <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />
-    );
+    return <ModuleUnavailable moduleId="rentals" access={moduleAccess} />;
   }
 
   const params = await searchParams;

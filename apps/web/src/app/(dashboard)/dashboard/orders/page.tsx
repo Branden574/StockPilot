@@ -7,7 +7,7 @@ import { formatOrderNumber, RETURNS_COPY } from '@stockpilot/core';
 export const metadata: Metadata = { title: 'Orders' };
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
@@ -83,7 +83,7 @@ export default async function OrdersPage({
   contextStarted.catch(() => {});
   const [moduleAccess, params] = await Promise.all([checkModuleAccess('orders'), searchParams]);
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');

@@ -399,6 +399,39 @@ describe('fails closed', () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
+  // Why a feature inside a gated page needs no "could not check" state of
+  // its own (a rental's Report a problem, gated on maintenance_requests, on
+  // a page gated on rentals): within one request every non-core module is
+  // answered from the SAME read, so a set that could not be read denies them
+  // all as "could not check" (and the page itself shows ModuleCheckFailed
+  // before it draws any feature), and a comp that was read grants them all.
+  // A feature's module can never be unknown while its page's module is on.
+  it('within one request, an unreadable set answers every non-core module alike', async () => {
+    faults.bundle = true;
+    faults.modulesRead = true;
+    db.rows = { rentals: true, maintenance_requests: true };
+    newRequest();
+    const page = await checkModuleAccess('rentals');
+    const feature = await checkModuleAccess('maintenance_requests');
+    expect(page).toEqual({ enabled: false, canManage: false, checkFailed: true });
+    expect(feature).toEqual(page);
+
+    db.comp = true;
+    newRequest();
+    expect(await checkModuleAccess('rentals')).toEqual({ enabled: true, canManage: false });
+    expect(await checkModuleAccess('maintenance_requests')).toEqual({
+      enabled: true,
+      canManage: false,
+    });
+
+    faults.modulesRead = false;
+    faults.orgRead = true;
+    newRequest();
+    const pageOrgUnread = await checkModuleAccess('rentals');
+    expect(pageOrgUnread.checkFailed).toBe(true);
+    expect(await checkModuleAccess('maintenance_requests')).toEqual(pageOrgUnread);
+  });
+
   it('the failed request does not stick: the next request that reads the set answers "on" or "off" again', async () => {
     faults.bundle = true;
     faults.modulesRead = true;

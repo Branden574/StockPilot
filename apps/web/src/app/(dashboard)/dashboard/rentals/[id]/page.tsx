@@ -1,8 +1,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
-import { ModuleCheckFailed } from '@/components/dashboard/module-check-failed';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
@@ -46,11 +45,7 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
   // still reads nothing.
   const rentalsModule = await checkModuleAccess('rentals');
   if (!rentalsModule.enabled) {
-    return rentalsModule.checkFailed ? (
-      <ModuleCheckFailed moduleId="rentals" />
-    ) : (
-      <ModuleNotEnabled moduleId="rentals" canManage={rentalsModule.canManage} />
-    );
+    return <ModuleUnavailable moduleId="rentals" access={rentalsModule} />;
   }
 
   const [rentalsSvc, inventorySvc, warehousesSvc] = await Promise.all([

@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation';
 
-import { ModuleCheckFailed } from '@/components/dashboard/module-check-failed';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
@@ -31,11 +30,7 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   // still reads nothing.
   const moduleAccess = await checkModuleAccess('po_imports');
   if (!moduleAccess.enabled) {
-    return moduleAccess.checkFailed ? (
-      <ModuleCheckFailed moduleId="po_imports" />
-    ) : (
-      <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />
-    );
+    return <ModuleUnavailable moduleId="po_imports" access={moduleAccess} />;
   }
 
   const { id } = await params;

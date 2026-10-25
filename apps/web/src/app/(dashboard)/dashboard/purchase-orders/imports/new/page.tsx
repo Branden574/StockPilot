@@ -1,5 +1,4 @@
-import { ModuleCheckFailed } from '@/components/dashboard/module-check-failed';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoScanForm } from '@/components/po-imports/po-scan-form';
 import { PoUploadForm } from '@/components/po-imports/po-upload-form';
@@ -21,11 +20,7 @@ export default async function NewPoImportPage() {
   // "off", and it still shows neither form.
   const moduleAccess = await checkModuleAccess('po_imports');
   if (!moduleAccess.enabled) {
-    return moduleAccess.checkFailed ? (
-      <ModuleCheckFailed moduleId="po_imports" />
-    ) : (
-      <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />
-    );
+    return <ModuleUnavailable moduleId="po_imports" access={moduleAccess} />;
   }
 
   return (
