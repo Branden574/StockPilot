@@ -25,6 +25,9 @@ import { describe, expect, it } from 'vitest';
  * test restores its env from a copy taken once instead of typing the value
  * again. An empty string (the unset secret) is no secret and stays.
  *
+ * The member one-click unsubscribe tests (B15) hold a signing value too, kept
+ * the same way, and are checked here from the start.
+ *
  * IF THIS FAILS: hold the value in a constant with a neutral name and give the
  * secret-shaped name the constant. Do not make the value look random.
  */
@@ -35,6 +38,12 @@ const FILES = [
   'src/components/team/team-manager.redesign.test.tsx',
   'src/app/invite/[token]/page.test.tsx',
   'src/app/unsubscribe/route.test.ts',
+  // B15: the member one-click unsubscribe link and the emails that carry it.
+  'src/lib/email/member-unsubscribe.test.ts',
+  'src/app/unsubscribe/route.members.test.ts',
+  'src/app/unsubscribe/route.settings-parity.test.tsx',
+  'src/server/services/member-email-unsubscribe.test.ts',
+  'src/server/actions/digest.preview.test.ts',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

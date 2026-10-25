@@ -5,6 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { formatNumber } from '@/lib/utils';
 import { backfillItemEmbeddingsAction } from '@/server/actions/embeddings';
 
 interface PanelProps {
@@ -85,9 +86,8 @@ export function EmbeddingsBackfillPanel({ initialRemaining, initialTotal }: Pane
       <div>
         <div className="text-muted-foreground mb-1.5 flex items-center justify-between gap-3 text-[12.5px]">
           <span id={countId}>
-            <span className="text-foreground font-mono tabular-nums">{done.toLocaleString()}</span>{' '}
-            of <span className="font-mono tabular-nums">{total.toLocaleString()}</span> items
-            embedded
+            <span className="text-foreground font-mono tabular-nums">{formatNumber(done)}</span> of{' '}
+            <span className="font-mono tabular-nums">{formatNumber(total)}</span> items embedded
           </span>
           <span className="font-mono tabular-nums">{pct}%</span>
         </div>

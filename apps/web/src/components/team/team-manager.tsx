@@ -63,7 +63,13 @@ import {
 } from '@/server/actions/team';
 import { formatRelative } from '@/lib/utils';
 
-import { ROLES, ROLE_LABELS, type InviteableRole, type Role } from '@stockpilot/core';
+import {
+  formatOrgDateTime,
+  ROLES,
+  ROLE_LABELS,
+  type InviteableRole,
+  type Role,
+} from '@stockpilot/core';
 
 interface Member {
   id: string;
@@ -121,6 +127,13 @@ interface TeamManagerProps {
   grantsByUser: Record<string, string[]>;
   charterSingular: string;
   warehouseSingular: string;
+  /**
+   * The organization's time zone (resolveOrgTimezone of its stored zone). The
+   * page renders this component on the server first, so a time printed with
+   * the runtime's zone was the server's (UTC on Vercel), and React keeps a
+   * server attribute that differs while it hydrates (B9 review).
+   */
+  timeZone: string;
   /** The page heading (the organization's name for Team in the sidebar,
    *  through effectiveNavLabel on the server page). Defaults to "Team". */
   title?: React.ReactNode;
@@ -141,6 +154,7 @@ export function TeamManager({
   grantsByUser,
   charterSingular,
   warehouseSingular,
+  timeZone,
   title = 'Team',
   subline,
 }: TeamManagerProps) {
@@ -191,6 +205,7 @@ export function TeamManager({
                 warehouseCharters={warehouseCharters}
                 charterSingular={charterSingular}
                 warehouseSingular={warehouseSingular}
+                timeZone={timeZone}
               />
             ))}
           </TableBody>
@@ -244,6 +259,7 @@ function MemberRow({
   warehouseCharters,
   charterSingular,
   warehouseSingular,
+  timeZone,
 }: {
   member: Member;
   currentUserRole: Role;
@@ -254,6 +270,7 @@ function MemberRow({
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
   warehouseSingular: string;
+  timeZone: string;
 }) {
   const router = useRouter();
   const [removeOpen, setRemoveOpen] = React.useState(false);
@@ -421,7 +438,13 @@ function MemberRow({
           {canSeeDisabledStatus && member.disabledAt && (
             <Badge
               variant="destructive"
-              title={`Disabled ${new Date(member.disabledAt).toLocaleString()}`}
+              // The organization's time, the same on the server and in the
+              // browser (a bare toLocaleString() kept the server's UTC time).
+              title={`Disabled ${formatOrgDateTime(
+                member.disabledAt,
+                { dateStyle: 'medium', timeStyle: 'short' },
+                timeZone,
+              )}`}
             >
               Disabled
             </Badge>

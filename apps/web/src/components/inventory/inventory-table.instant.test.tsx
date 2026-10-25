@@ -1974,6 +1974,34 @@ describe('InventoryTable planned first page (streamed default view)', () => {
     expect(screen.getByRole('link', { name: 'Only Row' })).toBeInTheDocument();
   });
 
+  // B9: the note printed its total raw ("of 1234") under a summary line that
+  // formats it ("1,234 SKUs").
+  it('the note to refresh prints its figures with thousands separators', async () => {
+    const dataset = Promise.resolve(null);
+    const tree = () => (
+      <InventoryTable
+        items={[item({ id: 'n1', name: 'Only Row' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={1234}
+        pageSize={30}
+        instantPromise={dataset}
+        firstPage={{
+          pageCount: 42,
+          pageItemCount: 1,
+          distinctSkus: 1234,
+          placementRows: 1240,
+          skuItemRowCounts: [],
+        }}
+      />
+    );
+    const { rerender } = render(tree());
+    await act(async () => {});
+    rerender(tree());
+    await act(async () => {});
+    expect(footerText()).toMatch(/^1,234 SKUs · 1,240 rows · /);
+    expect(screen.getByText('Showing 1–1 of 1,234. Refresh to see more.')).toBeInTheDocument();
+  });
+
   it('a planned page that is the whole list needs no note when the dataset never comes', async () => {
     const dataset = Promise.resolve(null);
     const { rerender } = render(strandedTree(dataset, 1));

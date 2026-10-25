@@ -88,3 +88,38 @@ describe('ReceiptHistory hydrates across a clock tick', () => {
     }
   });
 });
+
+// B9: the quantities and the totals line were `n.toLocaleString()`, the
+// RUNTIME's locale. This component renders on the server (en-US: "1,240"),
+// so a German browser hydrated "1.240", React discarded the server HTML
+// (error #418), and the receipt read differently from the PO page around it.
+describe('ReceiptHistory quantities', () => {
+  it('prints them in the app format, the same on the server and in a German browser', async () => {
+    const big: ReceiptLineRow = {
+      ...LINE,
+      qty_received_base: 1250,
+      qty_accepted_base: 1240,
+      qty_rejected_base: 10,
+    };
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ReceiptHistory
+          receipts={[RECEIPT]}
+          lines={[big]}
+          items={{ 'item-1': { name: 'Laptop stand', sku: 'LS-1' } }}
+          canReverse={false}
+        />
+      ),
+      { serverNow: T0, browserNow: T0, browserLocale: 'de-DE' },
+    );
+    try {
+      expect(run.errors).toEqual([]);
+      const row = within(run.container).getByText('Laptop stand').closest('tr')!;
+      expect(row).toHaveTextContent('1,250');
+      expect(row).toHaveTextContent('1,240');
+      expect(run.container).toHaveTextContent('Total accepted: 1,240 · Rejected: 10');
+    } finally {
+      run.unmount();
+    }
+  });
+});
