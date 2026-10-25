@@ -16,7 +16,8 @@ import { isSharePath } from '@/lib/share-paths';
  * `window.location.href` verbatim to a third-party vendor, which would hand
  * the token over (GC 27: never log a share token or signed URL). A credential
  * in another page's URL (a return path to a share page, a session in the
- * fragment) is taken out of each event by the before_send hook below.
+ * fragment) is taken out of each event by the before_send hook below, and no
+ * request PostHog makes sends that URL as its Referer.
  *
  * THIS IS LIVE: `NEXT_PUBLIC_POSTHOG_KEY` is set for production and preview
  * (verified 2026-09-18), so the guard below is what stands between those
@@ -71,6 +72,18 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         // lands on /signin with a live session there, and the SDK keeps
         // fragments by default when `defaults` is unset, as it is here.
         disable_capture_url_hashes: true,
+        // Nor send the page's address as a Referer. A beacon or a script tag
+        // goes by the page's referrer policy, which for a same-origin request
+        // such as /ingest is the full address, query and all (next.config.ts),
+        // and the /ingest rewrite forwards it to PostHog: the remote config
+        // script on every page load, the beacon that empties the queue as the
+        // page goes away. The SDK's own fetch asks for the origin only, so the
+        // queue goes by fetch (keepalive) and each script asks for the same.
+        disable_beacon: true,
+        prepare_external_dependency_script: (script) => {
+          script.setAttribute('referrerpolicy', 'strict-origin');
+          return script;
+        },
         // Every event, before it leaves the browser: no credential in any URL
         // it carries (the invite page's Sign in link is
         // /signin?redirect=/invite/<token>), and `perf_*` events cut down to
