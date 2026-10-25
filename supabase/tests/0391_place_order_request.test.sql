@@ -958,7 +958,13 @@ select is(
       where c.relnamespace = 'public'::regnamespace
         and c.relname in ('order_requests', 'order_request_lines', 'idempotency_keys', 'warehouses', 'warehouse_charters')
       group by c.relname) x),
-  E'idempotency_keys=7c0b897aca77ae4e04596b5f08a6f58b|2\n'
+  -- Re-pinned by 0407 (was 7c0b897aca77ae4e04596b5f08a6f58b|2): the FOR ALL
+  -- idempotency_keys_write became an INSERT and an UPDATE policy with the same
+  -- manager floor, and idempotency_keys_select went from any member to
+  -- managers; putting the two old policies back on the post-0407 stack gives
+  -- 7c0b897a|2 exactly. The 0391 writers keep their keys in order_submissions,
+  -- never in idempotency_keys.
+  E'idempotency_keys=f2904bc6a44f00dae9504d234b77e545|3\n'
   -- Re-pinned by 0395 (was 3741951ce4f5bce8394bfe6e5d7a8378|4 and
   -- 28cf8d6f9b07075076b13a24c2d3d984|4): order_request_lines_insert refuses a kit
   -- and order_requests_update requires write access to the order's warehouse

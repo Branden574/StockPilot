@@ -1,5 +1,5 @@
 begin;
-select plan(40);
+select plan(41);
 
 -- ── Fixtures ────────────────────────────────────────────────────────────────
 \set org_a '''a0000000-0000-0000-0000-00000000000a'''
@@ -194,14 +194,31 @@ set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000001';
 select is((select count(*)::int from public.maintenance_request_notes), 0, 'requester cannot read internal notes');
 
 -- ── Attachments: ownership + cross-tenant guards (Fix 1 / exploit 1) ────────
--- Requester inserts an attachment on their own request: allowed.
+-- Since 0407 only the service role inserts attachment rows: the finalize step
+-- does, after its own checks (#325), and a user's direct insert is refused by
+-- privilege. So the row is recorded the way finalize records it, and read
+-- back as the requester.
+set local role to service_role;
 insert into public.maintenance_request_attachments
   (organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
 select organization_id, id, 'a0000000-0000-0000-0000-00000000000a/photo.jpg', 'photo.jpg', 'photo.jpg',
        'image/jpeg', 12345, '10000000-0000-0000-0000-000000000001'
-  from public.maintenance_requests where organization_id = :org_a and request_number = 1;
+  from public.maintenance_requests where organization_id = 'a0000000-0000-0000-0000-00000000000a' and request_number = 1;
+set local role to 'authenticated';
 select is((select count(*)::int from public.maintenance_request_attachments), 1,
-  'requester inserts an attachment on their own request');
+  'the requester reads the attachment finalize recorded on their own request');
+
+-- The requester's own direct insert, on their own request: refused by
+-- privilege before any policy (0407 dropped the insert policy too).
+select throws_ok(
+  $$ insert into public.maintenance_request_attachments
+       (organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
+     select organization_id, id, 'a0000000-0000-0000-0000-00000000000a/photo2.jpg', 'photo2.jpg', 'photo2.jpg',
+            'image/jpeg', 12345, '10000000-0000-0000-0000-000000000001'
+       from public.maintenance_requests where organization_id = 'a0000000-0000-0000-0000-00000000000a'
+        and request_number = 1 $$,
+  '42501', 'permission denied for table maintenance_request_attachments',
+  'a requester''s direct attachment insert is refused by privilege (0407; finalize inserts with the service role)');
 
 -- The proven exploit: same (own) request, but the attachment is stamped with
 -- a FOREIGN organization_id — org C, which has the module ENABLED (unlike

@@ -57,8 +57,9 @@
 -- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
 -- the standing proof that INV-25/26 can still fail. The same holds for
 -- INV-32, INV-34 and INV-36 (0371), the controls for INV-31, INV-33 and
--- INV-35, for INV-39 (0373), the control for INV-37 and INV-38, and for
--- INV-41 (0373), the control for INV-40.
+-- INV-35, for INV-39 (0373), the control for INV-37 and INV-38, for
+-- INV-41 (0373), the control for INV-40, and for INV-44 (0407), the control
+-- for INV-42 and INV-43.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -67,7 +68,7 @@
 
 begin;
 
-select plan(42);
+select plan(46);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1581,6 +1582,91 @@ select is(
   'INV-41 control: the scope-cache census sees a planted writer'
 );
 drop function public._sec_inv_probe_draw_scope();
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- INV-42..44 (0407, docs INV-C8). No API client role holds TRUNCATE,
+-- REFERENCES, TRIGGER or MAINTAIN on a relation in public, and none gets them
+-- from the migration role's default privileges. TRUNCATE empties a table
+-- without asking row level security; the other three serve only DDL,
+-- maintenance and LOCK TABLE, which no API path runs. service_role is the
+-- server's own role and keeps them; it is not swept.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- The detectors, shared by the sweeps and their control. Relations: every
+-- kind that takes table privileges, at table level and at column level (a
+-- REFERENCES grant can name one column). Defaults: the postgres role's, in
+-- public and database-wide (no schema), for tables, which also cover views
+-- and materialized views.
+create function pg_temp.inv42_holders() returns setof text language sql stable as $f$
+  select distinct c.relname::text || ':' || a.grantee::regrole::text || ':' || a.privilege_type
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    cross join lateral aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+   where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f')
+     and a.grantee in ('anon'::regrole, 'authenticated'::regrole)
+     and a.privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
+  union
+  select distinct c.relname::text || '.' || att.attname::text || ':' || a.grantee::regrole::text || ':' || a.privilege_type
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_attribute att on att.attrelid = c.oid and att.attnum > 0 and not att.attisdropped
+    cross join lateral aclexplode(att.attacl) a
+   where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f') and att.attacl is not null
+     and a.grantee in ('anon'::regrole, 'authenticated'::regrole)
+     and a.privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
+$f$;
+create function pg_temp.inv43_defaults() returns setof text language sql stable as $f$
+  select coalesce(d.defaclnamespace::regnamespace::text, '(all schemas)') || ':' || a.grantee::regrole::text
+         || ':' || a.privilege_type
+    from pg_default_acl d
+    cross join lateral aclexplode(d.defaclacl) a
+   where d.defaclrole = 'postgres'::regrole
+     and d.defaclobjtype = 'r'
+     and (d.defaclnamespace = 'public'::regnamespace or d.defaclnamespace = 0)
+     and a.grantee in ('anon'::regrole, 'authenticated'::regrole)
+     and a.privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
+$f$;
+
+-- INV-42. The sweep over every relation in public.
+select is(
+  array(select h from pg_temp.inv42_holders() h order by 1),
+  array[]::text[],
+  'INV-42: no relation in public gives anon or authenticated TRUNCATE, REFERENCES, TRIGGER or MAINTAIN (0407)'
+);
+
+-- INV-43. What a later migration's table, view or materialized view gets.
+select is(
+  array(select d from pg_temp.inv43_defaults() d order by 1),
+  array[]::text[],
+  'INV-43: the postgres role''s default privileges give anon and authenticated none of the four in public (0407)'
+);
+
+-- INV-44. VACUITY + MUTATION CONTROL for INV-42 and INV-43: the swept
+-- population is not empty, a table created now is clean, and a planted grant
+-- of each kind (table-level, column-level, default) is seen.
+create table public._sec_inv_probe_ddl_privs (id int primary key, note text);
+select ok(
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f')) > 100
+  and not exists (select 1 from pg_temp.inv42_holders() h where h like '\_sec\_inv\_probe\_ddl\_privs%')
+  and (select bool_and(has_table_privilege('authenticated', 'public._sec_inv_probe_ddl_privs', p))
+         from unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p),
+  'INV-44 control: the population is not empty, and a table created now holds the old defaults without the four'
+);
+grant truncate on table public._sec_inv_probe_ddl_privs to authenticated;
+grant references (note) on table public._sec_inv_probe_ddl_privs to anon;
+alter default privileges for role postgres in schema public grant maintain on tables to anon;
+select is(
+  array(select x from (select h from pg_temp.inv42_holders() h where h like '\_sec\_inv\_probe\_ddl\_privs%'
+                       union all
+                       select d from pg_temp.inv43_defaults() d) s(x) order by 1),
+  array(select x from unnest(array['_sec_inv_probe_ddl_privs.note:anon:REFERENCES',
+                                   '_sec_inv_probe_ddl_privs:authenticated:TRUNCATE',
+                                   'public:anon:MAINTAIN']) x order by 1),
+  'INV-44 control: a planted table-level, column-level and default grant are each seen'
+);
+alter default privileges for role postgres in schema public revoke maintain on tables from anon;
+drop table public._sec_inv_probe_ddl_privs;
 
 select * from finish();
 rollback;

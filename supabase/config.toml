@@ -52,10 +52,9 @@ buckets.item-images.public = false
 buckets.item-images.file_size_limit = "10MiB"
 buckets.item-images.allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/avif"]
 
-buckets.item-attachments.public = false
-buckets.item-attachments.file_size_limit = "20MiB"
-# Dormant bucket (no app writer yet) — pinned conservatively; 0325 mirrors this in prod.
-buckets.item-attachments.allowed_mime_types = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic"]
+# No item-attachments bucket: it never had an app writer, and migration 0407
+# deleted the empty bucket in production. Declaring it here would re-create it
+# on every local and CI stack after the migrations run.
 
 buckets.org-logos.public = true
 buckets.org-logos.file_size_limit = "2MiB"

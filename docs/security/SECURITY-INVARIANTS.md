@@ -35,7 +35,13 @@
      presented the /auth/confirm login CSRF as closed for browsers that send
      Fetch Metadata. Both corrected, with the defences added for them and the
      section 8 row updated. The GET list was read from the route files on
-     that date; it is not a sweep. -->
+     that date; it is not a sweep.
+
+     AMENDED 2026-10-25 (0407, docket S9): INV-C8 added, with its assertions
+     INV-42..44, and INV-D3 notes the deleted item-attachments bucket. The
+     catalog figures in INV-C8 were read out of the migration scratch stack at
+     migration 0402 (equal to production's census of 2026-10-24); the counts
+     in section 10 were not re-derived. -->
 
 # Security invariants
 
@@ -1181,6 +1187,34 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
+### INV-C8 — no API client role holds `TRUNCATE`, `REFERENCES`, `TRIGGER` or `MAINTAIN` in `public`
+
+- **Invariant**: neither `anon` nor `authenticated` holds `TRUNCATE`,
+  `REFERENCES`, `TRIGGER` or `MAINTAIN` on any relation in `public`, at table
+  or column level, and the `postgres` role's default privileges (in `public`
+  and database-wide) give them none of the four, so a table a later
+  migration creates does not either.
+- **Why it matters**: `TRUNCATE` empties a table without asking row level
+  security: it is the one table privilege the policies cannot narrow, so any
+  role that holds it can wipe the table whatever its policies say.
+  `REFERENCES`, `TRIGGER` and `MAINTAIN` serve only DDL, maintenance and
+  `LOCK TABLE` in any mode (`MAINTAIN`, Postgres 17), which no API path runs.
+  Before 0407 the two roles held the four on 122 of the 145 relations, 871
+  privileges in all, every one from Supabase's default privileges.
+- **Enforced by**: 0407's GENERATED REVOKES block (one statement per relation
+  that held any of them, from `node scripts/gen-explicit-grants-sql.mjs
+  --revokes`) and its `alter default privileges ... revoke`. No function or
+  trigger in `public` or `ledger` truncates, locks, refreshes or maintains a
+  table, and foreign key checks run as the table owner, which is why the
+  revoke changes no API path. `service_role` keeps them: it is the server's own
+  role and bypasses RLS anyway.
+- **Tested at**: INV-42 (every relation, table and column level), INV-43 (the
+  default privileges), INV-44 (control: the population is not empty, a table
+  created now is clean, and a planted table-level, column-level and default
+  grant are each seen); per object in
+  [`0407_grants_policy_cleanup.test.sql`](../../supabase/tests/0407_grants_policy_cleanup.test.sql)
+  (T1-T3).
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
@@ -1291,7 +1325,10 @@ migration; INV-16 fails if that is forgotten.
   outbound email), 12 with a size cap. Read scoping of `user-avatars` to the
   owning user's folder is proven end-to-end against `storage.objects` in
   `0322_quantity_guards_avatar_scope_override_clears.test.sql`, not merely as
-  policy text.
+  policy text. 0407 deleted the item-attachments bucket (it never had an app
+  writer and held no object; the migration refuses to run if it holds any)
+  and its two storage policies, and `supabase/config.toml` no longer declares
+  it.
 
 ---
 

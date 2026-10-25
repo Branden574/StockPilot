@@ -8,11 +8,12 @@
 --   • exists with the declared signature,
 --   • SECURITY INVOKER with search_path pinned to public,
 --   • anon/authenticated hold NO EXECUTE (so they can never become a
---     cross-org aggregate oracle for user clients); service_role can execute,
+--     cross-org aggregate oracle for user clients); service_role can execute
+--     (0407 took that away: see below),
 --   • behavioral: seeded fixtures aggregate into hand-computed totals, with
 --     out-of-window rows excluded and cross-org rows isolated.
--- Plus live 42501 probes on a representative function and a service_role
--- lives_ok.
+-- Plus live 42501 probes on a representative function (anon, a signed-out
+-- authenticated call and, since 0407, service_role).
 --
 -- 0380 CHANGED THE CONTRACT: ReportsService now calls these with the
 -- CALLER'S client, so authenticated holds EXECUTE (each body gates: signed
@@ -20,6 +21,9 @@
 -- decides what each answer contains. The behavioural checks below therefore
 -- run as each org's OWNER (who reads every row) instead of the superuser,
 -- which the gates now refuse. 0380's own file proves the gates and scoping.
+--
+-- 0407 ENDED THE ROLLOUT: service_role lost EXECUTE on all six and the bodies
+-- lost the branch that answered it with no user (0407's own file, R1-R4).
 --
 -- now() = transaction_timestamp() is constant across this begin/rollback
 -- block, so p_since (= now() − 30 days) and the seeded created_at offsets are
@@ -138,9 +142,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_movement_type_summary(uuid, timestamptz)', 'execute'),
   'report_movement_type_summary: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_movement_type_summary(uuid, timestamptz)', 'execute'),
-  'report_movement_type_summary: service_role has EXECUTE');
+  'report_movement_type_summary: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- report_top_movers(uuid, timestamptz, integer) ──────────────────────────────
 select has_function('public', 'report_top_movers',
@@ -157,9 +161,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_top_movers(uuid, timestamptz, integer)', 'execute'),
   'report_top_movers: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_top_movers(uuid, timestamptz, integer)', 'execute'),
-  'report_top_movers: service_role has EXECUTE');
+  'report_top_movers: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- report_shrinkage_totals(uuid, timestamptz) ─────────────────────────────────
 select has_function('public', 'report_shrinkage_totals',
@@ -176,9 +180,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_shrinkage_totals(uuid, timestamptz)', 'execute'),
   'report_shrinkage_totals: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_shrinkage_totals(uuid, timestamptz)', 'execute'),
-  'report_shrinkage_totals: service_role has EXECUTE');
+  'report_shrinkage_totals: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- report_item_out_movements(uuid, timestamptz) ───────────────────────────────
 select has_function('public', 'report_item_out_movements',
@@ -195,9 +199,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_item_out_movements(uuid, timestamptz)', 'execute'),
   'report_item_out_movements: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_item_out_movements(uuid, timestamptz)', 'execute'),
-  'report_item_out_movements: service_role has EXECUTE');
+  'report_item_out_movements: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- report_bundle_activity(uuid, timestamptz) ──────────────────────────────────
 select has_function('public', 'report_bundle_activity',
@@ -214,9 +218,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_bundle_activity(uuid, timestamptz)', 'execute'),
   'report_bundle_activity: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_bundle_activity(uuid, timestamptz)', 'execute'),
-  'report_bundle_activity: service_role has EXECUTE');
+  'report_bundle_activity: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- report_bundle_component_value(uuid, timestamptz) ───────────────────────────
 select has_function('public', 'report_bundle_component_value',
@@ -233,9 +237,9 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('authenticated',
   'public.report_bundle_component_value(uuid, timestamptz)', 'execute'),
   'report_bundle_component_value: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
-select ok(has_function_privilege('service_role',
+select ok(not has_function_privilege('service_role',
   'public.report_bundle_component_value(uuid, timestamptz)', 'execute'),
-  'report_bundle_component_value: service_role has EXECUTE');
+  'report_bundle_component_value: service_role has no EXECUTE (0407: the rollout grant is gone)');
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- LIVE PRIVILEGE PROBES (3) — representative function.
@@ -272,10 +276,17 @@ select case
 end;
 reset role;
 
+-- 0407 took service_role's EXECUTE away (asserted statically above); the
+-- live denial is opt-in like the two probes above.
 set local role to 'service_role';
-select lives_ok(
-  $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
-  'service_role can execute report_movement_type_summary');
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
+      '42501', null, 'service_role cannot execute report_movement_type_summary (0407)')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 -- ═════════════════════════════════════════════════════════════════════════════
