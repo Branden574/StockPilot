@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isValidIsbn } from '@stockpilot/core';
+
 import type { ExtractedPo } from './extract';
 
 type ExtractedLine = ExtractedPo['lines'][number];
@@ -81,10 +83,14 @@ const SIZE_TOKENS: ReadonlySet<string> = new Set([
  *  code] }" or "[object Object]". */
 const SIZE_TOKEN_BY_WORD: ReadonlyMap<string, string> = new Map(Object.entries(APPAREL_SIZE_WORDS));
 
-/** "<count> - " or "<count>: " at the very start of a description. A dash or a
- *  colon only: "3 Ring Binder" and "2 x 4 Lumber" start with numbers that are
- *  part of the name. */
-const LEADING_COUNT = /^\s*(\d{1,6})\s*[-–—:]\s*/;
+/** "<count> - " or "<count>: " at the very start of a description: a dash, en
+ *  dash or em dash with a space on BOTH sides, or a colon with a space after
+ *  it (the invoice prints "25 - Small : ..."). A number joined to the next
+ *  word by a hyphen or a colon is part of the name, by the same rule
+ *  PART_SEPARATOR keeps for a hyphen inside a word: "3-Ring Binder",
+ *  "1-1/2\" Binder", "16:9 Monitor" and "1:1 Cover" keep their numbers. So do
+ *  "3 Ring Binder" and "2 x 4 Lumber", which have no dash or colon at all. */
+const LEADING_COUNT = /^\s*(\d{1,6})(?:\s+[-–—]\s+|\s*:\s+)/;
 
 /** Where one part of a printed name ends and the next begins: a colon (spaces
  *  optional), or a dash, en dash, em dash or bar with a space on BOTH sides.
@@ -108,6 +114,12 @@ function sizeTokenOf(part: string): string | null {
  * apparel size printed as its own part of the name moves to the end as its
  * token ("25 - Small : Carolina Blue" -> "Carolina Blue - S").
  *
+ * `printedSize` is the size the scan read for the line into its own field
+ * (extract.ts `size`: the size as printed, empty when the line has none). A
+ * word of the name that reads as a size moves only when it is that same size,
+ * so a title such as "M: Son of the Century", on a line with no size, keeps
+ * its "M".
+ *
  * WHY. Some vendor invoices (seen 2026-08-20) print each size of
  * a garment as "<qty> - <size> : <colour>". The scan kept that verbatim as the
  * item's name, so the sizes of one shirt never grouped (sizeRunStyleKey only
@@ -116,12 +128,17 @@ function sizeTokenOf(part: string): string | null {
  * receiving.
  *
  * CONSERVATIVE BY DESIGN: the count goes only when it equals the quantity the
- * line orders; the size moves only when it is a whole part of the name (not a
- * word inside a phrase such as "Large Format Paper"), when it is the only size
- * in the name, and when something other than the size is left. Anything else
- * returns the description as it was.
+ * line orders and a spaced dash or a colon follows it; the size moves only
+ * when the line printed that same size, when it is a whole part of the name
+ * (not a word inside a phrase such as "Large Format Paper"), when it is the
+ * only size in the name, and when something other than the size is left.
+ * Anything else returns the description as it was.
  */
-export function normalizeApparelName(description: string, quantity: number): string {
+export function normalizeApparelName(
+  description: string,
+  quantity: number,
+  printedSize: string,
+): string {
   const original = description.trim();
   let name = original;
 
@@ -131,6 +148,11 @@ export function normalizeApparelName(description: string, quantity: number): str
     if (rest) name = rest;
   }
 
+  // No size printed for the line (or one this table does not read): no word
+  // of the name is taken for its size.
+  const lineSize = sizeTokenOf(printedSize);
+  if (lineSize === null) return name;
+
   // [part, separator, part, separator, part, ...]
   const pieces = name.split(PART_SEPARATOR);
   const parts = pieces.filter((_, i) => i % 2 === 0).map((p) => p.trim());
@@ -139,6 +161,7 @@ export function normalizeApparelName(description: string, quantity: number): str
   if (sized.length !== 1) return name;
   const at = sized[0]!;
   const token = sizeTokenOf(parts[at]!)!;
+  if (token !== lineSize) return name;
 
   // A "Size" label printed as its own part ("Size: Large") goes with it.
   const from = at > 0 && parts[at - 1]!.toLowerCase() === 'size' ? at - 1 : at;
@@ -159,9 +182,16 @@ export function normalizeApparelName(description: string, quantity: number): str
 }
 
 /**
- * Applies normalizeApparelName to every INVENTORY line of a scan. Tax, freight,
- * fee and service lines are left as printed, and so is every field other than
- * the description: the line's `size` stays what the document printed.
+ * Applies normalizeApparelName to every INVENTORY line of a scan, with the size
+ * the scan read for that line. Tax, freight, fee and service lines are left as
+ * printed, and so is every field other than the description: the line's `size`
+ * stays what the document printed.
+ *
+ * A line whose vendor number is a checksum-valid ISBN is a book, and a book's
+ * title is never an apparel name: it keeps its printed description whole, even
+ * when the scan read a size for it ("M: Son of the Century" stays as printed).
+ * extract.ts runs this after the ISBN dedupe, which copies a book's ISBN onto
+ * its priced title line.
  *
  * `maxLength` is the scan's text bound (extract.ts MAX_SCAN_TEXT_LEN). Moving
  * a size to the end can add a few characters ("S:Blue" -> "Blue - S"), and a
@@ -173,8 +203,8 @@ export function normalizeApparelLineNames(
   maxLength: number,
 ): ExtractedLine[] {
   return lines.map((l) => {
-    if (l.lineType !== 'inventory') return l;
-    const description = normalizeApparelName(l.description, l.quantity);
+    if (l.lineType !== 'inventory' || isValidIsbn(l.vendorSku)) return l;
+    const description = normalizeApparelName(l.description, l.quantity, l.size);
     if (description === l.description || description.length > maxLength) return l;
     return { ...l, description };
   });
