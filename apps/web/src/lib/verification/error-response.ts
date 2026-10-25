@@ -45,3 +45,24 @@ export function verificationUnauthenticatedResponse(): NextResponse {
     { status: 401, headers: NO_STORE },
   );
 }
+
+/** The sentence for a read the rate limiter refused: the words the phone
+ *  shows for any 429 from these routes (verification-api.ts
+ *  describeVerificationError), and the exceptions routes' sentence. */
+export const VERIFICATION_RATE_LIMITED_COPY = 'Too many requests. Wait a moment and try again.';
+
+/** Too many reads: 429 in the same shape, never cached, with Retry-After
+ *  (whole seconds, at least 1) and `retryAt` (epoch ms), as the exceptions
+ *  routes answer it. */
+export function verificationRateLimitedResponse(resetAt: number): NextResponse {
+  return NextResponse.json(
+    { error: 'rate_limited', message: VERIFICATION_RATE_LIMITED_COPY, retryAt: resetAt },
+    {
+      status: 429,
+      headers: {
+        ...NO_STORE,
+        'Retry-After': String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))),
+      },
+    },
+  );
+}
