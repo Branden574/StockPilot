@@ -10,13 +10,14 @@ import { describe, expect, it } from 'vitest';
  * WHAT WAS OPEN: after the Next.js 16.4.3 upgrade (#381), Dependabot still
  * had alerts open on versions the lockfile resolved although every
  * consumer's range already allowed a fixed release, and `pnpm audit` listed
- * advisories that had no alert yet, one of them critical:
+ * advisories that had no alert yet, one of them critical (Dependabot opened
+ * those alerts on 2026-10-25):
  *
  *   - compression 1.8.1 (GHSA-vc2v-76pw-4v95, Dependabot #114): the Expo
  *     CLI's development server (apps/mobile: expo > @expo/cli, ^1.7.4).
  *   - dompurify 3.4.15 (GHSA-cg2g-xh64-v4q7 critical, GHSA-mrv2-3pqr-j5jr
- *     high, three low; Dependabot #110 and #116): asked for only by
- *     posthog-js's product-tours source (^3.4.13). The app imports
+ *     high, three low; Dependabot #110, #116 and #131 to #133): asked for
+ *     only by posthog-js's product-tours source (^3.4.13). The app imports
  *     posthog-js's main bundle, which does not contain it.
  *   - source-map-js 1.2.1 (GHSA-68fv-2mgg-jv7q, Dependabot #115): postcss
  *     8.5.28 and @tailwindcss/node 4.3.3 (both ^1.2.1), at build time.
@@ -27,12 +28,16 @@ import { describe, expect, it } from 'vitest';
  *     later do not depend on it at all, so the plugin now resolves metro
  *     0.84.6, the copy @react-native/metro-config already used. Expo bundles
  *     the phone app with its own pinned metro 0.84.5 (@expo/metro).
- *   - fast-uri 3.1.8 (four advisories of 2026-10-23): ajv 8, for commitlint
- *     and as @hookform/resolvers' unused ajv peer.
- *   - vite 6.4.3 (five advisories of 2026-10-20 and 2026-10-21, about its
- *     development server) and @vitest/mocker 4.1.11 (GHSA-qxg6-89mg-rqv8,
- *     GHSA-xp26-3454-mjgp): the test runner in apps/web, apps/mobile and
- *     packages/core. vitest 4.1.12 and vite 6.4.5 fix them.
+ *   - fast-uri 3.1.8 (four advisories of 2026-10-23, Dependabot #135 to
+ *     #138): ajv 8, for commitlint and as @hookform/resolvers' unused ajv
+ *     peer.
+ *   - vite 6.4.3 (five advisories of 2026-10-20 and 2026-10-21, in its
+ *     development server and the launch-editor copy it bundles, Dependabot
+ *     #124 to #128) and @vitest/mocker 4.1.11 (GHSA-qxg6-89mg-rqv8,
+ *     GHSA-xp26-3454-mjgp, Dependabot #129 and #130): the test runner in
+ *     apps/web, apps/mobile and packages/core. The first fixed releases are
+ *     vite 6.4.4 (the lockfile resolves 6.4.5) and @vitest/mocker 4.1.12,
+ *     which vitest 4.1.12 brings.
  *
  * sharp and shell-quote, fixed by #381 while their alerts (#119 and #118)
  * were still open, are held to the same rule.
@@ -45,8 +50,10 @@ import { describe, expect, it } from 'vitest';
  * a hand edit) fails CI instead of waiting for an alert.
  *
  * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release; zod 3
- * (GHSA-mrhx-c7xc-m3w5) needs zod 4, a change of its own. A withdrawn
- * advisory (sprintf-js, GHSA-hp3w-g68c-fv3c) is not a defect.
+ * (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and #134) needs zod 4, a
+ * change of its own (#381 refuses over-long lists on the two public routes
+ * until then). A withdrawn advisory (sprintf-js, GHSA-hp3w-g68c-fv3c) is not
+ * a defect.
  *
  * IF THIS FAILS: a lockfile change resolved a vulnerable version. Find what
  * asks for it (`pnpm why -r <package>`) and resolve the fixed version; do not
@@ -105,19 +112,23 @@ type Floor = { pkg: string; advisories: string[]; ranges: Range[] };
 /**
  * Each package's vulnerable ranges, merged across the advisories named
  * (copied from the GitHub advisory records, `first_patched_version` as
- * `fixed`).
+ * `fixed`). The comment on each entry records every advisory's own range and
+ * first patched release, as `range -> fix`, so a floor can be checked
+ * against `gh api /advisories/<id>`.
  */
 const FLOORS: Floor[] = [
   {
     pkg: 'compression',
+    // GHSA-vc2v-76pw-4v95 <1.8.2 -> 1.8.2.
     advisories: ['GHSA-vc2v-76pw-4v95'],
     ranges: [{ fixed: '1.8.2' }],
   },
   {
     pkg: 'dompurify',
-    // GHSA-cg2g-xh64-v4q7 >=3.4.4 <=3.4.16; GHSA-mrv2-3pqr-j5jr and
-    // GHSA-c6gr-qvv4-5v3f <=3.4.16; GHSA-6688-9rhm-gjv2 <=3.4.15;
-    // GHSA-p98j-92pf-mc4p >=3.4.13 <=3.4.15. Every one is fixed in 3.4.17.
+    // GHSA-cg2g-xh64-v4q7 >=3.4.4 <=3.4.16 -> 3.4.17; GHSA-mrv2-3pqr-j5jr and
+    // GHSA-c6gr-qvv4-5v3f <=3.4.16 -> 3.4.17; GHSA-6688-9rhm-gjv2 <=3.4.15 ->
+    // 3.4.16; GHSA-p98j-92pf-mc4p >=3.4.13 <=3.4.15 -> 3.4.16. 3.4.17 is the
+    // first release that fixes all five.
     advisories: [
       'GHSA-cg2g-xh64-v4q7',
       'GHSA-mrv2-3pqr-j5jr',
@@ -129,17 +140,23 @@ const FLOORS: Floor[] = [
   },
   {
     pkg: 'source-map-js',
+    // GHSA-68fv-2mgg-jv7q >=1.0.0 <1.2.2 -> 1.2.2.
     advisories: ['GHSA-68fv-2mgg-jv7q'],
     ranges: [{ from: '1.0.0', fixed: '1.2.2' }],
   },
   {
     pkg: 'image-size',
-    // GHSA-w3rx-r6r6-pgpr >=0.6.3 <=2.0.2; GHSA-5p2g-fcmc-qvqq >=1.2.0 <=2.0.2.
+    // GHSA-w3rx-r6r6-pgpr >=0.6.3 <=2.0.2 -> 2.0.3; GHSA-5p2g-fcmc-qvqq
+    // >=1.2.0 <=2.0.2 -> 2.0.3. No 1.x release is fixed.
     advisories: ['GHSA-w3rx-r6r6-pgpr', 'GHSA-5p2g-fcmc-qvqq'],
     ranges: [{ from: '0.6.3', fixed: '2.0.3' }],
   },
   {
     pkg: 'fast-uri',
+    // GHSA-w74x-v6f9-j3xg, GHSA-xhq7-xmqj-769h and GHSA-333x-w4r6-6crp:
+    // <2.4.8 -> 2.4.8, >=3.0.0 <3.1.9 -> 3.1.9, >=4.0.0 <4.2.3 -> 4.2.3.
+    // GHSA-wjr9-j795-jxcr: >=2.4.2 <2.4.8 -> 2.4.8, >=3.1.3 <3.1.9 -> 3.1.9,
+    // >=4.0.1 <4.2.3 -> 4.2.3.
     advisories: [
       'GHSA-w74x-v6f9-j3xg',
       'GHSA-wjr9-j795-jxcr',
@@ -154,6 +171,10 @@ const FLOORS: Floor[] = [
   },
   {
     pkg: 'vite',
+    // All five list the same vite ranges and first patched releases:
+    // <=6.4.3 -> 6.4.4, >=7.0.0 <=7.3.6 -> 7.3.7, >=8.0.0 <=8.1.5 -> 8.1.6,
+    // >=8.2.0 <=8.2.3 -> 8.2.4, >=8.3.0 <=8.3.2 -> 8.3.3. The 6.x fix is
+    // 6.4.4; the lockfile resolves 6.4.5.
     advisories: [
       'GHSA-587h-7wmj-h5pm',
       'GHSA-698v-4r3x-3vcv',
@@ -171,17 +192,24 @@ const FLOORS: Floor[] = [
   },
   {
     pkg: '@vitest/mocker',
-    // GHSA-qxg6-89mg-rqv8 >=2.1.0-beta.7 <4.1.12; GHSA-xp26-3454-mjgp >=4.1.11 <4.1.12.
+    // GHSA-qxg6-89mg-rqv8 >=2.1.0-beta.7 <4.1.12 -> 4.1.12, >=5.0.0-beta.1
+    // <5.0.3 -> 5.0.3; GHSA-xp26-3454-mjgp >=4.1.11 <4.1.12 -> 4.1.12,
+    // >=5.0.0-rc.2 <5.0.3 -> 5.0.3.
     advisories: ['GHSA-qxg6-89mg-rqv8', 'GHSA-xp26-3454-mjgp'],
-    ranges: [{ from: '2.1.0-beta.7', fixed: '4.1.12' }],
+    ranges: [
+      { from: '2.1.0-beta.7', fixed: '4.1.12' },
+      { from: '5.0.0-beta.1', fixed: '5.0.3' },
+    ],
   },
   {
     pkg: 'sharp',
+    // GHSA-wq5f-xc86-pv6w <0.35.5 -> 0.35.5.
     advisories: ['GHSA-wq5f-xc86-pv6w'],
     ranges: [{ fixed: '0.35.5' }],
   },
   {
     pkg: 'shell-quote',
+    // GHSA-pqg4-j6r4-53mv >=1.8.4 <1.11.0 -> 1.11.0.
     advisories: ['GHSA-pqg4-j6r4-53mv'],
     ranges: [{ from: '1.8.4', fixed: '1.11.0' }],
   },
@@ -318,8 +346,24 @@ describe('the check itself', () => {
     expect(vulnerableLocked(fixture(['fast-uri@2.4.8', 'fast-uri@4.2.3']))).toEqual([]);
     expect(vulnerableLocked(fixture(['vite@7.3.6', 'vite@8.2.0', 'vite@8.3.2']))).toHaveLength(3);
     expect(vulnerableLocked(fixture(['vite@7.3.7', 'vite@8.1.6', 'vite@8.3.3']))).toEqual([]);
+    // vite's 6.x fix is 6.4.4: 6.4.3 fails, 6.4.4 and the resolved 6.4.5 pass.
+    expect(vulnerableLocked(fixture(['vite@6.4.3']))).toHaveLength(1);
+    expect(vulnerableLocked(fixture(['vite@6.4.4', 'vite@6.4.5']))).toEqual([]);
     expect(vulnerableLocked(fixture(["'@vitest/mocker@2.1.0-beta.6'"]))).toEqual([]);
     expect(vulnerableLocked(fixture(["'@vitest/mocker@2.1.0-beta.7'"]))).toHaveLength(1);
+    expect(
+      vulnerableLocked(
+        fixture([
+          "'@vitest/mocker@5.0.0-beta.1'",
+          "'@vitest/mocker@5.0.2'",
+          "'@vitest/mocker@4.2.0'",
+        ]),
+      ),
+    ).toEqual([
+      '@vitest/mocker@5.0.0-beta.1 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp)',
+      '@vitest/mocker@5.0.2 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp)',
+    ]);
+    expect(vulnerableLocked(fixture(["'@vitest/mocker@5.0.3'"]))).toEqual([]);
   });
 
   it('orders prereleases before their release and fails a version it cannot read', () => {
