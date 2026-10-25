@@ -5,6 +5,14 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
+import type { NewRackConfirmationDetail } from '@stockpilot/core';
+
+import {
+  newRackConfirmContent,
+  newRackQuestion,
+  rackFieldsFromLabel,
+} from '@/components/inventory/new-rack-question';
+import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -50,6 +58,11 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
   const [crateColor, setCrateColor] = useState('');
   const [crateNumber, setCrateNumber] = useState('');
   const [quantity, setQuantity] = useState('0');
+  // "Create new rack 1-B?" (2026-10-24): a copy's stock is moved onto the rack
+  // typed here, and when no such rack exists the server asks before it creates
+  // one, the same question as the New item form (see new-rack-question.ts).
+  // Products only: a duplicated book is never placed by the duplicate.
+  const [rackQuestion, setRackQuestion] = useState<NewRackConfirmationDetail | null>(null);
 
   function reset() {
     setRackNumber('');
@@ -57,15 +70,22 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
     setCrateColor('');
     setCrateNumber('');
     setQuantity('0');
+    setRackQuestion(null);
   }
 
-  function submit() {
+  /**
+   * `answer` is the person's reply to the server's new-rack question, for this
+   * one save: yes, or the near-match to put the copy on instead.
+   */
+  function submit(answer: { confirmNewRack?: true; rack?: { number: string; row: string } } = {}) {
+    const number = answer.rack?.number ?? rackNumber;
+    const row = answer.rack?.row ?? rackRow;
     const qty = Number.parseInt(quantity, 10);
     if (Number.isNaN(qty) || qty < 0) {
       toast.error('Quantity must be 0 or more.');
       return;
     }
-    if (!rackNumber.trim()) {
+    if (!number.trim()) {
       toast.error('Rack number is required.');
       return;
     }
@@ -79,8 +99,8 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         ? {
             originalId: itemId,
             itemType: 'book' as const,
-            rackNumber: rackNumber.trim(),
-            rackRow: rackRow.trim() || null,
+            rackNumber: number.trim(),
+            rackRow: row.trim() || null,
             crateColor: crateColor.trim(),
             crateNumber: crateNumber.trim(),
             quantity: qty,
@@ -88,15 +108,21 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         : {
             originalId: itemId,
             itemType: 'product' as const,
-            rackNumber: rackNumber.trim(),
-            rackRow: rackRow.trim() || null,
+            rackNumber: number.trim(),
+            rackRow: row.trim() || null,
             quantity: qty,
+            // Only after the person said yes to creating the new rack.
+            ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
           };
       const result = await duplicateItemAction(input);
       if (!result.ok) {
+        const question = isBook ? null : newRackQuestion(result.error);
+        setRackQuestion(question);
+        if (question) return;
         toast.error(result.error.message);
         return;
       }
+      setRackQuestion(null);
       toast.success(`Duplicated "${itemName}"`);
       setOpen(false);
       reset();
@@ -221,11 +247,26 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
           <Button variant="outline" onClick={() => setOpen(false)} disabled={pending}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={pending}>
+          <Button onClick={() => submit()} disabled={pending}>
             {pending ? 'Duplicating…' : 'Duplicate'}
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <PlacementConfirmDialog
+        open={rackQuestion !== null}
+        content={rackQuestion ? newRackConfirmContent(rackQuestion) : null}
+        submitting={pending}
+        onCancel={() => setRackQuestion(null)}
+        onConfirm={() => submit({ confirmNewRack: true })}
+        onUseSuggestion={(label) => {
+          // Show the rack the copy goes onto, and save onto it.
+          const rack = rackFieldsFromLabel(label);
+          setRackNumber(rack.number);
+          setRackRow(rack.row);
+          submit({ rack });
+        }}
+      />
     </Dialog>
   );
 }
