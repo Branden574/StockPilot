@@ -70,8 +70,11 @@ beforeEach(() => {
 });
 
 describe('ReceiptHistory', () => {
+  // Re-pinned by F4-1 desk check F10 (was: no canReceive): the sentence names
+  // Receive items only where the page offers it, and says "No receipts yet."
+  // alone to anyone else (receipt-history.checklist.test.tsx).
   it('says there are no receipts yet, in its own words', () => {
-    render(<ReceiptHistory receipts={[]} lines={[]} items={{}} canReverse />);
+    render(<ReceiptHistory receipts={[]} lines={[]} items={{}} canReverse canReceive />);
     expect(
       screen.getByText(
         'No receipts yet. Use the "Receive items" button on the line items above to record what was received — partial deliveries are fine.',

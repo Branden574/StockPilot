@@ -477,7 +477,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     permissions: [],
     surfaces: ['mobile'],
     apiPrefixes: [],
-    ownsTables: ['receipts', 'receipt_lines'],
+    ownsTables: ['receipts', 'receipt_lines', 'checklist_versions', 'checklist_runs'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
       // 105 puts Receive POs first in Purchasing, just above Purchase orders

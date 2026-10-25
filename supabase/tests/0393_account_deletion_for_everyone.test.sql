@@ -316,9 +316,16 @@ select is(
   -- afc55a5ab973223f06d7c9d0245929f1|134, production's own census through
   -- 0396 (read 2026-10-11). 0399 (Ungroup) adds one key: the grouping
   -- request log's person, item_grouping_requests.user_id>user_profiles:c:NN
-  -- (recomputed from that production census with the one entry added).
-  '885e1d5a80696bacdf3424d5f34953e2|135|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log (135 keys), and no key to a person is composite or names SET NULL columns');
+  -- (recomputed from that production census with the one entry added),
+  -- 885e1d5a80696bacdf3424d5f34953e2|135, which production gives at head 0401.
+  -- Re-pinned by 0406: the receiving checklist adds four person keys, all ON
+  -- DELETE SET NULL on nullable columns (A3 rule): checklist_runs.completed_by
+  -- and started_by, checklist_versions.published_by and retired_by, to
+  -- user_profiles. Computed from production's own 135 rows (the schema-only
+  -- dump of 2026-10-24, which reproduces 885e1d5a...|135) plus exactly those
+  -- four.
+  '10105e6b2602f70de346249c34886572|139|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log and the receiving checklist''s four SET NULL keys (139 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -351,10 +358,16 @@ select is(
              where c.conrelid = ('public.' || m.tbl)::regclass and c.contype = 'f'
                and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)
                and c.confdeltype = 'n')),
-  'approvals,audit_logs,carrier_shipments,cycle_count_ai_scans,org_connections,organization_invites,organization_modules,'
-  'platform_admin_audit,po_imports,putaway_moves,receipts,returns,schedule_events,size_count_training_samples,'
-  'stock_movements,uom_conversions#',
-  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0393 changes, audit_logs, stock_movements), and on each the marked columns are exactly its SET NULL person columns');
+  -- Re-pinned by 0406 (was the 16 without checklist_runs and
+  -- checklist_versions): the receiving checklist's two new tables carry the
+  -- marker for their person columns (A3 rule for a new person column shown
+  -- as "Deleted user"); their trigger pairs, stamps and CHECKs are proven by
+  -- the receiving checklist suite (A9, A10, D1), so they are not added to
+  -- `marked` here.
+  'approvals,audit_logs,carrier_shipments,checklist_runs,checklist_versions,cycle_count_ai_scans,org_connections,'
+  'organization_invites,organization_modules,platform_admin_audit,po_imports,putaway_moves,receipts,returns,'
+  'schedule_events,size_count_training_samples,stock_movements,uom_conversions#',
+  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0393 changes, audit_logs, stock_movements) and the receiving checklist''s two, and on each marked table the marked columns are exactly its SET NULL person columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || a.attname, ',' order by 1), '')
      from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
@@ -368,13 +381,18 @@ select is(
     where c.connamespace = 'public'::regnamespace and c.contype = 'c'
       and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
            or c.conname = 'cc_ai_scans_confirm_chk')),
+  -- Re-pinned by 0406 (was the same list without the two checklist_ rows):
+  -- the receiving checklist adds two exactly-one CHECKs of the same rule on
+  -- its own tables. The selector stays every *_deleted_chk in public, so any
+  -- later one, on any table, must be validated and listed here.
   'approvals.approvals_requested_by_deleted_chk:true,cycle_count_ai_scans.cc_ai_scans_confirm_chk:true,'
+  'checklist_runs.checklist_runs_started_by_deleted_chk:true,checklist_versions.checklist_versions_published_by_deleted_chk:true,'
   'cycle_count_ai_scans.cycle_count_ai_scans_created_by_deleted_chk:true,organization_invites.organization_invites_invited_by_deleted_chk:true,'
   'platform_admin_audit.platform_admin_audit_actor_user_id_deleted_chk:true,po_imports.po_imports_uploaded_by_deleted_chk:true,'
   'putaway_moves.putaway_moves_performed_by_deleted_chk:true,receipts.receipts_received_by_deleted_chk:true,'
   'schedule_events.schedule_events_created_by_deleted_chk:true,'
   'size_count_training_samples.size_count_training_samples_captured_by_deleted_chk:true',
-  'K6: the nine exactly-one CHECKs and the relaxed cc_ai_scans_confirm_chk exist and are validated');
+  'K6: the nine exactly-one CHECKs, 0406''s two and the relaxed cc_ai_scans_confirm_chk exist and are validated');
 select is(
   (select coalesce(string_agg(x.tbl || ':' || x.problem, ',' order by x.tbl), '')
      from (
@@ -528,8 +546,11 @@ select is(
                      or c.conname in ('cc_ai_scans_confirm_chk', 'order_requests_delivery_target_chk', 'order_submissions_user_id_fkey',
                                       'delivery_locations_driver_user_id_fkey', 'user_permission_overrides_updated_by_fkey',
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
-  'true|true|true/16',
-  'K20: the five functions, the 16 deleted_users columns and the 16 constraints 0393 adds or restates say so in their comments');
+  -- Re-pinned by 0406 (was true|true|true/16): its two exactly-one CHECKs
+  -- (K6) say "the 0393 rule" in their comments, so every *_deleted_chk in
+  -- public still has to name 0393.
+  'true|true|true/18',
+  'K20: the five functions, the 16 deleted_users columns, the 16 constraints 0393 adds or restates and 0406''s two exactly-one CHECKs say so in their comments');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'

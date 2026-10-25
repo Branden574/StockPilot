@@ -243,6 +243,15 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 ### Receiving
 **Purpose:** record stock arriving against a PO (`receiving` module). Received quantities go to **Staging**, then you **Place** them (see [Put-away](#staging--put-away-placement)).
 
+**Who posts:** a manager (or above) who can adjust stock. On the web, **Receive items** shows only for them; in the mobile app, **Post receipt**, **Scan** and the quantity fields work only for them. Someone without the **Adjust on-hand** permission is told that it is needed; a staff member who has it sees "A manager posts receipts."
+
+### Receiving checklist
+**Purpose:** a short, optional check recorded for a delivery after its receipt posts: did the packing slip match, did the boxes arrive undamaged, how many boxes came. It records what a person checked; it never changes stock, the receipt or the purchase order, and a receipt posts without it (posting never fails because of it).
+
+**How to set it up:** **Purchase orders → Receiving checklist** (also a card on **Procedures**; in the mobile app, the list icon on the Receive tab or the row on Procedures). A manager who can manage purchase orders starts from the suggested steps or a blank list. Each step is answered **Pass, Fail or Not applicable**, with **a number**, or with **a short answer**, and can be marked required (up to 20 steps). An optional procedure can be linked as the instructions. **Publish version N** turns it on; publishing a change makes a new version, and checklists already started keep the steps they started with. **Turn off** stops new receipts offering it; recorded checklists stay on their receipts.
+
+**How to record one:** after posting a receipt, choose **Record checklist** (web: the Posted panel; mobile: the Posted alert), or later **Record**, **Continue** or **View** on the receipt in **Receipts** / **Receipt history**. **Save progress** keeps the answers; **Complete checklist** records them for good (every required step answered, and a note on each failed check). A manager who can post receipts records; anyone who can see the purchase order can see each receipt's checklist status ("no failed checks", "N failed checks", "in progress", "not recorded"). The checklist needs a connection on the phone.
+
 ### Suppliers & Supplier Scorecard
 - **Suppliers** (`suppliers` module): your vendor list with contacts and terms.
 - **Reports → Supplier scorecard**: on-time %, fill rate, and price performance per supplier.
@@ -265,7 +274,7 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 ## 9. Procedures & Scheduling
 
 ### Procedures
-**Purpose:** standard operating procedures (SOPs) and training, including **video** walkthroughs, attached to your operation (`procedures` module). **Procedures → New.**
+**Purpose:** standard operating procedures (SOPs) and training, including **video** walkthroughs, attached to your operation (`procedures` module). **Procedures → New.** Where Receiving is on, Procedures also links to the [Receiving checklist](#receiving-checklist), which can use a procedure as its instructions.
 
 ### Schedule
 **Purpose:** plan and assign time-based work (`schedule` module). **Schedule → New** to create entries; open one to edit.

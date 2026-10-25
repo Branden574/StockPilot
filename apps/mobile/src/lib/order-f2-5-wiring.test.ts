@@ -489,18 +489,31 @@ describe('the PO screen opens a draft read-only', () => {
   // Mutations caught: Post receipt, Scan or a quantity field offered on a
   // draft (the database refuses the receipt, 0349 po_not_ordered), or the
   // sentence missing.
+  // Re-pinned by F4-1 (receive gating): Scan and the quantities follow ONE
+  // rule, canEditReceiptQuantities({ reviewOnly: readOnly, gate }), false on
+  // a draft (and for a reader without stock:adjust) and true only for someone
+  // the gate lets post; the footer comes from receiveFooter({ reviewOnly:
+  // readOnly, ... }), which is 'none' then. Both helpers' read-only answers
+  // are pinned in receive-gate.test.ts.
   it('a draft shows no Scan, no quantities and no Post receipt, and says where it is ordered', () => {
     expect(po).toContain('const reviewOnly = poIsReviewOnly(header?.status);');
     // Re-pinned by the small fixes slice 2 review (was: reviewOnly at each
     // of these): Scan, the size runs, the quantities and the footer follow
     // readOnly, a draft OR a reader without stock:adjust
     // (stock-permission-ctas-wiring.test.ts pins the permission half).
+    // Re-pinned by F4-1 (was: readOnly at Scan, the quantities and the
+    // footer): those follow canEditQuantities and receiveFooter, both given
+    // readOnly as their review-only flag.
     expect(po).toContain('const readOnly = reviewOnly || !canReceive;');
     expect(po).toMatch(/buildPoBlocks\(lines, readOnly \? \{\} : groups\)/);
-    expect(po).toMatch(/\{readOnly \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
+    expect(po).toContain(
+      'const canEditQuantities = canEditReceiptQuantities({ reviewOnly: readOnly, gate: gateView });',
+    );
+    expect(po).toMatch(/\{!canEditQuantities \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
     expect(po).toMatch(/\{reviewOnly \? null : remaining === 0 \? \(/);
-    expect(po).toMatch(/\) : readOnly \? null : \(\s*<View style=\{styles\.qtyRow\}>/);
-    expect(po).toMatch(/\{readOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
+    expect(po).toMatch(/\) : !canEditQuantities \? null : \(\s*<View style=\{styles\.qtyRow\}>/);
+    expect(po).toMatch(/const footer = receiveFooter\(\{\s*reviewOnly: readOnly,/);
+    expect(po).toMatch(/\{footer\.kind === 'none' \? null : \(\s*<View style=\{styles\.footer\}>/);
     expect(po).toMatch(/\{reviewOnly \? \(\s*<View style=\{styles\.partNotice\}>\s*<Text style=\{styles\.partNoticeText\}>\{PO_DRAFT_REVIEW_COPY\}<\/Text>/);
     expect(po).toContain("if (s === 'draft') return 'Draft';");
   });

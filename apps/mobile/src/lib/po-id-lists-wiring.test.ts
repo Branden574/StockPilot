@@ -122,6 +122,10 @@ describe('PO receive: receipt history', () => {
     expect(poScreen).toContain('Receipt history did not load, so past receipts and their totals are not shown.');
     expect(poScreen).toMatch(/onPress=\{\(\) => void retryPart\('history'\)\}\s*disabled=\{retryingPart !== null\}/);
     expect(poScreen).toContain('{receiptsError === null && receipts.length > 0 && (');
-    expect(poScreen).toMatch(/async function retryPart\(part: 'groups' \| 'history'\) \{\s*if \(retryingPart !== null\) return;/);
+    // Re-pinned by F4-1: the checklist status is a third part with its own
+    // Try again (receiving-checks-view.ts historyChecksFailed).
+    expect(poScreen).toMatch(
+      /async function retryPart\(part: 'groups' \| 'history' \| 'checks'\) \{\s*if \(retryingPart !== null\) return;/,
+    );
   });
 });
