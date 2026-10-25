@@ -12,11 +12,14 @@
  *
  * Two shapes are read, from the AST (so comments never count):
  *   - a string or template literal holding a /signin?... or /reset?... URL
- *     (a path, `${origin}/signin?...`, or an absolute URL);
+ *     (a path, `${origin}/signin?...`, or an absolute URL); a substitution in
+ *     the query is computed, except `new URLSearchParams({ key: value })`,
+ *     whose keys are read (and a value the code writes as a string);
  *   - `url.searchParams.set('key', value)` (or append) on a variable the same
  *     file binds to that page (`const url = new URL('/signin', ...)`, or
  *     `url.pathname = '/signin'`).
- * `redirect` carries a destination, not a reason, and is never a notice.
+ * `redirect` carries a destination, not a reason, and is never a notice. Any
+ * other computed key or value fails: a page can only decide a fixed value.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -78,29 +81,87 @@ function decoded(part: string): string {
   }
 }
 
+function unwrap(node: ts.Expression): ts.Expression {
+  let n = node;
+  while (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n)) {
+    n = n.expression;
+  }
+  return n;
+}
+
+function fixedText(node: ts.Node): string | null {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
+}
+
+/**
+ * A template substitution as query text. `${new URLSearchParams({ redirect: back })}`
+ * (or its .toString()) has fixed keys: each is read, with a fixed value when the
+ * code writes one and a computed one otherwise. Anything else is computed whole.
+ */
+function substitution(expression: ts.Expression): string {
+  let e = unwrap(expression);
+  if (
+    ts.isCallExpression(e) &&
+    e.arguments.length === 0 &&
+    ts.isPropertyAccessExpression(e.expression) &&
+    e.expression.name.text === 'toString'
+  ) {
+    e = unwrap(e.expression.expression);
+  }
+  const init = ts.isNewExpression(e) ? e.arguments?.[0] : undefined;
+  if (
+    !ts.isNewExpression(e) ||
+    !ts.isIdentifier(e.expression) ||
+    e.expression.text !== 'URLSearchParams' ||
+    !init ||
+    !ts.isObjectLiteralExpression(init)
+  ) {
+    return HOLE;
+  }
+  const parts: string[] = [];
+  for (const prop of init.properties) {
+    if (ts.isShorthandPropertyAssignment(prop)) {
+      parts.push(`${encodeURIComponent(prop.name.text)}=${HOLE}`);
+    } else if (
+      ts.isPropertyAssignment(prop) &&
+      (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name))
+    ) {
+      const value = fixedText(prop.initializer);
+      parts.push(
+        `${encodeURIComponent(prop.name.text)}=${value === null ? HOLE : encodeURIComponent(value)}`,
+      );
+    } else {
+      return HOLE; // a spread or a computed key: the keys are not fixed
+    }
+  }
+  return parts.join('&');
+}
+
 function literalText(node: ts.Node): string | null {
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  const fixed = fixedText(node);
+  if (fixed !== null) return fixed;
   if (ts.isTemplateExpression(node)) {
-    return node.head.text + node.templateSpans.map((s) => HOLE + s.literal.text).join('');
+    return (
+      node.head.text +
+      node.templateSpans.map((s) => substitution(s.expression) + s.literal.text).join('')
+    );
   }
   return null;
 }
 
 function pageOfPath(node: ts.Node | undefined): Page | null {
-  if (!node) return null;
-  const text =
-    ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
+  const text = node ? fixedText(node) : null;
   return text === '/signin' ? 'signin' : text === '/reset' ? 'reset' : null;
 }
 
-function scan(file: string, rel: string): Finding[] {
-  const text = readFileSync(file, 'utf8');
+/** Every query value this source sends to /signin or /reset. */
+function scanSource(text: string, rel: string, tsx: boolean): Finding[] {
   const sf = ts.createSourceFile(
-    file,
+    rel,
     text,
     ts.ScriptTarget.Latest,
     true,
-    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   const findings: Finding[] = [];
   const bound = new Map<string, Set<Page>>();
@@ -119,12 +180,14 @@ function scan(file: string, rel: string): Finding[] {
         for (const pair of m[2]!.split('&')) {
           if (!pair) continue;
           const eq = pair.indexOf('=');
-          const raw = eq < 0 ? '' : pair.slice(eq + 1);
+          const rawKey = eq < 0 ? pair : pair.slice(0, eq);
+          const rawValue = eq < 0 ? '' : pair.slice(eq + 1);
           findings.push({
             file: rel,
             page,
-            key: decoded(eq < 0 ? pair : pair.slice(0, eq)),
-            value: raw.includes(HOLE) ? null : decoded(raw),
+            key: decoded(rawKey),
+            // A computed key computes its value too.
+            value: rawKey.includes(HOLE) || rawValue.includes(HOLE) ? null : decoded(rawValue),
           });
         }
       }
@@ -162,15 +225,13 @@ function scan(file: string, rel: string): Finding[] {
       ts.isIdentifier(node.expression.expression.expression)
     ) {
       const [keyArg, valueArg] = node.arguments;
-      const key = keyArg ? literalText(keyArg) : null;
-      const value = valueArg ? literalText(valueArg) : null;
-      if (key !== null && !key.includes(HOLE)) {
-        setCalls.push({
-          target: node.expression.expression.expression.text,
-          key,
-          value: value !== null && !value.includes(HOLE) ? value : null,
-        });
-      }
+      const key = keyArg ? fixedText(keyArg) : null;
+      const value = valueArg ? fixedText(valueArg) : null;
+      setCalls.push({
+        target: node.expression.expression.expression.text,
+        key: key ?? '<computed>',
+        value: key === null ? null : value,
+      });
     }
     ts.forEachChild(node, visit);
   };
@@ -191,16 +252,74 @@ function allFindings(): Finding[] {
     [CORE_SRC, 'packages/core/src'],
   ] as const) {
     for (const file of sourceFiles(root)) {
-      out.push(...scan(file, `${label}/${path.relative(root, file)}`));
+      const rel = `${label}/${path.relative(root, file)}`;
+      out.push(...scanSource(readFileSync(file, 'utf8'), rel, file.endsWith('.tsx')));
     }
   }
   return out;
 }
 
-const FINDINGS = allFindings();
 const show = (f: Finding) => `${f.file}: /${f.page}?${f.key}=${f.value ?? '<computed>'}`;
 
+describe('the scan reads the shapes it names', () => {
+  const read = (source: string) => scanSource(source, 'x.tsx', true).map(show);
+
+  it('reads a path, a substitution before it, and an absolute URL', () => {
+    expect(read(`const a = '/signin?error=one&reason=two';`)).toEqual([
+      'x.tsx: /signin?error=one',
+      'x.tsx: /signin?reason=two',
+    ]);
+    expect(read('const b = `${origin}/reset?error=three`;')).toEqual(['x.tsx: /reset?error=three']);
+    expect(read(`const c = 'https://app.example.com/signin?reset=four';`)).toEqual([
+      'x.tsx: /signin?reset=four',
+    ]);
+    expect(read(`const d = <a href="/signin?redirect=%2Fportal">Sign in</a>;`)).toEqual([
+      'x.tsx: /signin?redirect=/portal',
+    ]);
+  });
+
+  it("reads URLSearchParams' fixed keys, and computes everything else", () => {
+    expect(
+      read('const e = `/signin?${new URLSearchParams({ redirect: back }).toString()}`;'),
+    ).toEqual(['x.tsx: /signin?redirect=<computed>']);
+    expect(read("const f = `/signin?${new URLSearchParams({ error: 'five', next })}`;")).toEqual([
+      'x.tsx: /signin?error=five',
+      'x.tsx: /signin?next=<computed>',
+    ]);
+    expect(read('const g = `/signin?${query}`;')).toEqual(['x.tsx: /signin?<computed>=<computed>']);
+    expect(read('const h = `/signin?error=${code}`;')).toEqual(['x.tsx: /signin?error=<computed>']);
+    expect(read('const i = `/signin?${new URLSearchParams({ ...rest })}`;')).toEqual([
+      'x.tsx: /signin?<computed>=<computed>',
+    ]);
+  });
+
+  it('reads searchParams.set on a URL the file builds for the page', () => {
+    expect(
+      read(`const url = new URL('/signin', base); url.searchParams.set('reason', 'six');`),
+    ).toEqual(['x.tsx: /signin?reason=six']);
+    expect(read(`u.pathname = '/reset'; u.searchParams.append('error', code);`)).toEqual([
+      'x.tsx: /reset?error=<computed>',
+    ]);
+    expect(read(`const v = new URL('/signin', base); v.searchParams.set(key, 'seven');`)).toEqual([
+      'x.tsx: /signin?<computed>=<computed>',
+    ]);
+    // A URL built for another page is not read.
+    expect(read(`const w = new URL('/settings', base); w.searchParams.set('error', 'x');`)).toEqual(
+      [],
+    );
+  });
+
+  it('ignores comments, other paths and other pages, and survives bad percent-encoding', () => {
+    expect(read(`// '/signin?error=in-a-comment'\n/* '/reset?error=too' */`)).toEqual([]);
+    expect(read(`const j = '/signin/mfa?redirect=%2Fdashboard';`)).toEqual([]);
+    expect(read(`const k = '/api/v1/auth/reset?x=1';`)).toEqual([]);
+    expect(read(`const l = '/signin?bad=%E0%A4%A';`)).toEqual(['x.tsx: /signin?bad=%E0%A4%A']);
+  });
+});
+
 describe('auth page notices: every reason in the URL is decided (docket B39)', () => {
+  const FINDINGS = allFindings();
+
   it('finds the routes and the action that send a reason today (the scan works)', () => {
     const reasons = FINDINGS.filter((f) => !DESTINATION_KEYS.has(f.key)).map(show);
     expect(reasons).toEqual(
@@ -216,6 +335,7 @@ describe('auth page notices: every reason in the URL is decided (docket B39)', (
     expect(FINDINGS.map(show)).toEqual(
       expect.arrayContaining([
         'apps/web/src/lib/supabase/middleware.ts: /signin?redirect=<computed>',
+        'apps/web/src/lib/auth/session.ts: /signin?redirect=<computed>',
       ]),
     );
   });
