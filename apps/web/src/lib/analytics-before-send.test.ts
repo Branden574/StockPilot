@@ -106,6 +106,44 @@ describe('scrubAnalyticsEvent', () => {
     expect(meta?.data.href).toBe('https://app.example.test/signin?redirect=/invite/[redacted]');
   });
 
+  it("never rewrites a replay's page content: compressed records stay byte for byte", () => {
+    // posthog-js compresses full snapshots and mutations into binary strings
+    // (`cv` marks them); one can hold "/m/" and twelve URL-safe characters by
+    // chance, and rewriting it would break the recording. The DOM tree of an
+    // uncompressed snapshot is page content too.
+    const compressed = `\u001f\u008b/m/AbCdEfGhIjKlMnOp\u0000/r/${TOKEN}`;
+    const tree = { node: { type: 0, childNodes: [{ attributes: { href: `/r/${TOKEN}` } }] } };
+    const records = [
+      { type: 2, data: compressed, cv: '2024-10', timestamp: 1 },
+      { type: 2, data: tree, timestamp: 2 },
+      { type: 4, data: { href: SIGNIN, width: 1280, height: 800 }, timestamp: 3 },
+    ];
+    const out = scrubAnalyticsEvent(
+      event({ event: '$snapshot', properties: { $snapshot_data: records } }),
+    );
+    const sent = (out?.properties as { $snapshot_data: { data: unknown }[] }).$snapshot_data;
+    expect(sent[0]).toBe(records[0]);
+    expect(sent[0]?.data).toBe(compressed);
+    expect(sent[1]).toBe(records[1]);
+    expect((sent[2]?.data as { href: string }).href).toBe(
+      'https://app.example.test/signin?redirect=/invite/[redacted]',
+    );
+  });
+
+  it('takes the invite token out of a URL used as a key (heatmap points are keyed by page)', () => {
+    const out = scrubAnalyticsEvent(
+      event({
+        event: '$$heatmap',
+        properties: { $heatmap_data: { [SIGNIN]: [{ x: 10, y: 20, type: 'click' }] } },
+      }),
+    );
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+    const data = (out?.properties as { $heatmap_data: Record<string, unknown> }).$heatmap_data;
+    expect(Object.keys(data)).toEqual([
+      'https://app.example.test/signin?redirect=/invite/[redacted]',
+    ]);
+  });
+
   it('returns an event with no credential as the very same object', () => {
     const product = event({
       event: 'item_created',
