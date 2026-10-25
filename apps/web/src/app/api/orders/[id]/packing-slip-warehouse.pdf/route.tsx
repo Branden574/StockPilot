@@ -195,8 +195,9 @@ export async function GET(
     // locationFor in lib/pdf/packing-slip-shared.tsx. A fetch failure
     // degrades to the label (fetchPlacementHoldingsByItem reports + returns
     // whatever it has rather than throwing), never a broken PDF. The same
-    // read carries every other placed holding, so an item whose stock all
-    // sits on a Site prints the Site (B37).
+    // read carries every other placed holding, an org-level Site (no
+    // warehouse) included, so an item whose stock all sits on a Site prints
+    // the Site (B37).
     const placementHoldings = await fetchPlacementHoldingsByItem(
       ctx,
       itemIds,

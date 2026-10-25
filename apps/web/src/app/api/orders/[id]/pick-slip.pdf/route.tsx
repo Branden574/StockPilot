@@ -96,12 +96,13 @@ export async function GET(
     // Rack/crate HOLDINGS for every line item, scoped to THIS order's
     // warehouse — mirrors how stock_reservations already scope to
     // request.warehouse_id, so a pick slip for warehouse X only ever
-    // lists holdings physically in X. Split items (>1 holding) get the
-    // full breakdown in the LOCATION column instead of a single
+    // lists racks and crates physically in X. Split items (>1 holding) get
+    // the full breakdown in the LOCATION column instead of a single
     // (possibly stale/misleading) bin_location label — see locationFor
     // in lib/pdf/pick-slip.tsx. The same read carries every other placed
-    // holding, so an item whose stock all sits on a Site prints the Site,
-    // not the rack its label still names (B37).
+    // holding, an org-level Site (no warehouse) included, so an item whose
+    // stock all sits on a Site prints the Site, not the rack its label
+    // still names (B37).
     const placementHoldings = await fetchPlacementHoldingsByItem(
       ctx,
       itemIds,

@@ -119,9 +119,10 @@ export async function GET(
     // passes no scope, so a holding is reported wherever it physically
     // sits. Split items (>1 holding) get the full breakdown instead of a
     // single (possibly stale/misleading) label — see countSheetLocationLabel.
-    // The same read carries every other placed holding, so an item whose
-    // stock all sits on a Site prints the Site, not the rack its label still
-    // names (B37).
+    // The same read carries every other placed holding, an org-level Site (no
+    // warehouse) included for a per-warehouse count, so an item whose stock
+    // all sits on a Site prints the Site, not the rack its label still names
+    // (B37).
     const placementHoldings = await fetchPlacementHoldingsByItem(ctx, itemIds, header.warehouse_id);
 
     for (const row of lookupRows) {

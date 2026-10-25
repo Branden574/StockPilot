@@ -3,6 +3,8 @@ import 'server-only';
 import { reportError } from '@/lib/error-reporter';
 
 import {
+  isSystemLocation,
+  isUuid,
   partitionPlacementHoldings,
   type PlacedHoldingLike,
   type RackHoldingLike,
@@ -25,7 +27,8 @@ export interface PlacementHoldingsByItem {
    * Every other placed row (Sites, areas, NULL-kind shelves and bins), with
    * `kind` and `type`: `PlacementInput.otherHoldings`, so an item whose stock
    * sits only on a Site is named by its Site, not the rack its label still
-   * names (B37).
+   * names (B37). Under a warehouse scope it also carries every ORG-LEVEL placed
+   * row, whatever its kind (see `fetchPlacementHoldingsByItem`).
    */
   other: Map<string, PlacedHoldingLike[]>;
 }
@@ -56,12 +59,22 @@ export interface PlacementHoldingsByItem {
  * several rows, and an unpaged read was cut at 1000 rows with no error,
  * hiding split stock from the picker.
  *
- * `warehouseId`, when passed, scopes holdings to that warehouse's
- * locations only — mirrors how `stock_reservations` and the digital pick
- * flow already scope to a single order's warehouse_id, so a pick slip for
- * warehouse X lists holdings in X only. Omit it (org-wide cycle counts,
- * the scanner lookup, which carry no single-warehouse context) to return
- * every holding across every warehouse.
+ * `warehouseId`, when passed, scopes the RACK AND CRATE rows to that
+ * warehouse's locations only — mirrors how `stock_reservations` and the
+ * digital pick flow already scope to a single order's warehouse_id, so a pick
+ * slip for warehouse X lists racks and crates in X only, exactly as it always
+ * did. Omit it (org-wide cycle counts, the scanner lookup, which carry no
+ * single-warehouse context) to return every holding across every warehouse.
+ *
+ * THE ORG-LEVEL SITE (B37). A scoped read also takes the locations with NO
+ * warehouse, for the Site rule. A Site of the DC4 shape is one (0331 counted
+ * those rows in production), and order readiness counts stock on it as in
+ * every warehouse (0377: "here" is `warehouse_id is null or warehouse_id =
+ * v_wh`), so an order's pick slip must be able to name it. An org-level row
+ * joins `other` only, never `rack`: a Site there names the Site, while an
+ * org-level rack or crate (not a Site) keeps rule 0c from firing beside it, so
+ * that item reads exactly as before. The org-level Staging and Unplaced
+ * buckets are dropped like every warehouse's.
  */
 export async function fetchPlacementHoldingsByItem(
   ctx: Pick<ServiceContext, 'supabase' | 'organizationId'>,
@@ -96,7 +109,17 @@ export async function fetchPlacementHoldingsByItem(
           .eq('organization_id', ctx.organizationId)
           .in('item_id', batch)
           .gt('quantity', 0);
-        if (warehouseId) q = q.eq('locations.warehouse_id', warehouseId);
+        if (warehouseId) {
+          // This warehouse's locations and the org-level ones, on the inner
+          // embed (so it filters the rows). The id is spliced into PostgREST's
+          // filter grammar, so only a well-formed uuid is; anything else keeps
+          // the one-warehouse filter this read always had.
+          q = isUuid(warehouseId)
+            ? q.or(`warehouse_id.eq.${warehouseId},warehouse_id.is.null`, {
+                referencedTable: 'locations',
+              })
+            : q.eq('locations.warehouse_id', warehouseId);
+        }
         return q.order('id').range(from, to);
       })) as HoldingRow[];
     } catch (err) {
@@ -113,11 +136,16 @@ export async function fetchPlacementHoldingsByItem(
   });
 
   // Rows grouped per item in read order, then split by the one core rule.
+  // Under a warehouse scope the ORG-LEVEL rows (a location with no warehouse)
+  // are kept apart: they feed the Site rule only (see the doc above).
   const rowsByItem = new Map<string, PlacedHoldingLike[]>();
+  const orgLevelByItem = new Map<string, PlacedHoldingLike[]>();
   for (const row of chunkResults.flat()) {
     const name = row.locations?.name;
     if (!name) continue;
-    const arr = rowsByItem.get(row.item_id) ?? [];
+    const orgLevel = Boolean(warehouseId) && (row.locations?.warehouse_id ?? null) === null;
+    const byItem = orgLevel ? orgLevelByItem : rowsByItem;
+    const arr = byItem.get(row.item_id) ?? [];
     // `kind` and `type` are carried, not discarded: `kind` tells a crate from
     // a rack (a put-away into a position-less crate leaves the item's rack
     // keys naming the rack it left), and only the PAIR tells a Site from a
@@ -128,12 +156,19 @@ export async function fetchPlacementHoldingsByItem(
       kind: row.locations?.kind ?? null,
       type: row.locations?.type ?? null,
     });
-    rowsByItem.set(row.item_id, arr);
+    byItem.set(row.item_id, arr);
   }
   for (const [itemId, rows] of rowsByItem) {
     const { holdings, otherHoldings } = partitionPlacementHoldings(rows);
     if (holdings.length > 0) rack.set(itemId, holdings);
     if (otherHoldings.length > 0) other.set(itemId, otherHoldings);
+  }
+  // Org-level rows join `other` whatever their kind, never `rack`: a Site
+  // names the Site, and an org-level rack or crate, which is no Site, stops
+  // rule 0c beside it. The buckets hold stock awaiting put-away, as anywhere.
+  for (const [itemId, rows] of orgLevelByItem) {
+    const placed = rows.filter((r) => !isSystemLocation(r));
+    if (placed.length > 0) other.set(itemId, [...(other.get(itemId) ?? []), ...placed]);
   }
   return { rack, other };
 }
