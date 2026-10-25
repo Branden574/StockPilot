@@ -69,7 +69,7 @@ vi.mock('@/components/team/team-manager', () => ({
   },
 }));
 
-import { inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import TeamPage from './page';
 
@@ -119,5 +119,49 @@ describe('Team page: 250 viewers', () => {
       'user_category_assignments.select': { data: [], error: null },
     }).client;
     await expect(TeamPage()).rejects.toThrow(/categories read failed/);
+  });
+});
+
+/**
+ * B9 review: the Disabled badge's tooltip printed the server's clock (UTC on
+ * Vercel) with no zone named. The page now hands the list the organization's
+ * zone, read with the terminology it already reads.
+ */
+describe("Team page: the organization's time zone", () => {
+  const ORG_ROW: Record<string, unknown> = { terminology: null, timezone: 'America/New_York' };
+
+  it('asks for the zone and passes it to the list', async () => {
+    stubRef.current = makeSupabaseStub({
+      // Only the columns the page asks for, as PostgREST answers.
+      'organizations.select': (call: MockCall) => {
+        const cols = String(callArgs(call, 'select')?.[0] ?? '')
+          .split(',')
+          .map((c) => c.trim());
+        return {
+          data: Object.fromEntries(cols.filter((c) => c in ORG_ROW).map((c) => [c, ORG_ROW[c]])),
+          error: null,
+        };
+      },
+      'categories.select': { data: [], error: null },
+      'user_category_assignments.select': { data: [], error: null },
+    }).client;
+
+    render(await TeamPage());
+
+    const props = managerProps.mock.calls.at(-1)?.[0] as { timeZone: string };
+    expect(props.timeZone).toBe('America/New_York');
+  });
+
+  it('an organization row that did not arrive is the documented default zone, not a failed page', async () => {
+    stubRef.current = makeSupabaseStub({
+      'organizations.select': { data: null, error: { message: 'fetch failed' } },
+      'categories.select': { data: [], error: null },
+      'user_category_assignments.select': { data: [], error: null },
+    }).client;
+
+    render(await TeamPage());
+
+    const props = managerProps.mock.calls.at(-1)?.[0] as { timeZone: string };
+    expect(props.timeZone).toBe('America/Los_Angeles');
   });
 });

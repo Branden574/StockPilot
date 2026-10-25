@@ -7835,7 +7835,12 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
       'The notification said "Stock has been reserved." and the email said every unit was reserved',
     );
     expect(email).toContain('we’ve reserved every unit on this request.');
-    expect(email).toContain('units on this request; the rest is waiting for stock.');
+    // B9: the count's noun follows the number now (countOf: "of 1 unit" for a
+    // fractional hold of one unit), so the source no longer spells "units"
+    // before this sentence. The sentence as the email prints it, "we’ve
+    // reserved 6 of 8 units on this request; the rest is waiting for stock.",
+    // is pinned in the HTML and the text by order-requests.partial-approval.test.ts.
+    expect(email).toContain(' on this request; the rest is waiting for stock.');
   });
 
   // Review (2026-10-05): "because the rest is not in stock yet" was wrong when

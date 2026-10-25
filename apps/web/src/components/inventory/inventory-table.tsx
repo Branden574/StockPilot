@@ -3235,8 +3235,8 @@ export function InventoryTable({
               // The stranded planned page (see plannedPageStranded): no page
               // links, which would skip or repeat rows.
               <p className="text-muted-foreground text-[12.5px]">
-                Showing {pageRange.startRow}–{pageRange.endRow} of {effectiveTotal}. Refresh to see
-                more.
+                Showing {formatNumber(pageRange.startRow)}–{formatNumber(pageRange.endRow)} of{' '}
+                {formatNumber(effectiveTotal)}. Refresh to see more.
               </p>
             ) : (
               <span />
@@ -3340,11 +3340,12 @@ export function Pagination({
   return (
     <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
       {/* The figures in the ink and Prev / Next at weight 400, the
-          reference pager's (DESIGN-SPEC 6.9 and 6.2; FX8: they were 500). */}
+          reference pager's (DESIGN-SPEC 6.9 and 6.2; FX8: they were 500).
+          Formatted like the summary line above it ("52,345 items"). */}
       <span>
-        Showing <span className="text-foreground">{startRow}</span>–
-        <span className="text-foreground">{endRow}</span> of{' '}
-        <span className="text-foreground">{total}</span>
+        Showing <span className="text-foreground">{formatNumber(startRow)}</span>–
+        <span className="text-foreground">{formatNumber(endRow)}</span> of{' '}
+        <span className="text-foreground">{formatNumber(total)}</span>
       </span>
       {/* 8 px between the 28 px controls: each grows a 44 px touch area below
           sm and on coarse pointers, and a later one paints over its
@@ -3381,7 +3382,7 @@ export function Pagination({
                 'text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors',
               )}
             >
-              Page {safePage} of {totalPages}
+              Page {formatNumber(safePage)} of {formatNumber(totalPages)}
             </button>
           </PopoverTrigger>
           <PopoverContent
@@ -3414,7 +3415,7 @@ export function Pagination({
                     onClick={linkClick(buildHref(n))}
                     aria-current={n === safePage ? 'page' : undefined}
                   >
-                    {n}
+                    {formatNumber(n)}
                   </Link>
                 </Button>
               ))}
