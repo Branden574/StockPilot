@@ -84,7 +84,8 @@ const R14 = row({ itemId: 'I14', name: 'Loose paperbacks', sku: 'SP-LP-9', itemT
 const R15 = row({ itemId: 'I15', name: 'Folding chairs', sku: 'SP-CHR-1', sourceKind: 'unplaced', sourceLocationId: 'unp-1' });
 // Composite: SAME item as R1, second holding in unplaced.
 const R16 = row({ itemId: 'I1', name: 'Acer ChromeBook 314', sku: 'SP-ACB-314', sourceKind: 'unplaced', sourceLocationId: 'unp-1', quantity: 1 });
-// PO-1092 row with NO warehouse: visible but never placeable.
+// PO-1092 row with NO warehouse (the organization-level bucket, 0194):
+// placeable only when the page has a warehouse to place it in (B38).
 const R17 = row({ itemId: 'I17', name: 'Standing desk', sku: 'SP-DESK-1', sourcePoNumber: 'PO-1092', receiptNumber: 'RCV-000104', receivedAt: daysAgo(3), ageDays: 3, sourceLocationId: 'stg-C', warehouseId: null });
 const R18 = row({ itemId: 'I18', name: 'Desk lamp', sku: 'SP-LAMP-1', sourceKind: 'unplaced', sourceLocationId: 'unp-1', receivedAt: daysAgo(3), ageDays: 3 });
 const R19 = row({ itemId: 'I19', name: 'Projector', sku: 'SP-PRJ-1', sourcePoNumber: 'PO-1092', receiptNumber: 'RCV-000105', receivedAt: daysAgo(8), ageDays: 8, sourceLocationId: 'stg-C' });
@@ -173,9 +174,10 @@ describe('VERIFY selection safety', () => {
     expect(routerPush).not.toHaveBeenCalled();
   });
 
-  it('select-all under PO-1092 selects only the 5 visible PLACEABLE rows (not the no-warehouse row, not hidden rows); clearing keeps 5', async () => {
+  it('select-all under PO-1092 selects only the 5 visible PLACEABLE rows (not the no-warehouse row with no warehouse to place it in, not hidden rows); clearing keeps 5', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderTable();
+    // No warehouse names: the no-warehouse row has nowhere to go (B38).
+    renderTable({ warehouseNames: {} });
     await pick(user, 'Filter by purchase order', /^PO-1092 \(6\)$/);
     expect(bodyRows()).toHaveLength(6);
     expect(rowCheckbox('Standing desk')).toBeDisabled();
@@ -195,6 +197,18 @@ describe('VERIFY selection safety', () => {
     expect(cbs.map((c) => c.getAttribute('aria-checked'))).toEqual(['true', 'false']);
     // Header select-all is now unchecked (not all 20 placeable are selected).
     expect(screen.getByRole('checkbox', { name: 'Select all placeable rows' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('B38: with a warehouse to place it in, select-all under PO-1092 takes the no-warehouse row too, and the dialog gets it intact', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderTable();
+    await pick(user, 'Filter by purchase order', /^PO-1092 \(6\)$/);
+    expect(rowCheckbox('Standing desk')).toBeEnabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all placeable rows' }));
+    expect(screen.getByText('6 selected')).toBeInTheDocument();
+    const payload = bulkPlaceRowsSeen.at(-1) as ReturnType<typeof toBulk>[];
+    expect(payload).toEqual([R1, R2, R3, R4, R17, R19].map(toBulk));
+    expect(payload.find((p) => p.itemId === 'I17')!.warehouseId).toBeNull();
   });
 
   it('search that hides a selected row drops it; typing back the same text does not bring it back', () => {
