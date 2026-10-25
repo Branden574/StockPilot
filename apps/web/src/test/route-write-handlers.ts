@@ -54,18 +54,27 @@ export interface FileReading {
 }
 
 export interface ContextCall {
+  /** The gate called (withApiContext, or one of the returns routes' shared gates). */
+  gate: string;
   line: number;
   argument: string;
   /** The argument is a parameter of the function the call is in: the request it was given. */
   passesOwnParameter: boolean;
   /**
-   * The argument is `new Request(p.url, { method: p.method, headers })` for a
-   * parameter p of the function the call is in: the same request, other headers.
+   * The argument is `new Request(p.url, { method: p.method, headers: H })` for
+   * a parameter p of the function the call is in, where H is `p.headers`,
+   * `new Headers(p.headers)`, or a const the function declares as
+   * `new Headers(p.headers)` and changes only by setting a header in
+   * REBUILD_MAY_SET: the same request, with every header it came with (Origin,
+   * Sec-Fetch-Site, the cookie), asking for an organization.
    */
   rebuildsOwnParameter: boolean;
   /** The answer is kept (a declaration, an assignment or a return), not dropped. */
   resultKept: boolean;
 }
+
+/** The headers a rebuilt request may set: the organization it asks a context in. */
+export const REBUILD_MAY_SET: ReadonlySet<string> = new Set(['x-organization-id']);
 
 /** Is a call's value kept: declared, assigned or returned, through await and parentheses? */
 function resultKept(call: ts.CallExpression): boolean {
@@ -74,7 +83,11 @@ function resultKept(call: ts.CallExpression): boolean {
   const p = n.parent;
   if (ts.isVariableDeclaration(p) && p.initializer === n) return true;
   if (ts.isReturnStatement(p)) return true;
-  if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === n) {
+  if (
+    ts.isBinaryExpression(p) &&
+    p.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    p.right === n
+  ) {
     return true;
   }
   return false;
@@ -107,14 +120,15 @@ function isWriteMethod(name: string): name is WriteMethod {
 export function resolveModule(fileName: string, specifier: string): string | null {
   let target: string;
   if (specifier.startsWith('@/')) target = specifier.slice(2);
-  else if (specifier.startsWith('.')) target = path.posix.join(path.posix.dirname(fileName), specifier);
+  else if (specifier.startsWith('.'))
+    target = path.posix.join(path.posix.dirname(fileName), specifier);
   else return null;
   return path.posix.normalize(target).replace(/\.(ts|tsx|js|mjs)$/, '');
 }
 
 /** True when the module exists on disk as one of the extensions a route may use. */
-export function moduleExists(module: string): boolean {
-  return ['.ts', '.tsx', '.js', '.mjs'].some((ext) => existsSync(path.join(WEB_SRC, module + ext)));
+export function moduleExists(target: string): boolean {
+  return ['.ts', '.tsx', '.js', '.mjs'].some((ext) => existsSync(path.join(WEB_SRC, target + ext)));
 }
 
 /** local name -> the gate it imports, for imports of a gate from its own module. */
@@ -124,10 +138,10 @@ function gateImports(sf: ts.SourceFile, fileName: string): Map<string, string> {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const bindings = st.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) continue;
-    const module = resolveModule(fileName, st.moduleSpecifier.text);
+    const source = resolveModule(fileName, st.moduleSpecifier.text);
     for (const el of bindings.elements) {
       const imported = (el.propertyName ?? el.name).text;
-      if (GATE_MODULES[imported] !== undefined && GATE_MODULES[imported] === module) {
+      if (GATE_MODULES[imported] !== undefined && GATE_MODULES[imported] === source) {
         out.set(el.name.text, imported);
       }
     }
@@ -153,7 +167,10 @@ function topLevelDeclarations(sf: ts.SourceFile): Map<string, ts.Node> {
 function isValueReference(n: ts.Identifier): boolean {
   const p = n.parent;
   if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
-  if ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertySignature(p)) && p.name === n) {
+  if (
+    (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertySignature(p)) &&
+    p.name === n
+  ) {
     return false;
   }
   if (
@@ -223,7 +240,9 @@ export function readRouteFile(fileName: string, source: string): FileReading {
     }
     if (ts.isExportDeclaration(st)) {
       const specifier =
-        st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
+        st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)
+          ? st.moduleSpecifier.text
+          : null;
       if (!st.exportClause) {
         unreadable.push(`export * from ${specifier ?? '(unknown)'}`);
         continue;
@@ -237,12 +256,18 @@ export function readRouteFile(fileName: string, source: string): FileReading {
         if (!isWriteMethod(exported)) continue;
         const local = (el.propertyName ?? el.name).text;
         if (specifier) {
-          const module = resolveModule(fileName, specifier);
-          if (!module) unreadable.push(`export { ${exported} } from a package: ${specifier}`);
-          else handlers.push({ method: exported, gates: [], reexport: { module, name: local } });
+          const target = resolveModule(fileName, specifier);
+          if (!target) unreadable.push(`export { ${exported} } from a package: ${specifier}`);
+          else
+            handlers.push({
+              method: exported,
+              gates: [],
+              reexport: { module: target, name: local },
+            });
         } else {
           const decl = locals.get(local);
-          if (!decl) unreadable.push(`export { ${local} as ${exported} } with no local declaration`);
+          if (!decl)
+            unreadable.push(`export { ${local} as ${exported} } with no local declaration`);
           else handlers.push({ method: exported, gates: gatesReached(decl, gates, locals) });
         }
       }
@@ -275,13 +300,18 @@ function parameterNames(fn: ts.SignatureDeclaration | null): Set<string> {
 
 function propertyOf(obj: ts.ObjectLiteralExpression, name: string): ts.Expression | null {
   for (const p of obj.properties) {
-    if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name) return p.initializer;
+    if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name)
+      return p.initializer;
     if (ts.isShorthandPropertyAssignment(p) && p.name.text === name) return p.name;
   }
   return null;
 }
 
-function isMemberOf(expr: ts.Expression | null | undefined, params: Set<string>, member: string): boolean {
+function isMemberOf(
+  expr: ts.Expression | null | undefined,
+  params: Set<string>,
+  member: string,
+): boolean {
   return (
     !!expr &&
     ts.isPropertyAccessExpression(expr) &&
@@ -291,8 +321,114 @@ function isMemberOf(expr: ts.Expression | null | undefined, params: Set<string>,
   );
 }
 
+/** `new Headers(p.headers)` for a parameter p. */
+function isCopyOfOwnHeaders(expr: ts.Expression | null | undefined, params: Set<string>): boolean {
+  return (
+    !!expr &&
+    ts.isNewExpression(expr) &&
+    ts.isIdentifier(expr.expression) &&
+    expr.expression.text === 'Headers' &&
+    (expr.arguments?.length ?? 0) === 1 &&
+    isMemberOf(expr.arguments![0], params, 'headers')
+  );
+}
+
+/** Every declaration of `name` in the function's body, at any depth. */
+function declarationsIn(fn: ts.SignatureDeclaration, name: string): ts.VariableDeclaration[] {
+  const out: ts.VariableDeclaration[] = [];
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name) out.push(n);
+    ts.forEachChild(n, visit);
+  };
+  if (body) visit(body);
+  return out;
+}
+
+/**
+ * The function changes the headers object `name` only by setting or appending
+ * a header in REBUILD_MAY_SET: no delete, no other header set, no
+ * reassignment, and it is never handed to anything else that could change it.
+ */
+function changesOnlyAllowedHeaders(fn: ts.SignatureDeclaration, name: string): boolean {
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+  // `{ headers }` or `{ headers: h }` inside the init of a `new Request(...)`.
+  const inRequestInit = (prop: ts.Node): boolean => {
+    const obj = prop.parent;
+    return (
+      ts.isObjectLiteralExpression(obj) &&
+      ts.isNewExpression(obj.parent) &&
+      ts.isIdentifier(obj.parent.expression) &&
+      obj.parent.expression.text === 'Request' &&
+      obj.parent.arguments?.[1] === obj
+    );
+  };
+  let ok = true;
+  const visit = (n: ts.Node): void => {
+    // A use of the binding: not a key, a property name or its declaration.
+    if (ts.isIdentifier(n) && n.text === name && isValueReference(n)) {
+      const p = n.parent;
+      const isDeclaredName = ts.isVariableDeclaration(p) && p.name === n;
+      const isShorthandUse =
+        ts.isShorthandPropertyAssignment(p) && n.text === 'headers' && inRequestInit(p);
+      const isHeadersValue =
+        ts.isPropertyAssignment(p) &&
+        p.initializer === n &&
+        ts.isIdentifier(p.name) &&
+        p.name.text === 'headers' &&
+        inRequestInit(p);
+      const isMethodCall =
+        ts.isPropertyAccessExpression(p) &&
+        p.expression === n &&
+        ts.isCallExpression(p.parent) &&
+        p.parent.expression === p;
+      if (isMethodCall) {
+        const call = p.parent as ts.CallExpression;
+        const method = (p as ts.PropertyAccessExpression).name.text;
+        if (method === 'set' || method === 'append') {
+          const [key] = call.arguments;
+          if (!key || !ts.isStringLiteralLike(key) || !REBUILD_MAY_SET.has(key.text.toLowerCase()))
+            ok = false;
+        } else if (!['get', 'has', 'forEach', 'entries', 'keys', 'values'].includes(method)) {
+          ok = false;
+        }
+      } else if (!isDeclaredName && !isShorthandUse && !isHeadersValue) {
+        // Reassigned, passed to a function, spread, or anything else.
+        ok = false;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  if (body) visit(body);
+  return ok;
+}
+
+/** The headers of a rebuilt request are the incoming request's own (see ContextCall.rebuildsOwnParameter). */
+function carriesOwnHeaders(
+  expr: ts.Expression | null,
+  params: Set<string>,
+  fn: ts.SignatureDeclaration | null,
+): boolean {
+  if (!expr) return false;
+  if (isMemberOf(expr, params, 'headers') || isCopyOfOwnHeaders(expr, params)) return true;
+  if (!ts.isIdentifier(expr) || !fn) return false;
+  const decls = declarationsIn(fn, expr.text);
+  if (decls.length !== 1) return false;
+  const [decl] = decls;
+  const isConst =
+    ts.isVariableDeclarationList(decl!.parent) && (decl!.parent.flags & ts.NodeFlags.Const) !== 0;
+  return (
+    isConst &&
+    isCopyOfOwnHeaders(decl!.initializer, params) &&
+    changesOnlyAllowedHeaders(fn, expr.text)
+  );
+}
+
 /** A file's named imports: the specifier as written, and the names it imports. */
-export function importsOf(fileName: string, source: string): Array<{ specifier: string; names: string[] }> {
+export function importsOf(
+  fileName: string,
+  source: string,
+): Array<{ specifier: string; names: string[] }> {
   const sf = parse(fileName, source);
   const out: Array<{ specifier: string; names: string[] }> = [];
   for (const st of sf.statements) {
@@ -311,18 +447,19 @@ export function importsOf(fileName: string, source: string): Array<{ specifier: 
   return out;
 }
 
-/** Every withApiContext call in a file, and what it is given. */
-export function withApiContextCalls(fileName: string, source: string): ContextCall[] {
+/** Every call of a gate (GATE_MODULES, imported from its own module) in a file, and what it is given. */
+export function gateCalls(fileName: string, source: string): ContextCall[] {
   const sf = parse(fileName, source);
   const gates = gateImports(sf, fileName);
   const out: ContextCall[] = [];
   const visit = (n: ts.Node): void => {
-    if (
-      ts.isCallExpression(n) &&
-      ts.isIdentifier(n.expression) &&
-      gates.get(n.expression.text) === 'withApiContext'
-    ) {
-      const params = parameterNames(enclosingFunction(n));
+    const gate =
+      ts.isCallExpression(n) && ts.isIdentifier(n.expression)
+        ? gates.get(n.expression.text)
+        : undefined;
+    if (gate && ts.isCallExpression(n)) {
+      const fn = enclosingFunction(n);
+      const params = parameterNames(fn);
       const arg = n.arguments[0];
       const passesOwnParameter = !!arg && ts.isIdentifier(arg) && params.has(arg.text);
       let rebuildsOwnParameter = false;
@@ -338,9 +475,10 @@ export function withApiContextCalls(fileName: string, source: string): ContextCa
           !!init &&
           ts.isObjectLiteralExpression(init) &&
           isMemberOf(propertyOf(init, 'method'), params, 'method') &&
-          propertyOf(init, 'headers') !== null;
+          carriesOwnHeaders(propertyOf(init, 'headers'), params, fn);
       }
       out.push({
+        gate,
         line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
         argument: arg ? arg.getText(sf) : '(none)',
         passesOwnParameter,
@@ -352,4 +490,9 @@ export function withApiContextCalls(fileName: string, source: string): ContextCa
   };
   visit(sf);
   return out;
+}
+
+/** Every withApiContext call in a file, and what it is given. */
+export function withApiContextCalls(fileName: string, source: string): ContextCall[] {
+  return gateCalls(fileName, source).filter((c) => c.gate === 'withApiContext');
 }

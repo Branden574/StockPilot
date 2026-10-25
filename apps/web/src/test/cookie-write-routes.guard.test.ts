@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GATE_MODULES,
+  gateCalls,
   importsOf,
   moduleExists,
   readRouteFile,
+  REBUILD_MAY_SET,
   resolveModule,
   withApiContextCalls,
   WRITE_METHODS,
@@ -33,10 +35,13 @@ import {
  *      reader (the cookie client, cookies(), the page-session helpers). The
  *      one route that CREATES a session (/auth/confirm) must judge the post by
  *      Sec-Fetch-Site before it builds the cookie client;
- *   3. every withApiContext call, in a route or a shared gate, hands it the
- *      request it was given (or one rebuilt from it with the same URL and
- *      method), and keeps the answer: the rule reads the method, the URL and
- *      the headers, and a GET built from a POST would never be judged.
+ *   3. every call of withApiContext or of a shared gate, in a route or a
+ *      shared gate, hands it the request it was given (or one rebuilt from it
+ *      with the same URL, the same method and every header it came with,
+ *      changed only by the organization it asks for), and keeps the answer:
+ *      the rule reads the method, the URL and the headers, a GET built from a
+ *      POST would never be judged, and a write rebuilt without the incoming
+ *      Origin and Sec-Fetch-Site would be refused (fail closed).
  *
  * The self-test at the bottom runs the same reading over sources written to
  * fail, so this cannot pass by reading nothing.
@@ -95,7 +100,8 @@ const EXEMPT: Record<string, Exemption> = {
     methods: ['DELETE'],
     auth: 'API key',
     session: 'none',
-    reason: 'The public API unsubscribes a webhook for an sk_live_ key, within its own organization.',
+    reason:
+      'The public API unsubscribes a webhook for an sk_live_ key, within its own organization.',
   },
   'api/v1/auth/password-reset/route.ts': {
     methods: ['POST'],
@@ -194,17 +200,19 @@ const SOURCES = new Map(FILES.map((f) => [rel(f), readFileSync(f, 'utf8')]));
 const READINGS = new Map([...SOURCES].map(([file, src]) => [file, readRouteFile(file, src)]));
 
 /** Covered: reaches a gate, or re-exports a handler that does. */
-function isCovered(file: string, handler: WriteHandler, seen = new Set<string>()): boolean {
+function isCovered(handler: WriteHandler, seen = new Set<string>()): boolean {
   if (handler.gates.length > 0) return true;
   if (!handler.reexport) return false;
   const key = `${handler.reexport.module}#${handler.reexport.name}`;
   if (seen.has(key)) return false;
   seen.add(key);
-  const target = [...READINGS.keys()].find((f) => f.replace(/\.(ts|tsx|js|mjs)$/, '') === handler.reexport!.module);
+  const target = [...READINGS.keys()].find(
+    (f) => f.replace(/\.(ts|tsx|js|mjs)$/, '') === handler.reexport!.module,
+  );
   const targetHandler = target
     ? READINGS.get(target)!.handlers.find((h) => h.method === handler.reexport!.name)
     : undefined;
-  return !!target && !!targetHandler && isCovered(target, targetHandler, seen);
+  return !!target && !!targetHandler && isCovered(targetHandler, seen);
 }
 
 describe('every route that can write is held to the cross-site cookie rule', () => {
@@ -225,7 +233,9 @@ describe('every route that can write is held to the cross-site cookie rule', () 
   });
 
   it('reads every route file (no export shape it cannot follow)', () => {
-    const unreadable = [...READINGS].flatMap(([file, r]) => r.unreadable.map((u) => `${file}: ${u}`));
+    const unreadable = [...READINGS].flatMap(([file, r]) =>
+      r.unreadable.map((u) => `${file}: ${u}`),
+    );
     expect(unreadable).toEqual([]);
   });
 
@@ -234,7 +244,7 @@ describe('every route that can write is held to the cross-site cookie rule', () 
     for (const [file, reading] of READINGS) {
       const exemption = EXEMPT[file.replace(/^app\//, '')];
       for (const handler of reading.handlers) {
-        if (isCovered(file, handler)) continue;
+        if (isCovered(handler)) continue;
         if (exemption?.methods.includes(handler.method)) continue;
         open.push(`${file} ${handler.method}`);
       }
@@ -246,7 +256,7 @@ describe('every route that can write is held to the cross-site cookie rule', () 
     for (const [file, reading] of READINGS) {
       for (const h of reading.handlers.filter((x) => x.reexport)) {
         expect(moduleExists(h.reexport!.module), `${file} ${h.method}`).toBe(true);
-        expect(isCovered(file, h), `${file} ${h.method} -> ${h.reexport!.module}`).toBe(true);
+        expect(isCovered(h), `${file} ${h.method} -> ${h.reexport!.module}`).toBe(true);
       }
     }
   });
@@ -261,13 +271,16 @@ describe('the reviewed exemptions are current', () => {
     // Exactly the listed write methods: a new one must be reviewed on its own.
     expect(reading!.handlers.map((h) => h.method).sort()).toEqual([...exemption.methods].sort());
     // Still uncovered: a route that now reaches withApiContext leaves the list.
-    for (const h of reading!.handlers) expect(isCovered(file, h), `${h.method} reaches a gate`).toBe(false);
+    for (const h of reading!.handlers)
+      expect(isCovered(h), `${h.method} reaches a gate`).toBe(false);
 
     const source = SOURCES.get(file)!;
     const readers = importsOf(file, source).flatMap(({ specifier, names }) => {
       const banned = SESSION_READERS[specifier];
       if (!banned) return [];
-      return names.filter((n) => banned.includes('*') || banned.includes(n)).map((n) => `${n} from ${specifier}`);
+      return names
+        .filter((n) => banned.includes('*') || banned.includes(n))
+        .map((n) => `${n} from ${specifier}`);
     });
     if (exemption.session === 'none') {
       expect(readers, 'reads no cookie session').toEqual([]);
@@ -277,7 +290,9 @@ describe('the reviewed exemptions are current', () => {
       expect(readers).toEqual(['createClient from @/lib/supabase/server']);
       expect(
         importsOf(file, source).some(
-          (i) => i.specifier === '@/lib/auth/cross-site-request' && i.names.includes('fetchSiteIsElsewhere'),
+          (i) =>
+            i.specifier === '@/lib/auth/cross-site-request' &&
+            i.names.includes('fetchSiteIsElsewhere'),
         ),
       ).toBe(true);
       const post = source.slice(source.indexOf('export async function POST'));
@@ -300,22 +315,40 @@ describe('every withApiContext call is handed the request it judges', () => {
   ]);
 
   it('finds the calls (routes and the shared gates)', () => {
-    const total = [...CALLERS].reduce((n, [file, src]) => n + withApiContextCalls(file, src).length, 0);
+    const total = [...CALLERS].reduce(
+      (n, [file, src]) => n + withApiContextCalls(file, src).length,
+      0,
+    );
     expect(total).toBeGreaterThan(150);
-    for (const gate of GATE_FILES) expect(withApiContextCalls(gate, CALLERS.get(gate)!)).toHaveLength(1);
+    for (const gate of GATE_FILES)
+      expect(withApiContextCalls(gate, CALLERS.get(gate)!)).toHaveLength(1);
   });
 
-  it('each passes its own request parameter, or rebuilds it with the same URL and method, and keeps the answer', () => {
+  it('each call of a gate passes its own request parameter, or rebuilds it with the same URL, method and headers, and keeps the answer', () => {
     const bad: string[] = [];
+    let sharedGateCalls = 0;
     for (const [file, src] of CALLERS) {
-      for (const call of withApiContextCalls(file, src)) {
+      for (const call of gateCalls(file, src)) {
+        if (call.gate !== 'withApiContext') sharedGateCalls += 1;
         if (!(call.passesOwnParameter || call.rebuildsOwnParameter)) {
-          bad.push(`${file}:${call.line} is given ${call.argument}`);
+          bad.push(`${file}:${call.line} ${call.gate} is given ${call.argument}`);
         }
-        if (!call.resultKept) bad.push(`${file}:${call.line} drops its answer`);
+        if (!call.resultKept) bad.push(`${file}:${call.line} ${call.gate} drops its answer`);
       }
     }
     expect(bad).toEqual([]);
+    // The returns routes call the two shared gates (18 calls on 2026-10-24).
+    expect(sharedGateCalls).toBeGreaterThan(15);
+  });
+
+  it('the one rebuilt request today is the sign route asking in the order organization, with the incoming headers', () => {
+    const rebuilt = [...CALLERS].flatMap(([file, src]) =>
+      gateCalls(file, src)
+        .filter((c) => c.rebuildsOwnParameter)
+        .map((c) => `${file} ${c.gate}`),
+    );
+    expect(rebuilt).toEqual(['app/api/orders/sign/route.ts withApiContext']);
+    expect([...REBUILD_MAY_SET]).toEqual(['x-organization-id']);
   });
 
   it('the shared gates are imported from their own modules (an alias is followed, a namesake is not a gate)', () => {
@@ -333,7 +366,8 @@ describe('every withApiContext call is handed the request it judges', () => {
 describe('self-test: the reading reports what it should', () => {
   const FILE = 'app/api/v1/example/route.ts';
   const handlers = (src: string, file = FILE) => readRouteFile(file, src).handlers;
-  const methodsOf = (src: string) => handlers(src).map((h) => `${h.method}:${h.gates.join('+') || '-'}`);
+  const methodsOf = (src: string) =>
+    handlers(src).map((h) => `${h.method}:${h.gates.join('+') || '-'}`);
 
   it('a write with no gate is open; a GET is not a write', () => {
     expect(
@@ -419,14 +453,24 @@ describe('self-test: the reading reports what it should', () => {
       `export { POST } from '../../../orders/sign/route';`,
     );
     expect(reading.handlers).toEqual([
-      { method: 'POST', gates: [], reexport: { module: 'app/api/orders/sign/route', name: 'POST' } },
+      {
+        method: 'POST',
+        gates: [],
+        reexport: { module: 'app/api/orders/sign/route', name: 'POST' },
+      },
     ]);
-    expect(readRouteFile(FILE, `export * from './handlers';`).unreadable).toEqual(['export * from ./handlers']);
-    expect(readRouteFile(FILE, `export const { POST } = makeHandlers();`).unreadable).toHaveLength(1);
+    expect(readRouteFile(FILE, `export * from './handlers';`).unreadable).toEqual([
+      'export * from ./handlers',
+    ]);
+    expect(readRouteFile(FILE, `export const { POST } = makeHandlers();`).unreadable).toHaveLength(
+      1,
+    );
   });
 
   it('resolveModule maps @/ and relative specifiers to apps/web/src paths', () => {
-    expect(resolveModule('app/api/v1/returns/[id]/cancel/route.ts', '../../http')).toBe('app/api/v1/returns/http');
+    expect(resolveModule('app/api/v1/returns/[id]/cancel/route.ts', '../../http')).toBe(
+      'app/api/v1/returns/http',
+    );
     expect(resolveModule(FILE, '@/lib/auth/api-context')).toBe('lib/auth/api-context');
     expect(resolveModule(FILE, 'next/server')).toBeNull();
   });
@@ -444,12 +488,90 @@ describe('self-test: the reading reports what it should', () => {
          return [a, b, c, d];
        }`,
     );
-    expect(calls.map((c) => [c.passesOwnParameter || c.rebuildsOwnParameter, c.resultKept])).toEqual([
+    expect(
+      calls.map((c) => [c.passesOwnParameter || c.rebuildsOwnParameter, c.resultKept]),
+    ).toEqual([
       [true, true],
       [true, true],
       [false, true],
       [false, true],
       [true, false],
+    ]);
+  });
+
+  it('a rebuilt request carries the incoming headers: the headers themselves, or a copy changed only by the organization', () => {
+    const calls = withApiContextCalls(
+      FILE,
+      `import { withApiContext } from '@/lib/auth/api-context';
+       export async function POST(req: Request) {
+         const headers = new Headers(req.headers);
+         headers.set('x-organization-id', 'org');
+         const a = await withApiContext(new Request(req.url, { method: req.method, headers }));
+         const b = await withApiContext(new Request(req.url, { method: req.method, headers: req.headers }));
+         const c = await withApiContext(new Request(req.url, { method: req.method, headers: new Headers() }));
+         const d = await withApiContext(
+           new Request(req.url, { method: req.method, headers: { cookie: req.headers.get('cookie') ?? '' } }),
+         );
+         const e = await withApiContext(new Request(req.url, { method: req.method }));
+         return [a, b, c, d, e];
+       }`,
+    );
+    expect(calls.map((c) => c.rebuildsOwnParameter)).toEqual([true, true, false, false, false]);
+  });
+
+  it('a copy of the headers that drops or replaces one, is reassigned or is handed elsewhere is not the incoming headers', () => {
+    const rebuilt = (prelude: string) =>
+      withApiContextCalls(
+        FILE,
+        `import { withApiContext } from '@/lib/auth/api-context';
+         export async function POST(req: Request) {
+           ${prelude}
+           const ctx = await withApiContext(new Request(req.url, { method: req.method, headers }));
+           return ctx;
+         }`,
+      )[0]!.rebuildsOwnParameter;
+    expect(rebuilt(`const headers = new Headers(req.headers);`)).toBe(true);
+    expect(
+      rebuilt(`const headers = new Headers(req.headers); headers.set('X-Organization-Id', 'org');`),
+    ).toBe(true);
+    expect(rebuilt(`const headers = new Headers(req.headers); headers.delete('origin');`)).toBe(
+      false,
+    );
+    expect(
+      rebuilt(
+        `const headers = new Headers(req.headers); headers.set('origin', 'https://app.test');`,
+      ),
+    ).toBe(false);
+    expect(
+      rebuilt(
+        `const headers = new Headers(req.headers); headers.append('sec-fetch-site', 'same-origin');`,
+      ),
+    ).toBe(false);
+    expect(rebuilt(`let headers = new Headers(req.headers); headers = new Headers();`)).toBe(false);
+    expect(rebuilt(`const headers = new Headers(req.headers); scrub(headers);`)).toBe(false);
+    expect(rebuilt(`const headers = new Headers();`)).toBe(false);
+    expect(
+      rebuilt(`const headers = new Headers({ cookie: req.headers.get('cookie') ?? '' });`),
+    ).toBe(false);
+  });
+
+  it('a call of a shared gate is held to the same rule', () => {
+    const calls = gateCalls(
+      'app/api/v1/returns/[id]/cancel/route.ts',
+      `import { returnsContext } from '../../http';
+       export async function POST(req: Request) {
+         const a = await returnsContext(req, 'write');
+         const b = await returnsContext(new Request(req.url, { method: 'GET' }), 'write');
+         await returnsContext(req, 'write');
+         return [a, b];
+       }`,
+    );
+    expect(
+      calls.map((c) => [c.gate, c.passesOwnParameter || c.rebuildsOwnParameter, c.resultKept]),
+    ).toEqual([
+      ['returnsContext', true, true],
+      ['returnsContext', false, true],
+      ['returnsContext', true, false],
     ]);
   });
 
