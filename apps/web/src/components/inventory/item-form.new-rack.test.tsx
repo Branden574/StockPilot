@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { newRackConfirmationDetail } from '@stockpilot/core';
+import { newRackConfirmationDetail, type NewRackBlocker } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // 2026-09-24 (warehouse DC4): an item meant for rack 17-B was saved as "1-B", and a
@@ -57,12 +57,13 @@ const SHIRTS_ID = '88888888-8888-4888-8888-888888888888';
 const DC4_RACKS = ['17-B', '18-B', '20-A', '22-A', '35', '35-A', '36-A'];
 
 /** What the action returns when the server asks, built by the server's own builder. */
-function askedAbout(label: string, units: number) {
+function askedAbout(label: string, units: number, blockedBy: NewRackBlocker | null = null) {
   const detail = newRackConfirmationDetail({
     label,
     warehouseName: 'DC4',
     quantity: units,
     existingLabels: DC4_RACKS,
+    blockedBy,
   });
   if (!detail) throw new Error(`${label} is an existing rack in the fixture`);
   return {
@@ -249,6 +250,46 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
       ).toBeInTheDocument(),
     );
     expect(push).not.toHaveBeenCalled();
+  });
+
+  // 2026-10-25 review: a Staff member cannot create racks (no Manage
+  // locations), so their yes never created one. The question says so in the
+  // server's words, and its button says what the yes does.
+  it('for a member who cannot create racks, says so and offers Save anyway, never Create rack and save', async () => {
+    vi.mocked(createItemAction)
+      .mockResolvedValueOnce(askedAbout('1-B', 130, 'create_rack') as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } },
+      } as never);
+    renderForm();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await typeRack(user, '1', 'B');
+    await user.click(createButton());
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Rack 1-B does not exist')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?',
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Use 17-B instead' })).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole('button', { name: 'Create rack and save' }),
+    ).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Save anyway' }));
+
+    await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(2));
+    expect(createCall(1)).toMatchObject({ binLocation: '1-B', confirmNewRack: true });
+    // The item is saved, and the stock that is not on the rack is said.
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard/inventory/item-new'));
+    expect(toast.warning).toHaveBeenCalledWith(
+      expect.stringContaining('could not be placed on rack 1-B'),
+      expect.anything(),
+    );
   });
 
   it('an existing rack is saved straight away: one save, no question, no yes sent', async () => {

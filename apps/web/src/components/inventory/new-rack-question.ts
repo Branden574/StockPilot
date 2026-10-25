@@ -22,12 +22,23 @@ import type { PlacementConfirmContent } from './placement-confirm-dialog';
 /** The confirm button: the phone's words for the same question. */
 export const NEW_RACK_CONFIRM_LABEL = 'Create rack and save';
 
+/**
+ * The confirm button when this person's yes cannot create the rack (no Manage
+ * locations or no Transfer stock, `canCreateRack: false`, 2026-10-25): it saves
+ * the item, and the stock does not go on a rack. The phone's words for a save
+ * whose rack it could not check.
+ */
+export const NEW_RACK_SAVE_ANYWAY_LABEL = 'Save anyway';
+
 /** The server's question in a refused save, or null for any other refusal. */
 export function newRackQuestion(error: ActionError): NewRackConfirmationDetail | null {
   return parseNewRackConfirmationDetail(error.details);
 }
 
-/** The dialog for the question: Go back, "Use 17-B instead", Create rack and save. */
+/**
+ * The dialog for the question: Go back, "Use 17-B instead", and Create rack and
+ * save, or Save anyway for a person whose yes cannot create the rack.
+ */
 export function newRackConfirmContent(
   question: NewRackConfirmationDetail,
 ): PlacementConfirmContent {
@@ -35,7 +46,7 @@ export function newRackConfirmContent(
     title: question.title,
     message: question.message,
     ...(question.suggestions.length > 0 ? { suggestions: question.suggestions } : {}),
-    confirmLabel: NEW_RACK_CONFIRM_LABEL,
+    confirmLabel: question.canCreateRack ? NEW_RACK_CONFIRM_LABEL : NEW_RACK_SAVE_ANYWAY_LABEL,
   };
 }
 

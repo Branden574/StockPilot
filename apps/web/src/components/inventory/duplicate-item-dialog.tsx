@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
-import type { NewRackConfirmationDetail } from '@stockpilot/core';
+import { placementWarningMessage, type NewRackConfirmationDetail } from '@stockpilot/core';
 
 import {
   newRackConfirmContent,
@@ -123,7 +123,17 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         return;
       }
       setRackQuestion(null);
-      toast.success(`Duplicated "${itemName}"`);
+      // The copy exists either way. When its stock did not reach the rack
+      // (2026-10-25), say so in the shared placement words, as Add more sizes
+      // does.
+      if (result.data.placementFailed) {
+        toast.warning(
+          placementWarningMessage(`Duplicated "${itemName}"`, result.data.placementFailed),
+          { duration: 10000 },
+        );
+      } else {
+        toast.success(`Duplicated "${itemName}"`);
+      }
       setOpen(false);
       reset();
       router.push(`/dashboard/inventory/${result.data.id}`);

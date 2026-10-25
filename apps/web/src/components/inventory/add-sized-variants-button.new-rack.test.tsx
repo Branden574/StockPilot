@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { newRackConfirmationDetail } from '@stockpilot/core';
+import { newRackConfirmationDetail, type NewRackBlocker } from '@stockpilot/core';
 
 // "Create new rack 1-B?" on Add more sizes (2026-10-24). The new sizes inherit
 // this item's rack label, so their stock is placed on that rack, and when no
@@ -45,12 +45,13 @@ const SOURCE = {
   reorderQuantity: 0,
 };
 
-function askedAbout(label: string, units: number) {
+function askedAbout(label: string, units: number, blockedBy: NewRackBlocker | null = null) {
   const detail = newRackConfirmationDetail({
     label,
     warehouseName: 'DC4',
     quantity: units,
     existingLabels: ['17-B', '18-B', '20-A'],
+    blockedBy,
   })!;
   return {
     ok: false,
@@ -143,6 +144,43 @@ describe('AddSizedVariantsButton: the inherited rack does not exist', () => {
     await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(2));
     expect(call(1)).toMatchObject({ binLocation: '17-B' });
     expect(call(1)).not.toHaveProperty('confirmNewRack');
+  });
+
+  // 2026-10-25 review: a Staff member cannot create racks, so their yes
+  // never created one. The question says so, and its button says what it does.
+  it('for a member who cannot create racks, says so and offers Save anyway', async () => {
+    vi.mocked(bulkCreateSizedVariantsAction)
+      .mockResolvedValueOnce(askedAbout('1-B', 5, 'create_rack') as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { created: 1, ids: ['v-l'], placementFailed: { rackName: '1-B', count: 1 } },
+      } as never);
+    render(<AddSizedVariantsButton source={SOURCE} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await pickLargeAndCreate(user);
+
+    const question = await screen.findByRole('alertdialog');
+    expect(within(question).getByText('Rack 1-B does not exist')).toBeInTheDocument();
+    expect(
+      within(question).getByText(
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 5 units on a rack. Did you mean 17-B or 18-B?',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(question).queryByRole('button', { name: 'Create rack and save' }),
+    ).not.toBeInTheDocument();
+
+    await user.click(within(question).getByRole('button', { name: 'Save anyway' }));
+
+    await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(2));
+    expect(call(1)).toMatchObject({ binLocation: '1-B', confirmNewRack: true });
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining('could not be placed on rack 1-B'),
+        expect.anything(),
+      ),
+    );
   });
 
   it('an existing rack is saved straight away, and any other refusal is said as before', async () => {
