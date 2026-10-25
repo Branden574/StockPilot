@@ -18,9 +18,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * page re-runs the aggregate, so an OFFSET window shifts when a row appears or
  * goes between two pages: a row could be counted twice or skipped. A key
  * cursor never repeats a row and never skips one that was there all along.
- * The read is bounded at AGGREGATE_MAX_PAGES pages: past it the report fails
- * with a log line, never a set cut short without a word. A refusal is still
- * mapped to its own words (reportRpcError).
+ * The read is bounded at AGGREGATE_MAX_PAGES pages of PAGE_SIZE rows, 100,000
+ * rows, twice the 50,000-item scale the app is load-tested at (decision 5):
+ * past it the report fails with a log line, never a set cut short without a
+ * word. A read that needs more than 10 pages logs one warning with its page
+ * count and time, so slow reports show in the logs. A refusal is still mapped
+ * to its own words (reportRpcError).
  *
  * The stub answers the aggregates like PostgREST (servedLikePostgrest): an
  * unpaged call gets the first 1000 rows, as production would.
@@ -426,42 +429,121 @@ describe('every aggregate read asks for an order', () => {
   });
 });
 
-describe('the read is bounded', () => {
-  it('reads at most 20 pages (20,000 rows)', () => {
-    expect(AGGREGATE_MAX_PAGES).toBe(20);
-  });
+/**
+ * The big-read stand-in: `rows` already in `key` order, answered by binary
+ * search on the `.gt()` key and cut to the `.limit()` (and max_rows), so a
+ * 100,001-row read takes milliseconds where servedLikePostgrest would filter
+ * and sort every row on every page. It checks each page asks for `key` order
+ * and records the limit each one asked for.
+ */
+function keyedPages(rows: Array<Record<string, unknown>>, key: string) {
+  const keys = rows.map((r) => String(r[key]));
+  const limits: number[] = [];
+  const answer = (call: MockCall) => {
+    if (!awaited(call)) return { data: [], error: null };
+    expect(callArgs(call, 'order')).toEqual([key, { ascending: true }]);
+    const after = callArgs(call, 'gt')?.[1] as string | undefined;
+    let start = 0;
+    if (after !== undefined) {
+      let hi = keys.length;
+      while (start < hi) {
+        const mid = (start + hi) >> 1;
+        if (keys[mid]! <= after) start = mid + 1;
+        else hi = mid;
+      }
+    }
+    const limit = Number(callArgs(call, 'limit')?.[0] ?? PAGE_SIZE);
+    limits.push(limit);
+    return { data: rows.slice(start, start + Math.min(limit, PAGE_SIZE)), error: null };
+  };
+  return { limits, answer };
+}
 
-  // Mutation caught: no bound (it reads on), or a bound that keeps the pages
-  // it read and answers them as the whole set.
-  it('a 20th full page fails the report with a log line naming the aggregate, instead of reading on or cutting the set', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const b = bundles(AGGREGATE_MAX_PAGES * PAGE_SIZE);
-    const read = recordingPages(b.activity);
+describe('the read is bounded', () => {
+  const activityOf = (n: number) => Array.from({ length: n }, (_, i) => activityRow(uuid(i)));
+  const runBundles = async (n: number) => {
+    const read = keyedPages(activityOf(n), 'bundle_id');
     const { svc } = svcWith({
       'rpc:report_bundle_activity': read.answer,
       'rpc:report_bundle_component_value': servedLikePostgrest([]),
     });
-    const err = await svc.bundleActivity(90).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ServiceError);
-    expect((err as ServiceError).code).toBe('internal_error');
-    expect(read.pages).toHaveLength(AGGREGATE_MAX_PAGES);
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(String(log.mock.calls[0]?.[0])).toMatch(
-      /report_bundle_activity.*more than 20000 rows/,
+    const outcome = await svc.bundleActivity(90).then(
+      (report) => ({ report, err: null }),
+      (err: unknown) => ({ report: null, err }),
+    );
+    return { ...outcome, limits: read.limits };
+  };
+  const spyLogs = () => ({
+    warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+  });
+
+  // Decision 5: twice the 50,000-item scale target.
+  it('reads at most 100 pages of 1,000 rows (100,000 rows)', () => {
+    expect(AGGREGATE_MAX_PAGES).toBe(100);
+    expect(AGGREGATE_MAX_PAGES * PAGE_SIZE).toBe(100_000);
+  });
+
+  // Mutation caught: the 20-page bound, which failed every report past
+  // 20,000 items.
+  it('50,000 bundles page through without throwing: every one counted, and one warning with the pages and the time', async () => {
+    const logs = spyLogs();
+    const { report, err, limits } = await runBundles(50_000);
+    expect(err).toBeNull();
+    expect(report?.rows).toHaveLength(50_000);
+    expect(report?.totalKits).toBe(100_000);
+    // 50 full pages and the empty one that says there are no more.
+    expect(limits).toHaveLength(51);
+    expect(logs.error).not.toHaveBeenCalled();
+    expect(logs.warn).toHaveBeenCalledTimes(1);
+    expect(String(logs.warn.mock.calls[0]?.[0])).toMatch(
+      /^\[reports\] report_bundle_activity needed 51 pages in \d+ ms/,
     );
   });
 
-  it('19 full pages and a short 20th: every row, no log', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const n = AGGREGATE_MAX_PAGES * PAGE_SIZE - 1;
-    const b = bundles(n);
-    const { svc } = svcWith({
-      'rpc:report_bundle_activity': servedLikePostgrest(b.activity),
-      'rpc:report_bundle_component_value': servedLikePostgrest([]),
-    });
-    const report = await svc.bundleActivity(90);
-    expect(report.rows).toHaveLength(n);
-    expect(log).not.toHaveBeenCalled();
+  // Mutation caught: a bound that counts the 100th full page as one too
+  // many, and fails an organization with exactly 100,000.
+  it('100,000 bundles, exactly the bound: every one, and the check for more asks for one row', async () => {
+    const logs = spyLogs();
+    const { report, err, limits } = await runBundles(100_000);
+    expect(err).toBeNull();
+    expect(report?.rows).toHaveLength(100_000);
+    expect(limits).toHaveLength(101);
+    expect(limits.slice(0, 100).every((l) => l === PAGE_SIZE)).toBe(true);
+    expect(limits[100]).toBe(1);
+    expect(logs.error).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: no bound (it reads on), or a bound that keeps the pages
+  // it read and answers them as the whole set.
+  it('100,001 bundles, one row past the bound: the report fails with a log line naming the aggregate, never cut', async () => {
+    const logs = spyLogs();
+    const { report, err, limits } = await runBundles(100_001);
+    expect(report).toBeNull();
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('internal_error');
+    expect(limits).toHaveLength(101);
+    expect(logs.error).toHaveBeenCalledTimes(1);
+    expect(String(logs.error.mock.calls[0]?.[0])).toMatch(
+      /report_bundle_activity has more than 100000 rows/,
+    );
+    // The slow-read warning is still one line, with the pages it took.
+    expect(logs.warn).toHaveBeenCalledTimes(1);
+    expect(String(logs.warn.mock.calls[0]?.[0])).toMatch(/needed 101 pages in \d+ ms/);
+  });
+
+  // The warning's edge: "more than 10 pages" counts the pages asked for, the
+  // last of which may come back empty.
+  it('10 pages or fewer: no warning; 11: one', async () => {
+    const quiet = spyLogs();
+    expect((await runBundles(9_999)).limits).toHaveLength(10);
+    expect(quiet.warn).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const loud = spyLogs();
+    expect((await runBundles(10_000)).limits).toHaveLength(11);
+    expect(loud.warn).toHaveBeenCalledTimes(1);
+    expect(String(loud.warn.mock.calls[0]?.[0])).toMatch(/needed 11 pages/);
   });
 });
 

@@ -227,12 +227,20 @@ function reportRpcError(error: {
 }
 
 /**
- * The most pages one report aggregate is read in: 20 pages of PAGE_SIZE rows
- * (20,000 items or bundles). Production has at most a few hundred rows per
- * organization, one page. A 20th full page fails the report, logged, rather
- * than read on without end or answer a set cut short (integrator decision 2).
+ * The most pages of PAGE_SIZE rows one report aggregate is read in: 100 pages,
+ * 100,000 items or bundles, twice the 50,000-item scale the app is load-tested
+ * at (docs/security/perf-baseline.md, "50k-item scale"). Production has at most
+ * a few hundred rows per organization, one page. Past the bound the report
+ * fails, logged, rather than read on without end or answer a set cut short
+ * (integrator decisions 2 and 5). Each page re-runs the aggregate, so a large
+ * organization's report costs one aggregate per page: the single-call design
+ * in the PR's "Still to do (database)" is the real fix for those.
  */
-export const AGGREGATE_MAX_PAGES = 20;
+export const AGGREGATE_MAX_PAGES = 100;
+
+/** A read that needs more pages than this logs one warning with its page
+ *  count and time, so slow reports show in the logs. */
+const AGGREGATE_SLOW_PAGES = 10;
 
 /** One page of a report aggregate, as supabase-js answers it. */
 type AggregatePage = PromiseLike<{
@@ -243,10 +251,10 @@ type AggregatePage = PromiseLike<{
 /**
  * Every row of a report aggregate that returns one row per item or bundle
  * (report_item_out_movements, report_bundle_activity,
- * report_bundle_component_value), read by KEY: `page(after)` calls the
+ * report_bundle_component_value), read by KEY: `page(after, limit)` calls the
  * function for the rows after the key `after` (all rows when it is null),
- * ordered by `key` and limited to PAGE_SIZE. Each next page starts after the
- * last key of the one before.
+ * ordered by `key` and limited to `limit` (PAGE_SIZE, or 1 for the check past
+ * the bound). Each next page starts after the last key of the one before.
  *
  * PostgREST answers any request with at most 1000 rows and no error, so the
  * one unpaged call each report made used to drop every row past the 1000th
@@ -262,37 +270,55 @@ type AggregatePage = PromiseLike<{
  * bundle_id, which sorts last and which `.gt()` never matches, so past the
  * first page it is not read. That row has no bundle and the report drops it.)
  *
- * Bounded at AGGREGATE_MAX_PAGES pages. A failed page fails the report, mapped
- * by reportRpcError so a refusal keeps its own words: never the pages before
- * it standing in for the whole. The whole set is still the union of several
+ * Bounded at AGGREGATE_MAX_PAGES pages: after that many full pages, one more
+ * call asks for a single row past the last key, and if there is one the
+ * report fails with a log line. A failed page fails the report, mapped by
+ * reportRpcError so a refusal keeps its own words: never the pages before it
+ * standing in for the whole. The whole set is still the union of several
  * statements; one statement over one snapshot needs the database change in
  * the PR's "Still to do (database)".
  */
 async function allAggregateRows<Row extends Record<string, unknown>>(
   fn: string,
   key: string,
-  page: (after: string | null) => AggregatePage,
+  page: (after: string | null, limit: number) => AggregatePage,
 ): Promise<Row[]> {
   const rows: Row[] = [];
-  let after: string | null = null;
-  for (let n = 1; n <= AGGREGATE_MAX_PAGES; n += 1) {
-    const { data, error } = await page(after);
+  const started = Date.now();
+  let pagesAsked = 0;
+  const read = async (after: string | null, limit: number): Promise<Row[]> => {
+    pagesAsked += 1;
+    const { data, error } = await page(after, limit);
     if (error) throw reportRpcError(error);
-    const window = (data ?? []) as Row[];
-    for (const row of window) rows.push(row);
-    if (window.length < PAGE_SIZE) return rows;
-    const last = window[window.length - 1]?.[key];
-    // NULL sorts last, so a page that ends on it ends the set.
-    if (last === null || last === undefined) return rows;
-    after = String(last);
+    return (data ?? []) as Row[];
+  };
+  try {
+    let after: string | null = null;
+    for (let n = 1; n <= AGGREGATE_MAX_PAGES; n += 1) {
+      const window = await read(after, PAGE_SIZE);
+      for (const row of window) rows.push(row);
+      if (window.length < PAGE_SIZE) return rows;
+      const last = window[window.length - 1]?.[key];
+      // NULL sorts last, so a page that ends on it ends the set.
+      if (last === null || last === undefined) return rows;
+      after = String(last);
+    }
+    // AGGREGATE_MAX_PAGES full pages: the set is whole only if nothing follows.
+    if ((await read(after, 1)).length === 0) return rows;
+    console.error(
+      `[reports] ${fn} has more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows (${AGGREGATE_MAX_PAGES} pages of ${PAGE_SIZE}): the report fails instead of reading on`,
+    );
+    throw new ServiceError(
+      'internal_error',
+      `${fn} returned more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows`,
+    );
+  } finally {
+    if (pagesAsked > AGGREGATE_SLOW_PAGES) {
+      console.warn(
+        `[reports] ${fn} needed ${pagesAsked} pages in ${Date.now() - started} ms (each page re-runs the aggregate)`,
+      );
+    }
   }
-  console.error(
-    `[reports] ${fn} has more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows (${AGGREGATE_MAX_PAGES} pages of ${PAGE_SIZE}): the report fails instead of reading on`,
-  );
-  throw new ServiceError(
-    'internal_error',
-    `${fn} returned more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows`,
-  );
 }
 
 export class ReportsService {
@@ -1434,14 +1460,14 @@ export class ReportsService {
     // row per item, and the one unpaged call stopped at 1000.
     type OutRow = { item_id: string; units_out: number; last_out_at: string | null };
     const [outRows, itemRows] = await Promise.all([
-      allAggregateRows<OutRow>('report_item_out_movements', 'item_id', (after) => {
+      allAggregateRows<OutRow>('report_item_out_movements', 'item_id', (after, limit) => {
         const read = this.ctx.supabase.rpc('report_item_out_movements', {
           p_organization_id: this.ctx.organizationId,
           p_since: since,
         });
         return (after === null ? read : read.gt('item_id', after))
           .order('item_id', { ascending: true })
-          .limit(PAGE_SIZE);
+          .limit(limit);
       }),
       fetchAllRows<ItemRow>(
         (from, to) =>
@@ -1563,14 +1589,14 @@ export class ReportsService {
     const outRead = allAggregateRows<{ item_id: string }>(
       'report_item_out_movements',
       'item_id',
-      (after) => {
+      (after, limit) => {
         const read = this.ctx.supabase.rpc('report_item_out_movements', {
           p_organization_id: this.ctx.organizationId,
           p_since: since,
         });
         return (after === null ? read : read.gt('item_id', after))
           .order('item_id', { ascending: true })
-          .limit(PAGE_SIZE);
+          .limit(limit);
       },
     );
 
@@ -1678,26 +1704,26 @@ export class ReportsService {
       top_warehouse_name: string | null;
     };
     const [activityRows, valueRows] = await Promise.all([
-      allAggregateRows<ActivityRow>('report_bundle_activity', 'bundle_id', (after) => {
+      allAggregateRows<ActivityRow>('report_bundle_activity', 'bundle_id', (after, limit) => {
         const read = this.ctx.supabase.rpc('report_bundle_activity', {
           p_organization_id: orgId,
           p_since: since,
         });
         return (after === null ? read : read.gt('bundle_id', after))
           .order('bundle_id', { ascending: true })
-          .limit(PAGE_SIZE);
+          .limit(limit);
       }),
       allAggregateRows<{ bundle_id: string | null; component_value_out: number }>(
         'report_bundle_component_value',
         'bundle_id',
-        (after) => {
+        (after, limit) => {
           const read = this.ctx.supabase.rpc('report_bundle_component_value', {
             p_organization_id: orgId,
             p_since: since,
           });
           return (after === null ? read : read.gt('bundle_id', after))
             .order('bundle_id', { ascending: true })
-            .limit(PAGE_SIZE);
+            .limit(limit);
         },
       ),
     ]);
