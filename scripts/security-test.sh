@@ -1352,6 +1352,14 @@ MOBILE_TESTS=(
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
 
+  # The saved workspace records the account that saved it, and only that
+  # account's requests, queued work and workspace load use it: another
+  # account's, left by a fallback sign-out or a session the server ended, is
+  # never sent as this account's organization (docket B10, the 401 burst).
+  src/lib/workspace-keys.test.ts
+  src/lib/api.org-header.test.ts
+  src/lib/use-workspace.owner.test.ts
+
   # Book Order Totals on the phone: an answer for another workspace, warehouse
   # or account (a sign-out, a switch) is dropped, never shown; remembered
   # answers are keyed by account, workspace, every filter and the page, and
