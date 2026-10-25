@@ -20,7 +20,8 @@ export async function duplicateItemAction(input: DuplicateItemInput): Promise<
   ActionResult<{
     id: string;
     placementFailed?: PlacementFailure;
-    /** A book copy whose stock could not be moved to Unplaced (B28): where it was left. */
+    /** A book copy whose stock could not be moved, or may not have been moved,
+     *  to Unplaced (B28): where it was left, or null when that is not known. */
     stockLeftAt?: { locationName: string | null };
   }>
 > {

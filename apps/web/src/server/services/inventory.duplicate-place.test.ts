@@ -19,6 +19,8 @@ vi.mock('./audit', () => ({
   auditMany: vi.fn(async (payloads: readonly unknown[]) => ({ written: payloads.length, lost: 0 })),
 }));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import { InventoryService } from './inventory';
 
@@ -229,6 +231,168 @@ describe('InventoryService.duplicateItem: a book copy waits in Unplaced', () => 
     await svc.duplicateItem({ ...BOOK, quantity: 0 } as never);
     expect(stub.fromCalls).not.toContain('item_stock_levels');
     expect(transfers(stub)).toEqual([]);
+  });
+
+  // Integrator decision (B28, 2026-10-25): the copy's holdings are read through
+  // the caller's own client. Since 0371 a member below manager reads holdings
+  // only in the warehouses they are assigned to (staff with the all-warehouses
+  // setting too), so the copy's seeded holding can be out of view; and an inner
+  // join on locations dropped a holding whose location row the caller could not
+  // read. Both came back as "nothing outside Unplaced", and the dialog said the
+  // stock was in Unplaced while it was still at the site. Stock the caller's
+  // reads do not account for is now reported, without a place name.
+  describe('stock the reads do not account for is reported, never read as in Unplaced', () => {
+    const asStaff = (stub: ReturnType<typeof bookStub>) =>
+      new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+    const reported = () =>
+      expect(reportError).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tag: 'inventory.duplicate.book_to_unplaced',
+          level: 'warning',
+          organizationId: 'org-test',
+        }),
+      );
+    /** item_holdings_elsewhere's row for the copy: what sits out of view. */
+    const elsewhere = (h: { staged?: number; unplaced?: number; placed?: number }) => ({
+      data: [
+        {
+          item_id: 'dup-b',
+          staged: h.staged ?? 0,
+          unplaced: h.unplaced ?? 0,
+          placed: h.placed ?? 0,
+          placed_location_ids: h.placed ? ['site-elsewhere'] : [],
+          placed_rack_locations: 0,
+        },
+      ],
+      error: null,
+    });
+
+    it('a seeded holding hidden from the caller: an empty answer for a quantity of 3', async () => {
+      const stub = bookStub({ 'item_stock_levels.select': { data: [], error: null } });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toEqual({
+        id: 'dup-b',
+        placementFailed: null,
+        stockLeftAt: { locationName: null },
+      });
+      expect(transfers(stub)).toEqual([]);
+      reported();
+    });
+
+    it('stock placed in a warehouse the caller cannot see', async () => {
+      const stub = bookStub({
+        'item_stock_levels.select': { data: [], error: null },
+        'rpc:item_holdings_elsewhere': elsewhere({ placed: 3 }),
+      });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toMatchObject({
+        stockLeftAt: { locationName: null },
+      });
+      expect(stub.rpcCalls.find((c) => c.name === 'item_holdings_elsewhere')?.args).toEqual({
+        p_item_ids: ['dup-b'],
+      });
+      expect(transfers(stub)).toEqual([]);
+      reported();
+    });
+
+    it('stock in other warehouses that cannot be read', async () => {
+      const stub = bookStub({
+        'item_stock_levels.select': { data: [], error: null },
+        'rpc:item_holdings_elsewhere': { data: null, error: { message: 'timeout' } },
+      });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toMatchObject({
+        stockLeftAt: { locationName: null },
+      });
+      reported();
+    });
+
+    it('a holding whose location row cannot be read is reported, not dropped', async () => {
+      const stub = bookStub({
+        'item_stock_levels.select': { data: [{ ...SITE_HOLDING, locations: null }], error: null },
+      });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toMatchObject({
+        stockLeftAt: { locationName: null },
+      });
+      // Its place is unknown, so it is not moved: it could be Staging.
+      expect(transfers(stub)).toEqual([]);
+      reported();
+    });
+
+    it('reads the place with a left embed, so a holding at an unreadable location still arrives', async () => {
+      const stub = bookStub();
+      await asStaff(stub).duplicateItem(BOOK as never);
+
+      const select = stub.chainArgsAll.get('item_stock_levels.select')?.[0]?.[0]?.[0];
+      expect(select).toMatch(/\blocations\(/);
+      expect(select).not.toMatch(/!inner/);
+    });
+
+    it('a holding the reads see moves, and the stock they do not see is still reported', async () => {
+      const stub = bookStub({
+        'item_stock_levels.select': {
+          data: [{ ...SITE_HOLDING, quantity: 2 }],
+          error: null,
+        },
+        'rpc:item_holdings_elsewhere': elsewhere({ placed: 1 }),
+      });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toMatchObject({
+        stockLeftAt: { locationName: null },
+      });
+      expect(transfers(stub)).toEqual([
+        expect.objectContaining({
+          p_from_location_id: 'site-dc4',
+          p_to_location_id: 'unplaced-wh1',
+          p_quantity: 2,
+        }),
+      ]);
+      reported();
+    });
+
+    it('stock out of view that sits in Unplaced is in Unplaced: nothing to move or report', async () => {
+      const stub = bookStub({
+        'item_stock_levels.select': { data: [], error: null },
+        'rpc:item_holdings_elsewhere': elsewhere({ unplaced: 3 }),
+      });
+
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toEqual({
+        id: 'dup-b',
+        placementFailed: null,
+      });
+      expect(transfers(stub)).toEqual([]);
+      expect(reportError).not.toHaveBeenCalled();
+    });
+
+    it('holdings that add up to the copy need no question about other warehouses', async () => {
+      const stub = bookStub({
+        'rpc:item_holdings_elsewhere': { data: null, error: { message: 'timeout' } },
+      });
+
+      // The visible holding is all 3 units: the failed read of other warehouses
+      // changes nothing, and the move runs as for a manager.
+      await expect(asStaff(stub).duplicateItem(BOOK as never)).resolves.toEqual({
+        id: 'dup-b',
+        placementFailed: null,
+      });
+      expect(transfers(stub)).toHaveLength(1);
+      expect(reportError).not.toHaveBeenCalled();
+    });
+
+    it('a manager sees every holding: an empty answer is still not all 3 units', async () => {
+      // No hidden stock to ask about (managers skip the call), and the seed
+      // trigger can fail without failing the copy (0199): no holding at all.
+      const stub = bookStub({ 'item_stock_levels.select': { data: [], error: null } });
+      const svc = new InventoryService(makeServiceContext(stub.client));
+
+      await expect(svc.duplicateItem(BOOK as never)).resolves.toMatchObject({
+        stockLeftAt: { locationName: null },
+      });
+      expect(stub.rpcCalls.find((c) => c.name === 'item_holdings_elsewhere')).toBeUndefined();
+      reported();
+    });
   });
 
   // The dialog sends the record's own type; a request that names the other

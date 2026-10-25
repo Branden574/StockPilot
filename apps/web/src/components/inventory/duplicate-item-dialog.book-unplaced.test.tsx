@@ -42,7 +42,10 @@ async function duplicate(
     await user.click(within(dialog).getByRole('combobox', { name: /Crate color/ }));
     await user.click(await screen.findByRole('option', { name: /Blue/ }));
   }
-  const qty = within(dialog).getByLabelText('Quantity at this rack');
+  // A book's stock waits in Unplaced, so its field does not say "at this rack".
+  const qty = within(dialog).getByRole('spinbutton', {
+    name: opts.book ? 'Quantity' : 'Quantity at this rack',
+  });
   await user.clear(qty);
   await user.type(qty, opts.quantity);
   await user.click(within(dialog).getByRole('button', { name: 'Duplicate' }));
@@ -64,6 +67,22 @@ describe('DuplicateItemDialog: a book copy waits in Unplaced', () => {
     ).toBeInTheDocument();
   });
 
+  // The field's label is its accessible name: a book copy's stock never goes
+  // "at this rack", so a screen reader must not hear that, and the hint that
+  // says where it goes is the field's description, not a loose paragraph.
+  it("names a book's quantity without the rack and describes it with the Unplaced hint", async () => {
+    render(<DuplicateItemDialog itemId={ITEM_ID} itemName="Maus I" itemType="book" />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+    const dialog = await screen.findByRole('dialog');
+
+    const qty = within(dialog).getByRole('spinbutton', { name: 'Quantity' });
+    expect(qty).toHaveAccessibleDescription(
+      'Defaults to 0. The stock waits in Unplaced until it is put away into this crate.',
+    );
+    expect(within(dialog).queryByLabelText('Quantity at this rack')).not.toBeInTheDocument();
+  });
+
   it('keeps the rack words for a product', async () => {
     render(<DuplicateItemDialog itemId={ITEM_ID} itemName="Polo" itemType="product" />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -74,6 +93,10 @@ describe('DuplicateItemDialog: a book copy waits in Unplaced', () => {
       within(dialog).getByText('Defaults to 0. Set the actual on-hand count at the new rack.'),
     ).toBeInTheDocument();
     expect(within(dialog).queryByText(/Unplaced/)).not.toBeInTheDocument();
+    // A product copy's stock does go onto the rack typed here.
+    expect(
+      within(dialog).getByRole('spinbutton', { name: 'Quantity at this rack' }),
+    ).toHaveAccessibleDescription('Defaults to 0. Set the actual on-hand count at the new rack.');
   });
 
   it('after the save, says where a book copy with stock is', async () => {
@@ -124,7 +147,11 @@ describe('DuplicateItemDialog: a book copy waits in Unplaced', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it('says it is still where it started when the place is not known', async () => {
+  // Integrator decision (B28): the server answers without a place when its
+  // reads could not account for all of the copy's stock (stock out of the
+  // person's view, or a read that failed). It may be in Unplaced or still at
+  // the site: never the success message, and never "still where it started".
+  it('says the stock may not have reached Unplaced when the place is not known', async () => {
     vi.mocked(duplicateItemAction).mockResolvedValueOnce({
       ok: true,
       data: { id: 'dup-b', stockLeftAt: { locationName: null } },
@@ -134,12 +161,12 @@ describe('DuplicateItemDialog: a book copy waits in Unplaced', () => {
 
     await duplicate(user, { book: true, quantity: '3' });
 
-    await waitFor(() =>
-      expect(toast.warning).toHaveBeenCalledWith(
-        'Duplicated "Maus I", but its stock could not be moved to Unplaced: it is still where it started. Check before picking.',
-        { duration: 10000 },
-      ),
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard/inventory/dup-b'));
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Duplicated "Maus I", but its stock may not have reached Unplaced. Check before picking.',
+      { duration: 10000 },
     );
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('keeps "Duplicated" alone for a product copy that reached its rack', async () => {

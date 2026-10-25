@@ -43,13 +43,18 @@ interface Props {
 
 /**
  * A book copy whose stock the server could not move to Unplaced (B28): the
- * copy exists (never an error), its stock is still where the seed put it (the
- * original's site), and the person is sent to look, in the shared placement
- * warning's order.
+ * copy exists (never an error), and the person is sent to look, in the shared
+ * placement warning's order. With a place, the stock is still there (the
+ * original's site). Without one, the server could not tell where all of it is
+ * (stock out of the person's view, or a read that failed): it may be in
+ * Unplaced or still at the site, so the message says only that it may not
+ * have reached Unplaced.
  */
 function stockLeftAtMessage(itemName: string, locationName: string | null): string {
-  const where = locationName ? `still at ${locationName}` : 'still where it started';
-  return `Duplicated "${itemName}", but its stock could not be moved to Unplaced: it is ${where}. Check before picking.`;
+  if (!locationName) {
+    return `Duplicated "${itemName}", but its stock may not have reached Unplaced. Check before picking.`;
+  }
+  return `Duplicated "${itemName}", but its stock could not be moved to Unplaced: it is still at ${locationName}. Check before picking.`;
 }
 
 /**
@@ -255,7 +260,10 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="dup-quantity">Quantity at this rack</Label>
+            {/* A book copy's stock waits in Unplaced (B28), never "at this
+                rack": the label is the field's accessible name, and the hint
+                that says where the stock goes is its description. */}
+            <Label htmlFor="dup-quantity">{isBook ? 'Quantity' : 'Quantity at this rack'}</Label>
             <Input
               id="dup-quantity"
               type="number"
@@ -264,8 +272,9 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               disabled={pending}
+              aria-describedby="dup-quantity-hint"
             />
-            <p className="text-muted-foreground text-[12px]">
+            <p id="dup-quantity-hint" className="text-muted-foreground text-[12px]">
               {isBook
                 ? 'Defaults to 0. The stock waits in Unplaced until it is put away into this crate.'
                 : 'Defaults to 0. Set the actual on-hand count at the new rack.'}

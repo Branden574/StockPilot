@@ -85,6 +85,7 @@ import {
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
+  roundQuantity,
   STAGING_FILTER_MAX_ITEMS,
   trackingTypeForMode,
   validateCustomFields,
@@ -728,6 +729,43 @@ function seesEveryHolding(ctx: ServiceContext): boolean {
 }
 
 /**
+ * Why a book duplicate's holdings reads do not account for all of the copy's
+ * stock (B28, see InventoryService.moveSeededStockToUnplaced), or null when
+ * they do. `rows` are the caller's own read of the copy's holdings (a left
+ * embed: `locations` is null when the location row cannot be read),
+ * `elsewhere` its hiddenHoldingsFor answer, `quantity` the copy's
+ * quantity_on_hand. The answer goes to Sentry: numbers only, no names.
+ *
+ *   • A holding at a location the caller cannot read: its place is unknown.
+ *   • The visible holdings add up to the quantity: all accounted for (an
+ *     item's holdings add up to its on-hand, so nothing can be out of view).
+ *   • Otherwise the stock out of view must make up the rest, and only in
+ *     Staging or Unplaced. Placed stock out of view, a failed read of it, or a
+ *     total that still differs (no holding at all, when the seed failed) is
+ *     not accounted for.
+ */
+function unaccountedCopyStock(
+  rows: ReadonlyArray<{ quantity: number | string; locations: unknown }>,
+  elsewhere: HiddenHoldingsRead,
+  itemId: string,
+  quantity: number,
+): string | null {
+  if (rows.some((r) => !r.locations)) return 'a holding at a location the caller cannot read';
+  const expected = roundQuantity(quantity);
+  const visible = roundQuantity(rows.reduce((sum, r) => sum + Number(r.quantity), 0));
+  if (visible === expected) return null;
+  if (!elsewhere.ok) {
+    return `holdings add up to ${visible} of ${expected}; stock in other warehouses could not be read`;
+  }
+  const hidden = elsewhere.byItem.get(itemId);
+  if (hidden && hidden.placed > 0) {
+    return `${hidden.placed} placed in warehouses the caller cannot see`;
+  }
+  const total = roundQuantity(visible + holdingsElsewhereTotal(hidden));
+  return total === expected ? null : `holdings add up to ${total} of ${expected}`;
+}
+
+/**
  * A put-away destination. Defined in `@/lib/locations/destination-option`
  * beside its client-facing twin (both describe the same `locations` row, fed
  * by the same column list) and re-exported here because this service's
@@ -901,7 +939,9 @@ export interface ManualPlacementOutcome {
 /**
  * A duplicated book whose stock could not be moved to Unplaced (B28): it is
  * still where the seed trigger put it. `locationName` names that place (a site
- * such as "DC4"); null when even the holdings read failed.
+ * such as "DC4"); null when where the stock is is not known: the holdings read
+ * failed, or the caller's reads do not account for all of it (stock out of
+ * the caller's view, see moveSeededStockToUnplaced).
  */
 export interface StockLeftAtSite {
   locationName: string | null;
@@ -3834,7 +3874,12 @@ export class InventoryService {
     // (#253) puts stock nobody placed in Unplaced, awaiting put-away.
     let stockLeftAt: StockLeftAtSite | null = null;
     if (input.itemType === 'book' && Number(input.quantity) > 0) {
-      stockLeftAt = await this.moveSeededStockToUnplaced(newId as string, originalWarehouseId);
+      // 0299 writes the requested quantity as the copy's quantity_on_hand.
+      stockLeftAt = await this.moveSeededStockToUnplaced(
+        newId as string,
+        originalWarehouseId,
+        Number(input.quantity),
+      );
     }
 
     void audit(
@@ -3874,12 +3919,32 @@ export class InventoryService {
    *
    * FAIL-SOFT, REPORTED: the copy exists whatever happens here. A move that
    * cannot run leaves the stock where it was seeded; the answer names that
-   * place (null when the read itself failed) so the dialog can say so, and
-   * Sentry hears of it. Null: nothing was left outside Unplaced.
+   * place so the dialog can say so, and Sentry hears of it. Null: nothing was
+   * left outside Unplaced.
+   *
+   * ONLY WHAT THE READS ACCOUNT FOR IS SUCCESS (integrator decision, B28
+   * 2026-10-25). The holdings are read through the caller's own client: since
+   * 0371 a member below manager reads them only in the warehouses they are
+   * assigned to (staff with the 0280 all-warehouses setting too, see
+   * seesEveryHolding), and the seed trigger can fail without failing the copy
+   * (0199 swallows its error). An empty answer is therefore not "nothing left
+   * outside Unplaced". `quantity` is the copy's quantity_on_hand (0299 writes
+   * the request's quantity), and the holdings must add up to it: the visible
+   * ones, and when they fall short, for a caller below manager, the totals out
+   * of view (hiddenHoldingsFor, read alongside). Stock out of view counts only
+   * when it is in Staging or Unplaced, which is where this move would put it
+   * (unaccountedCopyStock has the rule). Placed stock out of view, a total
+   * that still differs, a failed read the answer depends on, or a holding
+   * whose location row the caller cannot read (a left embed, so it arrives
+   * with `locations` null instead of vanishing from an inner join) answers
+   * `{ locationName: null }` and is reported: the dialog then says the stock
+   * may not have reached Unplaced. The holdings that can be seen are still
+   * moved.
    */
   private async moveSeededStockToUnplaced(
     itemId: string,
     warehouseId: string | null,
+    quantity: number,
   ): Promise<StockLeftAtSite | null> {
     const report = (detail: string) =>
       void reportError(new Error(detail), {
@@ -3888,24 +3953,41 @@ export class InventoryService {
         organizationId: this.ctx.organizationId,
       });
 
-    let rows: Array<{
+    type SeededHolding = {
+      item_id: string;
       location_id: string;
-      quantity: number;
+      quantity: number | string;
       locations: { name: string | null; kind: string | null; type: string | null } | null;
-    }>;
-    try {
-      rows = await this.holdingsForItemIds(
+    };
+    // Both reads at once; hiddenHoldingsFor never throws, and managers and
+    // above skip its call (they read every holding).
+    const [read, elsewhere] = await Promise.all([
+      this.holdingsForItemIds<SeededHolding>(
         [itemId],
-        'item_id, location_id, quantity, locations!inner(name, kind, type)',
-      );
-    } catch (e) {
-      report(rawErrorText(e));
+        'item_id, location_id, quantity, locations(name, kind, type)',
+      ).then(
+        (rows) => ({ ok: true as const, rows }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
+      this.hiddenHoldingsFor([itemId]),
+    ]);
+    if (!read.ok) {
+      report(rawErrorText(read.error));
       return { locationName: null };
     }
+    // A row for another item is never trusted (placeManualCreateOnRack's rule).
+    const rows = read.rows.filter((r) => r.item_id === itemId);
+
+    const unaccounted = unaccountedCopyStock(rows, elsewhere, itemId, quantity);
+    if (unaccounted) report(`book duplicate's stock not accounted for: ${unaccounted}`);
+    const unknownPlace: StockLeftAtSite = { locationName: null };
+
     // Only a holding whose place is known and is not Staging or Unplaced.
     const seeded = rows.filter((r) => r.locations && !isSystemLocation(r.locations));
-    if (seeded.length === 0) return null;
-    const leftAt: StockLeftAtSite = { locationName: seeded[0]?.locations?.name ?? null };
+    if (seeded.length === 0) return unaccounted ? unknownPlace : null;
+    const leftAt: StockLeftAtSite = unaccounted
+      ? unknownPlace
+      : { locationName: seeded[0]?.locations?.name ?? null };
 
     // The warehouse's own Unplaced bucket (every warehouse has one: 0188's
     // trigger and backfill), in this organization, never an archived one.
@@ -3951,7 +4033,8 @@ export class InventoryService {
     } finally {
       if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
     }
-    return failed ? leftAt : null;
+    if (failed) return leftAt;
+    return unaccounted ? unknownPlace : null;
   }
 
   /**
