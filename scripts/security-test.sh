@@ -1059,6 +1059,13 @@ WEB_TESTS=(
   # secret is unset. Both files carry the "Security invariant" marker.
   src/app/api/cron/embeddings-sweep/route.test.ts
   src/lib/ai/embeddings-sweep.test.ts
+  # Unlinked escalation requests (B29, F1-5 follow-up): the daily check reads
+  # every organization's maintenance requests and exception links with the
+  # service role and only reads; each alert names a request by id, handle and
+  # EX reference, never its subject, description or requester; a failed read
+  # alerts nothing (a failed link read would make every request look
+  # unlinked); the CRON_SECRET gate fails closed when the secret is unset.
+  src/app/api/cron/maintenance-orphan-escalations/route.test.ts
 
   # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
   # hand-over through the sign route: a raw token whose sha256 is the order's
