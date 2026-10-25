@@ -47,6 +47,7 @@ import { usePerfUseful } from '@/components/perf/perf-useful';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
+import { isControlFlow } from '@/lib/control-flow';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
@@ -113,6 +114,7 @@ import {
   selectPage,
 } from '@/components/inventory/selection-utils';
 import { rememberLastListUrl } from '@/lib/last-list-url';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -5409,7 +5411,16 @@ function SavedViewChip({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   async function apply() {
-    await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    try {
+      await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a deploy): the warehouse was not switched, so
+      // applying the rest would show the view under the wrong warehouse.
+      toast.error(requestFailedMessage('apply the view'));
+      return;
+    }
     const next = new URLSearchParams();
     if (view.state.q) next.set('q', view.state.q);
     if (view.state.status) next.set('status', view.state.status);
@@ -5430,31 +5441,45 @@ function SavedViewChip({
 
   async function confirmDelete() {
     setDeleting(true);
-    const res = await deleteSavedViewAction(view.id, scope);
-    setDeleting(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
+    try {
+      const res = await deleteSavedViewAction(view.id, scope);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      setDeleteOpen(false);
+      toast.success(`Saved view "${view.name}" deleted.`);
+      router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('delete the view'));
+    } finally {
+      setDeleting(false);
     }
-    setDeleteOpen(false);
-    toast.success(`Saved view "${view.name}" deleted.`);
-    router.refresh();
   }
 
   async function toggleShare(e: React.MouseEvent) {
     e.stopPropagation();
     const next = !view.isShared;
     setSharing(true);
-    const res = await toggleSavedViewShareAction(view.id, next, scope);
-    setSharing(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
+    try {
+      const res = await toggleSavedViewShareAction(view.id, next, scope);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success(
+        next ? `View "${view.name}" shared with the team.` : `View "${view.name}" set to private.`,
+      );
+      router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(next ? 'share the view' : 'make the view private'));
+    } finally {
+      setSharing(false);
     }
-    toast.success(
-      next ? `View "${view.name}" shared with the team.` : `View "${view.name}" set to private.`,
-    );
-    router.refresh();
   }
 
   // The owner's share and delete controls appear on hover with a mouse, and
@@ -5569,24 +5594,33 @@ function SaveCurrentViewButton({
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
     setSaving(true);
-    const res = await createSavedViewAction({
-      scope,
-      name: trimmed,
-      state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
-      isShared: shareWithTeam,
-    });
-    setSaving(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
+    try {
+      const res = await createSavedViewAction({
+        scope,
+        name: trimmed,
+        state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
+        isShared: shareWithTeam,
+      });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success(
+        shareWithTeam
+          ? `View "${trimmed}" saved and shared with the team.`
+          : `View "${trimmed}" saved.`,
+      );
+      setOpen(false);
+      router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // B40: no answer (offline, a server error the action threw, a deploy
+      // that no longer has it). The popover stays open with the name kept.
+      toast.error(requestFailedMessage('save the view'));
+    } finally {
+      setSaving(false);
     }
-    toast.success(
-      shareWithTeam
-        ? `View "${trimmed}" saved and shared with the team.`
-        : `View "${trimmed}" saved.`,
-    );
-    setOpen(false);
-    router.refresh();
   }
 
   return (
