@@ -121,7 +121,9 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
   const at = (s: string) => audience && st === s;
   const handOver = st === 'staged_for_pickup' || st === 'in_transit';
 
-  const gates: Omit<OrderManagerActions, 'showSection'> = {
+  // The buttons only: the deleted-driver line is not one and never opens the
+  // section by itself.
+  const gates: Omit<OrderManagerActions, 'showSection' | 'deletedDriverLine'> = {
     approve: approver && st === 'pending_approval',
     approvePartial: approver && st === 'pending_approval',
     deny: approver && st === 'pending_approval',
