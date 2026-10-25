@@ -20,6 +20,8 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
+import { SPENT_SESSION_FRAGMENT } from '@/lib/auth/auth-page-notices';
+
 import { SignInForm } from './sign-in-form';
 
 const LINK_FAILED =
@@ -140,16 +142,34 @@ describe('SignInForm: an emailed link that did not work (docket B39)', () => {
     expect(container.textContent).not.toContain('otp_expired');
   });
 
-  it('does not call a link failed when its session arrived in the fragment (the legacy recovery forward)', () => {
-    // /auth/callback answers a legacy action_link with ?error=auth_callback_failed
-    // because the session is in the fragment, which no server sees; the
-    // RecoveryFragmentGuard then forwards to /reset/complete. The link worked.
+  it('says so when the link put its session in the fragment: the app never uses it, so the link is spent', () => {
+    // A link Supabase verified itself (an older reset email) reaches
+    // /auth/callback with its session in the fragment, which no server sees,
+    // and lands here with ?error=auth_callback_failed. The browser client is
+    // PKCE-only and refuses that session (lib/supabase/client.test.ts), so the
+    // person is not signed in and the link cannot be used again.
     at(
       'error=auth_callback_failed',
       '#access_token=header.payload.signature&expires_in=3600&refresh_token=r1&token_type=bearer&type=recovery',
     );
     const { container } = render(<SignInForm />);
-    expect(notice(container)).toBeNull();
+    expect(notice(container)).toHaveTextContent(LINK_FAILED);
+    expect(container.textContent).not.toContain('header.payload.signature');
+  });
+
+  it('says so for a session fragment that reached a protected page first, with no error in the query', () => {
+    // An invite link whose redirect is /dashboard: the proxy sends a signed-out
+    // browser to /signin?redirect=%2Fdashboard, and the fragment comes along.
+    at('redirect=%2Fdashboard', '#access_token=header.payload.signature&type=invite');
+    const { container } = render(<SignInForm />);
+    expect(notice(container)).toHaveTextContent(LINK_FAILED);
+  });
+
+  it('keeps the note once the session is gone from the address bar', () => {
+    // SessionFragmentScrub leaves the spent-link fragment in its place.
+    at('error=auth_callback_failed', SPENT_SESSION_FRAGMENT);
+    const { container } = render(<SignInForm />);
+    expect(notice(container)).toHaveTextContent(LINK_FAILED);
   });
 
   it('shows the link notice alone when the route also says the session ended', () => {

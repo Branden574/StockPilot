@@ -6,12 +6,18 @@ import {
   RESET_QUERY_NOTICES,
   SESSION_ENDED_NOTICE,
   SIGN_IN_QUERY_NOTICES,
+  SPENT_SESSION_FRAGMENT,
+  fragmentWithoutSession,
   linkFragment,
   resetNotice,
   signInNotice,
 } from './auth-page-notices';
 
 const query = (qs: string) => new URLSearchParams(qs);
+
+/** What a link Supabase verified itself hands back in the fragment (placeholder tokens). */
+const SESSION_FRAGMENT =
+  '#access_token=h.p.s&expires_in=3600&refresh_token=r1&token_type=bearer&type=recovery';
 
 /** Names every object inherits: a lookup that is not own-keys-only finds these. */
 const INHERITED = ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'];
@@ -65,17 +71,46 @@ describe('linkFragment', () => {
     expect(linkFragment('error_code=otp_expired')).toBe('failed');
   });
 
-  it('reads a session in the fragment as session (the link worked)', () => {
-    expect(
-      linkFragment(
-        '#access_token=h.p.s&expires_in=3600&refresh_token=r1&token_type=bearer&type=recovery',
-      ),
-    ).toBe('session');
-    expect(linkFragment('#access_token=h.p.s&type=invite')).toBe('session');
+  it('reads a session in the fragment as failed: the app never uses one, so the link is spent', () => {
+    // The browser client is PKCE-only (lib/supabase/client.test.ts pins it), so
+    // nothing on the page can sign the person in with this session.
+    expect(linkFragment(SESSION_FRAGMENT)).toBe('failed');
+    expect(linkFragment('#access_token=h.p.s&type=invite')).toBe('failed');
+    expect(linkFragment('#refresh_token=r1')).toBe('failed');
+    expect(linkFragment('#access_token=h.p.s&error=server_error')).toBe('failed');
   });
 
-  it('puts an error before a session, as auth-js does', () => {
-    expect(linkFragment('#access_token=h.p.s&error=server_error')).toBe('failed');
+  it('reads the fragment a spent session leaves behind as failed, so the note stays', () => {
+    expect(linkFragment(SPENT_SESSION_FRAGMENT)).toBe('failed');
+  });
+});
+
+describe('fragmentWithoutSession', () => {
+  it('swaps a session for the spent-link fragment, dropping every token', () => {
+    for (const hash of [
+      SESSION_FRAGMENT,
+      '#access_token=h.p.s&type=invite',
+      '#refresh_token=r1',
+      '#provider_token=p1&access_token=h.p.s',
+      'access_token=h.p.s',
+    ]) {
+      expect(fragmentWithoutSession(hash), hash).toBe(SPENT_SESSION_FRAGMENT);
+    }
+    expect(SPENT_SESSION_FRAGMENT).not.toMatch(/token/);
+  });
+
+  it('leaves every other fragment alone', () => {
+    for (const hash of [
+      undefined,
+      null,
+      '',
+      '#',
+      '#top',
+      '#error=access_denied&error_code=otp_expired',
+      SPENT_SESSION_FRAGMENT,
+    ]) {
+      expect(fragmentWithoutSession(hash), String(hash)).toBeNull();
+    }
   });
 });
 
@@ -90,13 +125,19 @@ describe('signInNotice', () => {
     expect(signInNotice(query('reason=session_ended'), 'failed')).toBe(LINK_FAILED_NOTICE);
   });
 
-  it('does not call the link failed when its session is in the fragment', () => {
-    expect(signInNotice(query('error=auth_callback_failed'), 'session')).toBeNull();
+  it('says the link failed when its session is in the fragment, with or without the query error', () => {
+    // The landing /auth/callback gives a link Supabase verified itself, and the
+    // one the proxy gives it on a protected page.
+    expect(signInNotice(query('error=auth_callback_failed'), linkFragment(SESSION_FRAGMENT))).toBe(
+      LINK_FAILED_NOTICE,
+    );
+    expect(
+      signInNotice(query('redirect=%2Fdashboard'), linkFragment('#access_token=h.p.s&type=invite')),
+    ).toBe(LINK_FAILED_NOTICE);
   });
 
   it('keeps the session-ended note, under a failed link', () => {
     expect(signInNotice(query('reason=session_ended'), 'none')).toBe(SESSION_ENDED_NOTICE);
-    expect(signInNotice(query('reason=session_ended'), 'session')).toBe(SESSION_ENDED_NOTICE);
     expect(signInNotice(query('reason=session_ended&error=auth_callback_failed'), 'none')).toBe(
       LINK_FAILED_NOTICE,
     );

@@ -26,10 +26,10 @@ import {
 } from '@stockpilot/core';
 
 // The fragment is read, not watched: the notice is about the link the browser
-// arrived from. When RecoveryFragmentGuard adopts a legacy recovery session,
-// auth-js empties the fragment moments before the guard leaves this page, and
-// a watched fragment would flash the failure notice in that moment. The server
-// has no fragment, so a server render reads 'none'.
+// arrived from, and nothing on this page changes what the fragment says.
+// SessionFragmentScrub swaps a session for SPENT_SESSION_FRAGMENT, and both read
+// as a failed link, so every render shows the same note. The server has no
+// fragment, so a server render reads 'none'.
 const unwatched = () => () => {};
 const fragmentInBrowser = (): LinkFragment => linkFragment(window.location.hash);
 const fragmentOnServer = (): LinkFragment => 'none';

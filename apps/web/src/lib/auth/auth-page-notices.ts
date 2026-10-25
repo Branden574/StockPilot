@@ -95,25 +95,67 @@ function decided(
  * server sees a fragment, and a redirect keeps it, so a link Supabase verified
  * itself (its action_link, which this app no longer emails but an older email
  * or the Supabase dashboard can still hold) reaches /signin with its outcome
- * there:
- *   'failed'   Supabase refused the link: `error`, `error_code` or
- *              `error_description`, the keys auth-js reads as a failed redirect
- *              (it checks them before anything else, and so does this);
- *   'session'  the link worked and its session is in the fragment
- *              (`access_token`); RecoveryFragmentGuard forwards a recovery one
- *              to /reset/complete;
- *   'none'     anything else, including no fragment.
+ * there. Both outcomes are a link that did not sign the person in:
+ *   - Supabase refused it: `error`, `error_code` or `error_description`, the
+ *     keys auth-js reads as a failed redirect;
+ *   - Supabase accepted it and put a session in the fragment (`access_token`,
+ *     `refresh_token`). The app cannot use that session. Its browser client
+ *     (lib/supabase/client.ts) is @supabase/ssr's, which forces the PKCE flow,
+ *     and auth-js refuses an implicit-grant fragment under PKCE; with the
+ *     ?error=auth_callback_failed that /auth/callback adds, it refuses even
+ *     earlier (lib/supabase/client.test.ts pins both). GoTrue has spent the
+ *     link, and the person is not signed in.
+ * Never adopt a session from the fragment (setSession, or a client in the
+ * implicit flow): any page could then sign a signed-out browser in to another
+ * account by linking to /signin#access_token=<theirs> (login CSRF, docket S14).
+ * 'none' is anything else, including no fragment.
  */
-export type LinkFragment = 'failed' | 'session' | 'none';
+export type LinkFragment = 'failed' | 'none';
+
+/** The fragment keys auth-js reads as a failed redirect. */
+const FRAGMENT_ERROR_KEYS = ['error', 'error_code', 'error_description'] as const;
+
+/** The fragment keys that carry a session's credentials. */
+const FRAGMENT_SESSION_KEYS = [
+  'access_token',
+  'refresh_token',
+  'provider_token',
+  'provider_refresh_token',
+] as const;
+
+function fragmentParams(hash: string | null | undefined): URLSearchParams | null {
+  const raw = (hash ?? '').replace(/^#/, '');
+  return raw ? new URLSearchParams(raw) : null;
+}
+
+function holdsSession(params: URLSearchParams): boolean {
+  return FRAGMENT_SESSION_KEYS.some((key) => params.has(key));
+}
 
 export function linkFragment(hash: string | null | undefined): LinkFragment {
-  const raw = (hash ?? '').replace(/^#/, '');
-  if (!raw) return 'none';
-  const params = new URLSearchParams(raw);
-  if (params.has('error') || params.has('error_code') || params.has('error_description')) {
-    return 'failed';
-  }
-  return params.has('access_token') ? 'session' : 'none';
+  const params = fragmentParams(hash);
+  if (!params) return 'none';
+  return FRAGMENT_ERROR_KEYS.some((key) => params.has(key)) || holdsSession(params)
+    ? 'failed'
+    : 'none';
+}
+
+/**
+ * What stays in the address bar once a session fragment's tokens are taken
+ * out (components/auth/session-fragment-scrub.tsx): no credential, and still a
+ * failed link to linkFragment, so the note stays on every render and after a
+ * reload.
+ */
+export const SPENT_SESSION_FRAGMENT = '#error=unusable_link';
+
+/**
+ * The fragment to put in place of this one when it carries a session, or null
+ * when it carries none. The whole fragment goes: everything in it came from
+ * the same answer, and its access and refresh tokens are live.
+ */
+export function fragmentWithoutSession(hash: string | null | undefined): string | null {
+  const params = fragmentParams(hash);
+  return params && holdsSession(params) ? SPENT_SESSION_FRAGMENT : null;
 }
 
 /** The search params as the page has them (URLSearchParams, Next's ReadonlyURLSearchParams). */
@@ -122,17 +164,14 @@ export interface QueryValues {
 }
 
 /**
- * The one notice the sign-in card shows, or null. A failed link outranks the
- * other reasons, since it is why the person is here. A session in the fragment
- * means the link worked whatever the query says (/auth/callback answers every
- * fragment link with ?error=auth_callback_failed, because it cannot see one).
+ * The one notice the sign-in card shows, or null. A failed link, in the
+ * fragment or the query, outranks the other reasons, since it is why the
+ * person is here.
  */
 export function signInNotice(query: QueryValues, fragment: LinkFragment): AuthNoticeCopy | null {
   if (fragment === 'failed') return LINK_FAILED_NOTICE;
-  const error =
-    fragment === 'session' ? null : decided(SIGN_IN_QUERY_NOTICES.error, query.get('error'));
   return (
-    error ??
+    decided(SIGN_IN_QUERY_NOTICES.error, query.get('error')) ??
     decided(SIGN_IN_QUERY_NOTICES.reason, query.get('reason')) ??
     decided(SIGN_IN_QUERY_NOTICES.reset, query.get('reset'))
   );
