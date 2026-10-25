@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { forgetOnAccountChange } from './account-epoch';
+
 /**
  * Cross-screen "cycle count cart" for mobile. A tiny module-level store
  * (no extra dep) backing select-mode on the Items + Books tabs: tapping a
@@ -69,6 +71,11 @@ export const countSelection = {
     return Boolean(picks[id]);
   },
 };
+
+// The picks are the signed-in account's items, from its workspace: a sign-out
+// or another account signing in drops them, so the next person never sees
+// them under "Count selected" (B25).
+forgetOnAccountChange(() => countSelection.clear());
 
 /** All picks as an array. Stable ref between mutations (no render loop). */
 export function useCountPicks(): CountPick[] {

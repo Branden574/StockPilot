@@ -5,6 +5,7 @@ import {
   type Role,
 } from '@stockpilot/core';
 
+import { forgetOnAccountChange } from './account-epoch';
 import { api } from './api';
 
 /**
@@ -75,10 +76,11 @@ export async function fetchCountCloseGate(userId: string, orgId: string): Promis
   return gate;
 }
 
-/** Test seam (and sign-out): forget every remembered answer. */
+/** Test seam (and every account change, B25): forget every remembered answer. */
 export function forgetCloseGates(): void {
   remembered.clear();
 }
+forgetOnAccountChange(forgetCloseGates);
 
 /** What the screen knows about the gate right now. */
 export type CloseGateState =

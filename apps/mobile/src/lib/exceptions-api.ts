@@ -37,6 +37,7 @@ import {
   type RecountUnavailableReason,
 } from '@stockpilot/core';
 
+import { forgetOnAccountChange } from './account-epoch';
 import { api } from './api';
 import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import {
@@ -824,11 +825,13 @@ export function recalledDetail(
   return rememberedDetail.get(`${userId}\u0000${orgId}\u0000${id}`) ?? null;
 }
 
-/** Test seam: forget everything remembered. */
+/** Forget everything remembered: tests, and every account change (B25), so a
+ *  signed-out account's exceptions are not kept in memory for the next one. */
 export function forgetRememberedExceptions(): void {
   remembered.clear();
   rememberedDetail.clear();
 }
+forgetOnAccountChange(forgetRememberedExceptions);
 
 // ── Time labels (the org's time zone) ──────────────────────────────────────
 

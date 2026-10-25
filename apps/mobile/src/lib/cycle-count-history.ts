@@ -21,6 +21,7 @@ import {
   type ListPage,
 } from '@stockpilot/core';
 
+import { forgetOnAccountChange } from './account-epoch';
 import type { CachedCycleCountHeader } from './cycle-count-cache';
 
 /** One count session as the list API returns it. */
@@ -139,7 +140,9 @@ export function recallListView(orgId: string | null): CycleCountListView {
   return (orgId ? lastViewByOrg.get(orgId) : undefined) ?? INITIAL_LIST_VIEW;
 }
 
-/** For tests only. */
+/** Forget every remembered view: tests, and every account change (B25), so
+ *  the next account to sign in never opens the list on this one's search. */
 export function forgetListViews(): void {
   lastViewByOrg.clear();
 }
+forgetOnAccountChange(forgetListViews);

@@ -163,6 +163,46 @@ export async function endSession(deps: EndSessionDeps, scope: SignOutScope): Pro
   }
 }
 
+/**
+ * The LOCAL sign-out behind "Use password instead" and "Use a different
+ * account" (auth-context.tsx signOutToFallback): it ends this device's session
+ * only, never the person's others (web, another phone).
+ *
+ * It used to end the session and nothing else (#242 follow-ups, B25), which
+ * left two things behind for the next person to sign in on the phone:
+ *   - the cache: the previous account's downloaded counts, lines and every
+ *     other org-scoped table, shown until the next account's first pull reset
+ *     a cache that was not its own (sync.ts), or longer when that pull failed;
+ *   - legacy queued rows (no owner, written by an older binary or bundle):
+ *     they belong to whoever drains them first (outbox-scope.ts), so the next
+ *     account's session sent them as its own.
+ *
+ * So, as the deliberate sign-out does (runSignOutFlow steps 4 to 6): this
+ * account's legacy rows are stamped as its own BEFORE the session goes, and
+ * the cache is cleared once it is gone, never while it may still exist. The
+ * outbox stays on the device, held for this account, and nothing is asked or
+ * drained: the person is usually signing straight back in. The saved
+ * workspace stays too (it is sent only with its own account).
+ *
+ * True when the session ended.
+ */
+export async function runFallbackSignOut(
+  deps: EndSessionDeps & Pick<SignOutFlowDeps, 'holdForAccount' | 'wipeCache'>,
+): Promise<boolean> {
+  try {
+    await deps.holdForAccount();
+  } catch (e) {
+    deps.warn?.('[auth] could not hold queued changes for this account', e);
+  }
+  if (!(await endSession(deps, 'local'))) return false;
+  try {
+    await deps.wipeCache();
+  } catch (e) {
+    deps.warn?.('[auth] wipe-on-signout failed', e);
+  }
+  return true;
+}
+
 export async function runSignOutFlow(
   deps: SignOutFlowDeps,
   opts: {
