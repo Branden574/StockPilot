@@ -2,8 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
-import { safeFetch } from '@/lib/ssrf-guard';
+import { fetchItemImage, itemImageFetchRoute } from '@/lib/item-image-fetch';
 
 const PER_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
@@ -34,17 +33,14 @@ async function ensurePdfCompatibleBytes(
     rawBytes[1] === 0x50 &&
     rawBytes[2] === 0x4e &&
     rawBytes[3] === 0x47;
-  const isJpeg =
-    rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
+  const isJpeg = rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
   if (isPng) return { bytes: rawBytes, contentType: 'image/png' };
   if (isJpeg) return { bytes: rawBytes, contentType: 'image/jpeg' };
 
   // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG.
   try {
     const { default: sharp } = await import('sharp');
-    const jpegBytes = await sharp(rawBytes)
-      .jpeg({ quality: 80, mozjpeg: true })
-      .toBuffer();
+    const jpegBytes = await sharp(rawBytes).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
     return { bytes: jpegBytes, contentType: 'image/jpeg' };
   } catch (err) {
     // sharp failed — log which format tripped it so a blank image in a PDF
@@ -78,30 +74,9 @@ async function downscaleForPdf(rawBytes: Buffer, maxEdgePx: number): Promise<Buf
   }
 }
 
-/** The project's storage origin (the signed item-images URLs). */
-function storageOrigin(): string | null {
-  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!raw) return null;
-  try {
-    return new URL(raw.trim()).origin;
-  } catch {
-    return null;
-  }
-}
-
-/** Where a URL may be fetched from, or null when it may not be fetched. */
-export function pdfImageFetchRoute(url: string): 'storage' | 'external' | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  const origin = storageOrigin();
-  if (origin && parsed.origin === origin) return 'storage';
-  if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return 'external';
-  return null;
-}
+/** Where a URL may be fetched from, or null when it may not be fetched. One
+ *  implementation with the inventory export's fetcher: lib/item-image-fetch.ts. */
+export const pdfImageFetchRoute = itemImageFetchRoute;
 
 /**
  * What a log line may say about a URL. A storage URL keeps its first 80
@@ -150,6 +125,7 @@ async function readCappedBody(res: Response, maxBytes: number): Promise<Buffer> 
  * this helper is fed is checked only for type and length where it is stored
  * and is writable by staff, so a bare fetch() of it could reach internal
  * hosts. A host off the allowlist throws, and the row gets its placeholder.
+ * The routing lives in lib/item-image-fetch.ts, shared with the export.
  */
 async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promise<string> {
   const route = pdfImageFetchRoute(url);
@@ -157,13 +133,7 @@ async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promi
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
   try {
-    const res =
-      route === 'storage'
-        ? await fetch(url, { signal: controller.signal })
-        : ((await safeFetch(url, {
-            signal: controller.signal,
-            hostAllowlist: COVER_HOST_ALLOWLIST,
-          })) as unknown as Response);
+    const res = await fetchItemImage(url, controller.signal);
     if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
     const rawBuf = await readCappedBody(res, PDF_IMAGE_MAX_BYTES);
     if (maxEdgePx !== null) {

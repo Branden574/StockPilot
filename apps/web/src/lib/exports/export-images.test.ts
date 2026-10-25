@@ -1,8 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const primaryImagesForServerDecoding = vi.fn();
 const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
+// The SSRF guard stays real (its SsrfBlockedError, and the real safeFetch for
+// the refused-host test); only safeFetch is observable, so no test here can
+// open a network connection.
+const { safeFetchSpy } = vi.hoisted(() => ({ safeFetchSpy: vi.fn() }));
+vi.mock('@/lib/ssrf-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ssrf-guard')>()),
+  safeFetch: (...args: unknown[]) => safeFetchSpy(...args),
+}));
 
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: vi.fn().mockImplementation(function () {
@@ -12,9 +21,15 @@ vi.mock('@/server/services/item-images', () => ({
 
 import { ItemImagesService } from '@/server/services/item-images';
 
+import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
 import { readImageDimensions } from '@/lib/inventory-export-xlsx';
 
-import { inFilters, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import {
+  inFilters,
+  makeServiceContext,
+  makeSupabaseStub,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import {
   attachExportImages,
@@ -258,7 +273,10 @@ describe('countRowsWithImages', () => {
       },
       'inventory_items.select': { data: [], error: null },
     });
-    const n = await countRowsWithImages(makeServiceContext(stub.client) as never, ids.slice(0, 100));
+    const n = await countRowsWithImages(
+      makeServiceContext(stub.client) as never,
+      ids.slice(0, 100),
+    );
     expect(pages).toBe(2);
     expect(n).toBe(100);
   });
@@ -267,7 +285,9 @@ describe('countRowsWithImages', () => {
     let calls = 0;
     const stub = makeSupabaseStub({
       'item_images.select': () =>
-        ++calls === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
+        ++calls === 2
+          ? { data: null, error: { message: 'fetch failed' } }
+          : { data: [], error: null },
       'inventory_items.select': { data: [], error: null },
     });
     await expect(
@@ -510,6 +530,86 @@ describe('fetchExportImageBytes — per-request URL cache', () => {
   });
 });
 
+/**
+ * Where the export fetches an image from. Its URLs are the project's own
+ * signed storage URLs, plus the legacy custom_fields.thumbnail_url the ISBN
+ * importer writes for book covers, which is checked only for type and length
+ * where it is stored and which staff can edit. The default fetcher used to be
+ * the bare global fetch for all of them, so anyone who could edit an item and
+ * export could make the server request any address, internal ones included
+ * (and follow its redirects).
+ */
+describe('fetchExportImageBytes — where each URL is fetched (SSRF)', () => {
+  const STORAGE = 'https://proj.supabase.co';
+  const SIGNED = `${STORAGE}/storage/v1/object/sign/item-images/org/item/thumb.webp?token=t`;
+  const COVER = 'https://covers.openlibrary.org/b/id/1-M.jpg';
+  const fetchSpy = vi.fn();
+  let previousSupabaseUrl: string | undefined;
+
+  beforeEach(() => {
+    previousSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = STORAGE;
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (previousSupabaseUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = previousSupabaseUrl;
+  });
+
+  it('fetches a signed URL of the project storage with plain fetch', async () => {
+    fetchSpy.mockResolvedValue(jpegResponse(1024));
+    const result = await fetchExportImageBytes(new Map([['a', SIGNED]]));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe(SIGNED);
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+    expect(result.images.has('a')).toBe(true);
+  });
+
+  it('sends a legacy cover URL through safeFetch with the cover allowlist, never plain fetch', async () => {
+    safeFetchSpy.mockResolvedValue(jpegResponse(1024));
+    const result = await fetchExportImageBytes(new Map([['a', COVER]]));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(safeFetchSpy).toHaveBeenCalledWith(
+      COVER,
+      expect.objectContaining({
+        hostAllowlist: COVER_HOST_ALLOWLIST,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(result.images.has('a')).toBe(true);
+  });
+
+  it('never requests an internal address: the guard refuses it once, it is not retried, the cell stays blank', async () => {
+    const { safeFetch: realSafeFetch } =
+      await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+    // The real guard: a host off the allowlist is refused before any lookup.
+    safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    const sleep = vi.fn(async () => {});
+    const result = await fetchExportImageBytes(
+      new Map([['a', 'http://169.254.169.254/latest/meta-data/']]),
+      { sleep },
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  it('refuses a URL that is not http(s) without any request', async () => {
+    const result = await fetchExportImageBytes(new Map([['a', 'file:///etc/passwd']]), {
+      sleep: async () => {},
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+    expect(result.skipped).toBe(1);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+});
+
 describe('fetchExportImageBytes — coverage gaps (Minor, fix wave)', () => {
   it('aborts a hung fetch once IMAGE_FETCH_TIMEOUT_MS elapses', async () => {
     vi.useFakeTimers();
@@ -523,10 +623,9 @@ describe('fetchExportImageBytes — coverage gaps (Minor, fix wave)', () => {
             // Never resolves on its own — simulates a hung connection.
           }),
       );
-      const pending = fetchExportImageBytes(
-        new Map([['a', 'https://signed.example/a.jpg']]),
-        { fetchImpl: fetchImpl as unknown as typeof fetch },
-      );
+      const pending = fetchExportImageBytes(new Map([['a', 'https://signed.example/a.jpg']]), {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
       // Every attempt hangs, so each one is cut off by the per-attempt
       // timer, then backed off, then retried — up to IMAGE_FETCH_MAX_ATTEMPTS.
       for (let i = 0; i < IMAGE_FETCH_MAX_ATTEMPTS; i++) {
@@ -912,7 +1011,9 @@ describe('fetchExportImageBytes — shared adaptive rate gate', () => {
     const rest = startedAt.slice(IMAGE_FETCH_CONCURRENCY);
     expect(rest.length).toBe(13 - IMAGE_FETCH_CONCURRENCY); // 12 entries + 1 retry
     for (const s of rest) {
-      expect(s.at, `${s.url} started at ${s.at}`).toBeGreaterThanOrEqual(IMAGE_FETCH_BACKOFF_BASE_MS);
+      expect(s.at, `${s.url} started at ${s.at}`).toBeGreaterThanOrEqual(
+        IMAGE_FETCH_BACKOFF_BASE_MS,
+      );
     }
     const siblings = rest.filter((s) => !s.url.endsWith('/0.jpg'));
     expect(siblings.length).toBeGreaterThan(0);
@@ -1135,7 +1236,9 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
   });
 
   it('octet-stream bytes with no recognisable magic are unsupported, not guessed', async () => {
-    const fetchImpl = vi.fn(async () => bytesResponse(new Uint8Array(64), 'application/octet-stream'));
+    const fetchImpl = vi.fn(async () =>
+      bytesResponse(new Uint8Array(64), 'application/octet-stream'),
+    );
     const decodeWebp = vi.fn(async () => null);
     const { skipped, skippedReasons } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.bin']]),

@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
+import { fetchItemImage, ItemImageUrlRefusedError } from '@/lib/item-image-fetch';
+import { SsrfBlockedError } from '@/lib/ssrf-guard';
 import { ItemImagesService } from '@/server/services/item-images';
 import type { ServiceContext } from '@/server/services/context';
 import {
@@ -86,12 +88,7 @@ export interface EmbeddedImage {
 }
 
 export type ImageSkipReason =
-  | 'rateLimited'
-  | 'timeout'
-  | 'unsupported'
-  | 'oversized'
-  | 'other'
-  | 'deadline';
+  'rateLimited' | 'timeout' | 'unsupported' | 'oversized' | 'other' | 'deadline';
 
 export type ImageSkipCounts = Record<ImageSkipReason, number>;
 
@@ -104,6 +101,8 @@ export interface FetchExportImageBytesResult {
 }
 
 export interface FetchExportImageBytesOptions {
+  /** Test seam. Production uses fetchItemImage: plain fetch for the project's
+   *  storage, safeFetch with the cover allowlist for any other URL. */
   fetchImpl?: typeof fetch;
   /** Width the WebP decoder fits into (square box). Default 200. */
   targetWidth?: number;
@@ -412,7 +411,8 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
     // Only when the magic is unrecognised do we trust the declared type —
     // that keeps png/jpeg bytes passing through byte-for-byte as before.
     const format = sniffImageFormat(buf) ?? declaredKind;
-    if (format === 'png' || format === 'jpeg') return { kind: 'ok', image: { data: buf, extension: format } };
+    if (format === 'png' || format === 'jpeg')
+      return { kind: 'ok', image: { data: buf, extension: format } };
     if (format === 'webp') {
       // The seam is contracted never to throw, but a throw here is a decode
       // failure, not a network failure: final, never retried.
@@ -420,7 +420,13 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
       return decoded ? { kind: 'ok', image: decoded } : { kind: 'skip', reason: 'unsupported' };
     }
     return { kind: 'skip', reason: 'unsupported' };
-  } catch {
+  } catch (err) {
+    // A URL the fetch route or the SSRF guard refuses (not http(s), a host off
+    // the cover allowlist, a private address) is refused the same way every
+    // time: final, never retried, counted as a source we do not read.
+    if (err instanceof ItemImageUrlRefusedError || err instanceof SsrfBlockedError) {
+      return { kind: 'skip', reason: 'unsupported' };
+    }
     // Timeout, DNS, reset, abort. Never log — the URL carries a signed token.
     return { kind: 'retry', reason: timedOut ? 'timeout' : 'other', retryAfterMs: null };
   } finally {
@@ -474,6 +480,11 @@ function emptySkipCounts(): ImageSkipCounts {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** The production fetcher (see lib/item-image-fetch.ts). attemptOnce always
+ *  passes the URL string and its own abort signal. */
+const routedImageFetch = ((input: string, init?: { signal?: AbortSignal | null }) =>
+  fetchItemImage(String(input), init?.signal ?? new AbortController().signal)) as typeof fetch;
+
 /**
  * Fetch image bytes for embedding, bounded on every axis: per-image size,
  * total size, image count, per-request timeout, retries with backoff, a
@@ -487,7 +498,7 @@ export async function fetchExportImageBytes(
 ): Promise<FetchExportImageBytesResult> {
   const now = opts.now ?? (() => Date.now());
   const deps: FetchDeps = {
-    fetchImpl: opts.fetchImpl ?? fetch,
+    fetchImpl: opts.fetchImpl ?? routedImageFetch,
     decodeWebp: opts.decodeWebp ?? webpToPng,
     targetWidth: opts.targetWidth ?? EXPORT_IMAGE_TARGET_WIDTH_PX.medium,
     sleep: opts.sleep ?? defaultSleep,
