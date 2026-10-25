@@ -432,7 +432,7 @@ function LastActiveCell({
     );
   }
   const resolved = resolveLastActive(member);
-  const title = describeLastActive(member);
+  const title = describeLastActive(member, timeZone);
   if (resolved.source === 'never') {
     return (
       <span className="text-muted-foreground" title={title}>
@@ -456,6 +456,15 @@ function LastActiveCell({
 }
 
 /**
+ * A date column's header tooltip: whose zone its dates are in. The console's
+ * pages render on the server, so a date with no zone named was the server's
+ * (UTC) day (B9).
+ */
+function orgZoneNote(timeZone: string | null): string {
+  return `In this organization's time zone (${resolveOrgTimezone(timeZone)}).`;
+}
+
+/**
  * The Actions cell stays on screen while the table scrolls sideways (sticky to
  * the card's right edge, on the card's own fill, taking the row hover with
  * it), with a hairline beside it where the table can scroll under it.
@@ -476,7 +485,7 @@ function MembersTable({
   // This page renders on the server, so a bare toLocaleDateString() printed
   // the server's day (UTC) with no zone named, and an evening join in the
   // Pacific read as the next day (B9). Members' dates are the organization's.
-  const zoneNote = `In this organization's time zone (${resolveOrgTimezone(timeZone)}).`;
+  const zoneNote = orgZoneNote(timeZone);
   return (
     <div className="flex flex-col gap-2">
       {!activityAvailable ? (
@@ -493,7 +502,9 @@ function MembersTable({
             <TableHead>User</TableHead>
             <TableHead>Role</TableHead>
             <TableHead title={zoneNote}>Joined</TableHead>
-            <TableHead title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization.">
+            <TableHead
+              title={`An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization. ${zoneNote}`}
+            >
               Last active
             </TableHead>
             <TableHead className={cn(ACTIONS_CELL, 'text-right')}>Actions</TableHead>
@@ -593,6 +604,7 @@ async function OrdersTab({ orgId, timeZone }: { orgId: string; timeZone: string 
         label="Orders"
         minWidth={560}
         head={['Order', 'Status', 'Requester', 'Created']}
+        headTitles={{ 3: orgZoneNote(timeZone) }}
         mono={[0]}
         rows={orders.map((o) => [
           o.id.slice(0, 8),
@@ -632,12 +644,14 @@ async function BillingTab({ orgId }: { orgId: string }) {
 /**
  * A read-only preview of one org's rows. `numeric` columns are right-aligned
  * (figures line up), `mono` columns print in the mono face (ids, SKUs,
- * quantities).
+ * quantities), and `headTitles` gives a column's header a tooltip (a date
+ * column says whose zone it is in).
  */
 function PreviewTable({
   label,
   minWidth,
   head,
+  headTitles = {},
   rows,
   numeric = [],
   mono = [],
@@ -645,6 +659,7 @@ function PreviewTable({
   label: string;
   minWidth: number;
   head: string[];
+  headTitles?: Partial<Record<number, string>>;
   rows: string[][];
   numeric?: number[];
   mono?: number[];
@@ -654,7 +669,11 @@ function PreviewTable({
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           {head.map((h, j) => (
-            <TableHead key={h} className={numeric.includes(j) ? 'text-right' : undefined}>
+            <TableHead
+              key={h}
+              title={headTitles[j]}
+              className={numeric.includes(j) ? 'text-right' : undefined}
+            >
               {h}
             </TableHead>
           ))}

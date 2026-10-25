@@ -343,12 +343,48 @@ describe("platform org detail — dates in the organization's zone", () => {
     );
   });
 
+  it("Users: Last active's tooltip names the cell's day, in the same zone, and its header says which zone", async () => {
+    h.members = [
+      {
+        userId: 'u-1',
+        email: 'ada@acme.test',
+        fullName: 'Ada',
+        role: 'staff',
+        joinedAt: EVENING,
+        disabledAt: null,
+        lastSignInAt: EVENING,
+        lastSessionAt: null,
+        lastActionAt: null,
+        lastSeenAt: null,
+      },
+    ];
+    await renderTab('users');
+    const region = screen.getByRole('region', { name: 'Members' });
+    const row = within(region).getByText('ada@acme.test').closest('tr')!;
+    // The cell and its tooltip come from one resolution, so they must name
+    // the same day: it used to read 25 Oct 2026, 01:30 UTC here (B9 review).
+    const cell = within(row).getByText('Signed in 24 Oct 2026');
+    expect(cell).toHaveAttribute(
+      'title',
+      expect.stringContaining('Last signed in 24 Oct 2026, 18:30 PDT.'),
+    );
+    expect(cell.getAttribute('title')).not.toContain('25 Oct 2026');
+    expect(
+      within(region).getByRole('columnheader', { name: 'Last active' }).getAttribute('title'),
+    ).toContain("In this organization's time zone (America/Los_Angeles).");
+  });
+
   it('Orders: Created is the day the order was placed there', async () => {
     h.orders = [{ id: 'abcdef12-3456', status: 'pending', requester: 'Ada', createdAt: EVENING }];
     await renderTab('orders');
     const region = screen.getByRole('region', { name: 'Orders' });
     expect(within(region).getByText('abcdef12').closest('tr')!.lastElementChild).toHaveTextContent(
       /^24 Oct 2026$/,
+    );
+    // The header says whose day it is, as Joined does (B9 review).
+    expect(within(region).getByRole('columnheader', { name: 'Created' })).toHaveAttribute(
+      'title',
+      "In this organization's time zone (America/Los_Angeles).",
     );
   });
 });
