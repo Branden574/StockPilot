@@ -183,11 +183,11 @@ describe('listExceptions', () => {
     expect(list.syncState?.unrecognizedUncheckedRules).toBe(2);
   });
 
-  it('carries the org time zone (null from an older server)', async () => {
+  // An older server's answer carries none: the organization's zone is read
+  // then (org-zone.test.ts runs that read).
+  it('carries the org time zone the server sent', async () => {
     apiMock.api.mockResolvedValueOnce(listBody({ timeZone: 'America/Los_Angeles' }));
     expect((await listExceptions('open')).timeZone).toBe('America/Los_Angeles');
-    apiMock.api.mockResolvedValueOnce(listBody());
-    expect((await listExceptions('open')).timeZone).toBeNull();
   });
 
   it('offers an action only when the server said this reader may act', async () => {
@@ -659,11 +659,23 @@ describe('exceptionTimeLabel', () => {
     expect(exceptionTimeLabel('2026-09-24T23:42:00Z', 'America/New_York')).toBe('Sep 24, 7:42 PM');
   });
 
-  it('falls back to the device zone without one, and an em dash for a bad value', () => {
-    const iso = '2026-09-24T23:42:00Z';
-    expect(exceptionTimeLabel(iso, null)).toBe(
-      new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
-    );
+  // B25: without a zone (an older server, and the organization's could not
+  // be read: org-zone.ts) the time was printed in the DEVICE's zone, so a
+  // phone set to another zone named another clock time than the web. Now
+  // core's default zone, as the web prints for an organization with none set.
+  it("prints core's default zone without one, never the device's, and an em dash for a bad value", () => {
+    const deviceZone = process.env.TZ;
+    process.env.TZ = 'Asia/Tokyo';
+    try {
+      // Tokyo would read "Sep 25, 8:42 AM".
+      expect(exceptionTimeLabel('2026-09-24T23:42:00Z', null)).toBe('Sep 24, 4:42 PM');
+      expect(exceptionTimeLabel('2026-09-24T23:42:00Z', undefined)).toBe('Sep 24, 4:42 PM');
+      // A zone this runtime cannot use is the default too, never a throw.
+      expect(exceptionTimeLabel('2026-09-24T23:42:00Z', 'Not/AZone')).toBe('Sep 24, 4:42 PM');
+    } finally {
+      if (deviceZone === undefined) delete process.env.TZ;
+      else process.env.TZ = deviceZone;
+    }
     expect(exceptionTimeLabel(null, 'America/Los_Angeles')).toBe('—');
     expect(exceptionTimeLabel('nope', 'America/Los_Angeles')).toBe('—');
   });

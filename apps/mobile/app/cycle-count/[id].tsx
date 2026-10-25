@@ -60,6 +60,7 @@ import {
 import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import { useOrgTimeZone } from '@/lib/org-zone';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -150,29 +151,10 @@ export default function CycleCountDetail() {
 
   const { orgId } = useOrg();
   // The organization's timezone for the "Counted offline <time>" label, so
-  // the phone and the web review name the same moment. Fail-soft: without it
-  // (offline, a refused read) the device's own zone is used.
-  const [orgTimeZone, setOrgTimeZone] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (!orgId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { data } = await supabase
-          .from('organizations')
-          .select('timezone')
-          .eq('id', orgId)
-          .maybeSingle();
-        const tz = (data as { timezone?: unknown } | null)?.timezone;
-        if (!cancelled && typeof tz === 'string' && tz) setOrgTimeZone(tz);
-      } catch {
-        // The label falls back to the device zone.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId]);
+  // the phone and the web review name the same moment: the one known for the
+  // organization, else read once (org-zone.ts). Without it (offline before
+  // any read, a refused read) core's default zone, never the device's (B25).
+  const orgTimeZone = useOrgTimeZone(orgId);
   const [header, setHeader] = React.useState<CachedCycleCountHeader | null>(null);
   const [lines, setLines] = React.useState<UiLine[]>([]);
   const [draft, setDraft] = React.useState<Record<string, string>>({});

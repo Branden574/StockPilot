@@ -19,6 +19,7 @@ import {
   randomRequestUuid,
   recountOutcome,
   recountOutcomeCopy,
+  resolveOrgTimezone,
   VARIANCE_DESTINATION_PENDING_COPY,
   VERIFICATION_SESSION_ENDED_COPY,
   type CountConfirmBlock,
@@ -51,6 +52,7 @@ import {
   type MobileEvidenceBlock,
   type MobileEvidenceEventInfo,
 } from './exception-evidence';
+import { withOrgTimeZone } from './org-zone';
 
 /**
  * The Exception Center on the phone (F1-1): thin typed wrappers over the
@@ -173,8 +175,10 @@ export interface MobileExceptionList {
    *  build's rule), left out of `occurrences` but COUNTED: a list with any
    *  never shows the all-clear state (core exceptionUnrecognizedCopy). */
   unrecognized: number;
-  /** The org's time zone, so the phone prints the clock time the web does;
-   *  null from an older server (the device zone is used then). */
+  /** The org's time zone, so the phone prints the clock time the web does.
+   *  From an older server that sends none, the organization's as the phone
+   *  reads it (listExceptions, org-zone.ts); null when that is unknown too,
+   *  and core's default zone is printed (exceptionTimeLabel). */
   timeZone: string | null;
 }
 
@@ -554,7 +558,7 @@ export async function listExceptions(
 ): Promise<MobileExceptionList> {
   if (opts.itemId && !UUID.test(opts.itemId)) throw new ExceptionsResponseError();
   const res = await api<unknown>(exceptionListPath(status, opts.itemId), { signal: opts.signal });
-  return parseExceptionList(res);
+  return withOrgTimeZone(parseExceptionList(res));
 }
 
 /** One occurrence with its timeline and recurrence history. Throws on any
@@ -562,7 +566,7 @@ export async function listExceptions(
 export async function getException(id: string): Promise<MobileExceptionDetail> {
   if (!UUID.test(id)) throw new ExceptionsResponseError();
   const res = await api<unknown>(`/api/v1/exceptions/${id}`);
-  return parseExceptionDetail(res);
+  return withOrgTimeZone(parseExceptionDetail(res));
 }
 
 /**
@@ -845,16 +849,18 @@ const TIME_LABEL_OPTIONS: Intl.DateTimeFormatOptions = {
 /**
  * "Sep 24, 3:42 PM" in the ORG's time zone, as the web page prints it
  * (formatOrgDateTime, the same options), so "Checked at", first seen and the
- * timeline name the same clock time on both surfaces. `timeZone` comes from
- * the server with the list or detail; without it (an older server) the
- * device's zone is used. An em dash for a bad value.
+ * timeline name the same clock time on both surfaces. `timeZone` comes with
+ * the list or detail: the server's, else the organization's (org-zone.ts
+ * withOrgTimeZone, for an older server that sends none). Without one, core's
+ * default zone, as the web uses for an organization with none set: never the
+ * device's (B25), which named another clock time on a phone set to another
+ * zone. An em dash for a bad value.
  */
 export function exceptionTimeLabel(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  if (timeZone) return formatOrgDateTime(d, TIME_LABEL_OPTIONS, timeZone);
-  return d.toLocaleString('en-US', TIME_LABEL_OPTIONS);
+  return formatOrgDateTime(d, TIME_LABEL_OPTIONS, resolveOrgTimezone(timeZone));
 }
 
 /** The offline banner over a remembered list. */
