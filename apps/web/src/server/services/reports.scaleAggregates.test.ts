@@ -48,21 +48,45 @@ function ctxOf(client: any) {
 
 /**
  * Dispatch rpcMock by function name using a handler map. The answer chains
- * like supabase-js's (`.order()`, `.range()`) and is awaited as a thenable;
- * a `.range()` slices the rows, so the per-item and per-bundle aggregates,
- * which are paged since B32, page here as they would against PostgREST.
+ * like supabase-js's (`.gt()`, `.order()`, `.limit()`, `.range()`) and is
+ * awaited as a thenable. It answers as PostgREST would: rows after the
+ * `.gt()` key, in the `.order()` key's order, cut to the `.limit()` or
+ * `.range()` window. So the per-item and per-bundle aggregates, which are
+ * paged by key since B32 (decision 2), page here as they would against
+ * PostgREST.
  */
 function wireRpc(handlers: Record<string, (args: Record<string, unknown>) => unknown[]>) {
   rpcMock.mockImplementation((name: string, args: Record<string, unknown>) => {
     const h = handlers[name];
     if (!h) throw new Error(`unexpected rpc: ${name}`);
     let window: [number, number] | null = null;
+    let after: [string, string] | null = null;
+    let orderKey: string | null = null;
     const answer = () => {
-      const rows = h(args);
+      let rows = h(args) as Array<Record<string, unknown>>;
+      if (after) {
+        const [col, value] = after;
+        rows = rows.filter((r) => r[col] != null && String(r[col]) > value);
+      }
+      if (orderKey) {
+        const key = orderKey;
+        rows = [...rows].sort((a, b) => (String(a[key]) < String(b[key]) ? -1 : 1));
+      }
       return { data: window ? rows.slice(window[0], window[1] + 1) : rows, error: null };
     };
     const builder = {
-      order: () => builder,
+      gt: (col: string, value: string) => {
+        after = [col, value];
+        return builder;
+      },
+      order: (col: string) => {
+        orderKey = col;
+        return builder;
+      },
+      limit: (n: number) => {
+        window = [0, n - 1];
+        return builder;
+      },
       range: (from: number, to: number) => {
         window = [from, to];
         return builder;

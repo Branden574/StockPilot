@@ -20,7 +20,7 @@ import {
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { orgTimeZoneFor } from './lib/org-time-zone';
 import { whereReorderCandidate } from './lib/orderable-items';
-import { fetchAllRows } from './lib/paginate';
+import { fetchAllRows, PAGE_SIZE } from './lib/paginate';
 
 export interface ValuationRow {
   itemId: string;
@@ -226,44 +226,73 @@ function reportRpcError(error: {
   return new ServiceError('internal_error', error.message);
 }
 
-/** Rows per aggregate page: PostgREST's `max_rows` (supabase/config.toml), so
- *  a full page comes back in full and a short one is the last. */
-const AGGREGATE_PAGE_ROWS = 1000;
+/**
+ * The most pages one report aggregate is read in: 20 pages of PAGE_SIZE rows
+ * (20,000 items or bundles). Production has at most a few hundred rows per
+ * organization, one page. A 20th full page fails the report, logged, rather
+ * than read on without end or answer a set cut short (integrator decision 2).
+ */
+export const AGGREGATE_MAX_PAGES = 20;
+
+/** One page of a report aggregate, as supabase-js answers it. */
+type AggregatePage = PromiseLike<{
+  data: unknown;
+  error: { message: string; code?: string | null; hint?: string | null } | null;
+}>;
 
 /**
  * Every row of a report aggregate that returns one row per item or bundle
  * (report_item_out_movements, report_bundle_activity,
- * report_bundle_component_value), read in AGGREGATE_PAGE_ROWS windows.
- * `page(from, to)` calls the function ordered by its unique key and ending
- * in `.range(from, to)`.
+ * report_bundle_component_value), read by KEY: `page(after)` calls the
+ * function for the rows after the key `after` (all rows when it is null),
+ * ordered by `key` and limited to PAGE_SIZE. Each next page starts after the
+ * last key of the one before.
  *
  * PostgREST answers any request with at most 1000 rows and no error, so the
  * one unpaged call each report made used to drop every row past the 1000th
  * (B32): a velocity report classed items that moved as D (dead) and
  * understated the value out, dead stock listed items that moved, and bundle
- * activity left bundles out of its totals. Each page re-runs the function;
- * production has at most a few hundred rows per organization, one page.
+ * activity left bundles out of its totals.
  *
- * A failed page fails the report, mapped by reportRpcError so a refusal
- * keeps its own words: never the pages before it standing in for the whole.
+ * Why a key and not an offset: each page re-runs the function, so a row that
+ * appears or goes between two pages shifts every OFFSET window after it, and
+ * a row is counted twice or skipped. Keys only grow, so no row repeats, and a
+ * row that was there all along is never skipped. (One case reads less than an
+ * offset would: report_bundle_component_value can answer one row with a NULL
+ * bundle_id, which sorts last and which `.gt()` never matches, so past the
+ * first page it is not read. That row has no bundle and the report drops it.)
+ *
+ * Bounded at AGGREGATE_MAX_PAGES pages. A failed page fails the report, mapped
+ * by reportRpcError so a refusal keeps its own words: never the pages before
+ * it standing in for the whole. The whole set is still the union of several
+ * statements; one statement over one snapshot needs the database change in
+ * the PR's "Still to do (database)".
  */
-async function allAggregateRows<Row>(
-  page: (
-    from: number,
-    to: number,
-  ) => PromiseLike<{
-    data: unknown;
-    error: { message: string; code?: string | null; hint?: string | null } | null;
-  }>,
+async function allAggregateRows<Row extends Record<string, unknown>>(
+  fn: string,
+  key: string,
+  page: (after: string | null) => AggregatePage,
 ): Promise<Row[]> {
   const rows: Row[] = [];
-  for (let from = 0; ; from += AGGREGATE_PAGE_ROWS) {
-    const { data, error } = await page(from, from + AGGREGATE_PAGE_ROWS - 1);
+  let after: string | null = null;
+  for (let n = 1; n <= AGGREGATE_MAX_PAGES; n += 1) {
+    const { data, error } = await page(after);
     if (error) throw reportRpcError(error);
     const window = (data ?? []) as Row[];
     for (const row of window) rows.push(row);
-    if (window.length < AGGREGATE_PAGE_ROWS) return rows;
+    if (window.length < PAGE_SIZE) return rows;
+    const last = window[window.length - 1]?.[key];
+    // NULL sorts last, so a page that ends on it ends the set.
+    if (last === null || last === undefined) return rows;
+    after = String(last);
   }
+  console.error(
+    `[reports] ${fn} has more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows (${AGGREGATE_MAX_PAGES} pages of ${PAGE_SIZE}): the report fails instead of reading on`,
+  );
+  throw new ServiceError(
+    'internal_error',
+    `${fn} returned more than ${AGGREGATE_MAX_PAGES * PAGE_SIZE} rows`,
+  );
 }
 
 export class ReportsService {
@@ -1401,19 +1430,19 @@ export class ReportsService {
     // and the ABC classification were silently wrong.) The item list still
     // streams (it IS the display) but now with NO cap. `since` is the exact
     // instant the JS computed. The CALLER'S client (0380): only movements the
-    // caller can read. Every page of it (allAggregateRows): one row per item,
-    // and the one unpaged call stopped at 1000.
+    // caller can read. Every page of it, by item_id (allAggregateRows): one
+    // row per item, and the one unpaged call stopped at 1000.
     type OutRow = { item_id: string; units_out: number; last_out_at: string | null };
     const [outRows, itemRows] = await Promise.all([
-      allAggregateRows<OutRow>((from, to) =>
-        this.ctx.supabase
-          .rpc('report_item_out_movements', {
-            p_organization_id: this.ctx.organizationId,
-            p_since: since,
-          })
+      allAggregateRows<OutRow>('report_item_out_movements', 'item_id', (after) => {
+        const read = this.ctx.supabase.rpc('report_item_out_movements', {
+          p_organization_id: this.ctx.organizationId,
+          p_since: since,
+        });
+        return (after === null ? read : read.gt('item_id', after))
           .order('item_id', { ascending: true })
-          .range(from, to),
-      ),
+          .limit(PAGE_SIZE);
+      }),
       fetchAllRows<ItemRow>(
         (from, to) =>
           this.ctx.supabase
@@ -1528,16 +1557,21 @@ export class ReportsService {
     // intersection below is unchanged. `since` is the exact instant the JS
     // computed. It does not depend on the item list, so it runs alongside
     // the item stream (as in velocityClass), not after it. Every page of it
-    // (allAggregateRows): the one unpaged call stopped at 1000 items, and an
-    // item past them that had moved was listed here as dead stock.
-    const outRead = allAggregateRows<{ item_id: string }>((from, to) =>
-      this.ctx.supabase
-        .rpc('report_item_out_movements', {
+    // by item_id (allAggregateRows): the one unpaged call stopped at 1000
+    // items, and an item past them that had moved was listed here as dead
+    // stock.
+    const outRead = allAggregateRows<{ item_id: string }>(
+      'report_item_out_movements',
+      'item_id',
+      (after) => {
+        const read = this.ctx.supabase.rpc('report_item_out_movements', {
           p_organization_id: this.ctx.organizationId,
           p_since: since,
-        })
-        .order('item_id', { ascending: true })
-        .range(from, to),
+        });
+        return (after === null ? read : read.gt('item_id', after))
+          .order('item_id', { ascending: true })
+          .limit(PAGE_SIZE);
+      },
     );
 
     // Every item with on-hand > 0 in the org. Stream the FULL set (no cap) —
@@ -1630,8 +1664,9 @@ export class ReportsService {
     // `since` is the exact instant the JS computed. The CALLER'S client
     // (0380): component value counts only items the caller can read, and a
     // top warehouse the caller cannot read comes back without a name.
-    // Both are one row per bundle, read in full (allAggregateRows): the one
-    // unpaged call each stopped at 1000 bundles and short-changed the totals.
+    // Both are one row per bundle, read in full by bundle_id
+    // (allAggregateRows): the one unpaged call each stopped at 1000 bundles
+    // and short-changed the totals.
     const orgId = this.ctx.organizationId;
     type ActivityRow = {
       bundle_id: string;
@@ -1643,17 +1678,27 @@ export class ReportsService {
       top_warehouse_name: string | null;
     };
     const [activityRows, valueRows] = await Promise.all([
-      allAggregateRows<ActivityRow>((from, to) =>
-        this.ctx.supabase
-          .rpc('report_bundle_activity', { p_organization_id: orgId, p_since: since })
+      allAggregateRows<ActivityRow>('report_bundle_activity', 'bundle_id', (after) => {
+        const read = this.ctx.supabase.rpc('report_bundle_activity', {
+          p_organization_id: orgId,
+          p_since: since,
+        });
+        return (after === null ? read : read.gt('bundle_id', after))
           .order('bundle_id', { ascending: true })
-          .range(from, to),
-      ),
-      allAggregateRows<{ bundle_id: string | null; component_value_out: number }>((from, to) =>
-        this.ctx.supabase
-          .rpc('report_bundle_component_value', { p_organization_id: orgId, p_since: since })
-          .order('bundle_id', { ascending: true })
-          .range(from, to),
+          .limit(PAGE_SIZE);
+      }),
+      allAggregateRows<{ bundle_id: string | null; component_value_out: number }>(
+        'report_bundle_component_value',
+        'bundle_id',
+        (after) => {
+          const read = this.ctx.supabase.rpc('report_bundle_component_value', {
+            p_organization_id: orgId,
+            p_since: since,
+          });
+          return (after === null ? read : read.gt('bundle_id', after))
+            .order('bundle_id', { ascending: true })
+            .limit(PAGE_SIZE);
+        },
       ),
     ]);
 

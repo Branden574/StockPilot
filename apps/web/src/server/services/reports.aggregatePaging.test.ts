@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The per-item and per-bundle report aggregates are read in full (B32).
@@ -12,8 +12,15 @@ import { describe, expect, it, vi } from 'vitest';
  *   - dead stock: an item that moved was listed as dead stock;
  *   - bundle activity: bundles and their runs, kits and value went missing
  *     from the totals.
- * Each read is now paged in 1000-row windows in a stable order, and a refusal
- * is still mapped to its own words (reportRpcError).
+ *
+ * Each read is now paged by KEY (integrator decision 2): every page asks for
+ * the rows after the last key it has, in key order, PAGE_SIZE at a time. Each
+ * page re-runs the aggregate, so an OFFSET window shifts when a row appears or
+ * goes between two pages: a row could be counted twice or skipped. A key
+ * cursor never repeats a row and never skips one that was there all along.
+ * The read is bounded at AGGREGATE_MAX_PAGES pages: past it the report fails
+ * with a log line, never a set cut short without a word. A refusal is still
+ * mapped to its own words (reportRpcError).
  *
  * The stub answers the aggregates like PostgREST (servedLikePostgrest): an
  * unpaged call gets the first 1000 rows, as production would.
@@ -34,10 +41,15 @@ import {
 } from '@/test/supabase-mock';
 
 import { ServiceError } from './context';
-import { ReportsService } from './reports';
+import { PAGE_SIZE } from './lib/paginate';
+import { AGGREGATE_MAX_PAGES, ReportsService } from './reports';
 
 const uuid = (i: number) => `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const SINCE = '2026-10-01T00:00:00.000Z';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** A detail stream that honours only `.range()` (its `.or()` filter is not
  *  what these tests are about), the way fetchAllRows pages it. */
@@ -70,50 +82,61 @@ function outMovements(n: number) {
   }));
 }
 
+/** One bundle's activity row: run once for 2 kits. */
+function activityRow(bundleId: string) {
+  return {
+    bundle_id: bundleId,
+    bundle_name: `Kit ${bundleId.slice(-4)}`,
+    bundle_sku: `KIT-${bundleId.slice(-4)}`,
+    runs: 1,
+    kits_out: 2,
+    last_run_at: SINCE,
+    top_warehouse_name: 'Main',
+  };
+}
+
 /** n bundles, each run once for 2 kits, with 3 of component value out. */
 function bundles(n: number) {
   return {
-    activity: Array.from({ length: n }, (_, i) => ({
-      bundle_id: uuid(i),
-      bundle_name: `Kit ${i}`,
-      bundle_sku: `KIT-${i}`,
-      runs: 1,
-      kits_out: 2,
-      last_run_at: SINCE,
-      top_warehouse_name: 'Main',
-    })),
+    activity: Array.from({ length: n }, (_, i) => activityRow(uuid(i))),
     value: Array.from({ length: n }, (_, i) => ({ bundle_id: uuid(i), component_value_out: 3 })),
   };
 }
 
+/** True for the read the code awaited: the stub also answers a chained rpc
+ *  once at call time, before its chain exists (supabase-mock makeRpcChain). */
+const awaited = (call: MockCall) => call.methods.length > 1;
+
 /**
  * PostgREST over a function with no ORDER BY of its own. Every page re-runs
- * the function, and without an `.order()` one run's rows can come back in
- * another order than the last run's: here the first page comes back in key
- * order and every later page in reverse, so offset pages repeat some rows and
- * skip others, as an unordered plan can. With `.order()` it answers in that
- * order, like servedLikePostgrest. Keyed on the window asked for, not on a
- * counter: the stub answers a chained rpc twice.
+ * the function, and without an `.order()` a run can hand its rows back in any
+ * order: here, in reverse. A key cursor then starts after the wrong row, so
+ * pages repeat some rows and skip others. With `.order()` it answers in that
+ * order, like servedLikePostgrest.
  */
 function unstableUnlessOrdered(rows: Array<Record<string, unknown>>) {
   const inKeyOrder = servedLikePostgrest(rows);
   const reversed = servedLikePostgrest([...rows].reverse());
-  return (call: MockCall) => {
-    if (call.methods.includes('order')) return inKeyOrder(call);
-    const from = (callArgs(call, 'range')?.[0] as number | undefined) ?? 0;
-    return from === 0 ? inKeyOrder(call) : reversed(call);
-  };
+  return (call: MockCall) =>
+    call.methods.includes('order') ? inKeyOrder(call) : reversed(call);
 }
 
-/** Answers like servedLikePostgrest, and records the window each page asked
- *  for after checking that the page is in `key` order. */
-function pagesInKeyOrder(rows: Array<Record<string, unknown>>, key: string) {
-  const pages: unknown[][] = [];
+/** One page as the code asked for it: the key it starts after (null for the
+ *  first page), its order and its size. */
+type PageAsked = { after: unknown; order: unknown[] | undefined; limit: unknown; range: unknown };
+
+/** Answers like servedLikePostgrest and records each awaited page. */
+function recordingPages(rows: Array<Record<string, unknown>> | (() => Array<Record<string, unknown>>)) {
+  const pages: PageAsked[] = [];
   const served = servedLikePostgrest(rows);
   const answer = (call: MockCall) => {
-    if (call.methods.length > 1) {
-      expect(callArgs(call, 'order'), key).toEqual([key, { ascending: true }]);
-      pages.push(callArgs(call, 'range') ?? []);
+    if (awaited(call)) {
+      pages.push({
+        after: callArgs(call, 'gt')?.[1] ?? null,
+        order: callArgs(call, 'order'),
+        limit: callArgs(call, 'limit')?.[0],
+        range: callArgs(call, 'range'),
+      });
     }
     return served(call);
   };
@@ -174,26 +197,6 @@ describe('deadStock: an item that moved is never dead stock', () => {
     expect(report.rows).toEqual([]);
     expect(report.itemCount).toBe(0);
   });
-
-  it('pages the aggregate in item_id order, a window at a time', async () => {
-    const pages: unknown[][] = [];
-    const served = servedLikePostgrest(outMovements(1001));
-    const { svc } = svcWith({
-      'rpc:report_item_out_movements': (call) => {
-        if (call.methods.length > 1) {
-          expect(callArgs(call, 'order')).toEqual(['item_id', { ascending: true }]);
-          pages.push(callArgs(call, 'range') ?? []);
-        }
-        return served(call);
-      },
-      'inventory_items.select': ranged(items(3)),
-    });
-    await svc.deadStock(90);
-    expect(pages).toEqual([
-      [0, 999],
-      [1000, 1999],
-    ]);
-  });
 });
 
 describe('bundleActivity: every bundle counts in the totals', () => {
@@ -224,31 +227,161 @@ describe('bundleActivity: every bundle counts in the totals', () => {
   });
 });
 
-// Each page re-runs the aggregate, so offset pages only fit together when
-// every page asks for the same order on the function's unique key. Only dead
-// stock's order was checked (above); velocity class and both bundle reads
-// could lose theirs with every test green, and then repeat some rows and skip
-// others past 1000.
-describe('every aggregate read pages in the order of its unique key', () => {
-  it('the stand-in plan repeats and skips rows when a read pages without an order (vacuity control)', () => {
+// Each page re-runs the aggregate. Pages fit together only when every page
+// asks for the rows after the last key it has, in the order of that key: the
+// keyset cursor of decision 2, with the shared PAGE_SIZE.
+describe('every aggregate read pages by its unique key', () => {
+  const expectKeyset = (pages: PageAsked[], key: string, lastKeyOfFirstPage: string) => {
+    expect(pages).toEqual([
+      { after: null, order: [key, { ascending: true }], limit: PAGE_SIZE, range: undefined },
+      {
+        after: lastKeyOfFirstPage,
+        order: [key, { ascending: true }],
+        limit: PAGE_SIZE,
+        range: undefined,
+      },
+    ]);
+  };
+
+  it('pages hold PAGE_SIZE rows (the shared constant, PostgREST max_rows)', () => {
+    expect(PAGE_SIZE).toBe(1000);
+  });
+
+  // Mutation caught: offset paging (`.range(from, to)`), a page size of its
+  // own, or a cursor that starts anywhere but after the last key read.
+  it('velocity class: the second page asks for the items after the first page’s last item, in item_id order', async () => {
+    const out = recordingPages(outMovements(1001));
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': out.answer,
+      'inventory_items.select': ranged(items(3)),
+    });
+    await svc.velocityClass(90);
+    expectKeyset(out.pages, 'item_id', uuid(999));
+  });
+
+  it('dead stock: the second page asks for the items after the first page’s last item, in item_id order', async () => {
+    const out = recordingPages(outMovements(1001));
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': out.answer,
+      'inventory_items.select': ranged(items(3)),
+    });
+    await svc.deadStock(90);
+    expectKeyset(out.pages, 'item_id', uuid(999));
+  });
+
+  it('both bundle reads: the second page asks for the bundles after the first page’s last bundle, in bundle_id order', async () => {
+    const b = bundles(1001);
+    const activity = recordingPages(b.activity);
+    const value = recordingPages(b.value);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': activity.answer,
+      'rpc:report_bundle_component_value': value.answer,
+    });
+    await svc.bundleActivity(90);
+    expectKeyset(activity.pages, 'bundle_id', uuid(999));
+    expectKeyset(value.pages, 'bundle_id', uuid(999));
+  });
+
+  it('a page short of PAGE_SIZE is the last: 3 pages for 2,001 rows, 1 for 999', async () => {
+    const big = recordingPages(outMovements(2001));
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': big.answer,
+      'inventory_items.select': ranged(items(3)),
+    });
+    await svc.deadStock(90);
+    expect(big.pages.map((p) => p.after)).toEqual([null, uuid(999), uuid(1999)]);
+
+    const small = recordingPages(outMovements(999));
+    const { svc: svc2 } = svcWith({
+      'rpc:report_item_out_movements': small.answer,
+      'inventory_items.select': ranged(items(3)),
+    });
+    await svc2.deadStock(90);
+    expect(small.pages.map((p) => p.after)).toEqual([null]);
+  });
+});
+
+describe('a row that appears or goes between two pages', () => {
+  /**
+   * The aggregate's rows change once the first page has been served, as when
+   * a movement or a bundle run is recorded while the report reads.
+   */
+  function changingAfterFirstPage(
+    rows: Array<Record<string, unknown>>,
+    change: (rows: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
+  ) {
+    let current = rows;
+    let firstPageServed = false;
+    const answer = (call: MockCall) => {
+      const res = servedLikePostgrest(current)(call);
+      if (awaited(call) && !firstPageServed) {
+        firstPageServed = true;
+        current = change(current);
+      }
+      return res;
+    };
+    return answer;
+  }
+
+  // A key that sorts inside the first page: hex letters sort after digits,
+  // so ...0000000005aa sits between uuid(599) and uuid(600).
+  const EARLY_KEY = 'bbbbbbbb-0000-4000-8000-0000000005aa';
+
+  // Mutation caught: offset paging. The new row pushes uuid(999) into the
+  // second offset window, and the bundle was counted twice.
+  it('a bundle run recorded mid-report: every bundle once, none twice', async () => {
+    const b = bundles(1001);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': changingAfterFirstPage(b.activity, (rows) => [
+        ...rows,
+        activityRow(EARLY_KEY),
+      ]),
+      'rpc:report_bundle_component_value': servedLikePostgrest(b.value),
+    });
+    const report = await svc.bundleActivity(90);
+    const ids = report.rows.map((r) => r.bundleId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(1001);
+    expect(report.totalRuns).toBe(1001);
+    expect(report.totalKits).toBe(2002);
+  });
+
+  // Mutation caught: offset paging. With a row gone from the first window,
+  // the second offset window starts one row late and uuid(1000), there all
+  // along, was skipped and classed D.
+  it('an item whose row goes mid-report: the items after the cursor are all read, none skipped', async () => {
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': changingAfterFirstPage(outMovements(1001), (rows) =>
+        rows.filter((r) => r.item_id !== uuid(5)),
+      ),
+      'inventory_items.select': ranged(items(1001)),
+    });
+    const report = await svc.velocityClass(90);
+    const classOf = new Map(report.rows.map((r) => [r.itemId, r.velocityClass]));
+    expect(classOf.get(uuid(1000))).not.toBe('D');
+    // The one item read on the first page keeps its class too.
+    expect(classOf.get(uuid(5))).not.toBe('D');
+  });
+});
+
+describe('every aggregate read asks for an order', () => {
+  it('the stand-in plan repeats and skips rows when key pages come back unordered (vacuity control)', () => {
     const answer = unstableUnlessOrdered(outMovements(1001));
-    const page = (from: number) =>
-      (
-        answer({
-          table: 'report_item_out_movements',
-          op: 'rpc',
-          methods: ['rpc', 'range'],
-          args: [[{}], [from, from + 999]],
-        }).data as Array<{ item_id: string }>
-      ).map((r) => r.item_id);
-    const seen = [...page(0), ...page(1000)];
-    expect(seen).toHaveLength(1001);
-    expect(new Set(seen).size).toBe(1000);
-    expect(seen).not.toContain(uuid(1000));
+    const page = (after: string | null) => {
+      const methods = after === null ? ['rpc', 'limit'] : ['rpc', 'gt', 'limit'];
+      const args = after === null ? [[{}], [PAGE_SIZE]] : [[{}], ['item_id', after], [PAGE_SIZE]];
+      return (answer({ table: 'report_item_out_movements', op: 'rpc', methods, args }).data as Array<{
+        item_id: string;
+      }>).map((r) => r.item_id);
+    };
+    const first = page(null);
+    const seen = [...first, ...page(first.at(-1)!)];
+    expect(new Set(seen).size).toBeLessThan(seen.length);
+    expect(seen).not.toContain(uuid(0));
   });
 
   // Mutation caught: velocityClass's read without `.order('item_id')` (the
-  // 1001st item, skipped, was classed D).
+  // skipped item was classed D).
   it('velocity class: each of 1001 items that moved is counted, none is classed D', async () => {
     const { svc } = svcWith({
       'rpc:report_item_out_movements': unstableUnlessOrdered(outMovements(1001)),
@@ -268,8 +401,7 @@ describe('every aggregate read pages in the order of its unique key', () => {
     expect((await svc.deadStock(90)).rows).toEqual([]);
   });
 
-  // Mutation caught: the bundle activity read without `.order('bundle_id')`
-  // (one bundle twice, another missing).
+  // Mutation caught: the bundle activity read without `.order('bundle_id')`.
   it('bundle activity: each of 1001 bundles once', async () => {
     const b = bundles(1001);
     const { svc } = svcWith({
@@ -281,8 +413,7 @@ describe('every aggregate read pages in the order of its unique key', () => {
     expect(new Set(report.rows.map((r) => r.bundleId)).size).toBe(1001);
   });
 
-  // Mutation caught: the component value read without `.order('bundle_id')`
-  // (the skipped bundle's value was left out of the total).
+  // Mutation caught: the component value read without `.order('bundle_id')`.
   it("bundle component value: every bundle's value counts", async () => {
     const b = bundles(1001);
     const { svc } = svcWith({
@@ -293,35 +424,44 @@ describe('every aggregate read pages in the order of its unique key', () => {
     expect(report.totalValueOut).toBe(3003);
     expect(report.rows.every((r) => r.componentValueOut === 3)).toBe(true);
   });
+});
 
-  it('velocity class asks for item_id order, a window at a time', async () => {
-    const out = pagesInKeyOrder(outMovements(1001), 'item_id');
-    const { svc } = svcWith({
-      'rpc:report_item_out_movements': out.answer,
-      'inventory_items.select': ranged(items(3)),
-    });
-    await svc.velocityClass(90);
-    expect(out.pages).toEqual([
-      [0, 999],
-      [1000, 1999],
-    ]);
+describe('the read is bounded', () => {
+  it('reads at most 20 pages (20,000 rows)', () => {
+    expect(AGGREGATE_MAX_PAGES).toBe(20);
   });
 
-  it('both bundle reads ask for bundle_id order, a window at a time', async () => {
-    const b = bundles(1001);
-    const activity = pagesInKeyOrder(b.activity, 'bundle_id');
-    const value = pagesInKeyOrder(b.value, 'bundle_id');
+  // Mutation caught: no bound (it reads on), or a bound that keeps the pages
+  // it read and answers them as the whole set.
+  it('a 20th full page fails the report with a log line naming the aggregate, instead of reading on or cutting the set', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const b = bundles(AGGREGATE_MAX_PAGES * PAGE_SIZE);
+    const read = recordingPages(b.activity);
     const { svc } = svcWith({
-      'rpc:report_bundle_activity': activity.answer,
-      'rpc:report_bundle_component_value': value.answer,
+      'rpc:report_bundle_activity': read.answer,
+      'rpc:report_bundle_component_value': servedLikePostgrest([]),
     });
-    await svc.bundleActivity(90);
-    for (const read of [activity, value]) {
-      expect(read.pages).toEqual([
-        [0, 999],
-        [1000, 1999],
-      ]);
-    }
+    const err = await svc.bundleActivity(90).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('internal_error');
+    expect(read.pages).toHaveLength(AGGREGATE_MAX_PAGES);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]?.[0])).toMatch(
+      /report_bundle_activity.*more than 20000 rows/,
+    );
+  });
+
+  it('19 full pages and a short 20th: every row, no log', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const n = AGGREGATE_MAX_PAGES * PAGE_SIZE - 1;
+    const b = bundles(n);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': servedLikePostgrest(b.activity),
+      'rpc:report_bundle_component_value': servedLikePostgrest([]),
+    });
+    const report = await svc.bundleActivity(90);
+    expect(report.rows).toHaveLength(n);
+    expect(log).not.toHaveBeenCalled();
   });
 });
 
@@ -351,16 +491,30 @@ describe('a refused aggregate keeps its own words', () => {
     expect((err as ServiceError).code).toBe('module_disabled');
   });
 
+  // Mutation caught: a failed later page answered by the pages before it.
   it('a failed second page fails the report instead of showing the first page as the whole', async () => {
     const first = outMovements(1000);
     const { svc } = svcWith({
       'rpc:report_item_out_movements': (call) =>
-        (callArgs(call, 'range')?.[0] as number | undefined) === 1000
+        callArgs(call, 'gt') !== undefined
           ? { data: null, error: { message: 'canceling statement due to statement timeout' } }
           : { data: first, error: null },
       'inventory_items.select': ranged(items(1)),
     });
     const err = await svc.velocityClass(90).catch((e: unknown) => e);
+    expect((err as ServiceError).code).toBe('internal_error');
+  });
+
+  it('a failed second bundle page fails the bundle report too', async () => {
+    const b = bundles(1001);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': servedLikePostgrest(b.activity),
+      'rpc:report_bundle_component_value': (call) =>
+        callArgs(call, 'gt') !== undefined
+          ? { data: null, error: { message: 'fetch failed' } }
+          : servedLikePostgrest(b.value)(call),
+    });
+    const err = await svc.bundleActivity(90).catch((e: unknown) => e);
     expect((err as ServiceError).code).toBe('internal_error');
   });
 });
