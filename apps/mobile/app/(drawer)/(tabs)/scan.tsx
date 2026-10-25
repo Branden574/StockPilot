@@ -60,7 +60,14 @@ import {
   elsewhereUnavailableNote,
   holdingsKnownInFull,
 } from '@/lib/placement-rows';
-import { resolveScanMatches, sanitizeScanCode, scanPickerSubtitle } from '@/lib/scan-resolve';
+import {
+  resolveScanMatches,
+  sanitizeScanCode,
+  scanCandidatePlacementLabel,
+  scanHoldingsByItem,
+  scanPickerSubtitle,
+  type ScanHoldingRow,
+} from '@/lib/scan-resolve';
 import { readSignatureOrder, scanSignatureDeparture } from '@/lib/scan-signature-departure';
 import { supabase } from '@/lib/supabase';
 import {
@@ -124,6 +131,11 @@ interface ScanCandidate {
   charterId: string | null;
   charterName: string | null;
   binLocation: string | null;
+  itemType: string | null;
+  customFields: Record<string, unknown> | null;
+  /** Where the record's stock is, for the picker's line
+   *  (scanCandidatePlacementLabel). Filled in only when the picker shows. */
+  placementLabel: string | null;
   quantityOnHand: number;
 }
 
@@ -357,7 +369,7 @@ export default function Scan() {
     const { data: rows } = await supabase
       .from('inventory_items')
       .select(
-        `id, sku, barcode, charter_id, bin_location, quantity_on_hand,
+        `id, sku, barcode, charter_id, bin_location, quantity_on_hand, item_type, custom_fields,
          charter:charters!charter_id (name)`,
       )
       .eq('organization_id', orgId)
@@ -374,6 +386,9 @@ export default function Scan() {
         charterId: (r.charter_id as string | null) ?? null,
         charterName: charterObj?.name ?? null,
         binLocation: (r.bin_location as string | null) ?? null,
+        itemType: (r.item_type as string | null) ?? null,
+        customFields: (r.custom_fields as Record<string, unknown> | null) ?? null,
+        placementLabel: null,
         quantityOnHand: Number(r.quantity_on_hand) || 0,
       };
     });
@@ -381,10 +396,45 @@ export default function Scan() {
     const resolution = resolveScanMatches(candidates, safe);
     if (resolution.kind === 'not_found') return null;
     if (resolution.kind === 'multiple') {
-      setPlacementChoices(resolution.matches);
+      setPlacementChoices(await withPlacementLabels(orgId, resolution.matches));
       return 'ambiguous';
     }
     return loadItemById(resolution.match.id);
+  }
+
+  /**
+   * The picker's rows, each with where its stock is (B26): the rack and crate
+   * holdings of every row in one read, the same read loadItemById makes for
+   * one item, then the one placement rule (scanCandidatePlacementLabel). A
+   * failed read leaves each line to the record's own rack keys and text, as
+   * before; it never holds the picker back.
+   */
+  async function withPlacementLabels(org: string, rows: ScanCandidate[]): Promise<ScanCandidate[]> {
+    let holdings = new Map<string, RackHoldingLike[]>();
+    try {
+      const { data, error } = await supabase
+        .from('item_stock_levels')
+        .select('item_id, quantity, locations!inner(name, kind)')
+        .eq('organization_id', org)
+        .in(
+          'item_id',
+          rows.map((r) => r.id),
+        )
+        .in('locations.kind', ['rack', 'crate'])
+        .gt('quantity', 0);
+      if (!error) holdings = scanHoldingsByItem((data ?? []) as unknown as ScanHoldingRow[]);
+    } catch {
+      // The rack keys and text still say something true enough to choose by.
+    }
+    return rows.map((r) => ({
+      ...r,
+      placementLabel: scanCandidatePlacementLabel({
+        itemType: r.itemType,
+        customFields: r.customFields,
+        binLocation: r.binLocation,
+        holdings: holdings.get(r.id) ?? [],
+      }),
+    }));
   }
 
   /** User picked a specific placement from the disambiguation sheet. */
@@ -1354,7 +1404,7 @@ export default function Scan() {
                     SKU {c.sku}
                   </Text>
                   <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
-                    {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
+                    {c.placementLabel ?? 'No bin set'} · {c.quantityOnHand} on hand
                   </Text>
                 </Pressable>
               ))}
