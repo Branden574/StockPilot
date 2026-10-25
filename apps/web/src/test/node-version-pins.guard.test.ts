@@ -29,6 +29,13 @@ import { describe, expect, it } from 'vitest';
  * it. pnpm only warns when a running Node is outside the engines range
  * (no engine-strict here), so EAS installs keep working.
  *
+ * The docs are held to the same major. Nothing in the repo can see the Vercel
+ * setting itself, so the one drift no pin catches is someone moving it by hand
+ * because a doc told them to expect another major. The 2026-08-07 security
+ * reports said to check for a "current nodejs22.x runtime". A doc may keep an
+ * older runtime only as history, under a later dated "Updated <date>" note
+ * in the same table cell or line that names the production major.
+ *
  * IF THIS FAILS after Vercel's Node.js Version setting moved to a new major:
  * change PRODUCTION_NODE_MAJOR, `.nvmrc` and the root engines field together.
  */
@@ -103,6 +110,80 @@ function setupNodeSteps(text: string): SetupNodeStep[] {
   });
   return steps;
 }
+
+// How docs name the Node.js runtime Vercel runs: its runtime id (`nodejs22.x`)
+// or a major followed by "runtime" (`a current 22.x runtime`).
+const RUNTIME_MENTION = /\bnodejs(\d+)\.x\b|\b(\d+)\.x runtime\b/gi;
+// A dated note that supersedes what comes before it in its cell or line.
+const DATED_UPDATE = /\bUpdated \d{4}-\d{2}-\d{2}\b/g;
+
+function runtimeMajors(text: string): number[] {
+  return [...text.matchAll(RUNTIME_MENTION)].map((m) => Number(m[1] ?? m[2]));
+}
+
+type StaleMention = { line: number; text: string };
+
+/**
+ * Markdown table cells (or whole lines, outside a table) that name a Vercel
+ * Node.js runtime other than `major` without a later dated note. Such a
+ * segment passes only when the text after its last `Updated <date>` names
+ * `<major>.x` (or `nodejs<major>.x`) and no other runtime, so the old wording
+ * reads as history.
+ */
+function staleRuntimeMentions(markdown: string, major: number): StaleMention[] {
+  // `\b24` alone misses `nodejs24.x`: there is no word boundary inside it.
+  const current = new RegExp(`(?:\\bnodejs|\\b)${major}\\.x\\b`, 'i');
+  const out: StaleMention[] = [];
+  markdown.split('\n').forEach((line, i) => {
+    // A table row is split on its unescaped pipes, so one cell's note never
+    // covers another cell.
+    const segments = line.trimStart().startsWith('|') ? line.split(/(?<!\\)\|/) : [line];
+    for (const segment of segments) {
+      if (runtimeMajors(segment).every((m) => m === major)) continue;
+      const lastUpdate = [...segment.matchAll(DATED_UPDATE)].at(-1);
+      const after = lastUpdate ? segment.slice(lastUpdate.index) : '';
+      const superseded = current.test(after) && runtimeMajors(after).every((m) => m === major);
+      if (!superseded) out.push({ line: i + 1, text: segment.trim() });
+    }
+  });
+  return out;
+}
+
+describe('staleRuntimeMentions (the doc check reads cells and dated notes)', () => {
+  it('flags each cell that names another runtime and has no dated note', () => {
+    const md = '| Node | Vercel runtime (nodejs22.x) | spot-check a current 22.x runtime |';
+    expect(staleRuntimeMentions(md, 24)).toEqual([
+      { line: 1, text: 'Vercel runtime (nodejs22.x)' },
+      { line: 1, text: 'spot-check a current 22.x runtime' },
+    ]);
+  });
+
+  it('keeps older wording as history under a later dated note that names the major', () => {
+    const md = [
+      '| Node | Vercel runtime (nodejs22.x). Updated 2026-10-25: the setting reads 24.x |',
+      '3. Check for a current nodejs22.x runtime. Updated 2026-10-25: expect 24.x instead.',
+      '| Vercel runtime | nodejs24.x |',
+      // The note may name the major by its runtime id too.
+      '| Vercel runtime (nodejs22.x). Updated 2026-10-25: it reads nodejs24.x |',
+    ].join('\n');
+    expect(staleRuntimeMentions(md, 24)).toEqual([]);
+  });
+
+  it("never lets one cell's note cover another cell", () => {
+    const md = '| Vercel runtime (nodejs22.x) | Updated 2026-10-25: reads 24.x |';
+    expect(staleRuntimeMentions(md, 24)).toEqual([
+      { line: 1, text: 'Vercel runtime (nodejs22.x)' },
+    ]);
+  });
+
+  it('flags a note that names no major, or another runtime after its date', () => {
+    const md = [
+      '3. Check for a current 22.x runtime. Updated 2026-10-25: see section 3.',
+      '3. Upgrade Node. Updated 2026-10-25: expect 24.x, then a nodejs22.x runtime.',
+    ].join('\n');
+    expect(staleRuntimeMentions(md, 24).map((s) => s.line)).toEqual([1, 2]);
+  });
+});
 
 describe('setupNodeSteps (the guard reads each step whole)', () => {
   it('reads node-version under with:, after uses:', () => {
@@ -193,6 +274,25 @@ describe('Node.js version pins', () => {
 
     // The workflows set up Node somewhere; finding none means the parser broke.
     expect(found).toBeGreaterThan(0);
+    expect(problems).toEqual([]);
+  });
+
+  it('no doc tells a reader to expect another Vercel Node runtime', () => {
+    // The repo's own Markdown at the root (README.md, DEPLOY.md, ...) and
+    // everything under docs/, where the security reports live.
+    const docs = [
+      ...readdirSync(REPO_ROOT).filter((f) => f.endsWith('.md')),
+      ...readdirSync(join(REPO_ROOT, 'docs'), { recursive: true, encoding: 'utf8' })
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => join('docs', f)),
+    ];
+    expect(docs).toContain(join('docs', 'security', 'current-threat-intelligence.md'));
+
+    const problems = docs.flatMap((file) =>
+      staleRuntimeMentions(readFileSync(join(REPO_ROOT, file), 'utf8'), PRODUCTION_NODE_MAJOR).map(
+        (s) => `${file}:${s.line} ${s.text.slice(0, 160)}`,
+      ),
+    );
     expect(problems).toEqual([]);
   });
 });
