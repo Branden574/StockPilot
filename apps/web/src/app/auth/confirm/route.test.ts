@@ -9,12 +9,20 @@ import { NextRequest } from 'next/server';
 //      scanners prefetch links within seconds of delivery (observed in
 //      prod: a recovery token eaten by a GET 28s after send). GET renders
 //      a click-through form; only POST verifies.
-//   2. POST verifies via auth.verifyOtp and redirects to the sanitized
-//      `next` path; failures land recovery users on /reset?error=link_expired.
+//   2. POST verifies via auth.verifyOtp and redirects to the link type's
+//      landing (`next` only when it is one of the type's landings, see
+//      lib/auth/confirm-landing.ts); failures land recovery users on
+//      /reset?error=link_expired.
 
 const verifyOtp = vi.fn();
+// The browser's current session, read by GET (the signed-in notice). Signed
+// out unless a test says otherwise.
+const getUser = vi.fn(async () => ({
+  data: { user: null as { id: string; email?: string | null } | null },
+  error: null,
+}));
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: async () => ({ auth: { verifyOtp } }),
+  createClient: async () => ({ auth: { verifyOtp, getUser } }),
 }));
 const completeEmailChange = vi.fn(async (_args: { userId: string }) => ({
   email: 'new@example.com',
@@ -102,10 +110,10 @@ describe('POST /auth/confirm', () => {
     expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_expired`);
   });
 
-  it('neutralizes protocol-relative next paths', async () => {
+  it('neutralizes protocol-relative next paths (the link type decides where it lands)', async () => {
     verifyOtp.mockResolvedValue({ error: null });
     const res = await POST(postReq({ token_hash: 'abc', type: 'recovery', next: '//evil.com' }));
-    expect(res.headers.get('location')).toBe(`${BASE}/dashboard`);
+    expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
   it('rejects disallowed types without calling verifyOtp', async () => {
@@ -223,6 +231,141 @@ describe('POST /auth/confirm from another site', () => {
     );
     expect(info).not.toHaveBeenCalled();
     info.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// NAVIGATE AND PRESS (docket S14 review). Refusing a post from another site
+// does not stop another site from SENDING the browser to this page with a link
+// it holds for its own account: the page must render for a click in webmail,
+// which is a cross-site navigation too, and its form then posts from the app's
+// own page (same-origin). So the page now says which account the browser is
+// already signed in as, and where the link lands is fixed by its type, not
+// chosen by the link. (Another site can no longer sign the browser out first:
+// app/auth/session-ended.)
+// ─────────────────────────────────────────────────────────────────────────
+describe('GET /auth/confirm in a browser that is already signed in', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const NOTICE =
+    'If this link was sent to a different account, continuing signs you in to that account instead.';
+
+  it('names the account this browser is signed in as, above the same form, and spends nothing', async () => {
+    getUser.mockResolvedValueOnce({
+      data: { user: { id: 'u-1', email: 'member@example.com' } },
+      error: null,
+    });
+    const res = await GET(getReq('token_hash=abc123&type=recovery&next=%2Freset%2Fcomplete'));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(
+      "You're signed in as <strong>member@example.com</strong> on this browser.",
+    );
+    expect(html).toContain(NOTICE);
+    expect(html).toContain("If you didn't ask for this link, close this page.");
+    expect(html).toContain('form method="post"');
+    expect(html).not.toMatch(/<script\b/i);
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('escapes the account name it prints', async () => {
+    getUser.mockResolvedValueOnce({
+      data: { user: { id: 'u-1', email: 'a<b>"c@example.com' } },
+      error: null,
+    });
+    const html = await (await GET(getReq('token_hash=abc123&type=invite'))).text();
+    expect(html).toContain('<strong>a&lt;b&gt;&quot;c@example.com</strong>');
+    expect(html).not.toContain('a<b>');
+  });
+
+  it('a session with no email still gets the notice, without a name', async () => {
+    getUser.mockResolvedValueOnce({ data: { user: { id: 'u-1', email: null } }, error: null });
+    const html = await (await GET(getReq('token_hash=abc123&type=magiclink'))).text();
+    expect(html).toContain('This browser is already signed in to StockPilot.');
+    expect(html).toContain(NOTICE);
+  });
+
+  it('signed out (an email scanner, a new device): no notice', async () => {
+    const html = await (await GET(getReq('token_hash=abc123&type=recovery'))).text();
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(html).not.toContain(NOTICE);
+    expect(html).toContain('This link works once. Press the button to continue.');
+  });
+
+  it('a session check that throws: the page still renders, without the notice', async () => {
+    getUser.mockRejectedValueOnce(new Error('network'));
+    const res = await GET(getReq('token_hash=abc123&type=recovery'));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).not.toContain(NOTICE);
+    expect(html).toContain('form method="post"');
+  });
+});
+
+describe('/auth/confirm lands where the link type says, not where the link says', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['magiclink', '/dashboard/items/new', '/portal'],
+    ['magiclink', '/dashboard/settings/billing', '/portal'],
+    ['invite', '/dashboard', '/reset/complete'],
+    ['invite', '/portal', '/portal'],
+    ['invite', '/reset/complete', '/reset/complete'],
+    ['recovery', '/dashboard/settings/integrations', '/reset/complete'],
+    ['recovery', '', '/reset/complete'],
+  ])('POST %s with next %s: lands on %s', async (type, next, landing) => {
+    verifyOtp.mockResolvedValue({ error: null });
+    const res = await POST(
+      postReq(
+        { token_hash: 'abc123', type, next },
+        { 'sec-fetch-site': 'same-origin', origin: 'null' },
+      ),
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(`${BASE}${landing}`);
+  });
+
+  it('GET carries the landing in its form, not the path the link chose', async () => {
+    const html = await (
+      await GET(getReq('token_hash=abc123&type=magiclink&next=%2Fdashboard%2Fitems%2Fnew'))
+    ).text();
+    expect(html).toContain('<input type="hidden" name="next" value="/portal">');
+    expect(html).not.toContain('/dashboard/items/new');
+  });
+
+  it("the reviewer's case: another site sends a signed-in browser to its own sign-in link, and the person presses", async () => {
+    getUser.mockResolvedValueOnce({
+      data: { user: { id: 'u-1', email: 'member@example.com' } },
+      error: null,
+    });
+    const page = await GET(
+      new NextRequest(
+        `${BASE}/auth/confirm?token_hash=attackers-own-link&type=magiclink&next=%2Fdashboard%2Fitems%2Fnew`,
+        {
+          headers: {
+            'sec-fetch-site': 'cross-site',
+            'sec-fetch-mode': 'navigate',
+            'sec-fetch-dest': 'document',
+          },
+        },
+      ),
+    );
+    const html = await page.text();
+    // The page must render (a click in webmail is a cross-site navigation too),
+    // and now says whose session this browser holds.
+    expect(html).toContain(
+      "You're signed in as <strong>member@example.com</strong> on this browser.",
+    );
+    // Its own form posts same-origin, so the press is verified; the browser
+    // lands where a sign-in link always lands, not on the page the link chose.
+    verifyOtp.mockResolvedValue({ error: null });
+    const res = await POST(
+      postReq(
+        { token_hash: 'attackers-own-link', type: 'magiclink', next: '/dashboard/items/new' },
+        { 'sec-fetch-site': 'same-origin', origin: 'null' },
+      ),
+    );
+    expect(res.headers.get('location')).toBe(`${BASE}/portal`);
   });
 });
 

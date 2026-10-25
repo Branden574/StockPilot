@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { confirmLanding } from '@/lib/auth/confirm-landing';
 import { fetchSiteIsElsewhere } from '@/lib/auth/cross-site-request';
-import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { completeEmailChange, EMAIL_CHANGE_RETURN_PATH } from '@/server/services/email-change';
@@ -38,6 +38,19 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  * A failed email-change link gets its own page rather than the /signin
  * bounce, because the clicker is usually a signed-in user whose account has
  * NOT changed.
+ *
+ * NAVIGATE AND PRESS (docket S14 review). A post from another site is refused
+ * (POST below), but nothing stops another site from SENDING the browser here
+ * with a link it holds for its own account: this page must render for a click
+ * in webmail, which is a cross-site navigation too, and its own form then posts
+ * same-origin. Two things narrow that login CSRF. The page names the account
+ * this browser is already signed in as, so pressing on is no longer a silent
+ * swap (and another site can no longer sign the browser out first:
+ * app/auth/session-ended). And where the link lands is fixed by its type
+ * (lib/auth/confirm-landing.ts), so the other site no longer chooses which page
+ * of its account opens. What stays open: a browser that is signed out, whose
+ * person presses on for a link they did not ask for, is signed in to the
+ * account the link belongs to (INV-E5, "Not covered").
  */
 
 /** Only the email types we actually send through this route. 'magiclink' is
@@ -82,6 +95,7 @@ main{max-width:400px;width:100%;margin:16px;box-sizing:border-box;background:#ff
 .brand{font-weight:600;font-size:15px;letter-spacing:-0.02em;margin-bottom:20px}
 h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin:0 0 10px}
 p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0 0 24px}
+p.note{background:#f9eedc;color:#975d11;border-radius:6px;padding:12px 14px;margin:0 0 20px;text-align:left}
 .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#2f7463;color:#ffffff;font:inherit;font-weight:500;font-size:15px;text-decoration:none;cursor:pointer}
 .btn:hover{background:#28695a}
 .btn:focus-visible{outline:2px solid #0e0f0d;outline-offset:2px}
@@ -89,6 +103,7 @@ p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0 0 24px}
 body{background:#0c0d0a;color:#f0efe8}
 main{background:#131410;border-color:#1f201b}
 p{color:#9a9b91}
+p.note{background:#292114;color:#e2b05a}
 .btn{background:#7acdb8;color:#07120e}
 .btn:hover{background:#8dd5c2}
 .btn:focus-visible{outline-color:#f0efe8}
@@ -134,15 +149,50 @@ function emailChangeExpiredPage(): NextResponse {
   });
 }
 
+/**
+ * Where a verified link of this type lands: email_change has its own fixed
+ * page, every other type the landing lib/auth/confirm-landing.ts keeps for it
+ * (`next` only when it is one of them, exactly).
+ */
+function landingFor(type: string, next: string | null): string {
+  return type === 'email_change' ? EMAIL_CHANGE_RETURN_PATH : confirmLanding(type, next);
+}
+
+/**
+ * The account this browser is signed in as, when GoTrue answers with one. Null
+ * when it is signed out (an email scanner's prefetch carries no cookie, so this
+ * costs it no round trip) or the check fails; the page then renders as before.
+ */
+async function signedInAccount(): Promise<{ email: string | null } | null> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user ? { email: user.email ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The notice for a browser that is already signed in: pressing on replaces that session if the link is another account's. */
+function signedInNotice(email: string | null): string {
+  const who = email
+    ? `You're signed in as <strong>${escapeHtml(email)}</strong> on this browser.`
+    : 'This browser is already signed in to StockPilot.';
+  return `<p class="note">${who} If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.</p>`;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const tokenHash = searchParams.get('token_hash');
   const type = searchParams.get('type');
-  const next = safeRedirectPath(searchParams.get('next'));
 
   if (!tokenHash || !type || !ALLOWED_TYPES.has(type as EmailOtpType)) {
     return failureRedirect(origin, type);
   }
+  const next = landingFor(type, searchParams.get('next'));
+  const signedIn = await signedInAccount();
 
   const heading =
     type === 'recovery'
@@ -161,6 +211,7 @@ export async function GET(request: NextRequest) {
   const html = shell(
     heading,
     `<h1>${heading}</h1>
+    ${signedIn ? signedInNotice(signedIn.email) : ''}
     <p>
       This link works once. Press the button to continue.
     </p>
@@ -181,7 +232,7 @@ export async function POST(request: NextRequest) {
   const form = await request.formData().catch(() => null);
   const tokenHash = (form?.get('token_hash') as string | null) ?? null;
   const type = (form?.get('type') as string | null) ?? null;
-  const next = safeRedirectPath((form?.get('next') as string | null) ?? null);
+  const next = (form?.get('next') as string | null) ?? null;
 
   // A post from another site (login CSRF, docket S14). The token in the form is
   // the credential and this answer SETS the session cookie, so a page on another
@@ -243,7 +294,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`, 303);
+      return NextResponse.redirect(`${origin}${landingFor(type, next)}`, 303);
     }
   }
 

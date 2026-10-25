@@ -148,7 +148,7 @@ const EXEMPT: Record<string, Exemption> = {
     auth: 'one-time token',
     session: 'creates',
     reason:
-      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, before verifyOtp.',
+      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, before verifyOtp. Its GET reads the session only to say which account the browser is already signed in as.',
   },
   'r/confirm/submit/route.ts': {
     methods: ['POST'],
@@ -285,8 +285,9 @@ describe('the reviewed exemptions are current', () => {
     if (exemption.session === 'none') {
       expect(readers, 'reads no cookie session').toEqual([]);
     } else {
-      // It builds the cookie client only to SET the session, after judging the
-      // post by Sec-Fetch-Site (its Origin is null by its own page's policy).
+      // It builds the cookie client to SET the session, after judging the post
+      // by Sec-Fetch-Site (its Origin is null by its own page's policy), and on
+      // GET to read which account the browser is signed in as (the notice).
       expect(readers).toEqual(['createClient from @/lib/supabase/server']);
       expect(
         importsOf(file, source).some(

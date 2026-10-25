@@ -875,12 +875,20 @@ WEB_TESTS=(
   # exemption (and every gate call to its own request), and two routes end to
   # end through Next's route module. auth/confirm/route.test.ts below carries
   # the login-CSRF half (a confirmation link posted from another site never
-  # signs this browser in).
+  # signs this browser in; a browser sent there by another site is told which
+  # account it is signed in as). The GETs that spend something of the
+  # person's: another origin's page cannot end a live session
+  # (auth/session-ended) or spend the export budget (export-rate-limit, and
+  # export-routes.limit-order below holds every export route to it), and a
+  # confirmation link lands where its type says (confirm-landing).
   src/lib/auth/cross-site-request.test.ts
   src/lib/auth/api-context.cross-site.test.ts
   src/test/cookie-write-routes.guard.test.ts
   'src/app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.cross-site.test.ts'
   src/app/api/v1/me/release-state/route.cross-site.test.ts
+  src/app/auth/session-ended/route.test.ts
+  src/lib/export-rate-limit.test.ts
+  src/lib/auth/confirm-landing.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts
