@@ -47,11 +47,24 @@ interface WorkspaceState {
   activeOrgName: string | null;
   activeRole: string | null;
   warehouses: WarehouseOption[];
+  /** The warehouse list is not one a read answered (it is loading, or its
+   *  read failed or was slow): the switcher says so instead of "No warehouses
+   *  in this org yet", and retryWorkspace reads it again (B24). */
+  warehousesUnread: boolean;
   activeWarehouseId: string | null;
   activeWarehouseName: string | null;
 }
 
 const WAREHOUSE_STORAGE_KEY = (orgId: string) => `workspace.activeWarehouseId.${orgId}`;
+
+/**
+ * The saved warehouse's name, saved with its id as JSON `{ id, name }`: a
+ * load whose warehouse read fails or is slow shows the saved warehouse by
+ * this name (resolveWarehouses) instead of widening every list to all
+ * warehouses. A `workspace.` key, so it is cleared with the others when the
+ * account changes (account-eviction.ts).
+ */
+const WAREHOUSE_LABEL_STORAGE_KEY = (orgId: string) => `workspace.activeWarehouseLabel.${orgId}`;
 
 const listeners = new Set<(state: WorkspaceState) => void>();
 let cached: WorkspaceState = {
@@ -61,6 +74,7 @@ let cached: WorkspaceState = {
   activeOrgName: null,
   activeRole: null,
   warehouses: [],
+  warehousesUnread: false,
   activeWarehouseId: null,
   activeWarehouseName: null,
 };
@@ -119,24 +133,27 @@ async function loadWarehouses(orgId: string): Promise<WarehouseOption[] | null> 
     .map((w) => ({ id: w.id, name: w.name }));
 }
 
-/** How long a workspace load or a switch waits for the warehouse list. React
- *  Native's fetch has no timeout of its own: a switch waits for this read
- *  inside the switch queue, and a load holds `loading` until it answers, so a
- *  stalled request must not hold every later switch or a spinner. */
-const WAREHOUSE_READ_TIMEOUT_MS = 15_000;
+/** How long a workspace load or a switch waits for each of its reads: the
+ *  memberships, the profile's default organization and the warehouse list.
+ *  React Native's fetch has no timeout of its own: a switch waits for its
+ *  warehouse read inside the switch queue, and a load holds `loading` until
+ *  its reads answer, so a stalled request must not hold every later switch or
+ *  a spinner. The membership and default reads had no bound at all (B24): one
+ *  request that never answered kept every screen loading for good. */
+const WORKSPACE_READ_TIMEOUT_MS = 15_000;
 
-/** loadWarehouses, answered with null (as its error path does) when it fails
- *  or takes longer than WAREHOUSE_READ_TIMEOUT_MS. */
-function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null> {
+/** A workspace read, answered with null (as its error path does) when it
+ *  fails or takes longer than WORKSPACE_READ_TIMEOUT_MS. */
+function bounded<T>(name: string, read: () => Promise<T | null>): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      console.warn('[workspace] loadWarehouses timed out');
+      console.warn(`[workspace] ${name} timed out`);
       resolve(null);
-    }, WAREHOUSE_READ_TIMEOUT_MS);
-    loadWarehouses(orgId).then(
-      (rows) => {
+    }, WORKSPACE_READ_TIMEOUT_MS);
+    read().then(
+      (value) => {
         clearTimeout(timer);
-        resolve(rows);
+        resolve(value);
       },
       () => {
         clearTimeout(timer);
@@ -144,6 +161,100 @@ function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null>
       },
     );
   });
+}
+
+function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null> {
+  return bounded('loadWarehouses', () => loadWarehouses(orgId));
+}
+
+/** null is a failed read (loadOrgs): hydrate keeps the workspace on screen. */
+function loadOrgsBounded(userId: string): Promise<OrgOption[] | null> {
+  return bounded('loadOrgs', () => loadOrgs(userId));
+}
+
+/** null is "unset or unreadable", as loadProfileDefaultOrg answers an error. */
+function loadProfileDefaultOrgBounded(userId: string): Promise<string | null> {
+  return bounded('the default organization read', () => loadProfileDefaultOrg(userId));
+}
+
+/** The warehouse saved for an organization, with the name saved with it (null
+ *  when none was, or it was saved for another warehouse). */
+async function savedWarehouse(orgId: string): Promise<{ id: string; name: string | null } | null> {
+  const [id, label] = await Promise.all([
+    AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId)),
+    AsyncStorage.getItem(WAREHOUSE_LABEL_STORAGE_KEY(orgId)),
+  ]);
+  if (!id) return null;
+  let name: string | null = null;
+  try {
+    const parsed = label ? (JSON.parse(label) as { id?: unknown; name?: unknown }) : null;
+    if (parsed && parsed.id === id && typeof parsed.name === 'string' && parsed.name) {
+      name = parsed.name;
+    }
+  } catch {
+    // An unreadable label is no name: the read decides, as before.
+  }
+  return { id, name };
+}
+
+/** Save (or with null, clear) the name of an organization's saved warehouse.
+ *  Never fails the caller: a label not saved only means a slow load cannot
+ *  name the warehouse and shows all warehouses, as it did before. */
+async function saveWarehouseLabel(orgId: string, warehouse: WarehouseOption | null): Promise<void> {
+  try {
+    if (warehouse) {
+      await AsyncStorage.setItem(
+        WAREHOUSE_LABEL_STORAGE_KEY(orgId),
+        JSON.stringify({ id: warehouse.id, name: warehouse.name }),
+      );
+    } else {
+      await AsyncStorage.removeItem(WAREHOUSE_LABEL_STORAGE_KEY(orgId));
+    }
+  } catch (err) {
+    console.warn('[workspace] saving the warehouse name failed', err);
+  }
+}
+
+/** What a workspace shows after its warehouse read (see resolveWarehouses). */
+interface ResolvedWarehouses {
+  warehouses: WarehouseOption[];
+  activeWarehouseId: string | null;
+  /** The list is not one a read answered: retryWorkspace reads it again. */
+  unread: boolean;
+}
+
+/**
+ * The warehouse list and the active warehouse after a warehouse read.
+ *
+ * A read that answered: its list, and the saved warehouse when it is in it,
+ * else all warehouses. The saved name is brought up to date (an app that saved
+ * only the id, or a renamed warehouse).
+ *
+ * A read that failed or was slow (null): the saved warehouse alone, by the
+ * name saved with it, and the list marked unread. It used to be an empty list,
+ * so the saved warehouse was "not in it" and every list quietly widened to all
+ * warehouses on a slow first load (B24). With no name saved for it there is
+ * nothing to show it by, and the workspace shows all warehouses, as before,
+ * until the retry reads the list.
+ */
+async function resolveWarehouses(
+  orgId: string,
+  read: WarehouseOption[] | null,
+): Promise<ResolvedWarehouses> {
+  const saved = await savedWarehouse(orgId);
+  if (read === null) {
+    if (saved?.name) {
+      return {
+        warehouses: [{ id: saved.id, name: saved.name }],
+        activeWarehouseId: saved.id,
+        unread: true,
+      };
+    }
+    return { warehouses: [], activeWarehouseId: null, unread: true };
+  }
+  const active = saved ? (read.find((w) => w.id === saved.id) ?? null) : null;
+  if (active && active.name !== saved?.name) await saveWarehouseLabel(orgId, active);
+  return { warehouses: read, activeWarehouseId: active?.id ?? null, unread: false };
 }
 
 /** The profile's default organization (the server's choice when a request
@@ -199,9 +310,9 @@ async function loadWorkspace(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
   const [memberships, persisted, profileDefault] = await Promise.all([
-    loadOrgs(userId),
+    loadOrgsBounded(userId),
     AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY),
-    loadProfileDefaultOrg(userId),
+    loadProfileDefaultOrgBounded(userId),
   ]);
   // See workspace-choice.ts: the same order the server uses, and the choice is
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
@@ -256,6 +367,7 @@ async function loadWorkspace(userId: string) {
   }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
+  let listUnread = false;
   if (activeOrgId) {
     // Bounded like a switch's read: a hung request must not hold `loading`.
     const read = await loadWarehousesBounded(activeOrgId);
@@ -267,11 +379,14 @@ async function loadWorkspace(userId: string) {
       // failed membership read above: what this account already shows stays.
       warehouses = cached.warehouses;
       activeWarehouseId = cached.activeWarehouseId;
+      listUnread = cached.warehousesUnread;
     } else {
-      warehouses = read ?? [];
-      const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
-      activeWarehouseId =
-        persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+      // A first load (or another workspace) has nothing of its own on screen
+      // to keep: the saved warehouse is kept by its saved name instead.
+      const resolved = await resolveWarehouses(activeOrgId, read);
+      warehouses = resolved.warehouses;
+      activeWarehouseId = resolved.activeWarehouseId;
+      listUnread = resolved.unread;
     }
   }
   if (accountEpoch() !== epochAtStart) return;
@@ -292,6 +407,7 @@ async function loadWorkspace(userId: string) {
     activeOrgName: activeOrg?.name ?? null,
     activeRole: activeOrg?.role ?? null,
     warehouses,
+    warehousesUnread: activeOrgId !== null && listUnread,
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
@@ -319,13 +435,20 @@ let retrying: Promise<void> | null = null;
  * while a load is already running, or with nobody signed in. It is an
  * ordinary hydrate, so the account epoch and switch rules above apply to it
  * unchanged.
+ *
+ * Except: a workspace shown with a warehouse list that a failed or slow read
+ * left unread (warehousesUnread, B24) is loaded again quietly, with no
+ * spinner over the screen already showing it, so the list (and a saved
+ * warehouse kept by name) is read once the connection allows.
  */
 export function retryWorkspace(): Promise<void> {
   if (retrying) return retrying;
   const userId = epochUserId;
   // A load already running (a screen that just mounted) answers the same way.
-  if (!userId || cached.activeOrgId !== null || loadsRunning > 0) return Promise.resolve();
-  publish({ loading: true });
+  if (!userId || loadsRunning > 0) return Promise.resolve();
+  const shown = cached.activeOrgId !== null;
+  if (shown && !cached.warehousesUnread) return Promise.resolve();
+  if (!shown) publish({ loading: true });
   const run = hydrate(userId)
     .catch((err: unknown) => {
       // A storage read that threw: the screen offers Try again again, never a
@@ -383,19 +506,24 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     activeOrgName: orgRow?.name ?? null,
     activeRole: orgRow?.role ?? null,
     warehouses: [],
+    warehousesUnread: true,
     activeWarehouseId: null,
     activeWarehouseName: null,
   });
   // A failed read leaves this new workspace with no warehouse list yet: there
   // is nothing of its own on screen to keep.
-  const warehouses = (await loadWarehousesBounded(orgId)) ?? [];
-  const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
-  const activeWarehouseId =
-    persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+  // So the warehouse saved for it is kept, by the name saved with it, and the
+  // list is read again on the next retry (resolveWarehouses, B24). It used to
+  // widen to all warehouses.
+  const { warehouses, activeWarehouseId, unread } = await resolveWarehouses(
+    orgId,
+    await loadWarehousesBounded(orgId),
+  );
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
   if (epoch !== accountEpoch()) return;
   publish({
     warehouses,
+    warehousesUnread: unread,
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
@@ -415,13 +543,16 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
 }
 
 export async function setActiveWarehouse(warehouseId: string | null): Promise<void> {
-  if (!cached.activeOrgId) return;
-  const key = WAREHOUSE_STORAGE_KEY(cached.activeOrgId);
+  const orgId = cached.activeOrgId;
+  if (!orgId) return;
+  const key = WAREHOUSE_STORAGE_KEY(orgId);
   if (warehouseId === null) {
     await AsyncStorage.removeItem(key);
   } else {
     await AsyncStorage.setItem(key, warehouseId);
   }
+  // Its name with it, so a slow load can still show it (resolveWarehouses).
+  await saveWarehouseLabel(orgId, cached.warehouses.find((w) => w.id === warehouseId) ?? null);
   const activeWarehouse = cached.warehouses.find((w) => w.id === warehouseId) ?? null;
   publish({
     activeWarehouseId: warehouseId,
@@ -455,6 +586,7 @@ export function useWorkspace(): WorkspaceState {
         activeOrgName: null,
         activeRole: null,
         warehouses: [],
+        warehousesUnread: false,
         activeWarehouseId: null,
         activeWarehouseName: null,
       });

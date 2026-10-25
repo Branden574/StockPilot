@@ -64,6 +64,15 @@ export function WorkspaceHeaderChip({ onPress }: { onPress: () => void }) {
   );
 }
 
+/**
+ * Under WAREHOUSES while the list is not one a read answered (B24): loading,
+ * or its read failed or was slow. It used to say "No warehouses in this org
+ * yet." over a list that had not loaded, and the saved warehouse, kept by its
+ * name through a slow load, would look like the organization's only one.
+ */
+export const WORKSPACE_WAREHOUSES_UNREAD_COPY =
+  'The full list of warehouses has not loaded yet. The app tries again while it is open and online.';
+
 /** Under ORGANIZATIONS while offline, when the rows cannot be tapped. */
 export const WORKSPACE_SWITCH_OFFLINE_COPY =
   "Switching organization needs a connection. It replaces this phone's offline copy of your items, " +
@@ -77,7 +86,7 @@ export function WorkspaceSwitcherSheet({
   onDismiss: () => void;
 }) {
   const { c, mode } = useTheme();
-  const { orgs, activeOrgId, warehouses, activeWarehouseId } = useWorkspace();
+  const { orgs, activeOrgId, warehouses, warehousesUnread, activeWarehouseId } = useWorkspace();
   // A switch of organization clears this phone's offline copy of the old one
   // (items, purchase orders, counts) and pulls the new one in full. Offline
   // the pull cannot start, so a tap, even by mistake, left no offline copy of
@@ -209,7 +218,11 @@ export function WorkspaceSwitcherSheet({
                       </Pressable>
                     );
                   })}
-                  {warehouses.length === 0 ? (
+                  {warehousesUnread ? (
+                    <Body size={12.5} muted>
+                      {WORKSPACE_WAREHOUSES_UNREAD_COPY}
+                    </Body>
+                  ) : warehouses.length === 0 ? (
                     <Body size={12.5} muted>
                       No warehouses in this org yet.
                     </Body>
