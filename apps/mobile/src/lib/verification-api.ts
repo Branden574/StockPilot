@@ -499,8 +499,10 @@ export function describeVerificationError(
     };
   }
   if (status === 429) {
+    // The server's per-person limit on location page reads (shared with the
+    // web page), or an edge refusal: the web page's sentence, from core.
     return {
-      detail: 'Too many requests. Wait a moment and try again.',
+      detail: verificationRefusalCopy('rate_limited', subject),
       retry: true,
       keepShown: true,
     };
