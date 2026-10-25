@@ -228,7 +228,11 @@ interface ResolvedWarehouses {
  *
  * A read that answered: its list, and the saved warehouse when it is in it,
  * else all warehouses. The saved name is brought up to date (an app that saved
- * only the id, or a renamed warehouse).
+ * only the id, or a renamed warehouse). When the saved warehouse is not in it
+ * (archived, or no longer readable), its name is cleared and its id kept: a
+ * later slow read then shows all warehouses, as this read did, instead of
+ * bringing back by its name, on every slow load for good, a warehouse this
+ * read dropped; a later read that lists it again restores it, as before.
  *
  * A read that failed or was slow (null): the saved warehouse alone, by the
  * name saved with it, and the list marked unread. It used to be an empty list,
@@ -254,6 +258,7 @@ async function resolveWarehouses(
   }
   const active = saved ? (read.find((w) => w.id === saved.id) ?? null) : null;
   if (active && active.name !== saved?.name) await saveWarehouseLabel(orgId, active);
+  else if (!active && saved?.name) await saveWarehouseLabel(orgId, null);
   return { warehouses: read, activeWarehouseId: active?.id ?? null, unread: false };
 }
 

@@ -16,6 +16,7 @@ type Published = {
   loading: boolean;
   orgs: unknown[];
   warehouses: { id: string; name: string }[];
+  warehousesUnread: boolean;
   activeWarehouseId: string | null;
   activeWarehouseName: string | null;
 };
@@ -57,6 +58,8 @@ const gate = vi.hoisted(() => ({
   holdWarehouses: null as Promise<void> | null,
   // The warehouse read answers with an error (offline: postgrest-js status 0).
   failWarehouses: false,
+  // Warehouses the read answers as archived (loadWarehouses leaves them out).
+  archived: new Set<string>(),
 }));
 vi.mock('./supabase', () => {
   const offline = {
@@ -94,9 +97,9 @@ vi.mock('./supabase', () => {
       if (gate.failWarehouses) return offline;
       return {
         data: [
-          { id: 'wh-1', name: 'Main', status: 'active' },
-          { id: 'wh-2', name: 'Annex', status: 'active' },
-        ],
+          { id: 'wh-1', name: 'Main' },
+          { id: 'wh-2', name: 'Annex' },
+        ].map((w) => ({ ...w, status: gate.archived.has(w.id) ? 'archived' : 'active' })),
         error: null,
       };
     },
@@ -138,6 +141,7 @@ afterEach(() => {
   gate.holdProfile = null;
   gate.holdWarehouses = null;
   gate.failWarehouses = false;
+  gate.archived.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -196,6 +200,7 @@ describe('a slow first load keeps the saved warehouse', () => {
       activeOrgId: 'org-b',
       activeWarehouseId: 'wh-2',
       activeWarehouseName: 'Annex',
+      warehousesUnread: false,
     });
     expect(JSON.parse(store.get(LABEL_B) ?? 'null')).toEqual({ id: 'wh-2', name: 'Annex' });
   });
@@ -208,11 +213,13 @@ describe('a slow first load keeps the saved warehouse', () => {
     const before = published.length;
     useWorkspace();
     await vi.advanceTimersByTimeAsync(15_000);
+    // Unread: the switcher says the list has not loaded, and the retry reads it.
     expect(published.at(-1)).toMatchObject({
       loading: false,
       activeOrgId: 'org-b',
       activeWarehouseId: 'wh-2',
       activeWarehouseName: 'Annex',
+      warehousesUnread: true,
     });
     expect(published.at(-1)?.warehouses).toEqual([{ id: 'wh-2', name: 'Annex' }]);
     // Never All warehouses on the way.
@@ -232,6 +239,7 @@ describe('a slow first load keeps the saved warehouse', () => {
       activeOrgId: 'org-b',
       activeWarehouseId: 'wh-2',
       activeWarehouseName: 'Annex',
+      warehousesUnread: false,
     });
     expect(published.at(-1)?.warehouses.map((w) => w.id)).toEqual(['wh-1', 'wh-2']);
     expect(published.slice(before).some((s) => s.loading)).toBe(false);
@@ -255,6 +263,8 @@ describe('a slow first load keeps the saved warehouse', () => {
       activeOrgId: 'org-b',
       activeWarehouseId: null,
       activeWarehouseName: null,
+      warehouses: [],
+      warehousesUnread: true,
     });
     expect(store.get('workspace.activeWarehouseId.org-b')).toBe('wh-2'); // untouched
 
@@ -263,6 +273,7 @@ describe('a slow first load keeps the saved warehouse', () => {
     expect(published.at(-1)).toMatchObject({
       activeWarehouseId: 'wh-2',
       activeWarehouseName: 'Annex',
+      warehousesUnread: false,
     });
     expect(JSON.parse(store.get(LABEL_B) ?? 'null')).toEqual({ id: 'wh-2', name: 'Annex' });
   });
@@ -286,12 +297,125 @@ describe('a slow first load keeps the saved warehouse', () => {
       activeOrgId: 'org-a',
       activeWarehouseId: 'wh-1',
       activeWarehouseName: 'Main',
+      warehousesUnread: true,
     });
     expect(published.at(-1)?.warehouses).toEqual([{ id: 'wh-1', name: 'Main' }]);
 
     gate.failWarehouses = false;
     await retryWorkspace();
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-a', activeWarehouseId: 'wh-1' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-a',
+      activeWarehouseId: 'wh-1',
+      warehousesUnread: false,
+    });
     expect(published.at(-1)?.warehouses.map((w) => w.id)).toEqual(['wh-1', 'wh-2']);
+  });
+
+  // While a switch reads the new organization's warehouses, the switcher says
+  // the list has not loaded instead of "No warehouses in this org yet."
+  // (workspace-switcher-unread.test.ts). Mutation caught: the switch's first
+  // publish saying the empty list was read (warehousesUnread: false).
+  it("a switch's first publish marks the new organization's list unread until its read answers", async () => {
+    store.set('workspace.activeWarehouseId.org-b', 'wh-2');
+    store.set(LABEL_B, JSON.stringify({ id: 'wh-2', name: 'Annex' }));
+    let answer!: () => void;
+    gate.holdWarehouses = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const switching = setActiveOrg('org-b');
+    try {
+      await vi.waitFor(() => expect(published.at(-1)?.activeOrgId).toBe('org-b'));
+      expect(published.at(-1)).toMatchObject({ warehouses: [], warehousesUnread: true });
+    } finally {
+      // Answered even when the check above fails: a switch left waiting would
+      // hold every later switch in the queue.
+      answer();
+      await switching;
+    }
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      warehousesUnread: false,
+      activeWarehouseId: 'wh-2',
+      activeWarehouseName: 'Annex',
+    });
+    expect(published.at(-1)?.warehouses.map((w) => w.id)).toEqual(['wh-1', 'wh-2']);
+  });
+});
+
+// A warehouse archived, or no longer readable, after it was chosen: the read
+// that answers without it shows All warehouses (as before B24). Its name, saved
+// so a slow load could show it, must go with it: a later slow or failed read
+// brought it back by that name, for good, and narrowed every list to a
+// warehouse the read had dropped (empty lists, for one the user can no longer
+// read). The saved id stays, so the warehouse comes back if a later read lists
+// it again, as it always did. Mutation caught: resolveWarehouses keeping the
+// name when a read that answered leaves the saved warehouse out.
+describe('a saved warehouse that a read no longer lists is not brought back by a slow load', () => {
+  const ID_B = 'workspace.activeWarehouseId.org-b';
+
+  it('a good read without the saved warehouse shows All warehouses and forgets its name, not its id', async () => {
+    relaunch();
+    store.set('workspace.activeOrgId', 'org-b');
+    store.set(ID_B, 'wh-2');
+    store.set(LABEL_B, JSON.stringify({ id: 'wh-2', name: 'Annex' }));
+    gate.archived.add('wh-2');
+    useWorkspace();
+    await settled();
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      warehouses: [{ id: 'wh-1', name: 'Main' }],
+      warehousesUnread: false,
+      activeWarehouseId: null,
+      activeWarehouseName: null,
+    });
+    expect(store.has(LABEL_B)).toBe(false);
+    expect(store.get(ID_B)).toBe('wh-2');
+  });
+
+  it.each(['the next', 'and every later'])(
+    '%s slow launch shows All warehouses, as the read that answered did',
+    async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      relaunch();
+      vi.useFakeTimers();
+      gate.holdWarehouses = NEVER();
+      const before = published.length;
+      useWorkspace();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(published.at(-1)).toMatchObject({
+        loading: false,
+        activeOrgId: 'org-b',
+        warehouses: [],
+        warehousesUnread: true,
+        activeWarehouseId: null,
+        activeWarehouseName: null,
+      });
+      expect(published.slice(before).some((s) => s.activeWarehouseId === 'wh-2')).toBe(false);
+    },
+  );
+
+  it('a failed read on a switch back to the organization shows All warehouses too', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    gate.holdWarehouses = null;
+    await setActiveOrg('org-a');
+    gate.failWarehouses = true;
+    await setActiveOrg('org-b');
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      warehouses: [],
+      warehousesUnread: true,
+      activeWarehouseId: null,
+    });
+  });
+
+  it('a read that lists the warehouse again brings it back, with its name saved again', async () => {
+    await retryWorkspace();
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      warehousesUnread: false,
+      activeWarehouseId: 'wh-2',
+      activeWarehouseName: 'Annex',
+    });
+    expect(JSON.parse(store.get(LABEL_B) ?? 'null')).toEqual({ id: 'wh-2', name: 'Annex' });
   });
 });
