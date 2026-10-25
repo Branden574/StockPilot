@@ -280,7 +280,11 @@ function TagDialog({
               */}
               <Input
                 type="color"
-                value={tagColor(currentColor)}
+                value={
+                  /^#[0-9a-fA-F]{6}$/.test(currentColor)
+                    ? currentColor
+                    : DEFAULT_COLOR
+                }
                 onChange={(e) => setValue('color', e.target.value)}
                 className="h-7 w-10 cursor-pointer p-0.5"
                 aria-label="Custom tag color"
