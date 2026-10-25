@@ -37,7 +37,7 @@ export const CONFIRM_LANDINGS = {
   magiclink: ['/dashboard', '/portal'],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
-export type ConfirmLandingType = keyof typeof CONFIRM_LANDINGS;
+type ConfirmLandingType = keyof typeof CONFIRM_LANDINGS;
 
 /** Where a type with no landings here goes (none today): the app's default, never `next`. */
 export const CONFIRM_FALLBACK_LANDING = '/dashboard';

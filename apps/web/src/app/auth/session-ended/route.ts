@@ -39,9 +39,10 @@ export const dynamic = 'force-dynamic';
  * of loops by construction: the dashboard only redirects here when GoTrue said
  * the session is missing, and a missing session never answers with a user. It
  * costs a sign-out only while GoTrue cannot answer, which no page can cause.
- * The app's own pages (the error screens' "Sign out and back in" link, Sec-Fetch-
- * Site same-origin), the person's own act (a typed address or a bookmark,
- * `none`) and a browser that sends no Fetch Metadata sign out as before.
+ * The app's own pages (the error screens' "Sign out and back in" link:
+ * Sec-Fetch-Site same-origin), the person's own act (a typed address or a
+ * bookmark, `none`) and a browser that sends no Fetch Metadata sign out as
+ * before.
  */
 export async function GET(request: NextRequest) {
   if (sentFromAnotherOrigin(request) && (await sessionIsLive())) {
