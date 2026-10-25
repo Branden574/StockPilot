@@ -307,11 +307,13 @@ describe('the exception is SCOPED: ordinary location creation still needs locati
 // mint_placement_location (0340) checks that the warehouse is the org's, not
 // that the caller may put stock there. Below manager, transfer_stock (0365)
 // refuses a move into a warehouse the caller does not work in, but only AFTER
-// the placement path has minted the destination: a request naming another
-// warehouse (a forged one, or a stale page) left an empty rack or crate there
-// every time. The Staging page now lets a row in the organization-level bucket
-// choose its warehouse, so the warehouse is a person's choice; the mint checks
-// it first, in the transfer's own words.
+// the placement path has minted the destination, so the refusal left an empty
+// rack or crate behind. The phone's transfer route got there with a source in
+// another warehouse (stale or hand-made: it takes a new rack's warehouse from
+// the source, and locations are readable org-wide), and the web with a viewer
+// granted stock:transfer. Staff on the web are refused earlier, by the place
+// actions' own read of the warehouse under their access. The mint now checks
+// first, in the transfer's own words.
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('findOrCreatePlacementDestination: the warehouse, before the mint (B38)', () => {
