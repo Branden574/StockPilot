@@ -17,22 +17,26 @@ export type PublicAvailability =
   /** availability_display='none' — the link shows no stock signal at all. */
   | { kind: 'none' };
 
+/**
+ * One item as the storefront draws it. The page ships the compact catalog
+ * (catalog-index.ts); the storefront expands it into these and fills in the
+ * lazy fields as /api/v1/public/catalog-thumbnails answers, a page at a time.
+ */
 export interface PublicCatalogItem {
   id: string;
   /** public_display_name when set, else the internal name. */
   displayName: string;
-  /** public_description when set; the internal description NEVER ships. */
+  /** public_description when set; the internal description NEVER ships.
+   *  Lazy: null until the item's photo page arrives. */
   publicDescription: string | null;
-  itemType: string | null;
   categoryId: string | null;
   categoryLabel: string | null;
   /**
-   * Always null in the RSC payload — signed thumbnail URLs are fetched
-   * after first paint by /api/v1/public/catalog-thumbnails (same deferred
-   * pattern as the staff picker).
+   * An external cover URL short enough to ship with the page, then the
+   * signed photo (or a longer cover) from the photo page once it arrives.
    */
   imageUrl: string | null;
-  /** Tiny base64 blur (item_images.lqip) so cards never flash a bare box. */
+  /** Tiny base64 blur (item_images.lqip). Lazy, from the item's photo page. */
   lqip: string | null;
   availability: PublicAvailability;
   /** Per-request qty cap: entry cap ?? link default ?? null (unlimited). */

@@ -9,9 +9,9 @@ import type { PublicAvailability, PublicCatalogItem } from './types';
 export type PublicItemStatus = 'ok' | 'low' | 'out';
 
 /**
- * Fixed public low-stock boundary for 'exact' links. Mirrors
- * PUBLIC_BUCKET_LOW_THRESHOLD in server/services/public-catalog.ts — the
- * org's real reorder_point is confidential and never ships to anonymous
+ * Fixed public low-stock boundary, for 'exact' links here and for 'bucket'
+ * links where the server stores a row's level (catalog-index.ts stockForRow)
+ * — the org's real reorder_point is confidential and never ships to anonymous
  * visitors, so "low" is classified against this fixed public number.
  */
 export const PUBLIC_LOW_STOCK_THRESHOLD = 5;

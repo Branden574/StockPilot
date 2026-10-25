@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import * as React from 'react';
 
-import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
+import { useCatalogPages } from '@/lib/use-catalog-thumbnails';
 
 import { CartProvider, initialCartState, useCart } from '@/components/orders/v2/cart-context';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -49,6 +49,7 @@ import { SfPopover } from '../storefront/storefront-overlays';
 
 import { PublicCartRail } from './public-cart-rail';
 import type { SubmittedState } from './public-cart-rail';
+import { publicPhotoPageUrl } from './photo-pages';
 import { PublicItemCard } from './public-item-card';
 import {
   PUBLIC_STATUS_LABELS,
@@ -158,24 +159,36 @@ function PublicOrdersV2Inner({
     window.location.assign(url.toString());
   }
 
-  // Deferred thumbnail URLs — fetched after first paint, token-gated. The
-  // hook retries with backoff so one blip doesn't blank the whole session.
-  const thumbUrls = useCatalogThumbnails(
-    `/api/v1/public/catalog-thumbnails?token=${encodeURIComponent(token)}&warehouseId=${encodeURIComponent(initialWarehouseId)}`,
-  );
+  // The photo pages — fetched after first paint, token-gated, 500 items a
+  // page (photo-pages.ts). The hook reads every page and retries with backoff,
+  // so one blip doesn't blank the whole session.
+  const pages = useCatalogPages(publicPhotoPageUrl(token, initialWarehouseId));
 
-  // Merge fetched thumbnail URLs onto the server-rendered items. The
-  // deferred fetch only FILLS items with no server-provided image (signed
-  // product photos); it never overrides an SSR cover. Covers ship in the
-  // initial payload already downsized — letting the deferred fetch replace
-  // one with the raw (larger) fallback URL would re-download the image and
-  // flicker for zero benefit.
+  // Merge each page's lazy fields onto the server-rendered items: the photo,
+  // its blur placeholder and the public description (B32: the cached catalog
+  // carries none of them). The photo only FILLS an item with no image of its
+  // own; it never overrides a cover the catalog row carries — that would
+  // re-download the image and flicker for zero benefit.
   const items = React.useMemo<PublicCatalogItem[]>(() => {
-    if (Object.keys(thumbUrls).length === 0) return rawItems;
-    return rawItems.map((it) =>
-      !it.imageUrl && thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
-    );
-  }, [rawItems, thumbUrls]);
+    const { urls, lqip, descriptions } = pages;
+    if (
+      Object.keys(urls).length === 0 &&
+      Object.keys(lqip).length === 0 &&
+      Object.keys(descriptions).length === 0
+    ) {
+      return rawItems;
+    }
+    return rawItems.map((it) => {
+      const imageUrl = it.imageUrl ?? urls[it.id] ?? null;
+      const blur = it.lqip ?? lqip[it.id] ?? null;
+      const publicDescription = it.publicDescription ?? descriptions[it.id] ?? null;
+      return imageUrl === it.imageUrl &&
+        blur === it.lqip &&
+        publicDescription === it.publicDescription
+        ? it
+        : { ...it, imageUrl, lqip: blur, publicDescription };
+    });
+  }, [rawItems, pages]);
 
   const itemMap = React.useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
 
