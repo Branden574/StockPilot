@@ -50,7 +50,7 @@ const FORBIDDEN_PHRASES = [
   'request submitted',
   'zendesk',
   'dc4 notified',
-  'andrew notified',
+  'jordan notified',
 ];
 
 function forbiddenPhraseIn(text: string): string | undefined {
@@ -84,13 +84,13 @@ describe('maintenance-requests onboarding registries (Task 23)', () => {
     );
   });
 
-  it('no announcement body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / andrew notified)', () => {
+  it('no announcement body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / jordan notified)', () => {
     for (const a of ANNOUNCEMENTS) {
       expect(forbiddenPhraseIn(a.body), `announcement "${a.id}" body: "${a.body}"`).toBeUndefined();
     }
   });
 
-  it('no tour step title or body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / andrew notified)', () => {
+  it('no tour step title or body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / jordan notified)', () => {
     for (const tour of ALL_DEFINED_TOURS) {
       for (const step of tour.steps) {
         expect(

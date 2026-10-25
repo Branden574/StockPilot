@@ -175,8 +175,8 @@ beforeEach(() => {
   listTimelineEvents.mockResolvedValue([]);
   // The real emailInput() returns { content, emailRouting } since per-org
   // email routing (migration 0337); routing resolves 'valid' with the
-  // compiled pair — the state the L4L seed produces — so every existing pin
-  // stays on pre-feature behavior.
+  // compiled sample pair, standing in for a configured org's stored routing,
+  // so every existing pin stays on pre-feature behavior.
   emailInput.mockImplementation(async (_id: string, opts: { shareUrl: string | null }) => ({
     content: {
       requestNumber: 'MR-2026-000042',

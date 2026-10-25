@@ -673,8 +673,8 @@ const { recipients: _dropped, ...CONTENT } = INPUT;
 
 describe('maintenanceRoutingFromResponse (the REST payload parser + the deploy-window rule)', () => {
   it('an ABSENT field (a pre-feature server) is the ONE fail-open state: fallback', () => {
-    // DEPLOY-ORDER SAFETY: this is byte-identical pre-feature behavior — the
-    // compiled constants — and nothing else may ever produce it.
+    // DEPLOY-ORDER SAFETY: this state composes with the compiled constants,
+    // and nothing else may ever produce it.
     expect(maintenanceRoutingFromResponse(undefined)).toEqual({ state: 'fallback' });
   });
 
@@ -740,7 +740,7 @@ describe('maintenanceEmailInputForRouting (THE matrix cell: compose input or not
     expect(prepared.draft.to).toBe('facilities-intake@acme-tenant.invalid');
   });
 
-  it("'fallback' (pre-feature server ONLY) composes with the compiled pair — byte-identical to pre-feature behavior", () => {
+  it("'fallback' (pre-feature server ONLY) composes with the compiled pair", () => {
     const input = maintenanceEmailInputForRouting(CONTENT, { state: 'fallback' });
     expect(input).not.toBeNull();
     expect(input!.recipients).toBe(L4L_MAINTENANCE_RECIPIENTS);

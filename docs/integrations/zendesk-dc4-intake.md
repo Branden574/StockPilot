@@ -6,6 +6,11 @@ that enforces it. Same-file citations use TEST NAMES rather than line
 numbers — line numbers drift the moment a neighbouring test is added, and
 this document has already outlived one such drift.
 
+Since 2026-10-25 the addresses and names below are sample stand-ins, because
+the repository is public. The customer's real intake and CC are its
+organization's stored routing (`organizations.email_routing`, seeded by
+migration 0337), not anything in this repository's code.
+
 ## Why this document exists
 
 Learn4Life's warehouse ticketing runs on Zendesk's **email intake**: mail sent

@@ -193,8 +193,8 @@ vi.mock('@/components/orders/send-delivery-request-button', () => ({
 
 const getCachedOrgTimezoneMock = vi.fn(async (_orgId: string) => 'America/Chicago');
 // Per-org email routing (migration 0337): resolves 'valid' with the compiled
-// pair by default (the L4L seed's state); individual tests override to pin
-// the hidden states.
+// sample pair by default (a configured org's state); individual tests
+// override to pin the hidden states.
 const getOrgEmailRoutingMock = vi.fn(async (_orgId: string, _feature: string) => ({
   state: 'valid' as const,
   recipients: {

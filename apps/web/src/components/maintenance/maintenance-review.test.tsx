@@ -17,8 +17,9 @@ import type { PanelPhoto } from './maintenance-photos-panel';
 
 import { MaintenanceReview } from './maintenance-review';
 
-/** The routing the L4L seed resolves to — keeps every pin below on the
- *  pre-feature behavior. The hidden states get their own describe below. */
+/** A configured org's routing (the compiled sample pair) — keeps every pin
+ *  below on the pre-feature behavior. The hidden states get their own
+ *  describe below. */
 const VALID_ROUTING: OrgEmailRoutingState = {
   state: 'valid',
   recipients: {

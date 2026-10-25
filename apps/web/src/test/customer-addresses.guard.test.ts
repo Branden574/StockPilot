@@ -155,7 +155,9 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
 
   it('still finds every allowed pair in its file', () => {
     const found = scanTrackedTree();
-    const stale = ALLOWED.filter((a) => !found.some((f) => f.file === a.file && f.sha256 === a.sha256));
+    const stale = ALLOWED.filter(
+      (a) => !found.some((f) => f.file === a.file && f.sha256 === a.sha256),
+    );
     expect(stale.map((a) => `${a.file} (${a.why})`)).toEqual([]);
   }, 60_000);
 
@@ -202,6 +204,8 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
       }
     }
     // The synthetic stand-ins are no customer domain.
-    expect(findIn('sample.txt', 'dc4@sampleorg.test cc jstone@site1.test, pat@example.org')).toEqual([]);
+    expect(
+      findIn('sample.txt', 'dc4@sampleorg.test cc jstone@site1.test, pat@example.org'),
+    ).toEqual([]);
   });
 });

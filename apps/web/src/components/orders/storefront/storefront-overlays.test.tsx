@@ -19,9 +19,9 @@ import { ReviewModal } from './storefront-overlays';
 import { DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
 
 // The routing DTO the server resolves for an org whose stored routing is
-// the compiled pair (L4L's seed) — keeps every pin below byte-identical to
-// pre-feature behavior. The hidden state (deliveryRecipients: null) gets
-// its own test at the end of this file.
+// the compiled sample pair — keeps every pin below on pre-feature behavior.
+// The hidden state (deliveryRecipients: null) gets its own test at the end
+// of this file.
 const TEST_ROUTING = {
   to: DELIVERY_REQUEST_RECIPIENTS.to,
   cc: DELIVERY_REQUEST_RECIPIENTS.cc,

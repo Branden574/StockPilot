@@ -34,8 +34,8 @@ import {
 } from '@stockpilot/core';
 
 /** The routing DTO every render below hands the component — the compiled
- *  pair (what the server resolves for L4L, whose seed preserves today's
- *  values), so every existing pin stays on pre-feature behavior. */
+ *  sample pair, standing in for what the server resolves for a configured
+ *  org, so every existing pin stays on pre-feature behavior. */
 const TEST_ROUTING = {
   to: L4L_MAINTENANCE_RECIPIENTS.to,
   cc: L4L_MAINTENANCE_RECIPIENTS.cc,

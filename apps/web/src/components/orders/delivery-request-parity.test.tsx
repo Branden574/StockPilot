@@ -128,9 +128,10 @@ vi.mock('@/components/orders/send-delivery-request-button', async (importOrigina
 
 vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: (orgId: string) => cachedOrgTimezone(orgId),
-  // Per-org routing resolves 'valid' with the compiled pair — the state the
-  // L4L seed produces, so the page renders the button exactly as before the
-  // feature. The hidden states are covered by the overlays/order-page suites.
+  // Per-org routing resolves 'valid' with the compiled sample pair, standing
+  // in for a configured org, so the page renders the button exactly as before
+  // the feature. The hidden states are covered by the overlays/order-page
+  // suites.
   getOrgEmailRouting: async () => ({
     state: 'valid',
     recipients: {

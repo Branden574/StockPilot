@@ -64,8 +64,8 @@ beforeEach(() => vi.clearAllMocks());
 // value whose addresses the assertions already name.
 const RECIPIENTS = DELIVERY_REQUEST_RECIPIENTS;
 
-// A CONFIGURED, non-L4L pair (per-org email routing, migration 0337) built
-// through the only constructor there is — used by the routing tests to prove
+// A CONFIGURED pair, not the compiled one (per-org email routing, migration
+// 0337), built through the only constructor there is — used by the routing tests to prove
 // the org's stored value actually reaches the composed URL, and that nothing
 // silently substitutes the compiled constants for it.
 const CONFIGURED = deliveryRequestRecipients({
@@ -979,9 +979,9 @@ describe('deliveryRoutingFromOrgRow', () => {
     expect(deliveryRecipientsForRouting(routing)).toBeNull();
   });
 
-  it('MUTATION PIN: unset/invalid resolve to NULL recipients, never the compiled L4L pair', () => {
+  it('MUTATION PIN: unset/invalid resolve to NULL recipients, never the compiled pair', () => {
     // A mutant that maps 'unset' or 'invalid' to the compiled constants —
-    // silently mailing another tenant's warehouse — fails here by name.
+    // composing with mailboxes the org never configured — fails here by name.
     for (const routing of [
       deliveryRoutingFromOrgRow(null),
       deliveryRoutingFromOrgRow({ email_routing: { delivery_request: { to: 'x', cc: 'y' } } }),

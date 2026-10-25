@@ -2354,7 +2354,7 @@ describe('emailInput', () => {
       });
     });
 
-    it('MUTATION KILL — UNSET: no stored routing yields state=unset, NOT the compiled L4L pair', async () => {
+    it('MUTATION KILL — UNSET: no stored routing yields state=unset, NOT the compiled pair', async () => {
       const { ctx } = build({
         'maintenance_requests.select': { data: BASE_ROW, error: null },
         'organizations.select': { data: { timezone: null, email_routing: null }, error: null },

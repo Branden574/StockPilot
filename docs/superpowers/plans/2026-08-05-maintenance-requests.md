@@ -181,17 +181,17 @@ select plan(26);
 \set requester '''10000000-0000-0000-0000-000000000001'''
 \set other_staff '''10000000-0000-0000-0000-000000000002'''
 \set mgr '''10000000-0000-0000-0000-000000000003'''
-\set andrew '''10000000-0000-0000-0000-000000000004'''
+\set jordan '''10000000-0000-0000-0000-000000000004'''
 \set outsider '''10000000-0000-0000-0000-000000000005'''
 \set org_owner '''10000000-0000-0000-0000-000000000006'''
 
 insert into auth.users (id, email) values
   (:requester, 'req@test.local'), (:other_staff, 'staff2@test.local'),
-  (:mgr, 'mgr@test.local'), (:andrew, 'jordan@test.local'), (:outsider, 'out@test.local'),
+  (:mgr, 'mgr@test.local'), (:jordan, 'jordan@test.local'), (:outsider, 'out@test.local'),
   (:org_owner, 'owner@test.local');
 insert into public.user_profiles (id, full_name) values
   (:requester, 'Req One'), (:other_staff, 'Staff Two'), (:mgr, 'Mgr Three'),
-  (:andrew, 'Jordan Stone'), (:outsider, 'Out Sider'), (:org_owner, 'Org Owner')
+  (:jordan, 'Jordan Stone'), (:outsider, 'Out Sider'), (:org_owner, 'Org Owner')
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -201,7 +201,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:org_a, :requester, 'staff',  now()),
   (:org_a, :other_staff, 'staff', now()),
   (:org_a, :mgr, 'manager', now()),
-  (:org_a, :andrew, 'viewer', now()),
+  (:org_a, :jordan, 'viewer', now()),
   (:org_a, :org_owner, 'owner', now()),
   (:org_b, :outsider, 'staff', now());
 
@@ -286,7 +286,7 @@ select is((select count(*)::int from public.maintenance_request_notes), 0, 'requ
 -- ── Jordan: viewer + per-user override grant of read_all sees everything ────
 set local role to postgres;
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
-values (:org_a, :andrew, 'maintenance_requests:read_all', true);
+values (:org_a, :jordan, 'maintenance_requests:read_all', true);
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000004';
 set local role to 'authenticated';
 select is((select count(*)::int from public.maintenance_requests), 2,

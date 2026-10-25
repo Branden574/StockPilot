@@ -319,7 +319,7 @@ describe('updateProfileNameAction', () => {
 
   it('strips bidi-override and control chars before saving', async () => {
     const result = await updateProfileNameAction({
-      fullName: 'Bran‮den',
+      fullName: 'Cars‮ten',
     });
     expect(result.ok).toBe(true);
     const args = stubHolder.stub!.chainArgs.get('user_profiles.update');

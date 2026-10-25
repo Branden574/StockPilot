@@ -150,7 +150,7 @@ const FORBIDDEN = [
   'request submitted',
   'zendesk',
   'dc4 notified',
-  'andrew notified',
+  'jordan notified',
   'general improvements',
   'various improvements',
   'bug fixes and improvements',
