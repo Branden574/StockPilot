@@ -681,8 +681,9 @@ describe('GET /api/cron/schedule-reminders', () => {
 
 /**
  * B15: each recipient's email carries their own signed one-click link, for
- * the event's organization, in List-Unsubscribe (with List-Unsubscribe-Post),
- * the footer's Unsubscribe and the text part. The signing value is a dull one
+ * the event's organization and dated with the run's UTC day, in
+ * List-Unsubscribe (with List-Unsubscribe-Post), the footer's Unsubscribe and
+ * the text part. The signing value is a dull one
  * under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts);
  * without one the email keeps the settings page (the tests above).
  */
@@ -728,11 +729,13 @@ describe('GET /api/cron/schedule-reminders — one-click unsubscribe', () => {
       [MANAGER_ID, 'manager@example.test'],
     ] as const) {
       const send = sends.find((s) => s.to === to)!;
-      const link = mintMemberUnsubscribeToken({
-        userId,
-        organizationId: ORG_ID,
-        kind: 'schedule_reminders',
-      });
+      // Dated with the run's UTC day (the clock is frozen at 2026-08-24
+      // 20:20 UTC above): the link works for 90 days.
+      const link = mintMemberUnsubscribeToken(
+        { userId, organizationId: ORG_ID, kind: 'schedule_reminders' },
+        new Date('2026-08-24T20:20:00.000Z'),
+      );
+      expect(link).toContain(`.${ORG_ID}.20260824.`);
       const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
       expect(send.headers).toEqual({
         'List-Unsubscribe': `<${url}>`,

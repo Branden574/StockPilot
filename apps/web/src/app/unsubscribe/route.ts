@@ -3,7 +3,11 @@ import { createHash } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { clientIpFromRequest } from '@/lib/client-ip';
-import { verifyMemberUnsubscribeToken, type MemberEmailKind } from '@/lib/email/member-unsubscribe';
+import {
+  MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS,
+  verifyMemberUnsubscribeToken,
+  type MemberEmailKind,
+} from '@/lib/email/member-unsubscribe';
 import {
   normalizeUnsubscribeEmail,
   verifyUnsubscribeToken,
@@ -25,13 +29,17 @@ export const dynamic = 'force-dynamic';
  *     from unsubscribing arbitrary addresses, and the opt-out lands in
  *     public_email_unsubscribes.
  *   - member emails (the weekly digest and its preview, schedule
- *     reminders; B15) — `/unsubscribe?m=<kind>.<user>.<org>.<hmac>`
+ *     reminders; B15) — `/unsubscribe?m=<kind>.<user>.<org>.<day>.<hmac>`
  *     (lib/email/member-unsubscribe.ts). The opt-out is the member's own
  *     switch on the Notifications page
  *     (services/member-email-unsubscribe.ts), honoured only while the
  *     member still belongs to the organization the link names. Every
  *     refusal — a changed link, an unknown kind, a removed member — is the
- *     same page, so a link says nothing about the account behind it.
+ *     same page, so a link says nothing about the account behind it. A
+ *     correctly signed link more than 90 days past the day its email was
+ *     built gets a "too old" page instead, on GET and POST, before any
+ *     database or limiter call: only the link is judged, so that page says
+ *     nothing about the account either.
  *
  * Both live OUTSIDE the login wall (the proxy does not match this path, and
  * nothing here reads a session): a member reading the email signed out, and
@@ -181,32 +189,55 @@ function memberInvalidPage(): NextResponse {
   );
 }
 
-/** Copy per kind: what the switch is, in the Notifications page's words. */
+/**
+ * Copy per kind: what the switch is, in the Notifications page's words.
+ *
+ * Both switches are account settings (user_profiles.email_digest_optin,
+ * notification_preferences.email_schedule_reminders, one row per account), so
+ * the confirm page and the done page both say the email stops for every
+ * workspace and where to turn it back on (integrator decision 2). The confirm
+ * page never says "your account": the link works with no sign-in, so its
+ * reader may be someone the email was forwarded to, and it says so.
+ */
 const MEMBER_COPY: Record<
   MemberEmailKind,
-  { confirmHeading: string; confirmLead: string; doneBody: string }
+  { confirmHeading: string; confirmLead: string; doneBody: string; expiredBody: string }
 > = {
   weekly_digest: {
     confirmHeading: 'Unsubscribe from the weekly digest?',
     confirmLead:
-      "You'll stop getting the weekly inventory digest email. This is a setting on your " +
-      'StockPilot account, so it stops the digest from every workspace you belong to.',
+      'This stops the weekly inventory digest email for the StockPilot account this email ' +
+      "was sent to. It's an account setting, so the digest stops for every workspace the " +
+      'account belongs to. To get it again, sign in and open Settings, then Notifications.',
     doneBody:
-      "You won't get the weekly inventory digest anymore. To turn it back on, sign in to " +
-      'StockPilot and open Settings, then Notifications.',
+      'The weekly inventory digest is off for your account now, in every workspace you ' +
+      'belong to. To turn it back on, sign in to StockPilot and open Settings, then ' +
+      'Notifications.',
+    expiredBody:
+      `Unsubscribe links work for ${MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS} days after the email is ` +
+      'sent, so this one changed nothing. To stop the weekly inventory digest, use the ' +
+      'Unsubscribe link in a newer digest, or sign in and open Settings, then Notifications.',
   },
   schedule_reminders: {
     confirmHeading: 'Unsubscribe from schedule reminder emails?',
     confirmLead:
-      "You'll stop getting the emails sent 24 hours and 1 hour before scheduled events. " +
-      "Reminders in the app and on your phone don't change. This is a setting on your " +
-      'StockPilot account, so it covers every workspace you belong to.',
+      'This stops the emails sent 24 hours and 1 hour before scheduled events, for the ' +
+      "StockPilot account this email was sent to. Reminders in the app and on the phone don't " +
+      "change. It's an account setting, so the emails stop for every workspace the account " +
+      'belongs to. To get them again, sign in and open Settings, then Notifications.',
     doneBody:
-      "You won't get schedule reminder emails anymore. Reminders in the app and on your " +
-      'phone still arrive. To turn the emails back on, sign in to StockPilot and open ' +
-      'Settings, then Notifications.',
+      'Schedule reminder emails are off for your account now, in every workspace you belong ' +
+      'to. Reminders in the app and on your phone still arrive. To turn the emails back on, ' +
+      'sign in to StockPilot and open Settings, then Notifications.',
+    expiredBody:
+      `Unsubscribe links work for ${MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS} days after the email is ` +
+      'sent, so this one changed nothing. To stop schedule reminder emails, use the ' +
+      'Unsubscribe link in a newer reminder, or sign in and open Settings, then Notifications.',
   },
 };
+
+/** For the reader of a forwarded email: the link acts for the member it was sent to. */
+const FORWARDED_NOTE = "If someone forwarded this email to you, it's their account, not yours.";
 
 function memberConfirmPage(link: string, kind: MemberEmailKind): NextResponse {
   const copy = MEMBER_COPY[kind];
@@ -214,6 +245,9 @@ function memberConfirmPage(link: string, kind: MemberEmailKind): NextResponse {
     copy.confirmHeading,
     `<p class="lead">
       ${escapeHtml(copy.confirmLead)}
+    </p>
+    <p class="lead">
+      ${escapeHtml(FORWARDED_NOTE)}
     </p>
     <form method="post" action="/unsubscribe">
       <input type="hidden" name="m" value="${escapeHtml(link)}">
@@ -232,6 +266,24 @@ function memberDonePage(kind: MemberEmailKind): NextResponse {
       ${escapeHtml(MEMBER_COPY[kind].doneBody)}
     </p>`,
     200,
+  );
+}
+
+/**
+ * A correctly signed link past its 90 days (integrator decision 1). It
+ * changes nothing and is answered from the link alone, with no database or
+ * limiter call. 410: the link is gone for good, and a one-click provider must
+ * not count it done. Every email carries a fresh link, and the settings page
+ * always works.
+ */
+function memberExpiredPage(kind: MemberEmailKind): NextResponse {
+  return htmlPage(
+    'This link is too old',
+    `<p class="lead">
+      ${escapeHtml(MEMBER_COPY[kind].expiredBody)}
+    </p>
+    <p><a href="${SETTINGS_PATH}">Open notification settings</a></p>`,
+    410,
   );
 }
 
@@ -282,11 +334,13 @@ function formString(form: FormData | null, name: string): string | null {
 }
 
 async function memberPost(request: NextRequest, link: string): Promise<NextResponse> {
-  // Pure computation first: a forged link never reaches the limiter or the
-  // database.
-  const claim = verifyMemberUnsubscribeToken(link);
+  // Pure computation first: a forged or expired link never reaches the
+  // limiter or the database.
+  const verdict = verifyMemberUnsubscribeToken(link);
   // Non-2xx tells a one-click provider the unsubscribe did NOT happen.
-  if (!claim) return memberInvalidPage();
+  if (verdict.status === 'expired') return memberExpiredPage(verdict.kind);
+  if (verdict.status !== 'valid') return memberInvalidPage();
+  const { claim } = verdict;
 
   const ip = clientIpFromRequest(request);
   const limited = await postRateLimited(link, ip);
@@ -325,8 +379,10 @@ export async function GET(request: NextRequest) {
   const link = searchParams.get('m');
   if (link !== null) {
     // Verification is pure computation — GET never touches the database.
-    const claim = verifyMemberUnsubscribeToken(link);
-    return claim ? memberConfirmPage(link, claim.kind) : memberInvalidPage();
+    const verdict = verifyMemberUnsubscribeToken(link);
+    if (verdict.status === 'valid') return memberConfirmPage(link, verdict.claim.kind);
+    if (verdict.status === 'expired') return memberExpiredPage(verdict.kind);
+    return memberInvalidPage();
   }
 
   const email = searchParams.get('e');

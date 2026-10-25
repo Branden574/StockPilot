@@ -109,8 +109,9 @@ describe('sendDigestPreviewAction', () => {
 
 /**
  * B15: the preview carries the Monday email's unsubscribe, a signed one-click
- * link for the caller in the workspace they sent it from, instead of the
- * settings page behind sign-in. The signing value is a dull one under a
+ * link for the caller in the workspace they sent it from, dated with today's
+ * UTC day (it works for 90 days), instead of the settings page behind
+ * sign-in. The signing value is a dull one under a
  * neutral name (src/test/secret-shaped-fixtures.guard.test.ts).
  */
 describe('sendDigestPreviewAction: one-click unsubscribe', () => {
@@ -137,15 +138,18 @@ describe('sendDigestPreviewAction: one-click unsubscribe', () => {
     delete signable.UNSUBSCRIBE_SECRET;
   });
 
-  it("names the caller and the caller's workspace, and advertises the one-click POST", async () => {
+  it("names the caller and the caller's workspace, dated today, and advertises the one-click POST", async () => {
     signable.UNSUBSCRIBE_SECRET = PREVIEW_SIGNING_VALUE;
+    // 7 PM on Oct 13 in Sydney is still Oct 13 in UTC (08:00).
+    const sentAt = new Date('2026-10-13T08:00:00.000Z');
+    vi.setSystemTime(sentAt);
     const res = await sendDigestPreviewAction();
     expect(res.ok).toBe(true);
-    const link = mintMemberUnsubscribeToken({
-      userId: MEMBER,
-      organizationId: ORG,
-      kind: 'weekly_digest',
-    });
+    const link = mintMemberUnsubscribeToken(
+      { userId: MEMBER, organizationId: ORG, kind: 'weekly_digest' },
+      sentAt,
+    );
+    expect(link).toContain(`.${ORG}.20261013.`);
     const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
     expect(sent().headers).toEqual({
       'List-Unsubscribe': `<${url}>`,

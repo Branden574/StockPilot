@@ -540,12 +540,15 @@ describe('GET /api/cron/weekly-digest — overdue in the organization zone', () 
 
 /**
  * B15: each digest carries the recipient's own signed one-click link for the
- * organization it is about, in List-Unsubscribe (with List-Unsubscribe-Post)
- * and as the footer's and the text part's Unsubscribe. The signing value is a
- * dull one under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts);
- * without one the digest keeps the settings page.
+ * organization it is about, dated with the run's UTC day (it works for 90
+ * days), in List-Unsubscribe (with List-Unsubscribe-Post) and as the footer's
+ * and the text part's Unsubscribe. The signing value is a dull one under a
+ * neutral name (src/test/secret-shaped-fixtures.guard.test.ts); without one
+ * the digest keeps the settings page.
  */
 describe('GET /api/cron/weekly-digest — one-click unsubscribe', () => {
+  // Monday 7 AM in Los Angeles; the run's UTC day is Oct 26.
+  const RUN_AT = new Date('2026-10-26T14:00:00.000Z');
   const DIGEST_SIGNING_VALUE = 'digest-cron-' + 'v'.repeat(22);
   const ORG_ID = '00000000-0000-4000-8000-00000000c0c0';
   const USER_ID = '00000000-0000-4000-8000-0000000000a1';
@@ -573,22 +576,27 @@ describe('GET /api/cron/weekly-digest — one-click unsubscribe', () => {
     });
   }
 
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(RUN_AT);
+  });
   afterEach(() => {
+    vi.useRealTimers();
     delete signable.UNSUBSCRIBE_SECRET;
   });
 
-  it("names the recipient and the digest's organization, with one-click", async () => {
+  it("names the recipient and the digest's organization, dated the run's day, with one-click", async () => {
     signable.UNSUBSCRIBE_SECRET = DIGEST_SIGNING_VALUE;
     adminHolder.client = stubOneRecipient().client;
     const digest = await import('@/lib/email/es/families/digest');
 
     await GET(buildRequest('Bearer test-cron-secret'));
 
-    const link = mintMemberUnsubscribeToken({
-      userId: USER_ID,
-      organizationId: ORG_ID,
-      kind: 'weekly_digest',
-    });
+    const link = mintMemberUnsubscribeToken(
+      { userId: USER_ID, organizationId: ORG_ID, kind: 'weekly_digest' },
+      RUN_AT,
+    );
+    expect(link).toContain(`.${ORG_ID}.20261026.`);
     const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0]![0].headers).toEqual({

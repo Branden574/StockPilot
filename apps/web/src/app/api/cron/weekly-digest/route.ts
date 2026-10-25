@@ -360,10 +360,12 @@ export async function GET(req: Request) {
           // provider's RFC 8058 POST by turning off this member's
           // email_digest_optin, the settings page's own switch. Without a
           // signing value it is the settings page, with no -Post header.
+          // Dated with the run's UTC day: the link works for 90 days.
           const unsubscribe = memberUnsubscribeDelivery({
             appUrl,
             settingsUrl,
             claim: { userId, organizationId: orgId, kind: 'weekly_digest' },
+            issuedAt: runStartedAt,
           });
           const html = renderWeeklyDigestHtml(payload, {
             ...opts,

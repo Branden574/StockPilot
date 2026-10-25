@@ -126,7 +126,11 @@ import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 import { POST } from './route';
 
 function oneClick(kind: 'weekly_digest' | 'schedule_reminders') {
-  const link = mintMemberUnsubscribeToken({ userId: MEMBER, organizationId: ORG, kind })!;
+  // Built just now, as the cron would: well inside its 90 days.
+  const link = mintMemberUnsubscribeToken(
+    { userId: MEMBER, organizationId: ORG, kind },
+    new Date(),
+  )!;
   return new Request(`https://test.local/unsubscribe?m=${link}`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },

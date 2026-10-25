@@ -103,11 +103,13 @@ export async function sendDigestPreviewAction() {
   // signed one-click link that works signed out, with its List-Unsubscribe
   // and List-Unsubscribe-Post headers (the settings page, without the POST
   // header, when no link can be signed). Same as the cron, so a preview
-  // behaves in the inbox as the real email does.
+  // behaves in the inbox as the real email does; dated today (UTC), it
+  // works for 90 days.
   const unsubscribe = memberUnsubscribeDelivery({
     appUrl,
     settingsUrl,
     claim: { userId: ctx.userId, organizationId: ctx.organizationId, kind: 'weekly_digest' },
+    issuedAt: new Date(),
   });
   const opts = {
     orgName: ctx.organizationName,

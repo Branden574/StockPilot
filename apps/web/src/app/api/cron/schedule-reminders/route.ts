@@ -402,6 +402,7 @@ export async function GET(req: Request) {
         if (email && wantsEmail) {
           // This recipient's own link, for the event's organization: it
           // turns off their schedule reminder emails and nobody else's.
+          // Dated with the run's UTC day: the link works for 90 days.
           const unsubscribe = memberUnsubscribeDelivery({
             appUrl,
             settingsUrl,
@@ -410,6 +411,7 @@ export async function GET(req: Request) {
               organizationId: ev.organization_id,
               kind: 'schedule_reminders',
             },
+            issuedAt: new Date(now),
           });
           const params: ScheduleReminderParams = {
             ...sharedParams,
