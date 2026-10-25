@@ -77,6 +77,11 @@ export interface PlatformOrgSummary {
   slug: string;
   industry: string | null;
   createdAt: string;
+  /**
+   * The organization's stored zone (organizations.timezone), so the directory
+   * prints its Created day in that zone, not the server's (B9).
+   */
+  timezone: string | null;
   effective: EffectivePlan;
   /** Raw billing-arrangement label as stored (for badges). */
   billingArrangement: string;
@@ -101,7 +106,7 @@ export async function listOrgsForPlatform(
   let q = admin
     .from('organizations')
     .select(
-      'id, name, slug, industry, created_at, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+      'id, name, slug, industry, timezone, created_at, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
     )
     .order('created_at', { ascending: false })
     .limit(LIMIT + 1);
@@ -157,6 +162,7 @@ export async function listOrgsForPlatform(
       slug: r.slug as string,
       industry: (r.industry as string | null) ?? null,
       createdAt: r.created_at as string,
+      timezone: (r.timezone as string | null) ?? null,
       effective: resolveEffectivePlan(
         {
           plan: (r.plan as string | null) ?? null,

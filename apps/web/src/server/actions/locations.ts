@@ -15,11 +15,26 @@ import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
+/**
+ * The same boundary as actions/inventory.ts. A ServiceError's `details` is
+ * app-authored structured metadata and goes to the page: the archive stock
+ * guard's `locationHoldsStock` is what makes the Archive dialog offer "Archive
+ * anyway" (locations-manager.tsx), and dropping it left only a toast. Never
+ * for an internal_error, whose detail is raw database text (S13). Anything
+ * that is not a ServiceError is logged here and answered with a generic
+ * message, never its own text.
+ */
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
+  if (error instanceof ServiceError) {
+    return err(
+      error.code,
+      error.message,
+      error.code === 'internal_error' ? undefined : error.details,
+    );
+  }
   console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return err('internal_error', 'Something went wrong. Please try again.');
 }
 
 export async function createLocationAction(input: CreateLocationInput): Promise<ActionResult<{ id: string }>> {

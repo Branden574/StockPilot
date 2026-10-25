@@ -285,9 +285,34 @@ The rate limiter itself is the Postgres atomic counter added in migration 0048,
 whose `increment_rate_limit` function was closed to anon by 0318 — see
 `supabase/tests/0318_secdef_grants.test.sql`.
 
+A cookie-authenticated write that a browser did not send from this origin is
+refused (anti-CSRF on route handlers, INV-E5), and so is one that carries neither
+`Origin` nor `Sec-Fetch-Site` (fail closed): `withApiContext` answers it as
+signed out before the session is read, and a sweep holds every route that can
+write to that rule or to a reviewed exemption.
+
+A `GET` that spends something of the person's is refused when another origin's
+page made the browser send it: `/auth/session-ended` then clears only a session
+that is already gone, and an export is answered 403 before the per-user export
+budget, its audit row and its alert. The emailed-link page names the account the
+browser is already signed in as, and each link type lands on a fixed page.
+
+_Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
+`apps/web/src/lib/auth/api-context.cross-site.test.ts`,
+`apps/web/src/test/cookie-write-routes.guard.test.ts`,
+`apps/web/src/app/auth/session-ended/route.test.ts`,
+`apps/web/src/lib/export-rate-limit.test.ts`,
+`apps/web/src/app/api/export-routes.limit-order.test.ts`,
+`apps/web/src/lib/auth/confirm-landing.test.ts`.
+
 _Gap_: no generic sweep asserting that **every** route is gated — coverage is
-per-route. A sweep over the cron routes specifically is feasible and is listed as a
-follow-up in the [`README`](README.md). No formal API schema or contract test.
+per-route (the INV-E5 sweep checks only that a write route reaches
+`withApiContext`, not what it permits). A sweep over the cron routes specifically
+is feasible and is listed as a follow-up in the [`README`](README.md). No formal API
+schema or contract test. A cookie `GET` another origin's page made as an image,
+script or frame is still answered (only its per-minute read limit is spent), and
+an emailed sign-in link still signs a signed-out browser in to the link's account
+when its person presses on (INV-E5, "Not covered").
 
 ### V14 — Configuration — **Partial**
 

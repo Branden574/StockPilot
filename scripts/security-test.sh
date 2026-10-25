@@ -867,6 +867,28 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
+  # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
+  # Origin names another host, or when neither header is present),
+  # withApiContext's cookie path refusing it before the session is read, the
+  # sweep that holds every route that can write to it or to a reviewed
+  # exemption (and every gate call to its own request), and two routes end to
+  # end through Next's route module. auth/confirm/route.test.ts below carries
+  # the login-CSRF half (a confirmation link posted from another site never
+  # signs this browser in; a browser sent there by another site is told which
+  # account it is signed in as). The GETs that spend something of the
+  # person's: another origin's page cannot end a live session
+  # (auth/session-ended) or spend the export budget (export-rate-limit, and
+  # export-routes.limit-order below holds every export route to it), and a
+  # confirmation link lands where its type says (confirm-landing).
+  src/lib/auth/cross-site-request.test.ts
+  src/lib/auth/api-context.cross-site.test.ts
+  src/test/cookie-write-routes.guard.test.ts
+  'src/app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.cross-site.test.ts'
+  src/app/api/v1/me/release-state/route.cross-site.test.ts
+  src/app/auth/session-ended/route.test.ts
+  src/lib/export-rate-limit.test.ts
+  src/lib/auth/confirm-landing.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts
@@ -919,6 +941,13 @@ WEB_TESTS=(
   # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
   # COOP, CORP. Asserted as properties, not as the literal strings.
   src/test/security-headers.test.ts
+  # D1 (Supabase stops default grants on 2026-10-30): a migration from 0402 on
+  # decides, in the same file, what anon, authenticated and service_role get
+  # on each public table, view and sequence it creates, a no-access object by
+  # an explicit REVOKE; a schema-wide grant never counts, and a schema-wide
+  # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
+  # the file on its own.
+  src/test/migration-grants.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
@@ -939,6 +968,11 @@ WEB_TESTS=(
   # every other refusal keeps its words and its reason. The file carries the
   # "Security invariant" marker.
   src/server/actions/restore-points.test.ts
+  # Duplicate (2026-10-24): an internal failure gets fixed words and no
+  # details, never the raw exception text; every other refusal keeps its
+  # details (the new-rack question rides them). The file carries the
+  # "Security invariant" marker.
+  src/server/actions/duplicate-item.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1250,6 +1284,21 @@ WEB_TESTS=(
   src/components/portal/portal-shop.test.tsx
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
+
+  # One-click unsubscribe in member emails (B15): a link names one member, one
+  # organization and one email kind under an HMAC keyed on UNSUBSCRIBE_SECRET,
+  # domain-separated from the address links; a changed part, an unknown kind,
+  # a malformed link and an unset signing value are all refused. GET changes
+  # nothing and touches no database. POST is rate limited per link (its hash)
+  # and per address after the signature check, failing closed; it is honoured
+  # only for an accepted, non-act-as member of the organization the link names,
+  # and every refusal (a removed member included) is the same page. It turns
+  # off exactly the switch the signed-in Notifications page shows, for that
+  # member only, through the page's own write.
+  src/lib/email/member-unsubscribe.test.ts
+  src/server/services/member-email-unsubscribe.test.ts
+  src/app/unsubscribe/route.members.test.ts
+  src/app/unsubscribe/route.settings-parity.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

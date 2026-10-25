@@ -24,6 +24,8 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+import { setDefaultLocale } from '@/test/hydration';
+
 import { PoReceiveDialog } from './po-receive-dialog';
 import type { SizeRunGroup } from './size-run-receive-grid';
 
@@ -331,5 +333,25 @@ describe('PoReceiveDialog — a failed post must be visible INSIDE the dialog', 
 
     resolveSecond?.({ ok: true, data: { receiptNumber: 'RC-9' } });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+// B9: the lot panel printed `sum.toLocaleString()`, the BROWSER's locale, so a
+// German browser read "0 / 1.500" beside a quantity box that says 1500 and a
+// page that writes "1,500" everywhere else.
+describe('PoReceiveDialog lot capture figures', () => {
+  it('prints the lot total and the required quantity in the app format in a German browser', async () => {
+    const restore = setDefaultLocale('de-DE');
+    try {
+      const user = await openDialog([
+        line({ id: 'a', quantityOrdered: 2000, trackingType: 'lot' }),
+      ]);
+      await user.type(screen.getAllByRole('spinbutton')[0]!, '1500');
+      const header = screen.getByText('Lot capture').parentElement!;
+      expect(header).toHaveTextContent('0 / 1,500');
+      expect(screen.getByRole('button', { name: 'Single lot of 1,500' })).toBeInTheDocument();
+    } finally {
+      restore();
+    }
   });
 });

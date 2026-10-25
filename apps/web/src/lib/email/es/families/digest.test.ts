@@ -302,11 +302,17 @@ describe('weekly digest — full payload', () => {
     expect(html).toContain('Five bars rise');
   });
 
-  it('uses the pref footer with the digest archetype short note', () => {
+  it('uses the pref footer with a short note that says the unsubscribe covers every workspace', () => {
     expect(html).toContain('>Manage email preferences</a>');
     expect(html).toContain('>Unsubscribe</a>');
     expect(html).toContain('workspace members who opted in — Mondays at 7:00 AM PDT.');
-    expect(html).toContain('Unsubscribing stops this notification type only.');
+    // B15 (integrator decision 2): the digest switch is an account setting,
+    // and Gmail's own Unsubscribe button posts without showing our confirm
+    // page, so the email itself says the digest stops in every workspace.
+    expect(html).toContain(
+      'Unsubscribing stops the weekly digest only, in every workspace you belong to.',
+    );
+    expect(html).not.toContain('Unsubscribing stops this notification type only.');
     // The digest archetype SHORTENS the pref boilerplate — the long
     // variant must not appear.
     expect(html).not.toContain('security and account emails still arrive');
@@ -490,5 +496,42 @@ describe('plain-text part (unchanged from the legacy renderer)', () => {
     // No number: no made-up reference, and never the old "Unassigned".
     expect(text).toMatch(/\n {2}\d+\/\d+\/\d+ · All warehouses · /);
     expect(text).not.toContain('Unassigned');
+  });
+});
+
+/**
+ * B15: the footer's Unsubscribe (and the text part) carry the sender's signed
+ * one-click link when there is one; "Manage email preferences" stays the
+ * settings page. Without one, both keep the settings page, as before.
+ */
+describe('the unsubscribe link', () => {
+  const LINK = 'https://app.test/unsubscribe?m=weekly_digest.example';
+  const footerHref = (html: string, label: string) =>
+    html.match(new RegExp(`<a class="ink2" href="([^"]*)"[^>]*>${label}</a>`))?.[1];
+
+  it('points the footer Unsubscribe at the signed link and keeps Manage on the settings page', () => {
+    const html = renderWeeklyDigestHtml(fullPayload(), { ...OPTS, unsubscribeUrl: LINK });
+    expect(footerHref(html, 'Unsubscribe')).toBe(LINK);
+    expect(footerHref(html, 'Manage email preferences')).toBe(OPTS.settingsUrl);
+  });
+
+  it('keeps both on the settings page when the sender has no signed link', () => {
+    const html = renderWeeklyDigestHtml(fullPayload(), OPTS);
+    expect(footerHref(html, 'Unsubscribe')).toBe(OPTS.settingsUrl);
+    expect(footerHref(html, 'Manage email preferences')).toBe(OPTS.settingsUrl);
+  });
+
+  it('gives the text part an Unsubscribe line only for a signed link', () => {
+    const textOpts = { orgName: OPTS.orgName, appUrl: OPTS.appUrl, settingsUrl: OPTS.settingsUrl };
+    const signed = weeklyDigestText(fullPayload(), { ...textOpts, unsubscribeUrl: LINK });
+    expect(signed).toContain(`Manage preferences: ${OPTS.settingsUrl}`);
+    expect(signed.endsWith(`Unsubscribe: ${LINK}`)).toBe(true);
+    for (const text of [
+      weeklyDigestText(fullPayload(), textOpts),
+      weeklyDigestText(fullPayload(), { ...textOpts, unsubscribeUrl: OPTS.settingsUrl }),
+    ]) {
+      expect(text).not.toContain('Unsubscribe:');
+      expect(text.endsWith(`Manage preferences: ${OPTS.settingsUrl}`)).toBe(true);
+    }
   });
 });
