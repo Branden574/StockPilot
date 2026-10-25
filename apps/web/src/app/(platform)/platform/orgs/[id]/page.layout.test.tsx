@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * One organization seen from the console, redesigned (P5.3). The audit and
@@ -282,5 +282,73 @@ describe('platform org detail — preview tables', () => {
     }
     const pill = within(region).getByText('Disabled');
     expect(pill.getAttribute('title')).toMatch(/^Disabled /);
+  });
+});
+
+/**
+ * B9: these tabs render on the server (UTC on Vercel), and each date below was
+ * a bare toLocaleDateString() or toLocaleString(): the server's day, with no
+ * zone named. An organization's dates are now its own zone's.
+ */
+describe("platform org detail — dates in the organization's zone", () => {
+  // 6:30 PM Pacific on 24 Oct is 01:30 UTC on 25 Oct.
+  const EVENING = '2026-10-25T01:30:00Z';
+  const originalTz = process.env.TZ;
+  beforeEach(() => {
+    process.env.TZ = 'UTC';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-15T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it('Overview: Created is the day it was created there', async () => {
+    h.overview = { ...h.overview!, createdAt: EVENING };
+    await renderTab('overview');
+    expect(screen.getByText('Created', { selector: 'dt' }).nextElementSibling).toHaveTextContent(
+      /^24 Oct 2026$/,
+    );
+  });
+
+  it("Users: Joined and a month-old Last active are the organization's days, and Disabled names its zone", async () => {
+    h.members = [
+      {
+        userId: 'u-1',
+        email: 'ada@acme.test',
+        fullName: 'Ada',
+        role: 'staff',
+        joinedAt: EVENING,
+        disabledAt: EVENING,
+        lastSignInAt: EVENING,
+        lastSessionAt: null,
+        lastActionAt: null,
+        lastSeenAt: null,
+      },
+    ];
+    await renderTab('users');
+    const region = screen.getByRole('region', { name: 'Members' });
+    const row = within(region).getByText('ada@acme.test').closest('tr')!;
+    expect(row.querySelectorAll('td')[2]).toHaveTextContent(/^24 Oct 2026$/);
+    expect(within(row).getByText('Signed in 24 Oct 2026')).toBeInTheDocument();
+    expect(within(row).getByText('Disabled')).toHaveAttribute(
+      'title',
+      'Disabled 24 Oct 2026, 18:30 PDT',
+    );
+    expect(within(region).getByRole('columnheader', { name: 'Joined' })).toHaveAttribute(
+      'title',
+      "In this organization's time zone (America/Los_Angeles).",
+    );
+  });
+
+  it('Orders: Created is the day the order was placed there', async () => {
+    h.orders = [{ id: 'abcdef12-3456', status: 'pending', requester: 'Ada', createdAt: EVENING }];
+    await renderTab('orders');
+    const region = screen.getByRole('region', { name: 'Orders' });
+    expect(within(region).getByText('abcdef12').closest('tr')!.lastElementChild).toHaveTextContent(
+      /^24 Oct 2026$/,
+    );
   });
 });

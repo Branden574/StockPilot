@@ -21,6 +21,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
 import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { cn } from '@/lib/utils';
+import { formatDayInZone, formatMomentInZone } from '@/lib/platform/dates';
 import {
   describeLastActive,
   formatLastActive,
@@ -36,6 +37,8 @@ import {
   getOrgOverview,
   type PlatformOrgMember,
 } from '@/server/services/platform/orgs';
+
+import { resolveOrgTimezone } from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
@@ -175,8 +178,9 @@ export default async function PlatformOrgDetailPage({
             orgId: id,
             search,
             page: Number.isFinite(usersPage) ? usersPage : 1,
+            timeZone: overview.timezone,
           }))}
-        {tab === 'orders' && (await OrdersTab({ orgId: id }))}
+        {tab === 'orders' && (await OrdersTab({ orgId: id, timeZone: overview.timezone }))}
         {tab === 'billing' && (await BillingTab({ orgId: id }))}
       </div>
 
@@ -213,7 +217,7 @@ function OverviewTab({
       <DetailSection flush className="max-w-2xl">
         <KeyValueList>
           <KeyValueRow label="Created">
-            {new Date(overview.createdAt).toLocaleDateString()}
+            {formatDayInZone(overview.createdAt, overview.timezone)}
           </KeyValueRow>
           <KeyValueRow label="Timezone">{overview.timezone ?? '—'}</KeyValueRow>
           <KeyValueRow label="Currency">{overview.currency ?? '—'}</KeyValueRow>
@@ -280,10 +284,13 @@ async function UsersTab({
   orgId,
   search,
   page,
+  timeZone,
 }: {
   orgId: string;
   search: string | null;
   page: number;
+  /** The organization's stored zone: its members' dates are printed in it. */
+  timeZone: string | null;
 }) {
   const result = await getOrgMembers(orgId, { search, page });
   const { members, total, pageSize, pageCount } = result;
@@ -332,7 +339,11 @@ async function UsersTab({
           title={result.search ? `No members match “${result.search}”.` : 'No members.'}
         />
       ) : (
-        <MembersTable members={members} activityAvailable={result.activityAvailable !== false} />
+        <MembersTable
+          members={members}
+          activityAvailable={result.activityAvailable !== false}
+          timeZone={timeZone}
+        />
       )}
 
       {/*
@@ -406,10 +417,12 @@ function LastActiveCell({
   member,
   available,
   now,
+  timeZone,
 }: {
   member: PlatformOrgMember;
   available: boolean;
   now: Date;
+  timeZone: string | null;
 }) {
   if (!available) {
     return (
@@ -427,7 +440,7 @@ function LastActiveCell({
       </span>
     );
   }
-  const label = formatLastActive(resolved.at, now);
+  const label = formatLastActive(resolved.at, now, timeZone);
   if (resolved.floor) {
     return (
       <span className="text-muted-foreground" title={title}>
@@ -452,12 +465,18 @@ const ACTIONS_CELL = 'bg-card sticky right-0 max-lg:border-l max-lg:border-borde
 function MembersTable({
   members,
   activityAvailable,
+  timeZone,
 }: {
   members: PlatformOrgMember[];
   activityAvailable: boolean;
+  timeZone: string | null;
 }) {
   // One clock read per render, so every row on the page ages from the same instant.
   const now = new Date();
+  // This page renders on the server, so a bare toLocaleDateString() printed
+  // the server's day (UTC) with no zone named, and an evening join in the
+  // Pacific read as the next day (B9). Members' dates are the organization's.
+  const zoneNote = `In this organization's time zone (${resolveOrgTimezone(timeZone)}).`;
   return (
     <div className="flex flex-col gap-2">
       {!activityAvailable ? (
@@ -473,7 +492,7 @@ function MembersTable({
           <TableRow className="hover:bg-transparent">
             <TableHead>User</TableHead>
             <TableHead>Role</TableHead>
-            <TableHead>Joined</TableHead>
+            <TableHead title={zoneNote}>Joined</TableHead>
             <TableHead title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization.">
               Last active
             </TableHead>
@@ -492,7 +511,7 @@ function MembersTable({
                   {m.disabledAt ? (
                     <Badge
                       variant="destructive"
-                      title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
+                      title={`Disabled ${formatMomentInZone(m.disabledAt, timeZone)}`}
                     >
                       Disabled
                     </Badge>
@@ -501,10 +520,15 @@ function MembersTable({
               </TableCell>
               <TableCell className="text-ink-2">{m.role}</TableCell>
               <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
+                {formatDayInZone(m.joinedAt, timeZone)}
               </TableCell>
               <TableCell className="text-[12.5px]">
-                <LastActiveCell member={m} available={activityAvailable} now={now} />
+                <LastActiveCell
+                  member={m}
+                  available={activityAvailable}
+                  now={now}
+                  timeZone={timeZone}
+                />
               </TableCell>
               <TableCell className={cn(ACTIONS_CELL, 'group-hover:bg-muted text-right')}>
                 {m.userId ? (
@@ -559,7 +583,7 @@ function MembersTable({
   );
 }
 
-async function OrdersTab({ orgId }: { orgId: string }) {
+async function OrdersTab({ orgId, timeZone }: { orgId: string; timeZone: string | null }) {
   const orders = await getOrgOrders(orgId);
   if (orders.length === 0)
     return <StatePanel kind="empty" headingLevel={null} title="No orders." />;
@@ -574,7 +598,7 @@ async function OrdersTab({ orgId }: { orgId: string }) {
           o.id.slice(0, 8),
           o.status,
           o.requester ?? '—',
-          new Date(o.createdAt).toLocaleDateString(),
+          formatDayInZone(o.createdAt, timeZone),
         ])}
       />
       <CapNote count={orders.length} />

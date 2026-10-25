@@ -16,10 +16,14 @@ import {
  */
 
 const NOW = new Date('2026-09-18T12:00:00Z');
+/** The organization's stored zone, which the thirty-day date is printed in. */
+const ORG_TZ = 'America/Los_Angeles';
 
-// Every date here must come out in UTC whatever the server's zone. CI runs in
-// UTC, where a local getter and a UTC getter agree and a `getDate()` regression
-// would pass unnoticed, so the zone is pinned to one where they differ.
+// Every date here must come out in the zone it was asked for (UTC for the
+// exact instants, the organization's for the thirty-day date) whatever the
+// server's zone. CI runs in UTC, where a local getter and a UTC getter agree
+// and a `getDate()` regression would pass unnoticed, so the zone is pinned to
+// one where they differ.
 const ORIGINAL_TZ = process.env.TZ;
 beforeAll(() => {
   process.env.TZ = 'America/Los_Angeles';
@@ -231,33 +235,40 @@ describe('resolveLastActive — the app reporting on itself (migration 0352)', (
 
 describe('formatLastActive', () => {
   it('is coarse on purpose: the signal has about one hour of resolution', () => {
-    expect(formatLastActive('2026-09-18T11:59:30Z', NOW)).toBe('Within the last hour');
-    expect(formatLastActive('2026-09-18T11:00:01Z', NOW)).toBe('Within the last hour');
-    expect(formatLastActive('2026-09-18T11:00:00Z', NOW)).toBe('1 hour ago');
-    expect(formatLastActive('2026-09-18T09:00:00Z', NOW)).toBe('3 hours ago');
-    expect(formatLastActive('2026-09-17T12:00:01Z', NOW)).toBe('23 hours ago');
+    expect(formatLastActive('2026-09-18T11:59:30Z', NOW, ORG_TZ)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T11:00:01Z', NOW, ORG_TZ)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T11:00:00Z', NOW, ORG_TZ)).toBe('1 hour ago');
+    expect(formatLastActive('2026-09-18T09:00:00Z', NOW, ORG_TZ)).toBe('3 hours ago');
+    expect(formatLastActive('2026-09-17T12:00:01Z', NOW, ORG_TZ)).toBe('23 hours ago');
   });
 
   it('counts whole elapsed days, which needs no time zone', () => {
-    expect(formatLastActive('2026-09-17T12:00:00Z', NOW)).toBe('1 day ago');
-    expect(formatLastActive('2026-09-15T12:00:00Z', NOW)).toBe('3 days ago');
-    expect(formatLastActive('2026-08-19T12:00:01Z', NOW)).toBe('29 days ago');
+    expect(formatLastActive('2026-09-17T12:00:00Z', NOW, ORG_TZ)).toBe('1 day ago');
+    expect(formatLastActive('2026-09-15T12:00:00Z', NOW, ORG_TZ)).toBe('3 days ago');
+    expect(formatLastActive('2026-08-19T12:00:01Z', NOW, ORG_TZ)).toBe('29 days ago');
   });
 
-  it('switches to a UTC calendar date from thirty days on', () => {
-    expect(formatLastActive('2026-08-19T12:00:00Z', NOW)).toBe('19 Aug 2026');
-    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW)).toBe('29 May 2026');
+  it("switches to a calendar date in the organization's zone from thirty days on", () => {
+    expect(formatLastActive('2026-08-19T12:00:00Z', NOW, 'UTC')).toBe('19 Aug 2026');
+    // B9: 11:30 PM Pacific on 28 May is 29 May in UTC. It used to print the
+    // UTC day, unlabelled, for every organization.
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, ORG_TZ)).toBe('28 May 2026');
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, 'UTC')).toBe('29 May 2026');
+    // A zone that did not arrive or that this runtime does not know: the
+    // documented default (Pacific), never a throw.
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, null)).toBe('28 May 2026');
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, 'Not/AZone')).toBe('28 May 2026');
   });
 
   it('never throws and never invents a time', () => {
-    expect(formatLastActive(null, NOW)).toBe('Never');
-    expect(formatLastActive(undefined, NOW)).toBe('Never');
-    expect(formatLastActive('', NOW)).toBe('Never');
-    expect(formatLastActive('not-a-date', NOW)).toBe('Never');
+    expect(formatLastActive(null, NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive(undefined, NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive('', NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive('not-a-date', NOW, ORG_TZ)).toBe('Never');
   });
 
   it('treats a clock-skewed future instant as just now, not as a negative age', () => {
-    expect(formatLastActive('2026-09-18T12:00:20Z', NOW)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T12:00:20Z', NOW, ORG_TZ)).toBe('Within the last hour');
   });
 });
 

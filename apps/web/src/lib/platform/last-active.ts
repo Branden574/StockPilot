@@ -29,6 +29,8 @@
  * wording is testable to the second and identical on every server.
  */
 
+import { formatDayInZone } from './dates';
+
 export interface LastActiveSignals {
   lastSignInAt?: string | null;
   lastSessionAt?: string | null;
@@ -76,8 +78,6 @@ const RELATIVE_DAYS = 30;
  */
 const SEEN_VOUCHES_MS = 10 * 60 * 1000;
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /** Epoch millis for an ISO instant, or null for anything that is not one. */
 function toMillis(iso: string | null | undefined): number | null {
   if (typeof iso !== 'string' || iso.length === 0) return null;
@@ -122,18 +122,23 @@ export function resolveLastActive(signals: LastActiveSignals): ResolvedLastActiv
 }
 
 function utcDate(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return formatDayInZone(ms, 'UTC');
 }
 
 /**
  * COARSE on purpose. The underlying signal has about an hour of resolution,
  * so "4 minutes ago" would claim accuracy the data does not have. Ages are
  * whole elapsed hours and days, which need no time zone; from thirty days on
- * it is a UTC calendar date. Never throws: this renders on the only surface
- * that can disable an account, which has no error boundary.
+ * it is the calendar day in the ORGANIZATION's zone (`timeZone`, its stored
+ * zone). It used to be the UTC day, unlabelled, so a Pacific evening read as
+ * the next day (B9). Never throws: this renders on the only surface that can
+ * disable an account, which has no error boundary.
  */
-export function formatLastActive(iso: string | null | undefined, now: Date): string {
+export function formatLastActive(
+  iso: string | null | undefined,
+  now: Date,
+  timeZone: string | null | undefined,
+): string {
   const ms = toMillis(iso);
   if (ms === null) return 'Never';
 
@@ -146,7 +151,7 @@ export function formatLastActive(iso: string | null | undefined, now: Date): str
   }
   const days = Math.floor(age / DAY_MS);
   if (days < RELATIVE_DAYS) return days === 1 ? '1 day ago' : `${days} days ago`;
-  return utcDate(ms);
+  return formatDayInZone(ms, timeZone);
 }
 
 /**
