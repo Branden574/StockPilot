@@ -34,7 +34,10 @@ function getReq(qs: string): NextRequest {
   return new NextRequest(`${BASE}/auth/confirm?${qs}`);
 }
 
-function postReq(fields: Record<string, string>, headers: Record<string, string> = {}): NextRequest {
+function postReq(
+  fields: Record<string, string>,
+  headers: Record<string, string> = {},
+): NextRequest {
   const form = new URLSearchParams(fields);
   return new NextRequest(`${BASE}/auth/confirm`, {
     method: 'POST',
@@ -144,7 +147,10 @@ describe('POST /auth/confirm from another site', () => {
     verifyOtp.mockResolvedValue({ error: null });
     for (const type of ['invite', 'magiclink']) {
       const res = await POST(
-        postReq({ token_hash: 'held', type, next: '/dashboard' }, { 'sec-fetch-site': 'cross-site' }),
+        postReq(
+          { token_hash: 'held', type, next: '/dashboard' },
+          { 'sec-fetch-site': 'cross-site' },
+        ),
       );
       expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=auth_callback_failed`);
     }
@@ -174,13 +180,49 @@ describe('POST /auth/confirm from another site', () => {
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
-  it('a browser that sends no Sec-Fetch-Site: verified as before', async () => {
+  // Decided 2026-10-24 (the integrator asked, docket S14): unlike an API write,
+  // a confirmation with no Sec-Fetch-Site is NOT refused. Its Origin is `null`
+  // by this page's own policy, so without Sec-Fetch-Site no header tells this
+  // page's post from another site's, and refusing would refuse every browser
+  // without Fetch Metadata, on a page that loads no script and that the email
+  // opens on whatever device holds it. It is logged instead, type only.
+  it('a browser that sends no Sec-Fetch-Site: verified as before, and logged without the token', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     verifyOtp.mockResolvedValue({ error: null });
     const res = await POST(
-      postReq({ token_hash: 'abc123', type: 'recovery', next: '/reset/complete' }, { origin: 'null' }),
+      postReq(
+        { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' },
+        { origin: 'null' },
+      ),
     );
     expect(verifyOtp).toHaveBeenCalledTimes(1);
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]![1]).toEqual({ type: 'recovery' });
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).not.toContain('abc123');
+    expect(logged).not.toContain('/reset/complete');
+    info.mockRestore();
+  });
+
+  it('the log names only a known link type, never a value the form chose', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await POST(postReq({ token_hash: 'abc123', type: 'x'.repeat(5000) }));
+    expect(info.mock.calls[0]![1]).toEqual({ type: 'other' });
+    info.mockRestore();
+  });
+
+  it("this route's own page with Sec-Fetch-Site same-origin is not logged", async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    verifyOtp.mockResolvedValue({ error: null });
+    await POST(
+      postReq(
+        { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' },
+        { 'sec-fetch-site': 'same-origin', origin: 'null' },
+      ),
+    );
+    expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
   });
 });
 

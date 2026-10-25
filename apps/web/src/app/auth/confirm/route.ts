@@ -195,6 +195,23 @@ export async function POST(request: NextRequest) {
     return type === 'email_change' ? emailChangeExpiredPage() : failureRedirect(origin, type);
   }
 
+  // A post with NO Sec-Fetch-Site is verified, unlike an API write (decided
+  // 2026-10-24, docket S14). Its Origin is `null` by this page's own policy, so
+  // without Sec-Fetch-Site no header can tell this page's post from another
+  // site's, and refusing it would refuse every browser that does not send
+  // Fetch Metadata (Safari before 16.4, Firefox before 90, Chrome before 76):
+  // this page loads no script and works in all of them, and an emailed link
+  // opens on whatever device holds the email. Every browser the app supports
+  // sends Sec-Fetch-Site over https, and so does Safari on every phone that
+  // runs the app (iOS 16.4 and later), so the refusal above covers them. Logged
+  // with the link type only, so the runtime logs show whether a real browser
+  // ever posts without it before anyone tightens this.
+  if (!request.headers.has('sec-fetch-site')) {
+    console.info('[auth/confirm] confirmation posted without Sec-Fetch-Site', {
+      type: type && ALLOWED_TYPES.has(type as EmailOtpType) ? type : 'other',
+    });
+  }
+
   if (tokenHash && type && ALLOWED_TYPES.has(type as EmailOtpType)) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.verifyOtp({
