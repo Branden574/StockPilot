@@ -20,6 +20,7 @@ import {
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import { showWriteCta } from './cta-gating';
 import { IdBatchReadError, readErrorMessage } from './id-batches';
+import type { RentalListExtent } from './rental-list';
 
 /**
  * The phone's rental detail and the reminder marks on its rentals list, the
@@ -219,11 +220,14 @@ export interface RentalCheckoutsView<Row> {
   failed: boolean;
   /** A reload failed and the rows from before it are still shown: why, for the banner. */
   staleReason: string | null;
+  /** How far the rows go (rental-list.ts): the eyebrow's "+" and the line
+   *  under the list. Null when no list was read for this organization. */
+  extent: RentalListExtent | null;
 }
 
 /** One read of the list: the rows, or why there are none. */
 export type RentalCheckoutsRead<Row> =
-  | { ok: true; rows: Row[]; context: RentalReminderContext; readAt: number }
+  | { ok: true; rows: Row[]; extent: RentalListExtent; context: RentalReminderContext; readAt: number }
   | { ok: false; reason: string; context: RentalReminderContext; readAt: number };
 
 /**
@@ -239,10 +243,18 @@ export function settleRentalCheckouts<Row>(
   read: RentalCheckoutsRead<Row>,
 ): RentalCheckoutsView<Row> {
   if (read.ok) {
-    return { orgId, rows: read.rows, context: read.context, readAt: read.readAt, failed: false, staleReason: null };
+    return {
+      orgId,
+      rows: read.rows,
+      context: read.context,
+      readAt: read.readAt,
+      failed: false,
+      staleReason: null,
+      extent: read.extent,
+    };
   }
   if (prev && prev.orgId === orgId && !prev.failed) return { ...prev, staleReason: read.reason };
-  return { orgId, rows: [], context: read.context, readAt: read.readAt, failed: true, staleReason: null };
+  return { orgId, rows: [], context: read.context, readAt: read.readAt, failed: true, staleReason: null, extent: null };
 }
 
 /** The banner over rows kept through a failed reload. */

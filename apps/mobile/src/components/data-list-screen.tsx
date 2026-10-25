@@ -49,6 +49,7 @@ export function DataListScreen<T>({
   emptyAction,
   failed,
   ItemSeparator,
+  footer,
 }: {
   eyebrow: string;
   title: string;
@@ -76,6 +77,9 @@ export function DataListScreen<T>({
    *  look current. Null or absent: the read succeeded. */
   failed?: DataListFailure | null;
   ItemSeparator?: React.ComponentType<unknown>;
+  /** Under the last row (the Rentals list's "Showing the newest 100 of N
+   *  returned or cancelled rentals"). Not shown while the list is empty. */
+  footer?: React.ReactNode;
 }) {
   const { c } = useTheme();
   const navigation = useNavigation();
@@ -200,6 +204,7 @@ export function DataListScreen<T>({
               </View>
             )
           }
+          ListFooterComponent={footer && data.length > 0 ? <View>{footer}</View> : undefined}
           renderItem={({ item, index }) => renderItem(item, index)}
         />
       )}

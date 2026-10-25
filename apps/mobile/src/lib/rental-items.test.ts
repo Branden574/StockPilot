@@ -378,9 +378,9 @@ describe('Rentals screen wiring', () => {
     // with nothing shown is `failed` (rental-view.test.ts pins the rule; a
     // failed RELOAD keeps the rows shown, with a banner).
     expect(screen).toContain(
-      'const [{ data, error, status }, context] = await Promise.all([\n      supabase\n        .from(\'rentals\')',
+      'const [read, context] = await Promise.all([\n      settleIdBatchRead(readRentalList(supabase, orgId), rentalReadFailureMessage),',
     );
-    expect(screen).toMatch(/if \(error\) \{[\s\S]*?settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)/);
+    expect(screen).toMatch(/if \(!read\.ok\) \{[\s\S]*?settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)/);
     expect(screen).toContain('const checkoutsFailed = shown?.failed ?? false;');
     // Redesign P5.9 (D25): said in DataListScreen's `failed` panel, which
     // replaces the empty words, for a failed read (or no workspace).
