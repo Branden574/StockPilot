@@ -7,7 +7,7 @@ import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchAllRowsByIds, settleAsDataError } from '@/server/services/lib/fetch-by-ids';
-import { fetchAllRows } from '@/server/services/lib/paginate';
+import { fetchAllRows, fetchAllRowsConcurrently } from '@/server/services/lib/paginate';
 
 /**
  * Funnels every supabase error in this route through reportError() and
@@ -326,6 +326,13 @@ async function snapshotGET(req: NextRequest) {
   // inventories. Use fetchAllRows to page through all matching rows.
   // Stable order on `id` guarantees pages don't overlap or skip rows
   // when records are written between page fetches.
+  //
+  // The pages after the first go out TOGETHER (B25): fetchAllRows sent each
+  // one only after the previous had answered, so a full pull cost one round
+  // trip per 1,000 items in a row, on top of the token check, the request
+  // context and the rate limit. At 1.5 s per Supabase call that put a
+  // 10,000-item pull at 21 s, past the phone's 20 s (api.ts). The first page
+  // asks for the exact count, and the rest are read at once.
   type ItemRow = {
     id: string;
     sku: string | null;
@@ -340,12 +347,13 @@ async function snapshotGET(req: NextRequest) {
   };
   const itemsP = seesNoWarehouse
     ? Promise.resolve({ rows: [] as ItemRow[], err: null })
-    : fetchAllRows<ItemRow>((from, to) => {
+    : fetchAllRowsConcurrently<ItemRow>((from, to, withCount) => {
         let q = ctx.supabase
           .from('inventory_items')
           .select(
             `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
              item_type, is_bundle, updated_at`,
+            withCount ? { count: 'exact' } : undefined,
           )
           .eq('organization_id', ctx.organizationId)
           .is('deleted_at', null)
@@ -522,12 +530,14 @@ async function snapshotGET(req: NextRequest) {
   // only. Sending it alongside the items read, instead of after every other
   // read, also narrows the window in which a row edited between the two
   // reads is reported as removed (it heals on the next pull either way).
+  // Paged like the items read (pages after the first at once): a delta after a
+  // bulk change can carry as many ids as a full pull.
   const changedItemsP = since
     ? settle(
-        fetchAllRows<{ id: string }>((from, to) =>
+        fetchAllRowsConcurrently<{ id: string }>((from, to, withCount) =>
           ctx.supabase
             .from('inventory_items')
-            .select('id')
+            .select('id', withCount ? { count: 'exact' } : undefined)
             .eq('organization_id', ctx.organizationId)
             // is_bundle rows are a different species (a bundle's phantom
             // stock row), excluded from `items` structurally rather than by
