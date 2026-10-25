@@ -52,6 +52,7 @@ import { fetchAllCycleCountLines } from '@/lib/cycle-count-lines-fetch';
 import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { postCycleCount } from '@/lib/cycle-counts-api';
+import { missingCountCopy, whyCountIsMissing, type MissingCount } from '@/lib/cycle-count-missing';
 import {
   getCountLinkedExceptions,
   linkedLineDestination,
@@ -177,7 +178,7 @@ export default function CycleCountDetail() {
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
   const [pendingForThis, setPendingForThis] = React.useState(0);
   const [emptyState, setEmptyState] = React.useState<
-    'none' | 'offline-uncached' | 'read-failed'
+    'none' | 'offline-uncached' | 'read-failed' | MissingCount
   >('none');
   /** The server's own message for a refused read, shown instead of an empty
    *  count. Only ever set when there is no cached snapshot to fall back to. */
@@ -349,8 +350,16 @@ export default function CycleCountDetail() {
       // Fail loud instead (release-order rule).
       if (!cached) {
         const message = (ccErr ?? lErr)?.message ?? null;
-        setReadError(message);
-        setEmptyState(message ? 'read-failed' : 'none');
+        if (message) {
+          setReadError(message);
+          setEmptyState('read-failed');
+        } else {
+          // No row and no error: no count by this id in this workspace. This
+          // rendered the count screen with nothing in it, which said "This
+          // count has no lines yet" (B25). Now where it is, or that it is not
+          // available (cycle-count-missing.ts).
+          setEmptyState(await whyCountIsMissing(supabase, id, orgId));
+        }
         setLoading(false);
       }
       return;
@@ -663,6 +672,40 @@ export default function CycleCountDetail() {
             onPress={() => {
               setLoading(true);
               setReadError(null);
+              setEmptyState('none');
+              void load();
+            }}
+          >
+            Retry
+          </Button>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (emptyState === 'other-workspace' || emptyState === 'not-available') {
+    const missing = missingCountCopy(emptyState);
+    return (
+      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={[styles.header, { borderBottomColor: c.hair }]}>
+          <Pressable
+            onPress={leave}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+          </Pressable>
+        </View>
+        <View style={styles.center}>
+          <Text style={[styles.emptyTitle, { color: c.ink }]}>{missing.title}</Text>
+          <Text style={[styles.emptyBody, { color: c.ink3 }]}>{missing.body}</Text>
+          <Button
+            variant="outline"
+            style={styles.retry}
+            onPress={() => {
+              setLoading(true);
               setEmptyState('none');
               void load();
             }}
@@ -1061,7 +1104,7 @@ export default function CycleCountDetail() {
             );
           })}
 
-          {lines.length === 0 && (
+          {header !== null && lines.length === 0 && (
             <Text style={[styles.emptyText, { color: c.ink3 }]}>
               This count has no lines yet. Add lines from the web first.
             </Text>
