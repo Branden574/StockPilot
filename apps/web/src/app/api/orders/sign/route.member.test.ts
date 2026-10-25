@@ -66,6 +66,8 @@ const ORG = 'org-l4l';
 const OTHER_ORG = 'org-other';
 const DRIVER = 'driver-1';
 const SIGNATURE = 'data:image/png;base64,' + 'A'.repeat(80);
+/** What the sign page's collector sends (signature-collector.tsx): a same-origin fetch. */
+const SIGN_PAGE = { origin: 'https://test.local', 'sec-fetch-site': 'same-origin' };
 
 interface World {
   column: string | null;
@@ -254,8 +256,9 @@ describe('0392: no session-free legacy link is left', () => {
 
 describe('member path: the DIGEST (readable by every member) completes nothing without an entitled session', () => {
   it('no session: the one 404, nothing written', async () => {
-    const res = await POST(request(DIGEST));
+    const res = await POST(request(DIGEST, SIGN_PAGE));
     expect(res.status).toBe(404);
+    expect(withApiContext).toHaveBeenCalledTimes(1);
     expect(await res.text()).toBe(NOT_FOUND_TEXT);
     expect(confirmCalls()).toHaveLength(0);
     expect(insertAuditRowReported).not.toHaveBeenCalled();
@@ -407,6 +410,7 @@ describe('every refusal is byte-identical to an unknown token', () => {
   it('unknown token, cleared column, digest without a session, and a viewer all answer the same 404 body', async () => {
     const bodies: string[] = [];
     bodies.push(await (await POST(request('7a'.repeat(32)))).text());
+    bodies.push(await (await POST(request(DIGEST, SIGN_PAGE))).text());
     bodies.push(await (await POST(request(DIGEST))).text());
     vi.mocked(withApiContext).mockResolvedValue(member({ role: 'viewer', userId: 'v' }) as never);
     bodies.push(await (await POST(request(DIGEST, { authorization: 'Bearer v' }))).text());
@@ -541,8 +545,23 @@ describe('review 8: a cookie session completes a hand-over only from this site',
     expect(world.status).toBe('staged_for_pickup');
   });
 
+  it('neither Origin nor Sec-Fetch-Site (a client that stripped both): the one 404, no context built (fail closed, docket S14)', async () => {
+    const res = await POST(request(DIGEST));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(confirmCalls()).toHaveLength(0);
+    expect(world.status).toBe('staged_for_pickup');
+  });
+
   it("the sign page's own post (same origin) hands over", async () => {
-    const res = await POST(request(DIGEST, { origin: 'https://test.local', 'sec-fetch-site': 'same-origin' }));
+    const res = await POST(request(DIGEST, SIGN_PAGE));
+    expect(res.status).toBe(200);
+    expect(world.status).toBe('completed');
+  });
+
+  it('a bearer with neither header (the phone) hands over', async () => {
+    const res = await POST(request(DIGEST, { authorization: 'Bearer t' }));
     expect(res.status).toBe(200);
     expect(world.status).toBe('completed');
   });
@@ -550,6 +569,26 @@ describe('review 8: a cookie session completes a hand-over only from this site',
   it('a bearer (the phone) is not judged by Origin: it has no ambient credential', async () => {
     const res = await POST(request(DIGEST, { authorization: 'Bearer t', origin: 'https://elsewhere.example' }));
     expect(res.status).toBe(200);
+  });
+
+  it('a non-Bearer Authorization header is not a bearer: withApiContext reads the cookie for it, so it is judged (docket S14)', async () => {
+    // A browser can attach Basic credentials on its own; withApiContext takes
+    // its bearer path only for `Bearer <token>`, and reads the cookie otherwise.
+    const res = await POST(
+      request(DIGEST, { authorization: 'Basic dXNlcjpwYXNz', origin: 'https://evil.example' }),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  it("the context is asked with the post's own method, so withApiContext judges it as the write it is (docket S14)", async () => {
+    const res = await POST(request(DIGEST, SIGN_PAGE));
+    expect(res.status).toBe(200);
+    const asked = vi.mocked(withApiContext).mock.calls[0]![0] as Request;
+    expect(asked.method).toBe('POST');
+    expect(asked.url).toBe('https://test.local/api/v1/orders/sign');
   });
 
   it('a raw link needs no session, so a cross-site post of a printed QR is judged as before', async () => {

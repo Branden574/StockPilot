@@ -91,7 +91,7 @@ export async function GET(
         throw new ServiceError('validation_error', 'Choose a charter.');
       }
     }
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     if (slug === 'inventory-valuation') {
