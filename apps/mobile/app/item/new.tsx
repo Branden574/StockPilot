@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   itemPhotoPath,
+  newRackBlockerFor,
   randomPhotoFileBase,
   SIZE_SYSTEM_LABELS,
   SIZE_SYSTEMS,
@@ -61,6 +62,8 @@ import { sectionLabelText } from '@/lib/section-label';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { loadWarehouseRackNames } from '@/lib/warehouse-racks';
@@ -115,7 +118,9 @@ function askAboutNewRack(
           onPress: () => resolve({ use: label }),
         })),
         {
-          text: check.kind === 'new' ? 'Create rack and save' : 'Save anyway',
+          // "Create rack and save" only when the yes creates the rack and
+          // moves the stock onto it (checkCreateRack decides, 2026-10-25).
+          text: check.kind === 'new' && check.createsRack ? 'Create rack and save' : 'Save anyway',
           onPress: () => resolve('create'),
         },
       ],
@@ -332,6 +337,11 @@ export default function NewItem() {
   // Create into the ACTIVE workspace org (was useOrg's .limit(1), which
   // created items in the user's first org regardless of the switcher).
   const { activeOrgId: orgId } = useWorkspace();
+  // What a yes to "Create new rack?" can do for this member (2026-10-25): a
+  // Staff member cannot create racks (no Manage locations), so the question
+  // says so, the server's own rule (newRackBlockerFor).
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
   const { c } = useTheme();
   const params = useLocalSearchParams<{ barcode?: string; type?: string }>();
   const itemType: 'product' | 'book' = params.type === 'book' ? 'book' : 'product';
@@ -859,6 +869,10 @@ export default function NewItem() {
       units,
       warehouseName: warehouses.find((w) => w.id === whId)?.name ?? null,
       existingRacks: existing,
+      // Only once the role and the effective permissions are known. Until
+      // then, the words for a yes that creates the rack: saying "no rack" over
+      // a yes that creates one is the answer this question exists to stop.
+      blockedBy: role && permissions ? newRackBlockerFor({ role, permissions }) : null,
     });
     if (check.kind === 'none' || check.kind === 'existing') return form;
     const choice = await askAboutNewRack(check);
