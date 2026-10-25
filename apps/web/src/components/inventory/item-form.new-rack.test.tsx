@@ -44,6 +44,7 @@ import {
   createItemAction,
   updateItemAction,
 } from '@/server/actions/inventory';
+import { pressWhenEnabled } from '@/test/press-when-enabled';
 
 import { ItemForm, type ItemFormDefaults } from './item-form';
 
@@ -150,7 +151,10 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
     expect(push).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
 
-    await user.click(within(dialog).getByRole('button', { name: 'Create rack and save' }));
+    await pressWhenEnabled(
+      user,
+      within(dialog).getByRole('button', { name: 'Create rack and save' }),
+    );
 
     await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(2));
     expect(createCall(1)).toMatchObject({
@@ -175,7 +179,7 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
     await typeRack(user, '1', 'B');
     await user.click(createButton());
     const dialog = await screen.findByRole('alertdialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Go back' }));
+    await pressWhenEnabled(user, within(dialog).getByRole('button', { name: 'Go back' }));
 
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(createItemAction).toHaveBeenCalledTimes(1);
@@ -202,7 +206,7 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
     await typeRack(user, '1', 'B');
     await user.click(createButton());
     const dialog = await screen.findByRole('alertdialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Use 17-B instead' }));
+    await pressWhenEnabled(user, within(dialog).getByRole('button', { name: 'Use 17-B instead' }));
 
     await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(2));
     expect(createCall(1)).toMatchObject({
@@ -238,7 +242,8 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
 
     await typeRack(user, '1', 'B');
     await user.click(createButton());
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', {
         name: 'Use 17-B instead',
       }),
@@ -280,7 +285,7 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
       within(dialog).queryByRole('button', { name: 'Create rack and save' }),
     ).not.toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole('button', { name: 'Save anyway' }));
+    await pressWhenEnabled(user, within(dialog).getByRole('button', { name: 'Save anyway' }));
 
     await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(2));
     expect(createCall(1)).toMatchObject({ binLocation: '1-B', confirmNewRack: true });
@@ -365,7 +370,7 @@ describe('ItemForm, New item: a typed rack that does not exist is asked about fi
     await user.click(createButton());
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('Create new rack 1-B?')).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: 'Use 17-B instead' }));
+    await pressWhenEnabled(user, within(dialog).getByRole('button', { name: 'Use 17-B instead' }));
 
     await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(2));
     expect(createCall(1)).toMatchObject({ itemType: 'book', binLocation: '17-B' });
@@ -444,7 +449,10 @@ describe('ItemForm, New item size run: the run is asked about once', () => {
     expect(bulkCall(0)).not.toHaveProperty('confirmNewRack');
     expect(createItemAction).not.toHaveBeenCalled();
 
-    await user.click(within(dialog).getByRole('button', { name: 'Create rack and save' }));
+    await pressWhenEnabled(
+      user,
+      within(dialog).getByRole('button', { name: 'Create rack and save' }),
+    );
 
     await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(2));
     expect(bulkCall(1)).toMatchObject({
@@ -467,7 +475,8 @@ describe('ItemForm, New item size run: the run is asked about once', () => {
     await user.click(screen.getByRole('button', { name: 'S' }));
     await typeRack(user, '1', 'B');
     await user.click(createButton());
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', {
         name: 'Use 17-B instead',
       }),

@@ -25,6 +25,7 @@ vi.mock('@/server/actions/duplicate-item', () => ({
 import { toast } from 'sonner';
 
 import { duplicateItemAction } from '@/server/actions/duplicate-item';
+import { pressWhenEnabled } from '@/test/press-when-enabled';
 
 import { DuplicateItemDialog } from './duplicate-item-dialog';
 
@@ -87,7 +88,10 @@ describe('DuplicateItemDialog: the copy is typed onto a rack that does not exist
     expect(call(0)).not.toHaveProperty('confirmNewRack');
     expect(toast.error).not.toHaveBeenCalled();
 
-    await user.click(within(question).getByRole('button', { name: 'Create rack and save' }));
+    await pressWhenEnabled(
+      user,
+      within(question).getByRole('button', { name: 'Create rack and save' }),
+    );
 
     await waitFor(() => expect(duplicateItemAction).toHaveBeenCalledTimes(2));
     expect(call(1)).toMatchObject({
@@ -108,7 +112,8 @@ describe('DuplicateItemDialog: the copy is typed onto a rack that does not exist
 
     const dialog = await openAndFill(user, { number: '1', row: 'B' }, '4');
     await user.click(within(dialog).getByRole('button', { name: 'Duplicate' }));
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Go back' }),
     );
 
@@ -129,7 +134,8 @@ describe('DuplicateItemDialog: the copy is typed onto a rack that does not exist
 
     const dialog = await openAndFill(user, { number: '1', row: 'B' }, '4');
     await user.click(within(dialog).getByRole('button', { name: 'Duplicate' }));
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', {
         name: 'Use 17-B instead',
       }),
@@ -179,7 +185,7 @@ describe('DuplicateItemDialog: the copy is typed onto a rack that does not exist
     expect(
       within(question).queryByRole('button', { name: 'Create rack and save' }),
     ).not.toBeInTheDocument();
-    await user.click(within(question).getByRole('button', { name: 'Save anyway' }));
+    await pressWhenEnabled(user, within(question).getByRole('button', { name: 'Save anyway' }));
 
     await waitFor(() => expect(duplicateItemAction).toHaveBeenCalledTimes(2));
     expect(call(1)).toMatchObject({ rackNumber: '1', rackRow: 'B', confirmNewRack: true });

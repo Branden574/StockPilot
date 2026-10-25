@@ -25,6 +25,7 @@ vi.mock('@/server/actions/inventory', () => ({
 import { toast } from 'sonner';
 
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
+import { pressWhenEnabled } from '@/test/press-when-enabled';
 
 import { AddSizedVariantsButton } from './add-sized-variants-button';
 
@@ -98,7 +99,10 @@ describe('AddSizedVariantsButton: the inherited rack does not exist', () => {
     expect(call(0)).not.toHaveProperty('confirmNewRack');
     expect(toast.error).not.toHaveBeenCalled();
 
-    await user.click(within(question).getByRole('button', { name: 'Create rack and save' }));
+    await pressWhenEnabled(
+      user,
+      within(question).getByRole('button', { name: 'Create rack and save' }),
+    );
 
     await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(2));
     expect(call(1)).toMatchObject({
@@ -116,7 +120,8 @@ describe('AddSizedVariantsButton: the inherited rack does not exist', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await pickLargeAndCreate(user);
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Go back' }),
     );
 
@@ -135,7 +140,8 @@ describe('AddSizedVariantsButton: the inherited rack does not exist', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await pickLargeAndCreate(user);
-    await user.click(
+    await pressWhenEnabled(
+      user,
       within(await screen.findByRole('alertdialog')).getByRole('button', {
         name: 'Use 17-B instead',
       }),
@@ -171,7 +177,7 @@ describe('AddSizedVariantsButton: the inherited rack does not exist', () => {
       within(question).queryByRole('button', { name: 'Create rack and save' }),
     ).not.toBeInTheDocument();
 
-    await user.click(within(question).getByRole('button', { name: 'Save anyway' }));
+    await pressWhenEnabled(user, within(question).getByRole('button', { name: 'Save anyway' }));
 
     await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(2));
     expect(call(1)).toMatchObject({ binLocation: '1-B', confirmNewRack: true });
