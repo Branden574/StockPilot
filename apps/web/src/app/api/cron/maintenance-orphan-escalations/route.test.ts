@@ -525,9 +525,9 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
     const from = stub.client.from.bind(stub.client) as (table: string) => unknown;
     let started = 0;
     stub.client.from = vi.fn((table: string) => {
-      started += table === 'maintenance_requests' ? 1 : 0;
-      if (table === 'maintenance_requests' && started === reads) {
-        vi.setSystemTime(runAt + ORPHAN_SWEEP.deadlineMs + 1);
+      if (table === 'maintenance_requests') {
+        started += 1;
+        if (started === reads) vi.setSystemTime(runAt + ORPHAN_SWEEP.deadlineMs + 1);
       }
       return from(table);
     });
