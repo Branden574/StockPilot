@@ -19,7 +19,10 @@
  * the move is new on the server: transfer_stock (0365) lets a member below
  * manager take stock out of a location with no warehouse
  * (caller_can_write_location answers true for one) and put it only into a
- * warehouse they write, and the placement mint refuses a warehouse they do not
+ * warehouse they write. A new rack or crate is checked before it exists: each
+ * place action reads its warehouse under the caller's own access
+ * (warehouses_select hides one a staff member is not assigned to), and the
+ * placement mint refuses one they do not write
  * (LocationsService.mintPlacementDestination).
  *
  * Pure: the table and both dialogs import it.

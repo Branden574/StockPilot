@@ -353,10 +353,14 @@ export class LocationsService {
     // THE WAREHOUSE, before anything is minted (B38). mint_placement_location
     // checks only that the warehouse is the org's. Below manager the move that
     // follows is refused unless the caller writes the destination's warehouse
-    // (transfer_stock, 0365), but by then the rack or crate existed: a request
-    // naming another warehouse left an empty location there every time. The
-    // Staging page lets a row in the organization-level bucket choose its
-    // warehouse, so this is now a person's choice; it is checked here.
+    // (transfer_stock, 0365), but by then the rack or crate existed, empty.
+    // Who gets here with a warehouse they cannot write: the phone's transfer
+    // route, which takes a new rack's warehouse from the SOURCE location
+    // (readable org-wide), so a stale or hand-made source in another
+    // warehouse; and on the web, a viewer granted stock:transfer. A staff
+    // member naming another warehouse on the web is refused before this: each
+    // place action first reads the warehouse under their own access
+    // (warehouses_select), which hides one they are not assigned to.
     await this.assertMayPlaceInWarehouse(input.warehouseId);
     const name = crateAwareLocationName(input);
     const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });

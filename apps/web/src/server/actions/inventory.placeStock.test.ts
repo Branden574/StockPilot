@@ -425,7 +425,11 @@ describe('placeStockAction: out of the organization-level bucket (B38)', () => {
     );
   });
 
-  it("a chosen warehouse outside the caller's organization is refused before anything is resolved or moved", async () => {
+  // The warehouse is read under the caller's own access (warehouses_select:
+  // a manager, or someone assigned to it), so no row is also what a staff
+  // member gets for a warehouse they are not assigned to. On the web that is
+  // where their new rack in another warehouse stops, before the mint's check.
+  it("a chosen warehouse the caller cannot read (another organization's, or for staff one they are not assigned to) is refused before anything is resolved or moved", async () => {
     installContext({ warehouseRow: null });
     const result = await placeStockAction({
       itemId: ITEM_ID,
