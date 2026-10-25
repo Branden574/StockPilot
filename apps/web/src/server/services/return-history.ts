@@ -1,14 +1,18 @@
 import 'server-only';
 
-import { can, formatOrderNumber, formatRackHoldings } from '@stockpilot/core';
+import { formatOrderNumber, formatRackHoldings } from '@stockpilot/core';
 
-import { ServiceError, assertModuleEnabled, assertPermission, type ServiceContext } from './context';
+import type { ServiceContext } from './context';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 
 /**
- * The RMA's chain (brief 35, plan RX-1 `ReturnHistoryService.chain`): one
- * timeline from the original pick to the close, so anyone can see where the
- * returned unit came from and where it went.
+ * The RMA's chain (brief 35, plan RX-1): one timeline from the original pick
+ * to the close, so anyone can see where the returned unit came from and where
+ * it went. buildReturnWorkbench (returns-workbench.ts) builds it from the
+ * reads the workbench already makes, and every surface reads it there: the
+ * web RMA page, the web actions and the /api/v1/returns routes the phone uses.
+ * The plan's standalone ReturnHistoryService.chain(returnId) never had a
+ * caller and never got the RX-2 exchange inputs, so it was removed (B22).
  *
  *   picked       the original order's pick of each returned item, with the
  *                racks its recorded draw took from (0373 provenance)
@@ -361,130 +365,5 @@ export async function loadOriginalPicks(
   } catch (err) {
     reportDegradedRead('returns.chain.picks', err, { items: itemIds.length });
     return [];
-  }
-}
-
-/**
- * ReturnHistoryService.chain(returnId): the standalone read (the workbench
- * builds the same chain from the reads it already made).
- */
-export class ReturnHistoryService {
-  constructor(private readonly ctx: ServiceContext) {}
-
-  async chain(returnId: string): Promise<ReturnChainEvent[]> {
-    assertModuleEnabled(this.ctx, 'returns');
-    assertPermission(this.ctx, can(this.ctx, 'returns:manage') ? 'returns:manage' : 'returns:read');
-    if (!UUID_RE.test(returnId)) throw new ServiceError('not_found', "This return isn't available.");
-    const ctx = this.ctx;
-
-    const { data: header, error } = await ctx.supabase
-      .from('returns')
-      .select(
-        'id, order_request_id, order_request:order_requests!order_request_id (order_number, completed_at, signed_at), lines:return_lines (id, item_id)',
-      )
-      .eq('organization_id', ctx.organizationId)
-      .eq('id', returnId)
-      .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
-    if (!header) throw new ServiceError('not_found', "This return isn't available.");
-    type OrderEmbed = { order_number: number | null; completed_at: string | null; signed_at: string | null };
-    const h = header as {
-      order_request_id: string;
-      order_request?: OrderEmbed | OrderEmbed[] | null;
-      lines?: Array<{ id: string; item_id: string }> | null;
-    };
-    const order = Array.isArray(h.order_request) ? (h.order_request[0] ?? null) : (h.order_request ?? null);
-    const itemIds = [...new Set((h.lines ?? []).map((l) => l.item_id))];
-
-    const [decisionsRes, movesRes, items] = await Promise.all([
-      ctx.supabase
-        .from('return_decisions')
-        .select('seq, kind, channel, revision, return_line_id, disposition, restock_target, location_id, reason, actor_user_id, actor_kind, created_at')
-        .eq('organization_id', ctx.organizationId)
-        .eq('return_id', returnId)
-        .order('seq', { ascending: true }),
-      ctx.supabase
-        .from('stock_movements')
-        .select('item_id, movement_type, quantity_change, to_location_id, created_at')
-        .eq('organization_id', ctx.organizationId)
-        .eq('reference_type', 'return')
-        .eq('reference_id', returnId)
-        // Ledger rows only (review fix; the workbench reads the same way).
-        .eq('via_ledger', true)
-        .order('created_at', { ascending: true }),
-      itemIds.length > 0
-        ? fetchAllRowsByIds<{ id: string; name: string | null }>(itemIds, (batch) => (from, to) =>
-            ctx.supabase.from('inventory_items').select('id, name').eq('organization_id', ctx.organizationId).in('id', batch).order('id').range(from, to),
-          )
-        : Promise.resolve([] as Array<{ id: string; name: string | null }>),
-    ]);
-    if (decisionsRes.error) throw new ServiceError('internal_error', decisionsRes.error.message);
-    const itemNames = new Map(items.map((i) => [i.id, i.name]));
-    type D = { seq: number; kind: string; channel: string; revision: number | null; return_line_id: string | null; disposition: string | null; restock_target: string | null; location_id: string | null; reason: string | null; actor_user_id: string | null; actor_kind: string; created_at: string };
-    type M = { item_id: string; movement_type: string; quantity_change: number | string; to_location_id: string | null; created_at: string };
-    const decisions = (decisionsRes.data as D[] | null) ?? [];
-    const moves = (movesRes.data as M[] | null) ?? [];
-
-    const userIds = [...new Set(decisions.map((d) => d.actor_user_id).filter((v): v is string => !!v && UUID_RE.test(v)))];
-    const locIds = [
-      ...new Set([...decisions.map((d) => d.location_id), ...moves.map((m) => m.to_location_id)].filter((v): v is string => !!v && UUID_RE.test(v))),
-    ];
-    const [users, locs, picks] = await Promise.all([
-      userIds.length > 0
-        ? fetchAllRowsByIds<{ id: string; full_name: string | null; email: string | null }>(userIds, (batch) => (from, to) =>
-            ctx.supabase.from('user_profiles').select('id, full_name, email').in('id', batch).order('id').range(from, to),
-          ).catch(() => [] as Array<{ id: string; full_name: string | null; email: string | null }>)
-        : Promise.resolve([] as Array<{ id: string; full_name: string | null; email: string | null }>),
-      locIds.length > 0
-        ? fetchAllRowsByIds<{ id: string; name: string }>(locIds, (batch) => (from, to) =>
-            ctx.supabase.from('locations').select('id, name').eq('organization_id', ctx.organizationId).in('id', batch).order('id').range(from, to),
-          ).catch(() => [] as Array<{ id: string; name: string }>)
-        : Promise.resolve([] as Array<{ id: string; name: string }>),
-      loadOriginalPicks(ctx, h.order_request_id, itemIds, itemNames),
-    ]);
-    const userName = new Map(users.map((u) => [u.id, u.full_name?.trim() || u.email || null]));
-    const locName = new Map(locs.map((l) => [l.id, l.name]));
-    // A line's name, and the rack(s) its own return legs went to once closed.
-    const lineLabels = new Map((h.lines ?? []).map((l) => [l.id, itemNames.get(l.item_id) ?? 'Item']));
-    const originalRacks = new Map<string, string>();
-    for (const l of h.lines ?? []) {
-      const racks = moves
-        .filter((m) => m.item_id === l.item_id && m.movement_type === 'return' && m.to_location_id)
-        .map((m) => ({ name: locName.get(m.to_location_id!) ?? 'a rack', quantity: numberOf(m.quantity_change) }));
-      const label = racks.length === 1 ? racks[0]!.name : formatRackHoldings(racks);
-      if (label) originalRacks.set(l.id, label);
-    }
-
-    return buildReturnChainEvents({
-      orderNumber: order?.order_number ?? null,
-      signedAt: order?.signed_at ?? null,
-      completedAt: order?.completed_at ?? null,
-      picks,
-      itemNames,
-      lineLabels,
-      originalRacks,
-      decisions: decisions.map((d) => ({
-        seq: numberOf(d.seq),
-        kind: d.kind,
-        channel: d.channel,
-        revision: d.revision,
-        returnLineId: d.return_line_id,
-        disposition: d.disposition,
-        restockTarget: d.restock_target,
-        locationName: d.location_id ? (locName.get(d.location_id) ?? null) : null,
-        reason: d.reason,
-        actorName: d.actor_user_id ? (userName.get(d.actor_user_id) ?? null) : null,
-        actorKind: d.actor_kind,
-        createdAt: d.created_at,
-      })),
-      movements: moves.map((m) => ({
-        itemId: m.item_id,
-        movementType: m.movement_type,
-        quantity: numberOf(m.quantity_change),
-        toLocationName: m.to_location_id ? (locName.get(m.to_location_id) ?? null) : null,
-        rack: m.to_location_id !== null,
-        createdAt: m.created_at,
-      })),
-    });
   }
 }
