@@ -10,8 +10,10 @@ import { CommentThread, type CommentView } from '@/components/procedures/comment
 import { MarkdownBody } from '@/components/procedures/markdown-body';
 import { ProcedureCategoryPill } from '@/components/procedures/procedure-fallback-band';
 import { VideoPlayer } from '@/components/procedures/video-player';
-import { can, isAdminRole } from '@stockpilot/core';
+import { can, isAdminRole, resolveOrgTimezone } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { formatRelative } from '@/lib/utils';
 import { ProceduresService } from '@/server/services/procedures';
 import { ServiceError } from '@/server/services/context';
@@ -23,6 +25,15 @@ export default async function ProcedureDetailPage({ params }: { params: Promise<
   const ctx = await requireOrgContext();
   const canEdit = can(ctx, 'categories:manage');
   const canModerate = isAdminRole(ctx.role);
+  // The discussion's times are the organization's. The request-cached org row
+  // the layout already read, so nothing new is fetched; a failed read is the
+  // documented default zone, never a failed page.
+  const timezoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'procedures.detail.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   const svc = await ProceduresService.forCurrentUser();
   let procedure;
@@ -32,6 +43,7 @@ export default async function ProcedureDetailPage({ params }: { params: Promise<
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
   }
+  const timeZone = await timezoneRead;
 
   const liveCommentCount = countLiveComments(procedure.comments);
 
@@ -123,6 +135,7 @@ export default async function ProcedureDetailPage({ params }: { params: Promise<
             procedureId={procedure.id}
             comments={procedure.comments.map(toView)}
             canModerate={canModerate}
+            timeZone={timeZone}
           />
         </DetailSection>
       </div>

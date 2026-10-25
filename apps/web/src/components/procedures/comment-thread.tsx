@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Textarea } from '@/components/ui/textarea';
 import { formatRelative } from '@/lib/utils';
+import { formatOrgDateTime } from '@stockpilot/core';
 import {
   deleteProcedureCommentAction,
   updateProcedureCommentAction,
@@ -41,6 +42,13 @@ interface CommentThreadProps {
   comments: CommentView[];
   /** True when the current viewer is an admin or owner (can moderate). */
   canModerate: boolean;
+  /**
+   * The organization's time zone (resolveOrgTimezone of its stored zone), for
+   * each comment's time tooltip. The page renders the thread on the server
+   * first, so a time printed with the runtime's zone was the server's (UTC on
+   * Vercel), and React kept it while hydrating (B9 review).
+   */
+  timeZone: string;
 }
 
 function initials(name: string | null): string {
@@ -54,11 +62,13 @@ function CommentRow({
   comment,
   canModerate,
   allowReply,
+  timeZone,
 }: {
   procedureId: string;
   comment: CommentView;
   canModerate: boolean;
   allowReply: boolean;
+  timeZone: string;
 }) {
   const router = useRouter();
   const [replyOpen, setReplyOpen] = React.useState(false);
@@ -120,7 +130,14 @@ function CommentRow({
           <time
             dateTime={comment.created_at}
             className="text-muted-foreground text-[12px] tabular-nums"
-            title={new Date(comment.created_at).toLocaleString()}
+            // The organization's time, the same on the server and in the
+            // browser: suppressHydrationWarning below also hides a title that
+            // differs, so a bare toLocaleString() kept the server's UTC time.
+            title={formatOrgDateTime(
+              comment.created_at,
+              { dateStyle: 'medium', timeStyle: 'short' },
+              timeZone,
+            )}
             // clock drifts between SSR + hydration; tolerate it instead
             // of unmounting the comment thread with React error #418.
             suppressHydrationWarning
@@ -224,6 +241,7 @@ function CommentRow({
                   comment={r}
                   canModerate={canModerate}
                   allowReply={false}
+                  timeZone={timeZone}
                 />
               </li>
             ))}
@@ -243,7 +261,12 @@ function CommentRow({
   );
 }
 
-export function CommentThread({ procedureId, comments, canModerate }: CommentThreadProps) {
+export function CommentThread({
+  procedureId,
+  comments,
+  canModerate,
+  timeZone,
+}: CommentThreadProps) {
   if (comments.length === 0) {
     return <p className="text-muted-foreground text-sm">No comments yet. Start the discussion.</p>;
   }
@@ -251,7 +274,13 @@ export function CommentThread({ procedureId, comments, canModerate }: CommentThr
     <ul className="space-y-6">
       {comments.map((c) => (
         <li key={c.id}>
-          <CommentRow procedureId={procedureId} comment={c} canModerate={canModerate} allowReply />
+          <CommentRow
+            procedureId={procedureId}
+            comment={c}
+            canModerate={canModerate}
+            allowReply
+            timeZone={timeZone}
+          />
         </li>
       ))}
     </ul>
