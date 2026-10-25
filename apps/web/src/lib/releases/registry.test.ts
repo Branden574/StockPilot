@@ -13140,6 +13140,57 @@ describe('the unsubscribe, new rack question and other-website fixes release (un
     expect(entry('other-websites-cannot-sign-you-out-or-download').whatChanged).toContain(
       "“Start this download from StockPilot. A link on another website can't start it.”",
     );
+    // Added in review (2026-10-25): the refusal is a short JSON error that
+    // carries those words, and every file the entry names comes from a route
+    // that calls it. A report's page and the order print page are dashboard
+    // pages that never do, so the entry names a report's PDF or CSV, not a
+    // report or a printout.
+    expect(source('lib/export-rate-limit.ts')).toContain(
+      "{ error: 'cross_site_request', message: CROSS_SITE_EXPORT_MESSAGE },",
+    );
+    for (const route of [
+      'app/api/inventory/export.csv/route.ts',
+      'app/api/reports/[slug]/csv/route.ts',
+      'app/api/reports/[slug]/pdf/route.tsx',
+      'app/api/purchase-orders/[id]/pdf/route.tsx',
+      'app/api/orders/[id]/pick-slip.pdf/route.tsx',
+    ]) {
+      expect(source(route), route).toMatch(
+        /const limited = await exportRateLimited\((req|request), ctx\.userId, ctx\.organizationId\);/,
+      );
+    }
+    const download = entry('other-websites-cannot-sign-you-out-or-download');
+    expect(download.whatChanged).toContain(
+      "A link to an export or PDF StockPilot makes, such as a CSV export, a report's PDF or CSV, a purchase order PDF or a pick slip,",
+    );
+    expect(download.howItAffectsYou).toContain(
+      'you see a short error that contains that message instead of the file',
+    );
+    // Added in review (2026-10-25): the two hover times use the organization's
+    // stored zone, which only owners and admins change, under Workspace
+    // timezone. No sentence says an unset zone is UTC: the create form stores
+    // the creator's browser zone, and an unreadable row falls back to Pacific.
+    expect(source('app/(dashboard)/dashboard/team/page.tsx')).toContain(
+      'timeZone={resolveOrgTimezone(orgRow.data?.timezone as string | null | undefined)}',
+    );
+    expect(source('app/(dashboard)/dashboard/procedures/[id]/page.tsx')).toContain(
+      '.then((org) => resolveOrgTimezone(org?.timezone))',
+    );
+    expect(source('components/onboarding/create-organization-form.tsx')).toContain(
+      "timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',",
+    );
+    expect(source('components/settings/org-timezone-editor.tsx')).toContain(
+      '<Label htmlFor="org-timezone">Workspace timezone</Label>',
+    );
+    expect(source('server/actions/organization.ts')).toContain(
+      "return err('forbidden', 'Only owners and admins can change the timezone.');",
+    );
+    for (const id of ['team-disabled-time-org-zone', 'procedure-comment-times-org-zone']) {
+      expect(entry(id).howItAffectsYou, id).toContain(
+        "The time uses your organization's time zone, which owners and admins can change under Workspace timezone in Settings, Organization.",
+      );
+      expect(entry(id).howItAffectsYou, id).not.toContain('UTC');
+    }
     // The confirmation page's notice.
     const notice =
       "If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.";

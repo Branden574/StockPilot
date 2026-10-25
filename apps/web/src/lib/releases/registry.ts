@@ -101,11 +101,18 @@ export const RELEASES: Release[] = [
     // confirmation type, the sign and release-state refusals and the new log
     // lines; B15's Gmail sentence (no walk saw Gmail's own button or the
     // DKIM-signed headers), Yahoo, the plain-text line, the rate limits and the
-    // audit row; B16's phone half, the empty product group a refused sports item
-    // no longer leaves, and two failure-path messages; B9's pager on a public
-    // request link's page (public_links:manage only), the location actions'
-    // failure message, and what only platform staff see (the console's dates,
-    // Last active, the scheduled-job audit mark).
+    // audit row; B9's pager on a public request link's page (public_links:manage
+    // only), the location actions' failure message, and what only platform staff
+    // see (the console's dates, Last active, the scheduled-job audit mark).
+    // Told later, in the release for B16's phone half (the next phone update),
+    // because this one already has twelve entries, the most a release holds
+    // (releaseSchema, packages/core/src/schemas/releases.ts): three more #389
+    // changes. A refused sports item or size run no longer leaves an empty
+    // product group (services/inventory.ts:3218-3252 and :4164-4208 now run
+    // before the group is created); Duplicate says "Something went wrong. Please
+    // try again." in place of the raw error (server/actions/duplicate-item.ts:49-52);
+    // and a save whose rack lookup fails is refused before any write
+    // (services/inventory.ts:8698-8701) with the generic internal error message.
     // Who is told: every member (five entries have no audience: the two S14
     // entries, B15's, the browser-language counts and the settings error); each
     // other entry names the permission, and the module where there is one, that
@@ -184,26 +191,29 @@ export const RELEASES: Release[] = [
         // cross-site-request.ts:182 and export-rate-limit.ts:90). From: S14 #388. Checked at
         // e84d123d9: auth/session-ended/route.ts:48-49 sends a live session that another
         // origin sent there to the dashboard (before, the GET signed out with no check); every
-        // export and printout route passes its request to exportRateLimited, which refuses
-        // another origin's request with CROSS_SITE_EXPORT_MESSAGE before the hourly budget,
-        // export-rate-limit.ts:20-21, :90-95 and :98 (40 an hour); same-origin and the
-        // person's own act (none) pass, cross-site-request.ts:115-118. Purchase order
-        // attachments are signed storage links, not these routes
-        // (server/services/po-attachments.ts:70), hence an export or printout StockPilot
-        // makes. The refusal is the route's JSON answer, which carries the words, hence
-        // "answers". No audience: anyone signed in could be signed out, and the exports span
-        // many permissions.
+        // route that answers with a CSV, XLSX, ZIP or PDF passes its request to
+        // exportRateLimited, which refuses another origin's request with
+        // CROSS_SITE_EXPORT_MESSAGE before the hourly budget, export-rate-limit.ts:20-21, :90-95
+        // and :98 (40 an hour); same-origin and the person's own act (none) pass,
+        // cross-site-request.ts:115-118. No page calls it: the report pages, the order print page
+        // and the labels page are dashboard pages that still open from another site's link. The
+        // barcode image (api/v1/items/[id]/barcode) does not call it either, and purchase order
+        // attachments are signed storage links (server/services/po-attachments.ts:70), hence an
+        // export or PDF StockPilot makes and a report's PDF or CSV, not a printout or a report.
+        // The refusal is the route's JSON answer, which carries the words, hence "answers" and
+        // a short error that contains the message. No audience: anyone signed in could be signed
+        // out, and the exports span many permissions.
         id: 'other-websites-cannot-sign-you-out-or-download',
         category: 'fixed',
         area: 'Web app',
         title:
           'Links on other websites can no longer sign you out or start downloads with your account',
         whatChanged:
-          "On the web, a link or page on another website can no longer sign you out of StockPilot. A link that would have signed you out now opens your dashboard, and you stay signed in. A link to an export or printout StockPilot makes, such as a CSV export, a report, a purchase order PDF or a pick slip, no longer downloads when it is opened from a page on another website, such as webmail or a chat app in your browser. It answers “Start this download from StockPilot. A link on another website can't start it.” instead.",
+          "On the web, a link or page on another website can no longer sign you out of StockPilot. A link that would have signed you out now opens your dashboard, and you stay signed in. A link to an export or PDF StockPilot makes, such as a CSV export, a report's PDF or CSV, a purchase order PDF or a pick slip, no longer downloads when it is opened from a page on another website, such as webmail or a chat app in your browser. It answers “Start this download from StockPilot. A link on another website can't start it.” instead.",
         whyItMatters:
-          'Before, any website could sign you out of StockPilot with a link, and a page on another website could start StockPilot exports and printouts with your signed-in account. Each one counted toward the exports you can run in an hour, so another website could use them up and stop your own exports and printouts for up to an hour.',
+          'Before, any website could sign you out of StockPilot with a link, and a page on another website could start StockPilot exports and PDFs with your signed-in account. Each one counted toward the exports you can run in an hour, so another website could use them up and stop your own exports and PDFs for up to an hour.',
         howItAffectsYou:
-          "Signing out, and downloading from StockPilot's own pages, work as they did. If you open a link to one of these files from webmail or a chat app in your browser, you see that message instead of the file. Nothing changes in the mobile app.",
+          "Signing out, and downloading from StockPilot's own pages, work as they did. If you open a link to one of these files from webmail or a chat app in your browser, you see a short error that contains that message instead of the file. Nothing changes in the mobile app.",
         whatToDo:
           'No action needed. If a download link says to start the download from StockPilot, open the page in StockPilot and download it from there.',
       },
@@ -363,9 +373,17 @@ export const RELEASES: Release[] = [
       {
         // platform: web. From: B9 #391. Checked at e84d123d9: team/page.tsx:43 and :167 (the
         // organization's zone, resolveOrgTimezone) and team-manager.tsx:443-446
-        // (formatOrgDateTime), pinned by team-manager.disabled-badge.test.tsx:185; the default
-        // zone is UTC, supabase/migrations/0001_init.sql:34; Workspace timezone,
-        // org-timezone-editor.tsx:93. Not walked: Demo Co has no disabled member. Audience: the
+        // (formatOrgDateTime), pinned by team-manager.disabled-badge.test.tsx:185. The zone is the
+        // stored one, which the create form takes from the creator's browser
+        // (create-organization-form.tsx:49, actions/organization.ts:60) and the platform console
+        // defaults to Pacific (actions/platform-admin.ts:36); an unreadable row falls back to
+        // Pacific (core time/org-timezone.ts:42 and :97-99). An organization that never opened
+        // the setting need not be on the column's UTC default (0001_init.sql:34), so no sentence
+        // says it is. Owners and admins change it under Workspace timezone
+        // (org-timezone-editor.tsx:93, settings/organization/page.tsx:17,
+        // actions/organization.ts:284), which shows UTC for a stored zone outside its list
+        // (org-timezone-editor.tsx:70-72), hence "can change" and not "the zone shown there".
+        // Not walked: Demo Co has no disabled member. Audience: the
         // page needs members:invite (team/page.tsx:28 can(ctx, 'members:invite')), and only
         // owners and admins see the badge (team-manager.tsx:304 and :438).
         id: 'team-disabled-time-org-zone',
@@ -377,7 +395,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "It showed the server's time (UTC) without saying so, so an evening disable in the Pacific read as early the next morning.",
         howItAffectsYou:
-          'The time uses the time zone set in Settings, Organization. An organization that has not set one uses UTC, so its times stay in UTC.',
+          "The time uses your organization's time zone, which owners and admins can change under Workspace timezone in Settings, Organization.",
         whatToDo:
           'No action needed. If the time is not your local time, set Workspace timezone in Settings, Organization.',
         audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
@@ -385,7 +403,8 @@ export const RELEASES: Release[] = [
       {
         // platform: web. From: B9 #391. Checked at e84d123d9: procedures/[id]/page.tsx:32 and
         // :138 (the organization's zone), comment-thread.tsx:136 (formatOrgDateTime in the hover
-        // title) and :145 (how long ago, unchanged). Not walked: Demo Co has no procedure
+        // title) and :145 (how long ago, unchanged). The zone, and who can change it, as in
+        // team-disabled-time-org-zone's comment. Not walked: Demo Co has no procedure
         // comment. Audience as web-procedures-fixes: the Procedures module
         // (services/procedures.ts:283 assertModuleEnabled) and items:update (the sidebar
         // entry's requires).
@@ -398,7 +417,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "It showed the server's time (UTC) without saying so, so an evening comment in the Pacific read as early the next morning.",
         howItAffectsYou:
-          'The comment still shows how long ago it was posted. The time zone is the one set in Settings, Organization, and an organization that has not set one uses UTC.',
+          "The comment still shows how long ago it was posted. The time uses your organization's time zone, which owners and admins can change under Workspace timezone in Settings, Organization.",
         whatToDo:
           'No action needed. If the time is not your local time, an owner or admin can set the time zone in Settings, Organization.',
         audience: { anyPermission: ['items:update'], modules: ['procedures'] },
