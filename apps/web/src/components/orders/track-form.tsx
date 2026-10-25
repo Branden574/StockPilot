@@ -9,7 +9,7 @@ import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { returnedFragment } from '@stockpilot/core';
+import { orderStatusLabelForFulfillment, returnedFragment } from '@stockpilot/core';
 import { cn } from '@/lib/utils';
 
 interface TrackResult {
@@ -48,25 +48,66 @@ interface Props {
   initialEmail: string;
 }
 
-const TIMELINE: Array<{
-  key: keyof Pick<
-    TrackResult,
-    | 'createdAt'
-    | 'approvedAt'
-    | 'packingSlipGeneratedAt'
-    | 'stagedAt'
-    | 'inTransitAt'
-    | 'completedAt'
-  >;
-  label: string;
-}> = [
-  { key: 'createdAt', label: 'Submitted' },
-  { key: 'approvedAt', label: 'Approved' },
-  { key: 'packingSlipGeneratedAt', label: 'Packed' },
-  { key: 'stagedAt', label: 'Staged' },
-  { key: 'inTransitAt', label: 'In transit' },
-  { key: 'completedAt', label: 'Delivered' },
-];
+type TrackStepKey = keyof Pick<
+  TrackResult,
+  | 'createdAt'
+  | 'approvedAt'
+  | 'packingSlipGeneratedAt'
+  | 'stagedAt'
+  | 'inTransitAt'
+  | 'signedAt'
+  | 'completedAt'
+>;
+
+/** The step for the signature (B22), in the packing slip's and the
+ *  completion email's words for that moment. */
+export const SIGNED_FOR_STEP_LABEL = 'Signed for';
+
+/**
+ * The steps this order goes through, each read from the timestamp the order
+ * row records for it (B22). The page used one fixed list for every order, so
+ * a pickup showed an In transit step it never takes and ended Delivered, and
+ * the signature had no step although the read sends signedAt.
+ *   - A pickup is collected at the counter: it is never in transit, and its
+ *     last step is the completed status's word for a pickup, Handed over
+ *     (core's orderStatusLabelForFulfillment, the rule the order page, the
+ *     orders list and the phone use), so the status line and the last step
+ *     always agree.
+ *   - Signed for comes before the last step. Both signature paths, on screen
+ *     and on paper, stamp signed_at at every hand-over, in full or in part,
+ *     and completed_at only when nothing is still owed (0395
+ *     confirm_order_signature and confirm_physical_signature), so a short
+ *     hand-over shows Signed for done and the last step still to come.
+ *   - An order completed with no signature (completed before signatures were
+ *     recorded) has no Signed for step: it never happened and never will.
+ */
+export function trackSteps(
+  result: Pick<TrackResult, 'fulfillmentType' | 'signedAt' | 'completedAt'>,
+): Array<{ key: TrackStepKey; label: string }> {
+  const steps: Array<{ key: TrackStepKey; label: string }> = [
+    { key: 'createdAt', label: 'Submitted' },
+    { key: 'approvedAt', label: 'Approved' },
+    { key: 'packingSlipGeneratedAt', label: 'Packed' },
+    { key: 'stagedAt', label: 'Staged' },
+  ];
+  if (result.fulfillmentType !== 'pickup') {
+    steps.push({ key: 'inTransitAt', label: 'In transit' });
+  }
+  if (result.signedAt || !result.completedAt) {
+    steps.push({ key: 'signedAt', label: SIGNED_FOR_STEP_LABEL });
+  }
+  steps.push({ key: 'completedAt', label: trackStatusLabel('completed', result.fulfillmentType) });
+  return steps;
+}
+
+/** A status's words on this page, given the order's fulfilment: its own map
+ *  below, with core's rule for a completed pickup (Handed over). */
+export function trackStatusLabel(
+  status: string,
+  fulfillmentType: string | null | undefined,
+): string {
+  return orderStatusLabelForFulfillment(status, STATUS_LABELS[status] ?? status, fulfillmentType);
+}
 
 export const STATUS_LABELS: Record<string, string> = {
   pending_confirmation: 'Waiting for your confirmation',
@@ -82,6 +123,7 @@ export const STATUS_LABELS: Record<string, string> = {
   // CONFLICTS D14: a short hand-over leaves the order backordered; the page
   // printed the raw key. The word is the app's own (ORDER_STATUS_META).
   backordered: 'Backordered',
+  // A delivery's word. A completed pickup reads Handed over (trackStatusLabel).
   completed: 'Delivered',
   denied: 'Denied',
   cancelled: 'Cancelled',
@@ -197,7 +239,7 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
 }
 
 function TrackResultBlock({ result }: { result: TrackResult }) {
-  const statusLabel = STATUS_LABELS[result.status] ?? result.status;
+  const statusLabel = trackStatusLabel(result.status, result.fulfillmentType);
   const isTerminalNegative =
     result.status === 'denied' || result.status === 'cancelled';
 
@@ -229,12 +271,13 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
 
         {/* Timeline — only for non-terminal-negative paths and only
             once the requester has confirmed (pending_confirmation
-            rows haven't "created" yet from the team's view). Done steps
-            carry a check and ink words; open steps a hollow circle and quiet
-            words, so the state never rests on colour alone. */}
+            rows haven't "created" yet from the team's view). The steps
+            follow the order's fulfilment (trackSteps). Done steps carry a
+            check and ink words; open steps a hollow circle and quiet words,
+            so the state never rests on colour alone. */}
         {!isTerminalNegative && result.status !== 'pending_confirmation' ? (
           <Timeline className="border-border mt-5 border-t pt-5">
-            {TIMELINE.map((step) => {
+            {trackSteps(result).map((step) => {
               const ts = result[step.key];
               const done = Boolean(ts);
               return (

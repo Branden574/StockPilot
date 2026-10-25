@@ -6,10 +6,12 @@ import { ORDER_STATUS_META } from '@stockpilot/core';
 import { STATUS_LABELS, TrackForm } from './track-form';
 
 /**
- * Public /r/track keeps its OWN status words (CONFLICTS E3: "Delivered" for
- * completed, the six-step timeline), and every status the API can answer has
- * a word (CONFLICTS D14: a backordered order printed the raw key). A lookup
- * that finds nothing is said in an alert.
+ * Public /r/track keeps its OWN status words (CONFLICTS E3: "Delivered" for a
+ * completed delivery), and every status the API can answer has a word
+ * (CONFLICTS D14: a backordered order printed the raw key). A lookup that
+ * finds nothing is said in an alert. B22: a completed pickup reads Handed
+ * over, and the steps follow the order's fulfilment
+ * (track-form.steps.test.tsx has every sequence).
  */
 
 vi.mock('@/components/orders/delivery-map', () => ({ DeliveryMap: () => null }));
@@ -68,14 +70,16 @@ describe('/r/track status words', () => {
     for (const key of Object.keys(ORDER_STATUS_META)) {
       expect(STATUS_LABELS[key], key).toBeTruthy();
     }
-    // Its own vocabulary stays: completed is "Delivered", the requester's
+    // Its own vocabulary stays: completed is "Delivered" (a delivery's word;
+    // a completed pickup reads Handed over, B22), the requester's
     // confirmation step is theirs.
     expect(STATUS_LABELS.completed).toBe('Delivered');
     expect(STATUS_LABELS.pending_confirmation).toBe('Waiting for your confirmation');
     expect(STATUS_LABELS.staged_for_delivery).toBe('Ready for delivery');
   });
 
-  it('keeps the six-step timeline with its words, done steps marked apart from open ones by more than colour', async () => {
+  it("keeps the timeline's words, done steps marked apart from open ones by more than colour", async () => {
+    // The fixture is a pickup (B22): no In transit step, and it ends Handed over.
     const { container } = await look('approved');
     const steps = Array.from(container.querySelectorAll('[data-slot="timeline-entry"]'));
     expect(steps.map((li) => li.querySelector('.font-medium')?.textContent)).toEqual([
@@ -83,11 +87,30 @@ describe('/r/track status words', () => {
       'Approved',
       'Packed',
       'Staged',
-      'In transit',
-      'Delivered',
+      'Signed for',
+      'Handed over',
     ]);
     // Submitted and Approved carry a time; the rest none.
     expect(steps.filter((li) => /\d/.test(li.textContent ?? ''))).toHaveLength(2);
+    // A done step's icon differs from an open step's, not only its colour.
+    const icon = (li: Element) =>
+      li.querySelector('[data-slot="timeline-marker"] svg')?.getAttribute('class') ?? '';
+    expect(icon(steps[1]!)).not.toBe(icon(steps[2]!));
+  });
+
+  it('B22: a completed pickup reads Handed over; a completed delivery still reads Delivered', async () => {
+    const pickup = await look('completed', {
+      signedAt: '2026-08-17T17:00:00Z',
+      completedAt: '2026-08-17T17:00:00Z',
+    });
+    expect(screen.getByRole('heading', { level: 2, name: 'Handed over' })).toBeInTheDocument();
+    pickup.unmount();
+    await look('completed', {
+      fulfillmentType: 'delivery',
+      signedAt: '2026-08-17T17:00:00Z',
+      completedAt: '2026-08-17T17:00:00Z',
+    });
+    expect(screen.getByRole('heading', { level: 2, name: 'Delivered' })).toBeInTheDocument();
   });
 
   it('hides the timeline while the requester has not confirmed, and for denied or cancelled', async () => {
