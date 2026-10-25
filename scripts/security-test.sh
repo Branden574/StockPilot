@@ -868,12 +868,14 @@ WEB_TESTS=(
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
   # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
-  # no Bearer token is refused when Sec-Fetch-Site is not same-origin or Origin
-  # names another host), withApiContext's cookie path refusing it before the
-  # session is read, the sweep that holds every route that can write to it or
-  # to a reviewed exemption, and two routes end to end through Next's route
-  # module. auth/confirm/route.test.ts below carries the login-CSRF half (a
-  # confirmation link posted from another site never signs this browser in).
+  # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
+  # Origin names another host, or when neither header is present),
+  # withApiContext's cookie path refusing it before the session is read, the
+  # sweep that holds every route that can write to it or to a reviewed
+  # exemption (and every gate call to its own request), and two routes end to
+  # end through Next's route module. auth/confirm/route.test.ts below carries
+  # the login-CSRF half (a confirmation link posted from another site never
+  # signs this browser in).
   src/lib/auth/cross-site-request.test.ts
   src/lib/auth/api-context.cross-site.test.ts
   src/test/cookie-write-routes.guard.test.ts

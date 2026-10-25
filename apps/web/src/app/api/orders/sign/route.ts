@@ -238,10 +238,11 @@ export async function POST(req: NextRequest) {
     // A cookie session is an ambient credential: only this site's own page
     // (the sign page's collector) may spend it here (review finding 8). The
     // shared rule (lib/auth/cross-site-request.ts): a browser's Sec-Fetch-Site
-    // other than same-origin, or an Origin naming another host, `null` or an
-    // unreadable one, is the one 404, before any context is built. A Bearer
-    // caller (the phone) is not judged; a client that sends neither header is
-    // not a browser a page could drive. withApiContext applies the same rule.
+    // other than same-origin, an Origin naming another host, `null` or an
+    // unreadable one, or neither header at all (fail closed: the sign page's
+    // fetch always sends its Origin) is the one 404, before any context is
+    // built. A Bearer caller (the phone) is not judged. withApiContext applies
+    // the same rule.
     if (refusesCrossSiteCookieWrite(req)) return notFound();
     const ctx = await memberContextFor(req, order.organization_id);
     if (

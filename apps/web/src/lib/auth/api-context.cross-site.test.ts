@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Security invariant (docket S14, INV-E5): withApiContext's cookie path refuses
- * a write that a browser sent from another origin.
+ * a write that a browser did not send from a page of this origin.
  *
  * The session cookies are SameSite=Lax, so a page on a sibling subdomain can
  * make a signed-in member's browser post to any /api route with the cookie
@@ -16,9 +16,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *
  * Driven through the REAL withApiContext with one fake Supabase client: the
  * refusal must come before the session is read (no getUser, no context RPC),
- * a same-origin write and a write with neither header (not a browser) still
- * resolve, a Bearer caller (the phone) is never judged, and a GET is never
- * judged (a link from another site is a GET the browser sends with the cookie).
+ * and it covers a cookie write with neither Origin nor Sec-Fetch-Site (fail
+ * closed: every supported browser sends Origin on a write). A same-origin
+ * write still resolves, a Bearer caller (the phone) is never judged, and a GET
+ * is never judged (a link from another site is a GET the browser sends with
+ * the cookie).
  */
 
 const refs = vi.hoisted(() => ({ client: null as unknown }));
@@ -124,15 +126,27 @@ describe('withApiContext: a cookie write from another origin is refused before t
     ['an Origin alone, from another host (no Sec-Fetch-Site)', { origin: 'https://evil.example' }],
     ['Sec-Fetch-Site alone, cross-site', { 'sec-fetch-site': 'cross-site' }],
     ['an opaque origin', { origin: 'null' }],
+    ['neither Origin nor Sec-Fetch-Site (a client, proxy or extension stripped both)', {}],
   ])('%s: null, and no session or context is read', async (_name, headers) => {
     expect(await withApiContext(cookieRequest(headers))).toBeNull();
     expect(calls).toEqual([]);
   });
 
-  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])('%s from a sibling subdomain: null', async (method) => {
-    expect(await withApiContext(cookieRequest(SIBLING, method))).toBeNull();
-    expect(calls).toEqual([]);
-  });
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
+    '%s from a sibling subdomain: null',
+    async (method) => {
+      expect(await withApiContext(cookieRequest(SIBLING, method))).toBeNull();
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
+    'a cookie %s with neither header: null',
+    async (method) => {
+      expect(await withApiContext(cookieRequest({}, method))).toBeNull();
+      expect(calls).toEqual([]);
+    },
+  );
 
   it('a non-Bearer Authorization header is not a bearer: the cookie rule applies', async () => {
     expect(
@@ -156,6 +170,28 @@ describe('withApiContext: a cookie write from another origin is refused before t
     expect(logged).not.toContain('secret-value');
     expect(logged).not.toContain('auth-token');
   });
+
+  it('logs a refused header-less cookie write, with both headers recorded as absent', async () => {
+    expect(await withApiContext(cookieRequest({}))).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![1]).toMatchObject({
+      method: 'POST',
+      secFetchSite: null,
+      originHost: null,
+    });
+  });
+
+  it('does not log a refused write that carried no session cookie (its answer was null anyway)', async () => {
+    const bare = new Request(`${APP}/api/v1/things`, { method: 'POST' });
+    expect(await withApiContext(bare)).toBeNull();
+    const elsewhere = new Request(`${APP}/api/v1/things`, {
+      method: 'POST',
+      headers: { cookie: 'theme=dark', ...OTHER_SITE },
+    });
+    expect(await withApiContext(elsewhere)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
 });
 
 describe('withApiContext: what still resolves', () => {
@@ -166,9 +202,28 @@ describe('withApiContext: what still resolves', () => {
     expect(calls).toEqual(['auth:getUser(cookie)', 'rpc:get_request_context']);
   });
 
-  it('a cookie write with neither header (not a browser a page could drive) resolves', async () => {
-    expect((await withApiContext(cookieRequest({})))?.organizationId).toBe(ORG);
+  it('a cookie write with only Sec-Fetch-Site same-origin, or only a matching Origin, resolves', async () => {
+    expect(
+      (await withApiContext(cookieRequest({ 'sec-fetch-site': 'same-origin' })))?.organizationId,
+    ).toBe(ORG);
+    expect((await withApiContext(cookieRequest({ origin: APP })))?.organizationId).toBe(ORG);
   });
+
+  it('a Bearer write with neither header (the phone) is not judged', async () => {
+    const req = new Request(`${APP}/api/v1/cycle-counts/x/lines/y/record`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer h.e30.sig' },
+    });
+    expect((await withApiContext(req))?.organizationId).toBe(ORG);
+    expect(calls[0]).toBe('auth:getUser(bearer)');
+  });
+
+  it.each(['GET', 'HEAD'])(
+    'a cookie %s with neither header is not a write: it resolves',
+    async (method) => {
+      expect((await withApiContext(cookieRequest({}, method)))?.organizationId).toBe(ORG);
+    },
+  );
 
   it('a Bearer write (the phone) is not judged, whatever Origin and Sec-Fetch-Site say', async () => {
     const req = new Request(`${APP}/api/v1/cycle-counts/x/lines/y/record`, {
@@ -179,15 +234,20 @@ describe('withApiContext: what still resolves', () => {
     expect(calls[0]).toBe('auth:getUser(bearer)');
   });
 
-  it.each(['GET', 'HEAD'])('a cookie %s from another site is not a write: it resolves', async (method) => {
-    expect((await withApiContext(cookieRequest(OTHER_SITE, method)))?.organizationId).toBe(ORG);
-  });
+  it.each(['GET', 'HEAD'])(
+    'a cookie %s from another site is not a write: it resolves',
+    async (method) => {
+      expect((await withApiContext(cookieRequest(OTHER_SITE, method)))?.organizationId).toBe(ORG);
+    },
+  );
 
   it('a POST built from a same-origin request (the sign route builds one) resolves', async () => {
     const incoming = cookieRequest(SAME_ORIGIN);
     const headers = new Headers(incoming.headers);
     headers.set('x-organization-id', ORG);
-    const ctx = await withApiContext(new Request(incoming.url, { method: incoming.method, headers }));
+    const ctx = await withApiContext(
+      new Request(incoming.url, { method: incoming.method, headers }),
+    );
     expect(ctx?.organizationId).toBe(ORG);
   });
 

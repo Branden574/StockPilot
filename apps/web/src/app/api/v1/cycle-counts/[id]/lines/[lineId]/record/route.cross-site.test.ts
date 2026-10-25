@@ -20,8 +20,9 @@ import { runRouteThroughNext } from '@/test/next-route-harness';
  * counter's browser record any count it chose on any line that counter could
  * reach. Now the route gives that post its signed-out answer (401
  * unauthenticated), before the session is read and before anything is
- * recorded. Its own page's post, the phone's Bearer post and a client that
- * sends neither header are unchanged.
+ * recorded, and so does a cookie post with neither Origin nor Sec-Fetch-Site
+ * (fail closed: every supported browser sends Origin on a write). Its own
+ * page's post and the phone's Bearer post are unchanged.
  */
 
 const h = vi.hoisted(() => ({
@@ -110,9 +111,14 @@ function fakeSupabase() {
   };
 }
 
+// The route's POST takes a NextRequest, which is what Next's App Route module
+// hands it (built from the request below); the harness types its handlers with
+// the plain Request it is given.
+const ROUTE = route as unknown as Parameters<typeof runRouteThroughNext>[0];
+
 function post(headers: Record<string, string>) {
   return runRouteThroughNext(
-    route,
+    ROUTE,
     new Request(`${APP}/api/v1/cycle-counts/${CC}/lines/${LINE}/record`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
@@ -135,9 +141,13 @@ beforeEach(() => {
 
 describe('POST .../record: a cookie write from another origin gets the signed-out answer', () => {
   it.each([
-    ['a page on a sibling subdomain', { 'sec-fetch-site': 'same-site', origin: 'https://evil.app.test' }],
+    [
+      'a page on a sibling subdomain',
+      { 'sec-fetch-site': 'same-site', origin: 'https://evil.app.test' },
+    ],
     ['a page on another site', { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }],
     ['a browser without Sec-Fetch-Site, from another host', { origin: 'https://evil.app.test' }],
+    ['a client that sends neither Origin nor Sec-Fetch-Site', {}],
   ])('%s: 401, no session read, nothing recorded', async (_name, headers) => {
     const res = await post({ cookie: COOKIE, ...headers });
     expect(res.status).toBe(401);
@@ -169,8 +179,8 @@ describe('POST .../record: what still records', () => {
     expect(h.recordCount).toHaveBeenCalledTimes(1);
   });
 
-  it('a client that sends neither header (not a browser a page could drive)', async () => {
-    const res = await post({ cookie: COOKIE });
+  it("the phone's post (Bearer) with neither header", async () => {
+    const res = await post({ authorization: 'Bearer h.e30.sig', 'x-organization-id': ORG });
     expect(res.status).toBe(200);
     expect(h.recordCount).toHaveBeenCalledTimes(1);
   });

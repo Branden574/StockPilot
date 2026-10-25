@@ -1,9 +1,9 @@
 /**
- * The one rule for a cookie-authenticated write that a browser sent from
- * another page's origin (docket S14). withApiContext applies it on its cookie
- * path, so every API route that builds its context there refuses such a write
- * with the answer it already gives a signed-out caller. The order sign route and
- * the release-state route also call it before they build a context.
+ * The one rule for a cookie-authenticated write that a browser did not send
+ * from a page of this origin (docket S14). withApiContext applies it on its
+ * cookie path, so every API route that builds its context there refuses such a
+ * write with the answer it already gives a signed-out caller. The order sign
+ * route and the release-state route also call it before they build a context.
  *
  * WHY. A browser attaches the session cookie to a request whatever page made
  * it. The session cookies are SameSite=Lax, so a page on another SITE cannot
@@ -24,16 +24,27 @@
  *     from another site is a GET the browser sends with the cookie (Lax), which
  *     must keep working.
  *
- * WHEN IT IS REFUSED. When the browser says the request came from somewhere
- * else, in either of the two headers a browser sets and no page can set:
+ * WHEN IT IS REFUSED. Unless the browser says the request came from a page of
+ * this origin, in the two headers a browser sets and no page can set:
  *   - Sec-Fetch-Site is present and is not `same-origin`: `same-site` (a sibling
  *     subdomain), `cross-site`, or `none` (a request no page made, which never
  *     posts);
  *   - Origin is present and its host is not one this request was addressed to.
  *     `null` (a sandboxed frame, a data: URL, a cross-origin redirect) and an
- *     unreadable value name no host, so they are refused too.
- * A request with neither header is not judged: every browser the app supports
- * sends Origin on a POST, so a request without either is not one a page drove.
+ *     unreadable value name no host, so they are refused too;
+ *   - NEITHER header is present (fail closed, the integrator's decision of
+ *     2026-10-24). Every browser the app supports (Next 16's targets: Chrome,
+ *     Edge and Firefox 111+, Safari 16.4+) sends Origin on every request whose
+ *     method is not GET or HEAD (the Fetch standard, "append a request Origin
+ *     header"), and Sec-Fetch-Site besides over https, so this costs none of
+ *     them anything, and a client, proxy or extension that strips both headers
+ *     is not let through. A request that carries either header is judged by
+ *     the ones it carries: Sec-Fetch-Site `same-origin` alone (Origin dropped
+ *     by an extension) passes, and so does a matching Origin alone (plain http
+ *     to a LAN address, where no browser sends Sec-Fetch-Site).
+ * The phone is never refused: it sends a Bearer token on every signed-in call
+ * (apps/mobile/src/lib/api.ts authHeader). A test or script that drives a
+ * cookie write must send an Origin, as the web app's own pages do.
  *
  * THE HOST. Origin is compared with each host the request was addressed to: the
  * request URL's, the Host header's and the first X-Forwarded-Host's. On Vercel
@@ -110,9 +121,10 @@ function addressedHosts(req: Request): Set<string> {
 }
 
 /**
- * True when a browser sent this request from another origin, or from one it
- * will not name: Sec-Fetch-Site is not `same-origin`, or Origin is `null`,
- * unreadable or another host. False when neither header is present.
+ * True when a header says this request came from another origin, or from one
+ * the browser will not name: Sec-Fetch-Site is not `same-origin`, or Origin is
+ * `null`, unreadable or another host. False when neither header is present,
+ * which the write rule below refuses on its own account.
  */
 export function isCrossSiteBrowserRequest(req: Request): boolean {
   if (fetchSiteIsElsewhere(req)) return true;
@@ -129,12 +141,23 @@ export function isCrossSiteBrowserRequest(req: Request): boolean {
 }
 
 /**
+ * True when the browser's own headers place this request on a page of this
+ * origin: at least one of Sec-Fetch-Site and Origin is present, and each one
+ * present says so.
+ */
+export function isSameOriginBrowserRequest(req: Request): boolean {
+  const named = req.headers.has('sec-fetch-site') || req.headers.has('origin');
+  return named && !isCrossSiteBrowserRequest(req);
+}
+
+/**
  * True when this request must be refused before any cookie session is read: it
- * has no Bearer token, its method is a write, and a browser sent it from
- * another origin.
+ * has no Bearer token, its method is a write, and the browser does not say it
+ * came from a page of this origin (another origin, one it will not name, or
+ * neither header at all).
  */
 export function refusesCrossSiteCookieWrite(req: Request): boolean {
   if (bearerTokenFrom(req)) return false;
   if (!isWriteMethod(req.method)) return false;
-  return isCrossSiteBrowserRequest(req);
+  return !isSameOriginBrowserRequest(req);
 }

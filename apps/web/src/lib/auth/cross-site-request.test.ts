@@ -7,19 +7,21 @@ import {
   bearerTokenFrom,
   fetchSiteIsElsewhere,
   isCrossSiteBrowserRequest,
+  isSameOriginBrowserRequest,
   isWriteMethod,
   refusesCrossSiteCookieWrite,
 } from './cross-site-request';
 
 /**
  * Security invariant (docket S14, INV-E5): the one rule for a
- * cookie-authenticated write that a browser sent from another origin.
+ * cookie-authenticated write that a browser did not send from this origin.
  *
  * A request is refused when it carries no Bearer token, its method is a write
- * (anything but GET, HEAD and OPTIONS), and the browser says it came from
- * elsewhere: Sec-Fetch-Site present and not `same-origin`, or Origin present
- * and not naming a host this request was addressed to (`null` and unreadable
- * values name none). A request with neither header is not judged.
+ * (anything but GET, HEAD and OPTIONS), and the browser does not say it came
+ * from a page on this origin: Sec-Fetch-Site present and not `same-origin`,
+ * Origin present and not naming a host this request was addressed to (`null`
+ * and unreadable values name none), or NEITHER header present (fail closed:
+ * every browser the app supports sends Origin on a write).
  */
 
 const APP = 'https://app.test';
@@ -33,9 +35,9 @@ function req(
 
 describe('the browser says where the write came from', () => {
   it('same-origin (Sec-Fetch-Site and a matching Origin): allowed', () => {
-    expect(
-      refusesCrossSiteCookieWrite(req({ 'sec-fetch-site': 'same-origin', origin: APP })),
-    ).toBe(false);
+    expect(refusesCrossSiteCookieWrite(req({ 'sec-fetch-site': 'same-origin', origin: APP }))).toBe(
+      false,
+    );
   });
 
   it('same-site: a page on a sibling subdomain is refused', () => {
@@ -76,18 +78,62 @@ describe('the browser says where the write came from', () => {
   });
 });
 
-describe('missing headers', () => {
-  it('neither header: not judged (not a request a page drove)', () => {
-    expect(refusesCrossSiteCookieWrite(req())).toBe(false);
-    expect(isCrossSiteBrowserRequest(req())).toBe(false);
+describe('missing headers (fail closed)', () => {
+  // Every browser the app supports (Chrome, Edge and Firefox 111+, Safari
+  // 16.4+) sends Origin on any request whose method is not GET or HEAD (the
+  // Fetch standard, "append a request Origin header"), so a write with neither
+  // header did not come from one of its pages: a client, a proxy or an
+  // extension stripped both, and it is refused like a cross-site one.
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
+    'a cookie %s with neither header: refused',
+    (method) => {
+      expect(refusesCrossSiteCookieWrite(req({}, { method }))).toBe(true);
+    },
+  );
+
+  it('a Bearer write with neither header (the phone): allowed', () => {
+    expect(refusesCrossSiteCookieWrite(req({ authorization: 'Bearer t0k3n' }))).toBe(false);
   });
 
-  it('only Sec-Fetch-Site same-origin: allowed', () => {
+  it.each(['GET', 'HEAD', 'OPTIONS'])(
+    'a %s with neither header: allowed (not a write)',
+    (method) => {
+      expect(refusesCrossSiteCookieWrite(req({}, { method }))).toBe(false);
+    },
+  );
+
+  it("a same-origin fetch POST (Origin and Sec-Fetch-Site same-origin, the web app's own): allowed", () => {
+    expect(refusesCrossSiteCookieWrite(req({ origin: APP, 'sec-fetch-site': 'same-origin' }))).toBe(
+      false,
+    );
+  });
+
+  it('only Sec-Fetch-Site same-origin (a browser or extension that dropped Origin): allowed', () => {
     expect(refusesCrossSiteCookieWrite(req({ 'sec-fetch-site': 'same-origin' }))).toBe(false);
   });
 
-  it('only a matching Origin (a browser without Sec-Fetch-Site): allowed', () => {
+  it('only a matching Origin (plain http to a LAN address, where no browser sends Sec-Fetch-Site): allowed', () => {
     expect(refusesCrossSiteCookieWrite(req({ origin: APP }))).toBe(false);
+    const lan = { url: 'http://192.168.1.20:3570/api/v1/things' };
+    expect(
+      refusesCrossSiteCookieWrite(
+        req({ host: '192.168.1.20:3570', origin: 'http://192.168.1.20:3570' }, lan),
+      ),
+    ).toBe(false);
+  });
+
+  it('the two halves: a header saying elsewhere, and a page of this origin proven', () => {
+    // Neither header: nothing says elsewhere, and nothing proves this origin.
+    expect(isCrossSiteBrowserRequest(req())).toBe(false);
+    expect(isSameOriginBrowserRequest(req())).toBe(false);
+    expect(isSameOriginBrowserRequest(req({ 'sec-fetch-site': 'same-origin' }))).toBe(true);
+    expect(isSameOriginBrowserRequest(req({ origin: APP }))).toBe(true);
+    expect(isSameOriginBrowserRequest(req({ origin: APP, 'sec-fetch-site': 'same-site' }))).toBe(
+      false,
+    );
+    expect(
+      isSameOriginBrowserRequest(req({ origin: 'null', 'sec-fetch-site': 'same-origin' })),
+    ).toBe(false);
   });
 });
 
@@ -126,12 +172,21 @@ describe('the host the Origin is compared with', () => {
     const local = { url: 'http://localhost:3570/api/v1/things' };
     expect(
       refusesCrossSiteCookieWrite(
-        req({ host: '127.0.0.1:3570', origin: 'http://127.0.0.1:3570', 'sec-fetch-site': 'same-origin' }, local),
+        req(
+          {
+            host: '127.0.0.1:3570',
+            origin: 'http://127.0.0.1:3570',
+            'sec-fetch-site': 'same-origin',
+          },
+          local,
+        ),
       ),
     ).toBe(false);
     // The same server, posted to from a page on another port: refused.
     expect(
-      refusesCrossSiteCookieWrite(req({ host: '127.0.0.1:3570', origin: 'http://127.0.0.1:3999' }, local)),
+      refusesCrossSiteCookieWrite(
+        req({ host: '127.0.0.1:3570', origin: 'http://127.0.0.1:3999' }, local),
+      ),
     ).toBe(true);
   });
 
@@ -139,12 +194,18 @@ describe('the host the Origin is compared with', () => {
     const internal = { url: 'http://internal.local/api/v1/things' };
     expect(
       refusesCrossSiteCookieWrite(
-        req({ host: 'internal.local', 'x-forwarded-host': 'app.test, proxy.local', origin: APP }, internal),
+        req(
+          { host: 'internal.local', 'x-forwarded-host': 'app.test, proxy.local', origin: APP },
+          internal,
+        ),
       ),
     ).toBe(false);
     expect(
       refusesCrossSiteCookieWrite(
-        req({ host: 'internal.local', 'x-forwarded-host': 'proxy.local, app.test', origin: APP }, internal),
+        req(
+          { host: 'internal.local', 'x-forwarded-host': 'proxy.local, app.test', origin: APP },
+          internal,
+        ),
       ),
     ).toBe(true);
   });
@@ -181,7 +242,9 @@ describe('a Bearer caller is not judged; nothing else is exempt', () => {
     ).toBe(true);
     // "Bearer" with no token is not a bearer either: withApiContext reads the cookie.
     expect(
-      refusesCrossSiteCookieWrite(req({ authorization: 'Bearer ', origin: 'https://evil.example' })),
+      refusesCrossSiteCookieWrite(
+        req({ authorization: 'Bearer ', origin: 'https://evil.example' }),
+      ),
     ).toBe(true);
   });
 
@@ -208,13 +271,19 @@ describe('every method', () => {
 
   it.each(['POST', 'PUT', 'PATCH', 'DELETE'])('%s same-origin: allowed', (method) => {
     expect(
-      refusesCrossSiteCookieWrite(req({ origin: APP, 'sec-fetch-site': 'same-origin' }, { method })),
+      refusesCrossSiteCookieWrite(
+        req({ origin: APP, 'sec-fetch-site': 'same-origin' }, { method }),
+      ),
     ).toBe(false);
   });
 
   it('a method in another case is the same method (fetch does not normalise "patch")', () => {
     // Request-shaped, because undici warns on constructing a lowercase "patch".
-    const lowercase = { method: 'patch', url: `${APP}/api/v1/things`, headers: new Headers(crossSite) };
+    const lowercase = {
+      method: 'patch',
+      url: `${APP}/api/v1/things`,
+      headers: new Headers(crossSite),
+    };
     expect(refusesCrossSiteCookieWrite(lowercase as Request)).toBe(true);
     expect(isWriteMethod('get')).toBe(false);
     expect(isWriteMethod('Options')).toBe(false);
@@ -231,7 +300,9 @@ describe('fetchSiteIsElsewhere: the Sec-Fetch-Site half on its own', () => {
   it('only a present value other than same-origin', () => {
     expect(fetchSiteIsElsewhere(req())).toBe(false);
     expect(fetchSiteIsElsewhere(req({ 'sec-fetch-site': 'same-origin' }))).toBe(false);
-    expect(fetchSiteIsElsewhere(req({ 'sec-fetch-site': 'same-origin', origin: 'null' }))).toBe(false);
+    expect(fetchSiteIsElsewhere(req({ 'sec-fetch-site': 'same-origin', origin: 'null' }))).toBe(
+      false,
+    );
     for (const site of ['same-site', 'cross-site', 'none']) {
       expect(fetchSiteIsElsewhere(req({ 'sec-fetch-site': site })), site).toBe(true);
     }

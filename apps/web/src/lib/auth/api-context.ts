@@ -384,10 +384,19 @@ async function pickActiveMembership(
 }
 
 /**
- * One warning per refused cross-site write, so a refusal of the app's own
- * traffic (a proxy that renames the host, a browser that misreports) shows in
- * the runtime logs. The method, the path, Sec-Fetch-Site and the Origin's host
- * only: never the query string, a cookie or a token.
+ * The Supabase SSR client's session cookie, `sb-<projectRef>-auth-token[.N]`.
+ * Without one in the request there is no cookie session to read.
+ */
+const SUPABASE_AUTH_COOKIE_RE = /(?:^|;\s*)sb-[^=]+-auth-token(?:\.\d+)?=/;
+
+/**
+ * One warning per refused cookie write, so a refusal of the app's own traffic
+ * (a proxy that renames the host or strips both headers, a browser that
+ * misreports) shows in the runtime logs. Only a write that came with a session
+ * cookie is logged: without one the answer was null anyway, and a bot's bare
+ * POST is not news. The method, the path, Sec-Fetch-Site and the Origin's host
+ * only (null when the header was absent): never the query string, a cookie or
+ * a token.
  */
 function logRefusedCrossSiteWrite(req: Request): void {
   let path = '(unreadable)';
@@ -405,7 +414,7 @@ function logRefusedCrossSiteWrite(req: Request): void {
       originHost = '(unreadable)';
     }
   }
-  console.warn('[api-context] refused a cookie-authenticated write from another origin', {
+  console.warn('[api-context] refused a cookie-authenticated write not sent from this origin', {
     method: req.method,
     path,
     secFetchSite: req.headers.get('sec-fetch-site')?.slice(0, 32) ?? null,
@@ -429,10 +438,11 @@ function logRefusedCrossSiteWrite(req: Request): void {
  * because API routes don't have a useful redirect target.
  *
  * The cookie path also returns null for a write (any method but GET, HEAD and
- * OPTIONS) that a browser sent from another origin, before the session is read
- * (docket S14, lib/auth/cross-site-request.ts). Pass the request the route
- * received, or one built from it with the same method, URL and headers: the
- * rule reads all three.
+ * OPTIONS) that a browser did not send from a page of this origin, before the
+ * session is read: another origin, one it will not name, or neither Origin nor
+ * Sec-Fetch-Site at all (docket S14, lib/auth/cross-site-request.ts). Pass the
+ * request the route received, or one built from it with the same method, URL
+ * and headers: the rule reads all three.
  */
 export async function withApiContext(req?: Request): Promise<ServiceContext | null> {
   const bearer = bearerTokenFrom(req);
@@ -541,14 +551,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   // header is honored if present so a cookie-authed client can request a
   // specific org (membership is verified before use).
   //
-  // A write a browser sent from another origin is refused first (docket S14).
-  // The browser attaches the session cookie whatever page made the request, and
-  // SameSite=Lax still lets a page on a sibling subdomain post with it; a route
-  // handler gets no Origin check from the framework the way a server action
-  // does. Null is every caller's signed-out answer, so the refusal needs no
-  // route change, and nothing below (getUser, the context RPC) runs for it.
+  const cookieHeader = req?.headers.get('cookie') ?? '';
+  const hasSessionCookie = SUPABASE_AUTH_COOKIE_RE.test(cookieHeader);
+
+  // A write a browser did not send from a page of this origin is refused first
+  // (docket S14): another origin, one it will not name, or neither Origin nor
+  // Sec-Fetch-Site (fail closed: every supported browser sends Origin on a
+  // write). The browser attaches the session cookie whatever page made the
+  // request, and SameSite=Lax still lets a page on a sibling subdomain post
+  // with it; a route handler gets no Origin check from the framework the way a
+  // server action does. Null is every caller's signed-out answer, so the
+  // refusal needs no route change, and nothing below (getUser, the context
+  // RPC) runs for it.
   if (req && refusesCrossSiteCookieWrite(req)) {
-    logRefusedCrossSiteWrite(req);
+    if (hasSessionCookie) logRefusedCrossSiteWrite(req);
     return null;
   }
 
@@ -560,11 +576,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   // cookies are present we already know there's no session and can
   // skip the network call entirely. Anonymous /api/ai/chat now 401s
   // in <50ms instead of ~676ms (measured in production).
-  const cookieHeader = req?.headers.get('cookie') ?? '';
-  if (cookieHeader && !/(?:^|;\s*)sb-[^=]+-auth-token(?:\.\d+)?=/.test(cookieHeader)) {
-    return null;
-  }
-  if (!cookieHeader) {
+  if (!hasSessionCookie) {
     return null;
   }
 

@@ -15,10 +15,10 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
 // "mark it all read so they never see the notice" is still not something
 // another page should be able to do. The shared rule decides
 // (lib/auth/cross-site-request.ts, docket S14): a Bearer caller (the phone) is
-// not judged, and a browser that says the post came from elsewhere, by
-// Sec-Fetch-Site or by Origin, gets this route's own 403 before the session is
-// looked at. withApiContext applies the same rule, as a 401, to any caller that
-// skipped this check.
+// not judged, and a post the browser does not place on a page of this origin
+// (Sec-Fetch-Site or Origin naming elsewhere, or neither header at all) gets
+// this route's own 403 before the session is looked at. withApiContext applies
+// the same rule, as a 401, to any caller that skipped this check.
 
 /**
  * POST /api/v1/me/release-state — dismiss / open / read / read_all.

@@ -1409,17 +1409,21 @@ application structure.
   (`ORDER_PHOTO_URL_TTL_SECONDS` and the web loader's
   `THUMB_SIGNED_URL_TTL_SEC`).
 
-### INV-E5 — a cookie-authenticated write that a browser sent from another origin is refused
+### INV-E5 — a cookie-authenticated write that a browser did not send from this origin is refused
 
 - **Invariant**: every route handler under `apps/web/src/app` that exports
   `POST`, `PUT`, `PATCH` or `DELETE` either builds its context through
   `withApiContext`, whose cookie path answers null (the route's own signed-out
-  answer) for a write that carries no Bearer token and whose `Sec-Fetch-Site`
-  is present and not `same-origin`, or whose `Origin` is present and names no
-  host the request was addressed to; or it is on the reviewed exemption list in
+  answer) for a write that carries no Bearer token unless the browser places
+  it on a page of this origin: `Sec-Fetch-Site`, when present, is
+  `same-origin`; `Origin`, when present, names a host the request was
+  addressed to; and at least one of the two is present (a write with neither
+  is refused, fail closed). Or it is on the reviewed exemption list in
   [`cookie-write-routes.guard.test.ts`](../../apps/web/src/test/cookie-write-routes.guard.test.ts),
   with how it authenticates and why it needs no cookie rule, and it imports no
-  cookie-session reader.
+  cookie-session reader. Every call of `withApiContext` or of the returns
+  routes' two shared gates hands it the request it was given, or one rebuilt
+  with the same URL, method and headers (changed only by `X-Organization-Id`).
 - **Why it matters**: a browser attaches the session cookie to a request
   whatever page made it. The cookies are `SameSite=Lax`, which stops a page on
   another site from posting with them but not a page on a sibling subdomain
@@ -1438,26 +1442,37 @@ application structure.
   [`cross-site-request.ts`](../../apps/web/src/lib/auth/cross-site-request.ts),
   called at the top of `withApiContext`'s cookie path, before `getUser`, and by
   the sign and release-state routes before they build a context (each keeps
-  its own answer: the one 404, and 403). `/auth/confirm` calls
+  its own answer: the one 404, and 403). Never judged: a Bearer caller (the
+  phone, which sends one on every signed-in call), `GET`, `HEAD` and
+  `OPTIONS`. A write with neither header is refused because every browser the
+  app supports (Chrome, Edge and Firefox 111+, Safari 16.4+) sends `Origin` on
+  any request whose method is not `GET` or `HEAD` (the Fetch standard, "append
+  a request Origin header"), so only a client, proxy or extension that strips
+  both sends one; a test or script that drives a cookie write sends an
+  `Origin`, as the app's own pages do. The `Origin` host is compared with the
+  request URL's host, the `Host` header and the first `X-Forwarded-Host`: on
+  Vercel all three name the public host, and under `next dev` the URL says
+  `localhost` whatever the browser typed. `/auth/confirm` calls
   `fetchSiteIsElsewhere` before `verifyOtp`: its page is `no-referrer`, so its
-  own form posts `Origin: null` and only `Sec-Fetch-Site` can be read. Never
-  judged: a Bearer caller (the phone), `GET`, `HEAD` and `OPTIONS`, and a
-  request with neither header (not a browser a page could drive). The `Origin`
-  host is compared with the request URL's host, the `Host` header and the first
-  `X-Forwarded-Host`: on Vercel all three name the public host, and under
-  `next dev` the URL says `localhost` whatever the browser typed.
+  own form posts `Origin: null` and only `Sec-Fetch-Site` can be read. A post
+  there with no `Sec-Fetch-Site` is verified and logged (type only), by
+  decision: without that header no header tells its own post from another
+  site's, so refusing would refuse every browser without Fetch Metadata on a
+  page that loads no script and opens on whatever device holds the email.
 - **Tested at**:
   [`cross-site-request.test.ts`](../../apps/web/src/lib/auth/cross-site-request.test.ts)
-  (the rule: every method, both headers, `null` and malformed origins, Bearer
-  and other `Authorization` schemes, local and proxied hosts);
+  (the rule: every method, both headers, neither header, `null` and malformed
+  origins, Bearer and other `Authorization` schemes, local and proxied hosts);
   [`api-context.cross-site.test.ts`](../../apps/web/src/lib/auth/api-context.cross-site.test.ts)
-  (the real `withApiContext` refuses before the session is read, and a
-  same-origin, a Bearer and a header-less write still resolve);
+  (the real `withApiContext` refuses before the session is read, a header-less
+  cookie write included, and a same-origin write, a Bearer write and a `GET`
+  still resolve);
   [`cookie-write-routes.guard.test.ts`](../../apps/web/src/test/cookie-write-routes.guard.test.ts)
   (the allowlist sweep over the route files' syntax trees, with a self-test;
-  on 2026-10-24 it read 224 route files: 114 write handlers covered, 13 exempt,
-  one re-export); the record route's and release-state's `route.cross-site.test.ts`
-  (end to end through Next's App Route module); and
+  on 2026-10-24 it read 224 route files: 128 write handlers, 114 through a
+  gate, 13 exempt and one re-export, and 193 gate calls); the record route's
+  and release-state's `route.cross-site.test.ts` (end to end through Next's
+  App Route module); and
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
   (login CSRF).
 - **Not covered by this rule**: a `GET` that changes state. A link from another
@@ -1466,7 +1481,10 @@ application structure.
   are the cron jobs (behind `CRON_SECRET`) and the two accounting OAuth
   callbacks, which match their `state` against the pending connection row under
   RLS. Server actions are covered by Next's own `Origin` check, not by this
-  rule.
+  rule. Also not covered: a login CSRF on `/auth/confirm` from a browser that
+  sends no `Sec-Fetch-Site` (one without Fetch Metadata, or one whose header an
+  extension strips), which needs an unspent link for an account the attacker
+  holds; the log line shows whether such posts happen.
 
 ---
 

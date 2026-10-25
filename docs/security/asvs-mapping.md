@@ -285,10 +285,11 @@ The rate limiter itself is the Postgres atomic counter added in migration 0048,
 whose `increment_rate_limit` function was closed to anon by 0318 — see
 `supabase/tests/0318_secdef_grants.test.sql`.
 
-A cookie-authenticated write that a browser sent from another origin is refused
-(anti-CSRF on route handlers, INV-E5): `withApiContext` answers it as signed out
-before the session is read, and a sweep holds every route that can write to that
-rule or to a reviewed exemption.
+A cookie-authenticated write that a browser did not send from this origin is
+refused (anti-CSRF on route handlers, INV-E5), and so is one that carries neither
+`Origin` nor `Sec-Fetch-Site` (fail closed): `withApiContext` answers it as
+signed out before the session is read, and a sweep holds every route that can
+write to that rule or to a reviewed exemption.
 
 _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/lib/auth/api-context.cross-site.test.ts`,

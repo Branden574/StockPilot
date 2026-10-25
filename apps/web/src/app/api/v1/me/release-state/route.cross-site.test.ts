@@ -4,7 +4,7 @@
 // FIRST: Next builds its request storages from this global when they load.
 import '@/test/next-als';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { runRouteThroughNext } from '@/test/next-route-harness';
 
@@ -16,15 +16,15 @@ import { runRouteThroughNext } from '@/test/next-route-harness';
  *
  * This route judged a cross-site post before S14, by Origin alone: it let
  * through a post whose Sec-Fetch-Site said another site but which carried no
- * Origin, and any post with an Authorization header of any kind. It now uses
- * the shared rule and keeps its own answer (403 forbidden). The web app's own
- * post and the phone's are unchanged.
+ * Origin, a post with neither header, and any post with an Authorization
+ * header of any kind. It now uses the shared rule and keeps its own answer
+ * (403 forbidden). The web app's own post and the phone's are unchanged.
  */
 
 const h = vi.hoisted(() => ({
   client: null as unknown,
   calls: [] as string[],
-  recordReleaseState: null as unknown as ReturnType<typeof vi.fn>,
+  recordReleaseState: null as unknown as Mock<(...args: unknown[]) => Promise<unknown>>,
 }));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
@@ -122,12 +122,22 @@ beforeEach(() => {
 
 describe('POST /api/v1/me/release-state: a cookie write from another origin is refused', () => {
   it.each([
-    ['a page on a sibling subdomain', { 'sec-fetch-site': 'same-site', origin: 'https://evil.app.test' }],
+    [
+      'a page on a sibling subdomain',
+      { 'sec-fetch-site': 'same-site', origin: 'https://evil.app.test' },
+    ],
     ['a page on another site', { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }],
     ['Sec-Fetch-Site cross-site with no Origin', { 'sec-fetch-site': 'cross-site' }],
     ['Sec-Fetch-Site none', { 'sec-fetch-site': 'none' }],
     ['an opaque origin', { origin: 'null' }],
-    ['a Basic Authorization header from another site', { authorization: 'Basic dXNlcjpwYXNz', origin: 'https://evil.example' }],
+    [
+      'a Basic Authorization header from another site',
+      { authorization: 'Basic dXNlcjpwYXNz', origin: 'https://evil.example' },
+    ],
+    [
+      'neither Origin nor Sec-Fetch-Site (fail closed: every supported browser sends Origin on a write)',
+      {},
+    ],
   ])('%s: 403, no session read, nothing stamped', async (_name, headers) => {
     const res = await post({ cookie: COOKIE, ...headers });
     expect(res.status).toBe(403);
@@ -159,7 +169,9 @@ describe('POST /api/v1/me/release-state: what still records', () => {
     expect(h.calls[0]).toBe('auth:getUser(bearer)');
   });
 
-  it('a client that sends neither header (not a browser a page could drive)', async () => {
-    expect((await post({ cookie: COOKIE })).status).toBe(200);
+  it("the phone's post (Bearer) with neither header", async () => {
+    const res = await post({ authorization: 'Bearer h.e30.sig' });
+    expect(res.status).toBe(200);
+    expect(h.recordReleaseState).toHaveBeenCalledTimes(1);
   });
 });
