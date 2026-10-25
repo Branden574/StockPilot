@@ -43,7 +43,7 @@ All versions below are the resolved versions read from `/Users/brandenvincent-wa
 | stripe (server SDK) | 17.7.0 |
 | @anthropic-ai/sdk / @google/generative-ai | 0.111.0 / 0.21.0 |
 | react-markdown / remark-gfm | 10.1.0 / 4.0.1 |
-| Node.js | CI: setup-node `node-version: 22` (resolves current 22.x per run); Vercel runtime: nodejs22.x (platform-patched); local dev machine: v22.22.2 |
+| Node.js | CI: setup-node `node-version: 22` (resolves current 22.x per run); Vercel runtime: nodejs22.x (platform-patched); local dev machine: v22.22.2. Updated 2026-10-25 (docket C15): the Vercel project's Node.js Version setting reads 24.x (verified 2026-10-24), and `.nvmrc` (24), the root engines field (24.x) and every CI setup-node step (reads `.nvmrc`) now match it; see framework-patch-verification.md section 3 |
 | pnpm | 9.12.3 (`packageManager` in root package.json) |
 | GitHub Actions | actions/checkout@v7, actions/setup-node@v6, actions/setup-python@v7, pnpm/action-setup@v6, actions/upload-artifact@v7; no `pull_request_target`, all installs `pnpm install --frozen-lockfile` |
 | Resend | called via raw fetch (`apps/web/src/lib/email/resend.ts`); no Resend SDK in the tree |
