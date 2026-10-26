@@ -562,6 +562,10 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
     'status=archived',
     'status=archived&auto=1',
     'expected=1',
+    // B5: the "Show it" link after Group selected (a group no record is in
+    // here: the page asked for stands).
+    'group=0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b',
+    'group=0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b&page=2',
   ])('?%s', async (qs) => {
     const { firstPaint, settled } = await openUrl(qs);
     expect(firstPaint).toEqual(settled);
@@ -574,6 +578,15 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
     // The default view itself still plans and streams.
     expect((await openUrl('')).streamed).toBe(true);
     expect(planReads()).toHaveLength(1);
+  });
+
+  // B5: ?group= asks for the page that draws a display group's header, which
+  // the cached page 1 is not; the page is derived from the full dataset in
+  // the server render instead.
+  it('?group= is not the cached default page either: no plan is read and nothing streams', async () => {
+    const { streamed } = await openUrl('group=0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b');
+    expect(streamed).toBe(false);
+    expect(planReads()).toEqual([]);
   });
 
   // A zero result under Auto-archived only is the table's own "No items match

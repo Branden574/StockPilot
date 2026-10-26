@@ -102,7 +102,9 @@ import {
   deriveInstantView,
   expandInstantPlacementRows,
   filterInstantRows,
+  findDisplayGroupPage,
   instantStateFromSearchParams,
+  parseRevealGroupParam,
   type InstantFirstPage,
   type PlannedServerPage,
   type InstantModeState,
@@ -645,6 +647,12 @@ export function rowKeysToItemIds(keys: Iterable<string>): string[] {
  *  memo'd <Sparkline> from re-rendering on a fallback. */
 const EMPTY_SERIES: number[] = [];
 
+/** B5: how long, after a grouping, the list waits for the refreshed rows (to
+ *  turn to the group's page) or for the group's header to be drawn (to scroll
+ *  to it). A refresh that has not landed by then turns and scrolls nothing,
+ *  so a late one never pulls the person away from where they went since. */
+const REVEAL_WAIT_MS = 20_000;
+
 /**
  * On-demand master-image URL for payload-diet rows (rank 5): instant-mode
  * dataset rows ship only the ~200px thumb; the 2048px master (hover
@@ -1097,13 +1105,19 @@ export function InventoryTable({
     return qs ? `${basePath}?${qs}` : basePath;
   }
 
-  function hrefForPage(p: number): string {
-    const next = new URLSearchParams(params.toString());
-    if (p <= 1) next.delete('page');
-    else next.set('page', String(p));
-    const qs = next.toString();
-    return qs ? `${basePath}?${qs}` : basePath;
-  }
+  const hrefForPage = React.useCallback(
+    (p: number): string => {
+      const next = new URLSearchParams(params.toString());
+      if (p <= 1) next.delete('page');
+      else next.set('page', String(p));
+      // A page link chooses a page: never with ?group= (B5), which would
+      // plan the group's page instead.
+      next.delete('group');
+      const qs = next.toString();
+      return qs ? `${basePath}?${qs}` : basePath;
+    },
+    [params, basePath],
+  );
 
   // Encoded full current list URL — used to round-trip search/filter
   // state when the user clicks into a row, views, and comes back.
@@ -1952,9 +1966,9 @@ export function InventoryTable({
   }
 
   /** Opens an explicit group's header (after a grouping put records in it). */
-  function openExplicitGroup(groupId: string) {
+  const openExplicitGroup = React.useCallback((groupId: string) => {
     setExpandedExplicitGroups((prev) => (prev.has(groupId) ? prev : new Set(prev).add(groupId)));
-  }
+  }, []);
 
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
@@ -1964,6 +1978,169 @@ export function InventoryTable({
       return next;
     });
   }
+
+  // ── B5 (2026-10-25): show the group a grouping made ────────────────────
+  // A display group is one unit that clusters at its best-ranked record, and
+  // pages are packed unit by unit, so after Group selected (or Add to group)
+  // the group's header can be drawn on another page than the one the records
+  // were picked on: records picked on two pages, or a unit that no longer
+  // fits the end of its page. Opening the group (C3) did not show it there.
+  //
+  // INSTANT MODE holds every record, so it works the page out itself: once
+  // the refreshed rows carry the grouping (every changed record it holds is
+  // in the group), it turns to the page that draws the header (the rule
+  // deriveInstantView pages with) and scrolls the header into view. A person
+  // who moved on in the meantime (another page, a filter, a search) is not
+  // pulled back.
+  //
+  // A LIST PAGED ON THE SERVER holds one page and cannot tell which page that
+  // is: the done message links to ?group=<id> ("Show it"), which the server
+  // plans to that page (planLivePage), and the landing below opens the group
+  // there, scrolls to it and drops ?group= from the address (the page it chose
+  // is in ?page= from then on, so a refresh, a page link or Back stays on it).
+  // No link during a server-mode search (the list shows the search's matches,
+  // not pages) or without a planned page (over the instant-mode cap the pages
+  // are fixed slices, and the server cannot plan the group's page).
+  const instantStateKey = React.useMemo(
+    () => (instantState ? JSON.stringify(instantState) : null),
+    [instantState],
+  );
+  const [pendingReveal, setPendingReveal] = React.useState<{
+    groupId: string;
+    changedItemIds: readonly string[];
+    /** The view the grouping was made in: another view drops the reveal. */
+    stateKey: string;
+    until: number;
+  } | null>(null);
+  /** The group header to scroll into view once it is drawn (a ref: setting it
+   *  draws nothing; the effect below reads it after every render). */
+  const scrollToGroup = React.useRef<{ groupId: string; until: number } | null>(null);
+  const scrollToGroupHeader = React.useCallback((groupId: string) => {
+    scrollToGroup.current = { groupId, until: Date.now() + REVEAL_WAIT_MS };
+  }, []);
+
+  /** After a grouping applied (Group selected, Add to group): open the group
+   *  and show it (C3, B5). */
+  const revealGroup = React.useCallback(
+    (groupId: string, changedItemIds: readonly string[]) => {
+      openExplicitGroup(groupId);
+      if (instantMode && instantStateKey !== null) {
+        setPendingReveal({
+          groupId,
+          changedItemIds,
+          stateKey: instantStateKey,
+          until: Date.now() + REVEAL_WAIT_MS,
+        });
+      } else {
+        // Server mode: the header is drawn on this page only when the
+        // group's records sort here; scroll to it if it is.
+        scrollToGroupHeader(groupId);
+      }
+    },
+    [openExplicitGroup, instantMode, instantStateKey, scrollToGroupHeader],
+  );
+
+  React.useEffect(() => {
+    if (!pendingReveal) return;
+    if (
+      !effectiveInstant ||
+      !instantState ||
+      !instantView ||
+      instantStateKey !== pendingReveal.stateKey ||
+      Date.now() > pendingReveal.until
+    ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- drop a reveal the view moved past
+      setPendingReveal(null);
+      return;
+    }
+    const groupOf = new Map(effectiveInstant.items.map((r) => [r.id, r.display_group_id ?? null]));
+    const landed = pendingReveal.changedItemIds.every(
+      (id) => !groupOf.has(id) || groupOf.get(id) === pendingReveal.groupId,
+    );
+    // The refreshed rows have not landed yet: wait for them.
+    if (!landed) return;
+    setPendingReveal(null);
+    const page = findDisplayGroupPage(
+      effectiveInstant.items,
+      instantState,
+      effectiveInstant.view,
+      pageSize,
+      pendingReveal.groupId,
+    );
+    // The group does not form in this view (fewer than two of its records
+    // are in it): there is no header to show.
+    if (page === null) return;
+    scrollToGroupHeader(pendingReveal.groupId);
+    if (page !== instantView.page) shallowPush(hrefForPage(page));
+  }, [
+    pendingReveal,
+    effectiveInstant,
+    instantState,
+    instantStateKey,
+    instantView,
+    pageSize,
+    scrollToGroupHeader,
+    shallowPush,
+    hrefForPage,
+  ]);
+
+  // Landing on ?group=<id> (the "Show it" link): the page on screen is the
+  // one that draws that group's header (planned on the server, or turned to
+  // by deriveInstantView). Open it, scroll to it, and put the page in the
+  // address in place of ?group=.
+  const groupParam = params.get('group');
+  const groupParamCount = params.getAll('group').length;
+  React.useEffect(() => {
+    if (groupParam === null) return;
+    const groupId = groupParamCount === 1 ? parseRevealGroupParam(groupParam) : null;
+    if (groupId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot: opens the group a navigation asked for, then ?group= leaves the address
+      openExplicitGroup(groupId);
+      scrollToGroupHeader(groupId);
+    }
+    shallowReplace(hrefForPage(effectivePage));
+  }, [
+    groupParam,
+    groupParamCount,
+    effectivePage,
+    openExplicitGroup,
+    scrollToGroupHeader,
+    shallowReplace,
+    hrefForPage,
+  ]);
+
+  // Scroll the header asked for above into view once it is drawn (after the
+  // page turned, the refresh landed or the group opened). Runs after every
+  // render; it reads a ref, so it costs nothing while nothing is asked for.
+  React.useEffect(() => {
+    const target = scrollToGroup.current;
+    if (!target) return;
+    if (Date.now() > target.until) {
+      scrollToGroup.current = null;
+      return;
+    }
+    const key = `display-group:${target.groupId}`;
+    const header = Array.from(document.querySelectorAll('[data-group-key]')).find(
+      (el) => el.getAttribute('data-group-key') === key,
+    );
+    if (!header) return;
+    scrollToGroup.current = null;
+    // Optional call: some test DOMs lack it.
+    header.scrollIntoView?.({ block: 'center' });
+  });
+
+  // The done message's "Show it" link (B5), for a list paged on the server:
+  // this view, with ?group= in place of ?page=.
+  const showGroupHref = React.useCallback(
+    (groupId: string) => {
+      const next = new URLSearchParams(params.toString());
+      next.delete('page');
+      next.set('group', groupId);
+      return `${basePath}?${next.toString()}`;
+    },
+    [params, basePath],
+  );
+  const offerShowGroup = !instantMode && plannedPage != null && !q.trim();
 
   // ── Row and card pieces (one source for the Table and the Grid) ─────────
 
@@ -2427,11 +2604,19 @@ export function InventoryTable({
           itemIds={groupAction.ids}
           initialGroupId={groupAction.groupId}
           view={showBookFields ? 'books' : 'items'}
+          showGroupHref={offerShowGroup ? showGroupHref : undefined}
           onDone={(o) => {
             if (o.outcome !== 'applied') return;
             router.refresh();
-            // The record joined: show the group open (C3).
-            if (o.group?.id) openExplicitGroup(o.group.id);
+            // The record joined: show the group open (C3), on the page that
+            // draws it (B5).
+            const groupId = o.group?.id;
+            if (groupId) {
+              revealGroup(
+                groupId,
+                o.changes.filter((c) => c.toGroupId === groupId).map((c) => c.itemId),
+              );
+            }
           }}
           onOpenChange={(v) => (v ? null : setGroupAction(null))}
         />
@@ -2688,8 +2873,10 @@ export function InventoryTable({
             ungroupShownUnder={ungroupShownUnder}
             groupItemIds={groupFacts?.canGroup ? selectedItemIds : []}
             groupingView={showBookFields ? 'books' : 'items'}
-            // C3 (design 5): after a grouping the list opens the group.
-            onGrouped={openExplicitGroup}
+            // C3 (design 5): after a grouping the list opens the group, and
+            // B5: shows it, on the page that draws it.
+            onGrouped={revealGroup}
+            showGroupHref={offerShowGroup ? showGroupHref : undefined}
             onAddToSelection={(ids) =>
               // An explicit choice in the review: add those records (their
               // rows on screen when loaded, else the record itself).

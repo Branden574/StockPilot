@@ -74,6 +74,7 @@ import { signListThumbnails } from '@/lib/image-cache';
 import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { NO_PLACEMENT_HOLDINGS, readPlacementHoldings, readPrimaryPhotos } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
+import { onlySiteLocations } from '@/lib/location-filter';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -314,15 +315,16 @@ export default function BooksScreen() {
         .is('deleted_at', null)
         .ilike('name', '%book%')
         .order('name', { ascending: true }),
-      supabase
-        .from('locations')
-        .select('id, name')
-        .eq('organization_id', orgId)
-        .is('deleted_at', null)
-        // Sites only — racks/shelves/crates and the staging/unplaced system
-        // slots aren't stocking locations to filter or assign items by.
-        .in('type', ['warehouse', 'room', 'vehicle', 'jobsite'])
-        .order('name', { ascending: true }),
+      // Sites only, as the web's filter offers them (core isSiteLocation, see
+      // lib/location-filter.ts): never a rack, shelf, crate, bin or area, never
+      // the Staging or Unplaced bucket.
+      onlySiteLocations(
+        supabase
+          .from('locations')
+          .select('id, name')
+          .eq('organization_id', orgId)
+          .is('deleted_at', null),
+      ).order('name', { ascending: true }),
       supabase
         .from('charters')
         .select('id, name, code')
@@ -407,6 +409,8 @@ export default function BooksScreen() {
           r = r.or(`name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`);
         }
         if (f.locationIds.length > 0) {
+          // The record's LOCATION, as the web and the Items tab filter (see
+          // lib/location-filter.ts).
           // in-list-bound: user-picked location filter chips
           r = r.in('primary_location_id', f.locationIds);
         }

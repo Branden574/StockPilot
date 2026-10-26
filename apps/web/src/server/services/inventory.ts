@@ -86,6 +86,7 @@ import {
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
+  roundQuantity,
   STAGING_FILTER_MAX_ITEMS,
   trackingTypeForMode,
   validateCustomFields,
@@ -730,6 +731,43 @@ function seesEveryHolding(ctx: ServiceContext): boolean {
 }
 
 /**
+ * Why a book duplicate's holdings reads do not account for all of the copy's
+ * stock (B28, see InventoryService.moveSeededStockToUnplaced), or null when
+ * they do. `rows` are the caller's own read of the copy's holdings (a left
+ * embed: `locations` is null when the location row cannot be read),
+ * `elsewhere` its hiddenHoldingsFor answer, `quantity` the copy's
+ * quantity_on_hand. The answer goes to Sentry: numbers only, no names.
+ *
+ *   • A holding at a location the caller cannot read: its place is unknown.
+ *   • The visible holdings add up to the quantity: all accounted for (an
+ *     item's holdings add up to its on-hand, so nothing can be out of view).
+ *   • Otherwise the stock out of view must make up the rest, and only in
+ *     Staging or Unplaced. Placed stock out of view, a failed read of it, or a
+ *     total that still differs (no holding at all, when the seed failed) is
+ *     not accounted for.
+ */
+function unaccountedCopyStock(
+  rows: ReadonlyArray<{ quantity: number | string; locations: unknown }>,
+  elsewhere: HiddenHoldingsRead,
+  itemId: string,
+  quantity: number,
+): string | null {
+  if (rows.some((r) => !r.locations)) return 'a holding at a location the caller cannot read';
+  const expected = roundQuantity(quantity);
+  const visible = roundQuantity(rows.reduce((sum, r) => sum + Number(r.quantity), 0));
+  if (visible === expected) return null;
+  if (!elsewhere.ok) {
+    return `holdings add up to ${visible} of ${expected}; stock in other warehouses could not be read`;
+  }
+  const hidden = elsewhere.byItem.get(itemId);
+  if (hidden && hidden.placed > 0) {
+    return `${hidden.placed} placed in warehouses the caller cannot see`;
+  }
+  const total = roundQuantity(visible + holdingsElsewhereTotal(hidden));
+  return total === expected ? null : `holdings add up to ${total} of ${expected}`;
+}
+
+/**
  * A put-away destination. Defined in `@/lib/locations/destination-option`
  * beside its client-facing twin (both describe the same `locations` row, fed
  * by the same column list) and re-exported here because this service's
@@ -898,6 +936,17 @@ export interface ManualPlacementOutcome {
   rackName: string;
   /** Items whose stock demonstrably did NOT reach the rack. */
   failedItemIds: string[];
+}
+
+/**
+ * A duplicated book whose stock could not be moved to Unplaced (B28): it is
+ * still where the seed trigger put it. `locationName` names that place (a site
+ * such as "DC4"); null when where the stock is is not known: the holdings read
+ * failed, or the caller's reads do not account for all of it (stock out of
+ * the caller's view, see moveSeededStockToUnplaced).
+ */
+export interface StockLeftAtSite {
+  locationName: string | null;
 }
 
 /**
@@ -3654,17 +3703,21 @@ export class InventoryService {
    *
    * Returns the copy's id and, like create(), whether its stock did NOT reach
    * the rack the dialog named (`placementFailed`, 2026-10-25), so the dialog
-   * can say so instead of only "Duplicated".
+   * can say so instead of only "Duplicated". A book copy's stock waits in
+   * Unplaced (see moveSeededStockToUnplaced); `stockLeftAt` is present only
+   * when it could not be moved there, and names where it was left.
    */
-  async duplicateItem(
-    input: DuplicateItemInput,
-  ): Promise<{ id: string; placementFailed: PlacementFailure | null }> {
+  async duplicateItem(input: DuplicateItemInput): Promise<{
+    id: string;
+    placementFailed: PlacementFailure | null;
+    stockLeftAt?: StockLeftAtSite;
+  }> {
     assertPermission(this.ctx, 'items:create');
 
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku, warehouse_id, charter_id')
+      .select('sku, warehouse_id, charter_id, item_type')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -3673,6 +3726,22 @@ export class InventoryService {
     }
     const sku = (original as { sku: string }).sku;
     const originalWarehouseId = (original as { warehouse_id: string | null }).warehouse_id;
+    // The branch below follows the request's type, and duplicate_inventory_item
+    // (0299) follows the ORIGINAL's: a book sent as a product would be placed
+    // onto a bare rack with its crate fields dropped, a product sent as a book
+    // would keep its stock off its rack. The dialog sends the record's own
+    // type, so a mismatch is a stale tab or a hand-made request: refused
+    // before anything is written.
+    const originalType = (original as { item_type?: unknown }).item_type;
+    if (
+      typeof originalType === 'string' &&
+      (originalType === 'book') !== (input.itemType === 'book')
+    ) {
+      throw new ServiceError(
+        'validation_error',
+        'This record is not the type this duplicate was opened for. Reload the page and try again.',
+      );
+    }
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
@@ -3820,6 +3889,20 @@ export class InventoryService {
       }
     }
 
+    // ═══ A BOOK COPY'S STOCK WAITS IN UNPLACED (B28, 2026-10-25) ═══
+    // A book is never placed by a duplicate (its crate is chosen at put-away),
+    // so its copy kept the seed above: AT the original's site. The no-rack rule
+    // (#253) puts stock nobody placed in Unplaced, awaiting put-away.
+    let stockLeftAt: StockLeftAtSite | null = null;
+    if (input.itemType === 'book' && Number(input.quantity) > 0) {
+      // 0299 writes the requested quantity as the copy's quantity_on_hand.
+      stockLeftAt = await this.moveSeededStockToUnplaced(
+        newId as string,
+        originalWarehouseId,
+        Number(input.quantity),
+      );
+    }
+
     void audit(
       {
         event: 'inventory.item.duplicated',
@@ -3830,7 +3913,149 @@ export class InventoryService {
       this.ctx,
     );
 
-    return { id: newId as string, placementFailed };
+    return { id: newId as string, placementFailed, ...(stockLeftAt ? { stockLeftAt } : {}) };
+  }
+
+  /**
+   * THE NO-RACK RULE FOR A DUPLICATED BOOK (owner rule 2026-09-24, #253; the
+   * book half B28, 2026-10-25).
+   *
+   * duplicate_inventory_item (0299) copies the original's primary location (a
+   * SITE such as "DC4", the only kind of place the primary-location picker
+   * offers), and tg_seed_initial_level (0199) seeds the copy's opening stock AT
+   * that site: counted as placed, never on the put-away list, and shown as "No
+   * rack". A product copy is then moved onto the rack its dialog names. A book
+   * copy is not (its crate is chosen at put-away, where the crate rules run:
+   * placing a book onto a bare rack is what erased Maus I's crate), so its
+   * stock stayed at the site. The rule a manual create follows since #253:
+   * stock nobody placed waits in the warehouse's Unplaced bucket, awaiting
+   * put-away, and the primary location stays a label. The copy keeps its
+   * primary location, rack and crate labels; only the holding moves.
+   *
+   * Moves every holding of the copy that sits anywhere but a system bucket to
+   * the warehouse's Unplaced bucket, through transferStock: the ledger reads
+   * 'initial' at the site and then a 'transfer' to Unplaced, the same shape as
+   * a product copy's move onto its rack. A holding the trigger already put in
+   * Unplaced (an original with no primary location) stays.
+   *
+   * FAIL-SOFT, REPORTED: the copy exists whatever happens here. A move that
+   * cannot run leaves the stock where it was seeded; the answer names that
+   * place so the dialog can say so, and Sentry hears of it. Null: nothing was
+   * left outside Unplaced.
+   *
+   * ONLY WHAT THE READS ACCOUNT FOR IS SUCCESS (integrator decision, B28
+   * 2026-10-25). The holdings are read through the caller's own client: since
+   * 0371 a member below manager reads them only in the warehouses they are
+   * assigned to (staff with the 0280 all-warehouses setting too, see
+   * seesEveryHolding), and the seed trigger can fail without failing the copy
+   * (0199 swallows its error). An empty answer is therefore not "nothing left
+   * outside Unplaced". `quantity` is the copy's quantity_on_hand (0299 writes
+   * the request's quantity), and the holdings must add up to it: the visible
+   * ones, and when they fall short, for a caller below manager, the totals out
+   * of view (hiddenHoldingsFor, read alongside). Stock out of view counts only
+   * when it is in Staging or Unplaced, which is where this move would put it
+   * (unaccountedCopyStock has the rule). Placed stock out of view, a total
+   * that still differs, a failed read the answer depends on, or a holding
+   * whose location row the caller cannot read (a left embed, so it arrives
+   * with `locations` null instead of vanishing from an inner join) answers
+   * `{ locationName: null }` and is reported: the dialog then says the stock
+   * may not have reached Unplaced. The holdings that can be seen are still
+   * moved.
+   */
+  private async moveSeededStockToUnplaced(
+    itemId: string,
+    warehouseId: string | null,
+    quantity: number,
+  ): Promise<StockLeftAtSite | null> {
+    const report = (detail: string) =>
+      void reportError(new Error(detail), {
+        tag: 'inventory.duplicate.book_to_unplaced',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+      });
+
+    type SeededHolding = {
+      item_id: string;
+      location_id: string;
+      quantity: number | string;
+      locations: { name: string | null; kind: string | null; type: string | null } | null;
+    };
+    // Both reads at once; hiddenHoldingsFor never throws, and managers and
+    // above skip its call (they read every holding).
+    const [read, elsewhere] = await Promise.all([
+      this.holdingsForItemIds<SeededHolding>(
+        [itemId],
+        'item_id, location_id, quantity, locations(name, kind, type)',
+      ).then(
+        (rows) => ({ ok: true as const, rows }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
+      this.hiddenHoldingsFor([itemId]),
+    ]);
+    if (!read.ok) {
+      report(rawErrorText(read.error));
+      return { locationName: null };
+    }
+    // A row for another item is never trusted (placeManualCreateOnRack's rule).
+    const rows = read.rows.filter((r) => r.item_id === itemId);
+
+    const unaccounted = unaccountedCopyStock(rows, elsewhere, itemId, quantity);
+    if (unaccounted) report(`book duplicate's stock not accounted for: ${unaccounted}`);
+    const unknownPlace: StockLeftAtSite = { locationName: null };
+
+    // Only a holding whose place is known and is not Staging or Unplaced.
+    const seeded = rows.filter((r) => r.locations && !isSystemLocation(r.locations));
+    if (seeded.length === 0) return unaccounted ? unknownPlace : null;
+    const leftAt: StockLeftAtSite = unaccounted
+      ? unknownPlace
+      : { locationName: seeded[0]?.locations?.name ?? null };
+
+    // The warehouse's own Unplaced bucket (every warehouse has one: 0188's
+    // trigger and backfill), in this organization, never an archived one.
+    if (!warehouseId) {
+      report('book duplicate has no warehouse to hold its Unplaced stock');
+      return leftAt;
+    }
+    const { data: bucket, error: bucketErr } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('kind', 'unplaced')
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    const bucketId = (bucket as { id?: string } | null)?.id ?? null;
+    if (bucketErr || !bucketId) {
+      report(bucketErr ? rawErrorText(bucketErr) : 'no Unplaced bucket in the warehouse');
+      return leftAt;
+    }
+
+    let failed = false;
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const row of seeded) {
+        try {
+          await this.transferStock(
+            {
+              itemId,
+              fromLocationId: row.location_id,
+              toLocationId: bucketId,
+              quantity: Number(row.quantity),
+              notes: 'Duplicated without a placement: awaiting put-away',
+            },
+            { auditInto: transferAudits },
+          );
+        } catch (e) {
+          report(rawErrorText(e));
+          failed = true;
+        }
+      }
+    } finally {
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
+    }
+    if (failed) return leftAt;
+    return unaccounted ? unknownPlace : null;
   }
 
   /**

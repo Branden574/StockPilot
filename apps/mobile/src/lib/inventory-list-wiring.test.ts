@@ -247,40 +247,31 @@ describe('items list — identical behaviour to books, because the owner compare
     // so the rows and their exact count can never answer different questions.
     expect(inventory).toContain('const scoped = <Q extends string>(');
     expect(inventory).toContain("scoped(columns, { count: 'exact' })");
-    expect(inventory).toContain('await listRead(ITEM_COLUMNS_AT_LOCATIONS)');
     expect(inventory).toContain('await listRead(ITEM_COLUMNS)');
+    expect(
+      inventory.match(/product_group:product_groups!group_id \(default_counting_unit\)/g),
+    ).toHaveLength(1);
   });
 
-  it('filters by location through an inner stock-levels embed, never an id list in the URL', () => {
+  it('reads the list in one request, the newest load only, with its error on screen', () => {
     // The two-step read (item_stock_levels, then `.in('id', placedItemIds)`)
     // put up to 1000 uuids in the list read's URL, which failed past about 215
     // locally, and its first read ignored its error, so a failure became the
     // zero-uuid sentinel and a silent "No items match.".
     const body = loadBody(inventory);
-    expect(inventory).toMatch(/item_stock_levels!inner\(location_id\)` as const;/);
-    expect(body).toContain(".in('item_stock_levels.location_id', f.locationIds)");
-    expect(body).toContain(".gt('item_stock_levels.quantity', 0)");
     expect(body).not.toContain('placedItemIds');
     expect(body).not.toContain('00000000-0000-0000-0000-000000000000');
     expect(body).not.toContain(".from('item_stock_levels')");
     // Only the newest load writes: an older debounced load finishing late
     // cannot put back its rows or its error over a newer answer.
     expect(body).toMatch(/const seq = \(loadSeq\.current \+= 1\);/);
-    expect(body).toMatch(/: await listRead\(ITEM_COLUMNS\);\s*if \(seq !== loadSeq\.current\) return;/);
+    expect(body).toMatch(
+      /= await listRead\(ITEM_COLUMNS\);\s*if \(seq !== loadSeq\.current\) return;/,
+    );
     // One read, so its error takes the visible banner path, with a message
     // that is never empty (an empty one would hide the banner).
     expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');
     expect(inventory).toMatch(/\{loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /);
-  });
-
-  it('derives the location-filter columns from ITEM_COLUMNS, so the two cannot drift', () => {
-    // It was a hand copy of ITEM_COLUMNS plus the embed: a column added to one
-    // and not the other came back undefined, and only while a location filter
-    // was on.
-    expect(inventory).toMatch(
-      /const ITEM_COLUMNS_AT_LOCATIONS = `\$\{ITEM_COLUMNS\},\s*item_stock_levels!inner\(location_id\)` as const;/,
-    );
-    expect(inventory.match(/product_group:product_groups!group_id \(default_counting_unit\)/g)).toHaveLength(1);
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {
@@ -301,6 +292,32 @@ describe('items list — identical behaviour to books, because the owner compare
     expect(inventory).toContain('stockPill({ expected, lifecycle, quantity: total, reorderPoint })');
     expect(inventory).toContain('stockPillFor(item)');
   });
+});
+
+describe('both lists — the location filter is the web rule (B28, 2026-10-25)', () => {
+  // The web filters Items and Books on the record's primary location, a SITE
+  // label, and offers core's sites (isSiteLocation). The phone's Items tab
+  // matched stock HELD at the chosen site, which since the no-rack rule (#253)
+  // can only be stock left there by mistake: stock nobody placed waits in
+  // Unplaced and racks are their own locations. It listed a handful of
+  // leftovers for "DC4" while the web listed every DC4 record.
+  for (const [name, src] of screens) {
+    it(`${name}: a record matches on its primary location, never on its holdings`, () => {
+      const body = loadBody(src);
+      expect(body).toContain("r = r.in('primary_location_id', f.locationIds);");
+      expect(src).not.toContain('item_stock_levels!inner');
+      expect(src).not.toContain("'item_stock_levels.location_id'");
+      expect(src).not.toContain('ITEM_COLUMNS_AT_LOCATIONS');
+    });
+
+    it(`${name}: the choices are core's sites, not a fixed list of types`, () => {
+      expect(src).toContain("import { onlySiteLocations } from '@/lib/location-filter';");
+      expect(src).toMatch(
+        /onlySiteLocations\(\s*supabase\s*\.from\('locations'\)\s*\.select\('id, name'\)/,
+      );
+      expect(src).not.toContain(".in('type', ['warehouse', 'room', 'vehicle', 'jobsite'])");
+    });
+  }
 });
 
 describe('books list — a failed read says so, never passes for an empty or current shelf', () => {
