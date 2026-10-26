@@ -26,6 +26,7 @@ export * from './inventory/placement-warning';
 export * from './inventory/new-location';
 export * from './inventory/rack-holdings';
 export * from './inventory/item-photo-path';
+export * from './inventory/item-photo-thumb';
 export * from './inventory/placement-resolution';
 export * from './inventory/stock-writeoff';
 export * from './inventory/location-groups';
