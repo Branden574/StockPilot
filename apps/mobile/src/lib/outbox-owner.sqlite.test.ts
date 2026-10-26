@@ -139,6 +139,16 @@ function cacheLine(lineId: string, dirty = 0) {
     .run(lineId, dirty);
 }
 
+/** A line holding a count already synced from the server. */
+function countedLine(lineId: string, counted = 5) {
+  raw
+    .prepare(
+      `insert into cycle_count_lines (id, count_id, item_id, expected, counted, local_dirty)
+       values (?, 'cc1', 'i1', 10, ?, 0)`,
+    )
+    .run(lineId, counted);
+}
+
 const owners = () =>
   raw
     .prepare(
@@ -693,15 +703,6 @@ describe("a new row is queued only under its own account's saved workspace", () 
    * it (never with no workspace).
    */
   describe("an emptied box's clear follows the same rules as a count", () => {
-    /** A line holding a count already synced from the server (5). */
-    function countedLine(lineId: string) {
-      raw
-        .prepare(
-          `insert into cycle_count_lines (id, count_id, item_id, expected, counted, local_dirty)
-           values (?, 'cc1', 'i1', 10, 5, 0)`,
-        )
-        .run(lineId);
-    }
     const line = (id: string) =>
       raw.prepare('select counted, local_dirty from cycle_count_lines where id = ?').get(id);
 
@@ -814,6 +815,23 @@ describe("the AI shelf scan's copy of a count the server recorded (mirrorRecorde
     ]);
     expect(line('l1')).toEqual({ counted: 6, local_dirty: 0 });
     expect(line('l2')).toEqual({ counted: null, local_dirty: 1 });
+  });
+
+  // Merged with B4a: an emptied box's queued clear is an earlier edit of the
+  // line too. Sent after the scan, it would uncount the line the server has
+  // just counted.
+  it("supersedes the line's queued clear as well: this account's deleted, another account's kept as a record", async () => {
+    countedLine('l1', 3);
+    await cache.clearLocalLine('l1'); // this account's emptied box, queued
+    seed({ id: 50, user: 'u2', lineId: 'l1' }); // another account's held edit
+    raw
+      .prepare('update pending_actions set payload_json = ? where id = 50')
+      .run(JSON.stringify({ cycleCountId: 'cc1', lineId: 'l1', clear: true }));
+    await cache.mirrorRecordedCount('l1', 6, 'u1');
+    expect(queued()).toEqual([
+      { id: 50, status: 'rejected', user_id: 'u2', last_error: REPLACED_BY_LATER_COUNT },
+    ]);
+    expect(line('l1')).toEqual({ counted: 6, local_dirty: 0 });
   });
 
   it('a row for the line already on its way is left alone, and the line stays unsynced until it settles', async () => {
