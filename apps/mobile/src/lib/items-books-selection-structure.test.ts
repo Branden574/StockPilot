@@ -839,7 +839,27 @@ describe('Group review: the words, the family acknowledgement and the save', () 
   const code = codeOnly(sourceOf(GROUP));
 
   it("reads every one of core's GROUP_COPY words it read before", () => {
-    expect(copyKeys(GROUP, 'GROUP_COPY')).toEqual(
+    // The two radios of a record in another group are named with core's
+    // moveOneFor and leaveOutOneFor words (R2-5), now put together once per
+    // review by groupChoiceRadioNamesById, which the screen calls for them
+    // (redesign Stage 6, GROUP-REVIEW-RADIO-NAMES): the words it reads are
+    // the screen's own, and it reads no others.
+    expect(code).toContain('groupChoiceRadioNamesById(');
+    const lib = 'src/lib/display-groups.ts';
+    const namer = ts
+      .createSourceFile(lib, sourceOf(lib), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+      .statements.find(
+        (s): s is ts.FunctionDeclaration =>
+          ts.isFunctionDeclaration(s) && s.name?.text === 'groupChoiceRadioNamesById',
+      );
+    expect(namer, `function groupChoiceRadioNamesById in ${lib}`).toBeDefined();
+    const namerKeys = [
+      ...new Set(
+        [...codeOnly(namer!.getText()).matchAll(/\bGROUP_COPY\.(\w+)/g)].map((m) => m[1]!),
+      ),
+    ].sort();
+    expect(namerKeys).toEqual(['leaveOutOneFor', 'moveOneFor']);
+    expect([...new Set([...copyKeys(GROUP, 'GROUP_COPY'), ...namerKeys])].sort()).toEqual(
       [
         'acknowledgeFamily',
         'addSiblings',
@@ -911,6 +931,29 @@ describe('Group review: the words, the family acknowledgement and the save', () 
     expect(renderCondition(sf, field.el)).toMatch(
       /^\(mode === 'new'\) && !\(loadState\.kind === 'offline'/,
     );
+  });
+
+  // R5 (walk rc-grouping-n2-b, 2026-10-20): the keyboard covered the Group
+  // name box while it was being typed in, the box left the accessibility
+  // tree under it, and the walk could not type a new name. The review's one
+  // scroll had no keyboard avoidance. It now insets itself by the keyboard on
+  // iOS and scrolls the focused box above it (React Native's
+  // automaticallyAdjustKeyboardInsets: the caret's line plus 15pt clears the
+  // keyboard's top), as New count does; the box must sit inside that scroll
+  // for the inset to reach it. Mutation caught: the prop removed, or the box
+  // moved out of the scroll (into the pinned footer, which the keyboard
+  // covers).
+  it('the group name box scrolls clear of the keyboard', () => {
+    const scrolls = nodesIn(sf).filter((n) => tagOf(n.el, sf) === 'ScrollView');
+    expect(scrolls).toHaveLength(1);
+    const scroll = scrolls[0]!.el;
+    expect(attrText(scroll, 'automaticallyAdjustKeyboardInsets', sf)).toBe('true');
+    const field = nodesIn(sf).find((n) => tagOf(n.el, sf) === 'Field')!;
+    expect(field.ancestors).toContain(scroll);
+    // A tap on a radio or Add them still lands with the keyboard up, and a
+    // drag on the review still puts the keyboard away.
+    expect(attrText(scroll, 'keyboardShouldPersistTaps', sf)).toBe('handled');
+    expect(attrText(scroll, 'keyboardDismissMode', sf)).toBe('on-drag');
   });
 
   it('a save re-reads the lists and the grouped records leave the shared selection on close', () => {
