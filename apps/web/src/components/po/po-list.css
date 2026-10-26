@@ -1,0 +1,187 @@
+/* ==================================================================
+   The purchase orders list's fold (po-instant-table.tsx, P69-1).
+
+   Under 640px of card (a container query: the card's own width, so the
+   sidebar is allowed for) the list folds into the reference's two-line
+   row, drawn from the SAME cells as the wide table, one copy of each
+   value: the PO number with its status, the supplier, Placed and Expected
+   under them, and the total over its line count in a column on the right.
+   The fold used to be a second, hidden copy of those values in every row.
+   Every rule is scoped to table[data-slot='po-list'] and to that width;
+   the wide table is the plain table. The cells, in order: 1 PO number,
+   2 Supplier, 3 Status, 4 Placed, 5 Expected, 6 Lines, 7 Total, 8 the
+   open chevron.
+
+   - A row is a wrapping flex line, 16px in, that keeps the right-hand
+     column's room free, as wide as the table made it: its widest text (the
+     longest total, as a table column is as wide as its widest value), 24px
+     of the total's padding and the chevron's 52px, plus the number column's
+     own 12px. The widest text is --po-total-ch characters of the total's
+     mono face, each 1ch less the shell's -0.005em tracking (that is why the
+     row is mono and every cell sets the sans face back); a line count's
+     "N lines", in smaller type, counts as its digits and four more, never
+     less than its width.
+   - The status follows the number 10px on (the line's gap, a space of the
+     folded type, 3.296875px, and the number's margin, the rest of the
+     10px: both whole 64ths of a pixel, the unit browsers lay out in, so
+     they add up to 10px exactly) where both fit, else goes under it, 4px
+     down. Then line 1 ends (an empty item as wide as the row).
+   - Supplier, Placed and Expected follow in 12.5px type, 2px under line 1,
+     as words do: each part joins the line before it where it fits, else
+     starts the next line, and the lines touch. The lines have no gap of
+     their own: the number and the status carry 2px above and below (4px
+     between them when the status goes under the number, 2px between line
+     1 and the parts), and the row 2px less padding on top. Every part but
+     the last ends in its "·", tied to its last word by a no-break space,
+     so no line starts with one, and a long supplier name wraps between
+     its words.
+   - A part the row has nothing for (data-none: no supplier, a draft's
+     Placed, a Placed day not printed yet) is out of sight, not out of the
+     table, so its cell keeps its column for a screen reader.
+   - The line count, the total and the chevron are lifted out of the line
+     into the right-hand column, centred on the row as the table centred
+     them.
+   - The headers of the folded columns are out of sight too, never
+     removed, so each cell keeps its column's name. The table carries ARIA
+     roles: a table drawn as blocks and flex lines loses its semantics in
+     Chromium and WebKit without them.
+   - "Placed", "Expected", "line" or "lines" (data-one: 1 line) and each
+     "·" are generated content, here only, so the wide table holds no
+     hidden words; a screen reader reads them as text.
+
+   Unlayered on purpose, like storefront.css: the cells' own utility
+   classes (padding, type, colour) give way to these rules at this width.
+   ================================================================== */
+
+@container (width < 640px) {
+  table[data-slot='po-list'],
+  table[data-slot='po-list'] > thead,
+  table[data-slot='po-list'] > tbody {
+    display: block;
+  }
+
+  table[data-slot='po-list'] > thead > tr {
+    display: flex;
+  }
+  table[data-slot='po-list'] > thead > tr > th:first-child {
+    flex: 1 1 0%;
+  }
+  table[data-slot='po-list'] > thead > tr > th:nth-child(7) {
+    flex-shrink: 0;
+  }
+  table[data-slot='po-list'] > thead > tr > th:nth-child(8) {
+    flex-shrink: 0;
+    width: 52px;
+  }
+
+  /* Out of sight, still in the table: the folded columns' headers, and a
+     part the row has nothing for. */
+  table[data-slot='po-list'] > thead > tr > th:nth-child(n + 2):nth-child(-n + 6),
+  table[data-slot='po-list'] > tbody > tr > td[data-none] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  table[data-slot='po-list'] > tbody > tr {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 3.296875px;
+    padding: calc(var(--row-py) - 2px) calc(var(--po-total-ch) * (1ch - 0.005em) + 88px)
+      var(--row-py) 16px;
+    font-family: var(--font-mono);
+  }
+  /* The end of line 1. */
+  table[data-slot='po-list'] > tbody > tr::after {
+    content: '';
+    order: 3;
+    flex-basis: 100%;
+  }
+  table[data-slot='po-list'] > tbody > tr > td {
+    font-family: var(--font-sans);
+  }
+
+  /* Line 1 and the folded line, in the number's column. */
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(-n + 5) {
+    padding: 0;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(1) {
+    order: 1;
+    margin: 2px 6.703125px 2px 0;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(3) {
+    order: 2;
+    margin-block: 2px;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(2) {
+    order: 4;
+    overflow-wrap: anywhere;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(4) {
+    order: 5;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(5) {
+    order: 6;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:is(:nth-child(2), :nth-child(4), :nth-child(5)) {
+    font-size: 12.5px;
+    line-height: 18.75px;
+    color: var(--color-muted-foreground);
+    font-variant-numeric: normal;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(4):not([data-none])::before {
+    content: 'Placed ';
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(5)::before {
+    content: 'Expected ';
+  }
+  table[data-slot='po-list']
+    > tbody
+    > tr
+    > td:is(:nth-child(2), :nth-child(4)):not([data-none])::after {
+    content: '\00a0·';
+  }
+
+  /* The right-hand column. */
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(6) {
+    position: absolute;
+    top: 50%;
+    right: 64px;
+    translate: 0 2.125px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--color-muted-foreground);
+    font-variant-numeric: normal;
+    white-space: nowrap;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(6)::after {
+    content: ' lines';
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(6)[data-one]::after {
+    content: ' line';
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(7) {
+    position: absolute;
+    top: 50%;
+    right: 52px;
+    translate: 0 calc(-50% - 10px);
+    padding-block: 0;
+  }
+  table[data-slot='po-list'] > tbody > tr > td:nth-child(8) {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    translate: 0 -50%;
+    width: auto;
+    padding-block: 0;
+  }
+}

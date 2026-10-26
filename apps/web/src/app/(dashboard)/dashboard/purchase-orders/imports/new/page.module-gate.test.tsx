@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -8,13 +8,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the page used to offer two forms that could only fail on submit. It now
  * shows the same module-off panel the list shows (its words, and the Enable
  * link for someone who can enable modules), and with the module on both
- * upload cards render as before.
+ * upload cards render as before. When the module set could not be read
+ * (docket R7) it says it could not check, with Try again, and still offers no
+ * form.
  */
 
-const { access } = vi.hoisted(() => ({
-  access: { current: { enabled: true, canManage: true } },
+const { access, refresh } = vi.hoisted(() => ({
+  access: {
+    current: { enabled: true, canManage: true } as {
+      enabled: boolean;
+      canManage: boolean;
+      checkFailed?: boolean;
+    },
+  },
+  refresh: vi.fn(),
 }));
 
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+}));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
@@ -78,5 +91,25 @@ describe('New PO import: the po_imports module gate', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('scan form')).toBeInTheDocument();
     expect(screen.getByText('upload form')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('a module read that failed says it could not check, with Try again, and offers no form', async () => {
+    access.current = { enabled: false, canManage: true, checkFailed: true };
+    render(await NewPoImportPage());
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: "We couldn't check whether PO imports is on" }),
+    ).toBeInTheDocument();
+    // Not "off": no module-off words and no Enable link for a module that may be on.
+    expect(screen.queryByText("PO imports isn't enabled")).toBeNull();
+    expect(screen.queryByRole('link', { name: /Enable in Settings/ })).toBeNull();
+    // Still closed: neither form, and no page header.
+    expect(screen.queryByText('scan form')).toBeNull();
+    expect(screen.queryByText('upload form')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'New PO import' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

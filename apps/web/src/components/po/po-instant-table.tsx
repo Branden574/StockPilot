@@ -22,6 +22,8 @@ import { cn, formatCurrency, formatDateShort } from '@/lib/utils';
 
 import { formatCalendarDate } from '@stockpilot/core';
 
+import './po-list.css';
+
 export interface PoInstantRow {
   id: string;
   po_number: string;
@@ -34,23 +36,36 @@ export interface PoInstantRow {
   total: number | null;
 }
 
-/**
+/*
  * Supplier, Status, Placed, Expected and Lines need the room of a wide card.
  * Where the card is narrower (a phone, a narrow window beside the sidebar)
- * those columns fold into the reference's two-line row instead of scrolling
- * the table sideways: the status beside the PO number, the supplier and the
- * dates on a line under it, and the line count under the total. Every value
- * stays on screen and in the table for a screen reader: a hidden column is out
- * of both, a folded line is in both. The widths are the card's own (a
- * container query), not the window's, so the sidebar is allowed for.
+ * the row folds into the reference's two-line row instead of scrolling the
+ * table sideways: the status beside the PO number, the supplier and the dates
+ * on a line under it, and the line count under the total. The widths are the
+ * card's own (a container query), not the window's, so the sidebar is
+ * allowed for.
+ *
+ * ONE COPY OF EACH VALUE (P69-1). The fold was a second copy of the status,
+ * the supplier, the dates and the line count, hidden in the wide table as the
+ * wide cells were hidden in the fold: at 800 rows, 7,116 more elements,
+ * 1.3 MB more document and 16 ms more for each letter typed in the search.
+ * Now every value is drawn once, in its own cell, and under 640px the
+ * container query lays those same cells out as the fold: the rules are in
+ * po-list.css under table[data-slot='po-list'], so a row carries no classes
+ * for the fold and the wide table no hidden copy. A row tells the rules only
+ * what CSS cannot see: `data-none` on a part the fold leaves out (no
+ * supplier, a draft's Placed, a Placed day not printed yet), `data-one` on a
+ * line count of 1 ("1 line") and, on the table, `--po-total-ch`, the
+ * right-hand column's width. The words only the fold shows, "Placed",
+ * "Expected", "line" or "lines" and each "·", are generated content there.
+ *
+ * A table, row or cell drawn as a block or a flex box loses its table
+ * semantics in Chromium and WebKit, so the table, its row groups, rows,
+ * headers and cells carry their ARIA roles, and under 640px the headers of
+ * the folded columns are visually hidden, never removed: every cell keeps
+ * its column's name.
  */
-const WIDE = 'hidden @min-[640px]:table-cell';
-/** The folded parts, shown only while the columns above are hidden. */
-const NARROW = '@min-[640px]:hidden';
-
-function linesLabel(count: number): string {
-  return `${count} ${count === 1 ? 'line' : 'lines'}`;
-}
+const FOLD_LEFT_OUT = { 'data-none': '' } as const;
 
 /**
  * The purchase orders list (DESIGN-SPEC 6.9 table in M4's quiet row style:
@@ -87,106 +102,102 @@ export function PoListTable({
   // Read in the viewer's zone it was the day before.
   const expectedDay = (iso: string | null) => formatCalendarDate(iso);
   const supplierName = (id: string | null) => (id ? (supplierNames[id] ?? '—') : '—');
+  // Each total once, and the fold's right-hand column in characters of the
+  // total's face: the longest total, as a table column is as wide as its
+  // widest total, or a line count's "N lines" where that is wider (its
+  // smaller type is never wider than its digits and four characters more).
+  const totals = rows.map((po) => formatCurrency(Number(po.total ?? 0)));
+  const totalCh = rows.reduce(
+    (most, po, index) =>
+      Math.max(most, totals[index]?.length ?? 0, String(po.line_count).length + 4),
+    0,
+  );
 
   return (
     <div className="border-border bg-card @container min-w-0 overflow-hidden rounded-lg border">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>PO #</TableHead>
-            <TableHead className={WIDE}>Supplier</TableHead>
-            <TableHead className={WIDE}>Status</TableHead>
-            <TableHead className={WIDE}>Placed</TableHead>
-            <TableHead className={WIDE}>Expected</TableHead>
-            <TableHead className={cn(WIDE, 'text-right')}>Lines</TableHead>
-            <TableHead className="text-right">Total</TableHead>
-            <TableHead className="w-8" aria-label="Open" />
+      <Table
+        role="table"
+        data-slot="po-list"
+        style={{ '--po-total-ch': totalCh } as React.CSSProperties}
+      >
+        <TableHeader role="rowgroup">
+          <TableRow role="row" className="hover:bg-transparent">
+            <TableHead role="columnheader">PO #</TableHead>
+            <TableHead role="columnheader">Supplier</TableHead>
+            <TableHead role="columnheader">Status</TableHead>
+            <TableHead role="columnheader">Placed</TableHead>
+            <TableHead role="columnheader">Expected</TableHead>
+            <TableHead role="columnheader" className="text-right">
+              Lines
+            </TableHead>
+            <TableHead role="columnheader" className="text-right">
+              Total
+            </TableHead>
+            <TableHead role="columnheader" className="w-8" aria-label="Open" />
           </TableRow>
         </TableHeader>
-        <TableBody>
-          {rows.map((po) => {
+        <TableBody role="rowgroup">
+          {rows.map((po, index) => {
             // "Placed" = when the PO was sent to the supplier. Drafts haven't
             // been placed yet; imports lack ordered_at so fall back to
             // created_at.
             const placed = po.status === 'draft' ? null : (po.ordered_at ?? po.created_at);
             const placedText = placedDay(placed);
-            const expectedText = expectedDay(po.expected_at);
             const supplier = supplierName(po.supplier_id);
-            // The Placed day joins the line once the viewer's zone is known,
-            // like the column. A date never breaks across two lines; a long
-            // supplier name may wrap.
-            const folded = [
-              supplier === '—' ? null : { text: supplier, keep: false },
-              placed && placedText ? { text: `Placed ${placedText}`, keep: true } : null,
-              { text: `Expected ${expectedText}`, keep: true },
-            ].filter((part): part is { text: string; keep: boolean } => part !== null);
+            // What the fold leaves out: no supplier, and Placed for a draft
+            // or until the viewer's zone is known (like the column). Expected
+            // is always drawn, last.
+            const foldsSupplier = supplier !== '—';
+            const foldsPlaced = Boolean(placed && placedText);
             return (
-              <TableRow key={po.id} className="group">
-                <TableCell>
-                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <Link
-                      href={`/dashboard/purchase-orders/${po.id}`}
-                      className="text-foreground whitespace-nowrap font-mono text-[13.5px] font-medium hover:underline"
-                    >
-                      {po.po_number}
-                    </Link>
-                    <span className={NARROW}>
-                      <PoStatusBadge status={po.status} />
-                    </span>
-                  </div>
-                  <p
-                    className={cn(
-                      NARROW,
-                      'text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]',
-                    )}
+              <TableRow key={po.id} role="row" className="group">
+                <TableCell role="cell">
+                  {/* Top-aligned, the mono number sets its own line as it did as
+                      a flex item, rather than sitting on the sans face's
+                      baseline a pixel lower. */}
+                  <Link
+                    href={`/dashboard/purchase-orders/${po.id}`}
+                    className="text-foreground whitespace-nowrap align-top font-mono text-[13.5px] font-medium hover:underline"
                   >
-                    {folded.map((part, i) => (
-                      <React.Fragment key={i}>
-                        {i > 0 ? ' · ' : null}
-                        <span className={part.keep ? 'whitespace-nowrap' : undefined}>
-                          {part.text}
-                        </span>
-                      </React.Fragment>
-                    ))}
-                  </p>
+                    {po.po_number}
+                  </Link>
                 </TableCell>
-                <TableCell className={cn(WIDE, 'text-ink-2')}>{supplier}</TableCell>
-                <TableCell className={WIDE}>
+                <TableCell
+                  role="cell"
+                  className="text-ink-2"
+                  {...(foldsSupplier ? null : FOLD_LEFT_OUT)}
+                >
+                  {supplier}
+                </TableCell>
+                <TableCell role="cell">
                   <PoStatusBadge status={po.status} />
                 </TableCell>
                 <TableCell
-                  className={cn(
-                    WIDE,
-                    'text-muted-foreground whitespace-nowrap text-[12.5px] tabular-nums',
-                  )}
+                  role="cell"
+                  className="text-muted-foreground whitespace-nowrap text-[12.5px] tabular-nums"
+                  {...(foldsPlaced ? null : FOLD_LEFT_OUT)}
                 >
                   {placedText}
                 </TableCell>
                 <TableCell
-                  className={cn(
-                    WIDE,
-                    'text-muted-foreground whitespace-nowrap text-[12.5px] tabular-nums',
-                  )}
+                  role="cell"
+                  className="text-muted-foreground whitespace-nowrap text-[12.5px] tabular-nums"
                 >
-                  {expectedText}
+                  {expectedDay(po.expected_at)}
                 </TableCell>
-                <TableCell className={cn(WIDE, 'text-right tabular-nums')}>
+                <TableCell
+                  role="cell"
+                  className="text-right tabular-nums"
+                  data-one={po.line_count === 1 ? '' : undefined}
+                >
                   {po.line_count}
                 </TableCell>
-                <TableCell className="whitespace-nowrap text-right align-middle">
+                <TableCell role="cell" className="whitespace-nowrap text-right align-middle">
                   <span className="text-foreground font-mono text-[13.5px] tabular-nums">
-                    {formatCurrency(Number(po.total ?? 0))}
-                  </span>
-                  <span
-                    className={cn(
-                      NARROW,
-                      'text-muted-foreground mt-0.5 block text-[12px] leading-[18px]',
-                    )}
-                  >
-                    {linesLabel(po.line_count)}
+                    {totals[index]}
                   </span>
                 </TableCell>
-                <TableCell className="w-8 pl-1 text-right">
+                <TableCell role="cell" className="w-8 pl-1 text-right">
                   <Link
                     href={`/dashboard/purchase-orders/${po.id}`}
                     aria-label={`Open ${po.po_number}`}

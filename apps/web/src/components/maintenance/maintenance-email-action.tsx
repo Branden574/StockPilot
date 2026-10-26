@@ -255,16 +255,23 @@ function MaintenanceEmailActionInner({
     // App) is surfaced regardless. The panel reappears on every blocked
     // click, but the automatic mailto: navigation itself fires only once
     // per mount.
+    //
+    // NOT RECORDED (B29): recordMaintenanceDraftOpenedAction used to run here,
+    // BEFORE the navigation and whatever it did, so "Email draft opened"
+    // (outlook_draft_opened_at, status 'draft_opened') was stored for a
+    // draft nothing confirmed. That status silences the 24 h unsent-draft
+    // reminder (cron/maintenance-draft-reminders reminds 'saved' requests
+    // only) and an escalated exception shows "Email draft opened". The
+    // server records only an open the browser confirmed (the window.open
+    // handle above), as the phone records only after the OS opened an app,
+    // and as this page's own Open in Default Email App and Copy Email Details
+    // never did. The LOCAL count still goes up: a mail app may have opened a
+    // draft from this navigation, so another Open in Outlook on this page
+    // asks first (brief section 21).
     setFallbackReason('blocked');
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
       setOpenCount((n) => n + 1);
-      // Same best-effort .catch() as the success-path call above — a
-      // rejected promise here is otherwise an unhandled rejection.
-      void recordMaintenanceDraftOpenedAction(requestId).catch((e: unknown) => {
-        if (isControlFlow(e)) return;
-        void reportError(e, { tag: 'maintenance.draft-opened.record', level: 'warning' });
-      });
       try {
         window.location.assign(prepared.mailtoUrl);
       } catch {

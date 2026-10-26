@@ -2,12 +2,21 @@ import 'server-only';
 import { unstable_rethrow } from 'next/navigation';
 
 import { requireOrgContext } from '@/lib/auth/session';
-import { getModulesForRequest } from '@/lib/dashboard/request-cache';
+import { readModulesForRequest, type ModulesRead } from '@/lib/dashboard/request-cache';
 import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
 export interface ModuleAccess {
+  /** True only when the module is on. False when it is off AND when its state could not be read. */
   enabled: boolean;
   canManage: boolean;
+  /**
+   * The module's state could not be read: a failed read, not "off". Only ever
+   * set together with `enabled: false`, so a caller that reads `enabled` alone
+   * still fails closed. A page that explains why it shows nothing says "could
+   * not check, try again" for this (ModuleCheckFailed) instead of "not
+   * enabled", which would send an admin to switch on a module that is on.
+   */
+  checkFailed?: boolean;
 }
 
 /**
@@ -40,15 +49,21 @@ export interface ModuleAccess {
  * is_org_member), where module_enabled() is SECURITY DEFINER. For a member the
  * two agree row for row; for anyone else this sees nothing and denies.
  *
- * FAILS CLOSED. The set cannot be read -> the module is not enabled:
- *   - the membership bundle failed: getModulesForRequest falls back to the
+ * FAILS CLOSED. The set cannot be read -> the module is not enabled, and the
+ * answer says the check failed (`checkFailed`), so a page can offer Try again
+ * instead of claiming the module is off:
+ *   - the membership bundle failed: readModulesForRequest falls back to the
  *     legacy reads, with their own rules below;
- *   - the organization_modules read failed: getModulesForRequest logs it and
+ *   - the organization_modules read failed: readModulesForRequest logs it and
  *     counts no rows (an empty set denies every non-core module; only a comp
- *     that WAS read can still grant, exactly as module_enabled() would);
- *   - the organization row read failed: getOrgRowForRequest throws, caught here.
+ *     that WAS read can still grant, exactly as module_enabled() would). A
+ *     module the comp grants is on, whatever the rows say; any other module
+ *     is denied with `checkFailed`, because its row was never seen;
+ *   - the organization row read failed: getOrgRowForRequest throws, caught
+ *     here, and every non-core module is denied with `checkFailed`.
  * Framework control flow (redirect, notFound, dynamic bailout) is rethrown,
- * not mistaken for a read failure.
+ * not mistaken for a read failure. A caller RLS does not recognise as a
+ * member reads no rows WITHOUT an error: that is a plain "not enabled".
  *
  * `canManage` is true for owner/admin (who can turn it on in Settings ->
  * Modules). requireOrgContext is React-cached, so calling this at the top of a
@@ -58,19 +73,24 @@ export async function checkModuleAccess(moduleId: ModuleId): Promise<ModuleAcces
   const ctx = await requireOrgContext();
   const canManage = ctx.role === 'owner' || ctx.role === 'admin';
   if (MODULE_REGISTRY[moduleId].tier === 'core') return { enabled: true, canManage };
-  let modules: Set<ModuleId>;
+  let read: ModulesRead;
   try {
-    modules = await getModulesForRequest(ctx.organizationId);
+    read = await readModulesForRequest(ctx.organizationId);
   } catch (e) {
     unstable_rethrow(e);
-    // Fail closed (show "not enabled") on a read error, but log it so infra
-    // problems are observable rather than silently denying access.
+    // Fail closed on a read error, but log it so infra problems are
+    // observable rather than silently denying access.
     console.error(
       '[module-gate] module set unreadable, denying access',
       moduleId,
       e instanceof Error ? e.message : 'unknown error',
     );
-    return { enabled: false, canManage };
+    return { enabled: false, canManage, checkFailed: true };
   }
-  return { enabled: modules.has(moduleId), canManage };
+  if (read.modules.has(moduleId)) return { enabled: true, canManage };
+  // Not in the set. With the rows unread that is "not known", not "off": still
+  // denied (readModulesForRequest has logged the failed read).
+  return read.rowsUnreadable
+    ? { enabled: false, canManage, checkFailed: true }
+    : { enabled: false, canManage };
 }

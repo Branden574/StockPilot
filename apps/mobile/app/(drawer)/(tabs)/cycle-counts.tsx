@@ -61,6 +61,7 @@ import {
 } from '@/lib/cycle-count-history';
 import { listCycleCounts } from '@/lib/cycle-counts-api';
 import { showWriteCta } from '@/lib/cta-gating';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -130,6 +131,27 @@ function fromDownload(c: CachedCycleCountHeader): ListRow {
   };
 }
 
+/**
+ * What Start a cycle count offers to pick from: Items always, and Books only
+ * where the organization has the Books module. Without it the Books tab is
+ * not in the bar, and Pick books opened the Books screen anyway, a dead end.
+ * The module set is the one the tab bar and the side menu gate with
+ * (useEnabledModules).
+ */
+function startCountChoices(booksOn: boolean): { text: string; path: '/inventory' | '/books' }[] {
+  return [
+    { text: 'Pick items', path: '/inventory' },
+    ...(booksOn ? [{ text: 'Pick books', path: '/books' as const }] : []),
+  ];
+}
+
+/** The empty list's hint for someone who can start a count: what ＋ offers. */
+function startCountHint(booksOn: boolean): string {
+  return booksOn
+    ? 'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.'
+    : 'Tap ＋ to start a count — pick items, tap Select, then Review. Or start one from the web.';
+}
+
 /** The downloaded (cached) counts, or null when the device store cannot be read. */
 async function readDownloaded(): Promise<CachedCycleCountHeader[] | null> {
   try {
@@ -159,6 +181,13 @@ export default function CycleCounts() {
   // effective set is loading (undefined) the CTA shows — today's behavior.
   const perms = useEffectivePermissions();
   const canStartCount = showWriteCta(perms, 'stock:adjust');
+  // Whether the start may offer Books (startCountChoices). Permissive until
+  // the first snapshot lands, as the tab bar is: the default module set
+  // includes Books. The hint is worked out here, not inside the empty-list
+  // element: with the call in that element the React Compiler could no
+  // longer keep load's memoization (react-hooks/preserve-manual-memoization).
+  const booksOn = useEnabledModules().has('books');
+  const startHint = startCountHint(booksOn);
 
   // What the list shows (search, status, page), restored per workspace when
   // the screen comes back, so opening a count and returning keeps the view.
@@ -524,7 +553,7 @@ export default function CycleCounts() {
         {offline
           ? 'Open counts download when you are online. Connect to see your full history.'
           : canStartCount
-            ? 'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.'
+            ? startHint
             : 'Counts started from the web appear here for review.'}
       </Body>
     </View>
@@ -582,8 +611,10 @@ export default function CycleCounts() {
               minTap
               onPress={() =>
                 Alert.alert('Start a cycle count', 'Pick what you want to count, then tap Select.', [
-                  { text: 'Pick items', onPress: () => router.push('/inventory') },
-                  { text: 'Pick books', onPress: () => router.push('/books') },
+                  ...startCountChoices(booksOn).map((choice) => ({
+                    text: choice.text,
+                    onPress: () => router.push(choice.path),
+                  })),
                   { text: 'Cancel', style: 'cancel' },
                 ])
               }

@@ -118,7 +118,11 @@ describe('CategoriesManager — the resolved counting unit is rendered', () => {
         sports_subcategory_key: null,
         default_unit_of_measure: 'case',
       }),
-      row({ sports_subcategory_key: null, tracking_mode: 'QUANTITY', default_unit_of_measure: null }),
+      row({
+        sports_subcategory_key: null,
+        tracking_mode: 'QUANTITY',
+        default_unit_of_measure: null,
+      }),
     ]);
     expect(screen.getByText(/cases/)).toBeTruthy();
   });
@@ -131,7 +135,14 @@ describe('CategoriesManager — the resolved counting unit is rendered', () => {
 
   it('a plain category still renders with no sports affordances at all (regression)', () => {
     renderManager(
-      [row({ id: 'cat-plain', name: 'Electronics', parent_id: null, sports_subcategory_key: null })],
+      [
+        row({
+          id: 'cat-plain',
+          name: 'Electronics',
+          parent_id: null,
+          sports_subcategory_key: null,
+        }),
+      ],
       true,
     );
     expect(screen.queryByText(/Tracking:/)).toBeNull();
@@ -215,7 +226,10 @@ describe('CategoriesManager — the edit dialog sends only what changed', () => 
 
   it('round-trips an UNCHANGED profile as absent rather than resending it', async () => {
     const user = userEvent.setup();
-    renderEditable([SPORTS_ROOT, row({ id: 'cat-shoes', name: 'Shoes', sports_subcategory_key: 'shoes' })]);
+    renderEditable([
+      SPORTS_ROOT,
+      row({ id: 'cat-shoes', name: 'Shoes', sports_subcategory_key: 'shoes' }),
+    ]);
     await rename(user, 'Shoes', 'Shoes and Boots');
 
     await waitFor(() => expect(updateCategoryAction).toHaveBeenCalled());
@@ -227,11 +241,16 @@ describe('CategoriesManager — the edit dialog sends only what changed', () => 
 
   it('still sends an EXPLICIT null when the human really clears the profile', async () => {
     const user = userEvent.setup();
-    renderEditable([SPORTS_ROOT, row({ id: 'cat-shoes', name: 'Shoes', sports_subcategory_key: 'shoes' })]);
+    renderEditable([
+      SPORTS_ROOT,
+      row({ id: 'cat-shoes', name: 'Shoes', sports_subcategory_key: 'shoes' }),
+    ]);
 
     await user.click(screen.getByRole('button', { name: 'Shoes' }));
     // Untick "This is a Sports subcategory" — the one gesture that means "clear".
-    await user.click(await screen.findByRole('checkbox', { name: /this is a sports subcategory/i }));
+    await user.click(
+      await screen.findByRole('checkbox', { name: /this is a sports subcategory/i }),
+    );
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(updateCategoryAction).toHaveBeenCalled());
@@ -247,7 +266,9 @@ describe('CategoriesManager — the edit dialog sends only what changed', () => 
     renderEditable([SPORTS_ROOT, PLAIN_CHILD]);
 
     await user.click(screen.getByRole('button', { name: 'Footwear' }));
-    await user.click(await screen.findByRole('checkbox', { name: /this is a sports subcategory/i }));
+    await user.click(
+      await screen.findByRole('checkbox', { name: /this is a sports subcategory/i }),
+    );
     await user.click(await screen.findByRole('combobox', { name: /subcategory type/i }));
     await user.click(await screen.findByRole('option', { name: /shoes/i }));
     await user.click(screen.getByRole('button', { name: /save changes/i }));
@@ -264,7 +285,10 @@ describe('CategoriesManager — the edit dialog sends only what changed', () => 
     await user.click(screen.getByRole('button', { name: /create category/i }));
 
     await waitFor(() => expect(createCategoryAction).toHaveBeenCalled());
-    const payload = vi.mocked(createCategoryAction).mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const payload = vi.mocked(createCategoryAction).mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
     // There is no "current" to compare against, so the explicit nulls stand.
     expect('sportsSubcategoryKey' in payload).toBe(true);
     expect(payload.sportsSubcategoryKey).toBeNull();
@@ -338,7 +362,11 @@ describe('CategoriesManager — header, cards and gates (redesign)', () => {
     expect(classes).not.toContain('group-hover:opacity-100');
     expect(classes).toContain('pointer-fine:opacity-0');
     expect(classes).toContain('pointer-fine:group-hover:opacity-100');
-    expect(classes).toContain('pointer-fine:group-focus-within:opacity-100');
+    // Focus anywhere in its card shows it: the descendant selector
+    // `.group:focus-within &`, whose group is the card.
+    expect(classes).toContain('pointer-fine:[.group:focus-within_&]:opacity-100');
+    expect(archive.closest('.group')).toBe(screen.getAllByTestId('category-card')[0]);
+    expect(screen.getAllByTestId('category-card')[0]).toHaveTextContent('Apparel');
   });
 
   it('Archive asks first, with the words about filters and item forms', async () => {

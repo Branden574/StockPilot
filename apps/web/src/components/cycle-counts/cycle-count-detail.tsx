@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import {
   CYCLE_COUNT_MANAGER_POSTS_COPY,
+  countFromText,
   cycleCountCloseGate,
   offlineCaptureLabel,
   variantLabel,
@@ -126,8 +127,32 @@ interface Props {
   titleId?: string;
 }
 
+/** What a count line says when its box does not hold a count of 0 or more. */
+const COUNT_NOT_A_NUMBER = 'Enter a number of 0 or more, such as 5 or 2.5.';
+
 /** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
 const EDGE = 'first:pl-[18px] last:pr-[18px]';
+
+/**
+ * The count lines fold by the width of their own card (a container query on
+ * the card), not the window's: under 640 px of card the SKU, Expected and
+ * Variance columns fold into the Item cell. Beside the sidebar an iPad in
+ * portrait (768 to 834 px) leaves the card 474 to 540 px, and 200% zoom of a
+ * 1280 px window 574 px, all past the window's sm, so a viewport rule drew the
+ * six columns there with their 600 px floor and a searched line's Variance
+ * and Clear count sat past the card's edge. Six columns of a short line need
+ * 623 px, so from 640 px of card they fit.
+ */
+const FOLDED = 'hidden @min-[640px]:table-cell';
+
+/** What Expected means, for the Expected column's help (and the Counted column's while folded). */
+const EXPECTED_HELP = (
+  <p>
+    The system quantity when the line was counted (the quantity at session start until then).
+    Variance is counted minus expected, and posting applies that variance on top of the current
+    stock — stock that moved after a line was counted is kept, never counted twice.
+  </p>
+);
 
 /** The line filters, in the order they always had. */
 const LINE_FILTERS: Array<{ id: CycleCountLineFilter; label: string }> = [
@@ -286,9 +311,13 @@ export function CycleCountDetail({
   // back — otherwise the box keeps an unsaved number and renders a variance
   // that looks exactly like a saved line while the DB still says uncounted.
   async function saveCount(line: CycleCountLineWithItem, raw: string): Promise<boolean> {
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value < 0) {
-      const message = 'Enter a non-negative number.';
+    // The rule every count box reads by, here and on the phone (core
+    // countFromText): a plain number of 0 or more. A negative number, a second
+    // point or a comma ("1.2.3", "2,5"), an exponent or a sign ("1e3", "+5")
+    // is refused and nothing is saved; Number() saved "1e3" as 1000.
+    const value = countFromText(raw);
+    if (value === null) {
+      const message = COUNT_NOT_A_NUMBER;
       toast.error(message);
       setLineError({ id: line.id, message });
       return false;
@@ -437,7 +466,8 @@ export function CycleCountDetail({
             </div>
           )}
 
-          <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+          {/* @container: the count lines fold by this card's width (FOLDED). */}
+          <div className="border-border bg-card @container min-w-0 overflow-hidden rounded-lg border">
             {/* Status and who acts next: Cancel and Review & post for a
                 manager, the sentence for staff who count but do not post. */}
             <div className="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-[18px] py-2.5">
@@ -513,26 +543,33 @@ export function CycleCountDetail({
               />
             </div>
 
-            <Table scrollLabelledBy={titleId} className="min-w-[600px]">
+            {/* From 640 px of card up the line is six columns, at least 600 px.
+                Under that the SKU, Expected and Variance columns fold into the
+                Item cell (FOLDED), so a phone or a tablet beside the sidebar
+                shows the item, its count box and Clear count side by side: at
+                390 px the six columns needed 600 to 647 px, and the count box
+                started past the screen's edge. */}
+            <Table scrollLabelledBy={titleId} className="@min-[640px]:min-w-[600px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className={EDGE}>Item</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead className="text-right">
+                  <TableHead className={FOLDED}>SKU</TableHead>
+                  <TableHead className={cn(FOLDED, 'text-right')}>
                     <span className="inline-flex items-center gap-1.5">
                       Expected
-                      <HelpTip label="the Expected quantity">
-                        <p>
-                          The system quantity when the line was counted (the quantity at session
-                          start until then). Variance is counted minus expected, and posting applies
-                          that variance on top of the current stock — stock that moved after a line
-                          was counted is kept, never counted twice.
-                        </p>
-                      </HelpTip>
+                      <HelpTip label="the Expected quantity">{EXPECTED_HELP}</HelpTip>
                     </span>
                   </TableHead>
-                  <TableHead className="text-right">Counted</TableHead>
-                  <TableHead className="text-right">Variance</TableHead>
+                  <TableHead className="text-right">
+                    <span className="inline-flex items-center gap-1.5">
+                      Counted
+                      {/* The Expected column's help, here while that column is folded. */}
+                      <span className="@min-[640px]:hidden inline-flex">
+                        <HelpTip label="the Expected quantity">{EXPECTED_HELP}</HelpTip>
+                      </span>
+                    </span>
+                  </TableHead>
+                  <TableHead className={cn(FOLDED, 'text-right')}>Variance</TableHead>
                   <TableHead className={cn(EDGE, 'w-12')} />
                 </TableRow>
               </TableHeader>
@@ -772,9 +809,9 @@ function CountRow({
   // count — so an empty box reads as "uncounted" (variance —) instead of
   // showing the stale saved variance after you clear it. A counted 0 still
   // shows its variance because draft is "0", not "".
-  const trimmedDraft = draft.trim();
-  const draftNum = trimmedDraft === '' ? NaN : Number(trimmedDraft);
-  const effectiveCounted = Number.isFinite(draftNum) ? draftNum : null;
+  // Read by the rule a save reads by (countFromText), so a box that will not
+  // save shows no variance it will never apply.
+  const effectiveCounted = countFromText(draft);
   const variance = effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
   const variantText = variantLabel({
     jerseyNumber: line.item?.jersey_number ?? null,
@@ -783,11 +820,36 @@ function CountRow({
   // A count queued offline and synced later was measured against the book at
   // the moment it was taken (0369). Whoever reviews and posts sees when.
   const capturedText = line.counted_quantity != null ? offlineCaptureLabel(line, timeZone) : null;
+  const skuText = line.item?.sku ?? '—';
+  const expectedText = formatNumber(line.expected_quantity);
+  const varianceText =
+    variance == null
+      ? '—'
+      : variance === 0
+        ? '0'
+        : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`;
+  const varianceTone =
+    variance == null
+      ? 'text-muted-foreground'
+      : variance > 0
+        ? 'text-success'
+        : variance < 0
+          ? 'text-destructive'
+          : 'text-muted-foreground';
 
   return (
     <TableRow>
-      <TableCell className={cn(EDGE, 'min-w-[160px] max-w-[320px]')}>
+      {/* 112 px wide at least while folded, so a 320 px phone shows the item,
+          its box and Clear count side by side; 160 from 640 px of card up, as
+          before. A 13-digit barcode keeps its one line, so a line with one
+          and with Clear count is 5 px wider than a 320 px card, its controls
+          whole. */}
+      <TableCell className={cn(EDGE, '@min-[640px]:min-w-[160px] min-w-28 max-w-[320px]')}>
         <div className="font-medium [overflow-wrap:anywhere]">{line.item?.name ?? 'Unknown'}</div>
+        {/* The SKU column's value, here while that column is folded. */}
+        <div className="text-ink-2 @min-[640px]:hidden font-mono text-[12px] [overflow-wrap:anywhere]">
+          {skuText}
+        </div>
         {/* WHICH VARIANT this row is. Six sizes of one shoe otherwise differ
             only by SKU, and a counter matching hex strings to shoeboxes puts
             the 10s in the 10.5 row. Renders nothing for an ungrouped item, so
@@ -803,12 +865,26 @@ function CountRow({
         {capturedText && (
           <div className="text-muted-foreground truncate text-[12px]">{capturedText}</div>
         )}
+        {/* The Expected and Variance columns' values, here while folded. The
+            variance follows the box as it is typed, as its column does. */}
+        <div
+          className="text-muted-foreground @min-[640px]:hidden mt-0.5 text-[12px] tabular-nums"
+          data-testid="count-line-folded-numbers"
+        >
+          Expected <span className="font-mono">{expectedText}</span> · Variance{' '}
+          <span className={cn('font-mono', varianceTone)}>{varianceText}</span>
+        </div>
       </TableCell>
-      <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
-        {line.item?.sku ?? '—'}
+      <TableCell className={cn(FOLDED, 'text-ink-2 whitespace-nowrap font-mono text-[12.5px]')}>
+        {skuText}
       </TableCell>
-      <TableCell className="text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
-        {formatNumber(line.expected_quantity)}
+      <TableCell
+        className={cn(
+          FOLDED,
+          'text-muted-foreground text-right font-mono text-[13.5px] tabular-nums',
+        )}
+      >
+        {expectedText}
       </TableCell>
       <TableCell className="text-right">
         {readOnly ? (
@@ -831,8 +907,15 @@ function CountRow({
                   if (current != null && !(await onClear())) revertDraftToServerValue();
                   return;
                 }
-                const next = Number(trimmed);
-                if (Number.isFinite(next) && next !== current) {
+                // A box that holds something that is not a count (a second
+                // point, a comma, a minus sign) used to be left as it was,
+                // saving nothing and saying nothing, while a post applied the
+                // count saved before. The save now refuses it, says so on the
+                // line and puts the saved count back, as for a negative
+                // number, so the box never shows a count other than the one
+                // a post applies.
+                const next = countFromText(trimmed);
+                if (next === null || next !== current) {
                   if (!(await onSave(trimmed))) revertDraftToServerValue();
                 }
               }}
@@ -855,22 +938,9 @@ function CountRow({
         )}
       </TableCell>
       <TableCell
-        className={cn(
-          'text-right font-mono text-[13.5px] tabular-nums',
-          variance == null
-            ? 'text-muted-foreground'
-            : variance > 0
-              ? 'text-success'
-              : variance < 0
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-        )}
+        className={cn(FOLDED, 'text-right font-mono text-[13.5px] tabular-nums', varianceTone)}
       >
-        {variance == null
-          ? '—'
-          : variance === 0
-            ? '0'
-            : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}
+        {varianceText}
       </TableCell>
       <TableCell className={cn(EDGE, 'w-12')}>
         {!disabled && line.counted_quantity != null && (

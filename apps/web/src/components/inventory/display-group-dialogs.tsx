@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import Link from 'next/link';
 import * as React from 'react';
 
 import { MissingPhoto } from '@/components/patterns/missing-photo';
@@ -262,6 +263,11 @@ interface GroupSelectedDialogProps {
   onAddToSelection?: (ids: string[]) => void;
   /** Called once after a grouping applied or answered no-op. */
   onDone: (outcome: GroupingOutcome) => void;
+  /** B5: the address of the list page that draws a group's header. Given
+   *  only by a list paged on the server, which cannot tell which page that is
+   *  (a list holding every record turns to the page itself): the done message
+   *  then links to it ("Show it"), and following the link closes the dialog. */
+  showGroupHref?: (groupId: string) => string;
 }
 
 export function GroupSelectedDialog({
@@ -272,6 +278,7 @@ export function GroupSelectedDialog({
   initialGroupId = null,
   onAddToSelection,
   onDone,
+  showGroupHref,
 }: GroupSelectedDialogProps) {
   const [mode, setMode] = React.useState<'new' | 'existing'>(initialGroupId ? 'existing' : 'new');
   const [name, setName] = React.useState('');
@@ -435,6 +442,20 @@ export function GroupSelectedDialog({
               {outcome.outcome === 'noop'
                 ? GROUP_COPY.noop(outcome.group?.name ?? '')
                 : GROUP_COPY.done(outcome.group?.name ?? '')}
+              {outcome.group && showGroupHref ? (
+                <>
+                  {' '}
+                  <Link
+                    href={showGroupHref(outcome.group.id)}
+                    prefetch={false}
+                    aria-label={GROUP_COPY.showItFor(outcome.group.name)}
+                    className="underline underline-offset-2"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    {GROUP_COPY.showIt}
+                  </Link>
+                </>
+              ) : null}
             </p>
             <p className="text-muted-foreground text-xs">{GROUP_COPY.skuNote}</p>
           </div>

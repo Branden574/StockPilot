@@ -76,7 +76,9 @@ describe('TagsManager', () => {
           classes.some((c) => c.endsWith('opacity-0')) ? ['pointer-fine:opacity-0'] : [],
         );
         if (classes.includes('pointer-fine:opacity-0')) {
-          expect(classes).toContain('pointer-fine:group-focus-within:opacity-100');
+          // The descendant selector `.group:focus-within &`, whose group is the row.
+          expect(classes).toContain('pointer-fine:[.group:focus-within_&]:opacity-100');
+          expect(el.closest('.group')).toBe(row);
           expect(classes).toContain('pointer-fine:group-hover:opacity-100');
         }
       }

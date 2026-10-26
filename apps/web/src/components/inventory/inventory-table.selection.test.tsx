@@ -219,15 +219,20 @@ describe('CONFLICTS D18: a saved view’s owner controls reach touch and keyboar
       // Hidden by default for a fine pointer…
       expect(classes).toContain('opacity-0');
       // …but shown on hover, on keyboard focus inside the chip, on a touch
-      // screen and below sm.
+      // screen and below sm. Focus inside the chip is the descendant selector
+      // `.group\/view:focus-within &`: the class keeps one backslash, and its
+      // group is the chip.
       expect(classes).toEqual(
         expect.arrayContaining([
           'group-hover/view:opacity-100',
-          'group-focus-within/view:opacity-100',
+          String.raw`[.group\/view:focus-within_&]:opacity-100`,
           'focus-visible:opacity-100',
           'pointer-coarse:opacity-100',
           'max-sm:opacity-100',
         ]),
+      );
+      expect(control.closest(String.raw`.group\/view`)).toContainElement(
+        screen.getByRole('button', { name: 'Apply view Restock' }),
       );
     }
     // A teammate's chip offers neither (owner-only, unchanged).

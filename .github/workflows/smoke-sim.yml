@@ -54,9 +54,12 @@ jobs:
 
       - uses: pnpm/action-setup@v6.1.0
 
+      # The runner's Node (for pnpm and eas-cli) comes from .nvmrc like every
+      # other workflow. The EAS build itself runs on the "node" pinned in the
+      # simulator profile of apps/mobile/eas.json, not on this one.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Install dependencies

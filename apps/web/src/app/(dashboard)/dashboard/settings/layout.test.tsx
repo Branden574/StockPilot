@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,7 +26,13 @@ const requireOrgContext = vi.hoisted(() =>
 );
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext }));
 
-const moduleAccess = vi.hoisted(() => ({ current: { enabled: true, canManage: true } }));
+const moduleAccess = vi.hoisted(() => ({
+  current: { enabled: true, canManage: true } as {
+    enabled: boolean;
+    canManage: boolean;
+    checkFailed?: boolean;
+  },
+}));
 const checkModuleAccess = vi.hoisted(() =>
   vi.fn(async (moduleId: string) => {
     if (moduleId !== 'maintenance_requests') throw new Error(`unexpected module ${moduleId}`);
@@ -42,9 +48,10 @@ vi.mock('@/lib/supabase/server', () => ({ createClient }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient }));
 
 const prefetch = vi.hoisted(() => vi.fn());
+const refresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
   usePathname: () => pathHolder.current,
-  useRouter: () => ({ prefetch, push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ prefetch, push: vi.fn(), replace: vi.fn(), refresh }),
 }));
 
 import SettingsLayout from './layout';
@@ -146,6 +153,59 @@ describe('settings layout', () => {
     await renderLayout();
     const nav = screen.getByRole('navigation', { name: 'Settings' });
     expect(within(nav).queryByRole('link', { name: 'Maintenance requests' })).toBeNull();
+    expect(within(nav).queryByText('Maintenance requests')).toBeNull();
+    expect(within(nav).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(within(nav).getByRole('link', { name: 'Email routing' })).toBeInTheDocument();
+  });
+
+  it('links Maintenance requests for the owner while the module is on', async () => {
+    await renderLayout();
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    expect(within(nav).getByRole('link', { name: 'Maintenance requests' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/maintenance',
+    );
+    expect(within(nav).queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  // Docket R7: a module set that could not be read is not "off".
+  it('when the module could not be checked, shows the owner that it could not, with Try again, and no link', async () => {
+    moduleAccess.current = { enabled: false, canManage: true, checkFailed: true };
+    await renderLayout();
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    // Still closed: no link to the destination on an unknown answer.
+    expect(within(nav).queryByRole('link', { name: 'Maintenance requests' })).toBeNull();
+    const row = nav.querySelector('[data-slot="settings-entry-unchecked"]') as HTMLElement;
+    expect(row).toHaveTextContent('Maintenance requests');
+    expect(row).toHaveTextContent("We couldn't check whether this module is on.");
+    const retry = within(row).getByRole('button', { name: 'Try again' });
+    expect(retry).toHaveAccessibleDescription(
+      "Maintenance requests We couldn't check whether this module is on.",
+    );
+    fireEvent.click(retry);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // Everything else is as it was.
+    expect(within(nav).getByRole('link', { name: 'Email routing' })).toBeInTheDocument();
+  });
+
+  it('when the module could not be checked, a member without the configure grant sees nothing of it', async () => {
+    ctxHolder.current = { role: 'staff' };
+    moduleAccess.current = { enabled: false, canManage: false, checkFailed: true };
+    await renderLayout();
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    expect(within(nav).queryByText('Maintenance requests')).toBeNull();
+    expect(within(nav).queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('never marks the unchecked entry as the current page, even on its own path', async () => {
+    pathHolder.current = '/dashboard/settings/maintenance';
+    moduleAccess.current = { enabled: false, canManage: true, checkFailed: true };
+    await renderLayout();
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    expect(nav.querySelector('[aria-current]')).toBeNull();
+    expect(within(nav).getByRole('button', { name: 'Settings' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
   });
 });

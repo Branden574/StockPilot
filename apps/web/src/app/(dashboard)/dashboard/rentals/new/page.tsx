@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { RentalCreateForm } from '@/components/rentals/rental-create-form';
@@ -75,9 +75,12 @@ export default async function NewRentalPage({
   // is off. It now shows the checkouts list's module-off panel. The module
   // set came with the request's membership, so this costs no extra round
   // trip; a member without rentals:create is still sent to the list first.
+  // When the module set could not be read, the page says it could not check
+  // and offers Try again (which keeps the warehouse in the URL), and still
+  // reads nothing.
   const moduleAccess = await checkModuleAccess('rentals');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="rentals" access={moduleAccess} />;
   }
 
   const params = await searchParams;

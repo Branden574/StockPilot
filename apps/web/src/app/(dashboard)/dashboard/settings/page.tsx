@@ -19,7 +19,9 @@ export const metadata: Metadata = { title: 'Settings' };
  * page shares, from the caller's effective permissions (`can(ctx, ...)`,
  * overrides applied) and, for Maintenance requests, whether that
  * off-by-default module is on (`checkModuleAccess`). Both reads are the
- * request-cached ones the dashboard layout has already made.
+ * request-cached ones the dashboard layout has already made. When the module
+ * set could not be read, the tile is not a link and says it could not be
+ * checked, with Try again, as the sub-nav on every other settings page does.
  */
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
@@ -27,6 +29,7 @@ export default async function SettingsPage() {
   const access: SettingsNavAccess = {
     permissions: PERMISSIONS.filter((permission) => can(ctx, permission)),
     modules: maintenanceAccess.enabled ? ['maintenance_requests'] : [],
+    uncheckedModules: maintenanceAccess.checkFailed ? ['maintenance_requests'] : [],
   };
   return (
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -31,6 +31,7 @@ const inventoryByIds = vi.fn(async () => []);
 const warehousesListNames = vi.fn(async () => []);
 const checkModuleAccessMock = vi.fn();
 const reportProblemButtonProps = vi.fn();
+const refresh = vi.hoisted(() => vi.fn());
 
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
@@ -39,6 +40,7 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
+  useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
 }));
 
 vi.mock('next/link', async () => {
@@ -253,6 +255,40 @@ describe('rentals/[id] with the Rentals module off (P4.D1)', () => {
     ctxHolder.current = { role: 'viewer', permissions: new Set<string>() };
     await expect(renderPage()).rejects.toThrow('redirect:/dashboard');
     expect(checkModuleAccessMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('rentals/[id] when the module set could not be read (docket R7)', () => {
+  // A failed read is not "Rentals is off". Rental emails and maintenance
+  // request emails link here: the page says it could not check, offers Try
+  // again, and still reads nothing.
+  it('says it could not check, with Try again, and reads nothing', async () => {
+    checkModuleAccessMock.mockImplementation(async (moduleId: unknown) =>
+      moduleId === 'rentals'
+        ? { enabled: false, canManage: true, checkFailed: true }
+        : { enabled: true, canManage: true },
+    );
+    await renderPage();
+    expect(
+      screen.getByRole('heading', { level: 1, name: "We couldn't check whether Rentals is on" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Rentals isn't enabled")).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Enable in Settings → Modules' })).toBeNull();
+    expect(checkModuleAccessMock.mock.calls).toEqual([['rentals']]);
+    expect(rentalGet).not.toHaveBeenCalled();
+    expect(overdueRemindersOn).not.toHaveBeenCalled();
+    expect(reportProblemButtonProps).not.toHaveBeenCalled();
+    expect(headerProps).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('with Rentals on, the page renders as before and offers no Try again', async () => {
+    await renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: 'Rental detail' })).toBeTruthy();
+    expect(rentalGet).toHaveBeenCalledWith(RENTAL_ID);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

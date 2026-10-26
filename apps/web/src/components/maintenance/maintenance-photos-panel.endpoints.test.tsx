@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * MaintenancePhotosPanel takes its endpoints as props (F1-4). The exception
  * photo panel is one caller; these pin that the MAINTENANCE defaults are the
- * requests the panel always sent, including the browser-made thumbnail that
- * only maintenance takes, and that a panel given other endpoints never
- * touches the maintenance routes. maintenance-photos-panel.test.tsx pins the
- * rest of the maintenance behaviour, unchanged.
+ * requests the panel always sent, less the browser-made thumbnail that
+ * maintenance no longer takes (B29: the server makes it), and that a panel
+ * given other endpoints never touches the maintenance routes.
+ * maintenance-photos-panel.test.tsx pins the rest of the maintenance
+ * behaviour, unchanged.
  */
 
 const toastError = vi.fn();
@@ -54,20 +55,24 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('MaintenancePhotosPanel endpoints', () => {
-  it('the maintenance default still PUTs the browser thumbnail to the thumb URL it minted', async () => {
+  it('the maintenance default PUTs only the photo, though the mint still names a thumbnail URL: the server makes the thumbnail (B29)', async () => {
     const onChange = vi.fn();
     render(<MaintenancePhotosPanel requestId="r1" photos={[]} onChange={onChange} />);
     await userEvent.upload(fileInput(), jpeg());
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    // Finalize makes the thumbnail from the cleaned photo and writes it over
+    // anything sent to that name (2026-09-27), so a browser-made one was only
+    // a second upload of the same picture.
     expect(urls).toEqual([
       '/api/v1/maintenance-requests/r1/attachments',
       'https://storage.example.test/master',
-      'https://storage.example.test/thumb',
       '/api/v1/maintenance-requests/r1/attachments/finalize',
     ]);
-    const thumbPut = fetchSpy.mock.calls[2]!;
-    expect(thumbPut[1]).toMatchObject({ method: 'PUT', headers: { 'Content-Type': 'image/webp' } });
+    expect(fetchSpy.mock.calls[1]![1]).toMatchObject({
+      method: 'PUT',
+      headers: { 'Content-Type': 'image/jpeg' },
+    });
   });
 
   it('the maintenance default removes at once (no dialog), and a failed DELETE says so', async () => {

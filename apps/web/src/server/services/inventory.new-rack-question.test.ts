@@ -142,6 +142,16 @@ function transferTargets(stub: SupabaseStub) {
     .map((c) => (c.args as { p_to_location_id: string }).p_to_location_id);
 }
 
+/** The `kind` each read of `locations` filtered on, in call order: the rack
+ *  question reads kind 'rack' (the lookup, then the near-matches). */
+function locationKindsRead(stub: SupabaseStub): unknown[] {
+  const args = stub.chainArgsAll.get('locations.select') ?? [];
+  return (stub.chainsAll.get('locations.select') ?? []).map((methods, i) => {
+    const at = methods.findIndex((m, j) => m === 'eq' && args[i]?.[j]?.[0] === 'kind');
+    return at === -1 ? undefined : args[i]?.[at]?.[1];
+  });
+}
+
 async function refusal(promise: Promise<unknown>): Promise<ServiceError> {
   const e = await promise.then(
     () => null,
@@ -824,8 +834,34 @@ describe('InventoryService.duplicateItem asks before the copy is made', () => {
     expect(transferTargets(stub)).toEqual(['rack-17-b']);
   });
 
+  // A book copy's crate is chosen at put-away, so the duplicate never asks
+  // about its rack. Its seeded stock moves to the warehouse's Unplaced bucket
+  // instead (B28), and that bucket is the only location it reads. The seeded
+  // holding carries its location, as the move's left embed returns it: a
+  // holding without one is stock the reads cannot place, which is reported.
   it('never asks about a book copy, which is not placed by the duplicate', async () => {
-    const stub = dupStub();
+    const stub = buildStub({
+      'inventory_items.select': {
+        data: { sku: 'SP-MAUS', warehouse_id: 'wh-1', charter_id: null, item_type: 'book' },
+        error: null,
+      },
+      'rpc:duplicate_inventory_item': { data: 'dup-1', error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'dup-1',
+            location_id: 'site-dc4',
+            quantity: 4,
+            locations: { name: 'DC4', kind: null, type: null },
+          },
+        ],
+        error: null,
+      },
+      'locations.select': servedLikePostgrest([
+        ...LOCATIONS,
+        location('unplaced-wh1', 'Unplaced', { kind: 'unplaced' }),
+      ]),
+    });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await expect(
@@ -837,8 +873,9 @@ describe('InventoryService.duplicateItem asks before the copy is made', () => {
       } as never),
     ).resolves.toEqual({ id: 'dup-1', placementFailed: null });
 
-    expect(stub.fromCalls).not.toContain('locations');
+    expect(locationKindsRead(stub)).toEqual(['unplaced']);
     expect(createdRack(stub)).toBeUndefined();
+    expect(transferTargets(stub)).toEqual(['unplaced-wh1']);
   });
 
   // 2026-10-25 review: a copy whose stock did not reach its rack was reported

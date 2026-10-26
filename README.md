@@ -34,7 +34,7 @@ StockPilot is in production as the internal inventory system for L4L Fresno (a c
 
 ## Prerequisites
 
-- **Node.js** ≥ 20.11 (`nvm use` — `.nvmrc` points to 20.11.0)
+- **Node.js** 24.x (`nvm use` — `.nvmrc` points to 24, the major production runs on Vercel)
 - **pnpm** ≥ 9 (`npm install -g pnpm`)
 - **Supabase CLI** (`brew install supabase/tap/supabase`)
 - **Vercel CLI** (recommended): `npm install -g vercel`

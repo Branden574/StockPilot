@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { Info } from 'lucide-react';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ApiKeysPanel } from '@/components/settings/api-keys-panel';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
@@ -62,13 +62,14 @@ export default async function IntegrationsSettingsPage() {
     redirect('/dashboard');
   }
 
-  // Both modules are OFF by default. Show the standard ModuleNotEnabled state
-  // (with the Enable-in-Modules CTA) when NEITHER is enabled, rather than
+  // Both modules are OFF by default. Show the standard module-off state (with
+  // the Enable-in-Modules CTA; "could not check" with Try again when the
+  // module set could not be read) when NEITHER is enabled, rather than
   // loading connection data the org can't use. Name `integrations` (the primary
   // owner of this surface) in the CTA; if only shipping should be on, the
   // Modules page is one tap away from the same CTA.
   if (!integrationsAccess.enabled && !shippingAccess.enabled && !apiAccessAccess.enabled) {
-    return <ModuleNotEnabled moduleId="integrations" canManage={integrationsAccess.canManage} />;
+    return <ModuleUnavailable moduleId="integrations" access={integrationsAccess} />;
   }
 
   // Connections (QBO/EasyPost) load ONLY when integrations OR shipping is on —

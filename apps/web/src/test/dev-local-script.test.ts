@@ -52,6 +52,13 @@ const CANONICAL_ENV_LOCAL = [
   '',
 ].join('\n');
 
+// The canonical file as the pre-SP-030 script left it: its Supabase URL is the
+// local stack. Nothing writes it back, so a plain dev server keeps using it.
+const LOCAL_STACK_ENV_LOCAL = CANONICAL_ENV_LOCAL.replace(
+  'NEXT_PUBLIC_SUPABASE_URL=https://hosted.supabase.test',
+  'NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321',
+);
+
 // The stale 10-key backup, mirroring the real .env.local.prod: it does NOT
 // contain the four keys above, which is exactly why rewriting from it loses.
 const CANONICAL_ENV_PROD = [
@@ -87,7 +94,7 @@ type Harness = {
  * the repo are symlinks pointing at a canonical directory that lives
  * elsewhere (the stand-in for ~/Developer/stockpilot-env).
  */
-function makeHarness(): Harness {
+function makeHarness(envLocal: string = CANONICAL_ENV_LOCAL): Harness {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-dev-local-'));
   workspace = base;
 
@@ -102,7 +109,7 @@ function makeHarness(): Harness {
 
   const canonicalEnvLocal = path.join(canonical, '.env.local');
   const canonicalEnvProd = path.join(canonical, '.env.local.prod');
-  fs.writeFileSync(canonicalEnvLocal, CANONICAL_ENV_LOCAL);
+  fs.writeFileSync(canonicalEnvLocal, envLocal);
   fs.writeFileSync(canonicalEnvProd, CANONICAL_ENV_PROD);
 
   fs.symlinkSync(canonicalEnvLocal, path.join(webDir, '.env.local'));
@@ -201,6 +208,24 @@ describe('scripts/dev-local.sh', () => {
     expect(env.NEXT_PUBLIC_SUPABASE_ANON_KEY).toBe(STUB_ANON);
     expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe(STUB_SERVICE);
     expect(env.NEXT_PUBLIC_APP_URL).toBe('http://localhost:3000');
+  });
+
+  it('does not promise that a plain dev command goes back to the hosted project', () => {
+    // The canonical file still names the local stack, as the pre-SP-030
+    // script left it. This script never reads the file, so it cannot know.
+    const h = makeHarness(LOCAL_STACK_ENV_LOCAL);
+
+    const res = h.run();
+
+    expect(res.status).toBe(0);
+    const said = res.stdout.replace(/\s+/g, ' ');
+    // The old closing lines said "To go back to hosted Supabase: stop this
+    // server and run 'pnpm --filter @stockpilot/web dev' normally", which here
+    // starts a dev server on the local stack again, not the hosted project.
+    expect(said).not.toMatch(/back to hosted/i);
+    expect(said).toContain(
+      "A plain 'pnpm --filter @stockpilot/web dev' then uses whichever Supabase project apps/web/.env.local names",
+    );
   });
 
   it('does not create or overwrite any env file in the repo', () => {

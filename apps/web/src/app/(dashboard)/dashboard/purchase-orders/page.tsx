@@ -5,7 +5,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { FilterBar } from '@/components/patterns/filter-bar';
 import { PageHeader, SublineValue } from '@/components/patterns/page-header';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
@@ -75,7 +75,7 @@ export default async function PurchaseOrdersPage({
 }) {
   const moduleAccess = await checkModuleAccess('purchase_orders');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="purchase_orders" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="purchase_orders" access={moduleAccess} />;
   }
 
   const params = await searchParams;

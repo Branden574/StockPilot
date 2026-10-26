@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
@@ -37,7 +37,7 @@ export default async function NewOrderPage({
   // requireOrgContext already resolved (request-cached), no extra round trip.
   const moduleAccess = await checkModuleAccess('orders');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
   }
 
   // SHELL-PATH AUDIT: everything awaited before returning JSX must be

@@ -14,7 +14,7 @@ Connect the repo at https://vercel.com/new and pick **the GitHub repo**, then:
 | Build command | (leave default — it runs `next build`) |
 | Install command | (leave default — Vercel runs `pnpm install` from repo root) |
 | Output directory | (leave default) |
-| Node version | 20.x (matches `.nvmrc` 20.11.0) |
+| Node version | 24.x (matches `.nvmrc` 24, the root engines field and CI; apps/web/package.json has no engines, so this setting is what Vercel runs) |
 
 Vercel auto-detects pnpm monorepos and hoists installs correctly. No `vercel.json` is required.
 

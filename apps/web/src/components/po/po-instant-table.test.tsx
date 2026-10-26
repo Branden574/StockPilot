@@ -72,8 +72,18 @@ describe('PoInstantTable hydrates with the server in UTC and the browser in Los 
       expect(run.html).not.toContain('Oct 6');
       expect(run.html).not.toContain('Oct 5');
       expect(run.html).toContain('Oct 10');
+      // The narrow fold leaves Placed out (data-none) until the day is
+      // printed, as the column waits: on the server it is out, hydrated it
+      // is in, and the row's Placed cell holds the one copy of the day.
+      const served = document.createElement('div');
+      served.innerHTML = run.html;
+      const servedRow = within(served).getByText('PO-DEMO-002').closest('tr') as HTMLElement;
+      expect(servedRow.children[3]).toHaveAttribute('data-none');
+      expect(servedRow.children[3]).toHaveTextContent(/^$/);
       const row = within(run.container).getByText('PO-DEMO-002').closest('tr') as HTMLElement;
-      expect(within(row).getByText('Oct 5')).toBeInTheDocument();
+      expect(row.children[3]).not.toHaveAttribute('data-none');
+      expect(row.children[3]).toHaveTextContent(/^Oct 5$/);
+      expect(within(row).getAllByText('Oct 5')).toHaveLength(1);
       expect(within(row).getByText('Oct 10')).toBeInTheDocument();
       expect(within(row).queryByText('Oct 9')).toBeNull();
       const draft = within(run.container).getByText('PO-DEMO-003').closest('tr') as HTMLElement;

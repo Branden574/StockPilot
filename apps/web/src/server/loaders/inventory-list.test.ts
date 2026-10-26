@@ -177,6 +177,19 @@ describe('isDefaultInventoryView', () => {
       expect(isDefaultInventoryView({ auto: '1' }, 'books')).toBe(false);
     });
 
+    // B5 (2026-10-25): ?group=<id> asks for the page that draws that display
+    // group's header (the "Show it" link after Group selected). The cached
+    // default view is page 1, so it would paint page 1 and then turn to the
+    // group's page once the streamed dataset landed.
+    it('bypasses on ANY ?group= presence (the page that shows a display group — even garbage values)', () => {
+      const id = '0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b';
+      expect(isDefaultInventoryView({ group: id }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ group: id }, 'books')).toBe(false);
+      expect(isDefaultInventoryView({ group: '' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ group: 'garbage' }, 'books')).toBe(false);
+      expect(isDefaultInventoryView({ group: [id, id] }, 'items')).toBe(false);
+    });
+
     it('bypasses when a repeated param arrives as an array', () => {
       expect(
         isDefaultInventoryView({ q: ['a', 'b'] as unknown as string }, 'items'),

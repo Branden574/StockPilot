@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
+import { countFromText } from '@stockpilot/core';
+
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
@@ -186,10 +188,11 @@ function CycleCountScanScreenInner() {
     // An emptied box is not a count of 0. Number('') is 0, so a box cleared to
     // type a new number and saved before the typing recorded zero stock for
     // the line; the count screen records nothing from an empty box either. A
-    // typed 0 is still a count of 0.
-    const raw = sheet.qty.trim();
-    const num = raw === '' ? Number.NaN : Number(raw);
-    if (!Number.isFinite(num) || num < 0) {
+    // typed 0 is still a count of 0. The box is read by the rule every count
+    // box reads by (core countFromText): a plain number of zero or more, so
+    // "1e3" or "0x10" is refused too, never saved as 1000 or 16.
+    const num = countFromText(sheet.qty);
+    if (num === null) {
       Alert.alert('Invalid count', 'Enter a non-negative number.');
       return;
     }

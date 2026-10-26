@@ -11,7 +11,7 @@ import { MaintenanceReview } from '@/components/maintenance/maintenance-review';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
 import { MaintenanceShareLinkProvider } from '@/components/maintenance/share-link-context';
 import { ShareLinkPanel, type MaintenanceShareLinkStatus } from '@/components/maintenance/share-link-panel';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { PageHeaderBackLink } from '@/components/patterns/page-header';
@@ -98,7 +98,7 @@ export default async function MaintenanceRequestDetailPage({
 
   const access = await checkModuleAccess('maintenance_requests');
   if (!access.enabled) {
-    return <ModuleNotEnabled moduleId="maintenance_requests" canManage={access.canManage} />;
+    return <ModuleUnavailable moduleId="maintenance_requests" access={access} />;
   }
 
   const ctx = await withContext();

@@ -95,6 +95,29 @@ describe('duplicateItemAction', () => {
     });
   });
 
+  // B28 (2026-10-25): a book copy's stock waits in Unplaced; when the move
+  // could not run, the dialog is told where the stock was left.
+  it('hands the dialog a book copy whose stock was left at a site', async () => {
+    const BOOK = {
+      originalId: ORIGINAL_ID,
+      itemType: 'book' as const,
+      rackNumber: '40',
+      rackRow: 'B',
+      crateColor: 'blue',
+      crateNumber: '4',
+      quantity: 3,
+    };
+    svc.duplicateItem.mockResolvedValueOnce({
+      id: 'dup-3',
+      placementFailed: null,
+      stockLeftAt: { locationName: 'DC4' },
+    });
+    await expect(duplicateItemAction(BOOK)).resolves.toEqual({
+      ok: true,
+      data: { id: 'dup-3', stockLeftAt: { locationName: 'DC4' } },
+    });
+  });
+
   it("never forwards an internal error's detail", async () => {
     svc.duplicateItem.mockRejectedValueOnce(
       new ServiceError('internal_error', 'relation inventory_items violates policy', {

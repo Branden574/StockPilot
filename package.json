@@ -5,7 +5,7 @@
   "description": "StockPilot \u2014 internal warehouse + inventory operations platform (invite-only)",
   "packageManager": "pnpm@9.12.3",
   "engines": {
-    "node": ">=20.11.0",
+    "node": "24.x",
     "pnpm": ">=9.0.0"
   },
   "scripts": {

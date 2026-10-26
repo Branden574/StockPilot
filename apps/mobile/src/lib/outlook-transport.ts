@@ -159,15 +159,21 @@ export interface MeasuredDraftToOpen extends OutlookTransportUrls {
  *  anything that did not open — so no caller can report a blocked attempt as
  *  a particular app having opened.
  *
+ *  `attempted`, on a blocked open only, is the transport the opener ASKED the
+ *  OS to open (the plan's, so the cc-safety reroute to the mail app counts as
+ *  the mail app), or null when nothing was asked (a draft no link can carry).
+ *  It is what a blocked notice may name: a refused "Open in Default Email App"
+ *  must not say Outlook could not be opened (F1-5 phone walk, 2026-09-27).
+ *
  *  `in_flight` is the double-tap swallow: a call that arrived while an
  *  earlier open was still unresolved. It fired NO openURL and NO `onOpened`,
  *  so it is never counted as a draft, never confirmed as opened, and never
  *  reported as blocked (which would surface retry copy for a tap that needs
  *  none — the first tap is still doing the work). */
-export interface MeasuredOpenResult {
-  outcome: 'opened' | 'blocked' | 'in_flight';
-  used: OpenedTransport | null;
-}
+export type MeasuredOpenResult =
+  | { outcome: 'opened'; used: OpenedTransport }
+  | { outcome: 'blocked'; used: null; attempted: OpenedTransport | null }
+  | { outcome: 'in_flight'; used: null };
 
 /**
  * THE DOUBLE-TAP LATCH, shared by both compose features because they share
@@ -215,7 +221,7 @@ export async function openMeasuredDraft(
   onOpened: () => void,
   ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<MeasuredOpenResult> {
-  if (!prepared.linkFits) return { outcome: 'blocked', used: null };
+  if (!prepared.linkFits) return { outcome: 'blocked', used: null, attempted: null };
   // The double-tap swallow (see `composeOpenInFlight`): while one open is
   // unresolved a second call opens nothing, counts nothing (`onOpened` is
   // never invoked on this path, so the screens' draft counts cannot
@@ -240,8 +246,11 @@ export async function openMeasuredDraft(
           )
         : mailtoPlan(prepared);
     const outcome = await runPlan(plan);
-    if (outcome === 'opened') onOpened();
-    return { outcome, used: outcome === 'opened' ? plan.transport : null };
+    if (outcome === 'opened') {
+      onOpened();
+      return { outcome, used: plan.transport };
+    }
+    return { outcome, used: null, attempted: plan.transport };
   } finally {
     // Released on success AND failure — a rejected open must re-arm the
     // button, never brick it.

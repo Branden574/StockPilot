@@ -58,7 +58,9 @@ async function openAndFill(
   const dialog = await screen.findByRole('dialog');
   await user.type(within(dialog).getByLabelText(/Rack number/), rack.number);
   await user.type(within(dialog).getByLabelText(/Row/), rack.row);
-  const qty = within(dialog).getByLabelText('Quantity at this rack');
+  // "Quantity at this rack" for a product, "Quantity" for a book (B28: a book
+  // copy's stock waits in Unplaced).
+  const qty = within(dialog).getByRole('spinbutton', { name: /^Quantity/ });
   await user.clear(qty);
   await user.type(qty, quantity);
   return dialog;

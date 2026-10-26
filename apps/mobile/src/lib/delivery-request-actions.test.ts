@@ -313,6 +313,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
@@ -324,6 +325,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(Linking.openURL).not.toHaveBeenCalled();
   });
@@ -411,7 +413,11 @@ describe('the double-tap latch — one unresolved open swallows every call behin
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
     ).resolves.toEqual({ outcome: 'in_flight', used: null });
     rejectOpen(new Error('no handler'));
-    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    await expect(first).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    });
     // ...and after the rejection settles, the button works again.
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
@@ -1328,7 +1334,7 @@ describe('the on-screen notice gates', () => {
       ['nothing attempted yet', null],
       ['opened natively', { outcome: 'opened', used: 'outlook-native' }],
       ['opened in the default mail app', { outcome: 'opened', used: 'default-mail' }],
-      ['refused by the OS', { outcome: 'blocked', used: null }],
+      ['refused by the OS', { outcome: 'blocked', used: null, attempted: 'outlook-native' }],
       // A swallowed double-tap. NOT a refusal: the first tap's open is still
       // in flight and will surface its own outcome, so showing retry copy for
       // the second tap would tell the user the send failed while it is
@@ -1372,7 +1378,11 @@ describe('the on-screen notice gates', () => {
    * show "nothing can open this" and "try again" one under the other.
    */
   it('the blocked notice and the oversized message can never appear together', () => {
-    const blocked: DeliveryOpenResult = { outcome: 'blocked', used: null };
+    const blocked: DeliveryOpenResult = {
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    };
     for (const prepared of [
       prepareOrderDeliveryRequest(order(), RECIPIENTS),
       prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS),

@@ -23,13 +23,14 @@ export const dynamic = 'force-dynamic';
  * server-side — accepting it from the client was an unnecessary second
  * place for a hostile path to slip through the org/request boundary check.
  * Tasks 13/19 (web/mobile upload UI) must NOT send a thumbPath field; the
- * mint response's `thumbPath` is still correct to PUT the actual thumbnail
- * bytes to, since it is the exact path the service re-derives at finalize.
+ * mint response's `thumbPath` is the exact path the service re-derives at
+ * finalize.
  *
  * PRIVACY (2026-09-27): the service now re-encodes the photo WITHOUT its
  * metadata (EXIF with GPS, XMP, ICC) and writes it over the upload, and
  * writes its own thumbnail, made from the clean photo, at that same
- * thumbPath (replacing the client's). This body and the answer
+ * thumbPath (replacing anything a client PUT there: since B29 the web and
+ * phone send none, and phones on older updates still may). This body and the answer
  * ({ id, width, height }) are unchanged, so every app build keeps working.
  */
 const finalizeSchema = z.object({
