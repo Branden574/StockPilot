@@ -205,6 +205,16 @@ describe('PermissionExceptionsService.set: the write', () => {
     expect(await PermissionExceptionsService.set(input())).toEqual({ ok: false, code: 'invalid', field: 'permission' });
   });
 
+  it('an actor the database cannot find in auth.users (deleted after the check) is not_authorized', async () => {
+    // 0413 review fix round: the database records the actor's own auth email
+    // and refuses an unknown actor (detail 'actor'); that is no target error.
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: '22023', message: 'permission_exception_invalid', hint: 'permission_exception_invalid', details: 'actor' },
+    });
+    expect(await PermissionExceptionsService.set(input())).toEqual({ ok: false, code: 'not_authorized' });
+  });
+
   it.each(['55P03', '40P01', '57014'])('a lock wait or timeout (%s) is busy, not reported', async (code) => {
     rpc.mockResolvedValue({ data: null, error: { code, message: 'canceling statement', hint: null, details: null } });
     expect(await PermissionExceptionsService.set(input())).toEqual({ ok: false, code: 'busy' });

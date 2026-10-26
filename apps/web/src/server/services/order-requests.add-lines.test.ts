@@ -352,6 +352,15 @@ describe('addLines maps the database refusals by hint', () => {
     ).rejects.toMatchObject({ code: 'validation_error' });
   });
 
+  it('order_lines_invalid quantity names the 10,000-unit line ceiling (0413 review fix round)', async () => {
+    await expect(
+      refuse({ message: 'order_lines_invalid', code: '22023', hint: 'order_lines_invalid', details: 'quantity' }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Every added line needs a whole quantity, and a line can have at most 10,000 units.',
+    });
+  });
+
   it.each([
     ['That item cannot be ordered: it is deleted, a rental item, or not received yet.', '42501'],
     ['A line needs a real quantity.', '23514'],

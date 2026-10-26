@@ -685,3 +685,36 @@ describe('updateLineQuantity and an item hidden from new ordering', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0413 review fix round (D1 #2): one ceiling for a line, 10,000 units
+// (ORDER_MAX_UNITS_PER_LINE, the New order cap). Add items' database write
+// refuses a resulting line above it; a raise here is the same new demand, so
+// it is refused before any write. Lowering a line that is already above the
+// ceiling (older orders) stays allowed: existing demand may always shrink.
+// ---------------------------------------------------------------------------
+describe('updateLineQuantity and the 10,000-unit line ceiling', () => {
+  it('a raise to exactly 10,000 is written', async () => {
+    const stub = stubFor();
+    const res = await svc(stub).updateLineQuantity('order-1', 'line-1', 10_000);
+    expect(res.quantity).toBe(10_000);
+    expect(stub.chainArgs.get('order_request_lines.update')?.[0]?.[0]).toMatchObject({
+      quantity_requested: 10_000,
+    });
+  });
+
+  it('a raise to 10,001 is refused in words, before any write', async () => {
+    const stub = stubFor();
+    await expect(svc(stub).updateLineQuantity('order-1', 'line-1', 10_001)).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'A line can have at most 10,000 units.',
+    });
+    expect(stub.chainsAll.get('order_request_lines.update')).toBeUndefined();
+  });
+
+  it('lowering a line already above the ceiling is still allowed', async () => {
+    const stub = stubFor({ line: { ...CLEAN_LINE, quantity_requested: 20_000 } });
+    const res = await svc(stub).updateLineQuantity('order-1', 'line-1', 15_000);
+    expect(res.quantity).toBe(15_000);
+  });
+});

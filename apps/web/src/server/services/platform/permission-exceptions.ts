@@ -140,6 +140,10 @@ function refusalOf(error: RpcError): SetPermissionExceptionResult | null {
     case 'permission_not_platform_managed':
       return { ok: false, code: 'invalid', field: 'permission' };
     case 'permission_exception_invalid':
+      // 0413 review fix round: the database reads the actor's email from
+      // auth.users itself and refuses an actor it cannot find (deleted after
+      // the check above): the actor is no longer authorized, not a bad target.
+      if (error.details === 'actor') return { ok: false, code: 'not_authorized' };
       return {
         ok: false,
         code: 'invalid',
@@ -172,6 +176,8 @@ async function set(input: SetPermissionExceptionInput): Promise<SetPermissionExc
       p_state: input.state,
       p_expected_state: input.expectedState,
       p_actor_user_id: input.actorUserId,
+      // Kept for the signature; the database records the actor's own auth
+      // email and ignores this value (0413 review fix round).
       p_actor_email: actorEmail,
     }));
   } catch (e) {

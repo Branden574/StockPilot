@@ -35,6 +35,7 @@ import {
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
+  ORDER_MAX_UNITS_PER_LINE,
   ORDER_MODULE_DISABLED_COPY,
   ORDER_NEEDED_BY_INVALID_TIME_COPY,
   ORDER_ORGANIZATION_CHANGED_COPY,
@@ -2175,7 +2176,7 @@ export class OrderRequestsService {
         return new ServiceError(
           'validation_error',
           error.details === 'quantity'
-            ? 'Every added line needs a whole quantity from 1 to 100,000.'
+            ? 'Every added line needs a whole quantity, and a line can have at most 10,000 units.'
             : `Pick between 1 and ${ADD_LINES_MAX} items to add.`,
         );
       case 'order_not_found':
@@ -2701,6 +2702,14 @@ export class OrderRequestsService {
           `${picked} of these are already picked and staged — unstage them or finish fulfilling this line before lowering the quantity below ${picked}.`,
         );
       }
+    }
+
+    // One ceiling per line (0413 review fix round): 10,000 units, the New
+    // order cap, which Add items' database write applies to the resulting
+    // line too. Only a raise is refused; a line already above it (an older
+    // order) may still be lowered.
+    if (quantity > prior && quantity > ORDER_MAX_UNITS_PER_LINE) {
+      throw new ServiceError('validation_error', 'A line can have at most 10,000 units.');
     }
 
     // RAISING is new demand (0413): an item hidden from new ordering (Manage
