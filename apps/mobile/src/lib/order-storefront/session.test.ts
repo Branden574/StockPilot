@@ -19,6 +19,7 @@ import {
   type PendingOrderSubmission,
 } from '@stockpilot/core';
 
+import { orderCatalogSelection } from '../order-catalog-visibility/selection';
 import { OrderAnswerForAnotherOrganization, type OrderStorefrontApi } from './api';
 import { checkoutStage } from './checkout';
 import { storefrontOutcome } from './outcome';
@@ -1045,6 +1046,23 @@ describe('the storefront answer is read again before Submit (re-check: approve r
     expect(snap().submission.state.phase).toBe('refused');
     await new Promise((r) => setTimeout(r, 0));
     expect(api.storefront).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Ordering visibility (0413, design 8.6): sign-out clears the Manage order
+// items selection from the one place that closes the storefront session, so
+// the review sheet never lists a signed-out account's records.
+describe('closing the session clears the Manage order items selection', () => {
+  it('close() forgets the selection, the review sheet and the kept operation', async () => {
+    const manage = { userId: USER, orgId: ORG, epoch: 1 };
+    orderCatalogSelection.bindScope(manage);
+    orderCatalogSelection.add(manage, [{ id: A, name: 'Planner', identifier: 'PL-1', visible: true }]);
+    orderCatalogSelection.setReviewOpen(manage, true);
+    expect(orderCatalogSelection.forScope(manage).records).toHaveLength(1);
+    await session.open(scope);
+    session.close();
+    expect(orderCatalogSelection.forScope(manage).records).toEqual([]);
+    expect(orderCatalogSelection.getSnapshot()).toMatchObject({ scopeKey: null, reviewOpen: false, pending: null });
   });
 });
 
