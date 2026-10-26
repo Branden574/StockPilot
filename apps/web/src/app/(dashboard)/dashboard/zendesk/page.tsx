@@ -1,6 +1,6 @@
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { effectiveNavLabel } from '@/lib/nav-labels';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
 import { LocalDateTime } from '@/components/ui/local-datetime';
@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ZendeskPage() {
   const access = await checkModuleAccess('zendesk');
-  if (!access.enabled) return <ModuleNotEnabled moduleId="zendesk" canManage={access.canManage} />;
+  if (!access.enabled) return <ModuleUnavailable moduleId="zendesk" access={access} />;
 
   const ctx = await withContext();
   const canManage = can(ctx, 'integrations:manage');

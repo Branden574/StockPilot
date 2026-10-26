@@ -166,9 +166,14 @@ export default async function ReportsPage() {
                   <span className="text-foreground text-[13.5px] font-medium leading-5">
                     {r.name}
                   </span>
+                  {/* Shown on hover, and while the tile has keyboard focus:
+                      the descendant selector, not Tailwind's
+                      group-focus-visible variant, which Safari pays for on
+                      every focus change of every page
+                      (lib/group-focus-variants.guard.test.ts). */}
                   <ChevronRight
                     aria-hidden
-                    className="text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                    className="text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100"
                   />
                 </span>
                 <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
