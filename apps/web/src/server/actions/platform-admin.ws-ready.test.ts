@@ -85,6 +85,36 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
     expect(msg.html).toContain('Your workspace is ready.');
   });
 
+  // Docket B39 review: GoTrue's raw action_link hands its session back in the
+  // URL fragment, which the app never uses, so an owner who pressed it landed
+  // on /signin, not signed in, with live tokens in the address bar. With no
+  // hashed token there is no link of ours to send.
+  it('sends nothing, reports it and tells the operator when GoTrue returns no hashed token, never the action_link', async () => {
+    generateLink.mockResolvedValue({
+      data: {
+        user: { id: 'auth-user-9' },
+        properties: { action_link: 'https://sb/verify?token=raw' },
+      },
+      error: null,
+    });
+    const { reportError } = await import('@/lib/error-reporter');
+    const res = await createOrgForCustomerAction({
+      email: 'owner@acme.example',
+      name: 'Acme Co',
+      timezone: 'America/Los_Angeles',
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.message).toMatch(/Org created, but no invite link could be made/);
+      expect(res.error.message).toMatch(/Send password reset/);
+    }
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'platform-admin.invite-link' }),
+    );
+  });
+
   it('surfaces a send failure without rolling back the org', async () => {
     sendEmail.mockResolvedValue({ ok: false, error: 'resend down' });
     const res = await createOrgForCustomerAction({

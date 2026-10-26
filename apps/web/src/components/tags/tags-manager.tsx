@@ -21,6 +21,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createTagAction, deleteTagAction, updateTagAction } from '@/server/actions/tags';
 
+import { TAG_DEFAULT_COLOR, tagColor } from './tag-color';
+
 export interface TagManagerRow {
   id: string;
   name: string;
@@ -43,7 +45,10 @@ const PRESET_COLORS = [
   '#eab308',
   '#64748b',
 ];
-const DEFAULT_COLOR = '#94a3b8';
+// The editor opens on a tag's colour only when it is the #rrggbb form the app
+// writes (tagColor), else on the default, so saving a rename sends a colour
+// the server accepts (docket T14).
+const DEFAULT_COLOR = TAG_DEFAULT_COLOR;
 
 /**
  * A row's Edit and Delete (CONFLICTS D18). They used to be opacity-0 until the
@@ -131,7 +136,7 @@ export function TagsManager({
                 <span
                   aria-hidden
                   className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: tag.color ?? DEFAULT_COLOR }}
+                  style={{ backgroundColor: tagColor(tag.color) }}
                 />
                 <button
                   type="button"
@@ -213,7 +218,7 @@ function TagDialog({
     if (open) {
       reset({
         name: editing?.name ?? '',
-        color: editing?.color ?? DEFAULT_COLOR,
+        color: tagColor(editing?.color),
       });
     }
   }, [open, editing, reset]);

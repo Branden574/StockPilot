@@ -7,6 +7,7 @@ import type {
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertStoredColor } from './lib/stored-color';
 
 export interface ProcedureCategoryRow {
   id: string;
@@ -50,6 +51,7 @@ export class ProcedureCategoriesService {
   async create(input: CreateProcedureCategoryInput): Promise<ProcedureCategoryRow> {
     assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'organization:update');
+    assertStoredColor(input.color);
     const { data, error } = await this.ctx.supabase
       .from('procedure_categories')
       .insert({
@@ -72,6 +74,7 @@ export class ProcedureCategoriesService {
   async update(id: string, patch: UpdateProcedureCategoryInput): Promise<ProcedureCategoryRow> {
     assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'organization:update');
+    assertStoredColor(patch.color);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.color !== undefined) updates.color = patch.color ?? null;
