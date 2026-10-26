@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { extractPdfText } from '@/test/pdf-text';
+
 import { locationFor, renderPickSlipPdf } from './pick-slip';
 
 const baseDetail = {
@@ -185,6 +187,37 @@ describe('renderPickSlipPdf', () => {
     ]);
     const buf = await renderPickSlipPdf(baseDetail, { rackHoldingsByItemId });
     expect(buf.byteLength).toBeGreaterThan(2000);
+  }, 30000);
+});
+
+// B37: the LOCATION column reads each line's Site rows. renderPickSlipPdf
+// hands `otherHoldingsByItemId` to `locationFor`; both are optional, so
+// typecheck alone would never notice the hand-off dropped. This reads the
+// printed page (the slip is set in Helvetica, so its text extracts as drawn).
+describe('renderPickSlipPdf: a line whose stock all sits on a Site (B37)', () => {
+  // i1's keys name rack 2-A; all 7 of its placed units sit on the Site.
+  const onSite = new Map([['i1', [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]);
+
+  it('prints the Site and its count, not the rack its keys still name', async () => {
+    const text = extractPdfText(
+      await renderPickSlipPdf(baseDetail, {
+        rackHoldingsByItemId: new Map(),
+        otherHoldingsByItemId: onSite,
+      }),
+    );
+    expect(text).toContain('LOCATION');
+    expect(text).toContain('DC4 ×7');
+    expect(text).not.toContain('Rack 2-A');
+    // The other line has no Site rows: it keeps its rack.
+    expect(text).toContain('Rack 4-D');
+  }, 30000);
+
+  it('without the Site rows the column reads the rack, as before', async () => {
+    const text = extractPdfText(
+      await renderPickSlipPdf(baseDetail, { rackHoldingsByItemId: new Map() }),
+    );
+    expect(text).toContain('Rack 2-A');
+    expect(text).not.toContain('DC4 ×7');
   }, 30000);
 });
 

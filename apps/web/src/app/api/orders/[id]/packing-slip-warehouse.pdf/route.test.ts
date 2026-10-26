@@ -54,6 +54,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 
 import { GET } from './route';
 
@@ -249,6 +250,38 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     get.mockResolvedValue(detail(DIGEST));
     expect((await call()).status).toBe(200);
     expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${RAW}`);
+  });
+
+  // B37: a line whose stock all sits on a Site prints the Site. The route
+  // reads the lines' holdings in one query, in the order's warehouse, and must
+  // hand the renderer BOTH halves: the rack and crate rows and the Site rows.
+  // Both options are optional, so typecheck would not notice the Site half
+  // dropped; the renderer's own test pins what it prints from them.
+  it("hands the renderer both halves of the lines' holdings read, in the order's warehouse (B37)", async () => {
+    signIn({ role: 'manager' });
+    get.mockResolvedValue({
+      ...detail(DIGEST),
+      lines: [
+        { id: 'L1', item: { id: 'i1' } },
+        { id: 'L2', item: { id: 'i2' } },
+      ],
+    });
+    const rack = new Map([['i2', [{ name: '38-A', quantity: 4, kind: 'rack' }]]]);
+    const other = new Map([['i1', [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]);
+    vi.mocked(fetchPlacementHoldingsByItem).mockResolvedValueOnce({ rack, other } as never);
+
+    expect((await call()).status).toBe(200);
+
+    expect(vi.mocked(fetchPlacementHoldingsByItem).mock.calls[0]!.slice(1)).toEqual([
+      ['i1', 'i2'],
+      'wh-1',
+    ]);
+    const args = render.mock.calls.at(-1)![0] as unknown as {
+      rackHoldingsByItemId?: unknown;
+      otherHoldingsByItemId?: unknown;
+    };
+    expect(args.rackHoldingsByItemId).toBe(rack);
+    expect(args.otherHoldingsByItemId).toBe(other);
   });
 });
 

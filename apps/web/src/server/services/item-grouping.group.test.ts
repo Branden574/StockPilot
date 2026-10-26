@@ -234,6 +234,25 @@ describe('Group selected: the review', () => {
     for (const r of reads) expect(r.filters).toContainEqual(['eq', 'organization_id', ORG]);
   });
 
+  // B37: a record whose stock all sits on a Site is named by the Site and its
+  // count, not by the rack its bin text (15-A) still names. The review reads
+  // the records' holdings in one query and must give each record the Site
+  // half of it; the field is optional, so typecheck would not notice it
+  // dropped.
+  it('names a record whose stock all sits on a Site by the Site, and keeps the rack for one on a rack (B37)', async () => {
+    h.holdings.mockResolvedValue({
+      rack: new Map([[A, [{ name: '15-A', quantity: 2, kind: 'rack' }]]]),
+      other: new Map([[B, [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]),
+    });
+    const { svc } = harness([{ data: PREVIEW, error: null }]);
+    const review = await svc.previewGroup([A, B]);
+    expect(h.holdings).toHaveBeenCalledWith(expect.anything(), [A, B]);
+    expect(review.records.map((r) => [r.id, r.placementLabel])).toEqual([
+      [A, '15-A'],
+      [B, 'DC4 ×7'],
+    ]);
+  });
+
   it('refuses more than 100 records and ids that are not uuids, before any call', async () => {
     const many = Array.from(
       { length: 101 },

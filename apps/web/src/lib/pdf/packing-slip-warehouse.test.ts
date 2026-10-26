@@ -1,46 +1,11 @@
-import { inflateSync } from 'node:zlib';
-
 import { describe, expect, it } from 'vitest';
+
+// These slips use Helvetica (a standard-14 font, WinAnsi-encoded), so the
+// extracted text reads as the page's visible text in draw order.
+import { extractPdfText } from '@/test/pdf-text';
 
 import { renderCustomerPackingSlipPdf } from './packing-slip-customer';
 import { renderWarehousePackingSlipPdf } from './packing-slip-warehouse';
-
-/**
- * Every text run in a @react-pdf document lands in a FlateDecode content
- * stream, and each run is drawn as hex-string glyph codes (`[<53>…] TJ` /
- * `<5369…> Tj`), so raw bytes never contain the strings the page draws.
- * Inflate every stream…endstream section that decompresses cleanly, then
- * decode every hex string back to characters. These slips use Helvetica (a
- * standard-14 font, WinAnsi-encoded), so the glyph codes ARE the character
- * codes and the result reads as the page's visible text in draw order.
- */
-function extractPdfText(pdf: Buffer): string {
-  const streams: string[] = [];
-  let cursor = 0;
-  for (;;) {
-    const start = pdf.indexOf('stream', cursor);
-    if (start === -1) break;
-    // Skip the keyword + the EOL that follows it (\r\n or \n per spec).
-    let dataStart = start + 'stream'.length;
-    if (pdf[dataStart] === 0x0d) dataStart += 1;
-    if (pdf[dataStart] === 0x0a) dataStart += 1;
-    const end = pdf.indexOf('endstream', dataStart);
-    if (end === -1) break;
-    try {
-      streams.push(inflateSync(pdf.subarray(dataStart, end)).toString('latin1'));
-    } catch {
-      // Not a flate stream (font file, image, …) — skip it.
-    }
-    cursor = end + 'endstream'.length;
-  }
-  return (streams.join('\n').match(/<[0-9a-fA-F]+>/g) ?? [])
-    .map((h) =>
-      (h.slice(1, -1).match(/.{2}/g) ?? [])
-        .map((b) => String.fromCharCode(parseInt(b, 16)))
-        .join(''),
-    )
-    .join('');
-}
 
 const DIGITAL_SIGNATURE_LABEL = 'Signature captured digitally in StockPilot';
 
@@ -165,5 +130,35 @@ describe('renderWarehousePackingSlipPdf', () => {
     expect(extractPdfText(buf)).toContain('PACKING SLIP');
     // …so the label's absence is a real absence, not a broken extractor.
     expect(extractPdfText(buf)).not.toContain(DIGITAL_SIGNATURE_LABEL);
+  }, 30000);
+});
+
+// B37: the LOCATION column reads each line's Site rows. The renderer hands
+// `otherHoldingsByItemId` through LinesTable to `locationFor`; every link in
+// that chain is an optional field, so typecheck alone would never notice one
+// dropped. This reads the printed page instead.
+describe('renderWarehousePackingSlipPdf: a line whose stock all sits on a Site (B37)', () => {
+  // i1's keys name rack 2-A; all 7 of its placed units sit on the Site.
+  const onSite = new Map([['i1', [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]);
+
+  it('prints the Site and its count, not the rack its keys still name', async () => {
+    const text = extractPdfText(
+      await renderWarehousePackingSlipPdf({
+        ...baseInput,
+        rackHoldingsByItemId: new Map(),
+        otherHoldingsByItemId: onSite,
+      }),
+    );
+    expect(text).toContain('LOCATION');
+    expect(text).toContain('DC4 ×7');
+    expect(text).not.toContain('Rack 2-A');
+  }, 30000);
+
+  it('without the Site rows the column reads the rack, as before', async () => {
+    const text = extractPdfText(
+      await renderWarehousePackingSlipPdf({ ...baseInput, rackHoldingsByItemId: new Map() }),
+    );
+    expect(text).toContain('Rack 2-A');
+    expect(text).not.toContain('DC4 ×7');
   }, 30000);
 });

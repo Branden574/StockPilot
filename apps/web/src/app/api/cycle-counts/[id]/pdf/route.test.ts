@@ -7,6 +7,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ProductGroupsService } from '@/server/services/product-groups';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 import { WarehousesService } from '@/server/services/warehouses';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -319,6 +320,79 @@ describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () =>
         extra: { detail: expect.stringContaining('fetch failed') },
       }),
     );
+  });
+});
+
+/**
+ * B37: an item whose stock all sits on a Site prints the Site and its count,
+ * not the rack its keys still name. The route reads the items' holdings in one
+ * query, in the count's warehouse, and must hand the Site half of that read to
+ * each row's label. The field is optional, so typecheck would not notice it
+ * dropped; this reads the printed rows.
+ */
+describe('GET /api/cycle-counts/[id]/pdf: an item whose stock all sits on a Site (B37)', () => {
+  const ON_SITE = '00000000-0000-4000-8000-000000000037';
+  const ON_RACK = '00000000-0000-4000-8000-000000000038';
+  function lineFor(id: string) {
+    const l = groupedLine();
+    return { ...l, id: `line-${id}`, item_id: id, item: { ...l.item, id, group_id: null } };
+  }
+  // Both items' keys name a rack (38-A and 39-C); the bin text agrees.
+  const lookup = (id: string, rack: string, row: string) => ({
+    id,
+    item_type: 'book',
+    custom_fields: { book_rack_number: rack, book_rack_row: row },
+    bin_location: `${rack}-${row}`,
+    locations: { name: 'DC4' },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+    vi.mocked(WarehousesService).mockImplementation(function () {
+      return { list: async () => [] } as never;
+    });
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return {
+        get: async () => ({
+          header: { ...header(), warehouse_id: 'wh-a' },
+          lines: [lineFor(ON_SITE), lineFor(ON_RACK)],
+        }),
+      } as never;
+    });
+    vi.mocked(withApiContext).mockResolvedValue({
+      ...ctxWith(new Set<ModuleId>([...DEFAULT_MODULE_IDS])),
+      supabase: makeSupabaseStub({
+        'inventory_items.select': {
+          data: [lookup(ON_SITE, '38', 'A'), lookup(ON_RACK, '39', 'C')],
+          error: null,
+        },
+        'organizations.select': { data: { name: 'Acme', logo_url: null }, error: null },
+      }).client,
+    } as never);
+  });
+
+  it("prints the Site for that item, read in the count's warehouse, and the rack for the other", async () => {
+    vi.mocked(fetchPlacementHoldingsByItem).mockResolvedValueOnce({
+      rack: new Map(),
+      other: new Map([[ON_SITE, [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]),
+    } as never);
+
+    const res = await GET(req(), await paramsFor('cc-1'));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(fetchPlacementHoldingsByItem).mock.calls[0]!.slice(1)).toEqual([
+      [ON_SITE, ON_RACK],
+      'wh-a',
+    ]);
+    expect(capturedLines().map((l) => l.location)).toEqual(['DC4 ×7', 'Rack 39-C']);
+  });
+
+  it('without Site rows both items print the rack their keys name, as before', async () => {
+    const res = await GET(req(), await paramsFor('cc-1'));
+
+    expect(res.status).toBe(200);
+    expect(capturedLines().map((l) => l.location)).toEqual(['Rack 38-A', 'Rack 39-C']);
   });
 });
 
