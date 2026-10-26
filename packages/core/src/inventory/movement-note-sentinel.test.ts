@@ -7,8 +7,8 @@ import {
   userMovementNote,
 } from './movement-note-sentinel';
 
-/** A real receipt id from the prod ledger's shape (lowercase, hyphenated). */
-const SENTINEL = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+/** A receipt id in the prod ledger's shape (lowercase, hyphenated); synthetic. */
+const SENTINEL = 'a0000060-0000-4000-8000-000000000060';
 
 describe('isReceiptNoteSentinel', () => {
   it('masks a bare uuid — the sentinel post_receipt_v2 writes', () => {
@@ -37,7 +37,7 @@ describe('isReceiptNoteSentinel', () => {
     expect(isReceiptNoteSentinel('not-a-uuid')).toBe(false);
     expect(isReceiptNoteSentinel(SENTINEL.slice(0, -1))).toBe(false);
     expect(isReceiptNoteSentinel(`${SENTINEL}0`)).toBe(false);
-    expect(isReceiptNoteSentinel('zzzzzzzz-b114-4839-a100-a008d3f3fde0')).toBe(false);
+    expect(isReceiptNoteSentinel('zzzzzzzz-0000-4000-8000-000000000060')).toBe(false);
   });
 
   it('treats absent and empty notes as "nothing to hide", not as a sentinel', () => {

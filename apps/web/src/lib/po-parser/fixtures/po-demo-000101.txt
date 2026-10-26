@@ -22,7 +22,7 @@ CommentsPlease bill to Main Campus. DEMO orders need AS
 approval.
 SHIPPING INFORMATION
 200 W. Sample Ave.
-Anytown, CA, 90001
+Sampleton, CA, 90001
 Phone: (555)010-0142 Contact: Jordan Stone
 QTYUOMDATEDESCRIPTIONUNIT COSTTOTAL
 1EA4/29/2026TAX23.11$23.11

@@ -329,7 +329,7 @@ describe('MovementsService.list', () => {
   // mapping above: one lookup per page, never per row.
 
   it("resolves a pre-0306 'Order pick (order_request <uuid>)' reason to the order number", async () => {
-    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const orderId = 'a0000060-0000-4000-8000-000000000060';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -379,7 +379,7 @@ describe('MovementsService.list', () => {
   });
 
   it('drops the parenthetical rather than leaking a uuid when the order cannot be resolved', async () => {
-    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const orderId = 'a0000060-0000-4000-8000-000000000060';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -740,7 +740,7 @@ describe('MovementsService.exportRows', () => {
   });
 
   it('derives the reference columns for a pre-0306 pick row instead of exporting nulls', async () => {
-    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const orderId = 'a0000060-0000-4000-8000-000000000060';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [

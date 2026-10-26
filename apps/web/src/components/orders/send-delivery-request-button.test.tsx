@@ -34,7 +34,7 @@ const TEST_ROUTING = {
 
 const baseProps = {
   recipients: TEST_ROUTING,
-  orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+  orderId: '0000000f-0000-4000-8000-000000000001',
   orderNumber: 61,
   warehouseName: 'DC4',
   destination: {
@@ -69,7 +69,7 @@ describe('SendDeliveryRequestButton', () => {
 
     expect(actionSpy).toHaveBeenCalledTimes(1);
     expect(actionSpy).toHaveBeenCalledWith({
-      orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+      orderId: '0000000f-0000-4000-8000-000000000001',
       orderNumber: 61,
       fulfillmentType: 'delivery',
       warehouseName: 'DC4',

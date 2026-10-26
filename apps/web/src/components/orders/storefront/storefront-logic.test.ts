@@ -458,11 +458,11 @@ describe('formatSiteAddressLines', () => {
     expect(lines).toContain('Tulare, California 93274');
   });
 
-  it('passes a typo through verbatim instead of guessing — KVA Tulare really says "Calfornia"', () => {
+  it('passes a typo through verbatim instead of guessing — a stored site address may really say "Calfornia"', () => {
     // Data quality is the owner's to fix. Silently "correcting" a site address
     // in an outbound delivery instruction would be worse than reproducing it.
-    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '93274' })).toEqual([
-      'Fresno, Calfornia 93274',
+    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '00000' })).toEqual([
+      'Fresno, Calfornia 00000',
     ]);
   });
 
@@ -1146,7 +1146,7 @@ describe('buildDeliveryRequestDraft — shortened rows (maxRows)', () => {
       'Trash Liner 40 Gallon Clear',
     ];
     const skus = [
-      'SP-ZE7TG-XK6', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
+      'SP-NB1WR-CN1', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
       'SP-KD6MF-ZQ4', 'SP-VB9LN-WC7', 'SP-TR2PG-HD5', 'SP-XC5YB-NM8',
       'SP-GF1WK-JV3', 'SP-LP7DH-QS6', 'SP-BN4ZT-KR0',
     ];
@@ -1198,10 +1198,10 @@ describe('buildDeliveryRequestDraft — shortened rows (maxRows)', () => {
     // format everywhere, one of these two fails.
     const short = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 1 }).body;
     expect(short).toContain('1. Composition Notebook Wide Rule x12');
-    expect(short).not.toContain('SP-ZE7TG-XK6');
+    expect(short).not.toContain('SP-NB1WR-CN1');
 
     const full = buildDeliveryRequestDraft(eleven()).body;
-    expect(full).toContain('1. Composition Notebook Wide Rule — SP-ZE7TG-XK6 — qty 12');
+    expect(full).toContain('1. Composition Notebook Wide Rule — SP-NB1WR-CN1 — qty 12');
   });
 
   it('maxRows defaults to 0, so a bare { condensed: true } is the old heading-only body', () => {
@@ -1405,7 +1405,7 @@ describe('prepareDeliveryRequest — the ladder, measured end to end', () => {
       'Trash Liner 40 Gallon Clear',
     ];
     const skus = [
-      'SP-ZE7TG-XK6', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
+      'SP-NB1WR-CN1', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
       'SP-KD6MF-ZQ4', 'SP-VB9LN-WC7', 'SP-TR2PG-HD5', 'SP-XC5YB-NM8',
       'SP-GF1WK-JV3', 'SP-LP7DH-QS6', 'SP-BN4ZT-KR0',
     ];
@@ -1558,7 +1558,7 @@ describe('prepareDeliveryRequest — the ladder, measured end to end', () => {
     expect(prepared.clipboardText).toContain(
       '11. Trash Liner 40 Gallon Clear — SP-BN4ZT-KR0 — qty 5',
     );
-    expect(prepared.clipboardText).toContain('SP-ZE7TG-XK6');
+    expect(prepared.clipboardText).toContain('SP-NB1WR-CN1');
     expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 

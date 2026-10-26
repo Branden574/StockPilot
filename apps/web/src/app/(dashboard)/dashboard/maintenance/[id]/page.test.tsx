@@ -413,7 +413,6 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -446,6 +445,8 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('a cancelled request shows "Request cancelled", never "Request archived"', async () => {
@@ -900,7 +901,6 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -940,6 +940,8 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 

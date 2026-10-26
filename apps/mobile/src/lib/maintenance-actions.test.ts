@@ -248,7 +248,6 @@ describe('exported copy — forbidden vocabulary sweep (§GC-4)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Jordan notified',
     'Ticket assigned',
     'Email sent',
     'Ticket closed',
@@ -302,6 +301,8 @@ describe('exported copy — forbidden vocabulary sweep (§GC-4)', () => {
       for (const banned of FORBIDDEN) {
         expect(text).not.toContain(banned);
       }
+      // A named person notified, whatever the name (`<Name> notified`).
+      expect(text).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     }
   });
 

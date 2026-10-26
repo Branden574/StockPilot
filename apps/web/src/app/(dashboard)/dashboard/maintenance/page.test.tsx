@@ -75,7 +75,6 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Jordan notified',
   'Ticket assigned',
   'Email sent',
 ];
@@ -182,6 +181,8 @@ describe('accurate status language (brief sections 20 + 22)', () => {
     for (const banned of FORBIDDEN) {
       expect(text).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(text).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 

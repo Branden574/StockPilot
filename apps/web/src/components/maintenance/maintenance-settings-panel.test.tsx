@@ -47,7 +47,6 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Jordan notified',
   'Ticket assigned',
   'Email sent',
   'Zendesk comment',
@@ -57,6 +56,8 @@ function sweep() {
   for (const banned of FORBIDDEN) {
     expect(document.body.textContent).not.toContain(banned);
   }
+  // A named person notified, whatever the name.
+  expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
 }
 
 beforeEach(() => {

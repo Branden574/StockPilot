@@ -148,7 +148,6 @@ describe('status labels — the ONLY five states (Maintenance Resolved spec §1.
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Jordan notified',
       'Ticket assigned',
       'Email sent',
       'Ticket closed',
@@ -160,6 +159,8 @@ describe('status labels — the ONLY five states (Maintenance Resolved spec §1.
     ]) {
       expect(all).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(all).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('has exactly five states — no sixth status sneaks in', () => {

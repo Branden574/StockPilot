@@ -23,8 +23,11 @@ describe('parsePdfText (Staples format)', () => {
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });
 
-  it('extracts an Anytown shipping address', () => {
-    expect(po.shippingAddress).toMatch(/Anytown/i);
+  it('extracts a Sampleton shipping address', () => {
+    // Sampleton is only in the SHIPPING INFORMATION block; the issuer's own
+    // address in the header is in Anytown, so reading the header instead fails.
+    expect(po.shippingAddress).toMatch(/Sampleton/i);
+    expect(po.shippingAddress).not.toMatch(/Anytown/i);
   });
 
   it('produces at least 13 line rows', () => {

@@ -580,7 +580,8 @@ describe('§20 sweep — no false-confirmation language anywhere in this module\
     expect(/\bsent\b/i.test(src)).toBe(false);
     expect(/ticket created/i.test(src)).toBe(false);
     expect(/notified dc4/i.test(src)).toBe(false);
-    expect(/jordan notified/i.test(src)).toBe(false);
+    // A named person notified, whatever the name (case-sensitive: `<Name> notified`).
+    expect(/\b[A-Z][a-z]+ notified\b/.test(src)).toBe(false);
     expect(/ticket assigned/i.test(src)).toBe(false);
     expect(/email sent/i.test(src)).toBe(false);
     // Maintenance Resolved (GC 4) — this surface's own new forbidden

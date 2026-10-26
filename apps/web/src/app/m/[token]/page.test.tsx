@@ -59,7 +59,6 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Jordan notified',
   'Ticket assigned',
   'Ticket closed',
   'Ticket resolved',
@@ -296,6 +295,8 @@ describe('GET /m/[token] (page render)', () => {
       for (const banned of FORBIDDEN) {
         expect(document.body.textContent).not.toContain(banned);
       }
+      // A named person notified, whatever the name.
+      expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     });
 
     it('resolvedAtDisplay is rendered VERBATIM as handed back by the resolver — the page never reformats it itself', async () => {

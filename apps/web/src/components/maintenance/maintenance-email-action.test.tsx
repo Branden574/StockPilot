@@ -463,7 +463,6 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Jordan notified',
     'Ticket assigned',
     'Email sent',
   ];
@@ -472,6 +471,8 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     for (const banned of BANNED_PHRASES) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   }
 
   it('success state: no forbidden phrase after a successful open', async () => {

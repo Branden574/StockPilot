@@ -141,7 +141,9 @@ const WORDS_BLOCK: CountConfirmBlock = {
 /**
  * Claims the product cannot confirm (maintenance brief §20: StockPilot prepares
  * an email, it does not send one, and it never sees a ticket), plus vague filler
- * that tells a reader nothing. Lowercase; matched case-insensitively.
+ * that tells a reader nothing. Lowercase; matched case-insensitively. The
+ * brief's claim that a named person was notified is matched by shape instead
+ * (NAMED_PERSON_NOTIFIED), so this public file names no one.
  */
 const FORBIDDEN = [
   'email sent',
@@ -150,13 +152,15 @@ const FORBIDDEN = [
   'request submitted',
   'zendesk',
   'dc4 notified',
-  'jordan notified',
   'general improvements',
   'various improvements',
   'bug fixes and improvements',
   'under the hood',
   'optimized backend',
 ];
+
+/** `<Name> notified`: a capitalised word before "notified", case-sensitive. */
+const NAMED_PERSON_NOTIFIED = /\b[A-Z][a-z]+ notified\b/;
 
 /**
  * The three redesign releases (docs/whats-new-redesign-2026-10, 2026-10-20)
@@ -272,13 +276,17 @@ describe('release registry', () => {
 
   it('makes no claim StockPilot cannot stand behind, and no empty filler, in ANY field', () => {
     const hits = RELEASES.flatMap((r) =>
-      readerText(r).flatMap((text) =>
-        FORBIDDEN.filter((phrase) => text.toLowerCase().includes(phrase)).map(
+      readerText(r).flatMap((text) => [
+        ...FORBIDDEN.filter((phrase) => text.toLowerCase().includes(phrase)).map(
           (phrase) => `${r.id}: "${phrase}"`,
         ),
-      ),
+        ...(NAMED_PERSON_NOTIFIED.test(text) ? [`${r.id}: a named person notified`] : []),
+      ]),
     );
     expect(hits).toEqual([]);
+    // The shape check bites: a named person notified, whatever the name.
+    expect(NAMED_PERSON_NOTIFIED.test('Your request is saved and Morgan notified.')).toBe(true);
+    expect(NAMED_PERSON_NOTIFIED.test('DC4 is not notified by StockPilot.')).toBe(false);
   });
 
   it('uses no emoji and no exclamation marks: plain professional prose', () => {

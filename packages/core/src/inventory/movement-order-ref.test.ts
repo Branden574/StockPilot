@@ -13,8 +13,8 @@ import {
   returnNumberLabels,
 } from './movement-order-ref';
 
-/** The real row the owner reported: prod movement -> SO-000060. */
-const ORDER_ID = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+/** The row the owner reported (a prod pick movement -> SO-000060), with a synthetic id. */
+const ORDER_ID = 'a0000060-0000-4000-8000-000000000060';
 const LEGACY = `Order pick (order_request ${ORDER_ID})`;
 const LABELS = new Map([[ORDER_ID, 'SO-000060']]);
 

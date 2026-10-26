@@ -406,9 +406,10 @@ function shortenedDisclosure(listed: number, total: number): string {
  * and printing "Address:" with nothing under it implies the system captured
  * something it did not.
  *
- * Values are reproduced verbatim, typos included (a real site row may say
- * "Calfornia"). Silently correcting a site address inside a delivery
- * instruction would be a worse failure than reproducing the owner's data.
+ * Values are reproduced verbatim, typos included (a stored site address may
+ * hold a typo such as "Calfornia"). Silently correcting a site address inside
+ * a delivery instruction would be a worse failure than reproducing the
+ * owner's data.
  */
 export function formatSiteAddressLines(address: DeliveryRequestAddress | null): string[] {
   if (!address) return [];
@@ -653,7 +654,7 @@ export function buildDeliveryRequestDraft(
     if (condensed) {
       // THE SHORTENED ROW FORMAT, and why the SKU is not in it.
       //
-      // The full row is `1. Composition Notebook Wide Rule — SP-ZE7TG-XK6 —
+      // The full row is `1. Composition Notebook Wide Rule — SP-NB1WR-CN1 —
       // qty 12`. Those " — " separators are em-dashes: three UTF-8 bytes that
       // become %E2%80%94 and then, once the Outlook `mailtouri` wrapper
       // re-encodes the whole inner mailto, %25E2%2580%2594 — fifteen

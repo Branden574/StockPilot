@@ -47,7 +47,7 @@ const DIGITAL_SIGNATURE_LABEL = 'Signature captured digitally in StockPilot';
 const baseInput = {
   detail: {
     request: {
-      id: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+      id: '0000000f-0000-4000-8000-000000000001',
       order_number: 14,
       organization_id: 'org-1',
       warehouse_id: 'wh-1',
@@ -87,7 +87,7 @@ const baseInput = {
     lines: [
       {
         id: 'L1',
-        order_request_id: 'f3d77cda',
+        order_request_id: '0000000f',
         item_id: 'i1',
         quantity_requested: 30,
         quantity_fulfilled: 0,

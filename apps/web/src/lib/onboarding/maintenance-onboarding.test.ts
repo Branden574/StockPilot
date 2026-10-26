@@ -29,19 +29,22 @@ const ALL_DEFINED_TOURS = Object.values(toursModule) as TourDefinition[];
 /**
  * Review-fix wave (Fix 2): the master §20 list (brief
  * `.superpowers/sdd/maintenance-requests-brief.md:280`) is `Ticket created`,
- * `Request submitted to Zendesk`, `DC4 notified`, `Jordan notified`,
- * `Ticket assigned`, `Email sent`. The original sweep used a bare `'sent'`
- * substring as a stand-in for `Email sent` — that's a false-positive
- * landmine (`'present'`, `'consent'`, `'sent to the maintenance team'` all
- * contain `sent` as a substring) and it also never caught `Ticket assigned`,
- * `Request submitted [to Zendesk]`, `DC4 notified`, or `Jordan notified`
- * individually. Every entry below is phrase-level (never a bare word) and
- * lowercase (the check lowercases `text` before matching, so casing in the
- * list itself is cosmetic — kept lowercase to make that explicit). `zendesk`
- * alone subsumes `Request submitted to Zendesk`'s vendor-naming half;
- * `request submitted` is kept as its own phrase so a rewritten sentence that
- * drops "to Zendesk" but keeps the unconfirmable "submitted" claim is still
- * caught.
+ * `Request submitted to Zendesk`, `DC4 notified`, a named person notified
+ * (the brief names the DC4 lead), `Ticket assigned`, `Email sent`. The
+ * original sweep used a bare `'sent'` substring as a stand-in for
+ * `Email sent` — that's a false-positive landmine (`'present'`, `'consent'`,
+ * `'sent to the maintenance team'` all contain `sent` as a substring) and it
+ * also never caught `Ticket assigned`, `Request submitted [to Zendesk]`,
+ * `DC4 notified`, or a named person notified individually. Every entry
+ * below is phrase-level (never a bare word) and lowercase (the check
+ * lowercases `text` before matching, so casing in the list itself is
+ * cosmetic — kept lowercase to make that explicit). `zendesk` alone subsumes
+ * `Request submitted to Zendesk`'s vendor-naming half; `request submitted`
+ * is kept as its own phrase so a rewritten sentence that drops "to Zendesk"
+ * but keeps the unconfirmable "submitted" claim is still caught. A named
+ * person notified is matched by shape instead (NAMED_PERSON_NOTIFIED), on
+ * the text as written: no list can name every person, and this public file
+ * names none.
  */
 const FORBIDDEN_PHRASES = [
   'email sent',
@@ -50,10 +53,13 @@ const FORBIDDEN_PHRASES = [
   'request submitted',
   'zendesk',
   'dc4 notified',
-  'jordan notified',
 ];
 
+/** `<Name> notified`: a capitalised word before "notified", case-sensitive. */
+const NAMED_PERSON_NOTIFIED = /\b[A-Z][a-z]+ notified\b/;
+
 function forbiddenPhraseIn(text: string): string | undefined {
+  if (NAMED_PERSON_NOTIFIED.test(text)) return 'a named person notified';
   const lower = text.toLowerCase();
   return FORBIDDEN_PHRASES.find((phrase) => lower.includes(phrase));
 }
@@ -84,13 +90,13 @@ describe('maintenance-requests onboarding registries (Task 23)', () => {
     );
   });
 
-  it('no announcement body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / jordan notified)', () => {
+  it('no announcement body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / a named person notified)', () => {
     for (const a of ANNOUNCEMENTS) {
       expect(forbiddenPhraseIn(a.body), `announcement "${a.id}" body: "${a.body}"`).toBeUndefined();
     }
   });
 
-  it('no tour step title or body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / jordan notified)', () => {
+  it('no tour step title or body contains a forbidden §20 phrase (email sent / ticket created / ticket assigned / request submitted / zendesk / dc4 notified / a named person notified)', () => {
     for (const tour of ALL_DEFINED_TOURS) {
       for (const step of tour.steps) {
         expect(
@@ -103,6 +109,18 @@ describe('maintenance-requests onboarding registries (Task 23)', () => {
         ).toBeUndefined();
       }
     }
+  });
+
+  it('the sweep catches a named person notified, whatever the name, and passes the honest copy', () => {
+    expect(forbiddenPhraseIn('Request saved. Morgan notified.')).toBe('a named person notified');
+    expect(forbiddenPhraseIn('Saved, and Morgan Staffmember notified')).toBe(
+      'a named person notified',
+    );
+    expect(
+      forbiddenPhraseIn(
+        'StockPilot prepares the complete Outlook email for you to review and send.',
+      ),
+    ).toBeUndefined();
   });
 });
 

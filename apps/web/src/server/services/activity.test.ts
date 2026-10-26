@@ -144,12 +144,12 @@ describe('ActivityService.forItem', () => {
   });
 
   // Pre-0306 pick rows stringified the ORDER'S UUID into the reason, so the
-  // item feed read "Order pick (order_request b3c7390a-…)" while the item
+  // item feed read "Order pick (order_request a0000060-…)" while the item
   // history dialog showed a bare "Order pick" for the SAME event. Both now
   // resolve the number, and the legacy row gets the clickable source that
   // 0306-era rows get from their reference columns.
   it('resolves a pre-0306 order-pick reason and gives the row a linkable order reference', async () => {
-    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const orderId = 'a0000060-0000-4000-8000-000000000060';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [

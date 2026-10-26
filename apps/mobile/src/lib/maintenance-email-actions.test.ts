@@ -599,7 +599,6 @@ describe('exported copy is the literal, brief-pinned text', () => {
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Jordan notified',
       'Ticket assigned',
       'Email sent',
     ];
@@ -616,6 +615,8 @@ describe('exported copy is the literal, brief-pinned text', () => {
       for (const banned of FORBIDDEN) {
         expect(text).not.toContain(banned);
       }
+      // A named person notified, whatever the name (`<Name> notified`).
+      expect(text).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     }
   });
 });

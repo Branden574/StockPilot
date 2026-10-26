@@ -9847,7 +9847,7 @@ export class InventoryService {
     const receiptMeta = new Map<string, ReceiptMeta>();
 
     // 5b. Some reasons stringify a RECORD'S UUID into the words a human reads:
-    //     pre-0306 pick/cancel rows ('Order pick (order_request b3c7390a-…)',
+    //     pre-0306 pick/cancel rows ('Order pick (order_request a0000060-…)',
     //     written before order_requests.order_number arrived in 0254) and the
     //     return rows the shipped RMA RPCs write to this day ('Return restock
     //     (return …)', 0153/0154/0197). The ledger is append-only so both are

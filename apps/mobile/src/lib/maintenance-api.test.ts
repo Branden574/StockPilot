@@ -467,13 +467,14 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Jordan notified',
       'Ticket assigned',
       'Email sent',
     ];
     for (const banned of FORBIDDEN) {
       expect(src).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(src).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('`canReadAll` is actually ASSIGNED FROM showWriteCta(read_all/manage), not left dangling next to a hardcoded value', () => {
@@ -733,7 +734,6 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Jordan notified',
       'Ticket assigned',
       'Email sent',
       // §GC-4 additions (Maintenance Resolved plan) — this surface gains
@@ -748,6 +748,8 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     for (const banned of FORBIDDEN) {
       expect(src).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(src).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('derives status labels from MAINTENANCE_STATUS_LABELS, never a hand-copied literal', () => {

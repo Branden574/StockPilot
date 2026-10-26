@@ -34,7 +34,7 @@ const props = {
     cc: 'copy@example.invalid',
     toName: 'Intake',
   },
-  orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+  orderId: '0000000f-0000-4000-8000-000000000001',
   orderNumber: 16,
   warehouseName: 'DC4',
   destination: { id: 'c1', name: 'CVW Clovis', code: 'CVW-CLO', address: { line1: '1 Main St', city: 'Clovis' } },

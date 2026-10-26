@@ -265,12 +265,13 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Jordan notified',
       'Ticket assigned',
       'Email sent',
     ]) {
       expect(body).not.toContain(phrase);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(body).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 

@@ -280,7 +280,6 @@ const FORBIDDEN_PHRASES = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Jordan notified',
   'Ticket assigned',
   'Ticket closed',
   'Ticket resolved',
@@ -290,11 +289,17 @@ const FORBIDDEN_PHRASES = [
   'Issue verified fixed',
 ];
 
+/** `<Name> notified`: a named person notified, whatever the name (case-sensitive). */
+const NAMED_PERSON_NOTIFIED = /\b[A-Z][a-z]+ notified\b/;
+
 function sweep(subject: string, html: string, text: string): void {
   for (const phrase of FORBIDDEN_PHRASES) {
     expect(subject, `subject must not contain "${phrase}"`).not.toContain(phrase);
     expect(html, `html must not contain "${phrase}"`).not.toContain(phrase);
     expect(text, `text must not contain "${phrase}"`).not.toContain(phrase);
+  }
+  for (const out of [subject, html, text]) {
+    expect(out, 'must not say a named person was notified').not.toMatch(NAMED_PERSON_NOTIFIED);
   }
 }
 
@@ -339,6 +344,9 @@ describe('forbidden-vocabulary sweep (GC-4) across input permutations', () => {
     for (const phrase of FORBIDDEN_PHRASES) {
       expect(src, `maintenance.ts must not contain "${phrase}"`).not.toContain(phrase);
     }
+    expect(src, 'maintenance.ts must not say a named person was notified').not.toMatch(
+      NAMED_PERSON_NOTIFIED,
+    );
   });
 });
 
