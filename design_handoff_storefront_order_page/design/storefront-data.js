@@ -13,10 +13,10 @@
     { sku: "SP-P3MPL-NHM", name: "L4L New Hire — Men's Polo · L",      cat: "New Hire", stock: 23,  low: 20, img: P + "polo-m.png",   loc: "A3-04", freq: 8,  desc: "Navy performance polo, men's cut, embroidered chest logo." },
 
     // ---- Community Events (8) ---------------------------------------------
-    { sku: "SP-X1WZH-XME", name: "L4L Clear Water Bottle with Black Lid", cat: "Community Events", stock: 107, low: 15, img: P + "bottle.png",    loc: "C1-02", freq: 6, desc: "24 oz clear bottle with flip lid and full-color logo." },
-    { sku: "SP-ZE7TG-XK6", name: "L4L Cooling Towel",                     cat: "Community Events", stock: 22,  low: 25, img: P + "towel.png",     loc: "C1-04", freq: 4, desc: "Evaporative cooling towel in printed sleeve — summer event staple." },
-    { sku: "SP-ZCDXR-JFE", name: "L4L Hand Fan",                          cat: "Community Events", stock: 75,  low: 15, img: P + "fan.png",       loc: "C1-05", freq: 3, desc: "Die-cut paper hand fan on wood stick, learn4life print." },
-    { sku: "SP-X7RB6-WER", name: "L4L Hand Sanitizer",                    cat: "Community Events", stock: 218, low: 20, img: P + "sanitizer.png", loc: "C1-01", freq: 7, desc: "1 oz carabiner sanitizer, citrus scent." },
+    { sku: "SP-C1BTL-CE5", name: "L4L Clear Water Bottle with Black Lid", cat: "Community Events", stock: 96,  low: 15, img: P + "bottle.png",    loc: "C1-02", freq: 6, desc: "24 oz clear bottle with flip lid and full-color logo." },
+    { sku: "SP-C2TWL-CE6", name: "L4L Cooling Towel",                     cat: "Community Events", stock: 22,  low: 25, img: P + "towel.png",     loc: "C1-04", freq: 4, desc: "Evaporative cooling towel in printed sleeve — summer event staple." },
+    { sku: "SP-C3FAN-CE7", name: "L4L Hand Fan",                          cat: "Community Events", stock: 75,  low: 15, img: P + "fan.png",       loc: "C1-05", freq: 3, desc: "Die-cut paper hand fan on wood stick, learn4life print." },
+    { sku: "SP-C4SAN-CE8", name: "L4L Hand Sanitizer",                    cat: "Community Events", stock: 218, low: 20, img: P + "sanitizer.png", loc: "C1-01", freq: 7, desc: "1 oz carabiner sanitizer, citrus scent." },
     { sku: "SP-D4BAG-CE1", name: "L4L Drawstring Bag",                    cat: "Community Events", stock: 340, low: 25, loc: "C2-01", desc: "Lightweight cinch bag for event giveaways." },
     { sku: "SP-L8YRD-CE2", name: "L4L Lanyard — Rainbow",                 cat: "Community Events", stock: 512, low: 40, loc: "C2-02", desc: "Rainbow-gradient lanyard with plastic clip." },
     { sku: "SP-S2STK-CE3", name: "L4L Sticker Sheet",                     cat: "Community Events", stock: 0,   low: 50, loc: "C2-03", desc: "Kiss-cut sticker sheet, 8 designs." },

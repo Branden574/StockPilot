@@ -32,6 +32,8 @@ describe('ZendeskQuickAccess', () => {
     render(<ZendeskQuickAccess subdomain={null} canManage />);
     expect(screen.getByText(/No Zendesk subdomain set yet — add it below\./)).toBeInTheDocument();
     const input = screen.getByRole('textbox', { name: /Your Zendesk subdomain/ });
+    // Every organization sees this example, so it names no customer's Zendesk.
+    expect(input).toHaveAttribute('placeholder', 'yourcompany');
     const field = input.parentElement!;
     expect(field).toHaveClass('focus-within:ring-2', 'focus-within:ring-ring');
     fireEvent.change(input, { target: { value: 'sampleorg' } });

@@ -64,18 +64,19 @@ order by l.created_at;
 
 ### Preview result (prod, read-only via MCP, 2026-08-17 ~12:25 PT)
 
-All seven rows are L4L North Region. Destinations: `3b2d8dcb…` = rack "38-B",
-`38e832a2…` = rack "38-C" (both `kind = rack`, no crate columns).
+All seven rows are L4L North Region. Destinations: rack "38-B" and rack "38-C"
+(both `kind = rack`, no crate columns). Item, location and organization ids
+are left out of this public file; a fresh Part 1 run prints them.
 
 | erased_at (UTC) | item | before (audit) | current | disposition |
 | --- | --- | --- | --- | --- |
-| 17:50:52.780 | Maus I, My Father Bleeds History `9c481921-db94-42fe-8189-24a7c47a3937` | yellow / 6 | orange / 6 | RESET_BY_HAND_DIFFERENT |
-| 18:08:59.819 | The Joy Luck Club `658c697c-93e4-460f-b9a2-ad60719c2e57` | red / 4 | pink / 4 | RESET_BY_HAND_DIFFERENT |
-| 18:13:55.888 | To Kill a Mockingbird `1ba536ef-5ed7-4ee4-8bc0-32bbae50fb76` | green / 10 | green / 10 | ALREADY_RESTORED_SAME |
-| 18:19:02.126 | The Great Gatsby `a2922f1b-a468-4ff8-8fcf-9470d9d286ec` | green / 7 | green / 7 | ALREADY_RESTORED_SAME |
-| 18:22:27.648 | Of Mice and Men `8fcdc1e2-7dd1-4a3f-8104-70f83df0e7f7` | purple / 9 | NULL / NULL | **REPAIR** |
-| 18:25:53.402 | Into the wild `d7e13e20-a280-44b7-ba16-e290f18f723c` | yellow / 15 | yellow / 15 | ALREADY_RESTORED_SAME |
-| 18:27:38.749 | George Orwell - 1984 `4e25a733-5bc7-4e20-a866-058d7da0f70b` | yellow / 8 | orange / 8 | RESET_BY_HAND_DIFFERENT |
+| 17:50:52.780 | Maus I, My Father Bleeds History | yellow / 6 | orange / 6 | RESET_BY_HAND_DIFFERENT |
+| 18:08:59.819 | The Joy Luck Club | red / 4 | pink / 4 | RESET_BY_HAND_DIFFERENT |
+| 18:13:55.888 | To Kill a Mockingbird | green / 10 | green / 10 | ALREADY_RESTORED_SAME |
+| 18:19:02.126 | The Great Gatsby | green / 7 | green / 7 | ALREADY_RESTORED_SAME |
+| 18:22:27.648 | Of Mice and Men | purple / 9 | NULL / NULL | **REPAIR** |
+| 18:25:53.402 | Into the wild | yellow / 15 | yellow / 15 | ALREADY_RESTORED_SAME |
+| 18:27:38.749 | George Orwell - 1984 | yellow / 8 | orange / 8 | RESET_BY_HAND_DIFFERENT |
 
 - **REPAIR set = 1 row**: Of Mice and Men — Part 2 would restore `purple / 9`.
 - **Owner must reconcile by hand (3 rows)** — the audit says one colour, the
@@ -96,9 +97,9 @@ in FOUR independent ways (belt and braces, any one of which alone confines
 the write):
 
 1. the explicit `IN` list of REPAIR ids copied from Part 1, verbatim;
-2. the explicit `organization_id` — L4L North Region,
-   `63c13e64-92a6-4ea4-9936-6a2c26a85b4a` (every Part 1 row was this org;
-   a wrong id here writes ZERO rows rather than the wrong org's rows);
+2. the explicit `organization_id` — L4L North Region's, copied from Part 1
+   (every Part 1 row was this org; a wrong id here writes ZERO rows rather
+   than the wrong org's rows);
 3. `latest.organization_id = i.organization_id` — the erasure audit row and
    the item must belong to the same org, so a cross-org id collision (or a
    pasted id from another tenant) matches nothing;
@@ -153,9 +154,9 @@ COMMIT only when all three agree; ROLLBACK otherwise.
 --     from latest l
 --    where i.id = l.item_id
 --      -- (1) the REPAIR ids from Part 1, verbatim
---      and i.id in ('8fcdc1e2-7dd1-4a3f-8104-70f83df0e7f7')
---      -- (2) the org, explicitly — L4L North Region
---      and i.organization_id = '63c13e64-92a6-4ea4-9936-6a2c26a85b4a'
+--      and i.id in ('<REPAIR item id from Part 1>')
+--      -- (2) the org, explicitly — L4L North Region's id, from Part 1
+--      and i.organization_id = '<organization id from Part 1>'
 --      -- (3) the erasure row and the item are the same org's
 --      and l.organization_id = i.organization_id
 --      -- (4) still erased at write time
@@ -211,16 +212,14 @@ COMMIT only when all three agree; ROLLBACK otherwise.
 
 Re-run Part 1 immediately before Part 2: the REPAIR set changes whenever the
 owner re-types a label by hand, and Part 2 must never overwrite one of those.
-If the fresh Part 1 REPAIR set differs from the `IN` list above, update the
-list first (predicate (1)); predicates (2)-(4) still confine the write if a
-wrong id is pasted.
+Fill the `IN` list (predicate (1)) and the organization id (predicate (2))
+from that fresh run; predicates (2)-(4) still confine the write if a wrong
+id is pasted.
 
 ### Part 2 authoring notes (2026-08-17, ~13:30 PT; SELECT-only re-check)
 
-- The one REPAIR row is unchanged: Of Mice and Men
-  `8fcdc1e2-7dd1-4a3f-8104-70f83df0e7f7`, org
-  `63c13e64-92a6-4ea4-9936-6a2c26a85b4a`, both crate keys still NULL, live,
-  `item_type = 'book'`.
+- The one REPAIR row is unchanged: Of Mice and Men, L4L North Region, both
+  crate keys still NULL, live, `item_type = 'book'`.
 - The audit row shape mirrors `syncBookCratePlacement`'s own write
   (apps/web/src/server/services/inventory.ts, `placement: 'book_crate'`,
   all four placement keys in `before`/`after`, `changed_keys`), so the
@@ -232,8 +231,9 @@ wrong id is pasted.
   mirrors the prod shape — the L4L org id, the REPAIR item id with both crate
   keys null and rack 38-C, its `stock.transferred` + erasure audit rows, plus
   a DECOY erasure (same shape, other org, other item). Result: `restored 1 |
-  audit_rows 1 | items 8fcdc1e2-…`; the item read back `purple / 9`, rack 38
-  and `author` intact (merge, not replace); the decoy stayed NULL; exactly one
+  audit_rows 1 | items <the REPAIR item id>`; the item read back
+  `purple / 9`, rack 38 and `author` intact (merge, not replace); the decoy
+  stayed NULL; exactly one
   repair audit row, `before` {null,null,38,C} -> `after` {purple,9,38,C},
   `repair_of_audit_id` pointing at the erasure row. Then ROLLBACK.
 - NOT RUN in prod. Owner authorises; coordinator (or owner) runs under service

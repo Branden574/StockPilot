@@ -498,11 +498,11 @@ describe('formatSiteAddressLines', () => {
     expect(lines).toContain('Tulare, California 93274');
   });
 
-  it('passes a typo through verbatim instead of guessing — KVA Tulare really says "Calfornia"', () => {
+  it('passes a typo through verbatim instead of guessing — a stored site address may really say "Calfornia"', () => {
     // Data quality is the owner's to fix. Silently "correcting" a site address
     // in an outbound delivery instruction would be worse than reproducing it.
-    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '93274' })).toEqual([
-      'Fresno, Calfornia 93274',
+    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '00000' })).toEqual([
+      'Fresno, Calfornia 00000',
     ]);
   });
 
@@ -579,9 +579,10 @@ export function toPlainTextLine(value: string): string {
  * and printing "Address:" with nothing under it implies the system captured
  * something it did not.
  *
- * Values are reproduced verbatim, typos included (KVA Tulare's address really
- * says "Calfornia"). Silently correcting a site address inside a delivery
- * instruction would be a worse failure than reproducing the owner's data.
+ * Values are reproduced verbatim, typos included (a stored site address may
+ * hold a typo such as "Calfornia"). Silently correcting a site address inside
+ * a delivery instruction would be a worse failure than reproducing the
+ * owner's data.
  */
 export function formatSiteAddressLines(address: CharterAddress | null): string[] {
   if (!address) return [];
@@ -3755,7 +3756,7 @@ Add rows recording that destination building, room, priority/urgency, site conta
 - [ ] **Step 5: Write section E — the Outlook strategy.** URL generation (`https://outlook.office.com/mail/deeplink/compose`, chosen over `outlook.live.com` because the org runs managed M365); encoding (`URLSearchParams`, exactly once, `to`/`cc`/`subject`/`body` as real parameters); plain-text formatting (blocks joined by a blank line, omitted blocks leave no trace, all user text passed through `toPlainTextLine` so no newline can forge a header); popup handling (`window.open` first statement in the handler, `null` or a throw drives the fallback); default-email fallback (`location.assign(mailto:)`, To in the path, cc in the query); clipboard fallback (labelled TO/CC/SUBJECT/MESSAGE, always the FULL body, plus a selectable textarea when the API is denied or absent); large-order handling (measured against `DRAFT_URL_LIMIT = 1800`, condensed variant, disclosed in the body AND on screen).
 - [ ] **Step 6: Write section F — Status accuracy.** State explicitly: StockPilot records only that a DRAFT WAS OPENED (`order.delivery_request_drafted`), never that a ticket was submitted. Quote the audit metadata allow-list. State that the "Your manager has been notified" sentence at `storefront-overlays.tsx:353-357` was re-verified in Task 8 and record the finding.
 - [ ] **Step 7: Write section G — Tests, each command and its REAL result,** copied from Task 11's verification report. **This section must also record the deviation from brief section 34:** no Playwright e2e was written, on the owner's explicit instruction (owner decision 3), because Playwright is not wired into CI (`.github/workflows/ci.yml:34-38,70-92` runs typecheck, vitest, build and pgTAP only), none of the five existing specs creates data, and `auth.setup.ts:15-48` skips without `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` and throws on an MFA account. Name the component tests that carry the coverage instead — open, popup-blocked, mailto, clipboard, clipboard-denied, duplicate-draft, condensed, pickup, keyboard, and the CC on every path.
-- [ ] **Step 8: Write section H — Limitations, plainly:** cannot confirm the employee pressed Send; cannot capture a Zendesk ticket number in this phase; attachments cannot be auto-added through a compose link; ticket status cannot sync without a future integration. Add the four this implementation found: the destination address is a best-effort render of owner-maintained data that contains at least one known typo (KVA Tulare says "Calfornia"); 4 of 16 sites have no address at all; whether Outlook Web honours the `cc` deep-link parameter in the org's tenant is unverified owner QA; and the success surface is React state, so the assistant is unreachable after a refresh.
+- [ ] **Step 8: Write section H — Limitations, plainly:** cannot confirm the employee pressed Send; cannot capture a Zendesk ticket number in this phase; attachments cannot be auto-added through a compose link; ticket status cannot sync without a future integration. Add the four this implementation found: the destination address is a best-effort render of owner-maintained data that contains at least one known typo (a stored site address says "Calfornia"); 4 of 16 sites have no address at all; whether Outlook Web honours the `cc` deep-link parameter in the org's tenant is unverified owner QA; and the success surface is React state, so the assistant is unreachable after a refresh.
 - [ ] **Step 9: Write section I — ONE recommended next phase, recommend only, do not implement.** The recommendation is the **durable second home on `/dashboard/orders/[id]`**: that page already loads the full `OrderRequestDetail` server-side, it survives refresh and navigation, and it is where a manager or the requester goes when the first draft was lost. Note what it additionally requires: R8 handling for the 5 of 41 prod delivery orders whose `delivery_charter_id` is NULL under a `NOT VALID` CHECK, and a decision on who may draft one (owner open question 8). Mention the alternatives considered and rejected for now — persisting a Zendesk ticket number, a direct Zendesk API integration, Microsoft Graph, auto packing slip, delivery status sync — and say why the durable entry point beats all of them on value per unit of risk.
 - [ ] **Step 10: Add the open questions section,** reproducing the four unresolved items from this plan's Global Constraints unchanged: the pickup subject format, whether the recipient pair is L4L-only or a product feature, the Zendesk intake contract, and the durable second home. None may be answered by an implementation detail.
 - [ ] **Step 11: Commit.**

@@ -888,8 +888,8 @@ describe('parsePdfText (Staples format)', () => {
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });
 
-  it('extracts an Anytown shipping address', () => {
-    expect(po.shippingAddress).toMatch(/Anytown/i);
+  it('extracts a Sampleton shipping address', () => {
+    expect(po.shippingAddress).toMatch(/Sampleton/i);
   });
 
   it('produces at least 13 line rows', () => {
@@ -1080,7 +1080,7 @@ pnpm --filter @stockpilot/web test pdf
 ```
 Expected: 9 tests passed.
 
-If any single fixture-derived test fails, **do not weaken the assertion** — fix the regex in `parsePdfText`. The fixture is from a real Staples PO and the parser must match.
+If any single fixture-derived test fails, **do not weaken the assertion** — fix the regex in `parsePdfText`. The fixture keeps a real Staples PO's layout with synthetic values, and the parser must match it.
 
 - [ ] **Step 6: Commit**
 

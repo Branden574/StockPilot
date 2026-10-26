@@ -197,7 +197,7 @@ array — none is an executable Zendesk API call, import, or network reference.*
 | `api/v1/maintenance-requests/route.test.ts:81` | Test — asserts no outbound fetch occurs |
 | `api/v1/maintenance-requests/route.ts:25` | Doc comment: "This route never calls anything Zendesk-shaped" |
 | `[id]/draft-opened/route.ts:14` | Doc comment: same boundary statement |
-| `packages/core/src/maintenance/email.ts:361` | Outbound EMAIL BODY copy (sent to `dc4@sampleorg.test`, the live Zendesk intake): "Please reply to this email thread... same Zendesk ticket." — disclosure text inside the drafted email, not a program call |
+| `packages/core/src/maintenance/email.ts:361` | Outbound EMAIL BODY copy (sent to the DC4 intake, a live Zendesk intake; `dc4@sampleorg.test` in this repository's samples): "Please reply to this email thread... same Zendesk ticket." — disclosure text inside the drafted email, not a program call |
 | `apps/mobile/app/maintenance/[id].tsx:72` | User-facing DISCLOSURE copy: "Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here." |
 | `packages/core/src/maintenance/constants.test.ts:96` | Test — banned-vocabulary array |
 | `packages/core/src/maintenance/email.test.ts:244,251,817` | Test — asserts the body copy above / banned-phrase array |
