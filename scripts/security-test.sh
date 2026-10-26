@@ -739,6 +739,21 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Ordering visibility (0413): order_catalog_visible is written only by
+  # set_order_catalog_visibility (SECURITY DEFINER, EXECUTE to authenticated):
+  # the item guard refuses every other UPDATE of the column, service_role
+  # included. The write checks can_manage_order_catalog (explicit deny, then
+  # allow, then role default, the owner included), the app's MFA rule (a
+  # 48-case parity table) and the caller's read scope (set-based, held equal
+  # to caller_can_read_item and RLS per persona; a foreign or unreadable id
+  # refuses the whole call naming only the caller's ids). The key's exception
+  # rows are written only by platform_set_permission_exception (service_role):
+  # org admins, owners and service-role writes of the key, role rows and the
+  # global defaults are refused in the database. The new-demand gate on
+  # order_request_lines refuses a hidden item for every writer and leaks
+  # nothing about an item the writer cannot read. The two-session proofs are
+  # scripts/db-concurrency/0413_hide_vs_submit.sh and 0413_exchange_reissue_vs_hide.sh.
+  supabase/tests/0413_order_catalog_visibility.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

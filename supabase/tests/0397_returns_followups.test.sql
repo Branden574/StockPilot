@@ -740,8 +740,13 @@ select is(
        ('public.close_partial(uuid)',                             'a519c3e58fb577c3ff1b30fb3a6cc0ad'),
        ('public.tg_order_requests_replacement_header()',          'b7220c36c4f78792f698adfbd8da79ea'),
        ('public.cancel_return_replacement(uuid,integer,text,text)', '9e42b480d4a77b1ccde60f10fc858d44'),
-       ('public._return_exchange_requester_options(uuid,boolean)', 'c9a8b3ff98fa7e53e1befaeb39b52c55'),
-       ('public._return_exchange_item_ok(uuid,uuid,text,uuid)',   '60a9e392712860018a5c3d814aa285eb'),
+       -- Re-pinned by 0413 (were c9a8b3ff98fa7e53e1befaeb39b52c55 and
+       -- 60a9e392712860018a5c3d814aa285eb): a record hidden from ordering is
+       -- no new exchange selection; an item approved in an earlier transaction
+       -- for a return of the order still passes the staff check (re-issue).
+       -- Nothing else in either body changed.
+       ('public._return_exchange_requester_options(uuid,boolean)', 'c92668c5c9e6487781d5dae22c00505e'),
+       ('public._return_exchange_item_ok(uuid,uuid,text,uuid)',   'cc5df002fc610f12253c73db4dbda336'),
        ('public._return_exchange_line_budget(uuid,uuid)',         'a19c4994d724a227dfbb5d35b7f0d7c0'),
        ('public._return_replacement_class(uuid)',                 'fb118357c2024c55f80c095f783c68f1'),
        ('public.create_requester_return_request(uuid,jsonb,uuid,jsonb)', '157aebbe26a7baff32dd56755ab9025d'),
