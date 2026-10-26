@@ -28,15 +28,20 @@ export const dynamic = 'force-dynamic';
  * One request answers ONE page of the link's eligible items, at most
  * PUBLIC_PHOTO_PAGE_ITEMS (500) in item_id order, with the URL of the next
  * page (components/orders/public-v2/photo-pages.ts): each item's photo (or
- * external cover), its blur placeholder and its public description. So an
- * anonymous request signs at most 500 photos and reads the database at most
- * 14 times. It used to sign a photo for every eligible item (to the catalog's
- * ceiling) on each request (B32, integrator decisions 1 and 3).
+ * external cover), its blur placeholder and its public description, at most
+ * PHOTO_PAGE_ITEM_MAX_BYTES an item, so a page stays under Vercel's 4.5 MB.
+ * So an anonymous request signs at most 500 photos and reads the database at
+ * most 14 times. It used to sign a photo for every eligible item (to the
+ * catalog's ceiling) on each request (B32, integrator decisions 1 and 3).
  *
- * Only the one URL of a page is answered. Any other query (an extra
- * parameter, another order or spelling, page=0) is a 400 with no-store before
+ * Only the one URL of a page is answered. Any other query the route sees (an
+ * extra parameter, another order, page=0) is a 400 with no-store before
  * anything is read: each would be a CDN cache key of its own, so the work
- * above could be repeated at will (decision 2).
+ * above could be repeated at will (decision 2). Next rewrites some spellings
+ * into the page's own URL before this handler runs (a parameter named nxtP...
+ * or nxtI..., a percent-escape, an empty `&` segment: see photo-pages.ts), so
+ * those are answered as the page; the page's eligibility window, its costly
+ * read, then comes from the data cache whatever the spelling.
  *
  * The answer is the same for every visitor of the same URL until item-image
  * or warehouse state changes, so the Vercel CDN serves it for 60 s and stale

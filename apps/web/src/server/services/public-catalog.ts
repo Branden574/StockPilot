@@ -2,6 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
@@ -129,6 +130,32 @@ export const PUBLIC_NAME_MAX = 300;
 export const PUBLIC_CATEGORY_LABEL_MAX = 120;
 export const PUBLIC_ROW_COVER_MAX = 160;
 
+/**
+ * The most one item takes of a photo page, in bytes of the JSON answer
+ * (jsonBytes): its photo or cover URL, its blur and its description together.
+ * A URL or a blur past its own limit is left out (a cut URL or data URI draws
+ * nothing); the description is cut, between two characters, to what the item
+ * has left. So a page of PUBLIC_PHOTO_PAGE_ITEMS items is at most
+ * 500 x (8,000 + 126 for the three id keys) bytes plus its envelope, about
+ * 4.06 MB, under the 4.5 MB Vercel answers a larger function response with an
+ * error (B32 review round 2). It used to be bounded only by the items' text:
+ * 2,000 control characters, which JSON writes as 6 bytes each, made a page of
+ * 7.4 MB.
+ *
+ * A description of 2,000 characters in any script (6,000 bytes at 3 a
+ * character) is not cut on an item whose URL and blur are of a real size
+ * (about 500 and 400 bytes). Only text JSON writes long can be: many control
+ * characters, or more emoji than the item form takes (it stops at 1,000).
+ */
+export const PHOTO_PAGE_ITEM_MAX_BYTES = 8_000;
+/** The longest photo or cover URL a photo page sends, in JSON bytes. A cover
+ *  past it is not used (the item shows its photo), a signed URL past it is
+ *  left out; a real signed URL is about 500 bytes. */
+export const PHOTO_PAGE_URL_MAX_BYTES = 2_000;
+/** The longest blur a photo page sends, in JSON bytes: the column's
+ *  2,000-character limit (0122) in base64, which is all a real blur is. */
+export const PHOTO_PAGE_BLUR_MAX_BYTES = 2_000;
+
 /** Pages of open reservations one batch of 100 items may take (10,000 rows)
  *  before the load fails instead of reading on (see readOpenReservations). */
 const RESERVATION_PAGES_PER_BATCH = 10;
@@ -222,6 +249,55 @@ export async function readEligiblePage(
   return { items: rows.slice(0, PUBLIC_PHOTO_PAGE_ITEMS), next: more ? page + 1 : null };
 }
 
+/** One photo page's window of a link's eligible items, as the data cache
+ *  keeps it (JSON: about 20 KB at 500 ids). */
+interface EligibleWindow {
+  /** The page's item ids, in item_id order. */
+  ids: string[];
+  /** The page after it, or null. */
+  next: number | null;
+}
+
+/**
+ * The eligible item ids of one photo page (readEligiblePage), from the data
+ * cache: one entry per link, warehouse and page, kept 60 s and tagged with the
+ * link's catalog tag, so a change to the link or to an item's visibility drops
+ * it with the catalog (PublicLinksService, item-visibility.ts). The wrapper is
+ * made per call so its tag can carry the link id, as getPublicCatalogForLink's.
+ *
+ * WHY IT IS CACHED (B32 review round 2). The photo route answers only a page's
+ * one URL, but Next rewrites the request's URL before the route sees it
+ * (normalizeCdnUrl in next/dist/server/server-utils.js): a parameter whose name
+ * starts with nxtP or nxtI, and nextInternalLocale, are dropped, and the query
+ * is written again, which decodes a percent-escape and drops an empty `&`
+ * segment. Each such spelling is a CDN cache key of its own, and the route sees
+ * the page's own URL, so it cannot refuse them. This window is the costly read
+ * of a page (the function computes the link's whole eligible set), and its key
+ * is the page, never the URL: however many spellings arrive, the function runs
+ * once a minute per link, warehouse and page. THROWS on a failed read, which
+ * the data cache does not keep.
+ */
+async function readEligibleWindow(
+  linkId: string,
+  warehouseId: string,
+  page: number,
+): Promise<EligibleWindow> {
+  const cached = unstable_cache(loadEligibleWindow, ['public-link-photo-window-v1'], {
+    revalidate: 60,
+    tags: [publicCatalogTag(linkId)],
+  });
+  return cached(linkId, warehouseId, page);
+}
+
+async function loadEligibleWindow(
+  linkId: string,
+  warehouseId: string,
+  page: number,
+): Promise<EligibleWindow> {
+  const { items, next } = await readEligiblePage(createAdminClient(), linkId, warehouseId, page);
+  return { ids: items.map((r) => r.item_id), next };
+}
+
 /** The lazy fields of one photo page, by item id. */
 export interface PublicCatalogPageDetails {
   /** The storage path of the item's first photo (primary first), to sign. */
@@ -310,16 +386,21 @@ export interface PublicPhotoPageContent {
 
 /**
  * One photo page of a link's catalog: the page's eligible items
- * (readEligiblePage, at most PUBLIC_PHOTO_PAGE_ITEMS), their lazy fields
- * (readPublicPageDetails) and their photos, signed by `sign` (the route passes
- * ItemImagesService.signedUrls).
+ * (readEligibleWindow, at most PUBLIC_PHOTO_PAGE_ITEMS, from the data cache),
+ * their lazy fields (readPublicPageDetails) and their photos, signed by `sign`
+ * (the route passes ItemImagesService.signedUrls).
  *
  * An item with an external cover is shown by its cover, as the page always
  * preferred, so its photo is not signed and its blur is not sent. Every other
  * item with a photo is signed once (a path two items share, once). So one
  * request signs at most PUBLIC_PHOTO_PAGE_ITEMS photos and reads the database
- * at most 1 + 2 * ceil(PUBLIC_PHOTO_PAGE_ITEMS / 100) times: 11. THROWS on a
- * failed read.
+ * at most 1 + 2 * ceil(PUBLIC_PHOTO_PAGE_ITEMS / 100) times: 11, and the 1 only
+ * when the data cache does not hold the window.
+ *
+ * Each item takes at most PHOTO_PAGE_ITEM_MAX_BYTES of the answer: a URL or a
+ * blur past its limit is left out (reported: neither is what the app writes),
+ * and the description is cut to what the item has left. THROWS on a failed
+ * read.
  */
 export async function readPublicPhotoPage(
   admin: ReturnType<typeof createAdminClient>,
@@ -328,38 +409,64 @@ export async function readPublicPhotoPage(
   page: number,
   sign: (paths: string[]) => Promise<Map<string, string>>,
 ): Promise<PublicPhotoPageContent> {
-  const eligible = await readEligiblePage(admin, link.id, warehouseId, page);
+  const eligible = await readEligibleWindow(link.id, warehouseId, page);
   const out: PublicPhotoPageContent = {
     urls: {},
     lqip: {},
     descriptions: {},
     nextPage: eligible.next,
   };
-  const itemIds = eligible.items.map((r) => r.item_id);
+  const itemIds = eligible.ids;
   if (itemIds.length === 0) return out;
 
   const details = await readPublicPageDetails(admin, link.organizationId, itemIds);
   const photoOf = new Map<string, string>();
   for (const id of itemIds) {
-    const description = details.descriptions.get(id);
-    if (description) out.descriptions[id] = description;
-    const cover = details.covers.get(id);
-    if (cover) {
-      out.urls[id] = cover;
-      continue;
-    }
+    if (details.covers.has(id)) continue;
     const path = details.photoPaths.get(id);
-    if (!path) continue;
-    photoOf.set(id, path);
-    const blur = details.lqip.get(id);
-    if (blur) out.lqip[id] = blur;
+    if (path) photoOf.set(id, path);
   }
-  if (photoOf.size === 0) return out;
+  const signed =
+    photoOf.size === 0 ? new Map<string, string>() : await sign([...new Set(photoOf.values())]);
 
-  const signed = await sign([...new Set(photoOf.values())]);
-  for (const [id, path] of photoOf) {
-    const url = signed.get(path);
-    if (url) out.urls[id] = url;
+  let urlsLeftOut = 0;
+  let blursLeftOut = 0;
+  for (const id of itemIds) {
+    let room = PHOTO_PAGE_ITEM_MAX_BYTES;
+    const path = photoOf.get(id);
+    const url = details.covers.get(id) ?? (path === undefined ? undefined : signed.get(path));
+    if (url !== undefined) {
+      const bytes = jsonBytes(url);
+      if (bytes <= PHOTO_PAGE_URL_MAX_BYTES) {
+        out.urls[id] = url;
+        room -= bytes;
+      } else {
+        urlsLeftOut += 1;
+      }
+    }
+    const blur = path === undefined ? undefined : details.lqip.get(id);
+    if (blur !== undefined) {
+      const bytes = jsonBytes(blur);
+      if (bytes <= PHOTO_PAGE_BLUR_MAX_BYTES) {
+        out.lqip[id] = blur;
+        room -= bytes;
+      } else {
+        blursLeftOut += 1;
+      }
+    }
+    const description = details.descriptions.get(id);
+    if (description) {
+      const fitted = capJsonBytes(description, room);
+      if (fitted) out.descriptions[id] = fitted;
+    }
+  }
+  if (urlsLeftOut > 0 || blursLeftOut > 0) {
+    void reportError(new Error('A public photo page left out a URL or a blur too long to send'), {
+      tag: 'public_catalog.photo_page_field_too_long',
+      level: 'warning',
+      organizationId: link.organizationId,
+      extra: { linkId: link.id, page, urlsLeftOut, blursLeftOut },
+    });
   }
   return out;
 }
@@ -374,13 +481,47 @@ export async function readPublicPhotoPage(
  * retina without a large byte cost. (An earlier `-L`→`-M` downsize here made
  * covers upscale ~2.5× in the 220-260px retina cells and read blurry.)
  * Returns null unless the field is a plain http(s) URL under 2,000
- * characters, so no other custom field value reaches the public page.
+ * characters, so no other custom field value reaches the public page, and
+ * at most PHOTO_PAGE_URL_MAX_BYTES once written in JSON, so a cover's share of
+ * a photo page stays bounded (a real cover URL is ASCII, 1 byte a character,
+ * so only text that is not a URL goes past it; the item then shows its photo).
  */
 function externalCoverUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const url = raw.trim();
   if (!/^https?:\/\//i.test(url) || url.length >= 2000) return null;
+  if (jsonBytes(url) > PHOTO_PAGE_URL_MAX_BYTES) return null;
   return url;
+}
+
+/** Bytes `text` adds to a JSON answer: its JSON form in UTF-8, less the
+ *  quotes. A plain character is 1, an accented letter 2, a character of most
+ *  other scripts 3, an emoji 4; a quote, a backslash, a tab or a newline 2,
+ *  and most other control characters 6. */
+function jsonBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), 'utf8') - 2;
+}
+
+/**
+ * `text` cut to at most `max` bytes of a JSON answer (jsonBytes), between two
+ * characters, never inside one (an emoji cut in half is a lone surrogate,
+ * which JSON writes as 6 bytes and no browser draws). Text that fits is
+ * returned as it is. JSON writes each character on its own, so the bytes of
+ * the characters kept add up to the bytes of the text kept.
+ */
+function capJsonBytes(text: string, max: number): string {
+  if (jsonBytes(text) <= max) return text;
+  let used = 0;
+  let end = 0;
+  // A string iterates by code point: an emoji comes whole, a lone surrogate
+  // alone.
+  for (const ch of text) {
+    const bytes = jsonBytes(ch);
+    if (used + bytes > max) break;
+    used += bytes;
+    end += ch.length;
+  }
+  return text.slice(0, end);
 }
 
 /**

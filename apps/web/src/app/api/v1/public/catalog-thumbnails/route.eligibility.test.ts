@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,22 +12,38 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * cache key, so that work could be repeated at will. It now answers one page
  * of at most 500 items, in item_id order (the order the page's catalog is read
  * in), with the URL of the next page, and only for the one URL that names that
- * page: every other spelling is refused before any read. Each page carries the
- * lazy fields of its items (blur placeholder, public description), so the
- * cached catalog stays small.
+ * page: every other spelling it sees is refused before any read. Each page
+ * carries the lazy fields of its items (blur placeholder, public description),
+ * so the cached catalog stays small.
+ *
+ * Every request here is served the way a Next server serves it: Next rewrites
+ * the request's URL before the route sees it (normalizeCdnUrl, called by the
+ * route module's prepare() on every request), and some spellings of a page's
+ * URL come out of that as the page's own URL. The route cannot refuse those,
+ * and the CDN keeps each apart, so the costly read of a page (the eligibility
+ * window: the function computes the link's whole eligible set) comes from the
+ * data cache, keyed by the link, the warehouse and the page (review round 2).
+ *
+ * A page's size is bounded too: each item's photo or cover URL, blur and
+ * description take at most PHOTO_PAGE_ITEM_MAX_BYTES of the answer, so the
+ * largest page stays under Vercel's 4.5 MB response limit whatever the text.
  *
  * A failed read is not an empty catalog: it answers 500 with no-store, so no
  * cache keeps it, and the page's hook retries. A legacy organization token (no
  * links row) shows an EMPTY catalog on the page, so there is nothing to sign.
  */
 
-const { adminRef, signed, reportError } = vi.hoisted(() => ({
+const { adminRef, signed, reportError, dataCache } = vi.hoisted(() => ({
   adminRef: { current: null as unknown },
   signed: {
     calls: [] as string[][],
     url: (path: string) => `https://signed.test/${path}`,
   },
   reportError: vi.fn(async () => {}),
+  dataCache: {
+    entries: new Map<string, string>(),
+    calls: [] as Array<{ keyParts: unknown; opts: unknown; args: unknown[] }>,
+  },
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminRef.current }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
@@ -42,11 +60,35 @@ vi.mock('@/server/services/item-images', () => ({
     }
   },
 }));
+// Next's data cache as unstable_cache keys it: the function, its key parts and
+// its arguments, nothing from the request
+// (next/dist/server/web/spec-extension/unstable-cache.js). A value is kept as
+// JSON and read back from it; a thrown error is not kept.
+vi.mock('next/cache', () => ({
+  unstable_cache:
+    (fn: (...a: unknown[]) => Promise<unknown>, keyParts: unknown, opts: unknown) =>
+    async (...args: unknown[]) => {
+      dataCache.calls.push({ keyParts, opts, args });
+      const key = JSON.stringify([String(fn), keyParts, args]);
+      const hit = dataCache.entries.get(key);
+      if (hit !== undefined) return JSON.parse(hit) as unknown;
+      const value = await fn(...args);
+      dataCache.entries.set(key, JSON.stringify(value));
+      return value;
+    },
+  revalidateTag: vi.fn(),
+}));
 
 import {
   publicPhotoPageUrl,
   type PublicPhotoPage,
 } from '@/components/orders/public-v2/photo-pages';
+import {
+  PHOTO_PAGE_BLUR_MAX_BYTES,
+  PHOTO_PAGE_ITEM_MAX_BYTES,
+  PHOTO_PAGE_URL_MAX_BYTES,
+} from '@/server/services/public-catalog';
+import { publicCatalogTag } from '@/server/services/public-links';
 import {
   callArgs,
   makeSupabaseStub,
@@ -56,18 +98,35 @@ import {
 
 import { GET } from './route';
 
+// Next's own request preparation, as the route module's prepare() runs it on
+// every request before the handler sees the request (next start, and the
+// minimal mode Vercel runs).
+const nextRequire = createRequire(createRequire(import.meta.url).resolve('next/package.json'));
+const { normalizeCdnUrl } = nextRequire('./dist/server/server-utils.js') as {
+  normalizeCdnUrl: (req: { url: string }, paramKeys: string[]) => void;
+};
+
 const ORG = 'org-1';
+const LINK = 'link-1';
 const WAREHOUSE = 'abcdef12-3456-4789-8abc-def012345678';
 const TOKEN = '0123456789abcdef'.repeat(4);
+const ROUTE = '/api/v1/public/catalog-thumbnails';
 const CDN = 'public, s-maxage=60, stale-while-revalidate=300';
 const uuid = (i: number) => `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const pathOf = (i: number) => `${ORG}/${uuid(i)}/photo.webp`;
 
-function get(pathAndQuery: string) {
-  return GET(new NextRequest(`https://test.local${pathAndQuery}`));
+/** A request for `target` (path and query, as the browser sent it), served
+ *  as a Next server serves it: the route sees the URL Next leaves. */
+function get(target: string) {
+  const req = { url: target };
+  normalizeCdnUrl(req, []);
+  return GET(new NextRequest(`https://test.local${req.url}`));
 }
 const page = (n: number) => get(publicPhotoPageUrl(TOKEN, WAREHOUSE, n));
 const body = async (res: Response) => (await res.json()) as PublicPhotoPage;
+
+/** Bytes a value adds to a JSON answer, less its quotes. */
+const jsonBytes = (text: string) => new TextEncoder().encode(JSON.stringify(text)).length - 2;
 
 interface Fixture {
   /** Eligible items 0..n-1, each with one photo unless listed below. */
@@ -116,7 +175,7 @@ function wire(f: Fixture) {
         link === 'none'
           ? null
           : {
-              id: 'link-1',
+              id: LINK,
               organization_id: ORG,
               active: link === 'open',
               expires_at: null,
@@ -148,42 +207,32 @@ beforeEach(() => {
   signed.calls = [];
   signed.url = (path) => `https://signed.test/${path}`;
   reportError.mockClear();
+  dataCache.entries.clear();
+  dataCache.calls = [];
 });
 
 describe('only the one URL of a page does any work (decision 2)', () => {
-  const base = `/api/v1/public/catalog-thumbnails?token=${TOKEN}&warehouseId=${WAREHOUSE}`;
+  const base = `${ROUTE}?token=${TOKEN}&warehouseId=${WAREHOUSE}`;
 
   // Mutation caught: any parameter the route ignores, a page=0 or a reordered
   // query answered like the canonical one (each would be a CDN key of its own).
   it.each([
     ['an unknown parameter', `${base}&v=2`],
-    [
-      'a cache-busting parameter first',
-      `/api/v1/public/catalog-thumbnails?x=1&token=${TOKEN}&warehouseId=${WAREHOUSE}`,
-    ],
-    [
-      'the parameters in another order',
-      `/api/v1/public/catalog-thumbnails?warehouseId=${WAREHOUSE}&token=${TOKEN}`,
-    ],
+    ['a cache-busting parameter first', `${ROUTE}?x=1&token=${TOKEN}&warehouseId=${WAREHOUSE}`],
+    ['the parameters in another order', `${ROUTE}?warehouseId=${WAREHOUSE}&token=${TOKEN}`],
     ['page=0 (the first page has no page parameter)', `${base}&page=0`],
     ['a page past the last one', `${base}&page=4`],
     ['a page written another way', `${base}&page=01`],
     ['the page given twice', `${base}&page=1&page=2`],
-    [
-      'an encoded character in the token',
-      `/api/v1/public/catalog-thumbnails?token=%30${TOKEN.slice(1)}&warehouseId=${WAREHOUSE}`,
-    ],
+    ['the token given twice', `${base}&token=${TOKEN}`],
     [
       'an upper-case warehouse id',
-      `/api/v1/public/catalog-thumbnails?token=${TOKEN}&warehouseId=${WAREHOUSE.toUpperCase()}`,
+      `${ROUTE}?token=${TOKEN}&warehouseId=${WAREHOUSE.toUpperCase()}`,
     ],
-    ['no warehouse', `/api/v1/public/catalog-thumbnails?token=${TOKEN}`],
-    ['no token', `/api/v1/public/catalog-thumbnails?warehouseId=${WAREHOUSE}`],
-    [
-      'a token shorter than the page accepts',
-      `/api/v1/public/catalog-thumbnails?token=short&warehouseId=${WAREHOUSE}`,
-    ],
-    ['a trailing ampersand', `${base}&`],
+    ['no warehouse', `${ROUTE}?token=${TOKEN}`],
+    ['no token', `${ROUTE}?warehouseId=${WAREHOUSE}`],
+    ['a token shorter than the page accepts', `${ROUTE}?token=short&warehouseId=${WAREHOUSE}`],
+    ['a parameter named nxtP exactly', `${base}&nxtP`],
   ])('%s: 400, no-store, before any read or signing', async (_what, url) => {
     const { stub } = wire({ eligible: 3 });
     const res = await get(url);
@@ -200,6 +249,105 @@ describe('only the one URL of a page does any work (decision 2)', () => {
     expect(first.status).toBe(200);
     expect(first.headers.get('cache-control')).toBe(CDN);
     for (const n of [1, 2, 3]) expect((await page(n)).status).toBe(200);
+  });
+});
+
+describe("spellings Next rewrites to the page's own URL run no eligibility read of their own (review round 2)", () => {
+  const first = `${ROUTE}?token=${TOKEN}&warehouseId=${WAREHOUSE}`;
+  const second = `${first}&page=1`;
+
+  // What Next 16 does before the route sees the request: it drops every
+  // parameter whose name starts with nxtP or nxtI (and nextInternalLocale),
+  // and re-writes the query, which decodes a percent-escape and drops an
+  // empty segment. Each spelling is a CDN key of its own, and the route
+  // answers each as the page. Pinned here, so a Next upgrade that changes
+  // them shows.
+  const rewritten: Array<[string, string, string]> = [
+    ['a parameter named nxtP...', `${first}&nxtPcachebust=8f3a`, first],
+    [
+      'a parameter named nxtP... first',
+      `${ROUTE}?nxtPa=1&token=${TOKEN}&warehouseId=${WAREHOUSE}`,
+      first,
+    ],
+    ['a parameter named nxtI...', `${first}&nxtIx=1`, first],
+    ['nextInternalLocale', `${first}&nextInternalLocale=x`, first],
+    ['a page with a parameter named nxtP...', `${second}&nxtPz=9`, second],
+    [
+      'an encoded character in the token',
+      `${ROUTE}?token=%30${TOKEN.slice(1)}&warehouseId=${WAREHOUSE}`,
+      first,
+    ],
+    [
+      'an encoded dash in the warehouse id',
+      `${ROUTE}?token=${TOKEN}&warehouseId=abcdef12%2D3456-4789-8abc-def012345678`,
+      first,
+    ],
+    ['an encoded page number', `${first}&page=%31`, second],
+    ['a trailing ampersand', `${first}&`, first],
+    ['five trailing ampersands', `${first}&&&&&`, first],
+    ['a leading ampersand', `${ROUTE}?&token=${TOKEN}&warehouseId=${WAREHOUSE}`, first],
+    ['a doubled ampersand', `${ROUTE}?token=${TOKEN}&&warehouseId=${WAREHOUSE}`, first],
+  ];
+
+  it.each(rewritten)("%s: Next hands the route the page's own URL", (_what, raw, own) => {
+    const req = { url: raw };
+    normalizeCdnUrl(req, []);
+    expect(req.url).toBe(own);
+  });
+
+  // Mutation caught: the window read on every request (each spelling then
+  // re-runs the function over the link's whole eligible set).
+  it('every one of them is answered as its page, and each page reads its eligibility window once between them', async () => {
+    const { rpcCalls } = wire({ eligible: 600 });
+    const own = new Map<string, string>();
+    for (const target of [first, second]) own.set(target, await (await get(target)).text());
+    for (const [, raw, target] of rewritten) {
+      const res = await get(raw);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe(CDN);
+      expect(await res.text()).toBe(own.get(target));
+    }
+    expect(rpcCalls.map((c) => callArgs(c, 'range'))).toEqual([
+      [0, 500],
+      [500, 1000],
+    ]);
+  });
+
+  // Mutation caught: as above. The review's probe: 100 values of one such
+  // parameter were 100 runs of the function.
+  it('100 values of a parameter named nxtP...: one run of the eligibility function', async () => {
+    const { rpcCalls } = wire({ eligible: 600 });
+    for (let i = 0; i < 100; i += 1) {
+      expect((await get(`${first}&nxtPcb=${i}`)).status).toBe(200);
+    }
+    expect(rpcCalls).toHaveLength(1);
+  });
+});
+
+describe('the eligibility window comes from the data cache (review round 2)', () => {
+  // Mutation caught: a key with anything from the request in it (a new entry
+  // per spelling), a key without the page (one page's window answering every
+  // page), or no tag (a link or item change would leave the window stale).
+  it("keyed by the link id, the warehouse id and the page only, for 60 s, tagged with the link's catalog tag", async () => {
+    wire({ eligible: 600 });
+    await page(0);
+    await page(1);
+    expect(dataCache.calls.map((c) => c.args)).toEqual([
+      [LINK, WAREHOUSE, 0],
+      [LINK, WAREHOUSE, 1],
+    ]);
+    for (const call of dataCache.calls) {
+      expect(call.keyParts).toEqual(['public-link-photo-window-v1']);
+      expect(call.opts).toEqual({ revalidate: 60, tags: [publicCatalogTag(LINK)] });
+    }
+  });
+
+  it('a window read that failed is not kept: the next request reads it again', async () => {
+    wire({ eligible: 3, failRpc: true });
+    expect((await page(0)).status).toBe(500);
+    const { rpcCalls } = wire({ eligible: 3 });
+    expect((await page(0)).status).toBe(200);
+    expect(rpcCalls).toHaveLength(1);
   });
 });
 
@@ -332,30 +480,130 @@ describe('failures, a closed link and the legacy token', () => {
   });
 });
 
-describe('a page fits the response limit at the maximum field lengths', () => {
+describe('a page stays under the response limit whatever its text (review round 2)', () => {
   /** Vercel answers a function response over 4.5 MB with an error. */
   const RESPONSE_LIMIT_BYTES = 4_500_000;
+  /** Each of an item's three entries adds its id key and punctuation:
+   *  `"<36-character id>":"<value>",`, 42 bytes besides the value. */
+  const ENTRY_OVERHEAD = 42;
+  /** The largest page: 500 items at their budget, plus the envelope and a
+   *  next URL. */
+  const PAGE_MAX = 500 * (PHOTO_PAGE_ITEM_MAX_BYTES + 3 * ENTRY_OVERHEAD) + 300;
+  /** A signed URL of 600 bytes (real ones are about 500) and a blur at the
+   *  column's 2,000-character limit (0122): the photo item with the least
+   *  room left for its description. */
+  const signedUrl600 = () => `https://signed.test/${'s'.repeat(580)}`;
+  const blur2000 = (i: number) => `data:image/webp;base64,${String(i).padStart(2000 - 23, 'A')}`;
+  const ROOM = PHOTO_PAGE_ITEM_MAX_BYTES - 600 - 2000;
 
-  // A cover and a blur never both ride for one item (a cover is shown, so the
-  // photo's blur is not sent), so each item carries the larger of the two: a
-  // signed photo (about 500 characters; 600 here) with a 2,000-character blur
-  // (the column's limit, 0122), plus a 2,000-character public description
-  // (0261) in a script of 3 bytes a character.
-  it('500 items, each with a 2,000-character description of 3-byte characters and a 2,000-character blur: under 4.5 MB', async () => {
-    const descriptions = Object.fromEntries(
-      Array.from({ length: 500 }, (_, i) => [i, '\u6587'.repeat(2000)]),
-    );
-    wire({
-      eligible: 500,
-      descriptions,
-      lqip: (i) => `data:image/webp;base64,${String(i).padStart(2000 - 23, 'A')}`,
-    });
-    signed.url = () => `https://signed.test/${'s'.repeat(600)}`;
+  async function measured(f: Fixture) {
+    const { ids } = wire(f);
     const text = await (await page(0)).text();
-    const parsed = JSON.parse(text) as PublicPhotoPage;
+    return {
+      ids,
+      text,
+      bytes: new TextEncoder().encode(text).length,
+      parsed: JSON.parse(text) as PublicPhotoPage,
+    };
+  }
+
+  function itemBytes(p: PublicPhotoPage, id: string): number {
+    return [p.urls[id], p.lqip[id], p.descriptions[id]].reduce(
+      (n, v) => n + (v === undefined ? 0 : jsonBytes(v)),
+      0,
+    );
+  }
+
+  it('the budgets keep the largest page under 4.5 MB', () => {
+    expect(PHOTO_PAGE_URL_MAX_BYTES).toBe(2000);
+    expect(PHOTO_PAGE_BLUR_MAX_BYTES).toBe(2000);
+    expect(PAGE_MAX).toBeLessThan(RESPONSE_LIMIT_BYTES);
+  });
+
+  // Mutation caught: a description sent whole (7,363,048 bytes for this page:
+  // JSON writes each control character as 6 bytes), or cut by characters
+  // instead of bytes.
+  it("500 descriptions of 2,000 control characters, with a 2,000-character blur and a 600-byte URL: each is cut to its item's room, and the page is under 4.5 MB", async () => {
+    signed.url = signedUrl600;
+    const original = '\u0001'.repeat(2000);
+    const { ids, bytes, parsed } = await measured({
+      eligible: 500,
+      descriptions: Object.fromEntries(ids500().map((i) => [i, original])),
+      lqip: blur2000,
+    });
     expect(Object.keys(parsed.urls)).toHaveLength(500);
-    expect(Object.values(parsed.lqip).every((b) => b.length === 2000)).toBe(true);
-    expect(Object.keys(parsed.descriptions)).toHaveLength(500);
-    expect(new TextEncoder().encode(text).length).toBeLessThan(RESPONSE_LIMIT_BYTES);
+    expect(Object.keys(parsed.lqip)).toHaveLength(500);
+    for (const id of ids) {
+      expect(parsed.descriptions[id]).toBe('\u0001'.repeat(ROOM / 6));
+      expect(itemBytes(parsed, id)).toBeLessThanOrEqual(PHOTO_PAGE_ITEM_MAX_BYTES);
+    }
+    expect(bytes).toBeLessThanOrEqual(PAGE_MAX);
+    expect(bytes).toBeLessThan(RESPONSE_LIMIT_BYTES);
+  });
+
+  // Mutation caught: as above (5,363,048 bytes sent whole), or a cut inside
+  // a character (a lone surrogate, which JSON writes as 6 bytes and no
+  // browser draws).
+  it("500 descriptions of 2,000 four-byte characters (the database's 2,000-character limit): cut between characters, and the page is under 4.5 MB", async () => {
+    signed.url = signedUrl600;
+    const { ids, bytes, parsed } = await measured({
+      eligible: 500,
+      descriptions: Object.fromEntries(ids500().map((i) => [i, '\u{1F600}'.repeat(2000)])),
+      lqip: blur2000,
+    });
+    for (const id of ids) {
+      expect(parsed.descriptions[id]).toBe('\u{1F600}'.repeat(ROOM / 4));
+    }
+    expect(bytes).toBeLessThan(RESPONSE_LIMIT_BYTES);
+  });
+
+  // The text the item form accepts (2,000 characters) is never cut on an item
+  // whose photo URL and blur are of a real size.
+  it('a 2,000-character description in a 3-byte script, with a real-sized blur and photo URL, is sent whole', async () => {
+    const description = '\u6587'.repeat(2000);
+    const { ids, parsed } = await measured({
+      eligible: 3,
+      descriptions: { 0: description, 1: description, 2: description },
+      lqip: (i) => `data:image/webp;base64,${String(i).padStart(400, 'A')}`,
+    });
+    for (const id of ids) expect(parsed.descriptions[id]).toBe(description);
+  });
+
+  // Mutation caught: a blur sent whatever its size (JSON writes 2,000 control
+  // characters as 12,000 bytes; a real blur is base64).
+  it('a blur that passes 2,000 bytes is left out, and reported', async () => {
+    const { ids, parsed } = await measured({
+      eligible: 2,
+      lqip: (i) => (i === 0 ? '\u0001'.repeat(2000) : 'data:image/webp;base64,AAAA'),
+    });
+    expect(parsed.lqip).toEqual({ [ids[1]!]: 'data:image/webp;base64,AAAA' });
+    expect(Object.keys(parsed.urls)).toEqual(ids);
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  // Mutation caught: a cover sent whatever its size. A cover is shown instead
+  // of the photo, so the item shows its photo when its cover is not usable.
+  it('a cover that passes 2,000 bytes is not used: the item shows its photo', async () => {
+    const longCover = `https://covers.example.test/${'\u00e9'.repeat(1000)}`;
+    const { ids, parsed } = await measured({ eligible: 1, covers: { 0: longCover } });
+    expect(longCover.length).toBeLessThan(2000);
+    expect(parsed.urls).toEqual({ [ids[0]!]: `https://signed.test/${pathOf(0)}` });
+    expect(signed.calls).toEqual([[pathOf(0)]]);
+  });
+
+  // Mutation caught: a signed URL sent whatever its size.
+  it('a signed URL that passes 2,000 bytes is left out, and reported', async () => {
+    signed.url = (path) =>
+      path === pathOf(0)
+        ? `https://signed.test/${'s'.repeat(2000)}`
+        : `https://signed.test/${path}`;
+    const { ids, parsed } = await measured({ eligible: 2 });
+    expect(Object.keys(parsed.urls)).toEqual([ids[1]!]);
+    expect(reportError).toHaveBeenCalledTimes(1);
   });
 });
+
+/** Item indexes 0..499. */
+function ids500(): number[] {
+  return Array.from({ length: 500 }, (_, i) => i);
+}
