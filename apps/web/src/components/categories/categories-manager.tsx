@@ -90,7 +90,16 @@ interface FormValues {
   trackingModeOverride: string;
 }
 
-const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#ec4899', '#64748b', '#eab308'];
+const PRESET_COLORS = [
+  '#6366f1',
+  '#10b981',
+  '#f97316',
+  '#0ea5e9',
+  '#a855f7',
+  '#ec4899',
+  '#64748b',
+  '#eab308',
+];
 
 /** The dot of a category with no colour, and of one whose stored colour is refused. */
 const NO_COLOR_DOT = '#94a3b8';
@@ -101,10 +110,13 @@ const DEFAULT_EDIT_COLOR = '#6366f1';
  * A card's Archive button (CONFLICTS D18). It used to be opacity-0 until the
  * card was hovered, so a phone or tablet never showed it and a keyboard user
  * tabbed onto an invisible button. Now only a fine pointer (a mouse) hides it
- * until the card is hovered or holds focus; on touch it always shows.
+ * until the card is hovered or holds focus; on touch it always shows. Focus in
+ * the card is the descendant selector `.group:focus-within &`, not Tailwind's
+ * group-focus-within variant, which Safari pays for on every focus change of
+ * every page (lib/group-focus-variants.guard.test.ts).
  */
 const HOVER_REVEAL =
-  'transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
+  'transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:[.group:focus-within_&]:opacity-100';
 
 /**
  * Resolves what the Tracking column shows for a row (Task 12). Returns null
@@ -289,9 +301,7 @@ export function CategoriesManager({
         data-testid="category-card"
         className={cn(
           'group flex min-w-0 items-start gap-3 rounded-lg transition-colors',
-          nested
-            ? 'px-0 py-1'
-            : 'border-border bg-card hover:border-line-strong border p-4',
+          nested ? 'px-0 py-1' : 'border-border bg-card hover:border-line-strong border p-4',
         )}
       >
         <span
@@ -357,7 +367,11 @@ export function CategoriesManager({
         actions={
           sportsEnabled && canManageSports && !isArchivedView ? (
             <Button variant="outline" onClick={handleSetupSports} disabled={setupBusy}>
-              {setupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {setupBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
               Set up Sports
             </Button>
           ) : null
@@ -373,11 +387,10 @@ export function CategoriesManager({
 
       {canManagePublicVisibility && initial.length > 0 && (
         <p className="text-muted-foreground max-w-[760px] text-[12.5px] leading-[18.75px]">
-          <span className="text-foreground font-medium">Public visibility:</span>{' '}
-          &lsquo;Internal only&rsquo; removes every item in the category from the shared
-          public pool on public request links, regardless of the items&apos; own settings.
-          Items hand-picked on a specific link stay visible on that link unless the item
-          itself is Hidden.
+          <span className="text-foreground font-medium">Public visibility:</span> &lsquo;Internal
+          only&rsquo; removes every item in the category from the shared public pool on public
+          request links, regardless of the items&apos; own settings. Items hand-picked on a specific
+          link stay visible on that link unless the item itself is Hidden.
         </p>
       )}
 
@@ -452,8 +465,8 @@ export function CategoriesManager({
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive category?'}
         description={
           <>
-            The category is hidden from filters and item forms. Items already in this category
-            keep their assignment until you move them. You can restore it from the{' '}
+            The category is hidden from filters and item forms. Items already in this category keep
+            their assignment until you move them. You can restore it from the{' '}
             <strong>Archived view</strong>.
           </>
         }
@@ -597,7 +610,9 @@ function CategoryDialog({
       trackingModeOverride: editing?.tracking_mode ?? '',
     });
     setProfileDraft(
-      isCustom && editing?.tracking_profile ? editing.tracking_profile : EMPTY_TRACKING_PROFILE_DRAFT,
+      isCustom && editing?.tracking_profile
+        ? editing.tracking_profile
+        : EMPTY_TRACKING_PROFILE_DRAFT,
     );
   }, [open, editing, reset]);
 
@@ -613,7 +628,9 @@ function CategoryDialog({
   const canSubmitSports =
     !showSportsSection ||
     !isSportsSubcategory ||
-    (isCustomSubcategory ? isTrackingProfileComplete(profileDraft) : subcategoryKey !== NO_SUBCATEGORY);
+    (isCustomSubcategory
+      ? isTrackingProfileComplete(profileDraft)
+      : subcategoryKey !== NO_SUBCATEGORY);
 
   const onSubmit = handleSubmit(async (values) => {
     const sportsFields =
@@ -683,19 +700,19 @@ function CategoryDialog({
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
           {parentRow && (
-            <p className="text-xs text-muted-foreground">
-              Under: <span className="font-medium text-foreground">{parentRow.name}</span>
+            <p className="text-muted-foreground text-xs">
+              Under: <span className="text-foreground font-medium">{parentRow.name}</span>
             </p>
           )}
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" placeholder="Electronics" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="description">
               Description
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea id="description" rows={2} {...register('description')} />
           </div>
@@ -707,7 +724,7 @@ function CategoryDialog({
                   type="button"
                   key={c}
                   onClick={() => setValue('color', c)}
-                  className="h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition-all data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
+                  className="ring-offset-background data-[selected=true]:ring-ring h-7 w-7 rounded-full ring-offset-2 transition-all data-[selected=true]:ring-2"
                   data-selected={watch('color') === c}
                   style={{ backgroundColor: c }}
                   aria-label={c}
@@ -733,21 +750,19 @@ function CategoryDialog({
                 Has size variants (S, M, L, XL…)
               </label>
               <p id="cat-supports-sizes-help" className="text-muted-foreground text-[12px]">
-                When on, items in this category get a Sizes selector on the
-                item form, and saving creates one variant per chosen size.
+                When on, items in this category get a Sizes selector on the item form, and saving
+                creates one variant per chosen size.
               </p>
             </div>
           </div>
 
           {showSportsSection && (
-            <div className="space-y-3 rounded-md border border-border p-3">
+            <div className="border-border space-y-3 rounded-md border p-3">
               <div className="flex items-start gap-3">
                 <Checkbox
                   id="is-sports-subcategory"
                   checked={isSportsSubcategory}
-                  onCheckedChange={(v) =>
-                    setValue('isSportsSubcategory', v, { shouldDirty: true })
-                  }
+                  onCheckedChange={(v) => setValue('isSportsSubcategory', v, { shouldDirty: true })}
                   aria-describedby="is-sports-subcategory-help"
                 />
                 <div className="min-w-0 space-y-0.5">
@@ -794,13 +809,15 @@ function CategoryDialog({
                     <div className="space-y-1.5">
                       <Label htmlFor="tracking-mode-override">
                         Tracking mode
-                        <span className="ml-1 font-normal text-muted-foreground">
+                        <span className="text-muted-foreground ml-1 font-normal">
                           (default: {TRACKING_MODE_LABELS[builtInProfile.defaultMode]})
                         </span>
                       </Label>
                       <Select
                         value={watch('trackingModeOverride') || '__default'}
-                        onValueChange={(v) => setValue('trackingModeOverride', v === '__default' ? '' : v)}
+                        onValueChange={(v) =>
+                          setValue('trackingModeOverride', v === '__default' ? '' : v)
+                        }
                       >
                         <SelectTrigger id="tracking-mode-override">
                           <SelectValue />
@@ -826,7 +843,12 @@ function CategoryDialog({
           )}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting || !canSubmitSports}>
@@ -854,9 +876,7 @@ function CategoryDialog({
  */
 function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
   const router = useRouter();
-  const [value, setValue] = React.useState<CategoryPublicVisibility>(
-    category.public_visibility,
-  );
+  const [value, setValue] = React.useState<CategoryPublicVisibility>(category.public_visibility);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -900,7 +920,7 @@ function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
             <SelectItem value="internal_only">Internal only</SelectItem>
           </SelectContent>
         </Select>
-        {busy && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+        {busy && <Loader2 className="text-muted-foreground h-3 w-3 animate-spin" />}
       </div>
       {error && <p className="text-destructive text-xs">{error}</p>}
     </div>

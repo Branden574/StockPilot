@@ -39,6 +39,7 @@ import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { chipActionClass, filterChipClass, MetaChip } from '@/components/patterns/chip';
 import { FilterTrigger } from '@/components/patterns/filter-bar';
 import { ItemCell } from '@/components/patterns/item-cell';
+import { MissingPhoto } from '@/components/patterns/missing-photo';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { SizeBadge } from '@/components/patterns/size-badge';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -3826,20 +3827,30 @@ function hasOnHandNotes(item: Item, reservedByItem?: Map<string, number>): boole
   return (item.staged_quantity ?? 0) + (item.unplaced_quantity ?? 0) > 0;
 }
 
-/** A grid card's one-line meta: its parts with a quiet "·" between them. */
+/**
+ * A grid card's meta: its parts with a quiet "·" between them, in order. On
+ * one line where the card has room, drawn exactly as before; where it has not
+ * (a group card's "N records · Category · Generic" on a 390 px phone, W5) it
+ * wraps between whole parts, and inside a part only between its words, so no
+ * word is cut or hidden. Each "·" stays with the part before it, so a wrapped
+ * line never starts with one, and the lines sit 18 px apart, as text does.
+ */
 function MetaLine({ children }: { children: React.ReactNode }) {
   const parts = React.Children.toArray(children);
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+    <span
+      data-slot="meta-line"
+      className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5"
+    >
       {parts.map((part, i) => (
-        <React.Fragment key={i}>
-          {i > 0 ? (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {part}
+          {i < parts.length - 1 ? (
             <span aria-hidden className="text-muted-foreground">
               ·
             </span>
           ) : null}
-          {part}
-        </React.Fragment>
+        </span>
       ))}
     </span>
   );
@@ -4122,6 +4133,14 @@ function rollupText(
  * the photo at once, the missing-photo hatch stands in for no photo, and the
  * 2,048 px master loads only on hover intent (on demand for payload-diet rows
  * that carry the thumb alone).
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a row with no photo does; it used to leave the 34 px
+ * tile empty. CardPhoto's rule (below): the failed address is remembered, so
+ * a new one (a refresh signs the photos again) gets a fresh attempt, and
+ * because next/image is given an onError it sets the address once more after
+ * hydration, so a photo that failed before the page came alive is caught too.
  */
 function ListThumb({
   photo,
@@ -4139,15 +4158,18 @@ function ListThumb({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
+  // The photo did not load: the hatch, and no preview of it.
+  const shown = photo && thumbSrc && failedSrc !== thumbSrc ? photo : null;
   return (
     <ImageHoverPreview
-      src={photo?.image_url ?? null}
+      src={shown?.image_url ?? null}
       // Diet rows: master on demand (org-scoped route, same 25-day-stable URL
       // the row used to carry).
       srcLoader={
-        photo && !photo.image_url && photo.image_thumb_url
-          ? () => loadMasterImageUrl(photo.id)
+        shown && !shown.image_url && shown.image_thumb_url
+          ? () => loadMasterImageUrl(shown.id)
           : undefined
       }
       alt={alt}
@@ -4157,17 +4179,18 @@ function ListThumb({
       className="shrink-0"
     >
       <Thumb size={34}>
-        {photo && thumbSrc ? (
+        {shown && thumbSrc ? (
           <Image
             src={thumbSrc}
-            unoptimized={!!photo.image_thumb_url}
+            unoptimized={!!shown.image_thumb_url}
             alt=""
             width={68}
             height={68}
             sizes="34px"
             priority={priority}
-            placeholder={photo.image_lqip ? 'blur' : 'empty'}
-            blurDataURL={photo.image_lqip ?? undefined}
+            placeholder={shown.image_lqip ? 'blur' : 'empty'}
+            blurDataURL={shown.image_lqip ?? undefined}
+            onError={() => setFailedSrc(thumbSrc)}
             className="absolute inset-0 h-full w-full object-cover"
           />
         ) : undefined}
@@ -4186,6 +4209,16 @@ function hasPhoto(photo: Item | null): photo is Item {
  * uncropped in the card's fixed square, with the row's hover preview and
  * loading rules (ListThumb above). No photo: null, and the card draws the
  * missing-photo hatch.
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a card with no photo does. Before R8 it left the
+ * square empty: a blank card. The failed address is remembered, so a new
+ * one (a refresh signs the photos again) gets a fresh attempt without an
+ * effect resetting state. Because next/image is given an onError, it sets
+ * the address once more after hydration, so a cover that failed before the
+ * page came alive (the first cards fetch with the HTML) reports its error
+ * too. Which photos go through the optimizer is unchanged (ListThumb's rule).
  */
 function CardPhoto({
   photo,
@@ -4200,8 +4233,10 @@ function CardPhoto({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
   if (!photo || !thumbSrc) return null;
+  if (failedSrc === thumbSrc) return <MissingPhoto className="absolute inset-0" />;
   return (
     <ImageHoverPreview
       src={photo.image_url ?? null}
@@ -4224,6 +4259,7 @@ function CardPhoto({
         priority={priority}
         placeholder={photo.image_lqip ? 'blur' : 'empty'}
         blurDataURL={photo.image_lqip ?? undefined}
+        onError={() => setFailedSrc(thumbSrc)}
         style={{ objectFit: 'contain' }}
         className="h-full w-full object-contain"
       />
@@ -5613,9 +5649,14 @@ function SavedViewChip({
   // The owner's share and delete controls appear on hover with a mouse, and
   // stay visible on a touch screen, below sm, and whenever keyboard focus is
   // inside the chip (CONFLICTS D18: hover-only controls could not be reached
-  // by touch or by Tab-and-see).
+  // by touch or by Tab-and-see). Focus inside the chip is the descendant
+  // selector `.group\/view:focus-within &`, not Tailwind's group-focus-within
+  // variant, which Safari pays for on every focus change of every page
+  // (lib/group-focus-variants.guard.test.ts). String.raw keeps the one
+  // backslash of the escaped "/" in the class the browser gets and in the text
+  // Tailwind scans; an ordinary '\\/' string leaves two in the scanned text.
   const ownerControl = cn(
-    'grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 group-focus-within/view:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100',
+    String.raw`grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 [.group\/view:focus-within_&]:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100`,
     isActive ? 'hover:bg-background/20' : 'hover:bg-foreground/10',
   );
   return (

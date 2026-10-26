@@ -19,11 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  createTagAction,
-  deleteTagAction,
-  updateTagAction,
-} from '@/server/actions/tags';
+import { createTagAction, deleteTagAction, updateTagAction } from '@/server/actions/tags';
 
 import { TAG_DEFAULT_COLOR, tagColor } from './tag-color';
 
@@ -60,9 +56,12 @@ const DEFAULT_COLOR = TAG_DEFAULT_COLOR;
  * tabbed onto invisible buttons. Now only a fine pointer (a mouse) hides them
  * until the row is hovered or holds focus; on touch they always show. The two
  * sit 8 px apart, the gap the 44 px touch areas of 28 and 32 px buttons need.
+ * Focus in the row is the descendant selector `.group:focus-within &`, not
+ * Tailwind's group-focus-within variant, which Safari pays for on every focus
+ * change of every page (lib/group-focus-variants.guard.test.ts).
  */
 const ROW_ACTIONS =
-  'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
+  'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:[.group:focus-within_&]:opacity-100';
 
 export function TagsManager({
   initial,
@@ -258,7 +257,7 @@ function TagDialog({
               maxLength={60}
               {...register('name', { required: true, maxLength: 60 })}
             />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
           <div className="space-y-2">
             <Label>Color</Label>
@@ -268,7 +267,7 @@ function TagDialog({
                   type="button"
                   key={c}
                   onClick={() => setValue('color', c)}
-                  className="h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition-all data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
+                  className="ring-offset-background data-[selected=true]:ring-ring h-7 w-7 rounded-full ring-offset-2 transition-all data-[selected=true]:ring-2"
                   data-selected={currentColor === c}
                   style={{ backgroundColor: c }}
                   aria-label={`Use color ${c}`}
@@ -280,11 +279,7 @@ function TagDialog({
               */}
               <Input
                 type="color"
-                value={
-                  /^#[0-9a-fA-F]{6}$/.test(currentColor)
-                    ? currentColor
-                    : DEFAULT_COLOR
-                }
+                value={/^#[0-9a-fA-F]{6}$/.test(currentColor) ? currentColor : DEFAULT_COLOR}
                 onChange={(e) => setValue('color', e.target.value)}
                 className="h-7 w-10 cursor-pointer p-0.5"
                 aria-label="Custom tag color"

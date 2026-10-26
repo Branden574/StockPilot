@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
 export const metadata: Metadata = { title: 'Books' };
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { RefreshBookPricesButton } from '@/components/inventory/refresh-book-prices-button';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
@@ -157,7 +157,7 @@ export default async function BooksPage({
       searchParams,
     ]);
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="books" access={moduleAccess} />;
   }
 
   const lifecycleStatus =
