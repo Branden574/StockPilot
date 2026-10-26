@@ -5,8 +5,9 @@ import { z } from 'zod';
 
 import { getVerifiedEmail, isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
-import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
+import { reportError } from '@/lib/error-reporter';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
@@ -167,7 +168,7 @@ async function gateMfaForSelfService(): Promise<void> {
  *     undid that choice (email-routing-settings.ts surfaces it the same way).
  */
 function actionErrorFrom(e: unknown): ActionResult<never> {
-  if (isNextControlFlowError(e)) throw e;
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) return err(e.code, e.message, e.details);
   return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
 }

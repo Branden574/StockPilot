@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 
 import { compareSizeValues, err, ok, uuidSchema, type ActionResult } from '@stockpilot/core';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
@@ -78,6 +79,7 @@ export async function loadGroupVariantsAction(
       })),
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');
@@ -113,6 +115,7 @@ export async function archiveProductGroupAction(
     revalidatePath('/dashboard/product-groups');
     return ok({ id: parsed.data });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');
@@ -131,6 +134,7 @@ export async function restoreProductGroupAction(
     revalidatePath('/dashboard/product-groups');
     return ok({ id: parsed.data });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');

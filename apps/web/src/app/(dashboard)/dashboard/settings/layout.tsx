@@ -29,6 +29,11 @@ import { can, PERMISSIONS } from '@stockpilot/core';
  *
  * The `?mfa=required` hard gate and its exemption for the security page live in
  * the dashboard layout; nothing here redirects.
+ *
+ * A MODULE SET THAT COULD NOT BE READ is not "off": Maintenance requests is
+ * still not offered as a link (an unknown answer never shows it), but someone
+ * its permission shows it to sees that it could not be checked, with Try
+ * again, as the hub does, instead of the link silently missing.
  */
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -50,6 +55,7 @@ async function SettingsNavSlot() {
   const access: SettingsNavAccess = {
     permissions: PERMISSIONS.filter((permission) => can(ctx, permission)),
     modules: maintenance.enabled ? ['maintenance_requests'] : [],
+    uncheckedModules: maintenance.checkFailed ? ['maintenance_requests'] : [],
   };
   return <SettingsSubNav access={access} />;
 }

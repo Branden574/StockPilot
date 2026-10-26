@@ -33,9 +33,7 @@ const EVENT = {
 
 describe('ScheduleCalendar canManage gating', () => {
   it('canManage=false hides "+ New event" and every per-day "+ Add" link', () => {
-    render(
-      <ScheduleCalendar year={2026} month={7} events={[EVENT]} canManage={false} />,
-    );
+    render(<ScheduleCalendar year={2026} month={7} events={[EVENT]} canManage={false} />);
     expect(screen.queryByText('+ New event')).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Add event on/)).not.toBeInTheDocument();
     // Read affordances stay: the event chip still links to its detail page.
@@ -117,9 +115,14 @@ describe('ScheduleCalendar redesign', () => {
     expect(add).toHaveClass('opacity-0', 'group-hover:opacity-100');
     expect(add).toHaveClass(
       'focus-visible:opacity-100',
-      'group-focus-within:opacity-100',
+      '[.group:focus-within_&]:opacity-100',
       'pointer-coarse:opacity-100',
     );
+    // The descendant selector `.group:focus-within &` takes its group from the
+    // nearest .group, which is the link's own day (it holds the day's number).
+    const date = add.getAttribute('aria-label')!.replace('Add event on ', '');
+    const day = add.closest<HTMLElement>('.group')!;
+    expect(within(day).getByText(String(Number(date.slice(8))))).toBeInTheDocument();
   });
 
   it('every chip says its status in words, keeps the strike-through on finished ones, and uses no raw palette colour', async () => {

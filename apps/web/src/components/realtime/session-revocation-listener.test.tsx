@@ -12,7 +12,13 @@
  * run against what the browser actually has, not against Node's Buffer.
  */
 import { render, waitFor } from '@testing-library/react';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
 
 import { decodeBase64UrlUtf8, sessionIdFromAccessToken } from './session-id-from-token';
 
@@ -214,5 +220,51 @@ describe('SessionRevocationListener (browser Buffer polyfill installed)', () => 
 
     expect(h.signOut).not.toHaveBeenCalled();
     expect(h.replace).not.toHaveBeenCalled();
+  });
+
+  // A revoke ends the session on purpose (the account did it on another device
+  // or tab, or an admin did), so what an interrupted run kept in this tab
+  // (lib/interrupted-run) goes before the local sign-out.
+  describe('what an interrupted run kept in this tab', () => {
+    afterEach(() => sessionStorage.clear());
+
+    it('a confirmed revocation removes every record before it signs this tab out', async () => {
+      sessionStorage.clear();
+      seedInterruptedRuns();
+      let keysAtSignOut: string[] | null = null;
+      h.signOut.mockImplementationOnce(async () => {
+        keysAtSignOut = interruptedRunKeys();
+        return { error: null };
+      });
+      const onRevoked = await mount();
+
+      onRevoked({ payload: { keepId: null } });
+
+      await waitFor(() => expect(h.signOut).toHaveBeenCalledTimes(1));
+      expect(keysAtSignOut).toEqual([]);
+      expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+      await waitFor(() => expect(h.replace).toHaveBeenCalledWith('/signin'));
+    });
+
+    it('a forged or unconfirmed message removes nothing', async () => {
+      sessionStorage.clear();
+      seedInterruptedRuns();
+      // The session is still live at GoTrue, then the check cannot be made.
+      h.getUser
+        .mockResolvedValueOnce({ data: { user: { id: 'user-1' } }, error: null })
+        .mockResolvedValueOnce({
+          data: { user: null },
+          error: new AuthRetryableFetchError('Failed to fetch', 0),
+        });
+      const onRevoked = await mount();
+
+      onRevoked({ payload: { sessionIds: [MY_SESSION] } });
+      onRevoked({ payload: { keepId: 'someone-else' } });
+      await waitFor(() => expect(h.getUser).toHaveBeenCalledTimes(2));
+      await Promise.resolve();
+
+      expect(h.signOut).not.toHaveBeenCalled();
+      expect(interruptedRunKeys()).toHaveLength(2);
+    });
   });
 });

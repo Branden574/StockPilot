@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import {
   assertModuleEnabled,
@@ -22,6 +23,7 @@ import {
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) return err(error.code, error.message);
   console.error(error);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
@@ -98,7 +100,8 @@ export async function setPoDestinationWarehouseAction(input: {
     // this recovery action can't re-point a PO to a warehouse the user can't
     // actually receive into. Map the ForbiddenError to a clean 'forbidden'
     // ServiceError (toResult only special-cases ServiceError).
-    await assertWarehouseAccess(parsed.data.warehouseId, 'write', ctx).catch(() => {
+    await assertWarehouseAccess(parsed.data.warehouseId, 'write', ctx).catch((e: unknown) => {
+      rethrowControlFlow(e);
       throw new ServiceError('forbidden', 'You do not have access to receive into that warehouse.');
     });
 

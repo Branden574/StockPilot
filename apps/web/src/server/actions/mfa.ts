@@ -3,6 +3,7 @@
 import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
@@ -52,6 +53,7 @@ export async function enrollFactorAction(): Promise<
       uri: data.totp.uri,
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -145,6 +147,7 @@ export async function verifyEnrollmentAction(input: {
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -218,6 +221,7 @@ export async function unenrollFactorAction(input: {
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -328,6 +332,7 @@ export async function setOrgMfaPolicyAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the

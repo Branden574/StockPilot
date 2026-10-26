@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
 
 import { AuthCard } from '@/components/auth/auth-card';
-import { Button } from '@/components/ui/button';
-import { signOutAction } from '@/server/actions/auth';
+import { SignOutForm } from '@/components/auth/sign-out-form';
 
 import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/core';
 
@@ -24,15 +23,15 @@ export const metadata: Metadata = { title: 'Account disabled' };
  * this screen is for a CONFIRMED disable only — an unreadable status throws
  * instead, so a database problem renders the transient "Something went wrong"
  * boundary rather than telling an active user to call their administrator.
+ *
+ * Signing out is SignOutForm, a client component: before its request leaves,
+ * it removes what an interrupted run kept in this tab (lib/interrupted-run),
+ * which only the browser can do.
  */
 export default function AccountDisabledPage() {
   return (
     <AuthCard eyebrow="Account status" title={ACCOUNT_DISABLED_TITLE} description={ACCOUNT_DISABLED_MESSAGE}>
-      <form action={signOutAction}>
-        <Button type="submit" variant="outline" className="h-11 w-full text-[14px]">
-          Sign out
-        </Button>
-      </form>
+      <SignOutForm />
     </AuthCard>
   );
 }

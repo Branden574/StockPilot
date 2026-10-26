@@ -7,9 +7,10 @@
  * `sniffImage` (lib/image-signature.ts) is byte-pure and only ever needs the
  * first few kilobytes of a file, but all three of its callers used to
  * `download()` the ENTIRE object to feed it — up to the bucket's
- * file_size_limit (15 MB for maintenance-photos) buffered per finalize call,
- * for a verdict the first 4 KB decides. @supabase/storage-js exposes no range
- * option on `download()`, so the range request is made by hand:
+ * file_size_limit (10 MB for maintenance-photos and item-images, 5 MB for
+ * org-logos) buffered per call, for a verdict the first 4 KB decides.
+ * @supabase/storage-js exposes no range option on `download()`, so the range
+ * request is made by hand:
  *
  *   1. mint a short-lived signed URL for the object (through the SAME storage
  *      client the caller was downloading with, so an RLS-scoped client keeps
@@ -248,10 +249,12 @@ async function fetchLeadingWindow(
  * Memory is bounded by `expectedSize` — the full size storage's OWN response
  * headers declared on the window read — via the same read-then-cancel stream
  * walk the 200 path uses, so a misbehaving stream can never buffer more than
- * the size storage attested to (bucket caps keep that ≤ 15 MB, exactly what
- * the old always-full download() buffered on EVERY call). Null on any
- * failure: fail closed as unreadable — the callers' no-delete path — rather
- * than risk condemning a legitimate file on a partial second read.
+ * the size storage attested to, which the caller's bucket caps (15 MB for
+ * po-attachments and order-attachments, 10 MB for maintenance-photos and
+ * item-images, 5 MB for org-logos): no more than a whole download() buffers,
+ * and only in this rare case rather than on every call. Null on any failure:
+ * fail closed as unreadable — the callers' no-delete path — rather than risk
+ * condemning a legitimate file on a partial second read.
  */
 async function fetchWholeObject(
   signedUrl: string,

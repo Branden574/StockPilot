@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import type { RackHoldingLike } from '@stockpilot/core';
+import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
@@ -16,6 +16,14 @@ export interface ItemLookupMatch {
   barcode: string | null;
   charterId: string | null;
   charterName: string | null;
+  /**
+   * Where this record's stock is, by the one placement rule (core
+   * resolvePlacement): the racks or crate its holdings name when the stock is
+   * split or all in a crate, else its rack keys ("Rack 37-B"), else its rack
+   * text. Null when none is known. It was the raw rack text alone, which
+   * named one shelf for split stock, a rack the stock had left for crated
+   * stock, and nothing for a book whose rack lives in its rack keys.
+   */
   placementLabel: string | null;
   quantityOnHand: number;
   /**
@@ -36,12 +44,9 @@ export interface ItemLookupMatch {
   unitOfMeasure: string | null;
   /**
    * Rack/crate HOLDINGS (item_stock_levels) this item's stock actually
-   * sits on, when it's split across more than one — empty when unsplit
-   * or unplaced. `placementLabel` (bin_location) can be misleading for a
-   * split item (it names one rack while stock sits on several, and can
-   * go stale); a caller that wants to walk a picker to ALL of the stock
-   * should prefer this when it has length > 1. Additive field — existing
-   * consumers reading only `placementLabel` are unaffected.
+   * sits on — empty when unplaced. `placementLabel` already names every
+   * holding of a split item; this is the same truth as data, for a caller
+   * that lists the holdings itself.
    */
   rackHoldings: RackHoldingLike[];
 }
@@ -54,6 +59,8 @@ type LookupRow = {
   quantity_on_hand: number | null;
   charter_id: string | null;
   bin_location: string | null;
+  item_type: string | null;
+  custom_fields: Record<string, unknown> | null;
   charter: { name: string | null } | { name: string | null }[] | null;
   group_id: string | null;
   variant_size: string | null;
@@ -97,6 +104,7 @@ export async function GET(req: NextRequest) {
     .from('inventory_items')
     .select(
       `id, sku, name, barcode, quantity_on_hand, charter_id, bin_location,
+       item_type, custom_fields,
        group_id, variant_size, jersey_number, unit_of_measure,
        charter:charters!charter_id(name)`,
     )
@@ -128,21 +136,31 @@ export async function GET(req: NextRequest) {
     finalRows.map((r) => r.id),
   );
 
-  const matches: ItemLookupMatch[] = finalRows.map((row) => ({
-    id: row.id,
-    sku: row.sku,
-    name: row.name,
-    barcode: row.barcode,
-    charterId: row.charter_id,
-    charterName: embedCharterName(row.charter),
-    placementLabel: (row.bin_location ?? '').trim() || null,
-    quantityOnHand: Number(row.quantity_on_hand) || 0,
-    rackHoldings: rackHoldingsByItemId.get(row.id) ?? [],
-    groupId: row.group_id ?? null,
-    variantSize: row.variant_size ?? null,
-    jerseyNumber: row.jersey_number ?? null,
-    unitOfMeasure: row.unit_of_measure ?? null,
-  }));
+  const matches: ItemLookupMatch[] = finalRows.map((row) => {
+    const rackHoldings = rackHoldingsByItemId.get(row.id) ?? [];
+    return {
+      id: row.id,
+      sku: row.sku,
+      name: row.name,
+      barcode: row.barcode,
+      charterId: row.charter_id,
+      charterName: embedCharterName(row.charter),
+      placementLabel: formatPlacementLabel(
+        resolvePlacement({
+          itemType: row.item_type ?? null,
+          customFields: row.custom_fields ?? null,
+          binLocation: row.bin_location,
+          holdings: rackHoldings,
+        }),
+      ),
+      quantityOnHand: Number(row.quantity_on_hand) || 0,
+      rackHoldings,
+      groupId: row.group_id ?? null,
+      variantSize: row.variant_size ?? null,
+      jerseyNumber: row.jersey_number ?? null,
+      unitOfMeasure: row.unit_of_measure ?? null,
+    };
+  });
 
   return NextResponse.json({ matches });
 }

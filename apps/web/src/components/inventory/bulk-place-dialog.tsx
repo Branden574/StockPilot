@@ -52,6 +52,15 @@ import { Textarea } from '@/components/ui/textarea';
 
 import type { DestinationOption } from '@/lib/locations/destination-option';
 import {
+  BULK_PLACE_SEVERAL_WAREHOUSES_COPY,
+  bulkPlaceJoinWarehouseNote,
+  bulkPlaceWarehouseScope,
+  initialPlaceWarehouse,
+  PLACE_WAREHOUSE_HINT,
+  placeWarehouseOptions,
+  sharedItemWarehouse,
+} from '@/lib/locations/place-warehouse';
+import {
   destinationCrate,
   destinationFromFields,
   destinationIsRecordedStorage,
@@ -83,7 +92,11 @@ export interface BulkPlaceRow {
   itemType: string;
   sourceLocationId: string;
   quantity: number;
+  /** The holding's warehouse; null for the organization-level bucket (0194). */
   warehouseId: string | null;
+  /** The item's own warehouse, which the warehouse picker opens on when every
+   *  selected row with no warehouse shares it (B38). */
+  itemWarehouseId?: string | null;
   /** The book's recorded crate summary, for the aggregated change warning. */
   bookStorage?: BookStorageInfo | null;
 }
@@ -92,7 +105,8 @@ interface BulkPlaceDialogProps {
   rows: BulkPlaceRow[];
   /** warehouseId → rack/crate destinations (same map the per-item dialog uses). */
   destinationsMap: Record<string, DestinationOption[]>;
-  /** warehouseId → display name, for the new-rack confirmation copy. */
+  /** warehouseId → display name, for the new-rack confirmation copy, and the
+   *  warehouses a selection with no warehouse can be placed into (B38). */
   warehouseNames: Record<string, string>;
   /** Called after a successful (full or partial) place so the parent can clear selection. */
   onPlaced: () => void;
@@ -159,14 +173,24 @@ export function BulkPlaceDialog({
   } | null>(null);
 
   // All selected rows must share ONE warehouse — a rack belongs to a single
-  // warehouse, so a shared destination is only meaningful within one. Rows with
-  // no warehouse can't be placed.
-  const warehouseIds = React.useMemo(
-    () => [...new Set(rows.map((r) => r.warehouseId))],
-    [rows],
+  // warehouse, so a shared destination is only meaningful within one. A row in
+  // the organization-level bucket (0194) has none of its own (B38): it joins
+  // the one warehouse the other rows share, and when no row has one the person
+  // picks it. Rows from two warehouses are still refused.
+  const scope = React.useMemo(() => bulkPlaceWarehouseScope(rows), [rows]);
+  const warehouseOptions = React.useMemo(
+    () => placeWarehouseOptions(warehouseNames),
+    [warehouseNames],
   );
-  const singleWarehouse = warehouseIds.length === 1 && warehouseIds[0] != null;
-  const warehouseId = singleWarehouse ? (warehouseIds[0] as string) : null;
+  const [pickedWarehouseId, setPickedWarehouseId] = React.useState('');
+  const warehouseId =
+    scope.kind === 'one'
+      ? scope.warehouseId
+      : scope.kind === 'choose'
+        ? pickedWarehouseId || null
+        : null;
+  const singleWarehouse = warehouseId !== null;
+  const noWarehouseRows = rows.filter((r) => r.warehouseId === null).length;
   const destinations = warehouseId ? (destinationsMap[warehouseId] ?? []) : [];
   const warehouseName = warehouseId ? (warehouseNames[warehouseId] ?? null) : null;
 
@@ -200,6 +224,13 @@ export function BulkPlaceDialog({
     /* eslint-disable react-hooks/set-state-in-effect -- reset fields on open */
     setDestId('');
     setNotes('');
+    // No selected row has a warehouse: open on the one item warehouse they all
+    // share when the viewer can place there, else on the only one offered.
+    setPickedWarehouseId(
+      scope.kind === 'choose'
+        ? initialPlaceWarehouse(warehouseOptions, sharedItemWarehouse(rows))
+        : '',
+    );
     const seeded = seedDestinationFields(sharedStorage);
     setFields(seeded.fields);
     setUnknownCrateColor(seeded.unknownCrateColor);
@@ -211,7 +242,14 @@ export function BulkPlaceDialog({
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
     setPendingConfirm(null);
-  }, [destId, rackNumber, rackRow, crateColor, crateNumber]);
+  }, [destId, rackNumber, rackRow, crateColor, crateNumber, pickedWarehouseId]);
+
+  /** No selected row has a warehouse: the one the batch goes to. A rack
+   *  picked in the previous warehouse is not one of this one's, so it goes. */
+  function pickWarehouse(id: string) {
+    setPickedWarehouseId(id);
+    setDestId('');
+  }
 
   /** The dropdown, for an all-books batch, FILLS the four fields. */
   function pickExisting(id: string) {
@@ -592,14 +630,46 @@ export function BulkPlaceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {!singleWarehouse ? (
+        {scope.kind === 'several' ? (
           <p className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[13px]">
-            The selected items span multiple warehouses (or have none). Select items from a single
-            warehouse to place them together.
+            {BULK_PLACE_SEVERAL_WAREHOUSES_COPY}
           </p>
         ) : (
           <div className="space-y-3">
-            {allBooks ? (
+            {/* Rows in the organization-level bucket (B38). None of the
+                selection has a warehouse: pick it first. Some do: the others
+                join theirs, and the dialog says so. */}
+            {scope.kind === 'choose' ? (
+              <div className="space-y-1.5">
+                <Label id="bulk-warehouse-label">To warehouse</Label>
+                <Select value={pickedWarehouseId} onValueChange={pickWarehouse}>
+                  <SelectTrigger aria-labelledby="bulk-warehouse-label">
+                    <SelectValue placeholder="Select a warehouse" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {warehouseOptions.map((w) => (
+                      <SelectItem key={w.id} value={w.id}>
+                        {w.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-[12px]">{PLACE_WAREHOUSE_HINT}</p>
+              </div>
+            ) : noWarehouseRows > 0 ? (
+              <div className="space-y-1.5">
+                <Label>To warehouse</Label>
+                {/* Read only: the input's box on the sunk fill. */}
+                <div className="border-border bg-sunk text-muted-foreground flex h-8 items-center rounded-md border px-2.5 text-[13px] max-sm:h-11 max-sm:text-base">
+                  {warehouseName ?? 'The selected rows’ warehouse'}
+                </div>
+                <p className="text-muted-foreground text-[12px]">
+                  {bulkPlaceJoinWarehouseNote(noWarehouseRows, warehouseName ?? 'that warehouse')}
+                </p>
+              </div>
+            ) : null}
+
+            {!singleWarehouse ? null : allBooks ? (
               <>
                 {/* Where the batch is recorded today, when it is ONE place. */}
                 {sharedStorage && <CurrentStorageSummary storage={sharedStorage} />}

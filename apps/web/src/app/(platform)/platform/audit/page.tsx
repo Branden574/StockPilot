@@ -7,6 +7,7 @@ import { PlatformPage } from '@/components/platform/platform-page';
 import { PlatformTable } from '@/components/platform/platform-table';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
+import { formatExactUtc } from '@/lib/platform/last-active';
 import {
   platformAuditActorLabel,
   platformAuditTargetLabel,
@@ -70,7 +71,10 @@ export default async function PlatformAuditPage({
       <PlatformTable label="Platform audit" minWidth={980}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>When</TableHead>
+            {/* The trail spans organizations, so it is printed in UTC and says
+                so: this page renders on the server, and a bare toLocaleString()
+                printed the server's clock with no zone named (B9). */}
+            <TableHead title="In UTC.">When</TableHead>
             <TableHead>Actor</TableHead>
             <TableHead>Action</TableHead>
             {/* A disable is only auditable if you can see WHO it hit and WHY.
@@ -107,7 +111,7 @@ export default async function PlatformAuditPage({
               return (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                    {new Date(r.createdAt).toLocaleString()}
+                    {formatExactUtc(r.createdAt) ?? '—'}
                   </TableCell>
                   {/* An admin who deleted their account (0393) keeps the
                       email the row recorded: "Deleted user · email". */}

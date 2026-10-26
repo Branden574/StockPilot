@@ -42,10 +42,14 @@ function world(opts: {
   /** sha256 of the org's catalog token and of one link token (review 4). */
   catalogHash?: string;
   linkHash?: string;
+  /** The link row's own state (B22: a turned-off or expired link). */
+  linkState?: { active: boolean; expires_at: string | null };
+  /** The order's status (the map is for an order out for delivery). */
+  status?: string;
 }) {
   const order = {
     id: ORDER_ID,
-    status: 'completed',
+    status: opts.status ?? 'completed',
     requester_email: EMAIL,
     requester_name: 'Reggie',
     notes: null,
@@ -77,7 +81,18 @@ function world(opts: {
       opts.catalogHash ? [{ id: 'org-1', public_request_token_hash: opts.catalogHash }] : [],
     ),
     'public_request_links.select': servedLikePostgrest(
-      opts.linkHash ? [{ id: 'link-1', organization_id: 'org-1', token_hash: opts.linkHash }] : [],
+      opts.linkHash
+        ? [
+            {
+              id: 'link-1',
+              organization_id: 'org-1',
+              token_hash: opts.linkHash,
+              active: true,
+              expires_at: null,
+              ...opts.linkState,
+            },
+          ]
+        : [],
     ),
     'order_request_lines.select': {
       data: [{ id: 'l1', quantity_requested: 1, quantity_fulfilled: 1, returned_quantity: 0, item: { name: 'Polo' } }],
@@ -183,5 +198,45 @@ describe("public tracker: the requester's return link, side table first", () => 
     // The request's own track token still gets it.
     expect((await track(SIDE_TRACK)).json.returnPath).toBe(`/returns/request/${SIDE_RETURN}`);
     expect(JSON.stringify(byCatalog.json)).not.toContain(SIDE_RETURN);
+  });
+});
+
+// B22: /r/track accepts the token of a link that was turned off or has
+// expired, on purpose (923f8350c, #110): turning a link off stops new
+// requests through it; it must not strand an order already placed through it.
+// The caller still needs the order id and the requester's email, and gets the
+// redacted one-order view with no return link. Pinned here so an active or
+// expiry filter cannot be added to either route without a product decision.
+describe('public tracker: a link turned off or expired still tracks the orders placed through it', () => {
+  const LINK = 'e'.repeat(64);
+  for (const [name, linkState] of [
+    ['a turned-off', { active: false, expires_at: null }],
+    ['an expired', { active: true, expires_at: '2026-01-01T00:00:00Z' }],
+  ] as const) {
+    it(`${name} link's token opens the tracker and the live map, with no return link`, async () => {
+      world({
+        sideTrack: SIDE_TRACK,
+        sideReturn: SIDE_RETURN,
+        linkHash: sha256Hex(LINK),
+        linkState,
+        status: 'in_transit',
+      });
+      const res = await track(LINK);
+      expect(res.status).toBe(200);
+      expect(res.json.id).toBe(ORDER_ID);
+      expect(res.json.returnPath).toBeNull();
+      expect((await locate(LINK)).available).toBe(true);
+    });
+  }
+
+  it('the email must still match: a turned-off link with another email is the one 404', async () => {
+    world({ linkHash: sha256Hex(LINK), linkState: { active: false, expires_at: null } });
+    const res = await GET(
+      new NextRequest(
+        `https://test.local/api/v1/public/order-requests/${ORDER_ID}?email=other@example.com&token=${LINK}`,
+      ),
+      { params: Promise.resolve({ id: ORDER_ID }) },
+    );
+    expect(res.status).toBe(404);
   });
 });

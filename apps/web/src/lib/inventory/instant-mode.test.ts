@@ -87,6 +87,7 @@ describe('state adapters', () => {
       loc: ['l1'],
       charter: ['generic'],
       rack: '38-A',
+      group: null,
     });
     // Garbage coerces exactly like the pages do.
     expect(
