@@ -25,11 +25,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  distributeBundleAction,
-  previewBundleDistributionAction,
-} from '@/server/actions/bundles';
+import { distributeBundleAction, previewBundleDistributionAction } from '@/server/actions/bundles';
 import { cn, formatNumber } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 
 interface Preview {
   fromPhantom: number;
@@ -75,6 +74,10 @@ export function DistributeBundleModal({
 
   const [preview, setPreview] = React.useState<Preview | null>(null);
   const [previewing, setPreviewing] = React.useState(false);
+  // The preview call got no answer (B40). Try again bumps previewAttempt,
+  // which runs the effect again for the same quantity and warehouse.
+  const [previewFailed, setPreviewFailed] = React.useState(false);
+  const [previewAttempt, setPreviewAttempt] = React.useState(0);
 
   React.useEffect(() => {
     // Both early returns must clear `previewing`, not just `preview`. A previous
@@ -88,22 +91,38 @@ export function DistributeBundleModal({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setPreview(null);
       setPreviewing(false);
+      setPreviewFailed(false);
       return;
     }
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0 || !warehouseId) {
       setPreview(null);
       setPreviewing(false);
+      setPreviewFailed(false);
       return;
     }
     setPreviewing(true);
+    setPreviewFailed(false);
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
-      const res = await previewBundleDistributionAction({
-        id: bundleId,
-        quantity: qty,
-        warehouseId,
-      });
+      let res: Awaited<ReturnType<typeof previewBundleDistributionAction>>;
+      try {
+        res = await previewBundleDistributionAction({
+          id: bundleId,
+          quantity: qty,
+          warehouseId,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        if (ctrl.signal.aborted) return;
+        // No answer (offline, a server error, a deploy): the spinner used to
+        // stay on "Calculating preview…" with Distribute disabled for good.
+        setPreviewing(false);
+        setPreview(null);
+        setPreviewFailed(true);
+        return;
+      }
       if (ctrl.signal.aborted) return;
       setPreviewing(false);
       if (!res.ok) {
@@ -116,7 +135,7 @@ export function DistributeBundleModal({
       ctrl.abort();
       clearTimeout(t);
     };
-  }, [open, quantity, warehouseId, bundleId]);
+  }, [open, quantity, warehouseId, bundleId, previewAttempt]);
 
   async function submit() {
     const qty = Number(quantity);
@@ -130,15 +149,26 @@ export function DistributeBundleModal({
     }
     const allowShortage = preview?.hasShortage ?? false;
     setBusy(true);
-    const res = await distributeBundleAction({
-      id: bundleId,
-      quantity: qty,
-      warehouseId,
-      scheduleEventId: scheduleEventId === NO_EVENT ? null : scheduleEventId,
-      notes: notes.trim() || null,
-      allowShortage,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof distributeBundleAction>>;
+    try {
+      res = await distributeBundleAction({
+        id: bundleId,
+        quantity: qty,
+        warehouseId,
+        scheduleEventId: scheduleEventId === NO_EVENT ? null : scheduleEventId,
+        notes: notes.trim() || null,
+        allowShortage,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestUnconfirmedMessage('the kits were distributed', "the bundle's recent distributions"),
+      );
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -166,8 +196,8 @@ export function DistributeBundleModal({
         <DialogHeader>
           <DialogTitle>Distribute {bundleName}</DialogTitle>
           <DialogDescription>
-            Drains pre-assembled kits first, then components for any
-            remainder. Live preview shows what will be drawn.
+            Drains pre-assembled kits first, then components for any remainder. Live preview shows
+            what will be drawn.
           </DialogDescription>
         </DialogHeader>
 
@@ -205,11 +235,7 @@ export function DistributeBundleModal({
           {upcomingEvents.length > 0 && (
             <div className="space-y-1.5">
               <Label htmlFor="dist-event">Linked event (optional)</Label>
-              <Select
-                value={scheduleEventId}
-                onValueChange={setScheduleEventId}
-                disabled={busy}
-              >
+              <Select value={scheduleEventId} onValueChange={setScheduleEventId} disabled={busy}>
                 <SelectTrigger id="dist-event">
                   <SelectValue />
                 </SelectTrigger>
@@ -241,7 +267,12 @@ export function DistributeBundleModal({
             />
           </div>
 
-          <PreviewBlock preview={preview} previewing={previewing} />
+          <PreviewBlock
+            preview={preview}
+            previewing={previewing}
+            failed={previewFailed}
+            onRetry={() => setPreviewAttempt((n) => n + 1)}
+          />
         </div>
 
         <DialogFooter>
@@ -267,15 +298,32 @@ export function DistributeBundleModal({
 function PreviewBlock({
   preview,
   previewing,
+  failed,
+  onRetry,
 }: {
   preview: Preview | null;
   previewing: boolean;
+  failed: boolean;
+  onRetry: () => void;
 }) {
   if (previewing && !preview) {
     return (
       <div className="border-border bg-sunk text-muted-foreground rounded-md border p-3 text-[12.5px]">
         <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
         Calculating preview…
+      </div>
+    );
+  }
+  if (failed && !previewing) {
+    return (
+      <div
+        role="alert"
+        className="border-border flex items-center justify-between gap-3 rounded-md border p-3 text-[12.5px]"
+      >
+        <span className="text-destructive">{requestFailedMessage('load the preview')}</span>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Try again
+        </Button>
       </div>
     );
   }
@@ -325,14 +373,10 @@ function PreviewBlock({
                   <span className="flex-1 truncate">
                     {c.itemName}
                     {c.isOptional && (
-                      <span className="text-muted-foreground ml-1 text-[11px]">
-                        (optional)
-                      </span>
+                      <span className="text-muted-foreground ml-1 text-[11px]">(optional)</span>
                     )}
                   </span>
-                  <span className="tabular-nums">
-                    -{formatNumber(c.drawnFromComponents)}
-                  </span>
+                  <span className="tabular-nums">-{formatNumber(c.drawnFromComponents)}</span>
                   {c.shortage > 0 && !c.isOptional && (
                     <span className="text-destructive inline-flex items-center gap-1 font-semibold tabular-nums">
                       <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
@@ -344,9 +388,9 @@ function PreviewBlock({
             </div>
             {preview.hasShortage && (
               <p className="mt-2 text-[12px] font-medium">
-                Distribution will record {formatNumber(preview.totalShortageUnits)}{' '}
-                missing unit{preview.totalShortageUnits === 1 ? '' : 's'} as a
-                shortage marker. Confirm to proceed.
+                Distribution will record {formatNumber(preview.totalShortageUnits)} missing unit
+                {preview.totalShortageUnits === 1 ? '' : 's'} as a shortage marker. Confirm to
+                proceed.
               </p>
             )}
           </div>

@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  CheckCircle2,
-  FileUp,
-  Loader2,
-  Sparkles,
-  Trash2,
-  XCircle,
-} from 'lucide-react';
+import { CheckCircle2, FileUp, Loader2, Sparkles, Trash2, XCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -28,6 +21,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { bulkCreateBooksAction } from '@/server/actions/books-bulk-import';
 
 import { isbnSearchKeys } from '@stockpilot/core';
@@ -100,8 +95,7 @@ export function BulkIsbnImport({
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const endpoint =
-        mode === 'ai' ? '/api/books/extract-isbns-ai' : '/api/books/extract-isbns';
+      const endpoint = mode === 'ai' ? '/api/books/extract-isbns-ai' : '/api/books/extract-isbns';
       const res = await fetch(endpoint, { method: 'POST', body: fd });
       const json = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -112,7 +106,9 @@ export function BulkIsbnImport({
         message?: string;
       };
       if (!res.ok || !json.ok) {
-        toast.error(json.message ?? `Couldn't parse "${file.name}" (${res.status}). Try a different file.`);
+        toast.error(
+          json.message ?? `Couldn't parse "${file.name}" (${res.status}). Try a different file.`,
+        );
         return;
       }
       const found = json.isbns ?? [];
@@ -134,7 +130,11 @@ export function BulkIsbnImport({
         `${label} ${found.length} ISBN${found.length === 1 ? '' : 's'} from "${file.name}".`,
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't upload the file. Check your network and try again.");
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't upload the file. Check your network and try again.",
+      );
     } finally {
       setBusy(false);
       // Reset the input so the same file can be uploaded again if needed.
@@ -261,16 +261,12 @@ export function BulkIsbnImport({
         setResolved((prev) => prev.map((r) => (r.isbn === isbn ? { ...r, ...partial } : r)));
       }
     }
-    await Promise.all(
-      Array.from({ length: Math.min(LOOKUP_CONCURRENCY, isbns.length) }, worker),
-    );
+    await Promise.all(Array.from({ length: Math.min(LOOKUP_CONCURRENCY, isbns.length) }, worker));
     setScanning(false);
   }
 
   function updateRow(i: number, patch: Partial<Resolved>) {
-    setResolved((prev) =>
-      prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)),
-    );
+    setResolved((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
 
   function removeRow(i: number) {
@@ -288,25 +284,34 @@ export function BulkIsbnImport({
       return;
     }
     setSubmitting(true);
-    const r = await bulkCreateBooksAction({
-      warehouseId,
-      charterId: charterId === '__generic__' ? null : charterId,
-      books: ready.map((b) => ({
-        isbn: b.isbn,
-        title: b.title!,
-        author: b.author,
-        description: b.description,
-        thumbnailUrl: b.thumbnailUrl,
-        publisher: b.publisher,
-        publishedDate: b.publishedDate,
-        pageCount: b.pageCount,
-        grade: b.grade,
-        quantityOnHand: Math.max(0, b.quantity || 0),
-        unitCost: 0,
-        retailPrice: 0,
-      })),
-    });
-    setSubmitting(false);
+    let r: Awaited<ReturnType<typeof bulkCreateBooksAction>>;
+    try {
+      r = await bulkCreateBooksAction({
+        warehouseId,
+        charterId: charterId === '__generic__' ? null : charterId,
+        books: ready.map((b) => ({
+          isbn: b.isbn,
+          title: b.title!,
+          author: b.author,
+          description: b.description,
+          thumbnailUrl: b.thumbnailUrl,
+          publisher: b.publisher,
+          publishedDate: b.publishedDate,
+          pageCount: b.pageCount,
+          grade: b.grade,
+          quantityOnHand: Math.max(0, b.quantity || 0),
+          unitCost: 0,
+          retailPrice: 0,
+        })),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('import the books'));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -317,9 +322,7 @@ export function BulkIsbnImport({
         `Created ${created}, skipped ${skipped}, ${errors.length} failed. Open the books page to retry the failures.`,
       );
     } else if (skipped > 0) {
-      toast.success(
-        `Created ${created} · ${skipped} already existed (matched by ISBN/SKU).`,
-      );
+      toast.success(`Created ${created} · ${skipped} already existed (matched by ISBN/SKU).`);
       router.push(resolveListReturnHref('/dashboard/books', null));
     } else {
       toast.success(`Created ${created} book${created === 1 ? '' : 's'}.`);
@@ -329,9 +332,7 @@ export function BulkIsbnImport({
 
   const ready = resolved.filter((r) => r.status === 'ready');
   const failed = resolved.filter((r) => r.status === 'failed');
-  const inFlight = resolved.filter(
-    (r) => r.status === 'pending' || r.status === 'looking_up',
-  );
+  const inFlight = resolved.filter((r) => r.status === 'pending' || r.status === 'looking_up');
 
   const done = resolved.length - inFlight.length;
 
@@ -466,21 +467,15 @@ export function BulkIsbnImport({
             className="font-mono text-[12.5px]"
           />
           <p className="text-muted-foreground text-[12px] leading-[18px]">
-            Up to 200 per batch. The system runs Google Books, Open Library,
-            Open Library Search, and the Library of Congress in parallel for
-            each ISBN. When all four come up empty (often the case for
-            HMH / Pearson / McGraw-Hill academic ISBNs), Gemini is used as
-            a fallback — only the entries it identifies with high or
-            medium confidence are kept.
+            Up to 200 per batch. The system runs Google Books, Open Library, Open Library Search,
+            and the Library of Congress in parallel for each ISBN. When all four come up empty
+            (often the case for HMH / Pearson / McGraw-Hill academic ISBNs), Gemini is used as a
+            fallback — only the entries it identifies with high or medium confidence are kept.
           </p>
         </div>
 
         <div className="border-border -mx-[18px] -mb-[18px] flex flex-wrap items-center gap-2 border-t px-[18px] py-3.5">
-          <Button
-            onClick={runLookups}
-            disabled={scanning || submitting}
-            variant="gradient"
-          >
+          <Button onClick={runLookups} disabled={scanning || submitting} variant="gradient">
             {scanning ? (
               <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
             ) : (
@@ -616,10 +611,7 @@ export function BulkIsbnImport({
                         value={r.quantity}
                         onChange={(e) =>
                           updateRow(i, {
-                            quantity: Math.max(
-                              0,
-                              Number.parseInt(e.target.value, 10) || 0,
-                            ),
+                            quantity: Math.max(0, Number.parseInt(e.target.value, 10) || 0),
                           })
                         }
                         placeholder="Qty"

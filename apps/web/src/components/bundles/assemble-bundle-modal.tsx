@@ -26,6 +26,8 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { assembleBundleAction } from '@/server/actions/bundles';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 
 interface Props {
   bundleId: string;
@@ -66,20 +68,29 @@ export function AssembleBundleModal({
       return;
     }
     setBusy(true);
-    const res = await assembleBundleAction({
-      id: bundleId,
-      quantity: qty,
-      warehouseId,
-      notes: notes.trim() || null,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof assembleBundleAction>>;
+    try {
+      res = await assembleBundleAction({
+        id: bundleId,
+        quantity: qty,
+        warehouseId,
+        notes: notes.trim() || null,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestUnconfirmedMessage('the kits were assembled', "the bundle's pre-assembled stock"),
+      );
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(
-      `Pre-assembled ${qty} ${bundleName} kit${qty === 1 ? '' : 's'}.`,
-    );
+    toast.success(`Pre-assembled ${qty} ${bundleName} kit${qty === 1 ? '' : 's'}.`);
     setOpen(false);
     router.refresh();
   }
@@ -96,8 +107,8 @@ export function AssembleBundleModal({
         <DialogHeader>
           <DialogTitle>Assemble {bundleName}</DialogTitle>
           <DialogDescription>
-            Decrements the listed components and increments the phantom kit
-            count by the chosen quantity.
+            Decrements the listed components and increments the phantom kit count by the chosen
+            quantity.
           </DialogDescription>
         </DialogHeader>
 

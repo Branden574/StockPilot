@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 /**
  * The Assemble dialog (matrix W-CA-11b): Quantity, Warehouse and Notes, the
  * warehouse locked to where the pre-assembled kits already are, and the
@@ -82,5 +85,25 @@ describe('AssembleBundleModal', () => {
     });
     expect(mockToast.error).toHaveBeenCalledWith('Enter a positive quantity.');
     expect(mockAssemble).not.toHaveBeenCalled();
+  });
+});
+
+// B40: an Assemble that got no answer (offline, a server error, a deploy) left
+// the dialog spinning for good with nothing said. Kits may have been assembled
+// before the answer was lost, so the message says to look before trying again.
+describe('AssembleBundleModal when the request gets no answer', () => {
+  it('stops the spinner, keeps the dialog and says to check the stock before trying again', async () => {
+    mockAssemble.mockRejectedValueOnce(offline());
+    open(null);
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '2' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Assemble' }));
+    });
+    expect(mockToast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage('the kits were assembled', "the bundle's pre-assembled stock"),
+    );
+    expect(screen.getByRole('button', { name: 'Assemble' })).toBeEnabled();
+    expect(screen.getByLabelText('Quantity')).toHaveValue(2);
+    expect(mockToast.success).not.toHaveBeenCalled();
   });
 });

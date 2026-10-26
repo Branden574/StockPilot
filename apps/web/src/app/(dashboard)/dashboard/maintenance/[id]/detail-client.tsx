@@ -4,7 +4,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { MaintenancePhotosPanel, type PanelPhoto } from '@/components/maintenance/maintenance-photos-panel';
+import {
+  MaintenancePhotosPanel,
+  type PanelPhoto,
+} from '@/components/maintenance/maintenance-photos-panel';
 import { ResolveRequestDialog } from '@/components/maintenance/resolve-request-dialog';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -12,6 +15,8 @@ import {
   archiveMaintenanceRequestAction,
   cancelMaintenanceRequestAction,
 } from '@/server/actions/maintenance-requests';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 /**
  * Page-specific glue, not reusable components — kept colocated with the
@@ -29,7 +34,13 @@ export function MaintenancePhotosPanelClient({
   photos: PanelPhoto[];
 }) {
   const router = useRouter();
-  return <MaintenancePhotosPanel requestId={requestId} photos={photos} onChange={() => router.refresh()} />;
+  return (
+    <MaintenancePhotosPanel
+      requestId={requestId}
+      photos={photos}
+      onChange={() => router.refresh()}
+    />
+  );
 }
 
 interface ActionsProps {
@@ -80,8 +91,18 @@ export function MaintenanceRequestActions({
 
   async function doArchive() {
     setPending(true);
-    const res = await archiveMaintenanceRequestAction(requestId);
-    setPending(false);
+    let res: Awaited<ReturnType<typeof archiveMaintenanceRequestAction>>;
+    try {
+      res = await archiveMaintenanceRequestAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setArchiveOpen(false);
+      toast.error(requestFailedMessage('archive the request'));
+      return;
+    } finally {
+      setPending(false);
+    }
     setArchiveOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);
@@ -93,8 +114,18 @@ export function MaintenanceRequestActions({
 
   async function doCancel() {
     setPending(true);
-    const res = await cancelMaintenanceRequestAction(requestId);
-    setPending(false);
+    let res: Awaited<ReturnType<typeof cancelMaintenanceRequestAction>>;
+    try {
+      res = await cancelMaintenanceRequestAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setCancelOpen(false);
+      toast.error(requestFailedMessage('cancel the request'));
+      return;
+    } finally {
+      setPending(false);
+    }
     setCancelOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);

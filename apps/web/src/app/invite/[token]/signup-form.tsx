@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { acceptInviteWithSignupAction } from '@/server/actions/team';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 interface InviteSignupFormProps {
   token: string;
@@ -34,12 +36,21 @@ export function InviteSignupForm({ token, email }: InviteSignupFormProps) {
       return;
     }
     setSubmitting(true);
-    const res = await acceptInviteWithSignupAction({
-      token,
-      password,
-      fullName: fullName.trim() || undefined,
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof acceptInviteWithSignupAction>>;
+    try {
+      res = await acceptInviteWithSignupAction({
+        token,
+        password,
+        fullName: fullName.trim() || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('create your account'));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

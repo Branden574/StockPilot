@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { createCheckoutSessionAction, createPortalSessionAction } from '@/server/actions/billing';
 
 import type { PlanId } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 export function BillingActions({
   currentPlan,
@@ -20,8 +22,17 @@ export function BillingActions({
 
   async function startCheckout(plan: 'pro' | 'business', interval: 'monthly' | 'yearly') {
     setLoading(`${plan}-${interval}`);
-    const res = await createCheckoutSessionAction({ plan, interval });
-    setLoading(null);
+    let res: Awaited<ReturnType<typeof createCheckoutSessionAction>>;
+    try {
+      res = await createCheckoutSessionAction({ plan, interval });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('open checkout'));
+      return;
+    } finally {
+      setLoading(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -31,8 +42,17 @@ export function BillingActions({
 
   async function openPortal() {
     setLoading('portal');
-    const res = await createPortalSessionAction();
-    setLoading(null);
+    let res: Awaited<ReturnType<typeof createPortalSessionAction>>;
+    try {
+      res = await createPortalSessionAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('open the billing portal'));
+      return;
+    } finally {
+      setLoading(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

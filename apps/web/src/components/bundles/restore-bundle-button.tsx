@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { restoreBundleAction } from '@/server/actions/bundles';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 /**
  * Restore button for archived bundles. Pairs with ArchiveBundleButton —
@@ -28,8 +30,17 @@ export function RestoreBundleButton({
 
   async function confirmRestore() {
     setBusy(true);
-    const res = await restoreBundleAction(bundleId);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof restoreBundleAction>>;
+    try {
+      res = await restoreBundleAction(bundleId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('restore the bundle'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

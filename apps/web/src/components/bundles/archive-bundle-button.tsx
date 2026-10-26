@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { archiveBundleAction } from '@/server/actions/bundles';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 export function ArchiveBundleButton({
   bundleId,
@@ -22,8 +24,17 @@ export function ArchiveBundleButton({
 
   async function confirmArchive() {
     setBusy(true);
-    const res = await archiveBundleAction(bundleId);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof archiveBundleAction>>;
+    try {
+      res = await archiveBundleAction(bundleId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('archive the bundle'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -49,8 +60,8 @@ export function ArchiveBundleButton({
         title={`Archive "${bundleName}"?`}
         description={
           <>
-            The bundle is hidden from the active list. Existing distributions stay readable
-            and on the audit trail. You can restore the bundle later from the{' '}
+            The bundle is hidden from the active list. Existing distributions stay readable and on
+            the audit trail. You can restore the bundle later from the{' '}
             <strong>Archived view</strong>.
           </>
         }

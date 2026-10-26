@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -204,5 +207,42 @@ describe('DistributeBundleModal — fields and the shortage confirmation (redesi
       expect.objectContaining({ allowShortage: false }),
     );
     expect(mockToast.success).toHaveBeenCalledWith('Distributed 1 Field Kit kit.');
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) left
+// the dialog spinning for good with nothing said.
+describe('DistributeBundleModal when a request gets no answer', () => {
+  it('Distribute stops its spinner and says to check the distributions before trying again', async () => {
+    mockDistributeAction.mockRejectedValueOnce(offline());
+    renderModal();
+    await openAndSettle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Distribute 1 kit' }));
+    });
+    expect(mockToast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage('the kits were distributed', "the bundle's recent distributions"),
+    );
+    expect(screen.getByRole('button', { name: 'Distribute 1 kit' })).toBeEnabled();
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it('a preview with no answer stops Calculating preview, says so, and Try again asks again', async () => {
+    mockPreviewAction.mockReset();
+    mockPreviewAction.mockRejectedValueOnce(offline());
+    mockPreviewAction.mockResolvedValue({ ok: true, data: PREVIEW });
+    renderModal();
+    await openAndSettle();
+
+    expect(screen.queryByText(CALCULATING)).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(requestFailedMessage('load the preview'));
+    expect(screen.getByRole('button', { name: 'Distribute 1 kit' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await settle();
+    expect(mockPreviewAction).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/from pre-assembled stock/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Distribute 1 kit' })).toBeEnabled();
   });
 });
