@@ -25,7 +25,8 @@ import ts from 'typescript';
  * WHAT CAN REJECT. A call to a Server Action (imported from a `'use server'`
  * module), `fetch`, and any function whose body can reject: it throws, or
  * awaits or returns a call that can reject, outside a try block that has a
- * catch. Followed across modules by import and, inside a component, to the
+ * catch. `if (isControlFlow(e)) throw e;` does not count: it passes on only a
+ * redirect, while the router is already navigating. Followed across modules by import and, inside a component, to the
  * functions declared there (`const load = useCallback(async () => ...)`).
  * Not followed: methods of objects (a Supabase query, which answers
  * `{ error }` instead of rejecting), functions passed in as props, and values
@@ -491,7 +492,7 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
         return;
       }
       if (!caught) {
-        if (ts.isThrowStatement(n)) {
+        if (ts.isThrowStatement(n) && !isControlFlowRethrow(n)) {
           why = 'throw';
           return;
         }
@@ -645,7 +646,7 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
           const r = ts.isCallExpression(e) ? callRejects(info, e) : null;
           if (r) risks.push({ pos: n.getStart(sf), node: n, kind: 'await', reaches: r });
         }
-        if (ts.isThrowStatement(n)) {
+        if (ts.isThrowStatement(n) && !isControlFlowRethrow(n)) {
           risks.push({ pos: n.getStart(sf), node: n, kind: 'throw', reaches: 'throw' });
         }
         ts.forEachChild(n, walk);
@@ -901,6 +902,23 @@ function callsFlag(node: ts.Node, flag: string): boolean {
   };
   visit(node);
   return found;
+}
+
+/**
+ * `if (isControlFlow(e)) throw e;`: passes on only Next's control flow (a
+ * redirect to sign-in), when the router is already navigating. A flag it
+ * leaves set does not matter, so it is not a rejection here.
+ */
+function isControlFlowRethrow(st: ts.ThrowStatement): boolean {
+  let p: ts.Node = st.parent;
+  if (ts.isBlock(p) && p.statements.length === 1) p = p.parent;
+  if (!ts.isIfStatement(p) || p.elseStatement) return false;
+  const cond = unwrap(p.expression);
+  return (
+    ts.isCallExpression(cond) &&
+    ts.isIdentifier(unwrap(cond.expression)) &&
+    (unwrap(cond.expression) as ts.Identifier).text === 'isControlFlow'
+  );
 }
 
 /** `if (isControlFlow(e)) return ...;`: keeps the flag while the router navigates. */
