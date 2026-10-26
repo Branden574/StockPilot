@@ -28,6 +28,7 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -140,6 +141,8 @@ function CycleCountScanScreenInner() {
       // answered, then takes the next scan: left busy for good, it ignored
       // every scan after this one; freed at once, the camera still on the
       // code ran the same refused save every 600 ms in Burst, one alert each.
+      // A store failure is reported to the team (phone-save-report.ts).
+      reportPhoneSaveFailure(e, 'cycle-count.scan');
       const free = () => setBusy(false);
       const { title, message } = countNotSavedAlert(e);
       Alert.alert(title, message, [{ text: 'OK', onPress: free }], {

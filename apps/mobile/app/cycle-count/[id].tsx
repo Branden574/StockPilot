@@ -59,6 +59,7 @@ import {
   type MobileCountLinkedExceptions,
 } from '@/lib/exceptions-api';
 import { createDraftDebouncer } from '@/lib/draft-debouncer';
+import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
@@ -251,7 +252,10 @@ export default function CycleCountDetail() {
           // Not saved and not queued: the outbox refused it (no account, or
           // the workspace still loading) or the phone's store failed. Said
           // (count-save-refusal.ts); the box keeps the number, so Post still
-          // waits for it, and Try again saves it again.
+          // waits for it, and Try again saves it again. A store failure is
+          // reported to the team (phone-save-report.ts), as it was when it
+          // escaped unhandled.
+          reportPhoneSaveFailure(e, 'cycle-count.save');
           const { title, message } = countNotSavedAlert(e);
           Alert.alert(title, message, [
             { text: 'Cancel', style: 'cancel' },

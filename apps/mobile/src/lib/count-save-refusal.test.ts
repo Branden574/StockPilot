@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
 import {
@@ -11,6 +11,7 @@ import {
   OutboxWorkspaceLoadingError,
   outboxRefusalSentence,
 } from './outbox-scope';
+import { reportPhoneSaveFailure } from './phone-save-report';
 
 /**
  * docket B10, integrator decision 2: updateLocalLine now refuses a count
@@ -24,6 +25,18 @@ import {
  */
 
 const LOADING = 'Your workspace is still loading. Try again in a moment.';
+
+// reportPhoneSaveFailure runs for real; only Sentry itself is stood in for.
+const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock('./sentry', () => ({ Sentry: sentry }));
+
+beforeEach(() => {
+  sentry.captureException.mockReset();
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 const NO_ACCOUNT = 'No signed-in account to queue this change for. Sign in and try again.';
 
 /** Lets a fire-and-forget save (`void (async () => ...)()`) finish. */
@@ -92,6 +105,7 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
       countFromBox: screenFunction(COUNT, 'countFromBox', {}),
       updateLocalLine,
       countNotSavedAlert,
+      reportPhoneSaveFailure,
       Alert: { alert },
       setLines,
       setDraft,
@@ -126,15 +140,20 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
 
     buttons[1]!.onPress!();
     expect(saver.schedule).toHaveBeenCalledWith('l1', '7');
+    // Expected and retryable: never reported to the team.
+    expect(sentry.captureException).not.toHaveBeenCalled();
   });
 
-  it("the phone's store failing is said too", async () => {
-    const { saver, alert } = lineSaver(
-      vi.fn(async () => Promise.reject(new Error('SQLITE_IOERR: disk I/O error'))),
-    );
+  it("the phone's store failing is said too, and reported to the team", async () => {
+    const disk = new Error('SQLITE_IOERR: disk I/O error');
+    const { saver, alert } = lineSaver(vi.fn(async () => Promise.reject(disk)));
     saver.persist('l1', '7');
     await settle();
     expect(alert.mock.calls[0]?.slice(0, 2)).toEqual(['Count not saved', COUNT_NOT_SAVED_ON_PHONE]);
+    // Caught to say it, so no longer an unhandled rejection Sentry reports.
+    expect(sentry.captureException).toHaveBeenCalledWith(disk, {
+      tags: { area: 'cycle-count.save' },
+    });
   });
 
   it('a saved count is marked saved and sent, with nothing said', async () => {
@@ -163,6 +182,7 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
         setBusy,
         updateLocalLine,
         countNotSavedAlert,
+        reportPhoneSaveFailure,
         Alert: { alert },
         setScannedMap,
         setLines: vi.fn(),
@@ -196,6 +216,17 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
     expect(options.cancelable).toBe(true);
     options.onDismiss!();
     expect(setBusy.mock.calls.at(-1)).toEqual([false]);
+    expect(sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("the phone's store failing is said and reported to the team", async () => {
+    const disk = new Error('SQLITE_FULL: database or disk is full');
+    const { run, alert } = recordCount(vi.fn(async () => Promise.reject(disk)));
+    await expect(run({ id: 'l1' }, 3)).resolves.toBe(false);
+    expect(alert.mock.calls[0]?.slice(0, 2)).toEqual(['Count not saved', COUNT_NOT_SAVED_ON_PHONE]);
+    expect(sentry.captureException).toHaveBeenCalledWith(disk, {
+      tags: { area: 'cycle-count.scan' },
+    });
   });
 
   /**

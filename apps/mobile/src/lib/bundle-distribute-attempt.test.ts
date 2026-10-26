@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction } from './__fixtures__/screen-functions';
 import {
@@ -8,6 +8,7 @@ import {
   type DistributeKey,
 } from './bundle-distribute-attempt';
 import { OutboxOwnerUnknownError, OutboxWorkspaceLoadingError } from './outbox-scope';
+import { reportPhoneSaveFailure } from './phone-save-report';
 
 /**
  * docket B10, integrator decision 2: the outbox now refuses a new row while
@@ -20,6 +21,10 @@ import { OutboxOwnerUnknownError, OutboxWorkspaceLoadingError } from './outbox-s
  */
 
 const LOADING = 'Your workspace is still loading. Try again in a moment.';
+
+// reportPhoneSaveFailure runs for real; only Sentry itself is stood in for.
+const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock('./sentry', () => ({ Sentry: sentry }));
 
 describe('one distribution, one key', () => {
   const req = { bundleId: 'b1', quantity: 2, warehouseId: 'w1', allowShortage: false };
@@ -90,7 +95,14 @@ describe('the Distribute screen (app/bundles/[id].tsx) when the queue refuses', 
     keptKey = { current: null };
     minted = 0;
     qty = '2';
-    for (const fn of [api, enqueue, alert, setBusy, syncNow]) fn.mockReset();
+    for (const fn of [api, enqueue, alert, setBusy, syncNow, sentry.captureException]) {
+      fn.mockReset();
+    }
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function distribute(): Promise<void> {
@@ -111,6 +123,7 @@ describe('the Distribute screen (app/bundles/[id].tsx) when the queue refuses', 
       router: { back: vi.fn() },
       enqueue,
       syncNow,
+      reportPhoneSaveFailure,
     })();
   }
 
@@ -178,5 +191,22 @@ describe('the Distribute screen (app/bundles/[id].tsx) when the queue refuses', 
     expect(alert.mock.calls.at(-1)).toEqual(['Could not distribute', 'Not enough stock']);
 
     expect(sentKeys()).toEqual(['key-1', 'key-2']);
+  });
+
+  it("a store failure while queueing is reported to the team; the outbox's refusal is not", async () => {
+    const disk = new Error('SQLITE_FULL: database or disk is full');
+    api.mockRejectedValueOnce(new Error('Network request failed'));
+    enqueue.mockRejectedValueOnce(disk);
+    await distribute();
+    expect(sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(sentry.captureException).toHaveBeenCalledWith(disk, {
+      tags: { area: 'bundle.distribute.queue' },
+    });
+    expect(alert.mock.calls.at(-1)?.[1]).toMatch(/This phone could not save it\. Try again\.$/);
+
+    api.mockRejectedValueOnce(new Error('Network request failed'));
+    enqueue.mockRejectedValueOnce(new OutboxWorkspaceLoadingError());
+    await distribute();
+    expect(sentry.captureException).toHaveBeenCalledTimes(1);
   });
 });

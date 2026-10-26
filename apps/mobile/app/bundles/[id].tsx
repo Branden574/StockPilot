@@ -42,6 +42,7 @@ import {
   type CachedItem,
   type CachedWarehouse,
 } from '@/lib/db-reads';
+import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { enqueue, newIdempotencyKey } from '@/lib/queue';
 import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
@@ -271,7 +272,9 @@ export default function BundleDetail() {
       } catch (queueError) {
         // The outbox refused it (no account, or the workspace still loading)
         // or the phone's store failed. Said, where it used to escape unseen;
-        // the key is kept, so trying again sends this same request.
+        // the key is kept, so trying again sends this same request. A store
+        // failure is reported to the team (phone-save-report.ts).
+        reportPhoneSaveFailure(queueError, 'bundle.distribute.queue');
         outcomeUnknown = true;
         const { title, message } = distributeNotSavedAlert(e, queueError);
         Alert.alert(title, message);
