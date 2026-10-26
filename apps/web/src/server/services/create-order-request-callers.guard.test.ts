@@ -122,6 +122,13 @@ describe('every client write of order_request_lines is a known, gated writer (04
       /['"`]_order_request_line_top_up['"`]/.test(readFileSync(f, 'utf8')),
     );
     expect(callers).toEqual([]);
+    // The partial-change path is gone: nothing names its refusal or words, and
+    // the one order-requests.ts UPDATE above is updateLineQuantity's (Add
+    // items writes no line with the admin client any more).
+    const partial = FILES.filter((f) =>
+      /\baddLinesPartialRefusal\b|\bADD_LINES_PARTIAL_COPY\b|\bfailAfterWrite\b/.test(readFileSync(f, 'utf8')),
+    );
+    expect(partial).toEqual([]);
   });
 
   it('control: the census sees a multi-line builder chain', () => {

@@ -1354,6 +1354,7 @@ WEB_TESTS=(
   src/server/services/po-imports.charter-decoupling.test.ts
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts
+  src/server/services/inventory.order-catalog-visible.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

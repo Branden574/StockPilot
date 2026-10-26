@@ -138,6 +138,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+// ─── What the service may write ─────────────────────────────────────────────
+
+describe('the service writes through the one function only', () => {
+  it('never names public_visibility, and writes no table directly (design 11.1 row 6)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const src = readFileSync(path.resolve(__dirname, 'order-catalog-visibility.ts'), 'utf8');
+    expect(src).not.toMatch(/public_visibility/);
+    expect(src).not.toMatch(/\.(insert|update|upsert|delete)\s*\(/);
+    expect(src.match(/\.rpc\(/g)).toHaveLength(1);
+    expect(src).toContain("rpc('set_order_catalog_visibility'");
+  });
+});
+
 // ─── The rollout switch ─────────────────────────────────────────────────────
 
 describe('orderItemsManageEnabled (ORDER_ITEMS_MANAGE_ORGS)', () => {

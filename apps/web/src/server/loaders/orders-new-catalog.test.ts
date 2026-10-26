@@ -1586,6 +1586,22 @@ describe('loadCatalogItems: an item hidden after a cached read is never offered'
     expect(value.readStartedAt).toBeLessThanOrEqual(Date.now());
   });
 
+  it('aisles and counts are built without the hidden size (design 11.1 row 7)', async () => {
+    // Hide XS, leave S and M: the bundle's cards and its aisle count shrink.
+    const admin = makeFilteringAdmin([
+      { ...shown('x-xs'), order_catalog_visible: false, order_catalog_visibility_changed_at: iso(T0) },
+      shown('x-s'),
+      shown('x-m'),
+    ]);
+    createAdminClientMock.mockReturnValue(admin.client);
+
+    const bundle = await loadCatalogBundle(viewer('owner'), WH);
+
+    expect(bundle.items.map((i) => i.id).sort()).toEqual(['x-m', 'x-s']);
+    const total = bundle.aisles.reduce((n, a) => n + a.itemCount, 0);
+    expect(total).toBe(2);
+  });
+
   it('a hidden item never enters a fresh entry (the items read filters it)', async () => {
     const admin = makeFilteringAdmin([shown('g-x'), hiddenAt('g-y', T0 - 3_600_000)]);
     createAdminClientMock.mockReturnValue(admin.client);
