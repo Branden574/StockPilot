@@ -1096,8 +1096,14 @@ select is(
   'order_return_token_ensure(uuid)|bb1b6bd6103c3e2289c93bc914c91aeb\n'
   -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
   -- (0395 R2); the draw reversal and the holds it restores are unchanged.
-  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
-  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
+  -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R5:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'reopen_picking(uuid,text)|b62fbb68ee0d0eb44a9e641921a757e5\n'
+  -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R4:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'resume_fulfillment(uuid)|ce593a9203c41c1a7311b1af27d4cbd3\n'
   'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077',
   'P7: 0392 changes no function body but the two guards: the hand-over, the clears, the mint, the return-token mint, the delivery RPCs and the transition trigger keep their md5; the insert guard is 0392''s (0365 plus the admin-client secret rule, G23)');
 select is(

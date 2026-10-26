@@ -1169,20 +1169,33 @@ select is(
       ('public', 'caller_can_read_item'), ('public', 'location_holdings_visible'))),
   -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0405 (was 7883f466ae2642cbb4664ebc473e571b): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R1:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  E'approve_order_request(uuid)|0fb614dd15db280a97641ae0ac2673b0|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0405 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R2:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'approve_partial(uuid)|897c53295f88b0bac7dcc03edd07211f|true|{search_path=public}|postgres\n'
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
   -- pending approval, and the restock movements carry the order (0395 R1:
   -- removing both gives 0390's body exactly); nothing proven here reads either.
-  'cancel_order_request(uuid,text)|535fc49935f15adc8d7dfa78836a06af|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0405 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an approver's
+  -- cancel outside the order's warehouses and counts an order with no requester account as
+  -- nobody's own (0405 R6: removing both gives this body exactly); the cancel and its
+  -- restocks are unchanged.
+  'cancel_order_request(uuid,text)|2f230491b82b32b37f81c3ddbb8caf8e|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0405 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R3:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'close_partial(uuid)|44852737eedc1959e887b8621925d157|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0395 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
@@ -1204,10 +1217,16 @@ select is(
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
   -- (0395 R2); the draw reversal and the holds it restores are unchanged.
-  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R5:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'reopen_picking(uuid,text)|b62fbb68ee0d0eb44a9e641921a757e5|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R4:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'resume_fulfillment(uuid)|ce593a9203c41c1a7311b1af27d4cbd3|true|{search_path=public}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the

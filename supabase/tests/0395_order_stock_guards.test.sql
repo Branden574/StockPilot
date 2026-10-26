@@ -422,7 +422,10 @@ $b0$, ''), $b1$
      and reason          = 'Order cancelled (order_request ' || p_id::text || ')';
 $b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
-  '535fc49935f15adc8d7dfa78836a06af|47cabcd1fe4f52fb7b2b6b6b64b68da1',
+  -- Re-pinned by 0405 (was 535fc49935f15adc8d7dfa78836a06af|47cabcd1fe4f52fb7b2b6b6b64b68da1):
+  -- slice E adds two blocks; 0405 R6 proves that removing them gives 0395's body
+  -- (535fc499), from which removing 0395's text gives 0390's (47cabcd1).
+  '2f230491b82b32b37f81c3ddbb8caf8e|096e2410e6687bcd8cbaa65bee2bc285',
   'R1: cancel_order_request has 0395''s body (md5 535fc499), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
 
 select is(
@@ -443,7 +446,10 @@ select is(
      and reason          = 'Reopen picking (order_request ' || p_id::text || ')';
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')),
-  '14e49293fa670dc2e05a1c1b6930bce5|293ce0e76d195bb13105cfd1c067de82',
+  -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5|293ce0e76d195bb13105cfd1c067de82):
+  -- slice E adds the warehouse term; 0405 R5 proves that removing it gives 0395's body
+  -- (14e49293), from which removing 0395's text gives 0390's (293ce0e7).
+  'b62fbb68ee0d0eb44a9e641921a757e5|0d385fd7f11813e1b4a6886e9d079ea9',
   'R2: reopen_picking has 0395''s body (md5 14e49293), and removing the added text gives production''s body exactly (293ce0e7): the movement link (L115) is the only change');
 
 select is(
@@ -821,11 +827,15 @@ $b0$, '')) as m
   E'_notify_order_request_changes=7d197c46a1c9d9d5267f0c01be903ede|ff18125ea9142821da9c1a0d2b07c1da\n'
   'adjust_stock=0dbc639017c2f827e2c7a18e5486d975|8f2b54ee153cb1dd8cfccce7ab462b62\n'
   'assemble_bundle=c3e186436c7848163beafe5e85b062c8|9c725f9d2aac44bcd38889450056d67a\n'
-  'cancel_order_request=6a21252e51fff929fc18573e60b51324|112ba9976a11269694b161bc55d41562\n'
+  -- Re-pinned by 0405 (was cancel_order_request=6a21252e51fff929fc18573e60b51324|112ba9976a11269694b161bc55d41562
+  -- and reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2):
+  -- the two bodies carry slice E's blocks; 0405 R5, R6 and P1 prove each definition is
+  -- otherwise 0395's.
+  'cancel_order_request=16a547877a8a926f439e8c1af476ece1|4842e2494fa81ac6037296f1426b1989\n'
   'confirm_physical_signature=0ce2f35c507bef9e53f58ada6590993d|76899ffd767f579d61cfd2a6fccd1fb7\n'
   'post_cycle_count=40528d9207c8fe353b04d48bc0284acb|d2eee4d6216069731f965e9d2853c832\n'
   'post_receipt_v2=822851e86940eda3a9ad627cc53b3bcc|d40d3757f56f552c361acfbac0232c9b\n'
-  'reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2\n'
+  'reopen_picking=4b48d06fdc72c38a4ad07be9f0dcc528|103ef9f176b21ea0ac4d7ba38168edd6\n'
   'reverse_receipt=774eb447eaf4d8340522f159295a9377|4c049069d229b92b9b121d723cff081e\n'
   'transfer_stock=6a21d824bb893511cf72d192acb6043a|6231a20a470cd1991d32de9effe472c8',
   'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0395''s, and removing the added text gives production''s definition exactly: arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');

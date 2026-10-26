@@ -15,6 +15,8 @@ const base: OrderManagerActionsInput = {
   status: 'pending_approval',
   fulfillmentType: 'delivery',
   canApproveOrders: false,
+  // Every case below is in the order's warehouse unless it says otherwise.
+  writesOrderWarehouse: true,
   canAssignDelivery: false,
   isManagerByRole: false,
   isAssignedDriver: false,
@@ -143,6 +145,35 @@ describe('orderManagerActions: Physical signature is a manager by role or the dr
   });
 });
 
+// Security slice E (0405): every approval-class action asks write access to
+// the order's warehouse (the six order functions since 0405; the pick slip,
+// packing slips, staging, delivery and the hand-over link before), so an
+// approver outside it is offered none of them; the assigned driver's own steps
+// ask no warehouse. Mutation caught: writesOrderWarehouse dropped from
+// `approves`.
+describe("orderManagerActions: an approver outside the order's warehouse (security slice E)", () => {
+  const outside = { ...grantedStaff, canAssignDelivery: true, machineOffersReopen: true, writesOrderWarehouse: false };
+
+  it('sees no section and no action at any status', () => {
+    for (const status of ['pending_approval', 'approved', 'picking_complete', 'packing_slip_generated', 'staged_for_delivery', 'staged_for_pickup', 'in_transit', 'backordered']) {
+      const a = at(outside, status, { hasAssignedDriver: true, machineOffersClosePartial: true, fulfillmentType: status === 'staged_for_pickup' ? 'pickup' : 'delivery' });
+      expect(a.showSection, status).toBe(false);
+      expect(Object.entries(a).filter(([, v]) => v === true).map(([k]) => k), status).toEqual([]);
+    }
+  });
+
+  it('in their own warehouse the same approver keeps every action', () => {
+    expect(at({ ...outside, writesOrderWarehouse: true }, 'pending_approval')).toMatchObject({ showSection: true, approve: true, approvePartial: true, deny: true });
+    expect(at({ ...outside, writesOrderWarehouse: true }, 'backordered', { machineOffersClosePartial: true })).toMatchObject({ backorderedActions: true, closePartial: true });
+  });
+
+  it("the assigned driver keeps the driver's own hand-over steps outside it, never Mark in transit", () => {
+    const driver = { ...outside, isAssignedDriver: true, hasAssignedDriver: true };
+    expect(at(driver, 'staged_for_delivery')).toMatchObject({ showSection: false, markInTransit: false, assignDelivery: false });
+    expect(at(driver, 'in_transit')).toMatchObject({ showSection: true, digitalSignature: true, physicalSignature: true, markInTransit: false });
+  });
+});
+
 describe('orderManagerActions: never an empty or a wrong-status section', () => {
   it('terminal and picking statuses render nothing here', () => {
     for (const status of ['completed', 'cancelled', 'denied', 'pending_confirmation', 'pick_slip_generated', 'picking_in_progress', null, undefined]) {
@@ -163,7 +194,7 @@ describe('the order screen reads these gates (wiring pins)', () => {
   it('the section is the helper\'s answer, no longer role rank (mutation: restore `isManager &&`)', () => {
     expect(SCREEN).toContain('const hasPipelineActions = managerActions.showSection;');
     expect(SCREEN).not.toMatch(/const hasPipelineActions =\s*isManager/);
-    expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
+    expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*writesOrderWarehouse: writesHere,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
   });
 
   // RX-2 review fix F-1: one ask of the shared machine, with the order's
@@ -181,10 +212,34 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toMatch(/machineOffersReopen: canReopenPicking,\s*isViewerRole: role === 'viewer',\s*\}\);/);
   });
 
+  // Security slice E: both also ask the order's warehouse, for the
+  // approver's steps and for Claim, the pick and Release (viewerCanPickHere).
   it('both calls to the shared machine pass the effective permission, so reopen follows orders:approve, as the web panel does (mutation: drop either)', () => {
     const calls = SCREEN.split('availableOrderActions({').slice(1).map((c) => c.slice(0, c.indexOf('})')));
     expect(calls).toHaveLength(2);
-    for (const call of calls) expect(call).toContain('canApproveOrders: rpApprove,');
+    for (const call of calls) {
+      expect(call).toContain('canApproveOrders: rpApprove && writesHere,');
+      expect(call).toContain('viewerCanPick: viewerCanPickHere,');
+    }
+  });
+
+  // Security slice E: the order's warehouse comes from the scope read with
+  // the order, through the tested helper (mutation: the helper bypassed, or
+  // the pick gate left without the warehouse).
+  it("the warehouse gates come from the scope read with the order (security slice E)", () => {
+    expect(SCREEN).toMatch(/const orderAccess = orderWarehouseAccess\(\{\s*role,\s*warehouseId: order\?\.warehouseId \?\? null,\s*scope: order\?\.warehouseScope \?\? null,\s*\}\);/);
+    expect(SCREEN).toContain('const writesHere = orderAccess.writes === true;');
+    expect(SCREEN).toContain('const viewerCanPickHere = viewerCanPick && writesHere;');
+    // Slice E review: the line edits ask read access of the requester too
+    // (loadEditableOrderHeader), so an approver's own order outside their
+    // warehouses offers no Add items or line edit (mutation: the requester
+    // term put back in front of the read, `ownOrderLines || ...`).
+    expect(SCREEN).toContain('const linesInScope = orderAccess.reads === true;');
+    expect(SCREEN).not.toMatch(/const linesInScope =[^;]*requesterUserId|const linesInScope =[^;]*ownOrderLines/);
+    expect(SCREEN).not.toContain('ownOrderLines');
+    expect(SCREEN).toMatch(/needsOrderWarehouseScope\(\{\s*role,\s*canApproveOrders: rpApprove,\s*canPick: rpItems,\s*status: \(headerForReadiness\.status as string \| null\) \?\? null,\s*\}\)\s*\? readOrderWarehouseScope\(supabase, \{ role, organizationId: orgId, userId \}\)\s*: null;/);
+    expect(SCREEN).toContain('const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;');
+    expect(SCREEN).toMatch(/replacement,\s*warehouseScope,\s*lines: rows\.map/);
   });
 
   it('each button reads its own gate', () => {

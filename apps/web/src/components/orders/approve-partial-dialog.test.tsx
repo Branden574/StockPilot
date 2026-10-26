@@ -164,6 +164,7 @@ function panelProps(overrides: Partial<PanelProps> = {}): PanelProps {
     assignedDeliveryUserId: null,
     signatureToken: null,
     hasSignature: false,
+    canPrintWarehouseSlip: true,
     signedByName: null,
     signedAt: null,
     drivers: [],

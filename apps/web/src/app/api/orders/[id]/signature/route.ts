@@ -22,9 +22,14 @@ const NO_STORE = { 'cache-control': 'private, no-store' } as const;
  * NOT sufficient on its own — `order_requests_select` is a MEMBER-level RLS
  * policy (is_org_member), so every role including viewer passes it. Without an
  * app-layer gate any member could enumerate order ids and harvest customers'
- * captured signature PNGs (PII). So we mirror the order-detail page's
- * `showActionsPanel` gate exactly: an order approver (orders:approve) OR the
- * order's assigned delivery driver may read the signature; everyone else 403s.
+ * captured signature PNGs (PII). So the image goes to the audience of the
+ * order page's View signature button: an order approver (effective
+ * orders:approve, in ANY warehouse: the image changes nothing, so security
+ * slice E's warehouse rule for the panel's steps does not apply to it; the
+ * page keeps this read in the panel for an approver outside the order's
+ * warehouse, lib/orders/actions-panel-reads) OR the order's assigned delivery
+ * driver; everyone else 403s. The phone's View signature card reads the image
+ * here too, so it answers the same people.
  * A shared export throttle matches the sibling order-document routes so the
  * endpoint can't be scripted to exfiltrate signatures in bulk.
  *
@@ -57,10 +62,9 @@ export async function GET(
     | { signature_data_url: string | null; assigned_delivery_user_id: string | null }
     | null;
 
-  // Same gate the page uses to decide whether the actions panel (and therefore
-  // the signature dialog) renders: can(orders:approve) OR the assigned driver
-  // (assigned_delivery_user_id is non-null AND equals the caller;
-  // isHandOverEntitled in server/lib/order-secrets).
+  // The View signature audience (header): can(orders:approve), in any
+  // warehouse, OR the assigned driver (assigned_delivery_user_id is non-null
+  // AND equals the caller; isHandOverEntitled in server/lib/order-secrets).
   if (!isHandOverEntitled(ctx, { assigned_delivery_user_id: row?.assigned_delivery_user_id ?? null })) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }

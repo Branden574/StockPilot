@@ -862,8 +862,14 @@ select is(
   -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642 and
   -- 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from
   -- each gate and nothing else (0390 R1, R2); both still SECURITY DEFINER.
-  E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true\n'
-  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true\n'
+  -- Re-pinned by 0405 (was 7883f466ae2642cbb4664ebc473e571b): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R1:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  E'approve_order_request(uuid)|0fb614dd15db280a97641ae0ac2673b0|true\n'
+  -- Re-pinned by 0405 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R2:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'approve_partial(uuid)|897c53295f88b0bac7dcc03edd07211f|true\n'
   -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
   -- insert guard also refuses an admin-client (service_role) insert carrying
   -- a return token, a track token or a signature image (0392 suite G23);

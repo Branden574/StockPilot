@@ -44,10 +44,14 @@ const orderGet = vi.fn();
 const attachmentsList = vi.fn(async () => []);
 const returnableLinesForOrder = vi.fn(async () => []);
 const checkModuleAccessMock = vi.fn();
-const getWarehouseAccessMock = vi.fn(async (_ctx?: unknown) => ({
-  hasAllAccess: true,
-  writableIds: [] as string[],
-}));
+const getWarehouseAccessMock = vi.fn(
+  async (
+    _ctx?: unknown,
+  ): Promise<{ hasAllAccess: boolean; writableIds: string[]; readableIds?: string[] }> => ({
+    hasAllAccess: true,
+    writableIds: [],
+  }),
+);
 const reportProblemButtonProps = vi.fn();
 
 vi.mock('next/navigation', () => ({
@@ -71,7 +75,14 @@ vi.mock('next/link', async () => {
 // Every OTHER child component on this page — stubbed to null. This file
 // only cares about ReportProblemButton's props; what the rest of the page
 // renders is covered elsewhere (or not this task's concern).
-vi.mock('@/components/orders/add-items-dialog', () => ({ AddItemsDialog: () => null }));
+// Security slice E: who is offered Add items, recorded.
+const addItemsProps = vi.fn();
+vi.mock('@/components/orders/add-items-dialog', () => ({
+  AddItemsDialog: (props: Record<string, unknown>) => {
+    addItemsProps(props);
+    return null;
+  },
+}));
 // L85: who is offered Cancel request, recorded.
 const cancelButtonProps = vi.fn();
 vi.mock('@/components/orders/cancel-order-button', () => ({
@@ -540,6 +551,286 @@ describe('orders/[id]: Cancel request (L85)', () => {
   });
 });
 
+// SECURITY SLICE E (migration 0405): an approver acts on an order only in a
+// warehouse they may write to; the database and the service both ask it. The
+// page used to offer an approver outside the order's warehouse Approve, Deny,
+// Cancel, the notes, the line controls and Add items, each refused after the
+// tap ("This order is in a warehouse you don't work in"). It now offers them
+// none of these, together. Mutation caught by each case: the page's
+// approverWritesHere / approverReadsHere replaced by canApprove.
+describe("orders/[id]: an approver outside the order's warehouse (security slice E)", () => {
+  const LINE = {
+    id: 'LA',
+    order_request_id: ORDER_ID,
+    item_id: 'iA',
+    quantity_requested: 2,
+    quantity_fulfilled: 0,
+    quantity_picked: null,
+    returned_quantity: 0,
+    unit_cost_at_request: 0,
+    notes: null,
+    item: {
+      id: 'iA',
+      name: 'Item A',
+      sku: 'SKU-A',
+      quantity_on_hand: 10,
+      charter_name: null,
+      charter_code: null,
+    },
+  };
+  const orderAt = (status: string, request: Record<string, unknown> = {}) =>
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status, ...request }), lines: [LINE] }),
+    );
+  const asStaffApprover = () => {
+    ctxHolder.current = {
+      role: 'staff',
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
+    };
+  };
+  // The order is in wh-1 (requestFixture).
+  const worksIn = (ids: string[]) =>
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ids,
+      writableIds: ids,
+    });
+  const lastPanel = () =>
+    managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+
+  it('offers a staff approver of another warehouse no Cancel, no actions panel, no line controls and no Add items; in their own warehouse, all of them', async () => {
+    asStaffApprover();
+    orderAt('approved');
+    worksIn(['wh-other']);
+    const outside = await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+    expect(managerActionsProps).not.toHaveBeenCalled();
+    expect(orderLineActionsProps).not.toHaveBeenCalled();
+    expect(addItemsProps).not.toHaveBeenCalled();
+    outside.unmount();
+
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderAt('approved');
+    worksIn(['wh-1']);
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+    expect(lastPanel()?.canApprove).toBe(true);
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+  });
+
+  it('at pending approval: no Approve or Deny (no panel) for them; their own pending request keeps its requester Cancel, as the service and the function allow', async () => {
+    asStaffApprover();
+    orderAt('pending_approval');
+    worksIn(['wh-other']);
+    const someoneElses = await renderPage();
+    expect(managerActionsProps).not.toHaveBeenCalled();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+    someoneElses.unmount();
+
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    worksIn(['wh-other']);
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_approval' }),
+    );
+    expect(managerActionsProps).not.toHaveBeenCalled();
+  });
+
+  // Slice E review: the service's line edits (loadEditableOrderHeader) ask
+  // read access to the order's warehouse of the person who placed it too (the
+  // line insert policy also refuses a raw insert of any item of that warehouse
+  // they cannot read), so being the requester does not stand in for it.
+  // Mutation caught: `approverReadsHere ||
+  // isOwnRequest` put back for the lines (every assertion on the lines here).
+  it("their own order in a warehouse they don't work in offers no line control, no Add items and no short-line note; the requester's Cancel request stays", async () => {
+    asStaffApprover();
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    worksIn(['wh-other']);
+    const pending = await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_approval' }),
+    );
+    expect(orderLineActionsProps).not.toHaveBeenCalled();
+    expect(addItemsProps).not.toHaveBeenCalled();
+    pending.unmount();
+
+    // Out for delivery: the short line's note goes to the people who could
+    // have changed the lines, which they could not.
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'in_transit', requester_user_id: 'u1' }),
+        lines: [
+          { ...LINE, quantity_picked: 0 },
+          { ...LINE, id: 'LB', item_id: 'iB', quantity_picked: 2 },
+        ],
+      }),
+    );
+    worksIn(['wh-other']);
+    const shipped = await renderPage();
+    expect(shortLineFixesProps).not.toHaveBeenCalled();
+    shipped.unmount();
+
+    // In their own warehouse the same order is theirs to change.
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    worksIn(['wh-1']);
+    await renderPage();
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+  });
+
+  it("a requester who does not approve keeps their own order's lines, with no warehouse read paid for it (the service answers the rest)", async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    await renderPage();
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+    expect(getWarehouseAccessMock).not.toHaveBeenCalled();
+  });
+
+  it("in the picking phase the panel stays (it is every picker's) without an approver's step, and the picker roster is not read", async () => {
+    asStaffApprover();
+    orderAt('picking_in_progress');
+    worksIn(['wh-other']);
+    await renderPage();
+    expect(lastPanel()?.canApprove).toBe(false);
+    expect(lastPanel()?.pickers).toEqual([]);
+  });
+
+  // Slice E review: the panel's READS ask no warehouse (Print pick slip and
+  // Print customer slip are any member's who can open the order; the
+  // signature image is any approver's, which the phone offers them too), so
+  // an approver outside the order's warehouse keeps the panel where it has
+  // one (lib/orders/actions-panel-reads), with no step in it and without
+  // Print warehouse slip, whose QR hands the order over (the hand-over rule).
+  // Mutations caught: the read term dropped from showActionsPanel (no panel
+  // at these statuses), canPrintWarehouseSlip passed as true.
+  it.each([
+    'picking_complete',
+    'packing_slip_generated',
+    'staged_for_pickup',
+    'staged_for_delivery',
+    'completed',
+  ])(
+    'at %s they keep the panel for its reads, with no step and no Print warehouse slip',
+    async (status) => {
+      asStaffApprover();
+      orderAt(status, { signature_method: 'digital', signed_at: '2026-08-02T10:00:00Z' });
+      worksIn(['wh-other']);
+      await renderPage();
+      expect(lastPanel()).toMatchObject({
+        status,
+        canApprove: false,
+        canPrintWarehouseSlip: false,
+        signatureToken: null,
+        hasSignature: true,
+      });
+      expect(cancelButtonProps).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['pending_approval', 'approved', 'in_transit', 'backordered', 'denied', 'cancelled'])(
+    'at %s the panel has no read for them, so it is not shown',
+    async (status) => {
+      asStaffApprover();
+      orderAt(status);
+      worksIn(['wh-other']);
+      await renderPage();
+      expect(managerActionsProps).not.toHaveBeenCalled();
+    },
+  );
+
+  it('Print warehouse slip follows the hand-over rule: in their own warehouse, a manager, the assigned driver; never a viewer granted orders:approve', async () => {
+    asStaffApprover();
+    orderAt('completed');
+    worksIn(['wh-1']);
+    const own = await renderPage();
+    expect(lastPanel()).toMatchObject({ canApprove: true, canPrintWarehouseSlip: true });
+    own.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderAt('completed');
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: [],
+    });
+    const viewer = await renderPage();
+    expect(lastPanel()).toMatchObject({ canApprove: false, canPrintWarehouseSlip: false });
+    viewer.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderAt('completed');
+    const manager = await renderPage();
+    expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
+    manager.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
+    orderAt('staged_for_delivery', {
+      fulfillment_type: 'delivery',
+      assigned_delivery_user_id: 'u1',
+    });
+    await renderPage();
+    expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
+  });
+
+  it('a failed read of their warehouses offers nothing (fail closed)', async () => {
+    asStaffApprover();
+    orderAt('approved');
+    getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+    expect(managerActionsProps).not.toHaveBeenCalled();
+    expect(orderLineActionsProps).not.toHaveBeenCalled();
+    expect(addItemsProps).not.toHaveBeenCalled();
+  });
+
+  it("a viewer granted orders:approve keeps their own warehouse's lines and panel (the service's read rule) but is offered no step and no Cancel (a viewer never writes)", async () => {
+    ctxHolder.current = {
+      role: 'viewer',
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
+    };
+    orderAt('approved');
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: [],
+    });
+    await renderPage();
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+    expect(lastPanel()?.canApprove).toBe(false);
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+  });
+
+  it('a manager works in every warehouse by role: everything offered, and no warehouse read paid for it', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
+    };
+    orderAt('approved');
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalled();
+    expect(lastPanel()?.canApprove).toBe(true);
+    expect(orderLineActionsProps).toHaveBeenCalled();
+    expect(addItemsProps).toHaveBeenCalled();
+    expect(getWarehouseAccessMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('orders/[id]: the order read', () => {
   it('starts the service context (its GoTrue factors read) with the request context', async () => {
     await renderPage();
@@ -629,6 +920,10 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     expect(sideReads()).toBe(0);
   });
 
+  // Since security slice E (0405) an approver outside the order's warehouse
+  // sees the actions panel at staged for pickup only for its reads (Print
+  // customer slip; slice E review), with no step, no link and no Print
+  // warehouse slip; the raw token is still never read for them.
   it("review 1: a staff approver gets the link only for an order in a warehouse they may write to (the mint's rule)", async () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
     orderGet.mockResolvedValue(
@@ -636,14 +931,25 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
         request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }),
       }),
     );
-    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-other'],
+      writableIds: ['wh-other'],
+    });
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
+    expect(panelProps()?.canApprove).toBe(false);
+    expect(panelProps()?.canPrintWarehouseSlip).toBe(false);
     expect(sideReads()).toBe(0);
 
-    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: ['wh-1'],
+    });
     await renderPage();
     expect(panelProps()?.signatureToken).toBe(RAW);
+    expect(panelProps()?.canPrintWarehouseSlip).toBe(true);
   });
 
   it('review 1: a failed warehouse access read gives a staff approver no link (fail closed)', async () => {
@@ -653,7 +959,7 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     );
     getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
     await renderPage();
-    expect(panelProps()?.signatureToken).toBeNull();
+    expect(panelProps()).toBeUndefined();
     expect(sideReads()).toBe(0);
   });
 
@@ -1723,6 +2029,32 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       await renderPage();
       expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-failed', 'true');
       expect(screen.queryByTestId('readiness-hold-stock')).toBeNull();
+    });
+
+    // Security slice E: hold_order_stock asks write access to the order's
+    // warehouse, so a staff approver of another warehouse is not offered it.
+    // Mutation caught: canApproveOrders fed canApprove again.
+    it("only to an approver who may write to the order's warehouse", async () => {
+      as('staff', ['orders:approve']);
+      orderAt('approved', SO100_LINES);
+      readinessResult.mockResolvedValue(readinessOk(so100Facts('approved')));
+      getWarehouseAccessMock.mockResolvedValue({
+        hasAllAccess: false,
+        readableIds: ['wh-other'],
+        writableIds: ['wh-other'],
+      });
+      const outside = await renderPage();
+      expect(screen.getByTestId('readiness-strip')).toBeInTheDocument();
+      expect(screen.queryByTestId('readiness-hold-stock')).toBeNull();
+      outside.unmount();
+
+      getWarehouseAccessMock.mockResolvedValue({
+        hasAllAccess: false,
+        readableIds: ['wh-1'],
+        writableIds: ['wh-1'],
+      });
+      await renderPage();
+      expect(screen.getByTestId('readiness-hold-stock')).toHaveTextContent('Hold available stock');
     });
   });
 

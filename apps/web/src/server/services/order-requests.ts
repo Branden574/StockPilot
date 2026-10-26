@@ -696,6 +696,28 @@ function isWarehouseAccessUnreadable(e: unknown): boolean {
   return isWarehouseForbidden(e) && (e as { accessUnreadable?: unknown }).accessUnreadable === true;
 }
 
+/**
+ * Security slice E (0405): approve_order_request, approve_partial,
+ * close_partial, resume_fulfillment, reopen_picking and an approver's
+ * cancel_order_request refuse a caller without write access to the order's
+ * warehouse themselves (42501 forbidden, hint warehouse_write). The service
+ * asks the same first (requireWarehouseAccess 'write'), so this reaches it
+ * only when the two disagree for a moment: the caller's assignment removed
+ * between that check and the call, or a cancel of the approver's own order
+ * that left pending approval after the service read it (its own check then
+ * skipped the warehouse). Said in the one sentence every order action uses,
+ * the one requireWarehouseAccess throws, never as a missing permission or as
+ * "You can only cancel your own requests". Checked before each method's
+ * `includes('forbidden')` arm, which would otherwise answer it.
+ */
+function orderWarehouseRefusal(
+  error: { code?: string | null; hint?: string | null } | null | undefined,
+): ForbiddenError | null {
+  return error?.code === '42501' && error.hint === 'warehouse_write'
+    ? new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY)
+    : null;
+}
+
 const HOLD_FAILURE_REASONS: ReadonlySet<string> = new Set<HoldFailureReason>([
   'forbidden',
   'not_applicable',
@@ -2987,10 +3009,13 @@ export class OrderRequestsService {
       // review): a staff member who approves orders in warehouse A could
       // cancel a warehouse B order from the order page, releasing its holds
       // or restocking its picked batch, on the page where every other action
-      // already refused. cancel_order_request itself does not check the
-      // warehouse yet (security slice E). Owners, admins and managers work in
-      // every warehouse by role (isManagerOrAbove, roleSeesEveryWarehouse's
-      // rule in lib/auth/warehouse), so nothing is read for them.
+      // already refused. Since security slice E (0405) cancel_order_request
+      // asks the same itself, on the order row it locks (so an order read
+      // here as the approver's own pending request that was approved before
+      // the call is refused there: orderWarehouseRefusal below). Owners,
+      // admins and managers work in every warehouse by role
+      // (isManagerOrAbove, roleSeesEveryWarehouse's rule in
+      // lib/auth/warehouse), so nothing is read for them.
       //
       // The person who placed the order still cancels it while it waits for
       // approval with no warehouse check: that is the requester's cancel (the
@@ -3032,6 +3057,12 @@ export class OrderRequestsService {
       // Returns RX-2: the cancel guard on a replacement, by its hint.
       const refusal = replacementRefusal(error);
       if (refusal) throw refusal;
+      // Slice E (0405): an approver's cancel outside their warehouses. Also
+      // the race the requester branch above leaves: their own order read as
+      // pending (no warehouse asked) and approved before this call, which the
+      // function now decides on the row it locks.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
@@ -3122,6 +3153,10 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
       // 0390: the database asks orders:approve alone, as assertPermission did.
+      // Slice E (0405): the function's own warehouse refusal, before the
+      // 'forbidden' arm below reads it as a missing permission.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))
@@ -3653,6 +3688,10 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
       // 0390: the database asks orders:approve alone, as assertPermission did.
+      // Slice E (0405): the function's own warehouse refusal, before the
+      // 'forbidden' arm below reads it as a missing permission.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       // Core's words, the ones the approve-partial dialog (web) and sheet
@@ -3897,6 +3936,10 @@ export class OrderRequestsService {
           'validation_error',
           'No stock is available yet to fulfill the backordered items. Top up the short items first.',
         );
+      // Slice E (0405): the function's own warehouse refusal, before the
+      // 'forbidden' arm below reads it as a missing permission.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       // Core's words, as approvePartial's (the resume sheet and dialog say
@@ -3956,6 +3999,10 @@ export class OrderRequestsService {
           'conflict',
           "This order has been signed for and can't be reopened.",
         );
+      // Slice E (0405): the function's own warehouse refusal, before the
+      // 'forbidden' arm below reads it as a missing permission.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))
@@ -4008,6 +4055,10 @@ export class OrderRequestsService {
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
+      // Slice E (0405): the function's own warehouse refusal, before the
+      // 'forbidden' arm below reads it as a missing permission.
+      const outside = orderWarehouseRefusal(error);
+      if (outside) throw outside;
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))

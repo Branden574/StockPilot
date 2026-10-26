@@ -291,3 +291,71 @@ describe('Hold available stock and the needed-by date say the same sentence (one
     expect(stub.rpcCalls).toHaveLength(0);
   });
 });
+
+/**
+ * Security slice E (0405): the six order functions an approver calls refuse a
+ * caller outside the order's warehouse themselves (42501 forbidden, hint
+ * warehouse_write). The service asks the same first, so the function's answer
+ * reaches it only when the two disagree for a moment: an assignment removed
+ * between the service's check and the call, or (cancel) the approver's own
+ * order read as pending, so no warehouse was asked, and approved before the
+ * call. Either way it is the one sentence, never "Missing permission:
+ * orders:approve" or "You can only cancel your own requests" (what each
+ * method's `includes('forbidden')` arm says).
+ */
+describe("the functions' own warehouse refusal (slice E, 0405) is the one sentence", () => {
+  const OUTSIDE = {
+    data: null,
+    error: { code: '42501', message: 'forbidden', hint: 'warehouse_write' },
+  } satisfies QueryResult;
+  const inOwnWarehouse = { 'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-a' }, error: null } };
+
+  it.each([
+    ['approve', 'approve_order_request', (s: OrderRequestsService) => s.approve('ord-1', null)],
+    ['approvePartial', 'approve_partial', (s: OrderRequestsService) => s.approvePartial('ord-1')],
+    ['closePartial', 'close_partial', (s: OrderRequestsService) => s.closePartial('ord-1')],
+    ['resumeFulfillment', 'resume_fulfillment', (s: OrderRequestsService) => s.resumeFulfillment('ord-1')],
+    ['reopenPicking', 'reopen_picking', (s: OrderRequestsService) => s.reopenPicking('ord-1', 'Miscount')],
+  ] as const)(
+    '%s: the app check passed (their own warehouse), the function refused: the one sentence, not a missing permission',
+    async (_name, fn, run) => {
+      const stub = makeSupabaseStub({ ...inOwnWarehouse, ...access(), [`rpc:${fn}`]: OUTSIDE });
+      const e = await refusal(run(svc(stub)));
+      expect(stub.rpcCalls.map((c) => c.name)).toEqual([fn]);
+      expect(e.name).toBe('ForbiddenError');
+      expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
+    },
+  );
+
+  it('a plain forbidden from the same functions still reads as the missing permission (only the hint changes it)', async () => {
+    const stub = makeSupabaseStub({
+      ...inOwnWarehouse,
+      ...access(),
+      'rpc:approve_order_request': { data: null, error: { code: '42501', message: 'forbidden' } },
+    });
+    const e = await refusal(svc(stub).approve('ord-1', null));
+    expect(e).toMatchObject({ code: 'forbidden', message: 'Missing permission: orders:approve' });
+  });
+
+  it("cancel: the approver's own order read as pending (no warehouse asked), approved before the call: the function refuses it, in the one sentence", async () => {
+    // The service reads the order as the approver's own pending request in
+    // warehouse B, so it asks no warehouse (the requester's cancel) and calls
+    // the function, which finds it approved under its lock and refuses.
+    const stub = makeSupabaseStub({
+      ...order({ status: 'pending_approval', requester_user_id: 'appr-1' }),
+      ...access(),
+      'rpc:cancel_order_request': OUTSIDE,
+    });
+    const e = await refusal(svc(stub).cancel('ord-1', null));
+    expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
+    expect(e.name).toBe('ForbiddenError');
+    expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
+  });
+
+  it("cancel: a manager's cancel refused by the function the same way (an assignment-free role never meets it, but the words do not depend on who)", async () => {
+    const stub = makeSupabaseStub({ 'rpc:cancel_order_request': OUTSIDE });
+    const e = await refusal(svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null));
+    expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
+  });
+});

@@ -3,10 +3,12 @@ import { orderCancelOffer } from '@stockpilot/core';
 /**
  * Cancel on the phone's order screen (L93). WHO is offered it is core's
  * orderCancelOffer, the web order page's rule and the service's: someone who
- * approves orders at every open status, the person who placed it only while
- * it waits for approval, and nobody without orders:request, which the service
- * asserts for every cancel (desk check F3). The confirm carries the web's optional reason
- * (Alert.prompt's text field), sent to /api/v1/orders/[id]/transition.
+ * approves orders at every open status in a warehouse they may write to
+ * (security slice E, 0405: cancel_order_request asks it too), the person who
+ * placed it only while it waits for approval, and nobody without
+ * orders:request, which the service asserts for every cancel (desk check F3).
+ * The confirm carries the web's optional reason (Alert.prompt's text field),
+ * sent to /api/v1/orders/[id]/transition.
  *
  * Pure, so vitest pins it; the screen reads the result.
  */
@@ -24,6 +26,9 @@ export function phoneOrderCancel(input: {
   status: string | null | undefined;
   /** The effective orders:approve. */
   canApproveOrders: boolean;
+  /** The viewer may write to the order's warehouse (order-warehouse-scope.ts
+   *  orderWarehouseAccess `writes`); only an approver's cancel asks it. */
+  writesOrderWarehouse: boolean;
   /** The viewer placed this order. */
   isOwnRequest: boolean;
   /** The effective orders:request. */
@@ -33,6 +38,7 @@ export function phoneOrderCancel(input: {
   const offer = orderCancelOffer({
     status: input.status,
     canApprove: input.canApproveOrders,
+    canWriteOrderWarehouse: input.writesOrderWarehouse,
     isOwnRequest: input.isOwnRequest,
     canRequest: input.canRequestOrders,
   });

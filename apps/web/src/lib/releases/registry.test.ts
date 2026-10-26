@@ -6610,14 +6610,24 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(e.whyItMatters).not.toMatch(/Cancelling needed the web/);
     expect(e.whyItMatters).toContain('only a backordered order');
     expect(e.whyItMatters).toContain('someone who does not approve orders was offered Cancel request on their own order');
-    const open = { isOwnRequest: true, canRequest: true };
+    // An approver in the order's warehouse, the people the entry speaks of
+    // (security slice E, 0405: an approver's cancel asks write access to it).
+    const open = { isOwnRequest: true, canRequest: true, canWriteOrderWarehouse: true };
     for (const status of ['approved', 'pending_approval', 'staged_for_pickup', 'backordered']) {
       expect(orderCancelOffer({ status, canApprove: true, ...open }), status).toBe('approver');
     }
     expect(orderCancelOffer({ status: 'cancelled', canApprove: true, ...open })).toBeNull();
     expect(orderCancelOffer({ status: 'pending_approval', canApprove: false, ...open })).toBe('requester');
     expect(orderCancelOffer({ status: 'approved', canApprove: false, ...open })).toBeNull();
-    expect(orderCancelOffer({ status: 'pending_approval', canApprove: true, isOwnRequest: true, canRequest: false })).toBeNull();
+    expect(
+      orderCancelOffer({
+        status: 'pending_approval',
+        canApprove: true,
+        canWriteOrderWarehouse: true,
+        isOwnRequest: true,
+        canRequest: false,
+      }),
+    ).toBeNull();
     const web = readFileSync(resolve(__dirname, '../../components/orders/cancel-order-button.tsx'), 'utf8');
     expect(web).toContain('confirmLabel="Cancel request"');
     expect(web).not.toMatch(/Cancel order/);
