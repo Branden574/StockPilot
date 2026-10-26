@@ -20,6 +20,12 @@
 #      and staff candidates no longer offer it.
 #   4. No session ever sees 40001 or 40P01; no replacement order without a
 #      line.
+#   5. On the SAME order, which now holds commitments for the hidden item
+#      (approved, cancelled and re-issued in earlier transactions), a NEW RMA
+#      that selects it is refused exchange_item_not_eligible: a commitment
+#      exempts only the exact exchange line change_return_replacement keeps,
+#      never a later selection anywhere on the order (review fix round, D1
+#      item 4).
 #
 # LOCAL stack only (CONTAINER, default supabase_db_stockpilot; the migration
 # scratch stack is supabase_db_spmig) with 0413 applied. Fixtures are
@@ -254,6 +260,21 @@ as_user - "$MGR" "select 'R=' || coalesce((select string_agg(s->>'itemId', ',' o
 CAND="$(ans "$TMP/3.cand.out")"
 check "3: a staff search on the other order offers the shown record and not the hidden one" \
   "$(has "$CAND" "$IS" shown no-shown)/$(has "$CAND" "$IL" hidden-offered hidden-absent)" "shown/hidden-absent"
+
+# ═══ 5. A new selection on the same order ═════════════════════════════════
+echo "== 5. on the order holding commitments for the hidden item, a NEW staff selection of it is refused"
+as_user - "$MGR" "$(create_sql "$ORDER" "$(key 11)" "$L" "$IL")" > "$TMP/5.c.out"
+if grep -q '^R=' "$TMP/5.c.out"; then
+  R5="$(ans "$TMP/5.c.out" | jget returnId)"
+  as_user - "$MGR" "$(approve_sql "$R5" 0 "$(dec_ex "$(rl_of "$R5")" "$(xl_of "$R5")")")" > "$TMP/5.a.out"
+  check "5: the request is recorded, the approval (a new selection) is refused exchange_item_not_eligible" \
+    "$(grep -c 'HINT:  exchange_item_not_eligible' "$TMP/5.a.out")/$(live_count "$R5")" "1/0"
+else
+  check "5: the request naming the hidden item is refused exchange_item_not_eligible" \
+    "$(grep -c 'HINT:  exchange_item_not_eligible' "$TMP/5.c.out")" "1"
+fi
+check "5: still exactly the two re-issued replacements for the item on this order" \
+  "$(q "select count(*) from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id join public.returns r on r.id = o.replacement_for_return_id where r.order_request_id = '$ORDER' and l.item_id = '$IL' and o.status not in ('cancelled', 'denied')")" "2"
 
 # ═══ 4. Never 40001 / 40P01, no empty replacement ═════════════════════════
 echo "== 4. no retryable class, no empty replacement"

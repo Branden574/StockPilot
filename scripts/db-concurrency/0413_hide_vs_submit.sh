@@ -32,6 +32,16 @@
 #   8. No session ever sees 40001 or 40P01; no orphan order header remains.
 #   9. A hide and a show of one record by two members serialize: the show
 #      waits on the hide's row lock, then applies on top (one audit row each).
+#  10. The B2B portal's submit (insert_order_request_with_lines as the service
+#      role: header and lines in one transaction) waits on a hide that holds
+#      its item, then is refused order_item_hidden: no header, no line and no
+#      New order request notification remain (the header's notify trigger
+#      fired inside the same transaction and rolled back with it).
+#  11. The public link's submit (the same function with a track token) waits
+#      on a hide the same way and leaves no header, no track-token row and no
+#      line.
+#  12. A portal submit that holds first stands: the hide waits on its item
+#      lock and commits after the order.
 #
 # LOCAL stack only (CONTAINER, default supabase_db_stockpilot; the migration
 # scratch stack is supabase_db_spmig) with 0413 applied. Fixtures are
@@ -67,6 +77,9 @@ P1='04132222-0000-0000-0000-000000000108'
 M1='04132222-0000-0000-0000-000000000109'
 A3='04132222-0000-0000-0000-00000000010a'
 F1='04132222-0000-0000-0000-00000000010b'
+G1='04132222-0000-0000-0000-00000000010c'
+G2='04132222-0000-0000-0000-00000000010d'
+G3='04132222-0000-0000-0000-00000000010e'
 OADD='04132222-0000-0000-0000-000000000201'
 LT='04132222-0000-0000-0000-000000000301'
 
@@ -118,6 +131,29 @@ as_user() {
     "$body" \
     "$end;" | "${PSQL[@]}" -v VERBOSITY=verbose 2>&1
 }
+# as_service <application_name|-> <statements> [end]: one transaction as the
+# service role (the portal's and the public link's server writes).
+as_service() {
+  local app="$1" body="$2" end="${3:-commit}"
+  printf '%s\n' \
+    "$( [ "$app" != "-" ] && printf "set application_name to '%s';" "$app")" \
+    "begin;" \
+    "set local role service_role;" \
+    "$body" \
+    "$end;" | "${PSQL[@]}" -v VERBOSITY=verbose 2>&1
+}
+# submit_sql <portal|public_link> <item> <notes>: the server's one write.
+submit_sql() {
+  if [ "$1" = portal ]; then
+    printf "select 'R=' || public.insert_order_request_with_lines(jsonb_build_object('organization_id', '%s', 'warehouse_id', '%s', 'status', 'pending_approval', 'source', 'portal', 'requester_user_id', '%s', 'requester_name', 'Race Customer', 'fulfillment_type', 'pickup', 'notes', '%s'), jsonb_build_array(jsonb_build_object('item_id', '%s', 'quantity_requested', 1, 'unit_cost_at_request', 0)))::text;" \
+      "$ORG" "$WH" "$STF" "$3" "$2"
+  else
+    printf "select 'R=' || public.insert_order_request_with_lines(jsonb_build_object('organization_id', '%s', 'warehouse_id', '%s', 'status', 'pending_confirmation', 'source', 'public_link', 'requester_email', 'race-visitor@example.org', 'requester_name', 'Race Visitor', 'fulfillment_type', 'pickup', 'notes', '%s', 'confirmation_token_hash', md5('%s-a') || md5('%s-b'), 'confirmation_token_expires_at', now() + interval '1 day'), jsonb_build_array(jsonb_build_object('item_id', '%s', 'quantity_requested', 1, 'unit_cost_at_request', 0)), md5('%s-c') || md5('%s-d'))::text;" \
+      "$ORG" "$WH" "$3" "$3" "$3" "$2" "$3" "$3"
+  fi
+}
+notes_count() { q "select count(*) from public.notifications where organization_id = '$ORG'"; }
+
 # as_postgres <application_name> <statements> [end]
 as_postgres() {
   printf '%s\n' "set application_name to '$1';" "begin;" "$2" "${3:-commit};" | "${PSQL[@]}" -v VERBOSITY=verbose 2>&1
@@ -213,7 +249,10 @@ insert into public.inventory_items
   ('$P1', '$ORG', '$WH', '0413-2S-P1', '2S item P1', 10, 'active', 'none', '$RACK'),
   ('$M1', '$ORG', '$WH', '0413-2S-M1', '2S item M1', 0,  'active', 'none', null),
   ('$A3', '$ORG', '$WH', '0413-2S-A3', '2S item A3', 10, 'active', 'none', '$RACK'),
-  ('$F1', '$ORG2', '$WHB', '0413-2S-F1', '2S other item', 10, 'active', 'none', null);
+  ('$F1', '$ORG2', '$WHB', '0413-2S-F1', '2S other item', 10, 'active', 'none', null),
+  ('$G1', '$ORG', '$WH', '0413-2S-G1', '2S portal item', 10, 'active', 'none', '$RACK'),
+  ('$G2', '$ORG', '$WH', '0413-2S-G2', '2S public item', 10, 'active', 'none', '$RACK'),
+  ('$G3', '$ORG', '$WH', '0413-2S-G3', '2S portal first', 10, 'active', 'none', '$RACK');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$OADD', '$ORG', '$WH', 'pending_approval', 'internal', '$STF', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested) values
@@ -365,6 +404,51 @@ check "9: the hide changed it, then the show changed it back (serial, last write
   "[\"$A3\"]/[\"$A3\"]/true"
 check "9: two audit rows, one per change" \
   "$(q "select count(*) from public.audit_logs where organization_id = '$ORG' and event = 'item.order_visibility_changed' and metadata->>'entity_id' = '$A3'")" "2"
+
+# ═══ 10. The portal's submit while a hide holds its item ══════════════════
+echo "== 10. a hide holds; the portal's one-transaction submit waits, then is refused and leaves nothing"
+N0="$(notes_count)"
+as_user h10 "$MGR" "$(hide_sql "'$G1'" false "$(op 11)") select pg_sleep(2);" > "$TMP/10.h.out" &
+HP=$!
+wait_for h10 Timeout PgSleep || bad "10: the hide never reached its pause"
+as_service s10 "$(submit_sql portal "$G1" 'race portal 10')" > "$TMP/10.s.out" &
+SP=$!
+if wait_for s10 Lock; then ok "10: the portal submit waits on the item lock while the hide is open"; else bad "10: the portal submit never waited"; fi
+wait "$HP" "$SP"
+check "10: the hide changed the item" "$(ans "$TMP/10.h.out" | jget changed)" "[\"$G1\"]"
+check "10: the portal submit is refused order_item_hidden for that item" \
+  "$(grep -c 'HINT:  order_item_hidden' "$TMP/10.s.out")/$(grep -c "DETAIL:  $G1" "$TMP/10.s.out")" "1/1"
+check "10: no header, no line and no new notification remain" \
+  "$(q "select (select count(*) from public.order_requests where organization_id = '$ORG' and notes = 'race portal 10') || '/' || (select count(*) from public.order_request_lines where item_id = '$G1')")/$(notes_count)" \
+  "0/0/$N0"
+
+# ═══ 11. The public link's submit while a hide holds its item ═════════════
+echo "== 11. a hide holds; the public link's one-transaction submit waits, then is refused and leaves nothing"
+as_user h11 "$MGR" "$(hide_sql "'$G2'" false "$(op 12)") select pg_sleep(2);" > "$TMP/11.h.out" &
+HP=$!
+wait_for h11 Timeout PgSleep || bad "11: the hide never reached its pause"
+as_service s11 "$(submit_sql public_link "$G2" 'race public 11')" > "$TMP/11.s.out" &
+SP=$!
+if wait_for s11 Lock; then ok "11: the public-link submit waits on the item lock while the hide is open"; else bad "11: the public-link submit never waited"; fi
+wait "$HP" "$SP"
+check "11: the public-link submit is refused order_item_hidden for that item" \
+  "$(grep -c 'HINT:  order_item_hidden' "$TMP/11.s.out")/$(grep -c "DETAIL:  $G2" "$TMP/11.s.out")" "1/1"
+check "11: no header, no track-token row and no line remain" \
+  "$(q "select (select count(*) from public.order_requests where organization_id = '$ORG' and notes = 'race public 11') || '/' || (select count(*) from public.order_request_secrets s where s.organization_id = '$ORG' and s.public_track_token = md5('race public 11-c') || md5('race public 11-d')) || '/' || (select count(*) from public.order_request_lines where item_id = '$G2')")" \
+  "0/0/0"
+
+# ═══ 12. A portal submit that holds first ═════════════════════════════════
+echo "== 12. a portal submit holds; the hide waits, then commits after the order"
+as_service s12 "$(submit_sql portal "$G3" 'race portal 12') select pg_sleep(2);" > "$TMP/12.s.out" &
+SP=$!
+wait_for s12 Timeout PgSleep || bad "12: the portal submit never reached its pause"
+as_user h12 "$MGR" "$(hide_sql "'$G3'" false "$(op 13)")" > "$TMP/12.h.out" &
+HP=$!
+if wait_for h12 Lock; then ok "12: the hide waits on the portal order's item lock"; else bad "12: the hide never waited"; fi
+wait "$SP" "$HP"
+check "12: the portal order stands (existing history) with its line, then the hide changed the item" \
+  "$(ans "$TMP/12.s.out" | jget source status)/$(q "select count(*) from public.order_request_lines where item_id = '$G3'")/$(ans "$TMP/12.h.out" | jget changed)" \
+  "portal/pending_approval/1/[\"$G3\"]"
 
 # ═══ 8. Never 40001 / 40P01, no orphan header ═════════════════════════════
 echo "== 8. no retryable class, no orphan"

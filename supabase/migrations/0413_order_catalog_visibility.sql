@@ -40,18 +40,24 @@
 --   6. platform_set_permission_exception(org, user, permission, state,
 --      expected_state, actor, actor_email): the platform console's one write
 --      path for the exception (service_role EXECUTE only). Compare-and-set,
---      audited twice in the same transaction. platform_admin_audit's action
---      CHECK gains permission_exception_changed (every older value restated).
+--      audited twice in the same transaction. The actor must have a sign-in
+--      account, and the email recorded is that account's (actor_email is
+--      ignored). platform_admin_audit's action CHECK gains
+--      permission_exception_changed (every older value restated).
 --   7. The new-demand gate, tg_order_request_lines_order_visibility, BEFORE
---      INSERT, and BEFORE UPDATE OF quantity_requested, item_id when the
---      quantity rises or the item changes, on order_request_lines: a line for
---      an item with order_catalog_visible = false is refused (P0001
+--      INSERT, and BEFORE UPDATE OF quantity_requested, item_id,
+--      order_request_id when the quantity rises, the item changes or the line
+--      moves to another order, on order_request_lines: a line for an item
+--      with order_catalog_visible = false is refused (P0001
 --      order_item_hidden, detail = the item id) for EVERY writer (no role
 --      skip), except an exchange replacement order (approved commitments).
---      It reads the item FOR KEY SHARE (the lock the line's own FK check
---      takes), so it serializes with a hide's FOR UPDATE: an order accepted
---      before the hide is history, a write after the hide commits fails.
---      Lowering, removing, notes, approval, picking, returns: untouched.
+--      To an API role writing another organization's or an unreadable hidden
+--      item it answers a bare 42501 (no hint, no detail): it never hands a
+--      hidden item on. It reads the item FOR KEY SHARE (the lock the line's
+--      own FK check takes), so it serializes with a hide's FOR UPDATE: an
+--      order accepted before the hide is history, a write after the hide
+--      commits fails. Lowering, removing, notes, approval, picking, returns:
+--      untouched.
 --   8. place_order_request: step 8 also reports hidden items as
 --      item_not_orderable {itemId: 'hidden_from_orders'} (existing reasons
 --      keep priority), and the create's catch records the gate's refusal the
@@ -59,17 +65,32 @@
 --   9. add_order_request_lines(order, lines) and _order_request_line_top_up(
 --      order, item, delta): Add items in ONE transaction (top-ups and new
 --      lines, in item-id order), replacing the service's separately committed
---      top-ups (no partial change).
+--      top-ups (no partial change). The helper runs only inside the function
+--      (the transaction-bound flag stockpilot.add_lines; a direct call is
+--      42501 order_top_up_direct), checks the Orders module itself, and every
+--      line's RESULTING quantity is at most 10,000 units (place_order_
+--      request's per-item cap; 22023 order_lines_invalid, quantity).
 --  10. public_link_eligible_items: and i.order_catalog_visible (page and
 --      submit of public links share it).
 --  11. Exchanges, new selections only: _return_exchange_requester_options and
 --      return_exchange_candidates offer no hidden item;
---      _return_exchange_item_ok(staff) refuses a hidden item unless an
---      earlier transaction approved it for a return of this order (re-issue
---      and unchanged lines of a change keep working).
+--      _return_exchange_item_ok(staff) refuses a hidden item unless it is the
+--      approved item of the very exchange line that change_return_replacement
+--      keeps (a re-issue, or an unchanged line of a substitution), approved
+--      in an earlier transaction. change_return_replacement names those lines
+--      in the transaction-bound flag stockpilot.exchange_kept_lines, one line
+--      per check; any other selection of a hidden item on the order (a new
+--      RMA, an add at approval, a substitution to it) is refused.
 --  12. duplicate_inventory_item copies the source's choice (a copy of a
 --      hidden item is hidden). get_request_context() carries the org's
 --      order_catalog_last_hide_at.
+--  13. insert_order_request_with_lines(header, lines, track_token): the B2B
+--      portal's and the public link's one write (service_role EXECUTE only,
+--      SECURITY INVOKER): the header, the optional track-token row and the
+--      lines in item-id order, in ONE transaction, so a refusal at a line (a
+--      hide that committed after the server's catalog read) leaves no header,
+--      no line and no notification. It used to be separate calls with a
+--      compensating delete, after the header's notify trigger had fired.
 --
 -- WHO CHANGES AT PUSH: nobody. Every existing row reads shown (true), which
 -- is today's behaviour; no permission row is written for any member; the two
@@ -102,7 +123,10 @@
 --   8. A hide that changed a row stamps organizations.order_catalog_last_
 --      hide_at (after the item stamps).
 --   9. One audit_logs row per changed item (item.order_visibility_changed).
---  10. Answer {organizationId, operationId, visible, changed, unchanged}.
+--  10. Answer {organizationId, operationId, visible, changed, unchanged,
+--      warehouseIds}: warehouseIds are the distinct warehouses of every id in
+--      the call (changed or not), the ordering catalogs the server refreshes,
+--      so a retry that changes nothing still repairs a failed refresh.
 -- A retry finds every row in its target state: no write, no audit row, every
 -- id unchanged. All or nothing: one statement, one transaction.
 --
@@ -118,9 +142,10 @@
 --         mfa_required, aal2_required, order_visibility_managed (the item
 --         guard), permission_platform_managed (the permission guard),
 --         order_edit_forbidden, warehouse_read, replacement_lines_fixed,
---         not_member
+--         not_member, order_top_up_direct; the gate's bare 42501 (no hint)
 --   22023 order_catalog_invalid, order_lines_invalid,
---         permission_exception_invalid, permission_not_platform_managed
+--         permission_exception_invalid, permission_not_platform_managed,
+--         order_request_invalid
 --   P0002 order_catalog_items_unavailable (detail: JSON array of the
 --         caller's ids), order_not_found, member_not_found,
 --         order_line_not_found
@@ -182,6 +207,7 @@ begin
         ('public._return_exchange_requester_options(uuid,boolean)',     'c9a8b3ff98fa7e53e1befaeb39b52c55', false),
         ('public.return_exchange_candidates(uuid,uuid,text,integer)',   'b98658cd28a15784b2f947be11258e7f', false),
         ('public.get_request_context()',                                '4d9636cbee703d719743450ca22d26e5', false),
+        ('public.change_return_replacement(uuid,integer,jsonb,text,text,jsonb)', '6bea8a5f9cfa78345aaca9f1051d1d68', true),
         -- Relied on, unchanged.
         ('public.has_permission(uuid,text)',                            'cc0accdad7e2fdf4f88aa82aa887e85f', true),
         ('public.caller_can_read_item(uuid)',                           '80523d2cc0fafe7fc6b3599903d7f014', true),
@@ -237,7 +263,8 @@ begin
                                      '_order_items_hidden_from_orders', 'add_order_request_lines',
                                      '_order_request_line_top_up', 'tg_inventory_items_order_visibility_guard',
                                      'tg_platform_managed_permission_guard',
-                                     'tg_order_request_lines_order_visibility')) then
+                                     'tg_order_request_lines_order_visibility',
+                                     'insert_order_request_with_lines')) then
     v_bad := v_bad || ' the ordering-visibility objects already exist;';
   end if;
   -- (The permission rows are checked right after the lock prelude: reading a
@@ -675,13 +702,18 @@ begin
   end if;
 
   -- ── 10. Answer ───────────────────────────────────────────────────────────
+  -- warehouseIds: every id's warehouse, changed or not (the catalogs the
+  -- server refreshes; a no-op retry repairs a failed refresh).
   return jsonb_build_object(
     'organizationId', p_organization_id,
     'operationId',    p_operation_id,
     'visible',        p_visible,
     'changed',        to_jsonb(v_changed),
     'unchanged',      to_jsonb(array(select u.id from unnest(v_ids) as u(id)
-                                      where u.id <> all (v_changed) order by u.id)));
+                                      where u.id <> all (v_changed) order by u.id)),
+    'warehouseIds',   to_jsonb(array(select distinct ii.warehouse_id from public.inventory_items ii
+                                      where ii.id = any (v_ids) and ii.organization_id = p_organization_id
+                                      order by 1)));
 end;
 $$;
 
@@ -697,7 +729,7 @@ comment on function public.set_order_catalog_visibility(uuid, uuid[], boolean, u
   'read scope set-based (P0002 order_catalog_items_unavailable, detail = the caller''s failing ids; nothing '
   'applied). Writes only order_catalog_visible and its stamp (updated_at kept), stamps the org hide mark on a hide, '
   'and one audit_logs row per changed item (item.order_visibility_changed). A retry is a no-op with no audit row. '
-  'Never 40001/40P01.';
+  'Answers {organizationId, operationId, visible, changed, unchanged, warehouseIds}. Never 40001/40P01.';
 
 -- ═══ 8. platform_set_permission_exception ═════════════════════════════════
 create function public.platform_set_permission_exception(
@@ -718,11 +750,14 @@ declare
   v_role    text;
   v_granted boolean;
   v_before  text;
-  v_email   text := nullif(btrim(coalesce(p_actor_email, '')), '');
+  v_email   text;
 begin
   -- Service role only (no API EXECUTE); the server verified the platform
-  -- admin and their step-up before calling. auth.uid() is null here, which is
-  -- why the actor is passed and recorded explicitly.
+  -- admin and their step-up before calling (the platform allowlist is a
+  -- server setting the database cannot see). auth.uid() is null here, which
+  -- is why the actor is passed. It must be a real sign-in account, and the
+  -- email recorded is that account's own: p_actor_email is accepted for the
+  -- caller's signature and never trusted (integrator decision D1 item 3).
   if p_permission is null or not (p_permission = any (public._platform_managed_permissions())) then
     raise exception 'permission_not_platform_managed'
       using errcode = '22023', hint = 'permission_not_platform_managed';
@@ -733,8 +768,13 @@ begin
   if p_expected_state is null or p_expected_state not in ('default', 'allow', 'deny') then
     raise exception 'permission_exception_invalid' using errcode = '22023', hint = 'permission_exception_invalid', detail = 'expectedState';
   end if;
-  if p_organization_id is null or p_user_id is null or p_actor_user_id is null or v_email is null then
+  if p_organization_id is null or p_user_id is null then
     raise exception 'permission_exception_invalid' using errcode = '22023', hint = 'permission_exception_invalid', detail = 'target';
+  end if;
+  select nullif(btrim(coalesce(u.email::text, '')), '') into v_email
+    from auth.users u where u.id = p_actor_user_id;
+  if p_actor_user_id is null or v_email is null then
+    raise exception 'permission_exception_invalid' using errcode = '22023', hint = 'permission_exception_invalid', detail = 'actor';
   end if;
 
   -- The target: an accepted member with no Act-as seat (as the console's
@@ -808,8 +848,10 @@ comment on function public.platform_set_permission_exception(uuid, uuid, text, t
   'member_not_found), compare-and-set on expected_state (P0001 permission_exception_changed, detail = the current '
   'state; nothing written). Serialized per (org, member, key). Writes platform_admin_audit '
   '(permission_exception_changed) and audit_logs (permissions.platform_exception_changed) in the same transaction; '
-  'a repeat of the current state writes nothing. SECURITY DEFINER (passes the permission guard as postgres); '
-  'EXECUTE to service_role only: the server verifies the platform admin and step-up first.';
+  'a repeat of the current state writes nothing. The actor must have a sign-in account (22023 '
+  'permission_exception_invalid, detail actor); the email recorded is that account''s own, never p_actor_email. '
+  'SECURITY DEFINER (passes the permission guard as postgres); EXECUTE to service_role only: the server verifies the '
+  'platform admin and step-up first, and PermissionExceptionsService is its one caller (a guard test).';
 
 -- ═══ 9. Hidden items for an order request ═════════════════════════════════
 create function public._order_items_hidden_from_orders(p_item_ids uuid[])
@@ -1219,9 +1261,11 @@ begin
      for key share;
   if v_visible is false then
     -- An API-role writer learns "hidden" only for an item it may read in the
-    -- order's organization; anything else falls through to the RLS WITH
-    -- CHECK of order_request_lines_insert, which refuses it with the 42501
-    -- any unreadable or foreign item gets (BEFORE ROW triggers run first).
+    -- order's organization. For anything else it gets a bare 42501 with no
+    -- hint and no detail, the same answer the insert policy gives any
+    -- unreadable or foreign item, so nothing leaks; and the gate never hands
+    -- a hidden item on (fail closed: integrator decision D1 item 5; it used
+    -- to return the row and rely on the policy's WITH CHECK).
     -- The API role is read from the role setting: in this SECURITY DEFINER
     -- body current_user is the owner, but the setting PostgREST (or a SET
     -- ROLE) made still names the caller's role.
@@ -1229,7 +1273,7 @@ begin
       select o.organization_id into v_order_org
         from public.order_requests o where o.id = new.order_request_id;
       if v_order_org is distinct from v_item_org or not coalesce(public.caller_can_read_item(new.item_id), false) then
-        return new;
+        raise exception 'This order line is not allowed.' using errcode = '42501';
       end if;
     end if;
     raise exception 'This item is no longer available for new orders.'
@@ -1247,25 +1291,38 @@ revoke all on function public.tg_order_request_lines_order_visibility() from pub
 create trigger trg_zz_order_request_lines_zz_order_visibility
   before insert on public.order_request_lines
   for each row execute function public.tg_order_request_lines_order_visibility();
+-- A line moved to another order (order_request_id) is new demand on that
+-- order, so the move is gated like an insert (review fix round; no app path
+-- moves lines, and the service role holds UPDATE).
 create trigger trg_zz_order_request_lines_zz_order_visibility_upd
-  before update of quantity_requested, item_id on public.order_request_lines
+  before update of quantity_requested, item_id, order_request_id on public.order_request_lines
   for each row
-  when (new.quantity_requested > old.quantity_requested or new.item_id is distinct from old.item_id)
+  when (new.quantity_requested > old.quantity_requested or new.item_id is distinct from old.item_id
+        or new.order_request_id is distinct from old.order_request_id)
   execute function public.tg_order_request_lines_order_visibility();
 
 comment on function public.tg_order_request_lines_order_visibility() is
-  'The new-demand gate (0413): a new order line, or a raised quantity or changed item, for an item hidden from '
-  'ordering is refused (P0001 order_item_hidden, detail = the item id) for every writer: place_order_request, '
-  'create_order_request, direct inserts, Add items, top-ups, quantity raises, public links and the portal (no role '
-  'skip). Exchange replacement orders are exempt (approved commitments). Reads the item FOR KEY SHARE (the FK '
-  'check''s own lock), so it serializes with a hide''s FOR UPDATE. To an API role the refusal is raised only for an '
-  'item it may read in the order''s organization; otherwise the insert policy refuses as it does today. SECURITY '
-  'DEFINER so the locking read is not narrowed by the writer''s policies.';
+  'The new-demand gate (0413): a new order line, a raised quantity, a changed item or a line moved to another order, '
+  'for an item hidden from ordering, is refused (P0001 order_item_hidden, detail = the item id) for every writer: '
+  'place_order_request, create_order_request, direct inserts, Add items, top-ups, quantity raises, public links and '
+  'the portal (no role skip). Exchange replacement orders are exempt (approved commitments). Reads the item FOR KEY '
+  'SHARE (the FK check''s own lock), so it serializes with a hide''s FOR UPDATE. To an API role the hidden refusal '
+  'is raised only for an item it may read in the order''s organization; any other hidden item gets a bare 42501 (no '
+  'hint, no detail), never passed on. SECURITY DEFINER so the locking read is not narrowed by the writer''s '
+  'policies.';
 
 -- ═══ 12. Add items in one transaction ═════════════════════════════════════
 -- The top-up of a line already on the order. Lines have no UPDATE grant or
--- policy for API roles (0363, 0119), so this is definer code; it re-checks
--- everything Add items checks, because it can be called directly.
+-- policy for API roles (0363, 0119), so this is definer code. It runs ONLY
+-- inside add_order_request_lines, which raises the transaction-bound flag
+-- stockpilot.add_lines (this transaction's id) around its writes, the
+-- stockpilot.order_submit pattern of 0391. A direct call (no flag, or a flag
+-- of another transaction) is refused: it would skip the service's
+-- order_request.lines_added audit row and its hold sync (review fix round, D1
+-- item 1). EXECUTE stays with authenticated because add_order_request_lines
+-- is SECURITY INVOKER and calls this as the caller. It still re-checks
+-- everything Add items checks (defence in depth), the Orders module among
+-- them, and caps the RESULTING line at 10,000 units (D1 item 2).
 create function public._order_request_line_top_up(p_order_id uuid, p_item_id uuid, p_delta integer)
 returns void
 language plpgsql
@@ -1278,11 +1335,15 @@ declare
   v_hdr  record;
   v_item record;
   v_line uuid;
+  v_qty  numeric;
 begin
+  if coalesce(current_setting('stockpilot.add_lines', true), '') is distinct from pg_current_xact_id()::text then
+    raise exception 'order_top_up_direct' using errcode = '42501', hint = 'order_top_up_direct';
+  end if;
   if v_uid is null then
     raise exception 'unauthenticated' using errcode = '42501', hint = 'unauthenticated';
   end if;
-  if p_delta is null or p_delta < 1 or p_delta > 20000000 then
+  if p_delta is null or p_delta < 1 or p_delta > 10000 then
     raise exception 'order_lines_invalid' using errcode = '22023', hint = 'order_lines_invalid', detail = 'quantity';
   end if;
   select o.id, o.organization_id, o.warehouse_id, o.status, o.requester_user_id, o.replacement_for_return_id
@@ -1293,6 +1354,9 @@ begin
   end if;
   if v_hdr.replacement_for_return_id is not null then
     raise exception 'replacement_lines_fixed' using errcode = '42501', hint = 'replacement_lines_fixed';
+  end if;
+  if not public.module_enabled(v_hdr.organization_id, 'orders') then
+    raise exception 'module_disabled' using errcode = '42501', hint = 'module_disabled';
   end if;
   if v_hdr.status in ('in_transit', 'completed', 'denied', 'cancelled') then
     raise exception 'order_closed' using errcode = 'P0001', hint = 'order_closed', detail = v_hdr.status;
@@ -1334,13 +1398,17 @@ begin
   end if;
   -- One line per item is what Add items writes; should an older order hold
   -- two, the oldest is topped up (deterministic).
-  select l.id into v_line
+  select l.id, l.quantity_requested into v_line, v_qty
     from public.order_request_lines l
    where l.order_request_id = p_order_id and l.item_id = p_item_id
    order by l.created_at, l.id
    limit 1;
   if v_line is null then
     raise exception 'order_line_not_found' using errcode = 'P0002', hint = 'order_line_not_found';
+  end if;
+  -- One ceiling on the RESULTING line, place_order_request's per-item cap.
+  if v_qty + p_delta > 10000 then
+    raise exception 'order_lines_invalid' using errcode = '22023', hint = 'order_lines_invalid', detail = 'quantity';
   end if;
   -- The gate's UPDATE trigger fires here (no role skip): a hidden item is
   -- refused with order_item_hidden.
@@ -1355,13 +1423,15 @@ revoke all on function public._order_request_line_top_up(uuid, uuid, integer) fr
 grant execute on function public._order_request_line_top_up(uuid, uuid, integer) to authenticated;
 
 comment on function public._order_request_line_top_up(uuid, uuid, integer) is
-  'Add items'' top-up of a line already on the order (0413), called by add_order_request_lines in the same '
-  'transaction. SECURITY DEFINER (lines have no UPDATE grant for API roles), so it re-checks everything itself: '
-  'signed in, a member, the order not a replacement (replacement_lines_fixed) and not shipped or closed '
-  '(order_closed), the caller its requester or holding orders:approve (order_edit_forbidden), read access to its '
-  'warehouse (warehouse_read), the item readable, in the order''s warehouse, not deleted, Expected, a rental or a kit '
-  '(order_item_not_addable), delta 1 to 20,000,000. The order-visibility gate fires on its UPDATE. EXECUTE to '
-  'authenticated only.';
+  'Add items'' top-up of a line already on the order (0413), called ONLY by add_order_request_lines in the same '
+  'transaction: unless the transaction-bound flag stockpilot.add_lines holds this transaction''s id it refuses '
+  '(42501 order_top_up_direct). SECURITY DEFINER (lines have no UPDATE grant for API roles), so it re-checks '
+  'everything itself: signed in, a member, the order not a replacement (replacement_lines_fixed), the Orders module '
+  '(module_disabled), not shipped or closed (order_closed), the caller its requester or holding orders:approve '
+  '(order_edit_forbidden), read access to its warehouse (warehouse_read), the item readable, in the order''s '
+  'warehouse, not deleted, Expected, a rental or a kit (order_item_not_addable), delta 1 to 10,000 and the resulting '
+  'line at most 10,000 units (22023 order_lines_invalid, quantity). The order-visibility gate fires on its UPDATE. '
+  'EXECUTE to authenticated only (its INVOKER caller needs it).';
 
 create function public.add_order_request_lines(p_order_id uuid, p_lines jsonb)
 returns jsonb
@@ -1382,6 +1452,7 @@ declare
   v_existing uuid[];
   v_added   uuid[] := '{}';
   v_merged  uuid[] := '{}';
+  v_flag    text;
   r         record;
 begin
   if v_uid is null then
@@ -1389,7 +1460,8 @@ begin
   end if;
 
   -- ── Shape: 1 to 200 entries, each {itemId: uuid, quantity: whole 1 to
-  -- 100,000}; entries of one item are summed (the service's rule) ─────────
+  -- 100,000}; entries of one item are summed (the service's rule), and the
+  -- sum, like every line's resulting quantity, is at most 10,000 units ─────
   if p_lines is null or jsonb_typeof(p_lines) <> 'array'
      or jsonb_array_length(p_lines) < 1 or jsonb_array_length(p_lines) > 200 then
     raise exception 'order_lines_invalid' using errcode = '22023', hint = 'order_lines_invalid', detail = 'lines';
@@ -1414,6 +1486,12 @@ begin
     into v_wanted, v_ids
     from (select (l->>'itemId')::uuid as item, sum((l->>'quantity')::numeric)::integer as q
             from jsonb_array_elements(p_lines) as e(l) group by 1) s;
+  -- One ceiling on a line's RESULTING quantity on every path that adds
+  -- demand: place_order_request's per-item cap (10,000). A new line is the
+  -- sum; a top-up is checked against the line it lands on by the helper.
+  if exists (select 1 from jsonb_each_text(v_wanted) as w where w.value::numeric > 10000) then
+    raise exception 'order_lines_invalid' using errcode = '22023', hint = 'order_lines_invalid', detail = 'quantity';
+  end if;
 
   -- ── The order, under the caller's RLS (loadEditableOrderHeader's rules) ──
   select o.id, o.organization_id, o.warehouse_id, o.status, o.requester_user_id, o.replacement_for_return_id
@@ -1484,8 +1562,12 @@ begin
   end loop;
 
   -- ── Writes, one item at a time in id order (the gate fires in each) ──────
+  -- The flag lets _order_request_line_top_up run, for this transaction only;
+  -- put back after the writes (a refusal rolls it back with them).
   v_existing := array(select distinct l.item_id from public.order_request_lines l
                        where l.order_request_id = p_order_id);
+  v_flag := current_setting('stockpilot.add_lines', true);
+  perform set_config('stockpilot.add_lines', pg_current_xact_id()::text, true);
   foreach v_item in array v_ids loop
     if v_item = any (v_existing) then
       perform public._order_request_line_top_up(p_order_id, v_item, (v_wanted->>v_item::text)::integer);
@@ -1497,6 +1579,7 @@ begin
       v_added := v_added || v_item;
     end if;
   end loop;
+  perform set_config('stockpilot.add_lines', coalesce(v_flag, ''), true);
 
   return jsonb_build_object('orderId', p_order_id, 'added', to_jsonb(v_added), 'merged', to_jsonb(v_merged));
 end;
@@ -1507,12 +1590,14 @@ grant execute on function public.add_order_request_lines(uuid, jsonb) to authent
 
 comment on function public.add_order_request_lines(uuid, jsonb) is
   'Add items to an existing order in ONE transaction (0413). p_lines [{itemId, quantity}], 1 to 200 entries, whole '
-  'quantities 1 to 100,000, entries of one item summed (22023 order_lines_invalid, detail the field). The order read '
+  'quantities 1 to 100,000, entries of one item summed, and every line''s resulting quantity at most 10,000 units '
+  '(22023 order_lines_invalid, detail the field). The order read '
   'under the caller''s RLS: P0002 order_not_found, 42501 replacement_lines_fixed, module_disabled, P0001 order_closed '
   '(detail the status), 42501 order_edit_forbidden (requester or orders:approve), warehouse_read. Every item read '
   'under the caller''s RLS first: P0001 order_item_not_addable (detail {itemId, reason: not_found | other_warehouse | '
   'deleted | awaiting_first_receipt | rental | kit}) or order_item_hidden (detail the id). Then item-id order: a top-up '
-  'through _order_request_line_top_up, or an insert as the caller (the insert policy and every line guard apply). The '
+  'through _order_request_line_top_up (allowed by the transaction-bound flag stockpilot.add_lines, raised here around '
+  'the writes and put back), or an insert as the caller (the insert policy and every line guard apply). The '
   'gate refuses a hide that committed meanwhile, and the whole call rolls back: nothing partial. Answers {orderId, '
   'added, merged}. SECURITY INVOKER, lock_timeout 5s (55P03 busy, nothing written); EXECUTE to authenticated only.';
 
@@ -1563,6 +1648,110 @@ $function$;
 
 revoke all on function public.public_link_eligible_items(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.public_link_eligible_items(uuid, uuid) to service_role;
+
+-- ═══ 13b. The portal's and the public link's one write ═════════════════════
+-- The B2B portal and the public request link created an order as separate
+-- service-role calls: the header, then (public link) the track token's side
+-- row, then the lines, deleting the header if a later call failed. Since the
+-- gate above, a hide that commits between the server's catalog read and the
+-- line insert is such a failure, and by then the header's notify trigger had
+-- already written a "New order request" notification (and queued its push)
+-- for an order that was then deleted; a failed compensating delete left the
+-- header too. This writes all of it in ONE transaction, as the service role
+-- (SECURITY INVOKER: exactly the rights, triggers and policies those calls
+-- had), so a refusal at any line leaves no header, no side row, no line and no
+-- notification. Lines go in in item-id order (the lock order of every gated
+-- writer). Only a new portal (pending_approval) or public-link
+-- (pending_confirmation) request, from the header columns those two send.
+create function public.insert_order_request_with_lines(
+  p_header      jsonb,
+  p_lines       jsonb,
+  p_track_token text default null)
+returns jsonb
+language plpgsql
+volatile
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  c_uuid constant text := '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
+  c_cols constant text[] := array[
+    'organization_id', 'warehouse_id', 'status', 'source', 'customer_id',
+    'requester_user_id', 'requester_email', 'requester_name', 'requester_org_label', 'requester_phone',
+    'notes', 'fulfillment_type', 'delivery_charter_id', 'pickup_location_notes',
+    'confirmation_token_hash', 'confirmation_token_expires_at'];
+  c_line_keys constant text[] := array[
+    'item_id', 'quantity_requested', 'unit_cost_at_request', 'unit_price_at_request', 'notes'];
+  v_cols text;
+  v_row  public.order_requests%rowtype;
+begin
+  -- ── The header: a new portal or public-link request ─────────────────────
+  if p_header is null or jsonb_typeof(p_header) <> 'object'
+     or exists (select 1 from jsonb_object_keys(p_header) as k(key) where k.key <> all (c_cols)) then
+    raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'header';
+  end if;
+  if coalesce(p_header->>'source', '') not in ('portal', 'public_link') then
+    raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'source';
+  end if;
+  if coalesce(p_header->>'status', '')
+     is distinct from (case p_header->>'source' when 'portal' then 'pending_approval' else 'pending_confirmation' end) then
+    raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'status';
+  end if;
+
+  -- ── The lines: 1 to 100, one per item, each a whole quantity of 1 or more
+  if p_lines is null or jsonb_typeof(p_lines) <> 'array'
+     or jsonb_array_length(p_lines) < 1 or jsonb_array_length(p_lines) > 100
+     or exists (select 1 from jsonb_array_elements(p_lines) as e(l)
+                 where case
+                         when jsonb_typeof(l) <> 'object' then true
+                         when exists (select 1 from jsonb_object_keys(l) as k(key) where k.key <> all (c_line_keys)) then true
+                         when jsonb_typeof(l->'item_id') is distinct from 'string' then true
+                         when (l->>'item_id') !~ c_uuid then true
+                         when jsonb_typeof(l->'quantity_requested') is distinct from 'number' then true
+                         else (l->>'quantity_requested')::numeric < 1
+                              or (l->>'quantity_requested')::numeric <> trunc((l->>'quantity_requested')::numeric)
+                       end)
+     or (select count(distinct lower(l->>'item_id')) from jsonb_array_elements(p_lines) as e(l))
+        <> jsonb_array_length(p_lines) then
+    raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'lines';
+  end if;
+  if p_track_token is not null and p_track_token !~ '^[0-9a-f]{64}$' then
+    raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'trackToken';
+  end if;
+
+  -- ── One transaction: header, side row, lines (item-id order) ─────────────
+  select string_agg(quote_ident(k.key), ', ' order by k.key) into v_cols
+    from jsonb_object_keys(p_header) as k(key);
+  execute format(
+    'insert into public.order_requests (%s) select %s from jsonb_populate_record(null::public.order_requests, %L::jsonb) returning *',
+    v_cols, v_cols, p_header::text)
+    into v_row;
+  if p_track_token is not null then
+    insert into public.order_request_secrets (order_request_id, organization_id, public_track_token)
+    values (v_row.id, v_row.organization_id, p_track_token);
+  end if;
+  insert into public.order_request_lines (order_request_id, item_id, quantity_requested, unit_cost_at_request,
+                                          unit_price_at_request, notes)
+  select v_row.id, x.item_id, x.quantity_requested, coalesce(x.unit_cost_at_request, 0), x.unit_price_at_request, x.notes
+    from jsonb_to_recordset(p_lines) as x(item_id uuid, quantity_requested numeric, unit_cost_at_request numeric,
+                                          unit_price_at_request numeric, notes text)
+   order by x.item_id;
+
+  return to_jsonb(v_row);
+end;
+$$;
+
+revoke all on function public.insert_order_request_with_lines(jsonb, jsonb, text) from public, anon, authenticated, service_role;
+grant execute on function public.insert_order_request_with_lines(jsonb, jsonb, text) to service_role;
+
+comment on function public.insert_order_request_with_lines(jsonb, jsonb, text) is
+  'The B2B portal''s and the public request link''s one write of a new order (0413 review fix round): the header '
+  '(a portal request pending_approval, or a public-link request pending_confirmation, from an allowlist of header '
+  'columns), the optional track-token side row (64 hex characters) and 1 to 100 lines, one per item, whole '
+  'quantities of 1 or more, inserted in item-id order, all in ONE transaction (22023 order_request_invalid, detail '
+  'header | source | status | lines | trackToken). Any refusal, the ordering-visibility gate''s order_item_hidden '
+  'included, leaves no header, side row, line or notification. Answers the header row as JSON. SECURITY INVOKER, '
+  'EXECUTE to service_role only: the same rights and triggers as the separate calls it replaces.';
 
 -- ═══ 14. Exchanges: new selections follow ordering visibility ═════════════
 CREATE OR REPLACE FUNCTION public._return_exchange_requester_options(p_order_id uuid, p_check_budget boolean)
@@ -1662,14 +1851,24 @@ begin
     if public.order_items_orderable(v_wh, array[p_item_id]) <> '{}'::jsonb then
       return false;
     end if;
-    -- 0413: an item hidden from ordering is no new staff selection. An item
-    -- an EARLIER transaction approved for a return of this order (a re-issue,
-    -- or an unchanged line of a change) is an existing commitment and passes.
+    -- 0413: an item hidden from ordering is no new staff selection. The one
+    -- exemption is an existing commitment on the exact line being kept:
+    -- change_return_replacement names, in the transaction-bound flag
+    -- stockpilot.exchange_kept_lines ('<this transaction's id>|<line ids>'),
+    -- the exchange line whose approved item it re-issues or keeps unchanged,
+    -- and that line's item passes when an EARLIER transaction approved it
+    -- (approved, or cancelled with its replacement and now re-issued). Any
+    -- other selection of the item on the order is refused, a commitment on
+    -- another line of it included (review fix round, D1 item 4).
     if not exists (select 1 from public.inventory_items ii
                     where ii.id = p_item_id and ii.order_catalog_visible)
        and not exists (select 1 from public.return_exchange_lines xl
                          join public.returns r on r.id = xl.return_id
                         where r.order_request_id = p_order_id
+                          and split_part(coalesce(current_setting('stockpilot.exchange_kept_lines', true), ''), '|', 1)
+                              = coalesce(pg_current_xact_id_if_assigned()::text, '-')
+                          and xl.id::text = any (string_to_array(
+                                split_part(coalesce(current_setting('stockpilot.exchange_kept_lines', true), ''), '|', 2), ','))
                           and xl.approved_item_id = p_item_id
                           and xl.status in ('approved', 'cancelled')
                           and xl.approved_at < now()) then
@@ -1779,6 +1978,366 @@ revoke all on function public._return_exchange_requester_options(uuid, boolean) 
 revoke all on function public._return_exchange_item_ok(uuid, uuid, text, uuid) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_candidates(uuid, uuid, text, integer) from public, anon, authenticated, service_role;
 grant execute on function public.return_exchange_candidates(uuid, uuid, text, integer) to authenticated;
+
+-- ═══ 14b. change_return_replacement names the line it keeps ═══════════════
+-- The 0396 body (pinned by the preflight), with one change: the exchange
+-- lines it re-issues or keeps unchanged are named, one at a time, in the
+-- transaction-bound flag stockpilot.exchange_kept_lines while their items are
+-- checked, and all of them for _return_replacement_issue's own re-check, so
+-- _return_exchange_item_ok exempts a hidden item only for the exact line kept
+-- (review fix round, D1 item 4). CREATE OR REPLACE keeps its owner, grants
+-- and comment.
+CREATE OR REPLACE FUNCTION public.change_return_replacement(p_return_id uuid, p_expected_revision integer, p_lines jsonb, p_reason text, p_when_short text, p_replacement jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+ SET lock_timeout TO '5s'
+AS $function$
+declare
+  c_scope   constant text := 'return_replacement_change';
+  c_uuid    constant text := '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
+  v_user    uuid := auth.uid();
+  v_org     uuid;
+  v_wh      uuid;
+  v_order   uuid;
+  v_no      text;
+  v_status  text;
+  v_rev     integer;
+  v_reason  text;
+  v_when    text := coalesce(nullif(p_when_short, ''), 'refuse');
+  v_canon   jsonb;
+  v_hash    text;
+  v_key     text;
+  v_key_id  uuid;
+  v_prev    record;
+  v_live    record;
+  v_ftype   text;
+  v_site    uuid;
+  v_class   text;
+  v_mode    text;
+  v_seen    uuid[] := '{}';
+  v_set     jsonb := '[]'::jsonb;
+  v_changed boolean := false;
+  v_spent   integer := 0;
+  v_item    uuid;
+  v_qty     numeric;
+  v_repl    jsonb;
+  v_opts    jsonb;
+  v_room    numeric;
+  v_kept    text;
+  x         record;
+  e         jsonb;
+  a         jsonb;
+begin
+  if v_user is null then
+    raise exception 'unauthenticated' using errcode = '42501', hint = 'unauthenticated';
+  end if;
+  select r.organization_id, o.warehouse_id, o.id, r.return_number into v_org, v_wh, v_order, v_no
+    from public.returns r join public.order_requests o on o.id = r.order_request_id
+   where r.id = p_return_id;
+  if v_org is null or not public.is_org_member(v_org) then
+    raise exception 'return_not_found' using errcode = 'P0002', hint = 'return_not_found';
+  end if;
+  if not public.module_enabled(v_org, 'returns') or not public.module_enabled(v_org, 'orders') then
+    raise exception 'module_disabled' using errcode = 'P0001', hint = 'module_disabled';
+  end if;
+  if not public.has_permission(v_org, 'returns:manage') then
+    raise exception 'returns_manage' using errcode = '42501', hint = 'returns_manage';
+  end if;
+  if not public.has_permission(v_org, 'orders:approve') then
+    raise exception 'orders_approve' using errcode = '42501', hint = 'orders_approve';
+  end if;
+  if not public.user_can_access_inventory(v_user, v_wh, null, 'write') then
+    raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
+  end if;
+  v_reason := public._return_exchange_reason(p_reason, 1000);
+  if v_when not in ('refuse', 'backorder') then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'whenShort';
+  end if;
+  if p_expected_revision is null then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'expectedRevision';
+  end if;
+  if p_lines is not null and jsonb_typeof(p_lines) not in ('array', 'null') then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'lines';
+  end if;
+  if p_replacement is not null and jsonb_typeof(p_replacement) not in ('object', 'null') then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'replacement';
+  end if;
+
+  select r.status into v_status from public.returns r where r.id = p_return_id for update;
+
+  -- Idempotency: one key per (RMA, revision); the hash is the change.
+  select jsonb_build_object(
+           'lines', coalesce((select jsonb_agg(jsonb_build_object(
+                                       'exchangeLineId', lower(y->>'exchangeLineId'),
+                                       'itemId', coalesce(y->'itemId', 'null'::jsonb),
+                                       'quantity', coalesce(y->'quantity', 'null'::jsonb))
+                                     order by lower(y->>'exchangeLineId'), y::text)
+                                from jsonb_array_elements(case when jsonb_typeof(p_lines) = 'array' then p_lines else '[]'::jsonb end) as y),
+                             '[]'::jsonb),
+           'reason', v_reason,
+           'whenShort', v_when,
+           'replacement', coalesce(p_replacement, 'null'::jsonb))
+    into v_canon;
+  v_hash := md5(c_scope || ':v1|' || v_canon::text);
+  v_key := p_return_id::text || ':' || p_expected_revision::text;
+
+  insert into public.idempotency_keys as k (organization_id, scope, key, request_hash, status, resource_type, resource_id)
+  values (v_org, c_scope, v_key, v_hash, 'in_progress', 'return', p_return_id)
+  on conflict (organization_id, scope, key) do nothing
+  returning k.id into v_key_id;
+  -- A key row this function did not complete is taken over, never trusted
+  -- (the RX-1 F11 rule): every change it completes appends the
+  -- replacement_changed decision at the next revision, under the RMA lock.
+  if v_key_id is null
+     and not exists (select 1 from public.return_decisions d
+                      where d.return_id = p_return_id and d.kind = 'replacement_changed'
+                        and d.revision = p_expected_revision + 1) then
+    update public.idempotency_keys k
+       set request_hash = v_hash, status = 'in_progress', response = null,
+           resource_type = 'return', resource_id = p_return_id, updated_at = now()
+     where k.organization_id = v_org and k.scope = c_scope and k.key = v_key
+    returning k.id into v_key_id;
+  end if;
+  if v_key_id is null then
+    select k.request_hash, k.status into v_prev
+      from public.idempotency_keys k
+     where k.organization_id = v_org and k.scope = c_scope and k.key = v_key;
+    if not found or v_prev.request_hash is distinct from v_hash or v_prev.status is distinct from 'completed' then
+      raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed';
+    end if;
+    return jsonb_build_object('changed', false, 'replay', true, 'returnId', p_return_id,
+                              'revision', p_expected_revision + 1, 'status', v_status,
+                              'replacement', coalesce(public._return_exchange_replay(p_return_id, p_expected_revision + 1), 'null'::jsonb));
+  end if;
+
+  if v_status not in ('approved', 'received', 'closed') then
+    raise exception 'invalid_status_transition' using errcode = 'P0001', hint = 'invalid_status_transition',
+      detail = v_status;
+  end if;
+  select coalesce(max(d.revision), 0) into v_rev
+    from public.return_decisions d
+   where d.return_id = p_return_id
+     and d.kind in ('approved', 'replacement_changed', 'replacement_cancelled', 'cancelled');
+  if v_rev <> p_expected_revision then
+    raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed', detail = v_rev::text;
+  end if;
+
+  -- The live replacement, locked right after the RMA, then classified.
+  select o.id, o.status, o.fulfillment_type, o.delivery_charter_id into v_live
+    from public.order_requests o
+   where o.replacement_for_return_id = p_return_id and o.status not in ('cancelled', 'denied')
+     for update;
+  if v_live.id is not null then
+    v_class := public._return_replacement_class(v_live.id);
+    if v_class = 'handed_over'
+       or exists (select 1 from public.order_request_lines l
+                   where l.order_request_id = v_live.id and coalesce(l.quantity_fulfilled, 0) > 0) then
+      raise exception 'replacement_handed_over' using errcode = 'P0001', hint = 'replacement_handed_over';
+    end if;
+    if v_class = 'drawn' then
+      raise exception 'replacement_already_drawn' using errcode = 'P0001', hint = 'replacement_already_drawn';
+    end if;
+    v_mode := 'substitute';
+  else
+    v_mode := 'reissue';
+  end if;
+
+  -- The lines this change carries: every approved line (substitution) or
+  -- every line a replacement cancel left cancelled (re-issue). Each line may
+  -- send at most what is left of its returned quantity after the units this
+  -- RMA's replacements already handed over for it (desk check F2: a forced
+  -- or legacy cancel of a partly handed-over replacement never lets a new one
+  -- send those units again); a line with nothing left is not re-issued.
+  for x in
+    select xl.id, xl.return_line_id, xl.approved_item_id, xl.approved_quantity,
+           rl.quantity - coalesce(f.fulfilled, 0) as room, rl.quantity as qty, coalesce(f.fulfilled, 0) as sent,
+           rl.order_request_line_id as order_line
+      from public.return_exchange_lines xl
+      join public.return_lines rl on rl.id = xl.return_line_id
+      left join public._return_exchange_fulfilled(p_return_id) f on f.exchange_line_id = xl.id
+     where xl.return_id = p_return_id
+       and xl.status = case v_mode when 'substitute' then 'approved' else 'cancelled' end
+       and xl.approved_item_id is not null
+     order by xl.id
+  loop
+    if x.room < 1 then
+      if v_mode = 'substitute' then
+        raise exception 'replacement_handed_over' using errcode = 'P0001', hint = 'replacement_handed_over';
+      end if;
+      v_spent := v_spent + 1;
+      continue;
+    end if;
+    v_set := v_set || jsonb_build_array(jsonb_build_object(
+      'exchangeLineId', x.id, 'returnLineId', x.return_line_id, 'itemId', x.approved_item_id,
+      'quantity', least(x.approved_quantity, x.room), 'returned', x.room, 'previousItemId', null,
+      'qty', x.qty, 'sent', x.sent, 'orderLine', x.order_line));
+  end loop;
+  if jsonb_array_length(v_set) = 0 then
+    if v_spent > 0 then
+      raise exception 'replacement_handed_over' using errcode = 'P0001', hint = 'replacement_handed_over';
+    end if;
+    if v_mode = 'reissue' and exists (select 1 from public.return_exchange_lines xl
+                                       where xl.return_id = p_return_id and xl.status = 'declined'
+                                         and xl.approved_item_id is not null) then
+      -- Kept as a return only since this screen was drawn (desk check F9).
+      raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed';
+    end if;
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'no_exchange_lines';
+  end if;
+
+  for e in select y from jsonb_array_elements(case when jsonb_typeof(p_lines) = 'array' then p_lines else '[]'::jsonb end) as y loop
+    if jsonb_typeof(e) <> 'object' or jsonb_typeof(e->'exchangeLineId') is distinct from 'string'
+       or (e->>'exchangeLineId') !~ c_uuid then
+      raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'exchangeLineId';
+    end if;
+    if (e->>'exchangeLineId')::uuid = any (v_seen) then
+      raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'duplicate_line';
+    end if;
+    v_seen := v_seen || (e->>'exchangeLineId')::uuid;
+    select y into a from jsonb_array_elements(v_set) as y where (y->>'exchangeLineId')::uuid = (e->>'exchangeLineId')::uuid;
+    if a is null then
+      raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'exchangeLineId';
+    end if;
+    v_item := (a->>'itemId')::uuid;
+    if coalesce(e->'itemId', 'null'::jsonb) <> 'null'::jsonb then
+      if jsonb_typeof(e->'itemId') <> 'string' or (e->>'itemId') !~ c_uuid then
+        raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'itemId';
+      end if;
+      v_item := (e->>'itemId')::uuid;
+    end if;
+    v_qty := public._return_exchange_quantity(e->'quantity', (a->>'quantity')::numeric, (a->>'returned')::numeric);
+    if v_item <> (a->>'itemId')::uuid or v_qty <> (a->>'quantity')::numeric then
+      v_changed := true;
+    end if;
+    select coalesce(jsonb_agg(case when (y->>'exchangeLineId')::uuid = (e->>'exchangeLineId')::uuid
+                                   then y || jsonb_build_object('itemId', v_item, 'quantity', v_qty,
+                                                                'previousItemId', case when v_item <> (y->>'itemId')::uuid then y->'itemId' end)
+                                   else y end), '[]'::jsonb)
+      into v_set
+      from jsonb_array_elements(v_set) as y;
+    a := null;
+  end loop;
+  if v_mode = 'substitute' and not v_changed then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'no_change';
+  end if;
+  -- 0413 (review fix round, D1 item 4): an item hidden from ordering passes
+  -- only as the approved item of the very line kept here (a re-issue, or an
+  -- unchanged line of a substitution), so each line is checked with the
+  -- transaction-bound flag naming that line alone, or no line when its item
+  -- changed (a new selection). _return_exchange_item_ok reads the flag.
+  v_kept := current_setting('stockpilot.exchange_kept_lines', true);
+  for a in select y from jsonb_array_elements(v_set) as y loop
+    perform set_config('stockpilot.exchange_kept_lines',
+      pg_current_xact_id()::text || '|'
+      || case when a->>'previousItemId' is null then a->>'exchangeLineId' else '' end, true);
+    if not public._return_exchange_item_ok(v_order, (a->>'itemId')::uuid, 'staff') then
+      raise exception 'exchange_item_not_eligible' using errcode = 'P0001', hint = 'exchange_item_not_eligible';
+    end if;
+  end loop;
+  perform set_config('stockpilot.exchange_kept_lines', coalesce(v_kept, ''), true);
+
+  -- The new order inherits the replaced one's fulfilment (or, for a re-issue,
+  -- the last cancelled replacement's), unless the approver overrides it.
+  if v_live.id is not null then
+    v_ftype := v_live.fulfillment_type;
+    v_site := v_live.delivery_charter_id;
+  else
+    select o.fulfillment_type, o.delivery_charter_id into v_ftype, v_site
+      from public.order_requests o
+     where o.replacement_for_return_id = p_return_id
+     order by o.created_at desc, o.id desc
+     limit 1;
+  end if;
+  v_opts := jsonb_build_object(
+    'whenShort', v_when,
+    'fulfillmentType', coalesce(p_replacement->>'fulfillmentType', v_ftype),
+    'deliveryCharterId', case when coalesce(p_replacement ? 'deliveryCharterId', false) then p_replacement->'deliveryCharterId'
+                              else to_jsonb(v_site) end);
+
+  -- The order-number lock, then every item a row below names (the new items
+  -- and the ones they replace), FOR UPDATE in id order (desk check F4).
+  perform public._return_lock_items(
+    v_org,
+    array(select (y->>'itemId')::uuid from jsonb_array_elements(v_set) as y
+          union
+          select xl.approved_item_id from public.return_exchange_lines xl
+           where xl.return_id = p_return_id and xl.approved_item_id is not null),
+    true);
+  -- Review S1: under the budget lock of every original line in the change,
+  -- no line sends more than its original line has left to exchange, less
+  -- what this RMA's replacements already handed over for it.
+  perform public._return_lock_exchange_budget(
+    array(select (y->>'orderLine')::uuid from jsonb_array_elements(v_set) as y));
+  for a in select y from jsonb_array_elements(v_set) as y loop
+    v_room := least((a->>'qty')::numeric,
+                    greatest(public._return_exchange_line_budget(p_return_id, (a->>'orderLine')::uuid), 0))
+              - (a->>'sent')::numeric;
+    if (a->>'quantity')::numeric > v_room then
+      raise exception 'exchange_already_sent' using errcode = 'P0001', hint = 'exchange_already_sent',
+        detail = jsonb_build_object('quantity', trim_scale((a->>'quantity')::numeric),
+                                    'available', trim_scale(greatest(v_room, 0)))::text;
+    end if;
+  end loop;
+
+  -- Never both reservations: the old order is cancelled first (every hold
+  -- released, nothing restocked: it was not picked), then the new one is
+  -- created and held, all in this transaction.
+  if v_live.id is not null then
+    perform public._return_replacement_cancel_order(v_live.id, v_no, 'changed');
+  end if;
+  -- The issue re-checks every item of the merged set: the kept lines are named
+  -- for it (a changed line's new item was refused above when hidden).
+  perform set_config('stockpilot.exchange_kept_lines',
+    pg_current_xact_id()::text || '|'
+    || coalesce((select string_agg(y->>'exchangeLineId', ',') from jsonb_array_elements(v_set) as y
+                  where y->>'previousItemId' is null), ''), true);
+  v_repl := public._return_replacement_issue(
+    p_return_id,
+    (select jsonb_agg(jsonb_build_object('itemId', y->'itemId', 'quantity', y->'quantity')) from jsonb_array_elements(v_set) as y),
+    p_expected_revision + 1, v_opts);
+  perform set_config('stockpilot.exchange_kept_lines', coalesce(v_kept, ''), true);
+
+  insert into public.return_decisions (organization_id, return_id, kind, channel, revision, order_request_id, reason,
+                                       actor_user_id, actor_kind)
+  values (v_org, p_return_id, 'replacement_changed', 'staff', p_expected_revision + 1, (v_repl->>'orderId')::uuid, v_reason,
+          v_user, 'staff');
+  for a in select y from jsonb_array_elements(v_set) as y order by y->>'exchangeLineId' loop
+    update public.return_exchange_lines xl
+       set status = 'approved',
+           approved_item_id = (a->>'itemId')::uuid,
+           approved_quantity = (a->>'quantity')::numeric,
+           approved_by = v_user,
+           approved_at = now(),
+           replacement_order_request_id = (v_repl->>'orderId')::uuid,
+           replacement_order_line_id = (select l.id from public.order_request_lines l
+                                         where l.order_request_id = (v_repl->>'orderId')::uuid
+                                           and l.item_id = (a->>'itemId')::uuid),
+           revision = p_expected_revision + 1
+     where xl.id = (a->>'exchangeLineId')::uuid;
+    insert into public.return_decisions (organization_id, return_id, return_line_id, exchange_line_id, kind, channel,
+                                         item_id, previous_item_id, quantity, order_request_id, reason,
+                                         actor_user_id, actor_kind)
+    values (v_org, p_return_id, (a->>'returnLineId')::uuid, (a->>'exchangeLineId')::uuid, 'exchange_approved', 'staff',
+            (a->>'itemId')::uuid, (a->>'previousItemId')::uuid, (a->>'quantity')::numeric, (v_repl->>'orderId')::uuid,
+            v_reason, v_user, 'staff');
+  end loop;
+  insert into public.return_decisions (organization_id, return_id, kind, channel, revision, order_request_id,
+                                       actor_user_id, actor_kind)
+  values (v_org, p_return_id, 'replacement_issued', 'staff', p_expected_revision + 1, (v_repl->>'orderId')::uuid, v_user, 'staff');
+
+  update public.idempotency_keys
+     set status = 'completed', resource_id = p_return_id,
+         response = jsonb_build_object('returnId', p_return_id, 'revision', p_expected_revision + 1),
+         updated_at = now()
+   where id = v_key_id;
+
+  return jsonb_build_object('changed', true, 'replay', false, 'returnId', p_return_id,
+                            'revision', p_expected_revision + 1, 'status', v_status, 'mode', v_mode,
+                            'cancelledOrderId', v_live.id, 'replacement', v_repl);
+end;
+$function$;
 
 -- ═══ 15. Duplicate keeps the source's choice ══════════════════════════════
 CREATE OR REPLACE FUNCTION public.duplicate_inventory_item(p_original_id uuid, p_overrides jsonb)

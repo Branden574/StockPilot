@@ -58,6 +58,17 @@
 --     on show; public_visibility never changes.
 -- D.  duplicate_inventory_item copies the choice; unarchive and the first
 --     receipt keep it.
+-- R.  The review fix round (integrator decision D1 and the three reviews):
+--     the top-up helper refuses a direct call and an organization with Orders
+--     off; one ceiling of 10,000 on a line's RESULTING quantity on every add
+--     path (boundaries 10,000 and 10,001); moving a line to another order is
+--     gated; an exchange commitment is exempt only for the exact line
+--     change_return_replacement keeps, in its own transaction; the platform
+--     function records the actor's own auth email and refuses an unknown
+--     actor; the gate itself refuses an API writer's foreign or unreadable
+--     hidden item (no hint, no detail); insert_order_request_with_lines
+--     writes a portal or public-link header and its lines in one
+--     transaction, so a hidden item leaves no header, line or notification.
 -- C.  Census: the only UPDATE writer of the column, the bodies that read it,
 --     no function writes role_default_permissions, the user override writers.
 --
@@ -66,7 +77,7 @@
 
 begin;
 
-select plan(72);
+select plan(86);
 
 \set orgA    '\'04130000-0000-0000-0000-00000000000a\''
 \set orgB    '\'04130000-0000-0000-0000-00000000000b\''
@@ -130,6 +141,8 @@ select plan(72);
 \set lRepl   '\'04130000-0000-0000-0000-000000000302\''
 \set lPend   '\'04130000-0000-0000-0000-000000000303\''
 \set lAdd    '\'04130000-0000-0000-0000-000000000304\''
+\set lX      '\'04130000-0000-0000-0000-000000000305\''
+\set lY      '\'04130000-0000-0000-0000-000000000306\''
 \set rma     '\'04130000-0000-0000-0000-000000000401\''
 \set rmaL    '\'04130000-0000-0000-0000-000000000402\''
 \set xl      '\'04130000-0000-0000-0000-000000000403\''
@@ -284,6 +297,29 @@ begin
   end;
   return coalesce(v, 'null');
 end $$;
+-- The same call, answering ERR:<sqlstate>:<message> on a refusal: which code
+-- path refused (the gate's own words, or the insert policy's) when the hint
+-- and detail are both empty.
+create function pg_temp.run_msg(p_as text, p_sub uuid, p_sql text) returns text language plpgsql as $$
+declare v_state text; v_msg text; v text;
+begin
+  begin
+    perform set_config('request.jwt.claim.sub', coalesce(p_sub::text, ''), true);
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', p_sub, 'role', p_as, 'aal', 'aal1')::text, true);
+    perform set_config('role', p_as, true);
+    execute p_sql into v;
+    perform set_config('role', 'none', true);
+    perform set_config('request.jwt.claim.sub', '', true);
+    perform set_config('request.jwt.claims', '', true);
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+    perform set_config('role', 'none', true);
+    perform set_config('request.jwt.claim.sub', '', true);
+    perform set_config('request.jwt.claims', '', true);
+    return 'ERR:' || v_state || ':' || coalesce(v_msg, '');
+  end;
+  return coalesce(v, 'null');
+end $$;
 -- A read in its own snapshot: a plain subquery in the same SELECT as a
 -- writing call sees the statement's snapshot, taken before the call wrote.
 create function pg_temp.q(p_sql text) returns text language plpgsql as $$
@@ -291,6 +327,14 @@ declare v text;
 begin
   execute p_sql into v;
   return coalesce(v, 'null');
+end $$;
+-- One key of a call's JSON answer, or the refusal as it came (ERR:...).
+create function pg_temp.jf(p_answer text, p_key text) returns text language plpgsql as $$
+begin
+  if p_answer like 'ERR:%' then
+    return p_answer;
+  end if;
+  return coalesce(p_answer::jsonb ->> p_key, 'null');
 end $$;
 -- set_order_catalog_visibility as a member.
 create function pg_temp.vis(p_sub uuid, p_ids uuid[], p_visible boolean, p_op uuid,
@@ -365,11 +409,11 @@ select is(
      join (values
        ('trg_zz_inventory_items_order_visibility', '^CREATE TRIGGER \S+ BEFORE INSERT OR UPDATE OF order_catalog_visible, order_catalog_visibility_changed_at ON public\.inventory_items FOR EACH ROW EXECUTE FUNCTION tg_inventory_items_order_visibility_guard\(\)$'),
        ('trg_zz_order_request_lines_zz_order_visibility', '^CREATE TRIGGER \S+ BEFORE INSERT ON public\.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_order_visibility\(\)$'),
-       ('trg_zz_order_request_lines_zz_order_visibility_upd', '^CREATE TRIGGER \S+ BEFORE UPDATE OF quantity_requested, item_id ON public\.order_request_lines FOR EACH ROW WHEN \(\(\(new\.quantity_requested > old\.quantity_requested\) OR \(new\.item_id IS DISTINCT FROM old\.item_id\)\)\) EXECUTE FUNCTION tg_order_request_lines_order_visibility\(\)$')
+       ('trg_zz_order_request_lines_zz_order_visibility_upd', '^CREATE TRIGGER \S+ BEFORE UPDATE OF quantity_requested, item_id, order_request_id ON public\.order_request_lines FOR EACH ROW WHEN \(\(\(new\.quantity_requested > old\.quantity_requested\) OR \(new\.item_id IS DISTINCT FROM old\.item_id\) OR \(new\.order_request_id IS DISTINCT FROM old\.order_request_id\)\)\) EXECUTE FUNCTION tg_order_request_lines_order_visibility\(\)$')
      ) x(name, want) on x.name = t.tgname
     where t.tgrelid in ('public.inventory_items'::regclass, 'public.order_request_lines'::regclass)),
   'true,true,true',
-  'S4: the item guard fires on INSERT and on UPDATE OF the two columns; the gate on INSERT, and on UPDATE OF quantity or item only when the quantity rises or the item changes');
+  'S4: the item guard fires on INSERT and on UPDATE OF the two columns; the gate on INSERT, and on UPDATE OF quantity, item or order only when the quantity rises, the item changes or the line moves to another order');
 select is(
   (select string_agg(p.proname || ':' || p.prosecdef || ':' || p.provolatile::text
                      || ':' || has_function_privilege('anon', p.oid, 'execute')
@@ -382,12 +426,14 @@ select is(
       and p.proname in ('set_order_catalog_visibility', 'can_manage_order_catalog', '_platform_managed_permissions',
                         'platform_set_permission_exception', '_order_items_hidden_from_orders', 'add_order_request_lines',
                         '_order_request_line_top_up', 'tg_inventory_items_order_visibility_guard',
-                        'tg_platform_managed_permission_guard', 'tg_order_request_lines_order_visibility')),
+                        'tg_platform_managed_permission_guard', 'tg_order_request_lines_order_visibility',
+                        'insert_order_request_with_lines')),
   '_order_items_hidden_from_orders:false:s:false:true:false:search_path=public, pg_temp,'
   '_order_request_line_top_up:true:v:false:true:false:search_path=public, pg_temp,'
   '_platform_managed_permissions:false:i:true:true:true:search_path=public, pg_temp,'
   'add_order_request_lines:false:v:false:true:false:search_path=public, pg_temp,'
   'can_manage_order_catalog:false:s:false:true:false:search_path=public, pg_temp,'
+  'insert_order_request_with_lines:false:v:false:false:true:search_path=public, pg_temp,'
   'platform_set_permission_exception:true:v:false:false:true:search_path=public, pg_temp,'
   'set_order_catalog_visibility:true:v:false:true:false:search_path=public, pg_temp,'
   'tg_inventory_items_order_visibility_guard:false:v:false:false:false:search_path=public, pg_temp,'
@@ -486,8 +532,9 @@ create temp table _before on commit drop as
          (select md5(coalesce(string_agg(to_jsonb(l)::text, ',' order by l.id), '')) from public.item_stock_levels l where l.item_id in (:iXS, :iS, :iM)) as levels;
 select is(
   pg_temp.vis(:mgr, array[:iXS]::uuid[], false, :op1)::jsonb - 'organizationId',
-  jsonb_build_object('operationId', :op1, 'visible', false, 'changed', jsonb_build_array(:iXS), 'unchanged', '[]'::jsonb),
-  'W1: a manager hides the XS shirt: the answer names it changed');
+  jsonb_build_object('operationId', :op1, 'visible', false, 'changed', jsonb_build_array(:iXS), 'unchanged', '[]'::jsonb,
+                     'warehouseIds', jsonb_build_array(:whA)),
+  'W1: a manager hides the XS shirt: the answer names it changed, and the warehouse whose ordering catalog to refresh');
 select is(
   pg_temp.vis_of(:iXS) || ',' || pg_temp.vis_of(:iS) || ',' || pg_temp.vis_of(:iM)
   || '|' || ((select order_catalog_visibility_changed_at from public.inventory_items where id = :iXS) is not null)::text
@@ -514,8 +561,9 @@ select is(
 select is(
   pg_temp.vis(:mgr, array[:iXS]::uuid[], false, :op1)::jsonb - 'organizationId' - 'operationId' - 'visible'
   || jsonb_build_object('audits', pg_temp.q(format('select count(*)::text from public.audit_logs where organization_id = %L and event = ''item.order_visibility_changed''', :orgA))::int),
-  jsonb_build_object('changed', '[]'::jsonb, 'unchanged', jsonb_build_array(:iXS), 'audits', (select audits from _before) + 1),
-  'W5: a retry (same operation) changes nothing and writes no second audit row');
+  jsonb_build_object('changed', '[]'::jsonb, 'unchanged', jsonb_build_array(:iXS), 'warehouseIds', jsonb_build_array(:whA),
+                     'audits', (select audits from _before) + 1),
+  'W5: a retry (same operation) changes nothing and writes no second audit row; it still names the warehouse, so a retry repairs a failed refresh');
 select is(
   ((select order_catalog_last_hide_at from public.organizations where id = :orgA)
      >= (select order_catalog_visibility_changed_at from public.inventory_items where id = :iXS))::text
@@ -534,7 +582,7 @@ create temp table _mark2 on commit drop as select order_catalog_last_hide_at as 
 select is(
   pg_temp.vis(:mgr, array[:iM]::uuid[], true, :op3) || '|'
   || pg_temp.q(format('select (order_catalog_last_hide_at = %L::timestamptz)::text from public.organizations where id = %L', (select at from _mark2), :orgA)),
-  '{"changed": [], "visible": true, "unchanged": ["' || :iM || '"], "operationId": "' || :op3 || '", "organizationId": "' || :orgA || '"}|true',
+  '{"changed": [], "visible": true, "unchanged": ["' || :iM || '"], "operationId": "' || :op3 || '", "warehouseIds": ["' || :whA || '"], "organizationId": "' || :orgA || '"}|true',
   'W8: a show that changes nothing leaves the mark as it was');
 select is(
   pg_temp.vis(:stf, array[:iOk]::uuid[], false, :op1) || ' ' || pg_temp.vis(:vwr, array[:iOk]::uuid[], false, :op1) || ' '
@@ -792,9 +840,9 @@ select is(
                where organization_id = :orgA and event = 'permissions.platform_exception_changed'
                  and metadata->>'entity_id' = :mgrD and metadata->>'after' = 'deny'),
   '6|{"after": "deny", "before": "default", "permission": "orders:manage_catalog_visibility", "target_role": "manager"}'
-  || '|' || :plat || ',support@stockpilot.test'
-  || '|{"after": "deny", "before": "default", "permission": "orders:manage_catalog_visibility", "entity_type": "user", "target_role": "manager", "platform_admin_email": "support@stockpilot.test"},' || :plat,
-  'PE11: each change is audited twice (platform audit and the org''s own log), with the actor, the target, before and after; the no-op wrote neither');
+  || '|' || :plat || ',0413-plat@ordvis.test'
+  || '|{"after": "deny", "before": "default", "permission": "orders:manage_catalog_visibility", "entity_type": "user", "target_role": "manager", "platform_admin_email": "0413-plat@ordvis.test"},' || :plat,
+  'PE11: each change is audited twice (platform audit and the org''s own log), with the actor, the actor''s own sign-in email (never the email the caller passed), the target, before and after; the no-op wrote neither');
 select is(
   pg_temp.run('authenticated', :own, format('select public.platform_set_permission_exception(%L, %L, ''orders:manage_catalog_visibility'', ''allow'', ''default'', %L, ''x@example.org'')::text', :orgA, :stf, :own)) || ' '
   || pg_temp.exc(:orgA, :nobody, 'allow', 'default') || ' '
@@ -864,6 +912,11 @@ select is(
   || pg_temp.run('authenticated', :stf, format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oFar, :iFarH)),
   'ERR:42501:: ERR:42501::',
   'O7: another organization''s hidden item and a hidden item outside the writer''s warehouses get the insert policy''s refusal, never the hidden hint (nothing about them leaks)');
+select is(
+  pg_temp.run_msg('authenticated', :stf, format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oPend, :iBH)) || ' | '
+  || pg_temp.run_msg('authenticated', :stf, format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oFar, :iFarH)),
+  'ERR:42501:This order line is not allowed. | ERR:42501:This order line is not allowed.',
+  'O7b: the gate itself fails closed for those writes (integrator decision D1 item 5): it never hands a hidden item on to the insert policy, and its refusal names nothing');
 -- A hide between place_order_request's step 8 and its insert (a probe in
 -- the create's own transaction; the two-session script proves the real race).
 create function public._zz0413_probe_hide() returns trigger language plpgsql security definer set search_path = public as $$
@@ -930,6 +983,11 @@ select is(
   'ERR:P0001:order_item_not_addable:{"itemId": "04130000-0000-0000-0000-00000000010b", "reason": "kit"} '
   'ERR:22023:order_lines_invalid:quantity ERR:P0002:order_not_found:',
   'A4: Add items keeps the service''s rules: shipped orders, someone neither requester nor approver, an item the caller cannot read, an Expected item, a kit, a fractional quantity, another org''s member');
+-- The helper runs only inside add_order_request_lines, which raises the
+-- transaction-bound flag stockpilot.add_lines around its writes (R2 proves a
+-- direct call is refused). Raised here the same way, so A5 and A6 exercise the
+-- helper's own re-checks (defence in depth) as Add items reaches them.
+select set_config('stockpilot.add_lines', pg_current_xact_id()::text, true) is not null as add_flag_up \gset
 select is(
   pg_temp.run('authenticated', :stfA, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oAdd, :iTop)) || ' '
   || pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oShip, :iOk)) || ' '
@@ -945,12 +1003,13 @@ select is(
   'ERR:42501:order_edit_forbidden: ERR:P0001:order_closed:in_transit ERR:P0002:order_not_found: ERR:22023:order_lines_invalid:quantity '
   'ERR:P0002:order_line_not_found: ERR:42501:warehouse_read: ERR:P0001:order_item_not_addable:{"itemId": "' || :iBH || '", "reason": "not_found"} '
   'ERR:P0001:order_closed:completed |3,4',
-  'A5: called directly the top-up helper re-checks everything: not the requester or an approver, a shipped order, a foreign member, a zero delta, no such line, an order in a warehouse the caller cannot read, another organization''s item, a closed order; an approver''s valid top-up works');
+  'A5: inside Add items the top-up helper re-checks everything: not the requester or an approver, a shipped order, a foreign member, a zero delta, no such line, an order in a warehouse the caller cannot read, another organization''s item, a closed order; an approver''s valid top-up works');
 select is(
   pg_temp.run('authenticated', :mgr, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oPend, :iS)) || '|'
   || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lPend)),
   '|5',
   'A6: (the helper answers void)');
+select set_config('stockpilot.add_lines', '', true) is not null as add_flag_down \gset
 
 -- ═══ X. Exchanges ═════════════════════════════════════════════════════════
 -- A return of the completed order's XS line, approved EARLIER with XS as the
@@ -977,18 +1036,24 @@ select is(
   || pg_temp.run('authenticated', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iS)),
   'ERR:42501:: ERR:42501:: ERR:42501::',
   'X2: the item check has no API EXECUTE (it runs inside the definer exchange functions)');
+-- change_return_replacement names the exchange line it keeps on its approved
+-- item in a transaction-bound flag (stockpilot.exchange_kept_lines, this
+-- transaction's id, then the line ids); the check exempts only that line.
+-- Raised here as change_return_replacement raises it for a re-issue of xl.
+select set_config('stockpilot.exchange_kept_lines', pg_current_xact_id()::text || '|' || :xl, true) is not null as kept_up \gset
 select is(
   pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) || ' '
   || pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iM)) || ' '
   || pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iS)),
   'true false true',
-  'X3: as the definer functions call it: a re-issue of the item an earlier transaction approved passes though it is hidden; a NEW selection of a hidden item is refused; a shown one passes');
+  'X3: as the definer functions call it: a re-issue of the item an earlier transaction approved on the kept line passes though it is hidden; a NEW selection of a hidden item is refused; a shown one passes');
 update public.return_exchange_lines set approved_at = now(), revision = 2 where id = :xl;
 select is(
   pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)),
   'false',
   'X4: an approval made in this same transaction is not yet a commitment (approved_at < now() fails), so a first approval of a hidden item is refused');
 update public.return_exchange_lines set approved_at = now() - interval '1 day', revision = 3 where id = :xl;
+select set_config('stockpilot.exchange_kept_lines', '', true) is not null as kept_down \gset
 select is(
   pg_temp.run('authenticated', :mgr, format('select string_agg(s->>''itemId'', '','' order by s->>''itemId'') from jsonb_array_elements(public.return_exchange_candidates(%L, %L, null, 30)->''siblings'') s', :oDone, :lDone))
   || '|' || pg_temp.run('authenticated', :mgr, format('select coalesce(string_agg(s->>''itemId'', '',''), '''') from jsonb_array_elements(public.return_exchange_candidates(%L, %L, ''Shirt'', 30)->''matches'') s', :oDone, :lDone))
@@ -1034,6 +1099,172 @@ select is(
   || '|' || pg_temp.vis_of(:iExp) || ',' || (select awaiting_first_receipt::text from public.inventory_items where id = :iExp),
   'false,active|false,false',
   'D2: unarchiving keeps a hidden choice, and the first receipt clears only awaiting_first_receipt');
+
+-- ═══ R. The review fix round ══════════════════════════════════════════════
+-- State here: lAdd (oAdd, iTop) holds 3; lPend (oPend, iS) holds 5; XS, M
+-- and OK2 are hidden, OK and the book are shown; Orders is on for org A.
+-- R1, D1 item 1: the helper checks the Orders module itself, even inside Add
+-- items (the flag raised as add_order_request_lines raises it).
+update public.organization_modules set enabled = false where organization_id = :orgA and module_id = 'orders';
+select set_config('stockpilot.add_lines', pg_current_xact_id()::text, true) is not null as add_flag_r1 \gset
+select is(
+  pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oAdd, :iTop))
+  || ' ' || pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+              jsonb_build_array(jsonb_build_object('itemId', :iTop, 'quantity', 1))))
+  || '|' || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd)),
+  'ERR:42501:module_disabled: ERR:42501:module_disabled:|3',
+  'R1: with Orders off the top-up helper refuses (module_disabled) as Add items does; the line is unchanged');
+select set_config('stockpilot.add_lines', '', true) is not null as add_flag_r1_down \gset
+update public.organization_modules set enabled = true where organization_id = :orgA and module_id = 'orders';
+-- R2, D1 item 1: a direct call (no flag of this transaction) is refused, so
+-- it can neither skip the service's audit row and hold sync nor raise demand
+-- past the service's checks.
+select is(
+  pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oAdd, :iTop)) || ' '
+  || pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 20000000)::text', :oAdd, :iTop)) || ' '
+  || pg_temp.run('authenticated', :mgr, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oPend, :iS)) || '|'
+  || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd)) || ','
+  || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lPend)),
+  'ERR:42501:order_top_up_direct: ERR:42501:order_top_up_direct: ERR:42501:order_top_up_direct:|3,5',
+  'R2: the top-up helper called directly is refused for the requester and for an approver alike (any delta); nothing changes');
+select is(
+  pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+    jsonb_build_array(jsonb_build_object('itemId', :iTop, 'quantity', 1))))::jsonb
+  || jsonb_build_object('top', pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd))::int,
+                        'flag', pg_temp.q('select coalesce(current_setting(''stockpilot.add_lines'', true), '''')')),
+  jsonb_build_object('orderId', :oAdd, 'added', '[]'::jsonb, 'merged', jsonb_build_array(:iTop), 'top', 4, 'flag', ''),
+  'R3: Add items still tops up an existing line through the helper (the flag is raised for the call and put back)');
+-- R4 to R6, D1 item 2: one ceiling, 10,000 units, on the RESULTING quantity
+-- of a line on every add path (place_order_request's per-item cap).
+select is(
+  pg_temp.jf(pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+     jsonb_build_array(jsonb_build_object('itemId', :iTop, 'quantity', 9996)))), 'merged')
+  || '|' || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd))
+  || '|' || pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+              jsonb_build_array(jsonb_build_object('itemId', :iTop, 'quantity', 1))))
+  || '|' || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd)),
+  '["' || :iTop || '"]|10000|ERR:22023:order_lines_invalid:quantity|10000',
+  'R4: a top-up may bring a line to exactly 10,000 units; one more is refused (22023 order_lines_invalid, quantity) and nothing changes');
+select is(
+  pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+    jsonb_build_array(jsonb_build_object('itemId', :iOk, 'quantity', 10001)))) || ' '
+  || pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+       jsonb_build_array(jsonb_build_object('itemId', :iOk, 'quantity', 6000), jsonb_build_object('itemId', :iOk, 'quantity', 4001)))) || '|'
+  || pg_temp.q(format('select count(*)::text from public.order_request_lines where order_request_id = %L and item_id = %L', :oAdd, :iOk)) || '|'
+  || pg_temp.jf(pg_temp.run('authenticated', :stf, format('select public.add_order_request_lines(%L, %L::jsonb)::text', :oAdd,
+        jsonb_build_array(jsonb_build_object('itemId', :iOk, 'quantity', 6000), jsonb_build_object('itemId', :iOk, 'quantity', 4000)))), 'added') || '|'
+  || pg_temp.q(format('select sum(quantity_requested)::int::text from public.order_request_lines where order_request_id = %L and item_id = %L', :oAdd, :iOk)),
+  'ERR:22023:order_lines_invalid:quantity ERR:22023:order_lines_invalid:quantity|0|["' || :iOk || '"]|10000',
+  'R5: a new line of 10,001 units, or two entries summing to 10,001, is refused before anything is written; 10,000 is added');
+select set_config('stockpilot.add_lines', pg_current_xact_id()::text, true) is not null as add_flag_r6 \gset
+select is(
+  pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 1)::text', :oAdd, :iTop)) || ' '
+  || pg_temp.run('authenticated', :stf, format('select public._order_request_line_top_up(%L, %L, 20000000)::text', :oAdd, :iTop)) || '|'
+  || pg_temp.q(format('select quantity_requested::int::text from public.order_request_lines where id = %L', :lAdd)),
+  'ERR:22023:order_lines_invalid:quantity ERR:22023:order_lines_invalid:quantity|10000',
+  'R6: the helper itself refuses a top-up past 10,000 on the resulting line (it used to accept 20,000,000 per call)');
+select set_config('stockpilot.add_lines', '', true) is not null as add_flag_r6_down \gset
+-- R7: moving a line to another order is new demand there (the UPDATE trigger
+-- fires on order_request_id too), for every writer, the service role included.
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
+  (:lX, :oDone, :iPrb, 7, 7),
+  (:lY, :oDone, :iBook, 1, 1);
+select pg_temp.vis(:mgr, array[:iPrb]::uuid[], false, :op1) is not null as hid_prb \gset
+select is(
+  pg_temp.run('service_role', null, format('update public.order_request_lines set order_request_id = %L where id = %L returning order_request_id::text', :oAdd, :lX)) || ' '
+  || pg_temp.run('service_role', null, format('update public.order_request_lines set order_request_id = %L where id = %L returning order_request_id::text', :oAdd, :lY)) || '|'
+  || pg_temp.q(format('select order_request_id::text from public.order_request_lines where id = %L', :lX)),
+  'ERR:P0001:order_item_hidden:' || :iPrb || ' ' || :oAdd || '|' || :oDone,
+  'R7: a hidden item''s line cannot be moved onto another order (the same insert is refused); a shown item''s line still moves');
+-- R8, D1 item 4: the exchange exemption is the exact line
+-- change_return_replacement keeps, in its own transaction. xl (approved a day
+-- ago for hidden XS on oDone) is the commitment.
+select pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) as r8_none \gset
+select set_config('stockpilot.exchange_kept_lines', pg_current_xact_id()::text || '|' || :lPend, true) is not null as r8_flag_other \gset
+select pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) as r8_other \gset
+select set_config('stockpilot.exchange_kept_lines', '1|' || :xl, true) is not null as r8_flag_stale \gset
+select pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) as r8_stale \gset
+update public.return_exchange_lines set status = 'cancelled' where id = :xl;
+select set_config('stockpilot.exchange_kept_lines', pg_current_xact_id()::text || '|' || :xl, true) is not null as r8_flag_kept \gset
+select pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) as r8_kept \gset
+select set_config('stockpilot.exchange_kept_lines', '', true) is not null as r8_flag_down \gset
+select pg_temp.run('postgres', :mgr, format('select public._return_exchange_item_ok(%L, %L, ''staff'')::text', :oDone, :iXS)) as r8_cancelled \gset
+select is(
+  :'r8_none' || ' ' || :'r8_other' || ' ' || :'r8_stale' || ' ' || :'r8_kept' || ' ' || :'r8_cancelled',
+  'false false false true false',
+  'R8: a hidden item is a new staff selection unless THIS transaction''s change keeps that very exchange line on it: no flag, a flag naming another line or another transaction all refuse; approved then cancelled, the line passes only when its re-issue names it');
+-- R9, D1 item 3: the platform function takes the actor's email from their own
+-- sign-in account and refuses an actor id with none (PE11 shows the email).
+select is(
+  pg_temp.run('service_role', null, format('select public.platform_set_permission_exception(%L, %L, ''orders:manage_catalog_visibility'', ''allow'', ''default'', %L, ''support@stockpilot.test'')::text',
+    :orgA, :vwr, '04130000-0000-0000-0000-0000000009fe'))
+  || '|' || pg_temp.q(format('select count(*)::text from public.user_permission_overrides where organization_id = %L and user_id = %L and permission = ''orders:manage_catalog_visibility''', :orgA, :vwr)),
+  'ERR:22023:permission_exception_invalid:actor|0',
+  'R9: an actor id with no sign-in account is refused and nothing is written');
+-- R10 to R12: insert_order_request_with_lines, the portal's and the public
+-- link's one write (header, optional track token and lines, one transaction).
+select is(
+  pg_temp.run('authenticated', :stf, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA), '[]'))
+  || ' ' || pg_temp.run('anon', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA), '[]')),
+  'ERR:42501:: ERR:42501::',
+  'R10: only the service role may call it');
+select pg_temp.q('select count(*)::text from public.notifications') as r11_notes \gset
+select is(
+  pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'requester_name', 'R11 Customer', 'fulfillment_type', 'pickup', 'notes', 'R11 hidden'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 1, 'unit_cost_at_request', 2),
+                      jsonb_build_object('item_id', :iXS, 'quantity_requested', 1, 'unit_cost_at_request', 2, 'unit_price_at_request', null))))
+  || '|' || pg_temp.q(format('select count(*)::text from public.order_requests where organization_id = %L and notes = ''R11 hidden''', :orgA))
+  || '|' || pg_temp.q('select count(*)::text from public.notifications'),
+  'ERR:P0001:order_item_hidden:' || :iXS || '|0|' || :'r11_notes',
+  'R11: a portal order naming a hidden item leaves no header, no line and no New order request notification (it used to notify for a header it then deleted)');
+select pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb, %L)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_confirmation', 'source', 'public_link',
+                       'requester_email', 'r12-visitor@example.org', 'requester_name', 'R12 Visitor', 'fulfillment_type', 'pickup',
+                       'notes', 'R12 ok', 'confirmation_token_hash', md5('r12-a') || md5('r12-b'),
+                       'confirmation_token_expires_at', now() + interval '1 day'),
+    jsonb_build_array(jsonb_build_object('item_id', :iS, 'quantity_requested', 2, 'unit_cost_at_request', 3, 'notes', 'size S'),
+                      jsonb_build_object('item_id', :iBook, 'quantity_requested', 1, 'unit_cost_at_request', 4)),
+    md5('r12-c') || md5('r12-d'))) as r12 \gset
+select is(
+  coalesce((select (s.j ->> 'status') || '|' || (s.j ->> 'source') || '|' || (s.j ->> 'requester_email')
+              || '|' || pg_temp.q(format('select string_agg(right(item_id::text, 3) || ''x'' || trim_scale(quantity_requested)::text || '':'' || trim_scale(unit_cost_at_request)::text || '':'' || coalesce(notes, ''-''), '','' order by item_id) from public.order_request_lines where order_request_id = %L', s.j ->> 'id'))
+              || '|' || pg_temp.q(format('select count(*)::text from public.order_request_secrets where order_request_id = %L and public_track_token = %L', s.j ->> 'id', md5('r12-c') || md5('r12-d')))
+              from (select (case when :'r12' like 'ERR:%' then null else :'r12' end)::jsonb as j) s
+             where s.j is not null),
+           :'r12'),
+  'pending_confirmation|public_link|r12-visitor@example.org|102x2:3:size S,104x1:4:-|1',
+  'R12: a public-link order is written whole: the header (answered as its row), the track token''s side row and its lines');
+select is(
+  pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'internal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 1)))) || ' '
+  || pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'approved', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 1)))) || ' '
+  || pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup', 'id', :oAdd),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 1)))) || ' '
+  || pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup'), '[]')) || ' '
+  || pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 1), jsonb_build_object('item_id', :iOk, 'quantity_requested', 2)))) || ' '
+  || pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 0)))),
+  'ERR:22023:order_request_invalid:source ERR:22023:order_request_invalid:status ERR:22023:order_request_invalid:header '
+  'ERR:22023:order_request_invalid:lines ERR:22023:order_request_invalid:lines ERR:22023:order_request_invalid:lines',
+  'R12b: it writes only a new portal or public-link request, from the header columns those two send (an id, a status past approval, an internal source, no line, a repeated item or a quantity under 1 are refused)');
 
 -- ═══ C. Census ════════════════════════════════════════════════════════════
 select is(

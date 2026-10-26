@@ -744,9 +744,12 @@ select is(
        -- 60a9e392712860018a5c3d814aa285eb): a record hidden from ordering is
        -- no new exchange selection; an item approved in an earlier transaction
        -- for a return of the order still passes the staff check (re-issue).
-       -- Nothing else in either body changed.
+       -- Nothing else in either body changed. The 0413 review fix round
+       -- re-pinned the item check again (was cc5df002fc610f12253c73db4dbda336):
+       -- the staff re-issue exemption now holds only for the exact kept
+       -- exchange line the caller names in this transaction.
        ('public._return_exchange_requester_options(uuid,boolean)', 'c92668c5c9e6487781d5dae22c00505e'),
-       ('public._return_exchange_item_ok(uuid,uuid,text,uuid)',   'cc5df002fc610f12253c73db4dbda336'),
+       ('public._return_exchange_item_ok(uuid,uuid,text,uuid)',   'a018b852baa9c82c23e5ee50523096a6'),
        ('public._return_exchange_line_budget(uuid,uuid)',         'a19c4994d724a227dfbb5d35b7f0d7c0'),
        ('public._return_replacement_class(uuid)',                 'fb118357c2024c55f80c095f783c68f1'),
        ('public.create_requester_return_request(uuid,jsonb,uuid,jsonb)', '157aebbe26a7baff32dd56755ab9025d'),
