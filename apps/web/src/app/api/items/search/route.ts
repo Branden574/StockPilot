@@ -135,6 +135,13 @@ export async function GET(req: Request): Promise<Response> {
   // bundles, which is the whole point of the flag existing there.
   const excludeBundles = params.get('bundles') === 'exclude';
 
+  // `orderable=1` keeps only records shown in Orders (order_catalog_visible,
+  // migration 0413), matching the order-creation catalog: the order Add items
+  // picker sends it, so a record hidden from new ordering is not offered (the
+  // server refuses it anyway). Opt-in: Items, Books, counts, the PO form, the
+  // bundle picker and rentals keep listing hidden records.
+  const orderCatalogVisibleOnly = params.get('orderable') === '1';
+
   const rawStatus = params.get('status');
   const status =
     rawStatus && VALID_STATUSES.has(rawStatus)
@@ -236,6 +243,7 @@ export async function GET(req: Request): Promise<Response> {
       itemType,
       itemTypes,
       excludeBundles,
+      ...(orderCatalogVisibleOnly ? { orderCatalogVisibleOnly: true } : {}),
       status: expected === true ? 'all' : status,
       expected,
       ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
@@ -250,6 +258,7 @@ export async function GET(req: Request): Promise<Response> {
     itemType: rentalsOnly && itemType === undefined && itemTypes === undefined ? 'all' : itemType,
     itemTypes,
     excludeBundles,
+    ...(orderCatalogVisibleOnly ? { orderCatalogVisibleOnly: true } : {}),
     // The Expected view spans lifecycles (mobile's listStatusPredicate
     // lifecycle:null; the Items/Books pages pass status:'all' the same
     // way) — so searching inside the chip view also reaches a flagged

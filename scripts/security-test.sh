@@ -1325,6 +1325,35 @@ WEB_TESTS=(
   src/server/services/member-email-unsubscribe.test.ts
   src/app/unsubscribe/route.members.test.ts
   src/app/unsubscribe/route.settings-parity.test.tsx
+
+  # Ordering visibility (0413, step 2b). Manage order items checks the Orders
+  # module, the rollout switch (ORDER_ITEMS_MANAGE_ORGS), the MFA floor and the
+  # platform-managed orders:manage_catalog_visibility before any read or write;
+  # its list and family reads use the caller's own client (RLS is the scope);
+  # Show or Hide goes through set_order_catalog_visibility only, refusals are
+  # mapped by hint and never carry database text, foreign ids are echoed only
+  # when the caller sent them, and the catalog tags are expired with
+  # { expire: 0 } (never 'max' or the global tag). No requester surface offers
+  # a hidden item: the storefront loader filters and overlays recent hides, the
+  # public link page overlays every render, the legacy public thumbnails answer
+  # an empty map, Frequently ordered and the picker thumbnails filter; Add
+  # items is one atomic database call, and a raise, the portal and the public
+  # form refuse a hidden item; PO-import charter siblings and restore points
+  # keep a hidden choice.
+  src/server/services/order-catalog-visibility.test.ts
+  src/server/actions/order-catalog-visibility.test.ts
+  src/app/api/v1/orders/catalog-visibility/route.test.ts
+  src/server/services/order-requests.add-lines.test.ts
+  src/server/services/order-requests.edit-lines.test.ts
+  src/server/services/portal.pricing-mode.test.ts
+  src/app/api/v1/public/order-requests/route.order-visibility.test.ts
+  src/app/api/v1/public/catalog-thumbnails/route.test.ts
+  src/server/services/public-catalog.order-visibility.test.ts
+  src/app/api/orders/freq/route.test.ts
+  src/app/api/orders/catalog-thumbnails/route.test.ts
+  src/server/services/po-imports.charter-decoupling.test.ts
+  src/server/services/po-imports-lines.charter-sibling.test.ts
+  src/server/services/restore-points.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

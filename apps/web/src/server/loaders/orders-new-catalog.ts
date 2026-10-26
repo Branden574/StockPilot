@@ -15,6 +15,7 @@ import { unstable_cache } from 'next/cache';
 
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
+import { heldMembership, orderCatalogLastHideAtOf } from '@/lib/auth/request-context-bundle';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -24,6 +25,7 @@ import {
   settleAsDataError,
 } from '@/server/services/lib/fetch-by-ids';
 import { ServiceError } from '@/server/services/context';
+import { ordersCatalogTag, withoutRecentlyHidden } from '@/server/services/lib/order-catalog-hidden';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { SIGN_PATHS_PER_CALL } from '@/server/services/lib/storage-sign-limiter';
 
@@ -629,7 +631,8 @@ export async function resolveCatalogScopeKey(
  * Loads catalog items for the storefront picker. Returns CatalogItem[]
  * with everything the card grid needs to render: price,
  * available-to-promise, rack label, category name. Bundles are
- * filtered out (phantom rows).
+ * filtered out (phantom rows), and so is every item hidden from new
+ * ordering (order_catalog_visible = false, migration 0413).
  *
  * Wrapped in unstable_cache (60s TTL, keyed by orgId + warehouseId +
  * scope key). The scope key is what keeps one caller's rows from being
@@ -654,20 +657,70 @@ export async function resolveCatalogScopeKey(
  * insufficient_stock; approve_partial reserves what is there and
  * backorders the rest), and the cap warnings in the cart handle any
  * drift. The SCOPE is never stale: it is resolved live on every request.
+ *
+ * ORDERING VISIBILITY (0413, design 7.2). The wrapper is created per call so
+ * the entry carries the organization's tag (ordersCatalogTag), which a Show
+ * or Hide expires with `{ expire: 0 }`; the global tag stays for every
+ * existing 'max' caller. The value carries `readStartedAt` (taken before the
+ * first items read) so loadOrderableCatalog can remove what was hidden after
+ * the entry was read: an expired tag alone does not stop a recompute that
+ * read before the hide from being stored as fresh. Read requester catalogs
+ * through loadOrderableCatalog, never through this directly.
  */
-export const loadCatalogItemsCached = unstable_cache(
-  async (
-    organizationId: string,
-    warehouseId: string,
-    accessKey: string,
-  ): Promise<CatalogItem[]> => {
-    return loadCatalogItemsUncached(organizationId, warehouseId, accessKey);
-  },
-  // v3 (2026-09-25): the catalog is every orderable row, no longer the first
-  // 500 by name. Bumped so no cached 500-row list outlives the deploy.
-  ['orders-new-v2-catalog-v3'],
-  { revalidate: 60, tags: ['orders-new-v2-catalog'] },
-);
+export interface CachedCatalogItems {
+  rows: CatalogItem[];
+  /** Epoch ms, taken before the entry's first items read. */
+  readStartedAt: number;
+}
+
+export const loadCatalogItemsCached = (
+  organizationId: string,
+  warehouseId: string,
+  accessKey: string,
+): Promise<CachedCatalogItems> =>
+  unstable_cache(
+    async (orgId: string, whId: string, key: string): Promise<CachedCatalogItems> => {
+      const readStartedAt = Date.now();
+      const rows = await loadCatalogItemsUncached(orgId, whId, key);
+      return { rows, readStartedAt };
+    },
+    // v4 (2026-10-26, ordering visibility 0413): rows leave out hidden items,
+    // the value is { rows, readStartedAt } and the entry carries the org tag.
+    // v3 (2026-09-25): the catalog is every orderable row, no longer the first
+    // 500 by name.
+    ['orders-new-v2-catalog-v4'],
+    { revalidate: 60, tags: ['orders-new-v2-catalog', ordersCatalogTag(organizationId)] },
+  )(organizationId, warehouseId, accessKey);
+
+/**
+ * The catalog a requester may order from: the cached rows for the caller's
+ * scope key, without any item hidden from new ordering since that entry was
+ * read (design 7.2 item 3). `lastHideAt` is the organization's hide mark from
+ * the request context (orderCatalogLastHideAtOf): null skips the check (the
+ * organization never hid anything), undefined (unknown) always checks.
+ * Kits, Frequently ordered, the Start-an-order prefill and the photos all
+ * derive from this list, so they shrink with it.
+ */
+export async function loadOrderableCatalog(
+  organizationId: string,
+  warehouseId: string,
+  accessKey: string,
+  lastHideAt: string | null | undefined,
+): Promise<CatalogItem[]> {
+  const cached = await loadCatalogItemsCached(organizationId, warehouseId, accessKey);
+  return withoutRecentlyHidden(cached.rows, {
+    organizationId,
+    warehouseId,
+    readStartedAt: cached.readStartedAt,
+    lastHideAt,
+  });
+}
+
+/** The organization's hide mark for a caller, from the membership its request
+ *  context was resolved from: undefined (unknown) when none is held. */
+export function catalogLastHideAt(viewer: CatalogViewer): string | null | undefined {
+  return orderCatalogLastHideAtOf(heldMembership(viewer));
+}
 
 export async function loadCatalogItems(
   viewer: CatalogViewer,
@@ -675,7 +728,12 @@ export async function loadCatalogItems(
   client?: CatalogScopeClient,
 ): Promise<CatalogItem[]> {
   const accessKey = await resolveCatalogScopeKey(viewer, warehouseId, client);
-  return loadCatalogItemsCached(viewer.organizationId, warehouseId, accessKey);
+  return loadOrderableCatalog(
+    viewer.organizationId,
+    warehouseId,
+    accessKey,
+    catalogLastHideAt(viewer),
+  );
 }
 
 /** The four flattened rack keys this loader selects, plus what decides between
@@ -803,6 +861,10 @@ async function loadCatalogItemsUncached(
       // (server-side line validation rejects them too, so a stale cached
       // catalog can't sneak one through).
       .eq('awaiting_first_receipt', false)
+      // Ordering visibility (0413): an item hidden from new ordering is
+      // offered to nobody, a manager included (only Manage order items lists
+      // it). Caller-independent, so it is not part of the scope key.
+      .eq('order_catalog_visible', true)
       .is('deleted_at', null)
       .or('is_bundle.is.null,is_bundle.eq.false')
       // id breaks ties so every read pages the rows in the same order, and
@@ -1085,7 +1147,11 @@ export async function prewarmOrdersNewCatalog(
   warehouseId: string,
 ): Promise<PrewarmPairResult> {
   const t0 = Date.now();
-  const items = await loadCatalogItemsCached(organizationId, warehouseId, FULL_CATALOG_SCOPE_KEY);
+  const { rows: items } = await loadCatalogItemsCached(
+    organizationId,
+    warehouseId,
+    FULL_CATALOG_SCOPE_KEY,
+  );
   const t1 = Date.now();
   let mediaCount = 0;
   let thumbMapError: string | null = null;
