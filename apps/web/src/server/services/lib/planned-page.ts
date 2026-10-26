@@ -64,6 +64,10 @@ export async function planLivePage(args: {
   /** Where a failed scan is logged from ("[inventory page]"). */
   logLabel: string;
   tag?: Tag;
+  /** ?group= (B5, the "Show it" link after Group selected): plan the page
+   *  that draws this display group's header instead of `page`, when the group
+   *  forms in the view (planGroupAwarePage). Null: the requested page. */
+  revealGroupId?: string | null;
 }): Promise<LivePagePlan> {
   const tag = args.tag ?? untagged;
   const [planRows, orgGroups] = await Promise.all([
@@ -101,6 +105,7 @@ export async function planLivePage(args: {
     args.page,
     args.pageSize,
     args.view,
+    args.revealGroupId ?? null,
   );
   return {
     plannedPage,
