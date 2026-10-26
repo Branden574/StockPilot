@@ -66,7 +66,7 @@ export async function GET(
   }
   // The throttle counts only reads the caller may make (a refused caller must
   // not spend the shared export budget or trip the abuse alert).
-  const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+  const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
   if (limited) return limited;
   if (!row) return NextResponse.json({ signatureDataUrl: null }, { headers: NO_STORE });
 

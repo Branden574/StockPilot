@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ConnectionsService } from '@/server/services/connections';
 import { ServiceError } from '@/server/services/context';
 
@@ -50,6 +51,7 @@ const accountMappingSchema = z.object({
 });
 
 function toActionError(e: unknown): ActionResult<never> {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) return err(e.code, e.message, e.details);
   console.error(e);
   return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

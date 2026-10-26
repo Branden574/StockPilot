@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { formatOrderNumber } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -121,42 +122,21 @@ function auditIp(req: Request): string | null {
 }
 
 /**
- * Did a browser send this cookie-authenticated post from another origin?
- * Route handlers get no Origin check from the framework (server actions do),
- * and the session cookies are SameSite=Lax, which still lets a page on a
- * sibling subdomain post with them. The browser names where a post came
- * from: Sec-Fetch-Site (anything but same-origin is refused) and Origin (its
- * host must be this request's; "null" or an unreadable one is refused). A
- * bearer caller (the phone) carries no ambient credential and is not judged
- * here; a client that sends neither header is not a browser a page could
- * drive. Same shape as /api/v1/me/release-state's isCrossSite.
- */
-function crossSiteCookiePost(req: Request): boolean {
-  if (req.headers.get('authorization')) return false;
-  const site = req.headers.get('sec-fetch-site');
-  if (site && site !== 'same-origin') return true;
-  const origin = req.headers.get('origin');
-  if (!origin) return false;
-  try {
-    return new URL(origin).host !== new URL(req.url).host;
-  } catch {
-    return true;
-  }
-}
-
-/**
  * The caller's context IN THE ORDER'S ORGANIZATION (bearer or cookie), or
  * null. The organization header is set to the order's: withApiContext then
  * verifies an accepted membership there, so a member of several
  * organizations is judged where the order lives, and anyone else gets null.
  * A context that cannot be built (an unreadable account status) is also null:
  * the caller answers the one not-found, never a different status.
+ *
+ * The request keeps the post's own method, URL and headers, so withApiContext
+ * judges it as the cookie write it is (docket S14); a GET would never be judged.
  */
 async function memberContextFor(req: Request, organizationId: string): Promise<ServiceContext | null> {
   try {
     const headers = new Headers(req.headers);
     headers.set('x-organization-id', organizationId);
-    return await withApiContext(new Request(req.url, { method: 'GET', headers }));
+    return await withApiContext(new Request(req.url, { method: req.method, headers }));
   } catch (e) {
     void reportError(e, { tag: 'orders.sign.member_context', level: 'warning' });
     return null;
@@ -256,8 +236,14 @@ export async function POST(req: NextRequest) {
     if (!rl.allowed) return rateLimited();
   } else {
     // A cookie session is an ambient credential: only this site's own page
-    // (the sign page's collector) may spend it here (review finding 8).
-    if (crossSiteCookiePost(req)) return notFound();
+    // (the sign page's collector) may spend it here (review finding 8). The
+    // shared rule (lib/auth/cross-site-request.ts): a browser's Sec-Fetch-Site
+    // other than same-origin, an Origin naming another host, `null` or an
+    // unreadable one, or neither header at all (fail closed: the sign page's
+    // fetch always sends its Origin) is the one 404, before any context is
+    // built. A Bearer caller (the phone) is not judged. withApiContext applies
+    // the same rule.
+    if (refusesCrossSiteCookieWrite(req)) return notFound();
     const ctx = await memberContextFor(req, order.organization_id);
     if (
       !ctx ||

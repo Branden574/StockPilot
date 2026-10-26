@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { cn } from '@/lib/utils';
@@ -256,6 +257,8 @@ async function uploadOne(endpoints: PhotoPanelEndpoints, file: File, note: strin
   try {
     await endpoints.finalize(input);
   } catch (e) {
+    // A redirect (the session ended) is not an unsettled finalize.
+    if (isControlFlow(e)) throw e;
     throw unsettled(e, input);
   }
 }
@@ -393,6 +396,7 @@ export function MaintenancePhotosPanel(props: Props) {
         try {
           await endpoints.finalize(item.pendingFinalize);
         } catch (e) {
+          if (isControlFlow(e)) throw e;
           throw unsettled(e, item.pendingFinalize);
         }
       } else {
@@ -401,6 +405,9 @@ export function MaintenancePhotosPanel(props: Props) {
       setUploads((prev) => prev.filter((u) => u.key !== item.key));
       onChange();
     } catch (e) {
+      // A redirect (the session ended): the router is already on its way to
+      // sign-in, so the row is not marked failed and nothing is shown.
+      if (isControlFlow(e)) return;
       const message = e instanceof Error ? e.message : 'Photo upload failed.';
       // Any settling answer from the server ends the finalize: the next Retry
       // starts again from the mint. Only an unsettled one keeps it.
@@ -475,6 +482,7 @@ export function MaintenancePhotosPanel(props: Props) {
     try {
       await endpoints.remove(id, null);
     } catch (e) {
+      if (isControlFlow(e)) return;
       toast.error(e instanceof Error ? e.message : 'Could not remove the photo.');
       return;
     }
@@ -497,6 +505,7 @@ export function MaintenancePhotosPanel(props: Props) {
     try {
       await endpoints.remove(removing.id, trimmedReason || null);
     } catch (e) {
+      if (isControlFlow(e)) return;
       setRemoveError(e instanceof Error ? e.message : 'Could not remove the photo.');
       setRemovePending(false);
       return;

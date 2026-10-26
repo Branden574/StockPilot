@@ -232,10 +232,12 @@ describe('platform org detail — Users tab last active', () => {
 
     const row = rowOf('user1@acme.test');
     const cell = row.getByText('3 hours ago');
+    // In the organization's zone, named, as the cell's own dates are (B9
+    // review). This overview's zone did not arrive: the documented default.
     expect(cell.getAttribute('title')).toBe(
-      'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, any organization; accurate to about an hour). ' +
-        'Last recorded action in this organization 17 Sep 2026, 23:30 UTC. ' +
-        'Last signed in 22 Jul 2026, 08:00 UTC.',
+      'Sign-in last renewed 18 Sep 2026, 02:00 PDT (any device, any organization; accurate to about an hour). ' +
+        'Last recorded action in this organization 17 Sep 2026, 16:30 PDT. ' +
+        'Last signed in 22 Jul 2026, 01:00 PDT.',
     );
     expect(row.queryByText(/signed in|last action/i)).toBeNull();
   });
@@ -302,7 +304,7 @@ describe('platform org detail — Users tab last active', () => {
     const row = rowOf('user1@acme.test');
     const cell = row.getByText('1 day ago');
     expect(cell.getAttribute('title')).toContain(
-      'Last had StockPilot open in this organization 17 Sep 2026, 12:00 UTC.',
+      'Last had StockPilot open in this organization 17 Sep 2026, 05:00 PDT.',
     );
     expect(cell.getAttribute('title')).not.toContain(HEDGE);
     expect(row.queryByText(/signed in|last action/i)).toBeNull();

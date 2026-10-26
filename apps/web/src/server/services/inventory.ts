@@ -32,6 +32,7 @@ import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
 import type { RackHoldingLike } from '@stockpilot/core';
+import type { PlacementFailure } from '@stockpilot/core';
 import type { HoldingsElsewhere, ItemElsewhere } from '@stockpilot/core';
 import type {
   BookCrateAcknowledgedChange,
@@ -72,7 +73,10 @@ import {
   formatStockQuantity,
   hasRackPosition,
   historyNote,
+  isbnSearchKeys,
   collectLegacyRefIdsByKind,
+  newRackBlockerFor,
+  newRackConfirmationDetail,
   normalizeRackFields,
   normalizeSizeValue,
   orderNumberLabels,
@@ -82,6 +86,7 @@ import {
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
+  roundQuantity,
   STAGING_FILTER_MAX_ITEMS,
   trackingTypeForMode,
   validateCustomFields,
@@ -725,6 +730,43 @@ function seesEveryHolding(ctx: ServiceContext): boolean {
 }
 
 /**
+ * Why a book duplicate's holdings reads do not account for all of the copy's
+ * stock (B28, see InventoryService.moveSeededStockToUnplaced), or null when
+ * they do. `rows` are the caller's own read of the copy's holdings (a left
+ * embed: `locations` is null when the location row cannot be read),
+ * `elsewhere` its hiddenHoldingsFor answer, `quantity` the copy's
+ * quantity_on_hand. The answer goes to Sentry: numbers only, no names.
+ *
+ *   • A holding at a location the caller cannot read: its place is unknown.
+ *   • The visible holdings add up to the quantity: all accounted for (an
+ *     item's holdings add up to its on-hand, so nothing can be out of view).
+ *   • Otherwise the stock out of view must make up the rest, and only in
+ *     Staging or Unplaced. Placed stock out of view, a failed read of it, or a
+ *     total that still differs (no holding at all, when the seed failed) is
+ *     not accounted for.
+ */
+function unaccountedCopyStock(
+  rows: ReadonlyArray<{ quantity: number | string; locations: unknown }>,
+  elsewhere: HiddenHoldingsRead,
+  itemId: string,
+  quantity: number,
+): string | null {
+  if (rows.some((r) => !r.locations)) return 'a holding at a location the caller cannot read';
+  const expected = roundQuantity(quantity);
+  const visible = roundQuantity(rows.reduce((sum, r) => sum + Number(r.quantity), 0));
+  if (visible === expected) return null;
+  if (!elsewhere.ok) {
+    return `holdings add up to ${visible} of ${expected}; stock in other warehouses could not be read`;
+  }
+  const hidden = elsewhere.byItem.get(itemId);
+  if (hidden && hidden.placed > 0) {
+    return `${hidden.placed} placed in warehouses the caller cannot see`;
+  }
+  const total = roundQuantity(visible + holdingsElsewhereTotal(hidden));
+  return total === expected ? null : `holdings add up to ${total} of ${expected}`;
+}
+
+/**
  * A put-away destination. Defined in `@/lib/locations/destination-option`
  * beside its client-facing twin (both describe the same `locations` row, fed
  * by the same column list) and re-exported here because this service's
@@ -893,6 +935,17 @@ export interface ManualPlacementOutcome {
   rackName: string;
   /** Items whose stock demonstrably did NOT reach the rack. */
   failedItemIds: string[];
+}
+
+/**
+ * A duplicated book whose stock could not be moved to Unplaced (B28): it is
+ * still where the seed trigger put it. `locationName` names that place (a site
+ * such as "DC4"); null when where the stock is is not known: the holdings read
+ * failed, or the caller's reads do not account for all of it (stock out of
+ * the caller's view, see moveSeededStockToUnplaced).
+ */
+export interface StockLeftAtSite {
+  locationName: string | null;
 }
 
 /**
@@ -3081,6 +3134,16 @@ export class InventoryService {
        * parses into it, so a payload cannot conjure one.
        */
       planSlot?: PlanLimitSlot;
+      /**
+       * Create the rack the opening stock is typed onto even though the
+       * request does not confirm it (`input.confirmNewRack`), as every create
+       * did before 2026-10-24. Only for a caller nobody can ask through: a
+       * restore putting a point's item back on its own rack, and a phone on
+       * the build that asks "Create new rack?" on its own screen and sends no
+       * answer (see POST /api/v1/items). Server-only, like the rest of this
+       * bag.
+       */
+      allowUnconfirmedNewRack?: boolean;
     } = {},
   ) {
     assertPermission(this.ctx, 'items:create');
@@ -3196,6 +3259,69 @@ export class InventoryService {
       jerseyNumber: input.jerseyNumber,
     });
 
+    // Resolve warehouse: warehouse-scoped users (staff/viewer) get their
+    // assignment forced regardless of input. Managers/admins must specify
+    // one (we can't pick "any" silently — items must belong to a warehouse).
+    // Pass our ctx so the helpers don't fall back to requireOrgContext()
+    // (NEXT_REDIRECT trap when called from /api/* routes).
+    //
+    // BEFORE the group find-or-create (2026-10-24, with the new-rack question
+    // below): both are refusals, and a refusal must come before the first
+    // write, or a refused create leaves an empty product group behind.
+    const forced = await forcedWarehouseId(this.ctx);
+    const resolvedWarehouseId = forced ?? input.warehouseId ?? null;
+    if (!resolvedWarehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be selected before creating an item.',
+      );
+    }
+    if (!forced) {
+      // Manager/admin path: validate they have write access to the chosen warehouse.
+      await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
+    }
+
+    // Resolve charter: null = generic stock; otherwise (warehouse, charter)
+    // must be a real pairing in warehouse_charters. The composite FK enforces
+    // it on insert, but a friendlier error here saves a round trip.
+    const resolvedCharterId = input.charterId ?? null;
+    if (resolvedCharterId) {
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+      );
+    }
+
+    // MANUAL-create-only guards, computed here so the new-rack question, the
+    // placement block below AND its doc comment can reference them.
+    // `opts.awaitingFirstReceipt` marks the PO-driven creation paths
+    // (createItemsFromPoLines / the PO custom-line branches in
+    // PurchaseOrdersService), `opts.source === 'import'` marks the PO-import
+    // approve path (po-imports-lines.ts, which also always sets
+    // awaitingFirstReceipt), and `opts.planSlot` marks the CSV bulk importer
+    // (server/actions/import.ts — it never sends `source`, so planSlot is its
+    // only tell). None of those get auto-place: PO/receiving keep their
+    // put-away step, and bulk/import paths are unchanged for now.
+    const isManualCreatePath =
+      !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
+    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    // The auto-place further down moves the opening stock onto the typed rack.
+    const placesOnTypedRack = isManualCreatePath && input.quantityOnHand > 0 && !!typedBinLabel;
+
+    // ═══ A NEW RACK ONLY WHEN THE PERSON SAID SO (2026-10-24) ═══
+    // The auto-place resolves-or-CREATES the typed rack. On 2026-09-24 that
+    // turned a mistyped "1-B" into a brand-new rack holding 130 units, and the
+    // web item form never asked. So a create whose rack does not exist is
+    // refused here, before the first write, unless the request carries the
+    // person's yes (`confirmNewRack`). The refusal names the rack, the units
+    // and the near-matches, and the client asks and sends the request again.
+    // An existing rack is never asked about.
+    const mayCreateRack = input.confirmNewRack === true || opts.allowUnconfirmedNewRack === true;
+    if (placesOnTypedRack && !mayCreateRack) {
+      await this.refuseUnconfirmedNewRack(resolvedWarehouseId, typedBinLabel, input.quantityOnHand);
+    }
+
     let resolvedGroupId: string | null = input.groupId ?? null;
     // Attaching to a group is the `sports` entitlement, whatever the category
     // says. RLS already pins the group to this org (product_group_in_org, 0298)
@@ -3275,56 +3401,8 @@ export class InventoryService {
 
     const sku = (input.sku && input.sku.trim()) || generateSku();
 
-    // Resolve warehouse: warehouse-scoped users (staff/viewer) get their
-    // assignment forced regardless of input. Managers/admins must specify
-    // one (we can't pick "any" silently — items must belong to a warehouse).
-    // Pass our ctx so the helpers don't fall back to requireOrgContext()
-    // (NEXT_REDIRECT trap when called from /api/* routes).
-    const forced = await forcedWarehouseId(this.ctx);
-    const resolvedWarehouseId = forced ?? input.warehouseId ?? null;
-    if (!resolvedWarehouseId) {
-      throw new ServiceError(
-        'validation_error',
-        'A warehouse must be selected before creating an item.',
-      );
-    }
-    if (!forced) {
-      // Manager/admin path: validate they have write access to the chosen warehouse.
-      await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
-    }
-
-    // Resolve charter: null = generic stock; otherwise (warehouse, charter)
-    // must be a real pairing in warehouse_charters. The composite FK enforces
-    // it on insert, but a friendlier error here saves a round trip.
-    const resolvedCharterId = input.charterId ?? null;
-    if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
-        );
-      }
-    }
-
-    // MANUAL-create-only guards, computed here so both the placement block
-    // below AND its doc comment can reference them. `opts.awaitingFirstReceipt`
-    // marks the PO-driven creation paths (createItemsFromPoLines / the PO
-    // custom-line branches in PurchaseOrdersService), `opts.source === 'import'`
-    // marks the PO-import approve path (po-imports-lines.ts, which also always
-    // sets awaitingFirstReceipt), and `opts.planSlot` marks the CSV bulk
-    // importer (server/actions/import.ts — it never sends `source`, so
-    // planSlot is its only tell). None of those get auto-place: PO/receiving
-    // keep their put-away step, and bulk/import paths are unchanged for now.
-    const isManualCreatePath =
-      !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
-    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    // (The warehouse, the charter and the manual-create guards are resolved
+    // above, before the group find-or-create; see the new-rack question.)
     // ═══ THE PRIMARY LOCATION IS A LABEL ON A MANUAL CREATE (owner, 2026-09-24) ═══
     // tg_seed_initial_level seeds the opening stock AT primary_location_id when
     // one is set. The pickers offer only SITES (the warehouse building, rooms,
@@ -3510,12 +3588,19 @@ export class InventoryService {
     // its stock exactly where the trigger put it (today's behavior). A
     // placement hiccup must never undo or block a create that already
     // succeeded.
+    //
+    // `mayCreateRack` (2026-10-24): an unconfirmed create only ever FINDS the
+    // rack. The question above already refused one that did not exist, so
+    // this matters only when the rack disappears between that read and this
+    // one: the stock then stays in Unplaced and the caller is told, rather
+    // than a rack nobody confirmed being created after all.
     let placement: ManualPlacementOutcome | null = null;
-    if (isManualCreatePath && input.quantityOnHand > 0 && typedBinLabel) {
+    if (placesOnTypedRack) {
       placement = await this.placeManualCreateOnRack(
         [data.id as string],
         resolvedWarehouseId,
         typedBinLabel,
+        { mayCreateRack },
       ).catch((e) => {
         console.error('[manual create] auto-place failed', {
           itemId: data.id,
@@ -3587,14 +3672,24 @@ export class InventoryService {
    * at multiple racks, so we don't need to mangle it with a suffix.
    * Same SKU at the SAME bin_location still 23505s (rendered to the
    * user as a friendly "already exists at this rack" error).
+   *
+   * Returns the copy's id and, like create(), whether its stock did NOT reach
+   * the rack the dialog named (`placementFailed`, 2026-10-25), so the dialog
+   * can say so instead of only "Duplicated". A book copy's stock waits in
+   * Unplaced (see moveSeededStockToUnplaced); `stockLeftAt` is present only
+   * when it could not be moved there, and names where it was left.
    */
-  async duplicateItem(input: DuplicateItemInput): Promise<string> {
+  async duplicateItem(input: DuplicateItemInput): Promise<{
+    id: string;
+    placementFailed: PlacementFailure | null;
+    stockLeftAt?: StockLeftAtSite;
+  }> {
     assertPermission(this.ctx, 'items:create');
 
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku, warehouse_id, charter_id')
+      .select('sku, warehouse_id, charter_id, item_type')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -3603,6 +3698,22 @@ export class InventoryService {
     }
     const sku = (original as { sku: string }).sku;
     const originalWarehouseId = (original as { warehouse_id: string | null }).warehouse_id;
+    // The branch below follows the request's type, and duplicate_inventory_item
+    // (0299) follows the ORIGINAL's: a book sent as a product would be placed
+    // onto a bare rack with its crate fields dropped, a product sent as a book
+    // would keep its stock off its rack. The dialog sends the record's own
+    // type, so a mismatch is a stale tab or a hand-made request: refused
+    // before anything is written.
+    const originalType = (original as { item_type?: unknown }).item_type;
+    if (
+      typeof originalType === 'string' &&
+      (originalType === 'book') !== (input.itemType === 'book')
+    ) {
+      throw new ServiceError(
+        'validation_error',
+        'This record is not the type this duplicate was opened for. Reload the page and try again.',
+      );
+    }
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
@@ -3658,6 +3769,20 @@ export class InventoryService {
     ] as const;
     const variantAttributesOverridden = variantOverrideKeys.some((k) => k in overrides);
 
+    // The new-rack question (2026-10-24), create()'s rule: the copy's stock is
+    // about to be moved onto the rack the dialog names (the placement below),
+    // so a rack that does not exist is refused BEFORE the copy is made, unless
+    // the person confirmed it. Books are never placed by a duplicate.
+    const placesCopyOnRack =
+      input.itemType !== 'book' &&
+      !!rackLabel &&
+      !!originalWarehouseId &&
+      Number(input.quantity) > 0;
+    const mayCreateRack = input.itemType === 'product' && input.confirmNewRack === true;
+    if (placesCopyOnRack && !mayCreateRack && originalWarehouseId) {
+      await this.refuseUnconfirmedNewRack(originalWarehouseId, rackLabel, Number(input.quantity));
+    }
+
     const { data: newId, error: rpcErr } = await this.ctx.supabase.rpc(
       'duplicate_inventory_item',
       { p_original_id: input.originalId, p_overrides: overrides },
@@ -3705,32 +3830,49 @@ export class InventoryService {
     // Same fix as a manual create: move whatever was seeded onto the typed
     // rack with the shared placement helper. Books keep their crate-aware
     // path unchanged. FAIL-SOFT: the copy already exists; a placement that
-    // cannot run is reported, never fatal.
-    if (
-      input.itemType !== 'book' &&
-      rackLabel &&
-      originalWarehouseId &&
-      Number(input.quantity) > 0
-    ) {
+    // cannot run is reported, never fatal. Unconfirmed, it only FINDS the rack.
+    //
+    // Reported to the PERSON too (2026-10-25), not only to Sentry: the dialog
+    // said "Duplicated" over a copy whose stock was still at the original's
+    // site. A placement that died outright counts as not placed, as in
+    // create(): the silent version is the defect.
+    let placementFailed: PlacementFailure | null = null;
+    if (placesCopyOnRack && originalWarehouseId) {
       const outcome = await this.placeManualCreateOnRack(
         [newId as string],
         originalWarehouseId,
         rackLabel,
-      ).catch((e: unknown) => {
+        { mayCreateRack },
+      ).catch((e: unknown): ManualPlacementOutcome => {
         void reportError(new Error(rawErrorText(e)), {
           tag: 'inventory.duplicate.place_on_rack',
           level: 'warning',
           organizationId: this.ctx.organizationId,
         });
-        return null;
+        return { rackName: rackLabel, failedItemIds: [newId as string] };
       });
-      if (outcome && outcome.failedItemIds.length > 0) {
+      if (outcome.failedItemIds.length > 0) {
         void reportError(new Error(`duplicate not placed on ${outcome.rackName}`), {
           tag: 'inventory.duplicate.place_on_rack',
           level: 'warning',
           organizationId: this.ctx.organizationId,
         });
+        placementFailed = { rackName: outcome.rackName, count: outcome.failedItemIds.length };
       }
+    }
+
+    // ═══ A BOOK COPY'S STOCK WAITS IN UNPLACED (B28, 2026-10-25) ═══
+    // A book is never placed by a duplicate (its crate is chosen at put-away),
+    // so its copy kept the seed above: AT the original's site. The no-rack rule
+    // (#253) puts stock nobody placed in Unplaced, awaiting put-away.
+    let stockLeftAt: StockLeftAtSite | null = null;
+    if (input.itemType === 'book' && Number(input.quantity) > 0) {
+      // 0299 writes the requested quantity as the copy's quantity_on_hand.
+      stockLeftAt = await this.moveSeededStockToUnplaced(
+        newId as string,
+        originalWarehouseId,
+        Number(input.quantity),
+      );
     }
 
     void audit(
@@ -3743,7 +3885,149 @@ export class InventoryService {
       this.ctx,
     );
 
-    return newId as string;
+    return { id: newId as string, placementFailed, ...(stockLeftAt ? { stockLeftAt } : {}) };
+  }
+
+  /**
+   * THE NO-RACK RULE FOR A DUPLICATED BOOK (owner rule 2026-09-24, #253; the
+   * book half B28, 2026-10-25).
+   *
+   * duplicate_inventory_item (0299) copies the original's primary location (a
+   * SITE such as "DC4", the only kind of place the primary-location picker
+   * offers), and tg_seed_initial_level (0199) seeds the copy's opening stock AT
+   * that site: counted as placed, never on the put-away list, and shown as "No
+   * rack". A product copy is then moved onto the rack its dialog names. A book
+   * copy is not (its crate is chosen at put-away, where the crate rules run:
+   * placing a book onto a bare rack is what erased Maus I's crate), so its
+   * stock stayed at the site. The rule a manual create follows since #253:
+   * stock nobody placed waits in the warehouse's Unplaced bucket, awaiting
+   * put-away, and the primary location stays a label. The copy keeps its
+   * primary location, rack and crate labels; only the holding moves.
+   *
+   * Moves every holding of the copy that sits anywhere but a system bucket to
+   * the warehouse's Unplaced bucket, through transferStock: the ledger reads
+   * 'initial' at the site and then a 'transfer' to Unplaced, the same shape as
+   * a product copy's move onto its rack. A holding the trigger already put in
+   * Unplaced (an original with no primary location) stays.
+   *
+   * FAIL-SOFT, REPORTED: the copy exists whatever happens here. A move that
+   * cannot run leaves the stock where it was seeded; the answer names that
+   * place so the dialog can say so, and Sentry hears of it. Null: nothing was
+   * left outside Unplaced.
+   *
+   * ONLY WHAT THE READS ACCOUNT FOR IS SUCCESS (integrator decision, B28
+   * 2026-10-25). The holdings are read through the caller's own client: since
+   * 0371 a member below manager reads them only in the warehouses they are
+   * assigned to (staff with the 0280 all-warehouses setting too, see
+   * seesEveryHolding), and the seed trigger can fail without failing the copy
+   * (0199 swallows its error). An empty answer is therefore not "nothing left
+   * outside Unplaced". `quantity` is the copy's quantity_on_hand (0299 writes
+   * the request's quantity), and the holdings must add up to it: the visible
+   * ones, and when they fall short, for a caller below manager, the totals out
+   * of view (hiddenHoldingsFor, read alongside). Stock out of view counts only
+   * when it is in Staging or Unplaced, which is where this move would put it
+   * (unaccountedCopyStock has the rule). Placed stock out of view, a total
+   * that still differs, a failed read the answer depends on, or a holding
+   * whose location row the caller cannot read (a left embed, so it arrives
+   * with `locations` null instead of vanishing from an inner join) answers
+   * `{ locationName: null }` and is reported: the dialog then says the stock
+   * may not have reached Unplaced. The holdings that can be seen are still
+   * moved.
+   */
+  private async moveSeededStockToUnplaced(
+    itemId: string,
+    warehouseId: string | null,
+    quantity: number,
+  ): Promise<StockLeftAtSite | null> {
+    const report = (detail: string) =>
+      void reportError(new Error(detail), {
+        tag: 'inventory.duplicate.book_to_unplaced',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+      });
+
+    type SeededHolding = {
+      item_id: string;
+      location_id: string;
+      quantity: number | string;
+      locations: { name: string | null; kind: string | null; type: string | null } | null;
+    };
+    // Both reads at once; hiddenHoldingsFor never throws, and managers and
+    // above skip its call (they read every holding).
+    const [read, elsewhere] = await Promise.all([
+      this.holdingsForItemIds<SeededHolding>(
+        [itemId],
+        'item_id, location_id, quantity, locations(name, kind, type)',
+      ).then(
+        (rows) => ({ ok: true as const, rows }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
+      this.hiddenHoldingsFor([itemId]),
+    ]);
+    if (!read.ok) {
+      report(rawErrorText(read.error));
+      return { locationName: null };
+    }
+    // A row for another item is never trusted (placeManualCreateOnRack's rule).
+    const rows = read.rows.filter((r) => r.item_id === itemId);
+
+    const unaccounted = unaccountedCopyStock(rows, elsewhere, itemId, quantity);
+    if (unaccounted) report(`book duplicate's stock not accounted for: ${unaccounted}`);
+    const unknownPlace: StockLeftAtSite = { locationName: null };
+
+    // Only a holding whose place is known and is not Staging or Unplaced.
+    const seeded = rows.filter((r) => r.locations && !isSystemLocation(r.locations));
+    if (seeded.length === 0) return unaccounted ? unknownPlace : null;
+    const leftAt: StockLeftAtSite = unaccounted
+      ? unknownPlace
+      : { locationName: seeded[0]?.locations?.name ?? null };
+
+    // The warehouse's own Unplaced bucket (every warehouse has one: 0188's
+    // trigger and backfill), in this organization, never an archived one.
+    if (!warehouseId) {
+      report('book duplicate has no warehouse to hold its Unplaced stock');
+      return leftAt;
+    }
+    const { data: bucket, error: bucketErr } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('kind', 'unplaced')
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    const bucketId = (bucket as { id?: string } | null)?.id ?? null;
+    if (bucketErr || !bucketId) {
+      report(bucketErr ? rawErrorText(bucketErr) : 'no Unplaced bucket in the warehouse');
+      return leftAt;
+    }
+
+    let failed = false;
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const row of seeded) {
+        try {
+          await this.transferStock(
+            {
+              itemId,
+              fromLocationId: row.location_id,
+              toLocationId: bucketId,
+              quantity: Number(row.quantity),
+              notes: 'Duplicated without a placement: awaiting put-away',
+            },
+            { auditInto: transferAudits },
+          );
+        } catch (e) {
+          report(rawErrorText(e));
+          failed = true;
+        }
+      }
+    } finally {
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
+    }
+    if (failed) return leftAt;
+    return unaccounted ? unknownPlace : null;
   }
 
   /**
@@ -3864,70 +4148,78 @@ export class InventoryService {
    * stock_movements writeback after the insert so the audit trail +
    * dashboard sparklines stay accurate.
    */
-  async bulkCreateSizedVariants(input: {
-    baseName: string;
-    baseSku: string | null;
-    baseBarcode: string | null;
-    description: string | null;
-    categoryId: string;
-    supplierId: string | null;
-    warehouseId: string;
-    charterId: string | null;
-    primaryLocationId: string | null;
-    binLocation: string | null;
-    retailPrice: number;
-    unitCost: number;
-    reorderPoint: number;
-    reorderQuantity: number;
-    /** Omit to take the category's counting unit (PAIR for shoes); an explicit
-     *  value — including 'unit' — always wins. Mirrors create(). */
-    unitOfMeasure?: string;
-    /** Structured rack stamp written to every variant's custom_fields.rack_number/rack_row. */
-    rackNumber?: string | null;
-    rackRow?: string | null;
-    /**
-     * Per-org custom field values applied to EVERY created variant. Reserved
-     * keys (size, rack_number, rack_row, ...) are stripped — the variant
-     * builder owns those.
-     */
-    customFields?: Record<string, unknown> | null;
-    /**
-     * The group these variants belong to. Optional and NULL by default: an
-     * ungrouped size run behaves exactly as it did before the sports program.
-     * Never inferred from the name (owner decision: no name-heuristic
-     * grouping) — the caller either knows the group or there isn't one.
-     */
-    groupId?: string | null;
-    /**
-     * Sports (Task 11 review fix). The exact twin of `create()`'s field: when
-     * the category resolves to a sports subcategory and no `groupId` was given,
-     * the group is found-or-created from these attributes and its id stamped on
-     * every row. `group_key` is computed by `ProductGroupsService`, never
-     * accepted from a caller.
-     */
-    productGroup?: CreateProductGroupInput;
-    /** An authorized mode override, gated by the same `resolveModeOverride`
-     *  path `create()` uses (`sports:manage` + the subcategory's allowedModes). */
-    trackingModeOverride?: TrackingMode;
-    /**
-     * Variant attributes SHARED by every row in the run. A jersey number is
-     * worn in M and in XL (regression R3) and a colour is one colour across the
-     * run, so these are per-RUN, unlike `size` which is per-row. All of them
-     * feed the server-computed `variant_key` except `playerName`, which
-     * `create()` also leaves out of variant identity.
-     */
-    variantWidth?: string | null;
-    variantFit?: string | null;
-    variantColor?: string | null;
-    jerseyNumber?: string | null;
-    playerName?: string | null;
-    /**
-     * A size is now free TEXT, not one of nine apparel letters. A shoe run is
-     * '7'..'15' with halves and an apparel run is 'XS'..'5XL'; the authority is
-     * the category's size scale (migration 0294), validated below.
-     */
-    variants: Array<{ size: string; quantity: number }>;
-  }): Promise<{
+  async bulkCreateSizedVariants(
+    input: {
+      baseName: string;
+      baseSku: string | null;
+      baseBarcode: string | null;
+      description: string | null;
+      categoryId: string;
+      supplierId: string | null;
+      warehouseId: string;
+      charterId: string | null;
+      primaryLocationId: string | null;
+      binLocation: string | null;
+      retailPrice: number;
+      unitCost: number;
+      reorderPoint: number;
+      reorderQuantity: number;
+      /** Omit to take the category's counting unit (PAIR for shoes); an explicit
+       *  value — including 'unit' — always wins. Mirrors create(). */
+      unitOfMeasure?: string;
+      /** Structured rack stamp written to every variant's custom_fields.rack_number/rack_row. */
+      rackNumber?: string | null;
+      rackRow?: string | null;
+      /**
+       * Per-org custom field values applied to EVERY created variant. Reserved
+       * keys (size, rack_number, rack_row, ...) are stripped — the variant
+       * builder owns those.
+       */
+      customFields?: Record<string, unknown> | null;
+      /**
+       * The group these variants belong to. Optional and NULL by default: an
+       * ungrouped size run behaves exactly as it did before the sports program.
+       * Never inferred from the name (owner decision: no name-heuristic
+       * grouping) — the caller either knows the group or there isn't one.
+       */
+      groupId?: string | null;
+      /**
+       * Sports (Task 11 review fix). The exact twin of `create()`'s field: when
+       * the category resolves to a sports subcategory and no `groupId` was given,
+       * the group is found-or-created from these attributes and its id stamped on
+       * every row. `group_key` is computed by `ProductGroupsService`, never
+       * accepted from a caller.
+       */
+      productGroup?: CreateProductGroupInput;
+      /** An authorized mode override, gated by the same `resolveModeOverride`
+       *  path `create()` uses (`sports:manage` + the subcategory's allowedModes). */
+      trackingModeOverride?: TrackingMode;
+      /**
+       * Variant attributes SHARED by every row in the run. A jersey number is
+       * worn in M and in XL (regression R3) and a colour is one colour across the
+       * run, so these are per-RUN, unlike `size` which is per-row. All of them
+       * feed the server-computed `variant_key` except `playerName`, which
+       * `create()` also leaves out of variant identity.
+       */
+      variantWidth?: string | null;
+      variantFit?: string | null;
+      variantColor?: string | null;
+      jerseyNumber?: string | null;
+      playerName?: string | null;
+      /**
+       * A size is now free TEXT, not one of nine apparel letters. A shoe run is
+       * '7'..'15' with halves and an apparel run is 'XS'..'5XL'; the authority is
+       * the category's size scale (migration 0294), validated below.
+       */
+      variants: Array<{ size: string; quantity: number }>;
+      /** The person's answer to "Create new rack?" — see create()'s question. */
+      confirmNewRack?: boolean;
+    },
+    opts: {
+      /** create()'s option of the same name: the phone build that asks on its own screen. */
+      allowUnconfirmedNewRack?: boolean;
+    } = {},
+  ): Promise<{
     rows: Array<{ id: string; name: string; sku: string }>;
     /**
      * Non-null ONLY when a typed rack was asked for and some of the run's
@@ -4073,30 +4365,6 @@ export class InventoryService {
       seenVariantKeys.add(key);
     }
 
-    // Inline new-group creation, byte-for-byte the branch create() runs, and
-    // AFTER every size in the run has passed its checks (the scale, the
-    // required attributes, duplicates), as in create(). It used to run before
-    // them, so a refused run left an empty product group behind. Add
-    // Item shows a "this will be saved as / Product group" preview BEFORE the
-    // user picks sizes, and a sized sports category (shoes) leaves through this
-    // method — without this the preview promised a group that was never saved.
-    // Only for a SPORTS category, and only when no group was chosen already.
-    if (profile.isSports && !resolvedGroupId && input.productGroup) {
-      const groups = new ProductGroupsService(this.ctx);
-      const { group } = await groups.findOrCreate({
-        ...input.productGroup,
-        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
-        categoryId: input.categoryId,
-        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
-          profile.countingUnit) as CountingUnit,
-        // Same inheritance create() applies — see the comment there. This is the
-        // path a SHOE run takes, which is exactly the group whose size count was
-        // rendering XS..5XL instead of 9 / 9.5 / 10.
-        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
-      });
-      resolvedGroupId = group.id;
-    }
-
     // Per-org custom fields shared by every variant. Strip any reserved key the
     // variant builder owns (size/rack_*) so a stray payload can't clobber them,
     // then run the authoritative server-side gate so REQUIRED custom fields are
@@ -4131,19 +4399,47 @@ export class InventoryService {
     // Validate (warehouse, charter) pair when a charter is set.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
+      );
+    }
+
+    // The new-rack question, create()'s rule for the whole run: the stocked
+    // sizes are about to be moved onto the typed rack (the auto-place below),
+    // so a rack that does not exist is refused here, before the first write,
+    // unless the request carries the person's yes.
+    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    const runUnits = input.variants.reduce((sum, v) => sum + (v.quantity > 0 ? v.quantity : 0), 0);
+    const mayCreateRack = input.confirmNewRack === true || opts.allowUnconfirmedNewRack === true;
+    if (typedBinLabel && runUnits > 0 && !mayCreateRack) {
+      await this.refuseUnconfirmedNewRack(resolvedWarehouseId, typedBinLabel, runUnits);
+    }
+
+    // Inline new-group creation, byte-for-byte the branch create() runs, and
+    // AFTER every check on the run (the scale, the required attributes,
+    // duplicates, the custom fields, the warehouse and charter, the new-rack
+    // question), as in create(). It used to run before them, so a refused run
+    // left an empty product group behind. Add Item shows a "this will be saved
+    // as / Product group" preview BEFORE the user picks sizes, and a sized
+    // sports category (shoes) leaves through this method — without this the
+    // preview promised a group that was never saved. Only for a SPORTS
+    // category, and only when no group was chosen already.
+    if (profile.isSports && !resolvedGroupId && input.productGroup) {
+      const groups = new ProductGroupsService(this.ctx);
+      const { group } = await groups.findOrCreate({
+        ...input.productGroup,
+        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+        categoryId: input.categoryId,
+        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+          profile.countingUnit) as CountingUnit,
+        // Same inheritance create() applies — see the comment there. This is the
+        // path a SHOE run takes, which is exactly the group whose size count was
+        // rendering XS..5XL instead of 9 / 9.5 / 10.
+        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
+      });
+      resolvedGroupId = group.id;
     }
 
     // Auto-generate ONE shared base when the user didn't type a SKU
@@ -4413,20 +4709,21 @@ export class InventoryService {
     //     at all (0199 returns early on qty <= 0), so including it would buy a
     //     wider read for nothing.
     //
-    // `typedBinLabel` is derived by the SAME expression create() uses, off the
-    // SAME field: `input.binLocation` is what the Add Item form composes with
+    // `typedBinLabel` (computed with the new-rack question, above) is derived
+    // by the SAME expression create() uses, off the SAME field:
+    // `input.binLocation` is what the Add Item form composes with
     // `formatRackLabel(rackNumber, rackRow)` for a size run and with the
     // identical `num`/`num-row` composition for a single item, so the two
     // paths cannot disagree about what counts as a typed rack. There is no
-    // `isManualCreatePath` twin to check: this method has no `opts` at all and
-    // every caller of it — the web Add Item form, Expo's Add Item screen and
-    // POST /api/v1/items/sized-variants — is a hand-typed create. PO,
-    // receiving and CSV import never reach it.
+    // `isManualCreatePath` twin to check: every caller of this method — the
+    // web Add Item form, Expo's Add Item screen and POST
+    // /api/v1/items/sized-variants — is a hand-typed create. PO, receiving and
+    // CSV import never reach it.
     //
     // FAIL-SOFT, and per-variant inside the helper: the variants and their
     // ledger are already committed, so no placement failure may undo or block
     // them, and one variant's failed transfer must not cost the others theirs.
-    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    // `mayCreateRack` as in create(): an unconfirmed run only FINDS the rack.
     const stockedForPlacement = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
     let placement: ManualPlacementOutcome | null = null;
     if (typedBinLabel && stockedForPlacement.length > 0) {
@@ -4434,6 +4731,7 @@ export class InventoryService {
         stockedForPlacement,
         resolvedWarehouseId,
         typedBinLabel,
+        { mayCreateRack },
       ).catch((e) => {
         console.error('[sized variants] auto-place failed', {
           itemIds: stockedForPlacement,
@@ -4528,19 +4826,11 @@ export class InventoryService {
     // every row in the batch.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
+      );
     }
 
     // Plan-limit aware of batch size — was per-row (would only catch the
@@ -4567,17 +4857,34 @@ export class InventoryService {
       }
     }
 
-    // Pre-flight: which barcodes already exist? Count those as skipped,
-    // build payloads only for the survivors.
+    // Pre-flight: which items already exist? Count those as skipped, build
+    // payloads only for the survivors.
     //
-    // Batched (up to 500 barcodes, and a long barcode costs more URL than a
-    // uuid) and FAIL-CLOSED: the error used to be ignored, so a failed read
-    // looked like "none exist" and created duplicates of every item already
-    // in the org. A failed batch throws before anything is inserted.
-    const allBarcodes = input.items.map((i) => i.barcode);
+    // A BOOK is identified by its ISBN in EITHER form. The barcode string used
+    // to be compared exactly, so the same book came in again whenever the list
+    // gave the other form of its ISBN (0306406152 for a book stocked as
+    // 9780306406157, or the hyphenated print form), and one import carrying
+    // both forms made two records of one book. A book's keys are therefore the
+    // barcode as given plus, for a checksum-valid ISBN, both of its digit
+    // forms (isbnSearchKeys: the rule the item search and the Book Order
+    // Totals report use). Anything else (a product, a code that is not an
+    // ISBN) keeps the exact barcode, as before.
+    //
+    // Batched (up to 500 items, so at most 1,500 keys, and a long barcode
+    // costs more URL than a uuid) and FAIL-CLOSED: the error used to be
+    // ignored, so a failed read looked like "none exist" and created
+    // duplicates of every item already in the org. A failed batch throws
+    // before anything is inserted. Deleted records still count, as they
+    // always have: Settings > Recovery can restore one, and a second record
+    // of the same book would then sit beside it.
+    const keysOf = (i: (typeof input.items)[number]): string[] => {
+      const isbnKeys = i.itemType === 'book' ? isbnSearchKeys(i.barcode) : null;
+      return [...new Set([i.barcode, ...(isbnKeys ?? [])])];
+    };
+    const itemKeys = input.items.map(keysOf);
     const ctx = this.ctx;
     const existing = await fetchAllRowsByIds<{ barcode: string }>(
-      allBarcodes,
+      [...new Set(itemKeys.flat())],
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
@@ -4589,7 +4896,16 @@ export class InventoryService {
     );
     const existingSet = new Set(existing.map((r) => r.barcode));
 
-    const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
+    // A key also counts as taken once an EARLIER row of this same import
+    // claimed it, so one import never creates two records of one book (the
+    // same ISBN twice, or its two forms). The first row wins.
+    const claimed = new Set<string>();
+    const survivors = input.items.filter((_, idx) => {
+      const keys = itemKeys[idx] ?? [];
+      if (keys.some((k) => existingSet.has(k) || claimed.has(k))) return false;
+      for (const k of keys) claimed.add(k);
+      return true;
+    });
     const skipped = input.items.length - survivors.length;
 
     if (survivors.length === 0) {
@@ -4705,6 +5021,34 @@ export class InventoryService {
   }
 
   /**
+   * Refuses a (warehouse, charter) pair the organization has not linked
+   * (warehouse_charters), in the caller's own words (`refusal`). A read that
+   * fails refuses too (fail closed), as an internal error: every copy of this
+   * check used to ignore the read's error and tell the person the warehouse
+   * does not service the charter, which is not what happened (B26).
+   */
+  private async assertWarehouseServesCharter(
+    warehouseId: string,
+    charterId: string,
+    refusal: string,
+  ): Promise<void> {
+    const { data: pair, error } = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('charter_id', charterId)
+      .maybeSingle();
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        `Could not check that the warehouse services this charter: ${error.message}`,
+      );
+    }
+    if (!pair) throw new ServiceError('validation_error', refusal);
+  }
+
+  /**
    * A 23505 on (organization, SKU, charter, rack label) as plain words: one
    * lookup of the record that holds the slot, under the CALLER's client, so a
    * record they cannot read is never named (design 5, SKU collision). The
@@ -4739,6 +5083,75 @@ export class InventoryService {
       sku,
       ...(hit ? { conflictItemId: hit.id } : {}),
     });
+  }
+
+  /**
+   * A SKU edit moves every other live record of the ORIGINAL SKU to the new
+   * one (update()'s fan-out), in a second statement after the edited record's
+   * own UPDATE. Refuses, BEFORE either write, a move that second statement
+   * could not finish (unique index 0234: one live record per organization,
+   * SKU, charter and rack label, NULLs equal), so a refused SKU edit leaves
+   * every record where it was instead of the edited one alone on the new SKU.
+   *
+   * Two moves cannot finish:
+   *  - the edited record lands on the charter and rack of a record that moves
+   *    with it (both would then hold the new SKU there);
+   *  - a record outside the group already holds the new SKU at the charter
+   *    and rack of a record that moves.
+   * The edited record's own landing slot, when a record outside the group
+   * holds it, is left to its UPDATE: that statement is the first write and
+   * fails alone (skuTakenError, which can name the holder).
+   *
+   * Reads through the SERVICE ROLE, as the fan-out writes: the records that
+   * move, and the ones that block them, include records the editor cannot
+   * read. The organization_id filters are the tenant floor, and the refusal
+   * names no record. A read that fails refuses the edit (fail closed:
+   * fetchAllRows throws internal_error).
+   */
+  private async assertSkuGroupCanMove(
+    id: string,
+    originalSku: string,
+    newSku: string,
+    landing: { charterId: string | null; binLocation: string | null },
+  ): Promise<void> {
+    type SlotRow = { id: string; charter_id: string | null; bin_location: string | null };
+    const admin = createAdminClient();
+    const liveWithSku = (sku: string, excludeId?: string) =>
+      fetchAllRows<SlotRow>((from, to) => {
+        let q = admin
+          .from('inventory_items')
+          .select('id, charter_id, bin_location')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('sku', sku)
+          .is('deleted_at', null);
+        if (excludeId) q = q.neq('id', excludeId);
+        return q.order('id').range(from, to);
+      });
+    const [moving, holders] = await Promise.all([
+      liveWithSku(originalSku, id),
+      liveWithSku(newSku),
+    ]);
+    if (moving.length === 0) return;
+    // uuid text compares lower-case (Postgres prints it so); the rack label
+    // compares exactly, as the index does.
+    const slotOf = (charterId: string | null, binLocation: string | null) =>
+      JSON.stringify([charterId ? charterId.toLowerCase() : null, binLocation ?? null]);
+    const movingSlots = new Set(moving.map((r) => slotOf(r.charter_id, r.bin_location)));
+    const details = { reason: 'sku_taken_in_group', sku: newSku, previousSku: originalSku };
+    if (movingSlots.has(slotOf(landing.charterId, landing.binLocation))) {
+      throw new ServiceError(
+        'conflict',
+        `Another record with SKU ${originalSku} is already in the charter and rack chosen for this one, and changing the SKU moves both to SKU ${newSku}. Two records can't share a SKU there, so nothing was changed.`,
+        details,
+      );
+    }
+    if (holders.some((r) => movingSlots.has(slotOf(r.charter_id, r.bin_location)))) {
+      throw new ServiceError(
+        'conflict',
+        `Every record with SKU ${originalSku} moves to SKU ${newSku} together, and another record already uses SKU ${newSku} in the same charter and rack as one of them. Two records can't share a SKU there, so nothing was changed. Use a different SKU.`,
+        details,
+      );
+    }
   }
 
   async update(id: string, patch: UpdateItemInput) {
@@ -4970,23 +5383,22 @@ export class InventoryService {
     }
 
     if (patch.charterId !== undefined) {
-      // Validate the (final) (warehouse, charter) pair if non-null
+      // Validate the (final) (warehouse, charter) pair if non-null, when the
+      // charter or the warehouse CHANGES. The form sends every field on every
+      // save, so checking an unchanged pair refused every other edit of a
+      // record whose charter its warehouse no longer lists (an admin unlinked
+      // it later), and only a change of either one can make the pair new.
       const finalWarehouseId =
         (updates.warehouse_id as string | undefined) ?? currentWarehouseId ?? null;
-      if (patch.charterId && finalWarehouseId) {
-        const { data: pair } = await this.ctx.supabase
-          .from('warehouse_charters')
-          .select('charter_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('warehouse_id', finalWarehouseId)
-          .eq('charter_id', patch.charterId)
-          .maybeSingle();
-        if (!pair) {
-          throw new ServiceError(
-            'validation_error',
-            'This charter is not serviced by the chosen warehouse.',
-          );
-        }
+      const currentCharterId = (current as { charter_id?: string | null }).charter_id ?? null;
+      const pairChanges =
+        (patch.charterId ?? null) !== currentCharterId || finalWarehouseId !== currentWarehouseId;
+      if (patch.charterId && finalWarehouseId && pairChanges) {
+        await this.assertWarehouseServesCharter(
+          finalWarehouseId,
+          patch.charterId,
+          'This charter is not serviced by the chosen warehouse.',
+        );
       }
       updates.charter_id = patch.charterId ?? null;
     }
@@ -4997,6 +5409,28 @@ export class InventoryService {
     const sharedUpdates: Record<string, unknown> = {};
     for (const key of SHARED_ITEM_FIELDS) {
       if (key in updates) sharedUpdates[key] = updates[key];
+    }
+
+    // A SKU edit moves the whole group (the fan-out below): refuse, before
+    // this record's UPDATE, a move the fan-out could not finish, so a refused
+    // edit never leaves this record alone on the new SKU. Same condition as
+    // the fan-out: a blank SKU is never grouped.
+    if (
+      typeof updates.sku === 'string' &&
+      originalSku &&
+      originalSku.trim().length > 0 &&
+      updates.sku !== originalSku
+    ) {
+      const cur = current as { charter_id?: string | null; bin_location?: string | null };
+      await this.assertSkuGroupCanMove(id, originalSku, updates.sku, {
+        charterId:
+          ('charter_id' in updates ? (updates.charter_id as string | null) : cur.charter_id) ??
+          null,
+        binLocation:
+          ('bin_location' in updates
+            ? (updates.bin_location as string | null)
+            : cur.bin_location) ?? null,
+      });
     }
 
     const { data, error } = await this.ctx.supabase
@@ -5084,17 +5518,17 @@ export class InventoryService {
       // KNOWN LIMITATION: the target row was already updated (and committed)
       // in the prior statement above, in a SEPARATE statement from this
       // sibling fan-out — there is no shared transaction wrapping the two.
-      // If this edit is a `sku` re-key and the NEW sku collides with an
-      // existing row at one sibling's (org, sku, charter_id, bin_location)
-      // (migration 0234), this UPDATE fails with 23505 below and the group is
-      // left SPLIT: the target row
-      // now sits on the new sku while its siblings are still on the old one.
-      // This is surfaced to the caller as the `conflict` error (not silent,
+      // A `sku` re-key whose NEW sku collides at one sibling's (org, sku,
+      // charter_id, bin_location) (migration 0234) is refused BEFORE the
+      // target UPDATE (assertSkuGroupCanMove), so nothing is written. What
+      // remains is a race: a record that takes such a slot between that check
+      // and this UPDATE makes it fail with 23505 below, and the group is left
+      // SPLIT: the target row on the new sku, its siblings on the old one.
+      // That is surfaced to the caller as the `conflict` error (not silent,
       // not cross-tenant — organization_id stays scoped throughout — and
-      // on-hand quantities / stock ledger are untouched), but it is a real
-      // data-shape limitation until this fan-out is done. A fully-atomic
-      // group re-key would require moving target+siblings into one
-      // transactional RPC (tracked follow-up, not yet built).
+      // on-hand quantities / stock ledger are untouched). Closing the race
+      // needs target+siblings moved in one transactional database function
+      // (designed in the B26 pull request, not yet built).
       //
       // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
       // the RLS-scoped client is subject to inventory_items_update →
@@ -8498,14 +8932,9 @@ export class InventoryService {
     name: string,
   ): Promise<string | null> {
     const attempt = async () => {
-      const loc = await new LocationsService(this.ctx).findOrCreateRackOrCrate({
-        name,
-        type: 'shelf',
-        kind: 'rack',
-        warehouseId,
-        rackNumber: num,
-        rackRow: row,
-      });
+      const loc = await new LocationsService(this.ctx).findOrCreateRackOrCrate(
+        this.rackLookup(warehouseId, num, row, name),
+      );
       return (loc as { id: string }).id;
     };
     try {
@@ -8537,6 +8966,152 @@ export class InventoryService {
       });
       return null;
     }
+  }
+
+  /**
+   * The `locations` lookup for a rack, shared by the find-or-create above, the
+   * find-only twin below and the new-rack question, so all three match the
+   * SAME row: same name, kind 'rack' (never a crate or a Site of the same
+   * name), same warehouse.
+   */
+  private rackLookup(
+    warehouseId: string,
+    num: string,
+    row: string | null,
+    name: string,
+  ): Parameters<LocationsService['findOrCreateRackOrCrate']>[0] {
+    return { name, type: 'shelf', kind: 'rack', warehouseId, rackNumber: num, rackRow: row };
+  }
+
+  /**
+   * The rack a create's typed label names: decomposed and named the ONE way,
+   * so the new-rack question asks about exactly the rack the placement then
+   * resolves ("1 - b" and "1-b" are both the rack "1-b").
+   */
+  private manualCreateRack(rawLabel: string): { number: string; row: string | null; name: string } {
+    const parts = parseRackLabel(rawLabel);
+    return { number: parts.number, row: parts.row, name: formatRackLabel(parts) || rawLabel };
+  }
+
+  /**
+   * `findOrCreateRackLocation` without the create: the existing rack's id, or
+   * null. For a create nobody confirmed a new rack for (see
+   * `refuseUnconfirmedNewRack`). Fail-soft like its twin: a failed read is "not
+   * placed", reported by the caller, never a failed create.
+   */
+  private async findRackLocation(
+    warehouseId: string,
+    num: string,
+    row: string | null,
+    name: string,
+  ): Promise<string | null> {
+    try {
+      const loc = await new LocationsService(this.ctx).findRackOrCrate(
+        this.rackLookup(warehouseId, num, row, name),
+      );
+      return loc ? (loc as { id: string }).id : null;
+    } catch (e) {
+      console.error('[rack place] rack lookup failed', {
+        warehouseId,
+        name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * ═══ THE NEW-RACK QUESTION, ASKED BY THE SERVER (2026-10-24) ═══
+   *
+   * Returns when the rack `rawLabel` names already exists in the warehouse.
+   * Otherwise THROWS the refusal every client turns into "Create new rack
+   * 1-B?" (NEW_RACK_REQUIRES_CONFIRMATION, with the rack, the sentence and the
+   * near-matches in `details`). Every caller runs it before its first write,
+   * so a refusal leaves nothing behind, and only when the request did not
+   * confirm a new rack.
+   *
+   * Existence is decided by `findRackOrCrate`, the lookup the placement's own
+   * find-or-create runs, with the same input (`rackLookup`), so the question
+   * is asked exactly when the placement would have created a rack, and never
+   * about a rack that exists. A failed lookup throws: for a write, refusing
+   * to guess is the safe direction, and the person can save again.
+   */
+  private async refuseUnconfirmedNewRack(
+    warehouseId: string,
+    rawLabel: string,
+    units: number,
+  ): Promise<void> {
+    const rack = this.manualCreateRack(rawLabel);
+    const existing = await new LocationsService(this.ctx).findRackOrCrate(
+      this.rackLookup(warehouseId, rack.number, rack.row, rack.name),
+    );
+    if (existing) return;
+
+    // Only now, for the words: the warehouse's racks (for "Did you mean
+    // 17-B?") and its name. Both fail soft. A question without near-matches,
+    // or without the warehouse's name, is still the right question.
+    const [labels, warehouseName] = await Promise.all([
+      this.rackLabelsIn(warehouseId),
+      this.warehouseNameOf(warehouseId),
+    ]);
+    const detail = newRackConfirmationDetail({
+      label: rack.name,
+      warehouseName,
+      quantity: units,
+      existingLabels: labels,
+      // Worded for what THIS member's yes can do (2026-10-25). The placement
+      // creates the rack under locations:manage and moves the stock under
+      // stock:transfer; a Staff member has no locations:manage, so their yes
+      // never created the rack, right after a question that promised it.
+      blockedBy: newRackBlockerFor(this.ctx),
+    });
+    // Someone created the rack between the two reads: nothing new to create.
+    if (!detail) return;
+    throw new ServiceError('conflict', detail.message, { ...detail });
+  }
+
+  /**
+   * Every live rack's name in one warehouse, for the new-rack question's
+   * near-matches. The phone reads the same set in the same order
+   * (apps/mobile/src/lib/warehouse-racks.ts), so both platforms suggest the
+   * same racks first. Paged (a large warehouse is past PostgREST's 1000-row
+   * cap). Fail-soft: [] (no near-matches), never a failed create.
+   */
+  private async rackLabelsIn(warehouseId: string): Promise<string[]> {
+    try {
+      const rows = await fetchAllRows<{ id: string; name: string | null }>((from, to) =>
+        this.ctx.supabase
+          .from('locations')
+          .select('id, name')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('warehouse_id', warehouseId)
+          .eq('kind', 'rack')
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
+      return rows.map((r) => (r.name ?? '').trim()).filter((n) => n.length > 0);
+    } catch (e) {
+      console.error('[new rack question] rack names unreadable, asking without near-matches', {
+        warehouseId,
+        error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+      });
+      return [];
+    }
+  }
+
+  /** The warehouse's name for the new-rack sentence ("in DC4"), or null. Fail-soft. */
+  private async warehouseNameOf(warehouseId: string): Promise<string | null> {
+    const { data, error } = await this.ctx.supabase
+      .from('warehouses')
+      .select('name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', warehouseId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const name = (data as { name?: unknown }).name;
+    return typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
   }
 
   /**
@@ -8576,21 +9151,34 @@ export class InventoryService {
    * best-effort `placeItemsOntoRackByName` applies per holding). The call
    * sites keep their own catch-all for what is NOT per-item: the rack
    * resolve and the holdings read.
+   *
+   * `mayCreateRack` (2026-10-24): true only when the person confirmed a new
+   * rack (or for a caller nobody can ask, see create()'s
+   * `allowUnconfirmedNewRack`). Otherwise the rack is only FOUND, never
+   * created: the caller's new-rack question already refused a rack that did
+   * not exist, so a miss here means it disappeared since, and the stock stays
+   * where it was seeded, reported as not placed.
+   *
+   * And only for a member who can both create the rack and move the stock
+   * onto it (newRackBlockerFor, 2026-10-25), the question's own rule. For
+   * anyone else the yes is "Save anyway": the rack is only found. Before, a
+   * Staff member's yes attempted a create that locations:manage refused, and a
+   * member without stock:transfer got an empty rack the move then never
+   * reached.
    */
   private async placeManualCreateOnRack(
     itemIds: string[],
     warehouseId: string,
     rawLabel: string,
+    opts: { mayCreateRack: boolean },
   ): Promise<ManualPlacementOutcome> {
     if (itemIds.length === 0) return { rackName: rawLabel, failedItemIds: [] };
-    const parts = parseRackLabel(rawLabel);
-    const rackName = formatRackLabel(parts) || rawLabel;
-    const rackId = await this.findOrCreateRackLocation(
-      warehouseId,
-      parts.number,
-      parts.row,
-      rackName,
-    );
+    const rack = this.manualCreateRack(rawLabel);
+    const rackName = rack.name;
+    const createsRack = opts.mayCreateRack && newRackBlockerFor(this.ctx) === null;
+    const rackId = createsRack
+      ? await this.findOrCreateRackLocation(warehouseId, rack.number, rack.row, rackName)
+      : await this.findRackLocation(warehouseId, rack.number, rack.row, rackName);
     // The rack could not be resolved OR created, so nothing can have reached
     // it. EVERY requested item is reported as not placed rather than none:
     // the item exists, its label says this rack, and its stock is somewhere
@@ -8765,6 +9353,17 @@ export class InventoryService {
     } = {},
   ): Promise<Array<{
     itemId: string; name: string; sku: string; itemType: string; warehouseId: string | null;
+    /**
+     * B38: the ITEM's own warehouse (inventory_items.warehouse_id), beside the
+     * holding's (`warehouseId`). They differ for stock in the
+     * organization-level Staging or Unplaced bucket (0194, a location with no
+     * warehouse): it landed while the item had no warehouse, and the item has
+     * one now (it is listed only when readable, which reads it through its
+     * warehouse). Place for such a row asks for a warehouse and opens on this
+     * one, where order readiness counts the stock once placed. Rides the
+     * existing embed.
+     */
+    itemWarehouseId: string | null;
     sourceLocationId: string; sourceKind: 'staging' | 'unplaced'; quantity: number;
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
@@ -8822,7 +9421,7 @@ export class InventoryService {
     const levelsQuery = () => {
       let q = this.ctx.supabase
         .from('item_stock_levels')
-        .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
+        .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number, warehouse_id)')
         .eq('organization_id', this.ctx.organizationId)
         .in('locations.kind', ['staging', 'unplaced'])
         .gt('quantity', 0);
@@ -9066,6 +9665,7 @@ export class InventoryService {
         sku: r.inventory_items.sku,
         itemType: r.inventory_items.item_type,
         warehouseId: r.locations.warehouse_id ?? null,
+        itemWarehouseId: (r.inventory_items.warehouse_id as string | null | undefined) ?? null,
         sourceLocationId: r.location_id,
         sourceKind,
         barcode: readStagingBarcode(r.inventory_items),

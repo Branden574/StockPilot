@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NextRequest } from 'next/server';
@@ -53,6 +56,8 @@ vi.mock('@/lib/env', () => ({
 }));
 
 import {
+  isAuthPagePath,
+  RETURN_PATH_HEADER,
   SESSION_HEADER_USER_EMAIL,
   SESSION_HEADER_USER_ID,
   updateSession,
@@ -105,6 +110,8 @@ describe('updateSession — fast path (local getClaims verify)', () => {
     expect(forwardedHeader(res, SESSION_HEADER_USER_ID)).toBe(USER_ID);
     expect(forwardedHeader(res, SESSION_HEADER_USER_EMAIL)).toBe(USER_EMAIL);
     expect(forwardedHeader(res, 'x-pathname')).toBe('/dashboard/items');
+    // The page to come back to after sign-in, for lib/auth/session.ts.
+    expect(forwardedHeader(res, RETURN_PATH_HEADER)).toBe('/dashboard/items?tab=books');
     expect(forwardedHeader(res, 'x-nonce')).toBeTruthy();
     // The whole point of the change: zero GoTrue round trips on the warm path.
     expect(getUser).not.toHaveBeenCalled();
@@ -214,6 +221,17 @@ describe('updateSession — signed-out gating', () => {
     expect(overridden).not.toContain(SESSION_HEADER_USER_EMAIL);
   });
 
+  it('replaces a client-sent return path with the real one', async () => {
+    mockSignedOut();
+
+    const res = await updateSession(
+      req('/invite/abc123?x=1', { [RETURN_PATH_HEADER]: '/dashboard/team' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(forwardedHeader(res, RETURN_PATH_HEADER)).toBe('/invite/abc123?x=1');
+  });
+
   it('lets anonymous users reach auth routes untouched', async () => {
     mockSignedOut();
 
@@ -251,5 +269,174 @@ describe('updateSession — signed-in AUTH_ROUTES behavior (unchanged)', () => {
       const res = await updateSession(req(path));
       expect(res.status, path).toBe(200);
     }
+  });
+});
+
+// A Server Action is a fetch() POST to the page's own URL with a Next-Action
+// header. Before this, a signed-out action got the 307 above: the browser
+// followed it itself, Next.js handed the action to the page that owns it,
+// this proxy bounced that request too, and the browser got `{}` back, which
+// the action client turns into "An unexpected response was received from the
+// server." (a generic error on the page instead of sign-in).
+function actionReq(path: string, headers?: Record<string, string>): NextRequest {
+  return new NextRequest(`${BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'next-action': '7f0a1b2c3d',
+      'content-type': 'text/plain;charset=UTF-8',
+      ...headers,
+    },
+    body: '[]',
+  });
+}
+
+/** The redirect a Server Action answer carries, as Next's action client reads it. */
+function actionRedirect(res: Response): { url: URL; type: string | undefined } | null {
+  const header = res.headers.get('x-action-redirect');
+  if (!header) return null;
+  const [location, type] = header.split(';');
+  return { url: new URL(location ?? '', BASE), type };
+}
+
+describe('updateSession — a Server Action sent while signed out', () => {
+  it('answers with the redirect the action client follows, carrying the return path', async () => {
+    mockSignedOut();
+
+    const res = await updateSession(actionReq('/dashboard/items?tab=books'));
+
+    // Not an HTTP redirect the browser would follow by itself.
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
+    const redirect = actionRedirect(res);
+    expect(redirect?.url.pathname).toBe('/signin');
+    // The same return path a signed-out page load gets.
+    expect(redirect?.url.searchParams.get('redirect')).toBe('/dashboard/items?tab=books');
+    // Same-origin and relative, so the router treats it as its own page.
+    expect(res.headers.get('x-action-redirect')?.startsWith('/signin?')).toBe(true);
+    expect(redirect?.type).toBe('push');
+  });
+
+  it('keeps a ; in the page query from cutting that redirect short (the client splits on ;)', async () => {
+    mockSignedOut();
+
+    const res = await updateSession(actionReq('/dashboard/items?q=a;b'));
+
+    expect(res.headers.get('x-action-redirect')?.split(';')).toHaveLength(2);
+    expect(actionRedirect(res)?.url.searchParams.get('redirect')).toBe('/dashboard/items?q=a;b');
+  });
+
+  it('carries the cookie deletions of a failed refresh on that answer', async () => {
+    getClaims.mockImplementation(async () => {
+      cookieAdapter?.setAll([{ name: 'sb-test-auth-token', value: '', options: {} }]);
+      return { data: null, error: { name: 'AuthApiError' } };
+    });
+    getUser.mockResolvedValue({ data: { user: null }, error: { name: 'AuthApiError' } });
+
+    const res = await updateSession(actionReq('/platform/orgs'));
+
+    expect(actionRedirect(res)?.url.searchParams.get('redirect')).toBe('/platform/orgs');
+    expect(res.cookies.get('sb-test-auth-token')?.value).toBe('');
+  });
+
+  it('sends a signed-in action on a sign-in page to /dashboard the same way', async () => {
+    // Signed in from another tab, then Sign in pressed here: signInAction is
+    // posted to /signin, which bounces a signed-in visitor.
+    mockSignedInClaims();
+
+    const res = await updateSession(actionReq('/signin?redirect=%2Fdashboard%2Fitems'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
+    expect(res.headers.get('x-action-redirect')).toBe('/dashboard;push');
+  });
+
+  it('gives a form posted without JavaScript a 303, so the browser loads sign-in instead of posting to it', async () => {
+    mockSignedOut();
+
+    const res = await updateSession(
+      new NextRequest(`${BASE}/dashboard/bundles`, {
+        method: 'POST',
+        headers: { 'content-type': 'multipart/form-data; boundary=x' },
+        body: '--x--',
+      }),
+    );
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get('x-action-redirect')).toBeNull();
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/signin');
+    expect(location.searchParams.get('redirect')).toBe('/dashboard/bundles');
+  });
+
+  it('lets a signed-in Server Action through untouched', async () => {
+    mockSignedInClaims();
+
+    const res = await updateSession(actionReq('/dashboard/items'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-action-redirect')).toBeNull();
+    expect(forwardedHeader(res, SESSION_HEADER_USER_ID)).toBe(USER_ID);
+    expect(forwardedHeader(res, RETURN_PATH_HEADER)).toBe('/dashboard/items');
+  });
+});
+
+describe('isAuthPagePath', () => {
+  it('names the sign-in, sign-up and reset pages, with or without a query', () => {
+    for (const path of [
+      '/signin',
+      '/signin?redirect=%2Fdashboard',
+      '/signin/mfa',
+      '/signup',
+      '/reset/complete',
+    ]) {
+      expect(isAuthPagePath(path), path).toBe(true);
+    }
+    for (const path of [
+      '/dashboard',
+      '/dashboard/signin',
+      '/signing',
+      '/invite/abc',
+      '/onboarding',
+    ]) {
+      expect(isAuthPagePath(path), path).toBe(false);
+    }
+  });
+});
+
+// The answer above follows Next.js's own protocol for a redirect from a
+// Server Action, which is internal to Next.js. Pinned against the installed
+// version, so an upgrade that changes it fails here instead of in the field.
+describe('the Server Action redirect protocol of the installed Next.js', () => {
+  const nodeRequire = createRequire(import.meta.url);
+  const read = (file: string) => readFileSync(nodeRequire.resolve(`next/dist/${file}`), 'utf8');
+
+  it('the browser client follows x-action-redirect on a response with no Flight body', () => {
+    const client = read('client/components/router-reducer/reducers/server-action-reducer.js');
+    expect(client).toContain("res.headers.get('x-action-redirect')");
+    expect(client).toContain("redirectHeader?.split(';')");
+    expect(client).toContain("case 'push':");
+    // Only a response with neither Flight data nor a redirect is an error.
+    expect(client).toContain('if (!isRscResponse && !redirectLocation) {');
+    // The action's promise is rejected with a redirect the router already handled.
+    expect(client).toContain('redirectError.handled = true;');
+  });
+
+  it('the server answers its own redirect() in a fetch action the same way', () => {
+    const server = read('server/app-render/action-handler.js');
+    expect(server).toContain(
+      "res.setHeader('x-action-redirect', `${redirectUrl};${redirectType}`);",
+    );
+    expect(server).toMatch(
+      /if \(isFetchAction\) \{\s*\/\/ Fetch actions communicate redirects through `x-action-redirect`[\s\S]{0,200}res\.statusCode = 200;/,
+    );
+  });
+
+  it('a fetch action is a POST with the next-action header', () => {
+    expect(read('client/components/app-router-headers.js')).toContain(
+      "const ACTION_HEADER = 'next-action';",
+    );
+    expect(read('server/lib/server-action-request-meta.js')).toContain(
+      "const isFetchAction = Boolean(actionId !== undefined && typeof actionId === 'string' && req.method === 'POST');",
+    );
   });
 });

@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { reset as resetAnalytics } from '@/lib/analytics';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { signOutAction } from '@/server/actions/auth';
 
@@ -214,6 +215,10 @@ export function UserMenu({
               // And this person's tour state, kept for the browser session
               // (sign-out is a soft navigation, so module state survives it).
               forgetTourState();
+              // And what an interrupted run kept in this tab
+              // (lib/interrupted-run): a sign-out on purpose leaves none of it.
+              // Before the request, which answers with a redirect.
+              purgeInterruptedRuns();
               await signOutAction();
               router.refresh();
             }}

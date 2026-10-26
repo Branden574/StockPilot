@@ -143,4 +143,26 @@ describe('platform audit', () => {
     await renderPage();
     expect(screen.getByText('No platform-admin actions recorded yet.')).toBeInTheDocument();
   });
+
+  it('prints When in UTC and says so, whatever the server or the row (B9)', async () => {
+    // A bare toLocaleString() on the server named no zone, so a 6:30 PM
+    // Pacific action read "10/25/2026, 1:30:00 AM" with nothing to say whose
+    // clock that was. The trail spans organizations, so it states UTC.
+    const original = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      h.list.mockResolvedValue([row({ createdAt: '2026-10-25T01:30:00Z' })]);
+      await renderPage();
+      const region = screen.getByRole('region', { name: 'Platform audit' });
+      const [, first] = within(region).getAllByRole('row') as [HTMLElement, HTMLElement];
+      expect(first.firstElementChild).toHaveTextContent(/^25 Oct 2026, 01:30 UTC$/);
+      expect(within(region).getByRole('columnheader', { name: 'When' })).toHaveAttribute(
+        'title',
+        'In UTC.',
+      );
+    } finally {
+      if (original === undefined) delete process.env.TZ;
+      else process.env.TZ = original;
+    }
+  });
 });

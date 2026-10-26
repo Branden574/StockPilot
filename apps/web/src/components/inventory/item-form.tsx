@@ -33,6 +33,12 @@ const IsbnScanner = dynamic(
   { ssr: false },
 );
 import { GroupSelectedDialog } from '@/components/inventory/display-group-dialogs';
+import {
+  newRackConfirmContent,
+  newRackQuestion,
+  rackFieldsFromLabel,
+} from '@/components/inventory/new-rack-question';
+import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { composeBookCustomFields } from '@/components/inventory/book-custom-fields';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +58,7 @@ import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
+import { isControlFlow } from '@/lib/control-flow';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
@@ -90,6 +97,7 @@ import {
   type CreateItemInput,
   placementWarningMessage,
   type CustomFieldDefinition,
+  type NewRackConfirmationDetail,
   type RequiredAttributeProblem,
   type SharedSkuKeeps,
   type TrackingMode,
@@ -116,6 +124,18 @@ const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
  * tree use.
  */
 const MODE_OVERRIDE_NONE = '__category_default';
+
+/**
+ * The person's answer to the server's "Create new rack 1-B?" for ONE save
+ * (2026-10-24): yes, create it; or a near-match to save onto instead, as the
+ * two rack boxes or as a book's Bin / shelf. An ordinary save answers nothing,
+ * so a rack that does not exist is asked about first. See new-rack-question.ts.
+ */
+interface NewRackAnswer {
+  confirmNewRack?: true;
+  rack?: { number: string; row: string };
+  bin?: string;
+}
 
 /** Display label for each slot buildVariantKey may emit (variant-keys.ts). */
 const VARIANT_KEY_SLOT_LABELS: Record<string, string> = {
@@ -338,6 +358,14 @@ export function ItemForm({
   // Group selected (0400): the two records a refused SKU copy may group
   // instead (see reportSaveError), while their review is open.
   const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
+  // "Create new rack 1-B?", asked by the SERVER when a create's opening stock
+  // would land on a rack that does not exist (2026-10-24). `target` is the box
+  // that rack came from: the rack number and row, or a book's Bin / shelf
+  // (the label the server places a book's stock by).
+  const [rackQuestion, setRackQuestion] = React.useState<{
+    detail: NewRackConfirmationDetail;
+    target: 'rack' | 'bin';
+  } | null>(null);
   const isEdit = Boolean(defaults?.id);
   const [staged, setStaged] = React.useState<StagedImage[]>([]);
   const [uploadingImages, setUploadingImages] = React.useState(false);
@@ -719,7 +747,9 @@ export function ItemForm({
         .then((res) => {
           if (res?.ok) setGroupCandidates(res.data);
         })
-        .catch(() => {
+        .catch((e: unknown) => {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
           setGroupCandidates([]);
         });
     }, 400);
@@ -1085,11 +1115,35 @@ export function ItemForm({
   );
 
   // If the warehouse changes and the current charter no longer fits, clear it.
+  //
+  // Except a record's OWN charter on its own warehouse when editing (B26).
+  // This used to run on load too, so a record whose charter its warehouse no
+  // longer lists (an admin unlinked it after the record got it) opened showing
+  // Generic, and saving any other field sent Generic and took the record's
+  // charter away. That charter now shows as the record's own
+  // (`unlinkedCharter`) and is sent back unchanged; the server checks the pair
+  // only when the charter or the warehouse changes.
+  const loadedPlacementRef = React.useRef({
+    warehouseId: watchedWarehouseId,
+    charterId: watchedCharterId,
+  });
   React.useEffect(() => {
+    const ownCharter =
+      isEdit &&
+      watchedWarehouseId === loadedPlacementRef.current.warehouseId &&
+      watchedCharterId === loadedPlacementRef.current.charterId;
+    if (ownCharter) return;
     if (watchedCharterId && !allowedCharterIds.has(watchedCharterId)) {
       setValue('charterId', null);
     }
-  }, [watchedCharterId, allowedCharterIds, setValue]);
+  }, [isEdit, watchedWarehouseId, watchedCharterId, allowedCharterIds, setValue]);
+  const unlinkedCharter =
+    watchedCharterId && !allowedCharterIds.has(watchedCharterId)
+      ? {
+          id: watchedCharterId,
+          name: charterById.get(watchedCharterId) ?? `This record's ${charterLabel.toLowerCase()}`,
+        }
+      : null;
 
   async function uploadStagedImages(itemId: string) {
     if (staged.length === 0) return { uploaded: 0, failed: 0 };
@@ -1176,7 +1230,18 @@ export function ItemForm({
     return { uploaded, failed };
   }
 
-  const onSubmit = handleSubmit(async (values) => {
+  /**
+   * A refused CREATE that is the server's new-rack question opens the
+   * question (true). Any other refusal closes it (false), and the caller says
+   * the refusal as it always has.
+   */
+  function askNewRack(error: ActionError, target: 'rack' | 'bin'): boolean {
+    const detail = isEdit ? null : newRackQuestion(error);
+    setRackQuestion(detail ? { detail, target } : null);
+    return detail !== null;
+  }
+
+  async function submitItem(values: CreateItemInput, answer: NewRackAnswer = {}) {
     // SPORTS_SUBCATEGORY_REQUIRED — fast, kind failure. The server enforces
     // this too (resolveTrackingProfile throws on an unresolved subcategory
     // key, and CategoriesService never assigns items to a bare Sports root),
@@ -1247,8 +1312,9 @@ export function ItemForm({
         toast.error('Pick a category and warehouse before saving variants.');
         return;
       }
-      // DECOMPOSE before sending — see the edit branch below for why.
-      const sizedRack = normalizeRackFields({ number: rackNumber, row: rackRow });
+      // DECOMPOSE before sending — see the edit branch below for why. A
+      // near-match picked in the new-rack question stands in for the typed rack.
+      const sizedRack = normalizeRackFields(answer.rack ?? { number: rackNumber, row: rackRow });
       const num = sizedRack.number;
       const row = num ? (sizedRack.row ?? '').toUpperCase() : '';
       const composedBin = formatRackLabel({ number: num, row }) || null;
@@ -1293,11 +1359,15 @@ export function ItemForm({
               variantColor: values.variantColor || undefined,
             }
           : {}),
+        // Only after the person said yes to creating the run's new rack.
+        ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
       });
       if (!res.ok) {
+        if (askNewRack(res.error, 'rack')) return;
         reportSaveError(res.error);
         return;
       }
+      setRackQuestion(null);
 
       // Photo upload for the sized-bulk flow. The single-item path
       // below at line ~512 only handles `res.data.id`; this branch
@@ -1361,6 +1431,9 @@ export function ItemForm({
     const mergedValues = isBook
       ? {
           ...values,
+          // A book's stock is placed by its Bin / shelf label, so that is the
+          // box a near-match picked in the new-rack question replaces.
+          ...(answer.bin !== undefined ? { binLocation: answer.bin } : {}),
           itemType: 'book' as const,
           // composeBookCustomFields strips every form-owned key (rack/crate/
           // grade/author) up front, then re-adds only the ones still set — so
@@ -1387,7 +1460,9 @@ export function ItemForm({
           // whole label in rack_number with a NULL rack_row is what made items
           // invisible to their own rack filter on 2026-07-23 — the parser
           // splits it into ("22","B") instead of rejecting the input.
-          const itemRack = normalizeRackFields({ number: rackNumber, row: rackRow });
+          // A near-match picked in the new-rack question stands in for the
+          // typed rack.
+          const itemRack = normalizeRackFields(answer.rack ?? { number: rackNumber, row: rackRow });
           const num = itemRack.number;
           const row = num ? (itemRack.row ?? '').toUpperCase() : '';
           // Explicitly delete rack keys before re-adding so emptying
@@ -1449,12 +1524,18 @@ export function ItemForm({
     const action =
       isEdit && defaults?.id
         ? updateItemAction(defaults.id, editValues as UpdateItemInput)
-        : createItemAction(finalValues as CreateItemInput);
+        : createItemAction({
+            ...(finalValues as CreateItemInput),
+            // Only after the person said yes to creating the item's new rack.
+            ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
+          });
     const res = await action;
     if (!res.ok) {
+      if (askNewRack(res.error, isBook ? 'bin' : 'rack')) return;
       reportSaveError(res.error);
       return;
     }
+    setRackQuestion(null);
 
     // Persist the tag selection to item_tags. Done after the item
     // save resolves so we have a guaranteed item id (creates only get
@@ -1575,10 +1656,41 @@ export function ItemForm({
     } else {
       router.refresh();
     }
-  }, onInvalidSubmit);
+  }
+
+  const onSubmit = handleSubmit((values) => submitItem(values), onInvalidSubmit);
+
+  /**
+   * Save again with the person's answer to the server's new-rack question.
+   * The answer belongs to this one save: an ordinary submit after it answers
+   * nothing, so a rack typed later is asked about again.
+   */
+  function answerRackQuestion(answer: NewRackAnswer) {
+    void handleSubmit(
+      (values) => submitItem(values, answer),
+      () => {
+        setRackQuestion(null);
+        onInvalidSubmit();
+      },
+    )();
+  }
+
+  /** "Use 17-B instead": save onto the existing rack, and show it in its box. */
+  function saveOntoSuggestion(label: string) {
+    if (rackQuestion?.target === 'bin') {
+      setValue('binLocation', label);
+      answerRackQuestion({ bin: label });
+      return;
+    }
+    const rack = rackFieldsFromLabel(label);
+    setRackNumber(rack.number);
+    setRackRow(rack.row);
+    answerRackQuestion({ rack });
+  }
 
   // The form, and beside it (outside the form, so the review's inputs never
-  // count as unsaved work here) the Group them review.
+  // count as unsaved work here) the Group them review and the new-rack
+  // question.
   const formElement = (
     <form
       onSubmit={onSubmit}
@@ -2276,6 +2388,11 @@ export function ItemForm({
                 <SelectItem value="__generic">
                   Generic — any {charterLabel.toLowerCase()}
                 </SelectItem>
+                {unlinkedCharter ? (
+                  <SelectItem value={unlinkedCharter.id}>
+                    {unlinkedCharter.name} (not linked to this {warehouseLabel.toLowerCase()})
+                  </SelectItem>
+                ) : null}
                 {allowedCharters.length === 0 && watchedWarehouseId ? (
                   <div className="text-muted-foreground px-3 py-2 text-[12px]">
                     No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}{' '}
@@ -2747,6 +2864,14 @@ export function ItemForm({
           onOpenChange={(v) => (v ? null : setGroupIds(null))}
         />
       ) : null}
+      <PlacementConfirmDialog
+        open={rackQuestion !== null}
+        content={rackQuestion ? newRackConfirmContent(rackQuestion.detail) : null}
+        submitting={isSubmitting}
+        onCancel={() => setRackQuestion(null)}
+        onConfirm={() => answerRackQuestion({ confirmNewRack: true })}
+        onUseSuggestion={saveOntoSuggestion}
+      />
     </>
   );
 }

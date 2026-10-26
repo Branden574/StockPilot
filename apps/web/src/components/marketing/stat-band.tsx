@@ -3,7 +3,7 @@
 import * as React from 'react';
 
 import { useInView } from '@/lib/hooks/use-in-view';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 interface Stat {
   /** Numeric target to count up to (null = static text via `display`). */
@@ -54,7 +54,7 @@ function StatCell({ stat, run, delay }: { stat: Stat; run: boolean; delay: numbe
   return (
     <div className={cn('reveal-up', run && 'is-in')} style={{ transitionDelay: `${delay}ms` }}>
       <div className="font-display text-[clamp(32px,5vw,52px)] font-medium leading-none tracking-[-0.03em]">
-        {stat.display ?? `${stat.prefix ?? ''}${n.toLocaleString()}${stat.suffix ?? ''}`}
+        {stat.display ?? `${stat.prefix ?? ''}${formatNumber(n)}${stat.suffix ?? ''}`}
       </div>
       <div className="mt-2 text-[13px] leading-snug text-[var(--ed-ink-3)]">{stat.label}</div>
     </div>

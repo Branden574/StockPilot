@@ -5,6 +5,14 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
+import { placementWarningMessage, type NewRackConfirmationDetail } from '@stockpilot/core';
+
+import {
+  newRackConfirmContent,
+  newRackQuestion,
+  rackFieldsFromLabel,
+} from '@/components/inventory/new-rack-question';
+import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -34,6 +42,22 @@ interface Props {
 }
 
 /**
+ * A book copy whose stock the server could not move to Unplaced (B28): the
+ * copy exists (never an error), and the person is sent to look, in the shared
+ * placement warning's order. With a place, the stock is still there (the
+ * original's site). Without one, the server could not tell where all of it is
+ * (stock out of the person's view, or a read that failed): it may be in
+ * Unplaced or still at the site, so the message says only that it may not
+ * have reached Unplaced.
+ */
+function stockLeftAtMessage(itemName: string, locationName: string | null): string {
+  if (!locationName) {
+    return `Duplicated "${itemName}", but its stock may not have reached Unplaced. Check before picking.`;
+  }
+  return `Duplicated "${itemName}", but its stock could not be moved to Unplaced: it is still at ${locationName}. Check before picking.`;
+}
+
+/**
  * Modal launched by the "Duplicate" button on item-detail.
  * Pre-fills nothing visible (everything is inherited from the
  * original); user only enters the new physical location. On success,
@@ -50,6 +74,11 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
   const [crateColor, setCrateColor] = useState('');
   const [crateNumber, setCrateNumber] = useState('');
   const [quantity, setQuantity] = useState('0');
+  // "Create new rack 1-B?" (2026-10-24): a copy's stock is moved onto the rack
+  // typed here, and when no such rack exists the server asks before it creates
+  // one, the same question as the New item form (see new-rack-question.ts).
+  // Products only: a duplicated book is never placed by the duplicate.
+  const [rackQuestion, setRackQuestion] = useState<NewRackConfirmationDetail | null>(null);
 
   function reset() {
     setRackNumber('');
@@ -57,15 +86,22 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
     setCrateColor('');
     setCrateNumber('');
     setQuantity('0');
+    setRackQuestion(null);
   }
 
-  function submit() {
+  /**
+   * `answer` is the person's reply to the server's new-rack question, for this
+   * one save: yes, or the near-match to put the copy on instead.
+   */
+  function submit(answer: { confirmNewRack?: true; rack?: { number: string; row: string } } = {}) {
+    const number = answer.rack?.number ?? rackNumber;
+    const row = answer.rack?.row ?? rackRow;
     const qty = Number.parseInt(quantity, 10);
     if (Number.isNaN(qty) || qty < 0) {
       toast.error('Quantity must be 0 or more.');
       return;
     }
-    if (!rackNumber.trim()) {
+    if (!number.trim()) {
       toast.error('Rack number is required.');
       return;
     }
@@ -79,8 +115,8 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         ? {
             originalId: itemId,
             itemType: 'book' as const,
-            rackNumber: rackNumber.trim(),
-            rackRow: rackRow.trim() || null,
+            rackNumber: number.trim(),
+            rackRow: row.trim() || null,
             crateColor: crateColor.trim(),
             crateNumber: crateNumber.trim(),
             quantity: qty,
@@ -88,16 +124,39 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         : {
             originalId: itemId,
             itemType: 'product' as const,
-            rackNumber: rackNumber.trim(),
-            rackRow: rackRow.trim() || null,
+            rackNumber: number.trim(),
+            rackRow: row.trim() || null,
             quantity: qty,
+            // Only after the person said yes to creating the new rack.
+            ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
           };
       const result = await duplicateItemAction(input);
       if (!result.ok) {
+        const question = isBook ? null : newRackQuestion(result.error);
+        setRackQuestion(question);
+        if (question) return;
         toast.error(result.error.message);
         return;
       }
-      toast.success(`Duplicated "${itemName}"`);
+      setRackQuestion(null);
+      // The copy exists either way. When its stock did not reach the rack
+      // (2026-10-25), say so in the shared placement words, as Add more sizes
+      // does. A book copy's stock waits in Unplaced (B28); when the server
+      // could not move it there, say where it was left.
+      if (result.data.placementFailed) {
+        toast.warning(
+          placementWarningMessage(`Duplicated "${itemName}"`, result.data.placementFailed),
+          { duration: 10000 },
+        );
+      } else if (result.data.stockLeftAt) {
+        toast.warning(stockLeftAtMessage(itemName, result.data.stockLeftAt.locationName), {
+          duration: 10000,
+        });
+      } else if (isBook && qty > 0) {
+        toast.success(`Duplicated "${itemName}". Its stock is in Unplaced, awaiting put-away.`);
+      } else {
+        toast.success(`Duplicated "${itemName}"`);
+      }
       setOpen(false);
       reset();
       router.push(`/dashboard/inventory/${result.data.id}`);
@@ -201,7 +260,10 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="dup-quantity">Quantity at this rack</Label>
+            {/* A book copy's stock waits in Unplaced (B28), never "at this
+                rack": the label is the field's accessible name, and the hint
+                that says where the stock goes is its description. */}
+            <Label htmlFor="dup-quantity">{isBook ? 'Quantity' : 'Quantity at this rack'}</Label>
             <Input
               id="dup-quantity"
               type="number"
@@ -210,9 +272,12 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               disabled={pending}
+              aria-describedby="dup-quantity-hint"
             />
-            <p className="text-muted-foreground text-[12px]">
-              Defaults to 0. Set the actual on-hand count at the new rack.
+            <p id="dup-quantity-hint" className="text-muted-foreground text-[12px]">
+              {isBook
+                ? 'Defaults to 0. The stock waits in Unplaced until it is put away into this crate.'
+                : 'Defaults to 0. Set the actual on-hand count at the new rack.'}
             </p>
           </div>
         </div>
@@ -221,11 +286,26 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
           <Button variant="outline" onClick={() => setOpen(false)} disabled={pending}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={pending}>
+          <Button onClick={() => submit()} disabled={pending}>
             {pending ? 'Duplicating…' : 'Duplicate'}
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <PlacementConfirmDialog
+        open={rackQuestion !== null}
+        content={rackQuestion ? newRackConfirmContent(rackQuestion) : null}
+        submitting={pending}
+        onCancel={() => setRackQuestion(null)}
+        onConfirm={() => submit({ confirmNewRack: true })}
+        onUseSuggestion={(label) => {
+          // Show the rack the copy goes onto, and save onto it.
+          const rack = rackFieldsFromLabel(label);
+          setRackNumber(rack.number);
+          setRackRow(rack.row);
+          submit({ rack });
+        }}
+      />
     </Dialog>
   );
 }
