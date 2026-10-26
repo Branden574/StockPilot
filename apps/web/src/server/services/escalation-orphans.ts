@@ -213,20 +213,33 @@ export async function findUnlinkedEscalationRequests(
   return result;
 }
 
-/** Organization ids in id order, starting one organization later each day
- *  (the UTC day's number since 1970, modulo how many there are). A run cut
- *  short by its deadline reads the start of its order, and while there are
- *  N organizations each one starts the order on one of any N consecutive
- *  days, so each is read at least once in N days however few a run reads,
- *  with nothing stored between runs. N days can be longer than the
- *  three-day window, which is why each run's error alert names the
- *  organizations it did not read; only a stored per-organization time of
- *  the last read would bound it. An order that only alternated between two
- *  directions never read the middle organizations while runs read fewer
- *  than half. */
+/** Organization ids in the order a run reads them: from a start one
+ *  organization later each day (the UTC day's number since 1970, modulo how
+ *  many there are), then on in id order on even days and back in id order on
+ *  odd days, wrapping round. A run cut short by its deadline reads the start
+ *  of its order. While there are N organizations:
+ *  - each one starts the order on one of any N consecutive days, so each is
+ *    read at least once in N days however few a run reads, with nothing
+ *    stored between runs;
+ *  - each day starts beside the day before's start and reads the other way,
+ *    into the organizations the day before left. So when runs read more
+ *    than half of them, every organization is read in any three consecutive
+ *    runs, and in any two when runs read at least one more than half: a
+ *    request is in the window of the next three runs, or two when it was
+ *    saved in the 10 minutes before a run. Reading on in id order every day
+ *    left the same block, the one just before the start, unread for N - k
+ *    runs in a row when runs read k.
+ *  N days can be longer than the three-day window, which is why each run's
+ *  error alert names the organizations it did not read; only a stored
+ *  per-organization time of the last read would bound it. An order that
+ *  only alternated between two directions from the same start never read
+ *  the middle organizations while runs read fewer than half. */
 function sweepOrder(ids: readonly string[], now: number): string[] {
-  const start = Math.floor(now / DAY_MS) % ids.length;
-  return [...ids.slice(start), ...ids.slice(0, start)];
+  const day = Math.floor(now / DAY_MS);
+  const start = day % ids.length;
+  const onward = [...ids.slice(start), ...ids.slice(0, start)];
+  if (day % 2 === 0) return onward;
+  return [...onward.slice(0, 1), ...onward.slice(1).reverse()];
 }
 
 /** One organization's live "Ref EX-" requests in the window (at most the

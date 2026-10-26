@@ -518,10 +518,15 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
    * organization's start is checked against the deadline in the same step
    * as its read is made, before the next organization's check.
    */
-  async function runCutShort(orgs: string[], runAt: number, reads: number) {
+  async function runCutShort(
+    orgs: string[],
+    runAt: number,
+    reads: number,
+    requests: Array<Record<string, unknown>> = [],
+  ) {
     vi.setSystemTime(runAt);
     h.reportError.mockClear();
-    const stub = setup({ orgs });
+    const stub = setup({ orgs, requests });
     const from = stub.client.from.bind(stub.client) as (table: string) => unknown;
     let started = 0;
     stub.client.from = vi.fn((table: string) => {
@@ -539,23 +544,31 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
 
   // At least twice the organizations read at once, so a run cut short can
   // read fewer than half of them: an order that only alternates between two
-  // directions then never reads the middle ones.
+  // directions then never reads the middle ones. 10 and 15 organizations
+  // share a factor with an order whose start moved 3 or 5 organizations a
+  // day, which never started at some of them.
   it.each([
     [2 * ORPHAN_SWEEP.orgConcurrency, 1],
     [2 * ORPHAN_SWEEP.orgConcurrency + 3, 1],
     [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency],
     [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency + 1],
+    [2 * (ORPHAN_SWEEP.orgConcurrency + 1), ORPHAN_SWEEP.orgConcurrency],
+    [15, 1],
   ])(
-    'with %i organizations and every run cut short after %i, the runs of that many consecutive days read every organization, and each run names the ones it did not read',
+    'with %i organizations and every run cut short after %i, each day starts one organization later, the runs of that many consecutive days read every organization, and each run names the ones it did not read',
     async (count, reads) => {
       const orgs = Array.from({ length: count }, (_v, i) => `org-${String(i).padStart(2, '0')}`);
       const everRead = new Set<string>();
+      let start: string | undefined;
 
       for (let day = 0; day < count; day += 1) {
         const { read, body } = await runCutShort(orgs, NOW + day * 24 * HOUR, reads);
 
         expect(read).toHaveLength(reads);
         expect(body.read).toBe(reads);
+        // The first organization read is the one after the day before's.
+        if (start !== undefined) expect(read[0]).toBe(orgs[(orgs.indexOf(start) + 1) % count]);
+        start = read[0];
         expect([...read, ...body.notRead].sort()).toEqual(orgs);
         // The run's error alert names exactly the organizations it did not read.
         expect(incompleteAlerts()).toHaveLength(1);
@@ -567,6 +580,73 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
       }
 
       expect([...everRead].sort()).toEqual(orgs);
+    },
+  );
+
+  // A request is in the window of the next three daily runs (at least 10
+  // minutes old, at most 72 hours old), or of the next two when it was saved
+  // in the 10 minutes before a run. So when runs read more than half of the
+  // organizations, the runs that follow must reach the ones a run left.
+  // Reading on in id order every day from a start one later each day left
+  // the same block, the organizations just before the start, unread for
+  // N - k runs in a row. Two turns of the order, so with an odd count every
+  // start is read in both directions.
+  it.each([
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency + 2, 3],
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, 2 * ORPHAN_SWEEP.orgConcurrency, 2],
+    [40, 30, 2],
+  ])(
+    'with %i organizations and every run cut short after %i, more than half, every organization is read in any %i consecutive runs',
+    async (count, reads, within) => {
+      const orgs = Array.from({ length: count }, (_v, i) => `org-${String(i).padStart(2, '0')}`);
+      const readOn: string[][] = [];
+      for (let day = 0; day < 2 * count; day += 1) {
+        const { read } = await runCutShort(orgs, NOW + day * 24 * HOUR, reads);
+        readOn.push(read);
+      }
+
+      const missed: string[] = [];
+      for (let day = 0; day + within <= readOn.length; day += 1) {
+        const seen = new Set(readOn.slice(day, day + within).flat());
+        for (const org of orgs) {
+          if (!seen.has(org)) missed.push(`${org} on days ${day} to ${day + within - 1}`);
+        }
+      }
+      expect(missed).toEqual([]);
+    },
+  );
+
+  it.each([
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, ORPHAN_SWEEP.orgConcurrency + 2],
+    [2 * ORPHAN_SWEEP.orgConcurrency + 3, 2 * ORPHAN_SWEEP.orgConcurrency],
+  ])(
+    'with %i organizations and every run cut short after %i, more than half, an unlinked request saved just after a run is listed by one of the three runs that have it in their window',
+    async (count, reads) => {
+      const orgs = Array.from({ length: count }, (_v, i) => `org-${String(i).padStart(2, '0')}`);
+      const missed: string[] = [];
+
+      // One request in each organization, saved a minute after each day's
+      // run in turn, over two turns of the order.
+      for (let saved = 0; saved < 2 * count; saved += 1) {
+        const requests = orgs.map((org, i) =>
+          request({
+            id: `mr-${org}`,
+            organization_id: org,
+            request_number: 100 + i,
+            created_at: new Date(NOW + saved * 24 * HOUR + MIN).toISOString(),
+          }),
+        );
+        const listed = new Set<string>();
+        for (let run = saved + 1; run <= saved + 3; run += 1) {
+          await runCutShort(orgs, NOW + run * 24 * HOUR, reads, requests);
+          const message = orphanAlerts()[0]?.[0].message ?? '';
+          for (const org of orgs) if (message.includes(`request mr-${org},`)) listed.add(org);
+        }
+        for (const org of orgs) {
+          if (!listed.has(org)) missed.push(`mr-${org} saved after day ${saved}`);
+        }
+      }
+      expect(missed).toEqual([]);
     },
   );
 
