@@ -1990,6 +1990,32 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
     ]);
   });
 
+  // Mutation caught: the keep rule keeping a count for a clear whoever queued
+  // it. The case above cannot tell: its answer lists fewer than 50 counts, so
+  // the every-pull sweep takes A's count once the release has cleaned its
+  // line, whatever the keep rule says. A full page turns that sweep off, and
+  // the keep rule alone decides (sync.ts "Unconfirmed rows").
+  it("B's answer is a full page of 50 counts: the count another account's clear is on still goes, and the next account's own clear keeps its count", async () => {
+    await aLeavesItsCacheWithNoOwner('clear');
+    bSees({ openCycleCounts: Array.from({ length: 50 }, (_, i) => openCount(`cc-open-${i}`)) });
+    signIn(B);
+    await countOnThePhone('cc-b');
+    await emptyTheBox('cc-b-l1'); // before B's first pull
+    await m.sync.syncNow(); // B's first pull: the adopt, in full
+
+    expect(ids("select id from cycle_counts where id in ('cc-a', 'cc-b') order by id")).toEqual([
+      'cc-b',
+    ]);
+    expect(ids("select id from cycle_count_lines where count_id = 'cc-a'")).toEqual([]);
+    expect(ids('select id from cycle_counts')).toHaveLength(51);
+    expect(line('cc-b-l1')).toEqual({ counted: null, local_dirty: 1 });
+    expect(await m.counts.pendingCountFor('cc-b')).toBe(1);
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+      { user_id: B, status: 'pending', line_id: 'cc-b-l1', edit: 'clear' },
+    ]);
+  });
+
   // Mutations caught: the release taking only a dirty line that holds a count
   // (A's clear then stays as B's own cleared line, which the pull's write
   // keeps), and Sync first counting another account's clear.
@@ -2032,6 +2058,48 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
     expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
     expect(queuedEdits()).toEqual([
       { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+    ]);
+  });
+
+  // The same, on a count both accounts emptied a box of. Mutation caught: the
+  // count screen's release taking a line the next account's own clear backs.
+  // B's clear would then show as the server's count while it stays queued,
+  // and Sync first and the drain would still count it and send it.
+  it("a count both accounts emptied a box of, opened on the count screen before any pull of the next account's lands: the other account's clear gives way to the server's count, and the next account's own clear stays", async () => {
+    await aLeavesItsCacheWithNoOwner('clear');
+    signIn(B);
+    // A second line of A's count, with the server's count of 3 on it, whose
+    // box B empties.
+    raw.exec(`insert into cycle_count_lines
+        (id, count_id, item_id, item_name, item_sku, expected, counted, local_dirty)
+      values ('cc-a-l2', 'cc-a', 'item-y', 'Y', 'SKU-Y', 3, 3, 0)`);
+    await emptyTheBox('cc-a-l2');
+    device.snapshotFails = true;
+    await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
+    expect(owner()).toBe(B);
+
+    expect(
+      await m.counts.cacheCycleCount(
+        countHeader('cc-a'),
+        [fetchedLine('cc-a-l1', 2), { ...fetchedLine('cc-a-l2', 3), itemId: 'item-y' }],
+        await m.counts.cacheWriteScope(),
+      ),
+    ).toBe(true);
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect(line('cc-a-l2')).toEqual({ counted: null, local_dirty: 1 });
+    const shown = (await m.counts.getCycleCount('cc-a'))?.lines
+      .map((l) => [l.id, l.counted, l.localDirty])
+      .sort();
+    expect(shown).toEqual([
+      ['cc-a-l1', 2, false],
+      ['cc-a-l2', null, true],
+    ]);
+    // Post waits for B's clear (Sync first), and only for B's.
+    expect(await m.counts.pendingCountFor('cc-a')).toBe(1);
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+      { user_id: B, status: 'pending', line_id: 'cc-a-l2', edit: 'clear' },
     ]);
   });
 
