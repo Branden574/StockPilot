@@ -21,8 +21,9 @@
  *          drop an oversize placeholder, fall back when the worker fails.
  *   ARM 3  reads the SOURCE: neither path may carry a number of its own, both
  *          must import the shared module, the `new Worker(new URL(…))`
- *          expression must keep the exact shape the bundler recognises, and the
- *          two backfill tools must agree with the shared thumbnail size.
+ *          expression must keep the exact shape the bundler recognises, the
+ *          two backfill tools must agree with the shared thumbnail size, and
+ *          the phone's thumbnail numbers (core) must equal the web's.
  *   ARM 4  an engine that cannot encode WebP (WebKit answers a WebP request
  *          with a PNG): a camera photo becomes JPEG on both paths, anything
  *          that may be transparent does not, what comes back is labelled as
@@ -66,6 +67,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { ITEM_PHOTO_THUMB } from '@stockpilot/core';
 
 import { IMAGE_VARIANTS } from './image-variants.config';
 
@@ -811,6 +814,14 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
         /(?:contentType|'Content-Type')\s*:\s*(?:variants\.)?thumbBlob\.type\b/,
       );
     }
+  });
+
+  it("the phone makes its thumbnails at the web's size and quality (core ITEM_PHOTO_THUMB, B31)", () => {
+    // The phone cannot import this config (nor this config anything), so the
+    // phone's numbers live in core and this pins the two equal: the same
+    // drift the worker and the fallback once had, across the two apps.
+    expect(ITEM_PHOTO_THUMB.maxEdge).toBe(IMAGE_VARIANTS.thumb.maxDimension);
+    expect(ITEM_PHOTO_THUMB.quality).toBe(IMAGE_VARIANTS.thumb.quality);
   });
 
   it('both backfill tools make thumbnails of the shared size', () => {
