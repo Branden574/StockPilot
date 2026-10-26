@@ -215,6 +215,10 @@ export interface InventoryListSearchParamsLike {
   /** '1' = the Archived view's "Auto-archived only" chip (rows the zero-stock
    *  job archived). Any presence bypasses the cached default view. */
   auto?: string;
+  /** A display group's id: show the page that draws its header (the "Show
+   *  it" link after Group selected, B5). Any presence bypasses the cached
+   *  default view. */
+  group?: string | string[];
 }
 
 function hasIdFilter(value: string | string[] | undefined): boolean {
@@ -259,6 +263,11 @@ export function isDefaultInventoryView(
   // paint rows the table drops the moment it adopts the streamed dataset
   // (review 2026-10-05: the Active toggle used to carry ?auto=1 over).
   if (params.auto !== undefined) return false;
+  // Same for any ?group= presence (B5): it asks for the page that draws a
+  // display group's header, which the table's derivation turns to, so the
+  // cached page 1 would paint first and then turn. Garbage too, so the cache
+  // never has to reason about which values the derivation ignores.
+  if (params.group !== undefined) return false;
   if (hasIdFilter(params.cat) || hasIdFilter(params.loc) || hasIdFilter(params.charter)) {
     return false;
   }
