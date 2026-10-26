@@ -8,6 +8,7 @@ import {
   type RequesterSubmitted,
 } from '@/components/returns/requester-return-sheet';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import { readActionOptions, readActionSubmit } from '@/lib/returns/requester-sheet';
 import {
   portalReturnOptionsAction,
@@ -63,7 +64,9 @@ export function PortalReturnSheet({
     try {
       const res = await portalReturnSheetAction(orderId);
       if (res.ok) setState({ status: 'ready', sheet: res.data });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // Keep the sheet on screen; the next send is checked by the server.
     }
   }, [orderId, onStale]);
@@ -77,7 +80,9 @@ export function PortalReturnSheet({
         next = res.ok
           ? { status: 'ready', sheet: res.data }
           : { status: 'failed', message: res.error.message || SHEET_FAILED };
-      } catch {
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         next = { status: 'failed', message: SHEET_FAILED };
       }
       if (live) setState(next);

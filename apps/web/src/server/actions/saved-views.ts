@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { WAREHOUSE_FILTER_COOKIE } from '@/lib/warehouse-filter';
 import {
   SavedViewsService,
@@ -23,6 +24,7 @@ export async function createSavedViewAction(input: {
     revalidatePath(input.scope === 'inventory' ? '/dashboard/inventory' : '/dashboard/books');
     return { ok: true as const, data: view };
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }
@@ -40,6 +42,7 @@ export async function deleteSavedViewAction(id: string, scope: SavedViewScope) {
     revalidatePath(scope === 'inventory' ? '/dashboard/inventory' : '/dashboard/books');
     return { ok: true as const, data: { id } };
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }
@@ -67,6 +70,7 @@ export async function toggleSavedViewShareAction(
     revalidatePath(scope === 'inventory' ? '/dashboard/inventory' : '/dashboard/books');
     return { ok: true as const, data: { id, isShared } };
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }

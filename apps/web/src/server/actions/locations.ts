@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   createLocationSchema,
   LocationsService,
@@ -24,6 +25,7 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  * message, never its own text.
  */
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) {
     return err(
       error.code,

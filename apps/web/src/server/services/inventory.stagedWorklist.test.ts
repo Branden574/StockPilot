@@ -908,3 +908,77 @@ describe('InventoryService.stagedWorklist({ itemIds }) — put away from an orde
     expect(rows).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B38: a holding in the organization-level Staging bucket (0194: a location
+// with no warehouse) belongs to an item that has a warehouse now (the page
+// reads items through their warehouse). The row carries the ITEM's warehouse
+// beside the holding's, so Place can open on it; it rides the existing embed.
+// ---------------------------------------------------------------------------
+
+describe("InventoryService.stagedWorklist — the item's own warehouse (B38)", () => {
+  const ORG_ITEM = '33333333-3333-3333-3333-333333333333';
+
+  function stub() {
+    return makeSupabaseStub({
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: ORG_ITEM,
+            location_id: 'org-stg',
+            quantity: 6,
+            // The organization's bucket: no warehouse on the location.
+            locations: { id: 'org-stg', kind: 'staging', warehouse_id: null },
+            inventory_items: {
+              id: ORG_ITEM,
+              name: 'Trail Runner',
+              sku: 'SP-TR-1',
+              item_type: 'product',
+              deleted_at: null,
+              custom_fields: null,
+              warehouse_id: 'wh-main',
+            },
+          },
+          {
+            item_id: STAGING_ITEM,
+            location_id: 'stg-loc',
+            quantity: 2,
+            locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+            // An embed without the column (an older fixture shape) reads null.
+            inventory_items: {
+              id: STAGING_ITEM,
+              name: 'Desk Lamp',
+              sku: 'SP-DL-1',
+              item_type: 'product',
+              deleted_at: null,
+            },
+          },
+        ],
+        error: null,
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+  }
+
+  it("keeps the holding's warehouse (none) and adds the item's", async () => {
+    const rows = await new InventoryService(makeServiceContext(stub().client)).stagedWorklist();
+    expect(rows.find((r) => r.itemId === ORG_ITEM)).toMatchObject({
+      warehouseId: null,
+      itemWarehouseId: 'wh-main',
+      sourceLocationId: 'org-stg',
+    });
+    expect(rows.find((r) => r.itemId === STAGING_ITEM)).toMatchObject({
+      warehouseId: 'wh-1',
+      itemWarehouseId: null,
+    });
+  });
+
+  it('asks the EXISTING inventory_items embed for warehouse_id: no query of its own', async () => {
+    const s = stub();
+    await new InventoryService(makeServiceContext(s.client)).stagedWorklist();
+    expect(s.fromCalls).not.toContain('inventory_items');
+    const projection = s.chainArgsAll.get('item_stock_levels.select')![0]![0]![0] as string;
+    const embed = projection.slice(projection.indexOf('inventory_items!inner('));
+    expect(embed).toMatch(/\bwarehouse_id\b/);
+  });
+});

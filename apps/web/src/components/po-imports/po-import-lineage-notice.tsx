@@ -1,8 +1,9 @@
 import { History, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 
-import { formatRelative } from '@/lib/utils';
 import type { PoImportLineage } from '@/server/services/po-imports';
+
+import { formatOrgDate, formatOrgDateTime } from '@stockpilot/core';
 
 /**
  * Re-import lineage notice (migs 0286/0287). Reads in BOTH directions because
@@ -18,12 +19,23 @@ import type { PoImportLineage } from '@/server/services/po-imports';
  * order releases its po_number (PurchaseOrdersService.updateStatus), so the
  * number may already belong to a different, live PO. It is shown only as a
  * recognition aid, always alongside the word "cancelled".
+ *
+ * The later import is dated as a calendar day in the ORGANIZATION's zone
+ * (`timeZone`, which the page resolves from the org row), with the time on
+ * hover: the same words as the imports list's Uploaded column. It used to say
+ * "imported again 2 weeks ago", which names no day and drifts while the page
+ * sits open (owner request 2026-09-24: people track imports against a
+ * calendar). Formatted on the server in a fixed zone, so the server's own
+ * zone (UTC on Vercel) and the viewer's never move the day.
  */
 export function PoImportLineageNotice({
   lineage,
+  timeZone,
   className,
 }: {
   lineage: PoImportLineage;
+  /** The organization's IANA zone, already resolved (resolveOrgTimezone). */
+  timeZone: string;
   className?: string;
 }) {
   // The successor resolved by PoImportsService.resolveLineage is exactly ONE
@@ -48,9 +60,19 @@ export function PoImportLineageNotice({
             Replaced by a later import of this file
           </p>
           <p className="text-muted-foreground mt-0.5 text-[12.5px]">
-            This file was imported again {formatRelative(replacement.createdAt)}. Open the newer
-            import to see where it stands — if it was replaced in turn, it says so too. This import
-            and the purchase order it created are kept unchanged for the record.
+            This file was imported again on{' '}
+            <time
+              dateTime={replacement.createdAt}
+              title={formatOrgDateTime(
+                replacement.createdAt,
+                { dateStyle: 'medium', timeStyle: 'short' },
+                timeZone,
+              )}
+            >
+              {formatOrgDate(replacement.createdAt, { dateStyle: 'medium' }, timeZone)}
+            </time>
+            . Open the newer import to see where it stands — if it was replaced in turn, it says so
+            too. This import and the purchase order it created are kept unchanged for the record.
           </p>
           <Link
             href={`/dashboard/purchase-orders/imports/${replacement.id}`}

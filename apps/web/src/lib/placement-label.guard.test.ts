@@ -678,7 +678,17 @@ const DELEGATES_TO_RESOLVER = [
   // is not. This module owns the precedence; the screen it serves renders the
   // rows and now appears under RENDERS_PRECOMPUTED.
   'apps/mobile/src/lib/placement-rows.ts',
+  // The phone scanner's "Multiple placements found" line (B26), extracted for
+  // the same reason as placement-rows.ts: it said each record's raw rack text,
+  // and now calls the resolver with the records' holdings.
+  'apps/mobile/src/lib/scan-resolve.ts',
   'apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx',
+  // The scanner lookup API's `placementLabel` (B26): one line per record that
+  // answers a scanned code, naming where its stock is. It was the raw rack
+  // text, so a split item named one rack and a book whose rack lives in its
+  // rack keys named none. It already fetched the holdings; it now calls the
+  // resolver with them.
+  'apps/web/src/app/api/v1/items/lookup/route.ts',
   'apps/web/src/components/cycle-counts/count-item-picker.tsx',
   'apps/web/src/components/inventory/inventory-table.tsx',
   'apps/web/src/components/inventory/item-detail.tsx',
