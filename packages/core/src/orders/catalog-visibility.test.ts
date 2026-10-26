@@ -23,13 +23,16 @@ import {
   ORDER_CATALOG_VISIBLE_COLUMN,
   ORDER_ITEMS_ACCESS_ALLOW_SCOPE_COPY,
   ORDER_ITEMS_ACCESS_AUDIT_LABEL,
+  ORDER_ITEMS_ACCESS_BUSY_COPY,
   ORDER_ITEMS_ACCESS_CHANGED_COPY,
   ORDER_ITEMS_ACCESS_DISABLED_COPY,
+  ORDER_ITEMS_ACCESS_INVALID_COPY,
   ORDER_ITEMS_ACCESS_KEPT_ON_REINVITE_COPY,
   ORDER_ITEMS_ACCESS_MANAGER_NEEDS_DENY_COPY,
   ORDER_ITEMS_ACCESS_MODULE_OFF_COPY,
   ORDER_ITEMS_ACCESS_PHONE_ENTRY_COPY,
   ORDER_ITEMS_ACCESS_ROLE_DEFAULT_COPY,
+  ORDER_ITEMS_ACCESS_SAVE_FAILED_COPY,
   ORDER_ITEMS_ACCESS_STATE_LABELS,
   ORDER_ITEMS_BUSY_COPY,
   ORDER_ITEMS_FORBIDDEN_COPY,
@@ -438,6 +441,19 @@ describe('orderCatalogAccessPreview', () => {
       "This member's order items access changed while you were working. Reload the page and try again.",
     );
     expect(ORDER_ITEMS_ACCESS_CHANGED_COPY).not.toMatch(/authori[sz]ed|permission/i);
+  });
+
+  it('the console save refusals: busy, invalid and failed, none of them "not authorized"', () => {
+    expect(ORDER_ITEMS_ACCESS_BUSY_COPY).toBe(
+      "Another change to this member's order items access is still saving. Try again in a moment.",
+    );
+    expect(ORDER_ITEMS_ACCESS_INVALID_COPY).toBe("That change couldn't be sent. Reload the page and try again.");
+    expect(ORDER_ITEMS_ACCESS_SAVE_FAILED_COPY).toBe(
+      "Order items access couldn't be saved. Reload the page to see what it is now, then try again.",
+    );
+    for (const copy of [ORDER_ITEMS_ACCESS_BUSY_COPY, ORDER_ITEMS_ACCESS_INVALID_COPY, ORDER_ITEMS_ACCESS_SAVE_FAILED_COPY]) {
+      expect(copy).not.toMatch(/authori[sz]ed/i);
+    }
   });
 
   it('the two audit labels stay apart', () => {

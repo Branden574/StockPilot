@@ -460,6 +460,14 @@ export const ORDER_ITEMS_ACCESS_CHANGED_COPY =
   "This member's order items access changed while you were working. Reload the page and try again.";
 export const ORDER_ITEMS_ACCESS_MEMBER_NOT_FOUND_COPY =
   'That person is not a member of this organization anymore. Reload the page.';
+/** Another save for the same member and key held the row past the lock wait. */
+export const ORDER_ITEMS_ACCESS_BUSY_COPY =
+  "Another change to this member's order items access is still saving. Try again in a moment.";
+/** A malformed request (the dialog only sends the three states). */
+export const ORDER_ITEMS_ACCESS_INVALID_COPY = "That change couldn't be sent. Reload the page and try again.";
+/** An unexpected failure: nothing is claimed about what was saved. */
+export const ORDER_ITEMS_ACCESS_SAVE_FAILED_COPY =
+  "Order items access couldn't be saved. Reload the page to see what it is now, then try again.";
 
 const BLOCKER_REASON: Readonly<Record<OrderCatalogAccessBlocker, string>> = {
   account_disabled: 'their account is disabled',

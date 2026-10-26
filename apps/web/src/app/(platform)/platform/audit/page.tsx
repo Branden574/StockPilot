@@ -19,6 +19,8 @@ import {
   type PlatformAuditAction,
 } from '@/server/services/platform/audit';
 
+import { ORDER_ITEMS_ACCESS_AUDIT_LABEL } from '@stockpilot/core';
+
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Audit · Platform' };
 
@@ -34,6 +36,7 @@ const ACTION_LABEL: Record<PlatformAuditAction, string> = {
   org_deleted: 'Deleted org',
   user_disabled: 'Disabled account',
   user_reenabled: 'Re-enabled account',
+  permission_exception_changed: ORDER_ITEMS_ACCESS_AUDIT_LABEL,
 };
 
 export default async function PlatformAuditPage({
