@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { holdMembership, type BundleMembership } from '@/lib/auth/request-context-bundle';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
@@ -1464,6 +1464,13 @@ describe('loadCatalogItems: an item hidden after a cached read is never offered'
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // The clock is an hour after T0 unless a test says otherwise, so a hide
+    // mark near T0 is never "recent" for the early overlay read below.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0 + 3_600_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   /** The next unstable_cache entry answers `rows` read at `readStartedAt`,
@@ -1550,6 +1557,87 @@ describe('loadCatalogItems: an item hidden after a cached read is never offered'
     expect(admin.itemQueries).toHaveLength(1);
   });
 
+  /** An entry that answers only when released, to see what starts first. */
+  function heldEntry(ids: string[], readStartedAt: number) {
+    const held: { release?: () => void } = {};
+    vi.mocked(unstable_cache).mockImplementationOnce((() => () =>
+      new Promise((resolve) => {
+        held.release = () => resolve({ rows: ids.map(card), readStartedAt });
+      })) as never);
+    return held;
+  }
+
+  it('after a recent hide, the overlay read starts together with the cached read, not after it (review F3)', async () => {
+    const now = T0 + 10_000;
+    vi.setSystemTime(now);
+    const admin = makeFilteringAdmin([shown('g-x'), hiddenAt('g-y', T0 + 5_000)]);
+    createAdminClientMock.mockReturnValue(admin.client);
+    const held = heldEntry(['g-x', 'g-y'], T0);
+
+    const loading = loadCatalogItems(viewerWith('owner', iso(T0 + 5_000)), WH);
+    await vi.waitFor(() => expect(held.release).toBeDefined());
+    // The cached read has not answered, and the overlay is already asked.
+    await vi.waitFor(() => expect(admin.itemQueries).toHaveLength(1));
+    // From two minutes before the load began (vi.waitFor moves the fake
+    // clock in 50 ms steps while it polls, so allow those).
+    const gte = admin.itemQueries[0]!.find(([m]) => m === 'gte')![1] as [string, string];
+    expect(gte[0]).toBe('order_catalog_visibility_changed_at');
+    expect(Date.parse(gte[1]) - (now - 120_000)).toBeGreaterThanOrEqual(0);
+    expect(Date.parse(gte[1]) - (now - 120_000)).toBeLessThan(1_000);
+    held.release!();
+
+    expect((await loading).map((i) => i.id)).toEqual(['g-x']);
+    // The early read covered the entry (read at T0, after now - 2 min + 30 s):
+    // no second query.
+    expect(admin.itemQueries).toHaveLength(1);
+  });
+
+  it('an entry read before the early bound falls back to the serial overlay from its own read time', async () => {
+    const now = T0 + 10_000;
+    vi.setSystemTime(now);
+    const readStartedAt = T0 - 200_000;
+    const admin = makeFilteringAdmin([shown('g-x'), hiddenAt('g-y', T0 - 150_000)]);
+    createAdminClientMock.mockReturnValue(admin.client);
+    cachedEntry(['g-x', 'g-y'], readStartedAt);
+
+    const items = await loadCatalogItems(viewerWith('owner', iso(T0 + 5_000)), WH);
+
+    expect(items.map((i) => i.id)).toEqual(['g-x']);
+    expect(admin.itemQueries).toHaveLength(2);
+    expect(admin.itemQueries[1]).toContainEqual([
+      'gte',
+      ['order_catalog_visibility_changed_at', iso(readStartedAt - 30_000)],
+    ]);
+  });
+
+  it('no early read when the organization never hid anything or its last hide is older than two minutes', async () => {
+    vi.setSystemTime(T0 + 10_000);
+    const admin = makeFilteringAdmin([shown('g-x')]);
+    createAdminClientMock.mockReturnValue(admin.client);
+
+    cachedEntry(['g-x'], T0);
+    await loadCatalogItems(viewerWith('owner', null), WH);
+    expect(admin.itemQueries).toHaveLength(0);
+
+    // A hide 2 min 1 s ago, and an entry read after it: nothing to look for.
+    cachedEntry(['g-x'], T0);
+    await loadCatalogItems(viewerWith('owner', iso(T0 + 10_000 - 121_000)), WH);
+    expect(admin.itemQueries).toHaveLength(0);
+  });
+
+  it('a failed early read fails the catalog closed too', async () => {
+    vi.setSystemTime(T0 + 10_000);
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: null, error: { message: 'canceling statement' } },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    cachedEntry(['g-x'], T0);
+
+    await expect(loadCatalogItems(viewerWith('owner', iso(T0 + 5_000)), WH)).rejects.toThrow(
+      /recently hidden read failed/,
+    );
+  });
+
   it('a failed check fails the catalog closed, never offering a list that might hold a hidden item', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: null, error: { message: 'canceling statement' } },
@@ -1573,7 +1661,10 @@ describe('loadCatalogItems: an item hidden after a cached read is never offered'
     expect(call[1]).toEqual(['orders-new-v2-catalog-v4']);
     expect(call[2]).toEqual({
       revalidate: 60,
-      tags: ['orders-new-v2-catalog', `orders-new-v2-catalog:${ORG}`],
+      // The organization's tag and, since the review fix round (F1), the
+      // organization's tag for this warehouse, which a Show or Hide expires
+      // for exactly the warehouses it touched.
+      tags: ['orders-new-v2-catalog', `orders-new-v2-catalog:${ORG}`, `orders-new-v2-catalog:${ORG}:${WH}`],
     });
     // The wrapped callback answers { rows, readStartedAt }.
     const value = (await (call[0] as (...a: string[]) => Promise<unknown>)(

@@ -63,6 +63,8 @@ vi.mock('./storefront-cards', async (importOriginal) => {
   };
 });
 
+import { orderingTabWarehouse } from '@/lib/orders/ordering-tab-signal';
+
 import { OrdersStorefront, type StorefrontCatalogData } from './orders-storefront';
 
 const ORG = '0a000000-0000-4000-8000-000000000001';
@@ -103,12 +105,16 @@ function settled<T>(value: T): Promise<T> {
   return p;
 }
 
-function page(opts: { canManageOrderItems?: boolean } = {}) {
+function page(opts: { canManageOrderItems?: boolean; servedId?: string } = {}) {
   return (
     <OrdersStorefront
       warehouses={[{ id: WH, name: 'North' }]}
       warehouseId={WH}
-      catalogPromise={settled<StorefrontCatalogData>({ items: ITEMS, aisles: [] })}
+      catalogPromise={settled<StorefrontCatalogData>({
+        items: ITEMS,
+        aisles: [],
+        ...(opts.servedId ? { servedId: opts.servedId } : {}),
+      })}
       frequentlyOrderedPromise={settled([])}
       kitsPromise={settled({ status: 'ok' as const, kits: [] })}
       kitsEnabled={false}
@@ -126,7 +132,7 @@ function page(opts: { canManageOrderItems?: boolean } = {}) {
   );
 }
 
-async function openPage(opts?: { canManageOrderItems?: boolean }) {
+async function openPage(opts?: { canManageOrderItems?: boolean; servedId?: string }) {
   let view!: ReturnType<typeof render>;
   await act(async () => {
     view = render(page(opts));
@@ -291,6 +297,67 @@ describe('the catalog is re-read once it is older than a minute', () => {
     vi.setSystemTime(new Date('2026-10-26T15:01:30Z'));
     review();
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review F4: soft-navigating back within staleTimes.dynamic (90 s) restores
+// the cached RSC payload, catalog included, and the component remounts. The
+// staleness clock used to start at that mount, so a payload read before a
+// hide could stay selectable for up to about 150 s. Each server render now
+// names its payload (servedId) and the clock starts when this tab FIRST got
+// that payload (the browser's own clock both times, so no skew).
+describe('a catalog payload the router cache restored keeps its age', () => {
+  it('re-reads at once when a restored payload is older than a minute', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-26T15:00:00Z'));
+    const first = await openPage({ servedId: 'served-restored-1' });
+    expect(refresh).not.toHaveBeenCalled();
+    first.unmount();
+
+    vi.setSystemTime(new Date('2026-10-26T15:01:15Z'));
+    await openPage({ servedId: 'served-restored-1' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // Opening the review right after does not re-read it again.
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    review();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a restored payload under a minute old re-reads on focus once it passes the minute from first sight', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-26T16:00:00Z'));
+    const first = await openPage({ servedId: 'served-restored-2' });
+    first.unmount();
+
+    vi.setSystemTime(new Date('2026-10-26T16:00:30Z'));
+    await openPage({ servedId: 'served-restored-2' });
+    expect(refresh).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date('2026-10-26T16:01:01Z'));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new payload starts its own clock', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-26T17:00:00Z'));
+    const first = await openPage({ servedId: 'served-old-3' });
+    first.unmount();
+
+    vi.setSystemTime(new Date('2026-10-26T17:05:00Z'));
+    await openPage({ servedId: 'served-new-3' });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('the realtime listener knows which warehouse this tab shows', () => {
+  it('registers the warehouse while mounted and clears it after', async () => {
+    const view = await openPage();
+    expect(orderingTabWarehouse()).toBe(WH);
+    view.unmount();
+    expect(orderingTabWarehouse()).toBeNull();
   });
 });
 

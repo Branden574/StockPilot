@@ -11,7 +11,8 @@ import { DEFAULT_MODULE_IDS, effectivePermissions, type Role } from '@stockpilot
  * migration 0413 (step 2b "Done when"): the list, a bulk hide and show, the
  * refusals (including a direct RPC call with an aal1 token in an
  * admins_required organization), the freshness overlay skipped and run, the
- * catalog tags expired with { expire: 0 }, and no prewarm from the write.
+ * catalog tags of the touched warehouses expired with { expire: 0 }, and no
+ * prewarm from the write.
  *
  * What is real: the route handlers (GET and POST /api/v1/orders/catalog-
  * visibility, GET .../family/[groupId]) called with HTTP requests, the
@@ -524,8 +525,9 @@ describe.skipIf(!ENABLED)('Manage order items on the local stack (0413, step 2b 
     });
     expect(hideMark()).not.toBe(markBefore);
     expect(hideMark()).not.toBe('<null>');
+    // Only the warehouse the three records sit in (0413 review fix round F1).
     expect(hoisted.revalidateTag.mock.calls).toEqual([
-      [`orders-new-v2-catalog:${ORG}`, { expire: 0 }],
+      [`orders-new-v2-catalog:${ORG}:${WH}`, { expire: 0 }],
       [`public-catalog-${LNK}`, { expire: 0 }],
     ]);
     expect(hoisted.revalidateTag.mock.calls.flat()).not.toContain('max');
@@ -536,7 +538,7 @@ describe.skipIf(!ENABLED)('Manage order items on the local stack (0413, step 2b 
     expect(again.body).toMatchObject({ changed: [], unchanged: [...ids].sort() });
     ids.forEach((id) => expect(auditCount(id)).toBe(1));
     // A no-op still refreshes (repairs a failed refresh).
-    expect(hoisted.revalidateTag).toHaveBeenCalledWith(`orders-new-v2-catalog:${ORG}`, { expire: 0 });
+    expect(hoisted.revalidateTag).toHaveBeenCalledWith(`orders-new-v2-catalog:${ORG}:${WH}`, { expire: 0 });
 
     const hidden = await call(GET(listReq('?visibility=hidden')));
     expect(hidden.body.rows.map((x: { id: string }) => x.id).sort()).toEqual([...ids].sort());
@@ -555,15 +557,27 @@ describe.skipIf(!ENABLED)('Manage order items on the local stack (0413, step 2b 
   });
 
   it('OVERLAY SKIPPED: an organization that never hid anything, and a hide older than the read less 30 s, make no read', async () => {
-    const mark = hideMark();
-    hoisted.cacheEntry = { rows: [I.shirtS, I.expected].map((id) => ({ id })), readStartedAt: Date.parse(mark) + 31_000 };
-    const later = await loadOrderableCatalog(ORG, WH, 'ALL', mark);
+    // A hide three minutes ago (older than the early-read window of two),
+    // and an entry read 31 s after it: no early read, no check.
+    const oldMark = new Date(Date.now() - 180_000).toISOString();
+    hoisted.cacheEntry = { rows: [I.shirtS, I.expected].map((id) => ({ id })), readStartedAt: Date.parse(oldMark) + 31_000 };
+    const later = await loadOrderableCatalog(ORG, WH, 'ALL', oldMark);
     // The entry is returned as it is: a read 31 s after the last hide was
     // already filtered by its own query (here the stand-in keeps the row).
     expect(later.map((r) => r.id)).toEqual([I.shirtS, I.expected]);
     const never = await loadOrderableCatalog(ORG, WH, 'ALL', null);
     expect(never.map((r) => r.id)).toEqual([I.shirtS, I.expected]);
     expect(hoisted.adminQueries).toHaveLength(0);
+  });
+
+  it('OVERLAY EARLY (review F3): within two minutes of a hide the read starts with the cached one; an entry it does not need keeps its rows', async () => {
+    const mark = hideMark();
+    hoisted.cacheEntry = { rows: [I.shirtS, I.expected].map((id) => ({ id })), readStartedAt: Date.parse(mark) + 31_000 };
+    const rows = await loadOrderableCatalog(ORG, WH, 'ALL', mark);
+    expect(rows.map((r) => r.id)).toEqual([I.shirtS, I.expected]);
+    // One read, started before the entry answered; never a second one.
+    expect(hoisted.adminQueries).toHaveLength(1);
+    expect(hoisted.adminQueries[0]).toContain('order_catalog_visibility_changed_at >=');
   });
 
   it('SHOW: showing them again changes them back without moving the hide mark', async () => {

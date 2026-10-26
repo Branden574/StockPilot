@@ -31,7 +31,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { isModuleEnabled, mfaGateError, ServiceError, type ServiceContext } from './context';
 import { buildItemSearchClause } from './inventory';
 import { ItemImagesService } from './item-images';
-import { ordersCatalogTag } from './lib/order-catalog-hidden';
+import { ordersCatalogTag, ordersCatalogWarehouseTag } from './lib/order-catalog-hidden';
 import { isOrderBusyError } from './lib/order-busy';
 import { expireOrgPublicCatalogs } from './public-catalog';
 
@@ -61,8 +61,10 @@ import { expireOrgPublicCatalogs } from './public-catalog';
  * (auth.uid() is the actor): all or nothing, at most 500 distinct ids, one
  * audit row per changed record. Refusals are mapped by hint and SQLSTATE,
  * never by message text. After a write that returned (a no-op included, which
- * repairs a failed refresh): the organization's ordering catalog tag and every
- * public link catalog of the organization are expired with { expire: 0 }. The
+ * repairs a failed refresh): the ordering catalog tag of each warehouse the
+ * named records sit in (the organization's tag when the answer does not name
+ * them) and every public link catalog of the organization are expired with
+ * { expire: 0 }. The
  * Items and Books list cache is NOT expired: the write keeps updated_at (a
  * derived write) and neither list renders the column
  * (inventory-list-invalidation guard ALLOWLIST).
@@ -355,7 +357,7 @@ export class OrderCatalogVisibilityService {
     // The call returned, so whatever it changed is committed: refresh first,
     // then check the answer.
     const answer = this.parseAnswer(data, { visible, operationId });
-    await this.invalidate();
+    await this.invalidate(this.parseWarehouseIds(data));
     if (!answer) {
       throw new ServiceError(
         'internal_error',
@@ -422,6 +424,16 @@ export class OrderCatalogVisibilityService {
     };
   }
 
+  /** The warehouses of the records the call named (the function's
+   *  `warehouseIds`, 0413 review fix round), or null when the answer does not
+   *  carry a readable list: then the whole organization is expired. */
+  private parseWarehouseIds(data: unknown): string[] | null {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const v = (data as Record<string, unknown>).warehouseIds;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string' && UUID_RE.test(x))) return null;
+    return [...new Set((v as string[]).map((x) => x.toLowerCase()))].sort();
+  }
+
   /** Hint and SQLSTATE to a refusal; the database's text is never shown. */
   private refusal(
     error: { message?: string; code?: string; hint?: string; details?: string },
@@ -482,14 +494,24 @@ export class OrderCatalogVisibilityService {
 
   /**
    * After a write that returned (design 7.2 item 4): expire the ordering
-   * catalog of this organization and every public link catalog NOW. Never the
-   * global catalog tag with expire 0 (every organization's next load would be
-   * cold), never 'max', never the Items list cache, and no prewarm (see the
-   * header).
+   * catalog of each warehouse the named records sit in, and every public link
+   * catalog of the organization, NOW. Only those warehouses (review F1): the
+   * organization's other warehouses stay warm, so their open Place an Order
+   * tabs, which the realtime event no longer refreshes either, rebuild
+   * nothing. The organization's tag only when the answer named no readable
+   * warehouses. Never the global catalog tag with expire 0 (every
+   * organization's next load would be cold), never 'max', never the Items
+   * list cache, and no prewarm (see the header).
    */
-  private async invalidate(): Promise<void> {
+  private async invalidate(warehouseIds: string[] | null): Promise<void> {
     const organizationId = this.ctx.organizationId;
-    revalidateTag(ordersCatalogTag(organizationId), { expire: 0 });
+    if (warehouseIds) {
+      for (const warehouseId of warehouseIds) {
+        revalidateTag(ordersCatalogWarehouseTag(organizationId, warehouseId), { expire: 0 });
+      }
+    } else {
+      revalidateTag(ordersCatalogTag(organizationId), { expire: 0 });
+    }
     try {
       await expireOrgPublicCatalogs(organizationId);
     } catch (e) {

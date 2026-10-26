@@ -142,6 +142,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { Button } from '@/components/ui/button';
 import { CheckboxGlyph } from '@/components/ui/checkbox';
 import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
+import { setOrderingTabWarehouse } from '@/lib/orders/ordering-tab-signal';
 
 const GRID_PREVIEW = 4;
 const NO_REFUSED_ITEMS: ReadonlyMap<string, string> = new Map();
@@ -160,6 +161,33 @@ const MANAGE_ORDER_ITEMS_HREF = '/dashboard/orders/manage-items';
 export interface StorefrontCatalogData {
   items: CatalogItem[];
   aisles: AisleSummary[];
+  /**
+   * Names this server render's payload (0413 review fix round, F4). A soft
+   * navigation back within staleTimes.dynamic restores the SAME payload from
+   * the router cache and remounts the page; the staleness clock then starts
+   * when this tab first got the payload, not at the remount.
+   */
+  servedId?: string;
+}
+
+/**
+ * When this tab first got each catalog payload (servedId -> browser clock
+ * ms). Module state, so it outlives a remount; bounded. Both ends are the
+ * browser's own clock, so a server clock that disagrees changes nothing.
+ */
+const catalogFirstSeen = new Map<string, number>();
+const CATALOG_FIRST_SEEN_MAX = 50;
+
+/** The time the staleness clock starts for a payload seen `now`. */
+function catalogClockStart(servedId: string | undefined, now: number): number {
+  if (!servedId) return now;
+  const seen = catalogFirstSeen.get(servedId);
+  if (seen !== undefined) return seen;
+  catalogFirstSeen.set(servedId, now);
+  while (catalogFirstSeen.size > CATALOG_FIRST_SEEN_MAX) {
+    catalogFirstSeen.delete(catalogFirstSeen.keys().next().value as string);
+  }
+  return now;
 }
 
 export interface OrdersStorefrontProps {
@@ -340,6 +368,10 @@ function StorefrontShell({
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch, hydrated, locked, setLocked } = useCart();
+
+  // The warehouse this tab shows, for the realtime listener: a Show or Hide
+  // in another warehouse does not re-render this page (review F1).
+  React.useEffect(() => setOrderingTabWarehouse(warehouseId), [warehouseId]);
 
   const [openPop, setOpenPop] = React.useState<null | 'wh' | 'person' | 'site'>(null);
   const [pendingName, setPendingName] = React.useState('');
@@ -881,7 +913,7 @@ function StorefrontCatalog({
   canApproveOrders,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
-  const { items, aisles } = React.use(catalogPromise);
+  const { items, aisles, servedId } = React.use(catalogPromise);
   // Performance marker (lib/perf/marks.ts). AFTER use(), so it is part of the
   // render that has the catalog: this component only mounts (and the marker's
   // mount effect only runs) once the payload has arrived and the grid replaces
@@ -928,12 +960,15 @@ function StorefrontCatalog({
   // On focus, on a return to the tab and when the review opens. One refresh
   // at a time and at most one a minute; never a poll. router.refresh() runs
   // as a transition, so the page keeps showing while the new catalog streams
-  // in. A new catalog (a refresh, a warehouse switch) starts the clock again.
+  // in. A new catalog (a refresh, a warehouse switch) starts the clock again;
+  // the SAME payload restored by the router cache on a soft navigation back
+  // keeps the time this tab first got it, and is re-read at once on mount
+  // when that is over a minute ago (review F4).
   const catalogAtRef = React.useRef(0);
   const lastStaleRefreshRef = React.useRef(0);
   React.useEffect(() => {
-    catalogAtRef.current = Date.now();
-  }, [items]);
+    catalogAtRef.current = catalogClockStart(servedId, Date.now());
+  }, [items, servedId]);
   const refreshIfStale = React.useCallback(() => {
     const now = Date.now();
     if (now - catalogAtRef.current < CATALOG_STALE_MS) return;
@@ -941,6 +976,10 @@ function StorefrontCatalog({
     lastStaleRefreshRef.current = now;
     router.refresh();
   }, [router]);
+  // Once on mount, after the clock above is set (effects run in order).
+  React.useEffect(() => {
+    refreshIfStale();
+  }, [refreshIfStale]);
   React.useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshIfStale();

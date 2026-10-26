@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { isControlFlow } from '@/lib/control-flow';
+import { isOwnVisibilityWrite, orderingTabWarehouse } from '@/lib/orders/ordering-tab-signal';
 import { createClient } from '@/lib/supabase/client';
 import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 import { revalidateInventoryViewAction } from '@/server/actions/revalidate-inventory-view';
@@ -109,7 +110,7 @@ const THROTTLE_MS = 250;
 // Such an event is dropped everywhere except the two ordering pages, which
 // re-render with router.refresh() (the writer already expired the catalog
 // tag, and the catalog's own overlay covers the rest), never the list-busting
-// action. Every other event is unchanged. Accepted edge: an ordinary item edit
+// action, and only for an event that concerns the tab (see below). Every other event is unchanged. Accepted edge: an ordinary item edit
 // that waited on a hide's row lock commits with updated_at earlier than the
 // stamp and is dropped too; a stock write still refreshes through its
 // stock_movements event, and the list's 60 s TTL bounds the rest.
@@ -126,6 +127,56 @@ function withinPath(pathname: string, base: string): boolean {
 export function visibilityEventRule(pathname: string | null | undefined): 'refresh' | 'drop' {
   if (!pathname) return 'drop';
   return VISIBILITY_REFRESH_PATHS.some((base) => withinPath(pathname, base)) ? 'refresh' : 'drop';
+}
+
+// ═══ WHICH ORDERING TAB, AND WHEN (0413 review fix round, F1 and F2) ═══
+//
+// A Show or Hide expires the catalog entry of each warehouse it touched, and
+// unstable_cache recomputes a miss inside the request that finds it, one per
+// request (simultaneous misses are not combined). Every open Place an Order
+// tab used to refresh on the first event at once, so N tabs meant N full
+// catalog rebuilds within a few hundred ms, tabs of other warehouses included.
+// Now Place an Order refreshes only for an event of the warehouse it shows
+// (ordering-tab-signal; unknown either way still refreshes), after a random
+// 1 to 4 s, so the first tab's render stores the entry and the others read it.
+// Events that arrive while it waits share that refresh, and any refresh that
+// starts first (an ordinary event's action) takes its place.
+//
+// Manage order items refreshes another manager's write at once, but not this
+// tab's own: its save's Server Action response already carried the page.
+
+const STOREFRONT_PATH = '/dashboard/orders/new';
+/** The storefront's delayed refresh, ms: min + random() * spread. */
+export const VISIBILITY_REFRESH_DELAY_MIN_MS = 1_000;
+export const VISIBILITY_REFRESH_DELAY_SPREAD_MS = 3_000;
+
+/**
+ * Whether a visibility-only event, on a page whose rule is 'refresh', is one
+ * this tab should re-render for: not this tab's own write, and on Place an
+ * Order, not a record of another warehouse than the one it shows.
+ */
+export function visibilityEventConcernsTab(
+  pathname: string | null | undefined,
+  payload: unknown,
+  now: number = Date.now(),
+): boolean {
+  const row =
+    payload && typeof payload === 'object'
+      ? ((payload as { new?: unknown }).new as Record<string, unknown> | undefined)
+      : undefined;
+  if (!row || typeof row !== 'object') return true;
+  if (isOwnVisibilityWrite(row.id, now)) return false;
+  if (pathname && withinPath(pathname, STOREFRONT_PATH)) {
+    const shown = orderingTabWarehouse();
+    const rowWarehouse = typeof row.warehouse_id === 'string' ? row.warehouse_id.toLowerCase() : null;
+    if (shown && rowWarehouse && rowWarehouse !== shown) return false;
+  }
+  return true;
+}
+
+/** Whether this page waits before a visibility-only refresh (the storefront). */
+function visibilityRefreshWaits(pathname: string | null | undefined): boolean {
+  return !!pathname && withinPath(pathname, STOREFRONT_PATH);
 }
 
 const PG_TIMESTAMP =
@@ -270,6 +321,11 @@ export function InventoryRealtime({
       //     page) are waiting it is a plain router.refresh(): no Items list
       //     cache expiry for a change that list does not show.
       let needsAction = false;
+      //   waitTimer: the storefront's delayed visibility refresh (see
+      //     visibilityEventConcernsTab). One at a time; a refresh that starts
+      //     before it fires reads everything it was waiting for, so it is
+      //     dropped then.
+      let waitTimer: ReturnType<typeof setTimeout> | null = null;
       const isHidden = () => document.visibilityState === 'hidden';
       //   seenSinceStart / covered: ONE refresh per database transaction. One
       //     adjust_stock sends two events, the inventory_items UPDATE and the
@@ -304,6 +360,10 @@ export function InventoryRealtime({
         if (inFlight) {
           rerun = true;
           return;
+        }
+        if (waitTimer) {
+          clearTimeout(waitTimer);
+          waitTimer = null;
         }
         const useAction = needsAction;
         needsAction = false;
@@ -377,16 +437,43 @@ export function InventoryRealtime({
         }, THROTTLE_MS - since);
       }
 
+      function nudgeLater() {
+        if (isHidden()) {
+          dirtyWhileHidden = true;
+          return;
+        }
+        if (waitTimer) return;
+        const delay =
+          VISIBILITY_REFRESH_DELAY_MIN_MS + Math.random() * VISIBILITY_REFRESH_DELAY_SPREAD_MS;
+        waitTimer = setTimeout(() => {
+          waitTimer = null;
+          nudge();
+        }, delay);
+      }
+      cleanup.push(() => {
+        if (waitTimer) clearTimeout(waitTimer);
+        waitTimer = null;
+      });
+
       function onChange(payload?: { commit_timestamp?: unknown }) {
         const visibilityOnly = isVisibilityOnlyEvent(payload);
-        if (visibilityOnly && visibilityEventRule(pathnameRef.current) === 'drop') return;
+        const path = pathnameRef.current;
+        if (visibilityOnly) {
+          if (visibilityEventRule(path) === 'drop') return;
+          if (!visibilityEventConcernsTab(path, payload)) return;
+        }
         const commit = typeof payload?.commit_timestamp === 'string' ? payload.commit_timestamp : null;
         if (commit !== null) {
           if (covered.has(commit)) return;
           seenSinceStart.add(commit);
         }
-        if (!visibilityOnly) needsAction = true;
-        nudge();
+        if (!visibilityOnly) {
+          needsAction = true;
+          nudge();
+          return;
+        }
+        if (visibilityRefreshWaits(path)) nudgeLater();
+        else nudge();
       }
 
       function onVisibilityChange() {

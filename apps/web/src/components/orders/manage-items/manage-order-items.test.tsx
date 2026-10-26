@@ -59,6 +59,8 @@ vi.mock('@/components/auth/step-up-modal', () => ({
   useStepUp: () => ({ ensure: h.ensure, modal: null }),
 }));
 
+import { isOwnVisibilityWrite, OWN_VISIBILITY_WRITE_MS } from '@/lib/orders/ordering-tab-signal';
+
 import { ManageOrderItems } from './manage-order-items';
 
 const ORG_A = '0a000000-0000-4000-8000-00000000000a';
@@ -258,7 +260,12 @@ describe('Hide and Show one record', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Hidden 1 item.');
     const bookRow = screen.getByText('Field Guide to Ponds').closest('tr')!;
     expect(within(bookRow).getByText('Hidden from Orders')).toBeInTheDocument();
-    expect(h.refresh).toHaveBeenCalled();
+    // Review F2: the Server Action's response already carried the re-rendered
+    // page, so no second render is asked for, and this tab's realtime
+    // listener drops the write's own event for a few seconds.
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(isOwnVisibilityWrite(BOOK.id)).toBe(true);
+    expect(isOwnVisibilityWrite(BOOK.id, Date.now() + OWN_VISIBILITY_WRITE_MS + 1)).toBe(false);
   });
 
   it('Show of one record needs no confirmation', async () => {

@@ -48,11 +48,21 @@ import { fetchAllRows } from './paginate';
 /** The overlay reaches back this far before a cached read began. */
 export const ORDER_CATALOG_HIDE_MARGIN_MS = 30_000;
 
-/** The ordering catalog's per-organization cache tag (expired with
- *  `{ expire: 0 }` by a Show or Hide, never 'max'). The global tag
- *  'orders-new-v2-catalog' stays on every entry for the existing callers. */
+/** The ordering catalog's per-organization cache tag. Every entry of the
+ *  organization carries it; a Show or Hide expires it (with `{ expire: 0 }`,
+ *  never 'max') only when its answer did not name the warehouses it touched.
+ *  The global tag 'orders-new-v2-catalog' stays on every entry for the
+ *  existing callers. */
 export function ordersCatalogTag(organizationId: string): string {
   return `orders-new-v2-catalog:${organizationId}`;
+}
+
+/** The ordering catalog's per-(organization, warehouse) cache tag (0413
+ *  review fix round, F1). A Show or Hide expires it with `{ expire: 0 }` for
+ *  each warehouse its records sit in, so the organization's other warehouses
+ *  stay warm and their open tabs do not rebuild. */
+export function ordersCatalogWarehouseTag(organizationId: string, warehouseId: string): string {
+  return `orders-new-v2-catalog:${organizationId}:${warehouseId}`;
 }
 
 /**
@@ -131,8 +141,51 @@ export async function loadRecentlyHiddenItemIds(
 }
 
 /**
+ * The early overlay read (0413 review fix round, F3; design 7.2 item 3 "in
+ * parallel with the cached read"). The overlay is needed only when the
+ * organization hid something shortly before or after the entry was read, and
+ * an entry is normally at most a minute old (a 60 s revalidate). So when the
+ * last hide is within this window of now, the overlay is started from
+ * `now - window` together with the cached read, instead of after it.
+ */
+export const ORDER_CATALOG_EARLY_OVERLAY_MS = 120_000;
+
+/** An overlay read started before the entry answered: the ids hidden since
+ *  `sinceMs`. */
+export interface EarlyHiddenRead {
+  sinceMs: number;
+  ids: Promise<Set<string>>;
+}
+
+/**
+ * Starts the early overlay read when the hide mark is within
+ * ORDER_CATALOG_EARLY_OVERLAY_MS of `now`; null otherwise (no hide that
+ * recent, never hid, or the mark is unknown, which the serial check after the
+ * entry covers). The promise's rejection is observed here so a cached read
+ * that fails first leaves no unhandled rejection; the awaiting side still
+ * sees it.
+ */
+export function startEarlyHiddenRead(
+  organizationId: string,
+  warehouseId: string,
+  lastHideAt: string | null | undefined,
+  now: number,
+): EarlyHiddenRead | null {
+  if (typeof lastHideAt !== 'string') return null;
+  const mark = Date.parse(lastHideAt);
+  if (!Number.isFinite(mark) || mark < now - ORDER_CATALOG_EARLY_OVERLAY_MS) return null;
+  const sinceMs = now - ORDER_CATALOG_EARLY_OVERLAY_MS;
+  const ids = loadRecentlyHiddenItemIds(organizationId, warehouseId, sinceMs);
+  ids.catch(() => undefined);
+  return { sinceMs, ids };
+}
+
+/**
  * `rows` without the items hidden since `readStartedAt`, reading only when
- * the hide mark says one may be that recent (see recentHideCheckNeeded).
+ * the hide mark says one may be that recent (see recentHideCheckNeeded). An
+ * `early` read is used when it reaches back far enough (its bound is at or
+ * before readStartedAt - 30 s; a currently hidden id is always safe to drop),
+ * otherwise the serial read from the entry's own bound is made.
  */
 export async function withoutRecentlyHidden<T extends { id: string }>(
   rows: T[],
@@ -141,6 +194,7 @@ export async function withoutRecentlyHidden<T extends { id: string }>(
     warehouseId: string;
     readStartedAt: number;
     lastHideAt: string | null | undefined;
+    early?: EarlyHiddenRead | null;
   },
 ): Promise<T[]> {
   if (rows.length === 0) return rows;
@@ -148,6 +202,9 @@ export async function withoutRecentlyHidden<T extends { id: string }>(
   const since = Number.isFinite(opts.readStartedAt)
     ? opts.readStartedAt - ORDER_CATALOG_HIDE_MARGIN_MS
     : 0;
-  const hidden = await loadRecentlyHiddenItemIds(opts.organizationId, opts.warehouseId, since);
+  const hidden =
+    opts.early && opts.early.sinceMs <= since
+      ? await opts.early.ids
+      : await loadRecentlyHiddenItemIds(opts.organizationId, opts.warehouseId, since);
   return hidden.size === 0 ? rows : rows.filter((r) => !hidden.has(r.id));
 }

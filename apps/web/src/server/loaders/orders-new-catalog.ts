@@ -11,6 +11,8 @@ import 'server-only';
 // fully cold path. In this rarely-touched module, UI edits no longer
 // annihilate the caches. Keep UI concerns out of this file.
 
+import { randomUUID } from 'node:crypto';
+
 import { unstable_cache } from 'next/cache';
 
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
@@ -25,7 +27,12 @@ import {
   settleAsDataError,
 } from '@/server/services/lib/fetch-by-ids';
 import { ServiceError } from '@/server/services/context';
-import { ordersCatalogTag, withoutRecentlyHidden } from '@/server/services/lib/order-catalog-hidden';
+import {
+  ordersCatalogTag,
+  ordersCatalogWarehouseTag,
+  startEarlyHiddenRead,
+  withoutRecentlyHidden,
+} from '@/server/services/lib/order-catalog-hidden';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { SIGN_PATHS_PER_CALL } from '@/server/services/lib/storage-sign-limiter';
 
@@ -73,7 +80,9 @@ export async function loadCatalogBundle(
     };
   });
 
-  return { items: merged, aisles: buildAisles(merged) };
+  // servedId names this render's payload for the storefront's staleness clock
+  // (review F4): a payload the router cache restores keeps its first-seen time.
+  return { items: merged, aisles: buildAisles(merged), servedId: randomUUID() };
 }
 
 /**
@@ -659,9 +668,11 @@ export async function resolveCatalogScopeKey(
  * drift. The SCOPE is never stale: it is resolved live on every request.
  *
  * ORDERING VISIBILITY (0413, design 7.2). The wrapper is created per call so
- * the entry carries the organization's tag (ordersCatalogTag), which a Show
- * or Hide expires with `{ expire: 0 }`; the global tag stays for every
- * existing 'max' caller. The value carries `readStartedAt` (taken before the
+ * the entry carries the organization's tag (ordersCatalogTag) and the
+ * organization's tag for this warehouse (ordersCatalogWarehouseTag); a Show
+ * or Hide expires, with `{ expire: 0 }`, the warehouse tags of the records it
+ * touched (the organization's tag only when its answer did not name them);
+ * the global tag stays for every existing 'max' caller. The value carries `readStartedAt` (taken before the
  * first items read) so loadOrderableCatalog can remove what was hidden after
  * the entry was read: an expired tag alone does not stop a recompute that
  * read before the hide from being stored as fresh. Read requester catalogs
@@ -689,7 +700,14 @@ export const loadCatalogItemsCached = (
     // v3 (2026-09-25): the catalog is every orderable row, no longer the first
     // 500 by name.
     ['orders-new-v2-catalog-v4'],
-    { revalidate: 60, tags: ['orders-new-v2-catalog', ordersCatalogTag(organizationId)] },
+    {
+      revalidate: 60,
+      tags: [
+        'orders-new-v2-catalog',
+        ordersCatalogTag(organizationId),
+        ordersCatalogWarehouseTag(organizationId, warehouseId),
+      ],
+    },
   )(organizationId, warehouseId, accessKey);
 
 /**
@@ -707,12 +725,16 @@ export async function loadOrderableCatalog(
   accessKey: string,
   lastHideAt: string | null | undefined,
 ): Promise<CatalogItem[]> {
+  // After a recent hide the overlay read starts with the cached read, not
+  // after it (review F3): one round trip in parallel instead of in series.
+  const early = startEarlyHiddenRead(organizationId, warehouseId, lastHideAt, Date.now());
   const cached = await loadCatalogItemsCached(organizationId, warehouseId, accessKey);
   return withoutRecentlyHidden(cached.rows, {
     organizationId,
     warehouseId,
     readStartedAt: cached.readStartedAt,
     lastHideAt,
+    early,
   });
 }
 

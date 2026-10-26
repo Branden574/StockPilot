@@ -24,7 +24,12 @@ const PINS: Record<string, string> = {
   // the value is { rows, readStartedAt } for the freshness overlay, the items
   // read leaves out hidden items, and the key part is bumped to v4 so no entry
   // holding a hidden item, or in the old shape, outlives the deploy.
-  loadCatalogItemsCached: 'eff79ed84708a207491094935f2cb250b1baba3099a0d49c580a9a140f4ffa68',
+  // Re-pinned again in the 0413 review fix round (F1): the options gain the
+  // per-(organization, warehouse) tag a Show or Hide expires. The callback
+  // and the key parts are unchanged, so the cache key (callback text + key
+  // parts + arguments) is too and no warm entry goes cold on deploy; tags are
+  // checked at read time from the call site's list.
+  loadCatalogItemsCached: '44e54eeed6837b7fca2492c2bfa3ced644137e2d05630a37fb4d84295a3ce142',
   loadCatalogThumbMapCached: '0ee26062232644ab2e21a3379c154d2333b751409951bc58cc1bff90218a3708',
   loadChartersForWarehouseCached:
     'fa6e125852a2258d819a6fe9fdd72b9179eb76afcca4adf82d0044379e1d512b',

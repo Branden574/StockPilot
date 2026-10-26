@@ -597,21 +597,51 @@ describe('setVisibility: the one write path', () => {
   });
 });
 
+/** The database's answer: the API answer plus the warehouses of the records
+ *  the call named (0413 review fix round), which only the service reads. */
+const dbAnswer = (changed: string[], unchanged: string[], warehouseIds: unknown, visible = false) => ({
+  ...answerFor(changed, unchanged, visible),
+  warehouseIds,
+});
+
 describe('setVisibility: freshness after a write (design 7.2 item 4)', () => {
-  it("expires this organization's catalog and its public links with expire 0, never 'max' or the global tag", async () => {
+  it("expires only the named warehouses' ordering catalogs and the public links with expire 0, never 'max' or the global tag", async () => {
     const { service } = serviceWith({
-      'rpc:set_order_catalog_visibility': { data: answerFor([item(1)], []), error: null },
+      'rpc:set_order_catalog_visibility': { data: dbAnswer([item(1), item(2)], [], [WH_A, WH_B]), error: null },
     });
-    await service.setVisibility({ itemIds: [item(1)], visible: false, operationId: OP, surface: 'web' });
-    expect(revalidateTag.mock.calls).toEqual([[`orders-new-v2-catalog:${ORG}`, { expire: 0 }]]);
+    const out = await service.setVisibility({
+      itemIds: [item(1), item(2)],
+      visible: false,
+      operationId: OP,
+      surface: 'web',
+    });
+    // Review F1: a Show or Hide no longer turns every warehouse's entry of
+    // the organization cold, only the warehouses it touched.
+    expect(revalidateTag.mock.calls).toEqual([
+      [`orders-new-v2-catalog:${ORG}:${WH_A}`, { expire: 0 }],
+      [`orders-new-v2-catalog:${ORG}:${WH_B}`, { expire: 0 }],
+    ]);
     expect(expireOrgPublicCatalogs).toHaveBeenCalledWith(ORG);
+    // The warehouses are the service's business: the API answer is unchanged.
+    expect(out).toEqual(answerFor([item(1), item(2)], []));
     // No warming from the write path (no-request-path-prewarm guard).
     expect(afterCallbacks).toHaveLength(0);
   });
 
+  it('an answer without readable warehouses (a database before the fix round) expires the whole organization', async () => {
+    for (const warehouseIds of [undefined, null, 'x', [42], ['not-a-uuid']]) {
+      revalidateTag.mockClear();
+      const { service } = serviceWith({
+        'rpc:set_order_catalog_visibility': { data: dbAnswer([item(1)], [], warehouseIds), error: null },
+      });
+      await service.setVisibility({ itemIds: [item(1)], visible: false, operationId: OP, surface: 'web' });
+      expect(revalidateTag.mock.calls).toEqual([[`orders-new-v2-catalog:${ORG}`, { expire: 0 }]]);
+    }
+  });
+
   it('a no-op (every id already in that state) still expires the tags', async () => {
     const { service } = serviceWith({
-      'rpc:set_order_catalog_visibility': { data: answerFor([], [item(1)]), error: null },
+      'rpc:set_order_catalog_visibility': { data: dbAnswer([], [item(1)], [WH_A]), error: null },
     });
     const out = await service.setVisibility({ itemIds: [item(1)], visible: false, operationId: OP, surface: 'web' });
     expect(out.changed).toEqual([]);

@@ -85,6 +85,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { isControlFlow } from '@/lib/control-flow';
+import { markOwnVisibilityWrite, OWN_VISIBILITY_WRITE_MS } from '@/lib/orders/ordering-tab-signal';
 import { setOrderCatalogVisibilityAction } from '@/server/actions/order-catalog-visibility';
 
 import { writeOutcome, type WriteOutcome } from './outcome';
@@ -101,6 +102,10 @@ import {
   type SelectableRecord,
   type SelectionState,
 } from './selection';
+
+/** How long a sent write counts as this tab's own before it settles (a
+ *  bound for a slow action; the settle shortens it to OWN_VISIBILITY_WRITE_MS). */
+const OWN_WRITE_PENDING_MS = 60_000;
 
 /**
  * MANAGE ORDER ITEMS, the web page's interactive part (ordering visibility,
@@ -385,6 +390,10 @@ export function ManageOrderItems({
     setStatus(null);
     setAlert(null);
     if (fromConfirm) setConfirm((c) => (c ? { ...c, error: null } : c));
+    // This tab's own write: its realtime events are not a reason to render
+    // again (the action's response carries the page). Until the write
+    // settles, then for a few seconds after (review F2).
+    markOwnVisibilityWrite(write.ids, Date.now() + OWN_WRITE_PENDING_MS);
     let outcome: WriteOutcome;
     try {
       outcome = await call(write);
@@ -398,6 +407,7 @@ export function ManageOrderItems({
     } finally {
       sendingRef.current = false;
       setInFlight(null);
+      markOwnVisibilityWrite(write.ids, Date.now() + OWN_VISIBILITY_WRITE_MS);
     }
     if (write.scope !== scopeRef.current) {
       // The page moved to another organization while this was out.
@@ -436,7 +446,10 @@ export function ManageOrderItems({
         setReviewOpen(false);
         setStatus(outcome.message);
         toast.success(outcome.message);
-        router.refresh();
+        // No router.refresh() here (review F2): the write expired the catalog
+        // tags inside the Server Action, so Next rendered this page into the
+        // action's response and the client has already applied it. A refresh
+        // was a second full render, and the tab's own realtime event a third.
         return;
       }
       case 'locked':
