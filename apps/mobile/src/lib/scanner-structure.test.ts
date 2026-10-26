@@ -1053,7 +1053,11 @@ describe('Scan tab: the flows and their gates are unchanged', () => {
     const rowCode = codeOnly(row.getText(rows.sf));
     expect(rowCode).toContain("{c.charterName ?? 'Unassigned charter'}");
     expect(rowCode).toMatch(/SKU \{c\.sku\}/);
-    expect(rowCode).toMatch(/\{c\.binLocation \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/);
+    // B26: the line names where the record's stock is by the one placement
+    // rule (scan-resolve scanCandidatePlacementLabel), not its raw rack text.
+    expect(rowCode).toMatch(
+      /\{c\.placementLabel \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/,
+    );
     const cancel = elements(
       SCAN_TAB,
       (el, s) =>

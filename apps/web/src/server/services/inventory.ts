@@ -73,6 +73,7 @@ import {
   formatStockQuantity,
   hasRackPosition,
   historyNote,
+  isbnSearchKeys,
   collectLegacyRefIdsByKind,
   newRackBlockerFor,
   newRackConfirmationDetail,
@@ -85,6 +86,7 @@ import {
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
+  roundQuantity,
   STAGING_FILTER_MAX_ITEMS,
   trackingTypeForMode,
   validateCustomFields,
@@ -728,6 +730,43 @@ function seesEveryHolding(ctx: ServiceContext): boolean {
 }
 
 /**
+ * Why a book duplicate's holdings reads do not account for all of the copy's
+ * stock (B28, see InventoryService.moveSeededStockToUnplaced), or null when
+ * they do. `rows` are the caller's own read of the copy's holdings (a left
+ * embed: `locations` is null when the location row cannot be read),
+ * `elsewhere` its hiddenHoldingsFor answer, `quantity` the copy's
+ * quantity_on_hand. The answer goes to Sentry: numbers only, no names.
+ *
+ *   • A holding at a location the caller cannot read: its place is unknown.
+ *   • The visible holdings add up to the quantity: all accounted for (an
+ *     item's holdings add up to its on-hand, so nothing can be out of view).
+ *   • Otherwise the stock out of view must make up the rest, and only in
+ *     Staging or Unplaced. Placed stock out of view, a failed read of it, or a
+ *     total that still differs (no holding at all, when the seed failed) is
+ *     not accounted for.
+ */
+function unaccountedCopyStock(
+  rows: ReadonlyArray<{ quantity: number | string; locations: unknown }>,
+  elsewhere: HiddenHoldingsRead,
+  itemId: string,
+  quantity: number,
+): string | null {
+  if (rows.some((r) => !r.locations)) return 'a holding at a location the caller cannot read';
+  const expected = roundQuantity(quantity);
+  const visible = roundQuantity(rows.reduce((sum, r) => sum + Number(r.quantity), 0));
+  if (visible === expected) return null;
+  if (!elsewhere.ok) {
+    return `holdings add up to ${visible} of ${expected}; stock in other warehouses could not be read`;
+  }
+  const hidden = elsewhere.byItem.get(itemId);
+  if (hidden && hidden.placed > 0) {
+    return `${hidden.placed} placed in warehouses the caller cannot see`;
+  }
+  const total = roundQuantity(visible + holdingsElsewhereTotal(hidden));
+  return total === expected ? null : `holdings add up to ${total} of ${expected}`;
+}
+
+/**
  * A put-away destination. Defined in `@/lib/locations/destination-option`
  * beside its client-facing twin (both describe the same `locations` row, fed
  * by the same column list) and re-exported here because this service's
@@ -896,6 +935,17 @@ export interface ManualPlacementOutcome {
   rackName: string;
   /** Items whose stock demonstrably did NOT reach the rack. */
   failedItemIds: string[];
+}
+
+/**
+ * A duplicated book whose stock could not be moved to Unplaced (B28): it is
+ * still where the seed trigger put it. `locationName` names that place (a site
+ * such as "DC4"); null when where the stock is is not known: the holdings read
+ * failed, or the caller's reads do not account for all of it (stock out of
+ * the caller's view, see moveSeededStockToUnplaced).
+ */
+export interface StockLeftAtSite {
+  locationName: string | null;
 }
 
 /**
@@ -3236,19 +3286,11 @@ export class InventoryService {
     // it on insert, but a friendlier error here saves a round trip.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+      );
     }
 
     // MANUAL-create-only guards, computed here so the new-rack question, the
@@ -3633,17 +3675,21 @@ export class InventoryService {
    *
    * Returns the copy's id and, like create(), whether its stock did NOT reach
    * the rack the dialog named (`placementFailed`, 2026-10-25), so the dialog
-   * can say so instead of only "Duplicated".
+   * can say so instead of only "Duplicated". A book copy's stock waits in
+   * Unplaced (see moveSeededStockToUnplaced); `stockLeftAt` is present only
+   * when it could not be moved there, and names where it was left.
    */
-  async duplicateItem(
-    input: DuplicateItemInput,
-  ): Promise<{ id: string; placementFailed: PlacementFailure | null }> {
+  async duplicateItem(input: DuplicateItemInput): Promise<{
+    id: string;
+    placementFailed: PlacementFailure | null;
+    stockLeftAt?: StockLeftAtSite;
+  }> {
     assertPermission(this.ctx, 'items:create');
 
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku, warehouse_id, charter_id')
+      .select('sku, warehouse_id, charter_id, item_type')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -3652,6 +3698,22 @@ export class InventoryService {
     }
     const sku = (original as { sku: string }).sku;
     const originalWarehouseId = (original as { warehouse_id: string | null }).warehouse_id;
+    // The branch below follows the request's type, and duplicate_inventory_item
+    // (0299) follows the ORIGINAL's: a book sent as a product would be placed
+    // onto a bare rack with its crate fields dropped, a product sent as a book
+    // would keep its stock off its rack. The dialog sends the record's own
+    // type, so a mismatch is a stale tab or a hand-made request: refused
+    // before anything is written.
+    const originalType = (original as { item_type?: unknown }).item_type;
+    if (
+      typeof originalType === 'string' &&
+      (originalType === 'book') !== (input.itemType === 'book')
+    ) {
+      throw new ServiceError(
+        'validation_error',
+        'This record is not the type this duplicate was opened for. Reload the page and try again.',
+      );
+    }
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
@@ -3799,6 +3861,20 @@ export class InventoryService {
       }
     }
 
+    // ═══ A BOOK COPY'S STOCK WAITS IN UNPLACED (B28, 2026-10-25) ═══
+    // A book is never placed by a duplicate (its crate is chosen at put-away),
+    // so its copy kept the seed above: AT the original's site. The no-rack rule
+    // (#253) puts stock nobody placed in Unplaced, awaiting put-away.
+    let stockLeftAt: StockLeftAtSite | null = null;
+    if (input.itemType === 'book' && Number(input.quantity) > 0) {
+      // 0299 writes the requested quantity as the copy's quantity_on_hand.
+      stockLeftAt = await this.moveSeededStockToUnplaced(
+        newId as string,
+        originalWarehouseId,
+        Number(input.quantity),
+      );
+    }
+
     void audit(
       {
         event: 'inventory.item.duplicated',
@@ -3809,7 +3885,149 @@ export class InventoryService {
       this.ctx,
     );
 
-    return { id: newId as string, placementFailed };
+    return { id: newId as string, placementFailed, ...(stockLeftAt ? { stockLeftAt } : {}) };
+  }
+
+  /**
+   * THE NO-RACK RULE FOR A DUPLICATED BOOK (owner rule 2026-09-24, #253; the
+   * book half B28, 2026-10-25).
+   *
+   * duplicate_inventory_item (0299) copies the original's primary location (a
+   * SITE such as "DC4", the only kind of place the primary-location picker
+   * offers), and tg_seed_initial_level (0199) seeds the copy's opening stock AT
+   * that site: counted as placed, never on the put-away list, and shown as "No
+   * rack". A product copy is then moved onto the rack its dialog names. A book
+   * copy is not (its crate is chosen at put-away, where the crate rules run:
+   * placing a book onto a bare rack is what erased Maus I's crate), so its
+   * stock stayed at the site. The rule a manual create follows since #253:
+   * stock nobody placed waits in the warehouse's Unplaced bucket, awaiting
+   * put-away, and the primary location stays a label. The copy keeps its
+   * primary location, rack and crate labels; only the holding moves.
+   *
+   * Moves every holding of the copy that sits anywhere but a system bucket to
+   * the warehouse's Unplaced bucket, through transferStock: the ledger reads
+   * 'initial' at the site and then a 'transfer' to Unplaced, the same shape as
+   * a product copy's move onto its rack. A holding the trigger already put in
+   * Unplaced (an original with no primary location) stays.
+   *
+   * FAIL-SOFT, REPORTED: the copy exists whatever happens here. A move that
+   * cannot run leaves the stock where it was seeded; the answer names that
+   * place so the dialog can say so, and Sentry hears of it. Null: nothing was
+   * left outside Unplaced.
+   *
+   * ONLY WHAT THE READS ACCOUNT FOR IS SUCCESS (integrator decision, B28
+   * 2026-10-25). The holdings are read through the caller's own client: since
+   * 0371 a member below manager reads them only in the warehouses they are
+   * assigned to (staff with the 0280 all-warehouses setting too, see
+   * seesEveryHolding), and the seed trigger can fail without failing the copy
+   * (0199 swallows its error). An empty answer is therefore not "nothing left
+   * outside Unplaced". `quantity` is the copy's quantity_on_hand (0299 writes
+   * the request's quantity), and the holdings must add up to it: the visible
+   * ones, and when they fall short, for a caller below manager, the totals out
+   * of view (hiddenHoldingsFor, read alongside). Stock out of view counts only
+   * when it is in Staging or Unplaced, which is where this move would put it
+   * (unaccountedCopyStock has the rule). Placed stock out of view, a total
+   * that still differs, a failed read the answer depends on, or a holding
+   * whose location row the caller cannot read (a left embed, so it arrives
+   * with `locations` null instead of vanishing from an inner join) answers
+   * `{ locationName: null }` and is reported: the dialog then says the stock
+   * may not have reached Unplaced. The holdings that can be seen are still
+   * moved.
+   */
+  private async moveSeededStockToUnplaced(
+    itemId: string,
+    warehouseId: string | null,
+    quantity: number,
+  ): Promise<StockLeftAtSite | null> {
+    const report = (detail: string) =>
+      void reportError(new Error(detail), {
+        tag: 'inventory.duplicate.book_to_unplaced',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+      });
+
+    type SeededHolding = {
+      item_id: string;
+      location_id: string;
+      quantity: number | string;
+      locations: { name: string | null; kind: string | null; type: string | null } | null;
+    };
+    // Both reads at once; hiddenHoldingsFor never throws, and managers and
+    // above skip its call (they read every holding).
+    const [read, elsewhere] = await Promise.all([
+      this.holdingsForItemIds<SeededHolding>(
+        [itemId],
+        'item_id, location_id, quantity, locations(name, kind, type)',
+      ).then(
+        (rows) => ({ ok: true as const, rows }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
+      this.hiddenHoldingsFor([itemId]),
+    ]);
+    if (!read.ok) {
+      report(rawErrorText(read.error));
+      return { locationName: null };
+    }
+    // A row for another item is never trusted (placeManualCreateOnRack's rule).
+    const rows = read.rows.filter((r) => r.item_id === itemId);
+
+    const unaccounted = unaccountedCopyStock(rows, elsewhere, itemId, quantity);
+    if (unaccounted) report(`book duplicate's stock not accounted for: ${unaccounted}`);
+    const unknownPlace: StockLeftAtSite = { locationName: null };
+
+    // Only a holding whose place is known and is not Staging or Unplaced.
+    const seeded = rows.filter((r) => r.locations && !isSystemLocation(r.locations));
+    if (seeded.length === 0) return unaccounted ? unknownPlace : null;
+    const leftAt: StockLeftAtSite = unaccounted
+      ? unknownPlace
+      : { locationName: seeded[0]?.locations?.name ?? null };
+
+    // The warehouse's own Unplaced bucket (every warehouse has one: 0188's
+    // trigger and backfill), in this organization, never an archived one.
+    if (!warehouseId) {
+      report('book duplicate has no warehouse to hold its Unplaced stock');
+      return leftAt;
+    }
+    const { data: bucket, error: bucketErr } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('kind', 'unplaced')
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    const bucketId = (bucket as { id?: string } | null)?.id ?? null;
+    if (bucketErr || !bucketId) {
+      report(bucketErr ? rawErrorText(bucketErr) : 'no Unplaced bucket in the warehouse');
+      return leftAt;
+    }
+
+    let failed = false;
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const row of seeded) {
+        try {
+          await this.transferStock(
+            {
+              itemId,
+              fromLocationId: row.location_id,
+              toLocationId: bucketId,
+              quantity: Number(row.quantity),
+              notes: 'Duplicated without a placement: awaiting put-away',
+            },
+            { auditInto: transferAudits },
+          );
+        } catch (e) {
+          report(rawErrorText(e));
+          failed = true;
+        }
+      }
+    } finally {
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
+    }
+    if (failed) return leftAt;
+    return unaccounted ? unknownPlace : null;
   }
 
   /**
@@ -4181,19 +4399,11 @@ export class InventoryService {
     // Validate (warehouse, charter) pair when a charter is set.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
+      );
     }
 
     // The new-rack question, create()'s rule for the whole run: the stocked
@@ -4616,19 +4826,11 @@ export class InventoryService {
     // every row in the batch.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
+      );
     }
 
     // Plan-limit aware of batch size — was per-row (would only catch the
@@ -4655,17 +4857,34 @@ export class InventoryService {
       }
     }
 
-    // Pre-flight: which barcodes already exist? Count those as skipped,
-    // build payloads only for the survivors.
+    // Pre-flight: which items already exist? Count those as skipped, build
+    // payloads only for the survivors.
     //
-    // Batched (up to 500 barcodes, and a long barcode costs more URL than a
-    // uuid) and FAIL-CLOSED: the error used to be ignored, so a failed read
-    // looked like "none exist" and created duplicates of every item already
-    // in the org. A failed batch throws before anything is inserted.
-    const allBarcodes = input.items.map((i) => i.barcode);
+    // A BOOK is identified by its ISBN in EITHER form. The barcode string used
+    // to be compared exactly, so the same book came in again whenever the list
+    // gave the other form of its ISBN (0306406152 for a book stocked as
+    // 9780306406157, or the hyphenated print form), and one import carrying
+    // both forms made two records of one book. A book's keys are therefore the
+    // barcode as given plus, for a checksum-valid ISBN, both of its digit
+    // forms (isbnSearchKeys: the rule the item search and the Book Order
+    // Totals report use). Anything else (a product, a code that is not an
+    // ISBN) keeps the exact barcode, as before.
+    //
+    // Batched (up to 500 items, so at most 1,500 keys, and a long barcode
+    // costs more URL than a uuid) and FAIL-CLOSED: the error used to be
+    // ignored, so a failed read looked like "none exist" and created
+    // duplicates of every item already in the org. A failed batch throws
+    // before anything is inserted. Deleted records still count, as they
+    // always have: Settings > Recovery can restore one, and a second record
+    // of the same book would then sit beside it.
+    const keysOf = (i: (typeof input.items)[number]): string[] => {
+      const isbnKeys = i.itemType === 'book' ? isbnSearchKeys(i.barcode) : null;
+      return [...new Set([i.barcode, ...(isbnKeys ?? [])])];
+    };
+    const itemKeys = input.items.map(keysOf);
     const ctx = this.ctx;
     const existing = await fetchAllRowsByIds<{ barcode: string }>(
-      allBarcodes,
+      [...new Set(itemKeys.flat())],
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
@@ -4677,7 +4896,16 @@ export class InventoryService {
     );
     const existingSet = new Set(existing.map((r) => r.barcode));
 
-    const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
+    // A key also counts as taken once an EARLIER row of this same import
+    // claimed it, so one import never creates two records of one book (the
+    // same ISBN twice, or its two forms). The first row wins.
+    const claimed = new Set<string>();
+    const survivors = input.items.filter((_, idx) => {
+      const keys = itemKeys[idx] ?? [];
+      if (keys.some((k) => existingSet.has(k) || claimed.has(k))) return false;
+      for (const k of keys) claimed.add(k);
+      return true;
+    });
     const skipped = input.items.length - survivors.length;
 
     if (survivors.length === 0) {
@@ -4793,6 +5021,34 @@ export class InventoryService {
   }
 
   /**
+   * Refuses a (warehouse, charter) pair the organization has not linked
+   * (warehouse_charters), in the caller's own words (`refusal`). A read that
+   * fails refuses too (fail closed), as an internal error: every copy of this
+   * check used to ignore the read's error and tell the person the warehouse
+   * does not service the charter, which is not what happened (B26).
+   */
+  private async assertWarehouseServesCharter(
+    warehouseId: string,
+    charterId: string,
+    refusal: string,
+  ): Promise<void> {
+    const { data: pair, error } = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('charter_id', charterId)
+      .maybeSingle();
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        `Could not check that the warehouse services this charter: ${error.message}`,
+      );
+    }
+    if (!pair) throw new ServiceError('validation_error', refusal);
+  }
+
+  /**
    * A 23505 on (organization, SKU, charter, rack label) as plain words: one
    * lookup of the record that holds the slot, under the CALLER's client, so a
    * record they cannot read is never named (design 5, SKU collision). The
@@ -4827,6 +5083,75 @@ export class InventoryService {
       sku,
       ...(hit ? { conflictItemId: hit.id } : {}),
     });
+  }
+
+  /**
+   * A SKU edit moves every other live record of the ORIGINAL SKU to the new
+   * one (update()'s fan-out), in a second statement after the edited record's
+   * own UPDATE. Refuses, BEFORE either write, a move that second statement
+   * could not finish (unique index 0234: one live record per organization,
+   * SKU, charter and rack label, NULLs equal), so a refused SKU edit leaves
+   * every record where it was instead of the edited one alone on the new SKU.
+   *
+   * Two moves cannot finish:
+   *  - the edited record lands on the charter and rack of a record that moves
+   *    with it (both would then hold the new SKU there);
+   *  - a record outside the group already holds the new SKU at the charter
+   *    and rack of a record that moves.
+   * The edited record's own landing slot, when a record outside the group
+   * holds it, is left to its UPDATE: that statement is the first write and
+   * fails alone (skuTakenError, which can name the holder).
+   *
+   * Reads through the SERVICE ROLE, as the fan-out writes: the records that
+   * move, and the ones that block them, include records the editor cannot
+   * read. The organization_id filters are the tenant floor, and the refusal
+   * names no record. A read that fails refuses the edit (fail closed:
+   * fetchAllRows throws internal_error).
+   */
+  private async assertSkuGroupCanMove(
+    id: string,
+    originalSku: string,
+    newSku: string,
+    landing: { charterId: string | null; binLocation: string | null },
+  ): Promise<void> {
+    type SlotRow = { id: string; charter_id: string | null; bin_location: string | null };
+    const admin = createAdminClient();
+    const liveWithSku = (sku: string, excludeId?: string) =>
+      fetchAllRows<SlotRow>((from, to) => {
+        let q = admin
+          .from('inventory_items')
+          .select('id, charter_id, bin_location')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('sku', sku)
+          .is('deleted_at', null);
+        if (excludeId) q = q.neq('id', excludeId);
+        return q.order('id').range(from, to);
+      });
+    const [moving, holders] = await Promise.all([
+      liveWithSku(originalSku, id),
+      liveWithSku(newSku),
+    ]);
+    if (moving.length === 0) return;
+    // uuid text compares lower-case (Postgres prints it so); the rack label
+    // compares exactly, as the index does.
+    const slotOf = (charterId: string | null, binLocation: string | null) =>
+      JSON.stringify([charterId ? charterId.toLowerCase() : null, binLocation ?? null]);
+    const movingSlots = new Set(moving.map((r) => slotOf(r.charter_id, r.bin_location)));
+    const details = { reason: 'sku_taken_in_group', sku: newSku, previousSku: originalSku };
+    if (movingSlots.has(slotOf(landing.charterId, landing.binLocation))) {
+      throw new ServiceError(
+        'conflict',
+        `Another record with SKU ${originalSku} is already in the charter and rack chosen for this one, and changing the SKU moves both to SKU ${newSku}. Two records can't share a SKU there, so nothing was changed.`,
+        details,
+      );
+    }
+    if (holders.some((r) => movingSlots.has(slotOf(r.charter_id, r.bin_location)))) {
+      throw new ServiceError(
+        'conflict',
+        `Every record with SKU ${originalSku} moves to SKU ${newSku} together, and another record already uses SKU ${newSku} in the same charter and rack as one of them. Two records can't share a SKU there, so nothing was changed. Use a different SKU.`,
+        details,
+      );
+    }
   }
 
   async update(id: string, patch: UpdateItemInput) {
@@ -5058,23 +5383,22 @@ export class InventoryService {
     }
 
     if (patch.charterId !== undefined) {
-      // Validate the (final) (warehouse, charter) pair if non-null
+      // Validate the (final) (warehouse, charter) pair if non-null, when the
+      // charter or the warehouse CHANGES. The form sends every field on every
+      // save, so checking an unchanged pair refused every other edit of a
+      // record whose charter its warehouse no longer lists (an admin unlinked
+      // it later), and only a change of either one can make the pair new.
       const finalWarehouseId =
         (updates.warehouse_id as string | undefined) ?? currentWarehouseId ?? null;
-      if (patch.charterId && finalWarehouseId) {
-        const { data: pair } = await this.ctx.supabase
-          .from('warehouse_charters')
-          .select('charter_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('warehouse_id', finalWarehouseId)
-          .eq('charter_id', patch.charterId)
-          .maybeSingle();
-        if (!pair) {
-          throw new ServiceError(
-            'validation_error',
-            'This charter is not serviced by the chosen warehouse.',
-          );
-        }
+      const currentCharterId = (current as { charter_id?: string | null }).charter_id ?? null;
+      const pairChanges =
+        (patch.charterId ?? null) !== currentCharterId || finalWarehouseId !== currentWarehouseId;
+      if (patch.charterId && finalWarehouseId && pairChanges) {
+        await this.assertWarehouseServesCharter(
+          finalWarehouseId,
+          patch.charterId,
+          'This charter is not serviced by the chosen warehouse.',
+        );
       }
       updates.charter_id = patch.charterId ?? null;
     }
@@ -5085,6 +5409,28 @@ export class InventoryService {
     const sharedUpdates: Record<string, unknown> = {};
     for (const key of SHARED_ITEM_FIELDS) {
       if (key in updates) sharedUpdates[key] = updates[key];
+    }
+
+    // A SKU edit moves the whole group (the fan-out below): refuse, before
+    // this record's UPDATE, a move the fan-out could not finish, so a refused
+    // edit never leaves this record alone on the new SKU. Same condition as
+    // the fan-out: a blank SKU is never grouped.
+    if (
+      typeof updates.sku === 'string' &&
+      originalSku &&
+      originalSku.trim().length > 0 &&
+      updates.sku !== originalSku
+    ) {
+      const cur = current as { charter_id?: string | null; bin_location?: string | null };
+      await this.assertSkuGroupCanMove(id, originalSku, updates.sku, {
+        charterId:
+          ('charter_id' in updates ? (updates.charter_id as string | null) : cur.charter_id) ??
+          null,
+        binLocation:
+          ('bin_location' in updates
+            ? (updates.bin_location as string | null)
+            : cur.bin_location) ?? null,
+      });
     }
 
     const { data, error } = await this.ctx.supabase
@@ -5172,17 +5518,17 @@ export class InventoryService {
       // KNOWN LIMITATION: the target row was already updated (and committed)
       // in the prior statement above, in a SEPARATE statement from this
       // sibling fan-out — there is no shared transaction wrapping the two.
-      // If this edit is a `sku` re-key and the NEW sku collides with an
-      // existing row at one sibling's (org, sku, charter_id, bin_location)
-      // (migration 0234), this UPDATE fails with 23505 below and the group is
-      // left SPLIT: the target row
-      // now sits on the new sku while its siblings are still on the old one.
-      // This is surfaced to the caller as the `conflict` error (not silent,
+      // A `sku` re-key whose NEW sku collides at one sibling's (org, sku,
+      // charter_id, bin_location) (migration 0234) is refused BEFORE the
+      // target UPDATE (assertSkuGroupCanMove), so nothing is written. What
+      // remains is a race: a record that takes such a slot between that check
+      // and this UPDATE makes it fail with 23505 below, and the group is left
+      // SPLIT: the target row on the new sku, its siblings on the old one.
+      // That is surfaced to the caller as the `conflict` error (not silent,
       // not cross-tenant — organization_id stays scoped throughout — and
-      // on-hand quantities / stock ledger are untouched), but it is a real
-      // data-shape limitation until this fan-out is done. A fully-atomic
-      // group re-key would require moving target+siblings into one
-      // transactional RPC (tracked follow-up, not yet built).
+      // on-hand quantities / stock ledger are untouched). Closing the race
+      // needs target+siblings moved in one transactional database function
+      // (designed in the B26 pull request, not yet built).
       //
       // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
       // the RLS-scoped client is subject to inventory_items_update →
