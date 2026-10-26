@@ -31,6 +31,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
 // One list, in @stockpilot/core (`inventory/apparel-sizes`), shared with the
@@ -158,6 +160,15 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       // funnels to /dashboard/inventory.
       const basePath = source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
       router.push(resolveListReturnHref(basePath, null));
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestUnconfirmedMessage(
+          'the sizes were created',
+          source.itemType === 'book' ? 'the Books list' : 'the Items list',
+        ),
+      );
     } finally {
       setBusy(false);
     }

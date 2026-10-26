@@ -78,6 +78,8 @@ import {
   type ChosenDestination,
   type DestinationFields,
 } from '@/lib/locations/placement-destination';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
 
 /** Mixed / non-book selections only: the dropdown entry that opens the inline rack form. */
@@ -492,10 +494,7 @@ export function BulkPlaceDialog({
     );
     if (!match) return;
     setPendingConfirm(null);
-    void place(
-      { existingLocationId: match.id },
-      { describe: { mode: 'existing', option: match } },
-    );
+    void place({ existingLocationId: match.id }, { describe: { mode: 'existing', option: match } });
   }
 
   async function place(
@@ -507,22 +506,32 @@ export function BulkPlaceDialog({
     } = {},
   ) {
     setSubmitting(true);
-    const res = await bulkPlaceStockAction({
-      placements: rows.map((r) => ({
-        itemId: r.itemId,
-        fromLocationId: r.sourceLocationId,
-        quantity: r.quantity,
-      })),
-      notes: notes.trim() || undefined,
-      destination,
-      ...(opts.acknowledged && opts.acknowledged.length > 0
-        ? { acknowledgedCrateChanges: opts.acknowledged }
-        : {}),
-      // ALWAYS SENT, EVEN EMPTY — the capability declaration. See the single
-      // put-away dialog for why omitting it would silently stop the asking.
-      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof bulkPlaceStockAction>>;
+    try {
+      res = await bulkPlaceStockAction({
+        placements: rows.map((r) => ({
+          itemId: r.itemId,
+          fromLocationId: r.sourceLocationId,
+          quantity: r.quantity,
+        })),
+        notes: notes.trim() || undefined,
+        destination,
+        ...(opts.acknowledged && opts.acknowledged.length > 0
+          ? { acknowledgedCrateChanges: opts.acknowledged }
+          : {}),
+        // ALWAYS SENT, EVEN EMPTY — the capability declaration. See the single
+        // put-away dialog for why omitting it would silently stop the asking.
+        acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setPendingConfirm(null);
+      toast.error(requestUnconfirmedMessage('the stock was placed', 'Staging'));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
 
     if (!res.ok) {
       // The batch gate is all-or-nothing and fires BEFORE anything moves, so a
@@ -740,8 +749,8 @@ export function BulkPlaceDialog({
                 {isNew && (
                   <div className="border-border space-y-3 rounded-md border p-3">
                     <p className="text-muted-foreground text-[12px]">
-                      The selection includes items that are not books, so a new location here is
-                      a rack. Place books on their own to place them into a crate.
+                      The selection includes items that are not books, so a new location here is a
+                      rack. Place books on their own to place them into a crate.
                     </p>
 
                     <div className="grid grid-cols-2 gap-3">

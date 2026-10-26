@@ -57,16 +57,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  bulkUpdateInventoryAction,
-  type BulkInventoryOp,
-} from '@/server/actions/inventory';
+import { bulkUpdateInventoryAction, type BulkInventoryOp } from '@/server/actions/inventory';
 import {
   bulkSetItemPublicVisibilityAction,
   type ItemPublicVisibility,
 } from '@/server/actions/item-visibility';
 import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   ExportBuilderDialog,
   type ExportBuilderDialogProps,
@@ -342,8 +341,17 @@ export function BulkActions({
 
   async function createDraftPos() {
     setDraftBusy(true);
-    const r = await createDraftPosFromItemsAction(selectedIds);
-    setDraftBusy(false);
+    let r: Awaited<ReturnType<typeof createDraftPosFromItemsAction>>;
+    try {
+      r = await createDraftPosFromItemsAction(selectedIds);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage('the draft POs were created', 'Purchase orders'));
+      return;
+    } finally {
+      setDraftBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -361,7 +369,7 @@ export function BulkActions({
       toast.error(
         supplierFailures.length > 0
           ? `Couldn't create draft POs for ${supplierFailures.length} supplier${supplierFailures.length === 1 ? '' : 's'}. Try again or pick different items.`
-          : "No draft POs were created. Check that the selected items have a default supplier set.",
+          : 'No draft POs were created. Check that the selected items have a default supplier set.',
       );
       return;
     }
@@ -402,11 +410,20 @@ export function BulkActions({
   async function applyPublicVisibility() {
     setBusy(true);
     setVisibilityError(null);
-    const r = await bulkSetItemPublicVisibilityAction({
-      itemIds: selectedIds,
-      visibility: publicVisibility,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof bulkSetItemPublicVisibilityAction>>;
+    try {
+      r = await bulkSetItemPublicVisibilityAction({
+        itemIds: selectedIds,
+        visibility: publicVisibility,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setVisibilityError(requestFailedMessage('change the public visibility'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       setVisibilityError(r.error.message);
       return;
@@ -427,12 +444,21 @@ export function BulkActions({
 
   async function run(op: BulkInventoryOp, opts: { acknowledgeStock?: boolean } = {}) {
     setBusy(true);
-    const r = await bulkUpdateInventoryAction({
-      ids: selectedIds,
-      op,
-      ...(opts.acknowledgeStock ? { acknowledgeStock: true } : {}),
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof bulkUpdateInventoryAction>>;
+    try {
+      r = await bulkUpdateInventoryAction({
+        ids: selectedIds,
+        op,
+        ...(opts.acknowledgeStock ? { acknowledgeStock: true } : {}),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('update the items'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       // Archive is the only op that raises a validation error, and only the
       // stock guard does — so a validation_error here is unambiguously "still
@@ -560,7 +586,7 @@ export function BulkActions({
           on a mouse; 8 px below sm and on coarse pointers, where each action
           grows a 44 px touch area and a later one paints over its
           neighbour's edge (the Button's touch rule). */}
-      <div className="border-border bg-card flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2">
+      <div className="border-border bg-card pointer-coarse:gap-2 flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 max-sm:gap-2 max-sm:py-2">
         {/* Leading checked box — the bar swaps in over the toolbar when rows
             are selected, so this sits right where the user's attention is.
             Mirrors the table's header select-all: one click unselects
@@ -877,16 +903,12 @@ export function BulkActions({
             <DialogDescription>{pendingAckArchive}</DialogDescription>
           </DialogHeader>
           <p className="text-muted-foreground text-sm">
-            Archiving hides {count === 1 ? 'this item' : 'these items'} from the active view but keeps
-            the stock on record — it stays counted in valuation until you remove it. Remove the
-            stock first if you want it off the count.
+            Archiving hides {count === 1 ? 'this item' : 'these items'} from the active view but
+            keeps the stock on record — it stays counted in valuation until you remove it. Remove
+            the stock first if you want it off the count.
           </p>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPendingAckArchive(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setPendingAckArchive(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -910,23 +932,18 @@ export function BulkActions({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Restore {count} item{count === 1 ? '' : 's'}?</DialogTitle>
+            <DialogTitle>
+              Restore {count} item{count === 1 ? '' : 's'}?
+            </DialogTitle>
             <DialogDescription>
               This sets every selected item's status back to Active.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button
-              onClick={() => run({ kind: 'unarchive' })}
-              disabled={busy}
-            >
+            <Button onClick={() => run({ kind: 'unarchive' })} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Restore'}
             </Button>
           </DialogFooter>
@@ -940,10 +957,11 @@ export function BulkActions({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Set category on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogTitle>
+              Set category on {count} item{count === 1 ? '' : 's'}
+            </DialogTitle>
             <DialogDescription>
-              Choose a category to apply to every selected item, or pick
-              "No category" to clear it.
+              Choose a category to apply to every selected item, or pick "No category" to clear it.
             </DialogDescription>
           </DialogHeader>
           <Select value={categoryId} onValueChange={setCategoryId}>
@@ -960,11 +978,7 @@ export function BulkActions({
             </SelectContent>
           </Select>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -989,11 +1003,12 @@ export function BulkActions({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Set location on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogTitle>
+              Set location on {count} item{count === 1 ? '' : 's'}
+            </DialogTitle>
             <DialogDescription>
-              Set the primary stocking location for every selected item, or
-              pick "No location" to clear it. This does not move on-hand
-              stock between warehouses.
+              Set the primary stocking location for every selected item, or pick "No location" to
+              clear it. This does not move on-hand stock between warehouses.
             </DialogDescription>
           </DialogHeader>
           <Select value={locationId} onValueChange={setLocationId}>
@@ -1010,11 +1025,7 @@ export function BulkActions({
             </SelectContent>
           </Select>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -1033,20 +1044,18 @@ export function BulkActions({
       </Dialog>
 
       {/* Set rack */}
-      <Dialog
-        open={dialog?.kind === 'set_rack'}
-        onOpenChange={(v) => (v ? null : setDialog(null))}
-      >
+      <Dialog open={dialog?.kind === 'set_rack'} onOpenChange={(v) => (v ? null : setDialog(null))}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Set rack on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogTitle>
+              Set rack on {count} item{count === 1 ? '' : 's'}
+            </DialogTitle>
             <DialogDescription>
               Relabels every selected item with the same rack (e.g.{' '}
-              <span className="font-mono">38-A</span>) and moves its stock
-              onto that rack — for items that are staged, unplaced, or
-              already on a single rack/crate. Items with stock on more than
-              one rack are relabeled only; use Transfer to move those.
-              Leave both fields empty to clear the rack.
+              <span className="font-mono">38-A</span>) and moves its stock onto that rack — for
+              items that are staged, unplaced, or already on a single rack/crate. Items with stock
+              on more than one rack are relabeled only; use Transfer to move those. Leave both
+              fields empty to clear the rack.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -1067,31 +1076,24 @@ export function BulkActions({
                 placeholder="A"
                 maxLength={4}
                 value={rackRow}
-                onChange={(e) =>
-                  setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
-                }
+                onChange={(e) => setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
               />
             </div>
           </div>
           {hasSplitRackSelection && (
             <p className={CAUTION_NOTE}>
-              Some selected items have stock split across multiple racks. Set
-              rack updates their label only — to physically move stock, use
-              Transfer.
+              Some selected items have stock split across multiple racks. Set rack updates their
+              label only — to physically move stock, use Transfer.
             </p>
           )}
           {hasElsewhereSelection && (
             <p className={CAUTION_NOTE}>
-              Some selected items also have stock in warehouses you don&apos;t
-              manage. Set rack does not move that stock.
+              Some selected items also have stock in warehouses you don&apos;t manage. Set rack does
+              not move that stock.
             </p>
           )}
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -1120,9 +1122,7 @@ export function BulkActions({
         onChange={setAddTagIds}
         count={count}
         busy={busy}
-        onApply={() =>
-          run({ kind: 'add_tags', tagIds: [...addTagIds] })
-        }
+        onApply={() => run({ kind: 'add_tags', tagIds: [...addTagIds] })}
       />
 
       {/* Remove tags */}
@@ -1135,9 +1135,7 @@ export function BulkActions({
         onChange={setRemoveTagIds}
         count={count}
         busy={busy}
-        onApply={() =>
-          run({ kind: 'remove_tags', tagIds: [...removeTagIds] })
-        }
+        onApply={() => run({ kind: 'remove_tags', tagIds: [...removeTagIds] })}
       />
 
       {/* Set supplier */}
@@ -1147,7 +1145,9 @@ export function BulkActions({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Set supplier on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogTitle>
+              Set supplier on {count} item{count === 1 ? '' : 's'}
+            </DialogTitle>
             <DialogDescription>
               Choose a supplier to apply, or pick "No supplier" to clear it.
             </DialogDescription>
@@ -1166,11 +1166,7 @@ export function BulkActions({
             </SelectContent>
           </Select>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -1199,11 +1195,11 @@ export function BulkActions({
               Set public visibility on {count} item{count === 1 ? '' : 's'}
             </DialogTitle>
             <DialogDescription>
-              Controls how these items can appear on public request links.
-              &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even
-              when hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s
-              category to be public and a link that includes the public pool. Per-link
-              curation lives in Settings → Public request links.
+              Controls how these items can appear on public request links. &lsquo;Hidden&rsquo;
+              beats everything — the item never appears publicly, even when hand-picked on a link.
+              &lsquo;Public&rsquo; still requires the item&apos;s category to be public and a link
+              that includes the public pool. Per-link curation lives in Settings → Public request
+              links.
             </DialogDescription>
           </DialogHeader>
           <Select
@@ -1227,7 +1223,10 @@ export function BulkActions({
             .
           </p>
           {visibilityError && (
-            <p role="alert" className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[12.5px]">
+            <p
+              role="alert"
+              className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[12.5px]"
+            >
               {visibilityError}
             </p>
           )}
@@ -1311,7 +1310,7 @@ function TagsDialog({
                     className={
                       on
                         ? 'inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1 text-[12px] text-white shadow-sm transition-colors'
-                        : 'inline-flex items-center gap-1.5 rounded-full border border-[var(--ed-line-strong)] bg-card px-2.5 py-1 text-[12.5px] text-foreground transition-colors hover:bg-muted'
+                        : 'bg-card text-foreground hover:bg-muted inline-flex items-center gap-1.5 rounded-full border border-[var(--ed-line-strong)] px-2.5 py-1 text-[12.5px] transition-colors'
                     }
                     style={on ? { backgroundColor: swatch } : undefined}
                   >

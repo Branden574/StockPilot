@@ -1,6 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -42,7 +45,15 @@ function renderDialog() {
       currentLocationId={null}
       locations={[LOC_A, LOC_B] as never}
       holdings={
-        [{ locationId: 'loc-a', locationName: 'Receiving Dock', quantity: 40, kind: null, warehouseId: 'wh-1' }] as never
+        [
+          {
+            locationId: 'loc-a',
+            locationName: 'Receiving Dock',
+            quantity: 40,
+            kind: null,
+            warehouseId: 'wh-1',
+          },
+        ] as never
       }
       itemType="asset"
       canMintDestination
@@ -322,12 +333,36 @@ describe('StockTransferDialog — the book destination fields', () => {
     // Maus after the incident: label yellow 6 on 38-B, 79 units loose on the
     // plain rack "38-B", no crate row.
     renderBookDialog({
-      bookStorage: { rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6', grade: null, rackLabel: '38-B', crateLabel: 'Yellow 6' },
+      bookStorage: {
+        rackNumber: '38',
+        rackRow: 'B',
+        crateColor: 'yellow',
+        crateNumber: '6',
+        grade: null,
+        rackLabel: '38-B',
+        crateLabel: 'Yellow 6',
+      },
       locations: [
-        { id: 'loc-38b', name: '38-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '38', rackRow: 'B' },
-        { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '22', rackRow: 'B' },
+        {
+          id: 'loc-38b',
+          name: '38-B',
+          kind: 'rack',
+          warehouse_id: 'wh-1',
+          rackNumber: '38',
+          rackRow: 'B',
+        },
+        {
+          id: 'loc-b',
+          name: '22-B',
+          kind: 'rack',
+          warehouse_id: 'wh-1',
+          rackNumber: '22',
+          rackRow: 'B',
+        },
       ],
-      holdings: [{ locationId: 'loc-38b', name: '38-B', quantity: 79, kind: 'rack', warehouseId: 'wh-1' }],
+      holdings: [
+        { locationId: 'loc-38b', name: '38-B', quantity: 79, kind: 'rack', warehouseId: 'wh-1' },
+      ],
     });
     await openBook(user);
     // Pre-filled with the record.
@@ -343,22 +378,62 @@ describe('StockTransferDialog — the book destination fields', () => {
     expect(mockTransferStockAction.mock.calls[0]![0]).toMatchObject({
       fromLocationId: 'loc-38b',
       destination: {
-        newRack: { warehouseId: 'wh-1', crateNumber: '6', crateColor: 'yellow', rackNumber: '38', rackRow: 'B' },
+        newRack: {
+          warehouseId: 'wh-1',
+          crateNumber: '6',
+          crateColor: 'yellow',
+          rackNumber: '38',
+          rackRow: 'B',
+        },
       },
       acknowledgedRackChanges: [],
     });
-    expect(mockTransferStockAction.mock.calls[0]![0]).not.toHaveProperty('acknowledgedCrateChanges');
+    expect(mockTransferStockAction.mock.calls[0]![0]).not.toHaveProperty(
+      'acknowledgedCrateChanges',
+    );
   });
 
   it('moving OUT of the recorded crate opens with the source as destination — and says so', async () => {
     const user = userEvent.setup();
     renderBookDialog({
-      bookStorage: { rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6', grade: null, rackLabel: '38-B', crateLabel: 'Yellow 6' },
+      bookStorage: {
+        rackNumber: '38',
+        rackRow: 'B',
+        crateColor: 'yellow',
+        crateNumber: '6',
+        grade: null,
+        rackLabel: '38-B',
+        crateLabel: 'Yellow 6',
+      },
       locations: [
-        { id: 'loc-y6', name: 'Yellow #6 on rack 38-B', kind: 'crate', warehouse_id: 'wh-1', rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6' },
-        { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '22', rackRow: 'B' },
+        {
+          id: 'loc-y6',
+          name: 'Yellow #6 on rack 38-B',
+          kind: 'crate',
+          warehouse_id: 'wh-1',
+          rackNumber: '38',
+          rackRow: 'B',
+          crateColor: 'yellow',
+          crateNumber: '6',
+        },
+        {
+          id: 'loc-b',
+          name: '22-B',
+          kind: 'rack',
+          warehouse_id: 'wh-1',
+          rackNumber: '22',
+          rackRow: 'B',
+        },
       ],
-      holdings: [{ locationId: 'loc-y6', name: 'Yellow #6 on rack 38-B', quantity: 20, kind: 'crate', warehouseId: 'wh-1' }],
+      holdings: [
+        {
+          locationId: 'loc-y6',
+          name: 'Yellow #6 on rack 38-B',
+          quantity: 20,
+          kind: 'crate',
+          warehouseId: 'wh-1',
+        },
+      ],
     });
     await openBook(user);
     expect(screen.getByText(/that is where this stock already is/i)).toBeInTheDocument();
@@ -718,7 +793,12 @@ describe('StockTransferDialog — Staging is not a destination, Unplaced is', ()
 // can succeed (owner decision Q4; the server's 0365 check is unchanged).
 describe('StockTransferDialog — stock in other warehouses, and where it may go', () => {
   const MAIN_RACK = { id: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouse_id: 'wh-main' };
-  const MAIN_UNPLACED = { id: 'loc-main-unp', name: 'Unplaced', kind: 'unplaced', warehouse_id: 'wh-main' };
+  const MAIN_UNPLACED = {
+    id: 'loc-main-unp',
+    name: 'Unplaced',
+    kind: 'unplaced',
+    warehouse_id: 'wh-main',
+  };
   const ANNEX_RACK = { id: 'loc-annex', name: 'Rack A-9', kind: 'rack', warehouse_id: 'wh-annex' };
   const SITE = { id: 'loc-site', name: 'District Site', kind: null, warehouse_id: null };
   const LOCATIONS = [MAIN_RACK, MAIN_UNPLACED, ANNEX_RACK, SITE];
@@ -754,7 +834,15 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
   it('names stock in other warehouses instead of blaming Staging', async () => {
     const user = userEvent.setup();
     renderScoped({
-      holdings: [{ locationId: 'loc-main-unp', name: 'Unplaced', kind: 'unplaced', warehouseId: 'wh-main', quantity: 20 }],
+      holdings: [
+        {
+          locationId: 'loc-main-unp',
+          name: 'Unplaced',
+          kind: 'unplaced',
+          warehouseId: 'wh-main',
+          quantity: 20,
+        },
+      ],
       elsewhere: chrome,
     });
     await user.click(screen.getByRole('button', { name: /transfer/i }));
@@ -787,14 +875,24 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
     renderScoped({ holdings: [], elsewhere: { status: 'none' } });
     await user.click(screen.getByRole('button', { name: /transfer/i }));
     expect(
-      screen.getByText(/This item's stock is in Staging\/Unplaced — placement is handled in the staging workflow\.$/),
+      screen.getByText(
+        /This item's stock is in Staging\/Unplaced — placement is handled in the staging workflow\.$/,
+      ),
     ).toBeInTheDocument();
   });
 
   it('with sources, still says the rest is elsewhere under the source list', async () => {
     const user = userEvent.setup();
     renderScoped({
-      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      holdings: [
+        {
+          locationId: 'loc-main',
+          name: 'Rack M-1',
+          kind: 'rack',
+          warehouseId: 'wh-main',
+          quantity: 3,
+        },
+      ],
       elsewhere: chrome,
     });
     await user.click(screen.getByRole('button', { name: /transfer/i }));
@@ -806,7 +904,15 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
   it('Q4: a scoped member is offered only their warehouses and locations with no warehouse', async () => {
     const user = userEvent.setup();
     renderScoped({
-      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      holdings: [
+        {
+          locationId: 'loc-main',
+          name: 'Rack M-1',
+          kind: 'rack',
+          warehouseId: 'wh-main',
+          quantity: 3,
+        },
+      ],
       elsewhere: { status: 'none' },
       writableWarehouseIds: ['wh-main'],
     });
@@ -821,12 +927,56 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
   it('Q4: unrestricted (managers) still sees every warehouse', async () => {
     const user = userEvent.setup();
     renderScoped({
-      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      holdings: [
+        {
+          locationId: 'loc-main',
+          name: 'Rack M-1',
+          kind: 'rack',
+          warehouseId: 'wh-main',
+          quantity: 3,
+        },
+      ],
       elsewhere: { status: 'none' },
       writableWarehouseIds: null,
     });
     await user.click(screen.getByRole('button', { name: /transfer/i }));
     await user.click(screen.getAllByRole('combobox')[1]!);
     expect(await screen.findByRole('option', { name: /Rack A-9/ })).toBeInTheDocument();
+  });
+});
+
+// B40: Transfer stock set `submitting`, awaited the action with no catch and
+// cleared it only when it answered. A call that got no answer (offline, a
+// server error, a deploy) left the button spinning forever with no message,
+// and the new-location confirmation stuck open with its button spinning.
+describe('StockTransferDialog when the transfer gets no answer', () => {
+  const UNCONFIRMED = requestUnconfirmedMessage('the stock was moved', "the item's Movements tab");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("says to check the item's Movements tab before trying again, and Transfer stock works again", async () => {
+    mockTransferStockAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await openAndSubmitToExisting(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent(UNCONFIRMED);
+    expect(mockToast.error).toHaveBeenCalledWith(UNCONFIRMED);
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
+  });
+
+  it('closes the new-location confirmation instead of leaving it spinning', async () => {
+    mockTransferStockAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openBook(user);
+    await retype(user, /crate number/i, '13');
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+    await user.click(await screen.findByRole('button', { name: /create and transfer/i }));
+    expect(mockToast.error).toHaveBeenCalledWith(UNCONFIRMED);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
   });
 });

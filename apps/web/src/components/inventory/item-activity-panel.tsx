@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { Button } from '@/components/ui/button';
 import { mergeOlderActivityEvents, nextActivityCursor } from '@/lib/activity-pagination';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { loadOlderItemActivityAction } from '@/server/actions/activity';
 
 import type { ActivityCursor, ActivityEvent } from '@/server/services/activity';
@@ -73,8 +75,19 @@ export function ItemActivityPanel({
     }
     setLoading(true);
     setError(null);
-    const res = await loadOlderItemActivityAction({ itemId, before: cursor });
-    setLoading(false);
+    let res: Awaited<ReturnType<typeof loadOlderItemActivityAction>>;
+    try {
+      res = await loadOlderItemActivityAction({ itemId, before: cursor });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('load older activity');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setLoading(false);
+    }
     if (!res.ok) {
       setError(res.error.message);
       toast.error(res.error.message);
@@ -116,12 +129,7 @@ export function ItemActivityPanel({
       <ActivityFeed events={events} locationNames={locationNames} canEditNotes={canEditNotes} />
       {!exhausted && (
         <div className="mt-4 flex justify-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void loadOlder()}
-            disabled={loading}
-          >
+          <Button variant="outline" size="sm" onClick={() => void loadOlder()} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Load older'}
           </Button>
         </div>

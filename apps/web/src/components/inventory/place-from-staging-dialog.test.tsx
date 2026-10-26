@@ -3,6 +3,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -27,11 +30,51 @@ import { PlaceFromStagingDialog } from './place-from-staging-dialog';
 // Plus two real crates, which is what the dialog could never see before the
 // destination rows carried migration 0188's crate columns.
 const DESTINATIONS = [
-  { id: 'r-1a', name: '1-A', kind: 'rack', rackNumber: '1', rackRow: 'A', crateColor: null, crateNumber: null },
-  { id: 'r-10a', name: '10-A', kind: 'rack', rackNumber: '10', rackRow: 'A', crateColor: null, crateNumber: null },
-  { id: 'r-22b', name: '22-B', kind: 'rack', rackNumber: '22', rackRow: 'B', crateColor: null, crateNumber: null },
-  { id: 'c-blue4', name: 'Blue #4', kind: 'crate', rackNumber: null, rackRow: null, crateColor: 'blue', crateNumber: '4' },
-  { id: 'c-blue42', name: 'Blue #42', kind: 'crate', rackNumber: null, rackRow: null, crateColor: 'blue', crateNumber: '42' },
+  {
+    id: 'r-1a',
+    name: '1-A',
+    kind: 'rack',
+    rackNumber: '1',
+    rackRow: 'A',
+    crateColor: null,
+    crateNumber: null,
+  },
+  {
+    id: 'r-10a',
+    name: '10-A',
+    kind: 'rack',
+    rackNumber: '10',
+    rackRow: 'A',
+    crateColor: null,
+    crateNumber: null,
+  },
+  {
+    id: 'r-22b',
+    name: '22-B',
+    kind: 'rack',
+    rackNumber: '22',
+    rackRow: 'B',
+    crateColor: null,
+    crateNumber: null,
+  },
+  {
+    id: 'c-blue4',
+    name: 'Blue #4',
+    kind: 'crate',
+    rackNumber: null,
+    rackRow: null,
+    crateColor: 'blue',
+    crateNumber: '4',
+  },
+  {
+    id: 'c-blue42',
+    name: 'Blue #42',
+    kind: 'crate',
+    rackNumber: null,
+    rackRow: null,
+    crateColor: 'blue',
+    crateNumber: '42',
+  },
 ];
 
 /** A book recorded in Blue 4 on rack 38-A — the summary the row carries. */
@@ -231,7 +274,15 @@ const IN_RED_4_ON_38B: BookStorageInfo = {
 /** L4L's shape: rack 38-B has a row, crate Red 4 does NOT. */
 const L4L_DESTINATIONS = [
   ...DESTINATIONS,
-  { id: 'r-38b', name: '38-B', kind: 'rack', rackNumber: '38', rackRow: 'B', crateColor: null, crateNumber: null },
+  {
+    id: 'r-38b',
+    name: '38-B',
+    kind: 'rack',
+    rackNumber: '38',
+    rackRow: 'B',
+    crateColor: null,
+    crateNumber: null,
+  },
 ];
 
 /** The books-only existing-location shortcut (the crate colour Select is a combobox too). */
@@ -346,7 +397,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       quantity: 10,
       notes: undefined,
       destination: {
-        newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'red', rackNumber: '38', rackRow: 'B' },
+        newRack: {
+          warehouseId: 'wh-1',
+          crateNumber: '4',
+          crateColor: 'red',
+          rackNumber: '38',
+          rackRow: 'B',
+        },
       },
       acknowledgedRackChanges: [],
     });
@@ -364,7 +421,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
     expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
-      newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'blue', rackNumber: '38', rackRow: 'A' },
+      newRack: {
+        warehouseId: 'wh-1',
+        crateNumber: '4',
+        crateColor: 'blue',
+        rackNumber: '38',
+        rackRow: 'A',
+      },
     });
   });
 
@@ -387,7 +450,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     await user.click(screen.getByRole('button', { name: /create and place/i }));
     expect(mockPlaceStockAction.mock.calls[0]![0]).toMatchObject({
       destination: {
-        newRack: { warehouseId: 'wh-1', crateNumber: '7', crateColor: 'blue', rackNumber: '38', rackRow: 'A' },
+        newRack: {
+          warehouseId: 'wh-1',
+          crateNumber: '7',
+          crateColor: 'blue',
+          rackNumber: '38',
+          rackRow: 'A',
+        },
       },
       acknowledgedCrateChanges: [
         { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
@@ -443,7 +512,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(confirm).toHaveTextContent('Create new crate Blue #4 on rack 22-B?');
     await user.click(screen.getByRole('button', { name: /create and place/i }));
     expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
-      newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'blue', rackNumber: '22', rackRow: 'B' },
+      newRack: {
+        warehouseId: 'wh-1',
+        crateNumber: '4',
+        crateColor: 'blue',
+        rackNumber: '22',
+        rackRow: 'B',
+      },
     });
     expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
@@ -986,7 +1061,8 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       ok: false,
       error: {
         code: 'conflict',
-        message: 'The Outsiders is recorded in Blue 4. Placing it here will change that to Blue 42.',
+        message:
+          'The Outsiders is recorded in Blue 4. Placing it here will change that to Blue 42.',
         details: {
           reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
           items: [
@@ -1071,7 +1147,8 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       ok: false,
       error: {
         code: 'conflict',
-        message: 'The Outsiders is recorded in Red 7. Placing it here will change that to no crate.',
+        message:
+          'The Outsiders is recorded in Red 7. Placing it here will change that to no crate.',
         details: {
           reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
           items: [
@@ -1120,7 +1197,8 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       ok: false,
       error: {
         code: 'conflict',
-        message: 'The Outsiders is recorded in Blue 4. Placing it here will change that to Blue 42.',
+        message:
+          'The Outsiders is recorded in Blue 4. Placing it here will change that to Blue 42.',
         details: {
           reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
           items: [
@@ -1282,5 +1360,39 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(mockToast.warning).toHaveBeenCalledWith(
       'The Outsiders was placed, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.',
     );
+  });
+});
+
+// B40: Place stock set `submitting`, awaited the action with no catch and
+// cleared it only when it answered. A call that got no answer (offline, a
+// server error, a deploy) left the button spinning forever with no message,
+// and the new-rack confirmation stuck open with its button spinning.
+describe('PlaceFromStagingDialog when the placement gets no answer', () => {
+  const UNCONFIRMED = requestUnconfirmedMessage('the stock was placed', "the item's Movements tab");
+
+  it("says to check the item's Movements tab before trying again, and Place stock works again", async () => {
+    mockPlaceStockAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await openDialog(user);
+    await chooseDestination(user, '22-B');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(UNCONFIRMED);
+    expect(mockToast.error).toHaveBeenCalledWith(UNCONFIRMED);
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
+  });
+
+  it('closes the new-rack confirmation instead of leaving it spinning', async () => {
+    mockPlaceStockAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), '100-A');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockToast.error).toHaveBeenCalledWith(UNCONFIRMED);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
   });
 });

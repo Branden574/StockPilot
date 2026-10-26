@@ -25,6 +25,8 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { adjustStockAction } from '@/server/actions/inventory';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 
 import { type MovementType } from '@stockpilot/core';
 
@@ -75,14 +77,23 @@ export function StockAdjustDialog({
       return;
     }
     setSubmitting(true);
-    const res = await adjustStockAction({
-      itemId,
-      quantityChange: change,
-      movementType,
-      reason: reason || undefined,
-      notes: notes || undefined,
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof adjustStockAction>>;
+    try {
+      res = await adjustStockAction({
+        itemId,
+        quantityChange: change,
+        movementType,
+        reason: reason || undefined,
+        notes: notes || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage('the stock was adjusted', "the item's Movements tab"));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

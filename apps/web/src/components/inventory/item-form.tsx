@@ -59,6 +59,7 @@ import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
@@ -179,6 +180,13 @@ function humanizeVariantKey(key: string): string | null {
     })
     .join(' · ');
 }
+
+/**
+ * The reason in "Item saved, but tags couldn't be updated: ..." when that
+ * follow-up write got no answer (offline, a server error, a deploy) rather
+ * than a refusal with its own message (B40).
+ */
+const FOLLOW_UP_NO_ANSWER = 'check your connection and try again.';
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // HEIC + HEIF added so iPhone Safari (which ships HEIC by default
@@ -1165,63 +1173,75 @@ export function ItemForm({
         const item = staged[i];
         if (!item) continue;
         const progressKey = `${i}`;
-        // Generate master + thumb + LQIP from a single decode. Same
-        // helper the item-detail uploader uses so create-flow uploads
-        // populate the same thumb_path + lqip columns and get the
-        // same instant-thumb / blur-placeholder treatment in lists.
-        const { master, thumbBlob, lqip } = await compressImageVariants(item.file);
-        const ext = (master.name.split('.').pop() ?? 'jpg').toLowerCase();
-        const presign = await createImageUploadAction({ itemId, fileExt: ext });
-        if (!presign.ok) {
-          failed++;
-          continue;
-        }
-        // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
-        // any percentage over it would be fabricated. Progress comes from the
-        // master only - the thumb is a rounding error beside it.
-        const [masterRes, thumbRes] = await Promise.all([
-          uploadWithProgress({
-            url: presign.data.signedUrl,
-            body: master,
-            contentType: master.type,
-            headers: { 'x-upsert': 'true' },
-            onProgress: ({ loaded, total }) => {
-              batch.set(progressKey, total > 0 ? loaded / total : 0);
-              publishProgress();
-            },
-          }),
-          thumbBlob
-            ? uploadWithProgress({
-                url: presign.data.thumbSignedUrl,
-                body: thumbBlob,
-                // The blob's OWN type: the canvas decides what these bytes are
-                // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
-                // PNG thumbnails were stored as image/webp.
-                contentType: thumbBlob.type || VARIANT_MIME,
-                headers: { 'x-upsert': 'true' },
-              })
-            : Promise.resolve(null),
-        ]);
-        if (!masterRes.ok) {
-          // Settled as failed, so this file keeps the fraction it reached and
-          // the batch can never read 100% with a failure in it.
+        try {
+          // Generate master + thumb + LQIP from a single decode. Same
+          // helper the item-detail uploader uses so create-flow uploads
+          // populate the same thumb_path + lqip columns and get the
+          // same instant-thumb / blur-placeholder treatment in lists.
+          const { master, thumbBlob, lqip } = await compressImageVariants(item.file);
+          const ext = (master.name.split('.').pop() ?? 'jpg').toLowerCase();
+          const presign = await createImageUploadAction({ itemId, fileExt: ext });
+          if (!presign.ok) {
+            failed++;
+            continue;
+          }
+          // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
+          // any percentage over it would be fabricated. Progress comes from the
+          // master only - the thumb is a rounding error beside it.
+          const [masterRes, thumbRes] = await Promise.all([
+            uploadWithProgress({
+              url: presign.data.signedUrl,
+              body: master,
+              contentType: master.type,
+              headers: { 'x-upsert': 'true' },
+              onProgress: ({ loaded, total }) => {
+                batch.set(progressKey, total > 0 ? loaded / total : 0);
+                publishProgress();
+              },
+            }),
+            thumbBlob
+              ? uploadWithProgress({
+                  url: presign.data.thumbSignedUrl,
+                  body: thumbBlob,
+                  // The blob's OWN type: the canvas decides what these bytes are
+                  // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
+                  // PNG thumbnails were stored as image/webp.
+                  contentType: thumbBlob.type || VARIANT_MIME,
+                  headers: { 'x-upsert': 'true' },
+                })
+              : Promise.resolve(null),
+          ]);
+          if (!masterRes.ok) {
+            // Settled as failed, so this file keeps the fraction it reached and
+            // the batch can never read 100% with a failure in it.
+            batch.settle(progressKey, false);
+            publishProgress();
+            failed++;
+            continue;
+          }
+          batch.settle(progressKey, true);
+          publishProgress();
+          const thumbOk = thumbRes ? thumbRes.ok : false;
+          const record = await recordImageAction({
+            itemId,
+            storagePath: presign.data.path,
+            thumbPath: thumbOk ? presign.data.thumbPath : null,
+            lqip,
+            isFirst: i === 0,
+          });
+          if (record.ok) uploaded++;
+          else failed++;
+        } catch (e) {
+          // A redirect (the session ended) goes up as it is: nothing is shown.
+          if (isControlFlow(e)) throw e;
+          // No answer for this photo (offline, a server error, a deploy): it
+          // counts as failed, like a refused one, and the next photo is tried.
+          // Thrown out of here it ended the save in silence after the item
+          // had been created.
           batch.settle(progressKey, false);
           publishProgress();
           failed++;
-          continue;
         }
-        batch.settle(progressKey, true);
-        publishProgress();
-        const thumbOk = thumbRes ? thumbRes.ok : false;
-        const record = await recordImageAction({
-          itemId,
-          storagePath: presign.data.path,
-          thumbPath: thumbOk ? presign.data.thumbPath : null,
-          lqip,
-          isFirst: i === 0,
-        });
-        if (record.ok) uploaded++;
-        else failed++;
       }
     } finally {
       setUploadingImages(false);
@@ -1242,6 +1262,8 @@ export function ItemForm({
   }
 
   async function submitItem(values: CreateItemInput, answer: NewRackAnswer = {}) {
+    // Where a create that got no answer may have landed.
+    const listName = isBook ? 'the Books list' : 'the Items list';
     // SPORTS_SUBCATEGORY_REQUIRED — fast, kind failure. The server enforces
     // this too (resolveTrackingProfile throws on an unresolved subcategory
     // key, and CategoriesService never assigns items to a bare Sports root),
@@ -1318,50 +1340,60 @@ export function ItemForm({
       const num = sizedRack.number;
       const row = num ? (sizedRack.row ?? '').toUpperCase() : '';
       const composedBin = formatRackLabel({ number: num, row }) || null;
-      const res = await bulkCreateSizedVariantsAction({
-        baseName: values.name,
-        baseSku: values.sku?.trim() || null,
-        baseBarcode: values.barcode?.trim() || null,
-        description: values.description?.trim() || null,
-        categoryId: values.categoryId,
-        supplierId: values.supplierId ?? null,
-        warehouseId: values.warehouseId,
-        charterId: values.charterId ?? null,
-        primaryLocationId: values.primaryLocationId ?? null,
-        binLocation: composedBin,
-        rackNumber: num || null,
-        rackRow: row || null,
-        retailPrice: values.retailPrice,
-        unitCost: values.unitCost,
-        reorderPoint: values.reorderPoint,
-        reorderQuantity: values.reorderQuantity,
-        unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
-        // Per-org custom fields entered in the "Additional fields" section apply
-        // to every variant. The service strips reserved keys + runs the
-        // authoritative required-field gate, so this path no longer silently
-        // drops them. Pass undefined when empty to keep the payload lean.
-        customFields: Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
-        variants: selectedSizes,
-        // Sports: the group the preview promised, plus the attributes that are
-        // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
-        // sent — the size is per-row (`variants[].size`) and the system is
-        // derived server-side from the category's size scale, so a client
-        // cannot choose which physical stock these rows merge with.
-        ...sportsGroupPayload,
-        ...sportsModeOverridePayload,
-        ...(sportsActive
-          ? {
-              // One jersey number across M and XL is the point (regression R3).
-              jerseyNumber: values.jerseyNumber || undefined,
-              playerName: values.playerName || undefined,
-              variantWidth: values.variantWidth || undefined,
-              variantFit: values.variantFit || undefined,
-              variantColor: values.variantColor || undefined,
-            }
-          : {}),
-        // Only after the person said yes to creating the run's new rack.
-        ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
-      });
+      let res: Awaited<ReturnType<typeof bulkCreateSizedVariantsAction>>;
+      try {
+        res = await bulkCreateSizedVariantsAction({
+          baseName: values.name,
+          baseSku: values.sku?.trim() || null,
+          baseBarcode: values.barcode?.trim() || null,
+          description: values.description?.trim() || null,
+          categoryId: values.categoryId,
+          supplierId: values.supplierId ?? null,
+          warehouseId: values.warehouseId,
+          charterId: values.charterId ?? null,
+          primaryLocationId: values.primaryLocationId ?? null,
+          binLocation: composedBin,
+          rackNumber: num || null,
+          rackRow: row || null,
+          retailPrice: values.retailPrice,
+          unitCost: values.unitCost,
+          reorderPoint: values.reorderPoint,
+          reorderQuantity: values.reorderQuantity,
+          unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
+          // Per-org custom fields entered in the "Additional fields" section apply
+          // to every variant. The service strips reserved keys + runs the
+          // authoritative required-field gate, so this path no longer silently
+          // drops them. Pass undefined when empty to keep the payload lean.
+          customFields: Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
+          variants: selectedSizes,
+          // Sports: the group the preview promised, plus the attributes that are
+          // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
+          // sent — the size is per-row (`variants[].size`) and the system is
+          // derived server-side from the category's size scale, so a client
+          // cannot choose which physical stock these rows merge with.
+          ...sportsGroupPayload,
+          ...sportsModeOverridePayload,
+          ...(sportsActive
+            ? {
+                // One jersey number across M and XL is the point (regression R3).
+                jerseyNumber: values.jerseyNumber || undefined,
+                playerName: values.playerName || undefined,
+                variantWidth: values.variantWidth || undefined,
+                variantFit: values.variantFit || undefined,
+                variantColor: values.variantColor || undefined,
+              }
+            : {}),
+          // Only after the person said yes to creating the run's new rack.
+          ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer (offline, a server error, a deploy). The run may have been
+        // created before the answer was lost, so look before saving it again.
+        toast.error(requestUnconfirmedMessage('the sizes were created', listName));
+        return;
+      }
       if (!res.ok) {
         if (askNewRack(res.error, 'rack')) return;
         reportSaveError(res.error);
@@ -1529,7 +1561,24 @@ export function ItemForm({
             // Only after the person said yes to creating the item's new rack.
             ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
           });
-    const res = await action;
+    let res: Awaited<typeof action>;
+    try {
+      res = await action;
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy). An edit is safe to send
+      // again; a create may have happened before the answer was lost.
+      toast.error(
+        isEdit
+          ? requestFailedMessage(isBook ? 'save the book' : 'save the item')
+          : requestUnconfirmedMessage(
+              isBook ? 'the book was created' : 'the item was created',
+              listName,
+            ),
+      );
+      return;
+    }
     if (!res.ok) {
       if (askNewRack(res.error, isBook ? 'bin' : 'rack')) return;
       reportSaveError(res.error);
@@ -1553,9 +1602,17 @@ export function ItemForm({
     const initialKey = [...initialTagIds].sort().join(',');
     const selectedKey = [...selectedTagIds].sort().join(',');
     if (tags.length > 0 && (!isEdit || initialKey !== selectedKey)) {
-      const tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
-      if (!tagRes.ok) {
-        toast.warning(`Item saved, but tags couldn't be updated: ${tagRes.error.message}`);
+      let tagRes: Awaited<ReturnType<typeof setItemTagsAction>> | null = null;
+      try {
+        tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+      }
+      if (!tagRes?.ok) {
+        toast.warning(
+          `Item saved, but tags couldn't be updated: ${tagRes ? tagRes.error.message : FOLLOW_UP_NO_ANSWER}`,
+        );
       }
     }
 
@@ -1563,13 +1620,19 @@ export function ItemForm({
     // the item row is already saved, so a failure here surfaces as a
     // warning + retry instead of rolling the whole submit back.
     if (showPublicVisibility && publicVisibility !== initialPublicVisibility) {
-      const visRes = await setItemPublicVisibilityAction({
-        itemId,
-        visibility: publicVisibility,
-      });
-      if (!visRes.ok) {
+      let visRes: Awaited<ReturnType<typeof setItemPublicVisibilityAction>> | null = null;
+      try {
+        visRes = await setItemPublicVisibilityAction({
+          itemId,
+          visibility: publicVisibility,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+      }
+      if (!visRes?.ok) {
         toast.warning(
-          `Item saved, but public visibility couldn't be updated: ${visRes.error.message}`,
+          `Item saved, but public visibility couldn't be updated: ${visRes ? visRes.error.message : FOLLOW_UP_NO_ANSWER}`,
         );
       }
     }
@@ -1583,14 +1646,20 @@ export function ItemForm({
       const prevDisplayName = (initialPublicDisplayName ?? '').trim() || null;
       const prevDescription = (initialPublicDescription ?? '').trim() || null;
       if (nextDisplayName !== prevDisplayName || nextDescription !== prevDescription) {
-        const displayRes = await setItemPublicDisplayAction({
-          itemId,
-          publicDisplayName: nextDisplayName,
-          publicDescription: nextDescription,
-        });
-        if (!displayRes.ok) {
+        let displayRes: Awaited<ReturnType<typeof setItemPublicDisplayAction>> | null = null;
+        try {
+          displayRes = await setItemPublicDisplayAction({
+            itemId,
+            publicDisplayName: nextDisplayName,
+            publicDescription: nextDescription,
+          });
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+        }
+        if (!displayRes?.ok) {
           toast.warning(
-            `Item saved, but the public display fields couldn't be updated: ${displayRes.error.message}`,
+            `Item saved, but the public display fields couldn't be updated: ${displayRes ? displayRes.error.message : FOLLOW_UP_NO_ANSWER}`,
           );
         }
       }

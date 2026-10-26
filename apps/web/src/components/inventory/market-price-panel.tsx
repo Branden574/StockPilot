@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { fetchItemPriceAction } from '@/server/actions/price-tracking';
 import type { PriceObservationRow } from '@/server/services/price-tracking';
 
@@ -31,8 +33,17 @@ export function MarketPricePanel({
 
   async function refresh() {
     setLoading(true);
-    const res = await fetchItemPriceAction(itemId);
-    setLoading(false);
+    let res: Awaited<ReturnType<typeof fetchItemPriceAction>>;
+    try {
+      res = await fetchItemPriceAction(itemId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('refresh the market price'));
+      return;
+    } finally {
+      setLoading(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

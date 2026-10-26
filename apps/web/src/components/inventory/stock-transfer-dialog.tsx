@@ -64,8 +64,10 @@ import {
   type ChosenDestination,
   type DestinationFields,
 } from '@/lib/locations/placement-destination';
+import { isControlFlow } from '@/lib/control-flow';
 import { transferStockAction } from '@/server/actions/inventory';
 import { isWritableDestination, transferableHoldings } from '@/lib/placements';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 
 /** NON-BOOKS only: sentinel Select value for the inline "create a new location"
  *  branch — mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */
@@ -414,27 +416,39 @@ export function StockTransferDialog({
   ) {
     setSubmitting(true);
     setServerError(null);
-    const res = await transferStockAction({
-      itemId,
-      fromLocationId: fromLocation,
-      quantity: qtyNum,
-      notes: notes || undefined,
-      destination,
-      ...(opts.acknowledged && opts.acknowledged.length > 0
-        ? { acknowledgedCrateChanges: opts.acknowledged }
-        : {}),
-      // ALWAYS SENT, EVEN EMPTY, and deliberately not spread conditionally like
-      // the crate list above. Its presence is how this dialog declares it can
-      // answer a rack question at all; omitting it tells the action "cannot
-      // answer", and the reconciliation then PRESERVES the rack rather than
-      // asking — correct for a client with no rack channel, wrong for this one,
-      // which would silently stop being asked and warn on every rack-clearing
-      // transfer instead of offering the choice. An empty array on the first
-      // request is exactly right: this dialog cannot predict a rack erasure, so
-      // it asks to be told.
-      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof transferStockAction>>;
+    try {
+      res = await transferStockAction({
+        itemId,
+        fromLocationId: fromLocation,
+        quantity: qtyNum,
+        notes: notes || undefined,
+        destination,
+        ...(opts.acknowledged && opts.acknowledged.length > 0
+          ? { acknowledgedCrateChanges: opts.acknowledged }
+          : {}),
+        // ALWAYS SENT, EVEN EMPTY, and deliberately not spread conditionally like
+        // the crate list above. Its presence is how this dialog declares it can
+        // answer a rack question at all; omitting it tells the action "cannot
+        // answer", and the reconciliation then PRESERVES the rack rather than
+        // asking — correct for a client with no rack channel, wrong for this one,
+        // which would silently stop being asked and warn on every rack-clearing
+        // transfer instead of offering the choice. An empty array on the first
+        // request is exactly right: this dialog cannot predict a rack erasure, so
+        // it asks to be told.
+        acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestUnconfirmedMessage('the stock was moved', "the item's Movements tab");
+      setPendingConfirm(null);
+      setServerError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setSubmitting(false);
+    }
 
     if (!res.ok) {
       // The server refused because this move overwrites a crate a human

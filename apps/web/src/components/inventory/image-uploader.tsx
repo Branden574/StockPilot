@@ -31,6 +31,8 @@ import {
   removeImageAction,
 } from '@/server/actions/item-images';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 
 interface ImageRow {
   id: string;
@@ -114,6 +116,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // → PUT → record independently, so a failure on one doesn't
       // block the others (mirrors the prior `continue` semantics).
       const CONCURRENCY = 3;
+      let failed = 0;
       async function processOne(original: File, index: number): Promise<void> {
         // Validation already ran above, before the progress denominator was
         // fixed — every file reaching here is one we intend to upload.
@@ -123,6 +126,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
+          failed++;
           toast.error(presign.error.message);
           return;
         }
@@ -162,6 +166,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         if (!masterRes.ok) {
           // Settle as FAILED so this file keeps the fraction it actually
           // reached. A failed upload must never let the batch read 100%.
+          failed++;
           batch.settle(progressKey, false);
           publishProgress();
           toast.error(`Couldn't upload "${original.name}". Check your network and try again.`);
@@ -178,14 +183,27 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         // images.length snapshot for every iteration but is now
         // explicit about which item wins.
         const isFirst = galleryWasEmpty && index === 0;
-        const record = await recordImageAction({
-          itemId,
-          storagePath: presign.data.path,
-          thumbPath: thumbOk ? presign.data.thumbPath : null,
-          lqip,
-          isFirst,
-        });
+        let record: Awaited<ReturnType<typeof recordImageAction>>;
+        try {
+          record = await recordImageAction({
+            itemId,
+            storagePath: presign.data.path,
+            thumbPath: thumbOk ? presign.data.thumbPath : null,
+            lqip,
+            isFirst,
+          });
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) throw e;
+          // The file is up, but whether its row was written is unknown.
+          failed++;
+          toast.error(
+            requestUnconfirmedMessage(`"${original.name}" was saved`, "the item's photos"),
+          );
+          return;
+        }
         if (!record.ok) {
+          failed++;
           toast.error(record.error.message);
         }
       }
@@ -199,11 +217,26 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       const workers = Array.from({ length: Math.min(CONCURRENCY, accepted.length) }, async () => {
         while (cursor < accepted.length) {
           const i = cursor++;
-          await processOne(accepted[i]!, i);
+          const original = accepted[i]!;
+          try {
+            await processOne(original, i);
+          } catch (e) {
+            // A redirect (the session ended): the router is already navigating.
+            if (isControlFlow(e)) throw e;
+            // No answer for this photo (offline, a server error, a deploy, a
+            // dropped upload). It failed; the others carry on, and the batch
+            // still finishes and says so instead of stopping in silence.
+            failed++;
+            batch.settle(`${i}:${original.name}`, false);
+            publishProgress();
+            toast.error(requestFailedMessage(`upload "${original.name}"`));
+          }
         }
       });
       await Promise.all(workers);
-      toast.success('Photos uploaded.');
+      // Each failed photo has already said so; "Photos uploaded." after one
+      // of them would contradict it.
+      if (failed === 0) toast.success('Photos uploaded.');
       router.refresh();
     } finally {
       setUploading(false);
@@ -213,7 +246,17 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
   // Variant used by the lightbox toolbar (already confirmed there).
   async function deleteImageById(imageId: string) {
-    const res = await removeImageAction(imageId, itemId);
+    let res: Awaited<ReturnType<typeof removeImageAction>>;
+    try {
+      res = await removeImageAction(imageId, itemId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) throw e;
+      // No answer (offline, a server error, a deploy): the photo stays, and
+      // both confirms (this card's and the lightbox's) close on the message.
+      toast.error(requestFailedMessage('delete the photo'));
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

@@ -73,6 +73,8 @@ import {
   type ChosenDestination,
   type DestinationFields,
 } from '@/lib/locations/placement-destination';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { placeStockAction } from '@/server/actions/inventory';
 
 /** Non-books only: the dropdown entry that opens the inline rack form. */
@@ -402,24 +404,36 @@ export function PlaceFromStagingDialog({
   ) {
     setSubmitting(true);
     setServerError(null);
-    const res = await placeStockAction({
-      itemId,
-      fromLocationId: sourceLocationId,
-      quantity: qtyNum,
-      notes: notes.trim() || undefined,
-      destination,
-      ...(opts.acknowledged && opts.acknowledged.length > 0
-        ? { acknowledgedCrateChanges: opts.acknowledged }
-        : {}),
-      // ALWAYS SENT, EVEN EMPTY. Its presence is how this client declares it can
-      // answer the rack question at all; omitting it tells the server "cannot
-      // answer", and the server then preserves the rack rather than refusing —
-      // correct for an old client, wrong for this one, which would silently stop
-      // being asked. An empty array on the first request is exactly right: this
-      // dialog cannot predict a rack erasure, so it asks to be told.
-      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof placeStockAction>>;
+    try {
+      res = await placeStockAction({
+        itemId,
+        fromLocationId: sourceLocationId,
+        quantity: qtyNum,
+        notes: notes.trim() || undefined,
+        destination,
+        ...(opts.acknowledged && opts.acknowledged.length > 0
+          ? { acknowledgedCrateChanges: opts.acknowledged }
+          : {}),
+        // ALWAYS SENT, EVEN EMPTY. Its presence is how this client declares it can
+        // answer the rack question at all; omitting it tells the server "cannot
+        // answer", and the server then preserves the rack rather than refusing —
+        // correct for an old client, wrong for this one, which would silently stop
+        // being asked. An empty array on the first request is exactly right: this
+        // dialog cannot predict a rack erasure, so it asks to be told.
+        acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestUnconfirmedMessage('the stock was placed', "the item's Movements tab");
+      setPendingConfirm(null);
+      setServerError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setSubmitting(false);
+    }
 
     if (!res.ok) {
       // The server refused because this placement overwrites a crate a human
@@ -655,9 +669,7 @@ export function PlaceFromStagingDialog({
     // step 2 as an empty rack/crate row. Litter, and recoverable by hand; the
     // alternative was an erasure the operator was never shown.
     const deferToServer =
-      crateChange !== null &&
-      !hasRackPosition(nextPosition) &&
-      hasRackPosition(currentPosition);
+      crateChange !== null && !hasRackPosition(nextPosition) && hasRackPosition(currentPosition);
 
     // 2. Does it MINT a location? describeNewRackPlacement checks the label
     //    against this warehouse's existing rack/crate names — an existing
@@ -739,8 +751,7 @@ export function PlaceFromStagingDialog({
       // not describe the rack the placement is about to erase, so it has not
       // earned an acknowledgement. The gate refuses, and the operator answers
       // the server's fuller question instead.
-      acknowledged:
-        crateChange && !deferToServer ? toBookCrateAcknowledgement([crateChange]) : [],
+      acknowledged: crateChange && !deferToServer ? toBookCrateAcknowledgement([crateChange]) : [],
       // NEVER PRE-ACKNOWLEDGED FROM A SNAPSHOT. A rack erasure depends on the
       // live holdings, which this component has never read, so it has nothing to
       // fingerprint and nothing it could honestly claim to have shown. The empty
@@ -759,10 +770,7 @@ export function PlaceFromStagingDialog({
     );
     if (!match) return;
     setPendingConfirm(null);
-    void place(
-      { existingLocationId: match.id },
-      { describe: { mode: 'existing', option: match } },
-    );
+    void place({ existingLocationId: match.id }, { describe: { mode: 'existing', option: match } });
   }
 
   return (
@@ -779,7 +787,7 @@ export function PlaceFromStagingDialog({
         <DialogHeader>
           <DialogTitle>Place from {sourceLabel.toLowerCase()}</DialogTitle>
           <DialogDescription>
-            Move <span className="font-medium text-foreground">{itemName}</span> from{' '}
+            Move <span className="text-foreground font-medium">{itemName}</span> from{' '}
             {sourceLabel.toLowerCase()} into a rack or crate. Available:{' '}
             <span className="tabular-nums">{availableQuantity}</span>.
           </DialogDescription>
@@ -914,9 +922,7 @@ export function PlaceFromStagingDialog({
           <div className="space-y-1.5">
             <Label htmlFor="place-quantity">
               Quantity{' '}
-              <span className="text-muted-foreground font-normal">
-                (max {availableQuantity})
-              </span>
+              <span className="text-muted-foreground font-normal">(max {availableQuantity})</span>
             </Label>
             <Input
               id="place-quantity"
