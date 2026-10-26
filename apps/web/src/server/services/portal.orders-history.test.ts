@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
+import {
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 /**
  * The B2B portal's "Your orders" (B32). It read the customer's 50 newest
@@ -89,7 +94,11 @@ function served(rows: Array<Record<string, unknown>>) {
 
 function wire(
   rows: Array<Record<string, unknown>>,
-  countRead?: (call: MockCall) => { data: unknown; error: { message: string } | null; count?: number | null },
+  countRead?: (call: MockCall) => {
+    data: unknown;
+    error: { message: string } | null;
+    count?: number | null;
+  },
 ) {
   const answer = served(rows);
   const stub = makeSupabaseStub({
@@ -191,9 +200,7 @@ describe('portalOrders: the count is a read of its own (decision 4)', () => {
       'id',
       { count: 'exact', head: true },
     ]);
-    const eqs = count.methods
-      .map((m, i) => (m === 'eq' ? count.args[i] : null))
-      .filter(Boolean);
+    const eqs = count.methods.map((m, i) => (m === 'eq' ? count.args[i] : null)).filter(Boolean);
     expect(eqs).toEqual([
       ['organization_id', ORG],
       ['customer_id', CUSTOMER],
@@ -202,35 +209,46 @@ describe('portalOrders: the count is a read of its own (decision 4)', () => {
     expect(history.total).toBe(51);
   });
 
-  // Mutation caught: the count awaited after the order read.
+  // Mutations caught: the count awaited before the order read is sent, the
+  // order read awaited before the count is sent, and both built first and
+  // then awaited one after the other (supabase-js sends a read when it is
+  // awaited). The stub sends each answer on a later task, so a read that
+  // waits for the other is answered before the other is sent. The test used
+  // to count the reads built when the order read was answered, which a count
+  // awaited first also passed (review round 2).
   it('the count and the order read run side by side, not one after the other', async () => {
-    let countStartedBeforeOrdersAnswered = false;
     const answer = served(Array.from({ length: 3 }, (_, i) => order(i)));
-    let started = 0;
-    const stub = makeSupabaseStub({
+    let sent = 0;
+    const sentWhenAnswered: number[] = [];
+    adminRef.current = makeSupabaseStub({
       'order_requests.select': (call) => {
-        if (!isCountRead(call)) countStartedBeforeOrdersAnswered = started === 2;
-        return answer(call);
+        sent += 1;
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            sentWhenAnswered.push(sent);
+            resolve(answer(call));
+          }, 0);
+        }) as unknown as QueryResult;
       },
-    });
-    const from = stub.client.from;
-    stub.client.from = (table: string) => {
-      if (table === 'order_requests') started += 1;
-      return from(table);
-    };
-    adminRef.current = stub.client;
-    await portalOrders(ctx);
-    expect(countStartedBeforeOrdersAnswered).toBe(true);
+    }).client;
+    const history = await portalOrders(ctx);
+    expect(history.total).toBe(3);
+    expect(history.orders).toHaveLength(3);
+    // Both reads were sent before either was answered.
+    expect(sentWhenAnswered).toEqual([2, 2]);
   });
 
   // Mutation caught: a failed count that fails the page, or that answers a
   // made-up total.
   it('a failed count answers total null, and the orders still come back', async () => {
-    wire(Array.from({ length: 51 }, (_, i) => order(i)), () => ({
-      data: null,
-      error: { message: 'canceling statement due to statement timeout' },
-      count: null,
-    }));
+    wire(
+      Array.from({ length: 51 }, (_, i) => order(i)),
+      () => ({
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+        count: null,
+      }),
+    );
     const history = await portalOrders(ctx);
     expect(history.total).toBeNull();
     expect(history.orders).toHaveLength(50);
