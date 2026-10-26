@@ -58,18 +58,32 @@ describe('nothing in product code creates an order but the one path', () => {
       /from\(\s*['"`]order_requests['"`]\s*\)\s*\.insert\(/.test(readFileSync(f, 'utf8')),
     );
     // The public order link (no account) and the B2B portal create orders of
-    // their own sources through their own paths, reviewed separately; listed
-    // by name so a new inserter fails here.
-    expect(inserters.map((f) => path.relative(REPO, f)).sort()).toEqual(KNOWN_INSERTERS);
+    // their own sources through insert_order_request_with_lines (0413 review
+    // fix round), one transaction, so no client insert remains anywhere.
+    expect(inserters.map((f) => path.relative(REPO, f)).sort()).toEqual([]);
+  });
+
+  it('the public link and the portal each write an order in one insert_order_request_with_lines call', () => {
+    const callers = FILES.flatMap((f) => {
+      const hits = readFileSync(f, 'utf8').match(/rpc\(\s*['"`]insert_order_request_with_lines['"`]/g);
+      return hits ? hits.map(() => path.relative(REPO, f)) : [];
+    });
+    expect(callers.sort()).toEqual(KNOWN_ONE_WRITE_CALLERS);
+    // The track token's side row goes in inside that call, never as a client
+    // insert after the header (a failed second call used to strand a header).
+    const sideRowInserters = FILES.filter((f) =>
+      /from\(\s*['"`]order_request_secrets['"`]\s*\)\s*\.insert\(/.test(readFileSync(f, 'utf8')),
+    );
+    expect(sideRowInserters).toEqual([]);
   });
 });
 
-const KNOWN_INSERTERS: string[] = [
-  // The public order link: source public_link, created by the admin client
-  // for a person with no account (its own confirmation flow).
+const KNOWN_ONE_WRITE_CALLERS: string[] = [
+  // The public order link: source public_link, for a person with no account
+  // (its own confirmation flow); the header, track token row and lines.
   'apps/web/src/app/api/v1/public/order-requests/route.ts',
   // The B2B customer portal: source portal (a customer principal, never an
-  // org member).
+  // org member); the header and lines.
   'apps/web/src/server/services/portal.ts',
 ];
 
@@ -80,7 +94,7 @@ const KNOWN_INSERTERS: string[] = [
  * every role, the service role included), and each is listed so a new writer
  * fails here and gets reviewed. Add items is NOT a client write any more: it
  * is one add_order_request_lines call (one transaction), so no service-role
- * top-up remains.
+ * top-up remains; nor are the portal's and the public link's new orders.
  */
 const LINE_WRITE = /from\(\s*['"`]order_request_lines['"`]\s*\)\s*\.(insert|update|upsert|delete)\(/g;
 
@@ -94,16 +108,14 @@ function lineWriters(): string[] {
 }
 
 const KNOWN_LINE_WRITERS: string[] = [
-  // The public order link's lines (service role, sorted by item id; the gate
-  // refuses a hidden item and the header is deleted).
-  'apps/web/src/app/api/v1/public/order-requests/route.ts#insert',
+  // The public order link's and the portal's lines are no client write: they
+  // go in inside insert_order_request_with_lines (above), where the gate's
+  // refusal rolls the whole order back.
   // OrderRequestsService.updateLineQuantity (service role: lines have no
   // UPDATE policy). A raise is gated; lowering never is.
   'apps/web/src/server/services/order-requests.ts#update',
   // OrderRequestsService.removeLine (service role). Removal is never new demand.
   'apps/web/src/server/services/order-requests.ts#delete',
-  // The B2B portal's lines (service role, sorted by item id).
-  'apps/web/src/server/services/portal.ts#insert',
 ];
 
 describe('every client write of order_request_lines is a known, gated writer (0413)', () => {

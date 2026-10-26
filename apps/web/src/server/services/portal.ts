@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import {
+  ORDER_MAX_UNITS_PER_LINE,
   planAllowsB2bPortal,
   resolvePortalPricingMode,
   type ExchangeStatus,
@@ -355,6 +356,9 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
   }));
 }
 
+/** A portal line above the one line ceiling (10,000 units of one item). */
+const PORTAL_LINE_TOO_LARGE_COPY = 'A line can have at most 10,000 units.';
+
 const submitSchema = z.object({
   lines: z
     .array(z.object({ itemId: z.string().uuid(), quantity: z.number().int().min(1).max(100000) }))
@@ -398,6 +402,12 @@ export async function portalSubmitOrder(
   const mergedLines = Array.from(qtyByItem.entries())
     .map(([itemId, quantity]) => ({ itemId, quantity }))
     .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
+  // One ceiling for a line on every path that adds demand (0413, integrator
+  // D2): placement's per-item cap, after the per-item sum. The database
+  // refuses the same line (order_lines_invalid), mapped below.
+  if (mergedLines.some((l) => l.quantity > ORDER_MAX_UNITS_PER_LINE)) {
+    throw new Error(PORTAL_LINE_TOO_LARGE_COPY);
+  }
 
   const admin = createAdminClient();
 
@@ -454,29 +464,6 @@ export async function portalSubmitOrder(
   }
   const warehouseId = [...warehouses][0]!;
 
-  const { data: header, error: headerErr } = await admin
-    .from('order_requests')
-    .insert({
-      organization_id: ctx.organizationId,
-      warehouse_id: warehouseId,
-      status: 'pending_approval',
-      source: 'portal',
-      customer_id: ctx.customerId,
-      requester_user_id: ctx.userId,
-      requester_email: ctx.email,
-      requester_name: ctx.customerName,
-      notes: parsed.notes ?? null,
-      fulfillment_type: 'pickup',
-    })
-    .select('id')
-    .single();
-  if (headerErr || !header) {
-    void reportError(new Error(headerErr?.message ?? 'header insert failed'), {
-      tag: 'portal.submit.header',
-    });
-    throw new Error('Order could not be submitted. Please try again.');
-  }
-
   // Accounting split: unit_cost_at_request = the item's COST (consistent with
   // internal/public orders + the Sage/QBO return-valuation readers);
   // unit_price_at_request = the customer's SELL price (portal history reads it).
@@ -487,34 +474,57 @@ export async function portalSubmitOrder(
   // and the quotable ones in a priced org. Writing 0 for both would tell anyone
   // reading the history later that a to-be-quoted line had been settled at free.
   const linePayload = mergedLines.map((l) => ({
-    order_request_id: header.id as string,
     item_id: l.itemId,
     quantity_requested: l.quantity,
     unit_cost_at_request: Number(itemMeta.get(l.itemId)?.unit_cost) || 0,
     unit_price_at_request: byId.get(l.itemId)?.unitPrice ?? null,
   }));
-  const { error: lineErr } = await admin.from('order_request_lines').insert(linePayload);
-  if (lineErr) {
-    // Rollback-on-line-error pattern — never leave an orphan header.
-    await admin.from('order_requests').delete().eq('id', header.id as string);
+
+  // The header and its lines in ONE transaction (0413 review fix round). They
+  // used to be two calls with a compensating delete; a hide that won the race
+  // refused the lines after the header's notify trigger had already written a
+  // "New order request" notification, and a failed delete left the header.
+  // Now any refusal rolls all of it back, so there is nothing to clean up.
+  const { data: header, error: writeErr } = await admin.rpc('insert_order_request_with_lines', {
+    p_header: {
+      organization_id: ctx.organizationId,
+      warehouse_id: warehouseId,
+      status: 'pending_approval',
+      source: 'portal',
+      customer_id: ctx.customerId,
+      requester_user_id: ctx.userId,
+      requester_email: ctx.email,
+      requester_name: ctx.customerName,
+      notes: parsed.notes ?? null,
+      fulfillment_type: 'pickup',
+    },
+    p_lines: linePayload,
+  });
+  const headerId = (header as { id?: unknown } | null)?.id;
+  if (writeErr || typeof headerId !== 'string') {
     // The ordering-visibility gate (0413): an item hidden after the catalog
     // read above. The customer hears what the pre-check says, never why.
-    if ((lineErr as { hint?: string | null }).hint === 'order_item_hidden') {
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_item_hidden') {
       throw new Error('One of the items is no longer available to order.');
     }
-    void reportError(new Error(lineErr.message), { tag: 'portal.submit.lines' });
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_lines_invalid') {
+      throw new Error(PORTAL_LINE_TOO_LARGE_COPY);
+    }
+    void reportError(new Error(writeErr?.message ?? 'order write answered no row'), {
+      tag: 'portal.submit.write',
+    });
     throw new Error('Order could not be submitted. Please try again.');
   }
 
   // Feed the org's integration/audit surfaces like any other new order.
   void dispatchEvent(ctx.organizationId, 'order.created', {
-    id: header.id as string,
-    orderNumber: (header.id as string).slice(0, 8).toUpperCase(),
+    id: headerId,
+    orderNumber: headerId.slice(0, 8).toUpperCase(),
     source: 'portal',
     customerId: ctx.customerId,
   });
 
-  return { id: header.id as string };
+  return { id: headerId };
 }
 
 /** The customer's order history (this customer only, newest first). */

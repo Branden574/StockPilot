@@ -90,7 +90,9 @@
 --      lines in item-id order, in ONE transaction, so a refusal at a line (a
 --      hide that committed after the server's catalog read) leaves no header,
 --      no line and no notification. It used to be separate calls with a
---      compensating delete, after the header's notify trigger had fired.
+--      compensating delete, after the header's notify trigger had fired. A
+--      line holds at most 10,000 units (order_lines_invalid, the one line
+--      ceiling of every path that adds demand).
 --
 -- WHO CHANGES AT PUSH: nobody. Every existing row reads shown (true), which
 -- is today's behaviour; no permission row is written for any member; the two
@@ -1715,6 +1717,13 @@ begin
         <> jsonb_array_length(p_lines) then
     raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'lines';
   end if;
+  -- The one line ceiling of every path that adds demand (placement's per-item
+  -- cap, 0391): 10,000 units. Lines are one per item here, so a line is the
+  -- item's whole quantity (integrator D2).
+  if exists (select 1 from jsonb_array_elements(p_lines) as e(l)
+              where (l->>'quantity_requested')::numeric > 10000) then
+    raise exception 'order_lines_invalid' using errcode = '22023', hint = 'order_lines_invalid', detail = 'quantity';
+  end if;
   if p_track_token is not null and p_track_token !~ '^[0-9a-f]{64}$' then
     raise exception 'order_request_invalid' using errcode = '22023', hint = 'order_request_invalid', detail = 'trackToken';
   end if;
@@ -1748,8 +1757,9 @@ comment on function public.insert_order_request_with_lines(jsonb, jsonb, text) i
   'The B2B portal''s and the public request link''s one write of a new order (0413 review fix round): the header '
   '(a portal request pending_approval, or a public-link request pending_confirmation, from an allowlist of header '
   'columns), the optional track-token side row (64 hex characters) and 1 to 100 lines, one per item, whole '
-  'quantities of 1 or more, inserted in item-id order, all in ONE transaction (22023 order_request_invalid, detail '
-  'header | source | status | lines | trackToken). Any refusal, the ordering-visibility gate''s order_item_hidden '
+  'quantities of 1 to 10,000, inserted in item-id order, all in ONE transaction (22023 order_request_invalid, detail '
+  'header | source | status | lines | trackToken; a line above 10,000 units is 22023 order_lines_invalid, detail '
+  'quantity). Any refusal, the ordering-visibility gate''s order_item_hidden '
   'included, leaves no header, side row, line or notification. Answers the header row as JSON. SECURITY INVOKER, '
   'EXECUTE to service_role only: the same rights and triggers as the separate calls it replaces.';
 

@@ -634,12 +634,25 @@ export async function POST(req: NextRequest) {
     /* non-fatal */
   }
 
-  // 6. Insert header. Use the rollback-on-line-error pattern from
-  // OrderRequestsService.create — if line insert fails, delete the
-  // header so we don't leave orphans behind.
-  const { data: headerRow, error: headerErr } = await admin
-    .from('order_requests')
-    .insert({
+  // 6. Write the order: the header, the track token's side row (0389: the
+  // service-only order_request_secrets, never the order row every member
+  // reads) and the lines, in ONE transaction (0413 review fix round). They
+  // used to be three calls with compensating deletes, so a failure after the
+  // header (a hide that won the race, a side-row error) could strand it.
+  // Lines go in item-id order: the lock order of every gated writer of new
+  // demand (0413: the ordering-visibility gate takes each item's key-share
+  // lock as its line goes in, and a hide locks the same rows in id order), so
+  // a multi-line request never deadlocks with a bulk hide.
+  const linePayload = [...dedupedLines]
+    .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0))
+    .map((l) => ({
+      item_id: l.itemId,
+      quantity_requested: l.quantity,
+      unit_cost_at_request: itemMap.get(l.itemId)?.unitCost ?? 0,
+      notes: l.notes ?? null,
+    }));
+  const { data: headerRow, error: writeErr } = await admin.rpc('insert_order_request_with_lines', {
+    p_header: {
       organization_id: organizationId,
       warehouse_id: body.warehouseId,
       status: 'pending_confirmation',
@@ -655,62 +668,15 @@ export async function POST(req: NextRequest) {
       pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
-    })
-    .select('*')
-    .single();
-  if (headerErr || !headerRow) {
-    if (headerErr) {
-      await reportError(headerErr, { tag: 'public.order-requests.header-insert' });
-    }
-    return NextResponse.json(
-      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
-      { status: 500 },
-    );
-  }
-  const header = headerRow as OrderRequestRow;
-
-  // The track token's side row (0389), inside the same rollback path as the
-  // lines: without it the requester's tracking link would open nothing, so a
-  // failed write removes the header (the side row cascades with it).
-  const { error: secretErr } = await admin.from('order_request_secrets').insert({
-    order_request_id: header.id,
-    organization_id: organizationId,
-    public_track_token: trackToken,
+    },
+    p_lines: linePayload,
+    p_track_token: trackToken,
   });
-  if (secretErr) {
-    await admin.from('order_requests').delete().eq('id', header.id);
-    await reportError(secretErr, {
-      tag: 'public.order-requests.secret-insert',
-      extra: { headerId: header.id },
-    });
-    return NextResponse.json(
-      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
-      { status: 500 },
-    );
-  }
-
-  // In item-id order: the lock order of every gated writer of new demand
-  // (0413: the ordering-visibility gate takes each item's key-share lock as
-  // its line goes in, and a hide locks the same rows in id order), so a
-  // multi-line request never deadlocks with a bulk hide.
-  const linePayload = [...dedupedLines]
-    .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0))
-    .map((l) => ({
-      order_request_id: header.id,
-      item_id: l.itemId,
-      quantity_requested: l.quantity,
-      unit_cost_at_request: itemMap.get(l.itemId)?.unitCost ?? 0,
-      notes: l.notes ?? null,
-    }));
-  const { error: lineErr } = await admin
-    .from('order_request_lines')
-    .insert(linePayload);
-  if (lineErr) {
-    await admin.from('order_requests').delete().eq('id', header.id);
+  if (writeErr || !headerRow || typeof (headerRow as { id?: unknown }).id !== 'string') {
     // The ordering-visibility gate (0413): an item hidden after the
     // eligibility read above. The same 400 the pre-check gives, which never
-    // says why; not a fault.
-    if ((lineErr as { hint?: string | null }).hint === 'order_item_hidden') {
+    // says why; not a fault. Nothing was written.
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_item_hidden') {
       return NextResponse.json(
         {
           error: 'invalid_line',
@@ -721,15 +687,26 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    await reportError(lineErr, {
-      tag: 'public.order-requests.line-insert',
-      extra: { headerId: header.id },
+    // The database's line ceiling (10,000 units, integrator D2). The total
+    // cap above refuses first; this is the same 400 should it ever be reached.
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_lines_invalid') {
+      return NextResponse.json(
+        {
+          error: 'too_many_units',
+          message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
+        },
+        { status: 400 },
+      );
+    }
+    await reportError(writeErr ?? new Error('order write answered no row'), {
+      tag: 'public.order-requests.insert',
     });
     return NextResponse.json(
       { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
       { status: 500 },
     );
   }
+  const header = headerRow as OrderRequestRow;
 
   // Zendesk shell: a new public order request opens a support ticket
   // (best-effort; dormant until a zendesk connection is active). NOTE: fires at

@@ -145,8 +145,10 @@ function makeAdmin(
   db: Record<string, Row[]>,
   failTables: Record<string, string> = {},
   insertErrors: Record<string, { message: string; code?: string; hint?: string; details?: string }> = {},
+  rpcErrors: Record<string, { message: string; code?: string; hint?: string; details?: string }> = {},
 ) {
   const fromCalls: string[] = [];
+  const rpcCalls: Array<{ fn: string; args: Row }> = [];
   const deletes: Array<{ table: string; rows: Row[] }> = [];
   const inserts: Array<{ table: string; rows: Row[] }> = [];
   // Records the size of every `.in()` call, per table — lets a test prove a
@@ -241,8 +243,30 @@ function makeAdmin(
         fromCalls.push(table);
         return chain(table);
       },
+      // insert_order_request_with_lines (0413 review fix round): the header
+      // and its lines in ONE transaction. A refusal writes nothing at all; a
+      // success records both inserts the way the database would.
+      rpc: async (fn: string, args: Row) => {
+        rpcCalls.push({ fn, args });
+        if (fn !== 'insert_order_request_with_lines') {
+          return { data: null, error: { message: `no such function ${fn}` } };
+        }
+        if (rpcErrors[fn]) return { data: null, error: rpcErrors[fn]! };
+        const header: Row = { id: 'order_requests-1', ...(args.p_header as Row) };
+        const lines = (args.p_lines as Row[]).map((l, i) => ({
+          id: `order_request_lines-${i + 1}`,
+          order_request_id: header.id,
+          ...l,
+        }));
+        inserts.push({ table: 'order_requests', rows: [header] });
+        inserts.push({ table: 'order_request_lines', rows: lines });
+        (db.order_requests ??= []).push(header);
+        (db.order_request_lines ??= []).push(...lines);
+        return { data: header, error: null };
+      },
     },
     fromCalls,
+    rpcCalls,
     inserts,
     deletes,
     inCallSizes,
@@ -615,9 +639,9 @@ describe('portal and items hidden from new ordering', () => {
     expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
   });
 
-  it('a gate refusal at the line insert removes the header and says the same sentence', async () => {
-    admin = makeAdmin(makeDb(), {}, {
-      order_request_lines: {
+  it('a gate refusal inside the one write says the same sentence and leaves nothing to clean up', async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: {
         message: 'This item is no longer available for new orders.',
         code: 'P0001',
         hint: 'order_item_hidden',
@@ -633,7 +657,97 @@ describe('portal and items hidden from new ordering', () => {
         ],
       }),
     ).rejects.toThrow('One of the items is no longer available to order.');
-    expect(admin.deletes.find((d) => d.table === 'order_requests')?.rows).toHaveLength(1);
+    // The database rolled the header back with the refused line (and with it
+    // the header's "New order request" notification), so the service neither
+    // wrote a header of its own nor needs a compensating delete.
+    expect(admin.inserts).toEqual([]);
+    expect(admin.deletes).toEqual([]);
+  });
+
+  it('writes the header and its lines in ONE insert_order_request_with_lines call', async () => {
+    await portalSubmitOrder(ctxPriced, {
+      lines: [
+        { itemId: ITEM_B, quantity: 1 },
+        { itemId: ITEM_A, quantity: 2 },
+      ],
+      notes: 'Dock 2',
+    });
+    expect(admin.rpcCalls).toHaveLength(1);
+    const call = admin.rpcCalls[0]!;
+    expect(call.fn).toBe('insert_order_request_with_lines');
+    expect(call.args.p_header).toEqual({
+      organization_id: ORG,
+      warehouse_id: WAREHOUSE,
+      status: 'pending_approval',
+      source: 'portal',
+      customer_id: CUSTOMER,
+      requester_user_id: 'auth-1',
+      requester_email: 'buyer@school.example.com',
+      requester_name: 'Harbor Elementary',
+      notes: 'Dock 2',
+      fulfillment_type: 'pickup',
+    });
+    expect(call.args.p_lines).toEqual([
+      { item_id: ITEM_A, quantity_requested: 2, unit_cost_at_request: 4.25, unit_price_at_request: 12.5 },
+      { item_id: ITEM_B, quantity_requested: 1, unit_cost_at_request: 4.25, unit_price_at_request: null },
+    ]);
+    expect(call.args.p_track_token).toBeUndefined();
+    // No client write of an order row or line: only reads went through from().
+    expect(admin.fromCalls).not.toContain('order_requests');
+    expect(admin.fromCalls).not.toContain('order_request_lines');
+  });
+
+  // Integrator D2: one ceiling for a line on every path that adds demand,
+  // 10,000 units (placement's per-item cap). The cart is summed per item
+  // first, so two entries of one item count together.
+  it('a line above 10,000 units, summed per item, is refused in words before anything is written', async () => {
+    await expect(
+      portalSubmitOrder(ctxNoCharge, {
+        lines: [
+          { itemId: ITEM_A, quantity: 6_000 },
+          { itemId: ITEM_A, quantity: 4_001 },
+        ],
+      }),
+    ).rejects.toThrow('A line can have at most 10,000 units.');
+    expect(admin.rpcCalls).toEqual([]);
+    expect(admin.inserts).toEqual([]);
+  });
+
+  it('exactly 10,000 units of one item go through', async () => {
+    await portalSubmitOrder(ctxNoCharge, {
+      lines: [
+        { itemId: ITEM_A, quantity: 6_000 },
+        { itemId: ITEM_A, quantity: 4_000 },
+      ],
+    });
+    const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
+    expect(lines).toEqual([expect.objectContaining({ item_id: ITEM_A, quantity_requested: 10_000 })]);
+  });
+
+  it("the database's own line-ceiling refusal reads the same, not as a fault", async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: {
+        message: 'order_lines_invalid',
+        code: '22023',
+        hint: 'order_lines_invalid',
+        details: 'quantity',
+      },
+    });
+    adminRef.current = admin.client;
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).rejects.toThrow('A line can have at most 10,000 units.');
+  });
+
+  it('any other refusal of the one write is the generic sentence, reported', async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: { message: 'connection reset', code: '08006' },
+    });
+    adminRef.current = admin.client;
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).rejects.toThrow('Order could not be submitted. Please try again.');
+    expect(admin.inserts).toEqual([]);
   });
 
   it('inserts the lines in item-id order (the lock order every gated writer uses)', async () => {

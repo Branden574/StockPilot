@@ -58,7 +58,7 @@
 --     on show; public_visibility never changes.
 -- D.  duplicate_inventory_item copies the choice; unarchive and the first
 --     receipt keep it.
--- R.  The review fix round (integrator decision D1 and the three reviews):
+-- R.  The review fix round (integrator decisions D1 and D2, three reviews):
 --     the top-up helper refuses a direct call and an organization with Orders
 --     off; one ceiling of 10,000 on a line's RESULTING quantity on every add
 --     path (boundaries 10,000 and 10,001); moving a line to another order is
@@ -68,7 +68,8 @@
 --     actor; the gate itself refuses an API writer's foreign or unreadable
 --     hidden item (no hint, no detail); insert_order_request_with_lines
 --     writes a portal or public-link header and its lines in one
---     transaction, so a hidden item leaves no header, line or notification.
+--     transaction, so a hidden item leaves no header, line or notification,
+--     and holds the same 10,000-unit line ceiling (D2).
 -- C.  Census: the only UPDATE writer of the column, the bodies that read it,
 --     no function writes role_default_permissions, the user override writers.
 --
@@ -77,7 +78,7 @@
 
 begin;
 
-select plan(86);
+select plan(87);
 
 \set orgA    '\'04130000-0000-0000-0000-00000000000a\''
 \set orgB    '\'04130000-0000-0000-0000-00000000000b\''
@@ -1265,6 +1266,23 @@ select is(
   'ERR:22023:order_request_invalid:source ERR:22023:order_request_invalid:status ERR:22023:order_request_invalid:header '
   'ERR:22023:order_request_invalid:lines ERR:22023:order_request_invalid:lines ERR:22023:order_request_invalid:lines',
   'R12b: it writes only a new portal or public-link request, from the header columns those two send (an id, a status past approval, an internal source, no line, a repeated item or a quantity under 1 are refused)');
+-- R12c (integrator D2): the one line ceiling, 10,000 units, holds on this
+-- path too, in the order_lines_invalid contract every other path uses.
+select is(
+  pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+    jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_approval', 'source', 'portal',
+                       'requester_user_id', :stf, 'fulfillment_type', 'pickup', 'notes', 'R12c over'),
+    jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 10001))))
+  || '|' || pg_temp.q(format('select count(*)::text from public.order_requests where organization_id = %L and notes = ''R12c over''', :orgA))
+  || '|' || (case when pg_temp.run('service_role', null, format('select public.insert_order_request_with_lines(%L::jsonb, %L::jsonb)::text',
+                jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'status', 'pending_confirmation', 'source', 'public_link',
+                                   'requester_email', 'r12c-visitor@example.org', 'requester_name', 'R12c Visitor', 'fulfillment_type', 'pickup',
+                                   'notes', 'R12c at'),
+                jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity_requested', 10000)))) like 'ERR:%'
+              then 'refused' else 'written' end)
+  || '|' || coalesce(pg_temp.q(format('select string_agg(trim_scale(l.quantity_requested)::text, '','') from public.order_request_lines l join public.order_requests r on r.id = l.order_request_id where r.organization_id = %L and r.notes = ''R12c at''', :orgA)), '-'),
+  'ERR:22023:order_lines_invalid:quantity|0|written|10000',
+  'R12c: a line above 10,000 units is refused as order_lines_invalid quantity and nothing is written; exactly 10,000 is written');
 
 -- ═══ C. Census ════════════════════════════════════════════════════════════
 select is(

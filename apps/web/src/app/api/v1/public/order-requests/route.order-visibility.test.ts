@@ -8,10 +8,11 @@ import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
  * from new ordering; the legacy organization token (no links row) checks the
  * column itself. The database gate refuses a hidden item's line for every
  * writer, the service role included, so a hide that lands between the
- * eligibility read and the insert still refuses: the header is removed and
- * the requester gets the route's own "no longer available" 400 (never a 500),
- * which does not say why. Lines go in item-id order, the lock order of every
- * gated writer.
+ * eligibility read and the insert still refuses: the header, side row and
+ * lines go in as ONE transaction (insert_order_request_with_lines), so the
+ * refusal leaves nothing behind, and the requester gets the route's own "no
+ * longer available" 400 (never a 500), which does not say why. Lines go in
+ * item-id order, the lock order of every gated writer.
  */
 
 vi.mock('@/lib/rate-limit', () => ({
@@ -104,11 +105,11 @@ function wire(opts: {
       error: null,
     },
     'inventory_items.select': servedLikePostgrest(opts.rows),
-    'order_requests.insert.single': {
-      data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
-      error: null,
-    },
-    'order_request_lines.insert': { data: null, error: opts.lineError ?? null },
+    // The header, side row and lines: one transaction (0413 review fix
+    // round). A gate refusal at any line rolls the whole order back.
+    'rpc:insert_order_request_with_lines': opts.lineError
+      ? { data: null, error: opts.lineError }
+      : { data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID }, error: null },
     'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
   });
   adminHolder.client = stub.client;
@@ -141,7 +142,7 @@ describe('POST /api/v1/public/order-requests and items hidden from ordering', ()
       error: 'invalid_line',
       message: 'One of the books is no longer available.',
     });
-    expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('insert_order_request_with_lines');
     const select = stub.chainArgsAll.get('inventory_items.select')?.[0]?.[0]?.[0] as string;
     expect(select).toContain('order_catalog_visible');
   });
@@ -150,7 +151,7 @@ describe('POST /api/v1/public/order-requests and items hidden from ordering', ()
     const stub = wire({ viaLink: true, rows: [book(BOOK_A), book(BOOK_B, { order_catalog_visible: false })] });
     const res = await POST(request([{ itemId: BOOK_B, quantity: 1 }]));
     expect(res.status).toBe(400);
-    expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('insert_order_request_with_lines');
   });
 
   for (const viaLink of [true, false]) {
@@ -159,16 +160,50 @@ describe('POST /api/v1/public/order-requests and items hidden from ordering', ()
       ? 'This item is no longer available through this request form. Please remove it and submit again.'
       : 'One of the books is no longer available.';
 
-    it(`${how}: a hide between the read and the insert is a 400 with the header removed, never a 500`, async () => {
+    it(`${how}: a hide between the read and the insert is a 400 that leaves nothing behind, never a 500`, async () => {
       const stub = wire({ viaLink, rows: [book(BOOK_A), book(BOOK_B)], lineError: GATE_REFUSAL });
       const res = await POST(request([{ itemId: BOOK_B, quantity: 1 }]));
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: 'invalid_line', message: sentence });
-      expect(stub.chainsAll.get('order_requests.delete')).toHaveLength(1);
+      // The one write rolled back: no header was ever committed, so there is
+      // no compensating delete and no confirmation email.
+      expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
+      expect(stub.chainsAll.get('order_requests.delete')).toBeUndefined();
       // A refusal for the requester, not a fault to report.
       expect(reportErrorMock).not.toHaveBeenCalled();
     });
   }
+
+  // Integrator D2: the database holds a line to 10,000 units on this path
+  // too. The route's own total cap (10,000 per request) refuses first; if the
+  // database's refusal is ever reached it is the same 400, never a 500.
+  it('a request over 10,000 units of one item is refused before anything is written', async () => {
+    const stub = wire({ viaLink: true, rows: [book(BOOK_A)] });
+    const res = await POST(
+      request([
+        { itemId: BOOK_A, quantity: 6_000 },
+        { itemId: BOOK_A, quantity: 4_001 },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('too_many_units');
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('insert_order_request_with_lines');
+  });
+
+  it("the database's line-ceiling refusal is the route's own 400, not reported", async () => {
+    wire({
+      viaLink: true,
+      rows: [book(BOOK_A)],
+      lineError: { message: 'order_lines_invalid', code: '22023', hint: 'order_lines_invalid', details: 'quantity' },
+    });
+    const res = await POST(request([{ itemId: BOOK_A, quantity: 1 }]));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'too_many_units',
+      message: 'Total quantity exceeds 10,000 units per request.',
+    });
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
 
   it('any other line failure is still the 500 it was, reported', async () => {
     wire({
@@ -190,9 +225,11 @@ describe('POST /api/v1/public/order-requests and items hidden from ordering', ()
       ]),
     );
     expect(res.status).toBe(200);
-    const payload = stub.chainArgsAll.get('order_request_lines.insert')?.[0]?.[0]?.[0] as Array<{
-      item_id: string;
-    }>;
+    const payload = (
+      stub.rpcCalls.find((c) => c.name === 'insert_order_request_with_lines')?.args as {
+        p_lines: Array<{ item_id: string }>;
+      }
+    ).p_lines;
     expect(payload.map((l) => l.item_id)).toEqual([BOOK_A, BOOK_B]);
   });
 });
