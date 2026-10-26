@@ -55,12 +55,6 @@ const MOBILE_SRC = path.resolve(WEB_SRC, '../../mobile/src');
  */
 const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: string }> = [
   {
-    name: 'setOrderCatalogVisibilityAction',
-    file: 'order-catalog-visibility.ts',
-    reason:
-      'Ordering visibility (0413): the service and action land in step 2b; the Manage order items page that calls it lands in step 3a, which removes this entry.',
-  },
-  {
     name: 'createProcedureCategoryAction',
     file: 'procedures.ts',
     reason: 'SP-120 orphan; procedures.ts is outside this change — delete or wire it.',
