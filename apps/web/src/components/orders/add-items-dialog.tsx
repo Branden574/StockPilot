@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { isPickingSettled } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { cn, formatNumber } from '@/lib/utils';
 import { addOrderRequestLinesAction } from '@/server/actions/order-requests';
 
@@ -372,11 +374,27 @@ function AddItemsBody({
 
   async function submit() {
     setPending(true);
-    const res = await addOrderRequestLinesAction({
-      id: orderId,
-      lines: entries.map((p) => ({ itemId: p.row.id, quantity: p.qty })),
-    });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof addOrderRequestLinesAction>>;
+    try {
+      res = await addOrderRequestLinesAction({
+        id: orderId,
+        lines: entries.map((p) => ({ itemId: p.row.id, quantity: p.qty })),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy): the add may have been
+      // saved. The same picks sent again would add an item already on the
+      // order a second time, so they go, as for a refusal that can never
+      // take them, and the order is read again.
+      toast.error(requestUnconfirmedMessage('the items were added', 'the order'));
+      setPicks({});
+      onClose();
+      router.refresh();
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       if (addLinesRefusalIsTerminal(res.error)) {

@@ -14,6 +14,8 @@ import { announceHoldTopUp } from '@/components/orders/hold-top-up-toast';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { formatNumber } from '@/lib/utils';
 import {
   removeOrderRequestLineAction,
@@ -255,11 +257,7 @@ export function OrderLineActions({
             disabled={saving || unchanged || blocked != null}
             onClick={requestSave}
           >
-            {saving ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
           </Button>
           <Button
             type="button"
@@ -517,10 +515,10 @@ function RemoveLineConfirm({
       title="Remove this item?"
       description={
         <>
-          <span className="text-foreground font-medium">{itemName}</span> comes off this
-          order, along with the {formatNumber(quantityRequested)} requested. Nothing has
-          been picked or handed over for it, so no stock moves — any stock this order
-          was holding for it goes back to available.
+          <span className="text-foreground font-medium">{itemName}</span> comes off this order,
+          along with the {formatNumber(quantityRequested)} requested. Nothing has been picked or
+          handed over for it, so no stock moves — any stock this order was holding for it goes back
+          to available.
         </>
       }
       confirmLabel="Remove item"
@@ -541,11 +539,21 @@ async function commitLineQuantity(input: {
   itemName: string;
   quantity: number;
 }): Promise<boolean> {
-  const res = await updateOrderRequestLineQuantityAction({
-    id: input.orderId,
-    lineId: input.lineId,
-    quantity: input.quantity,
-  });
+  let res: Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>;
+  try {
+    res = await updateOrderRequestLineQuantityAction({
+      id: input.orderId,
+      lineId: input.lineId,
+      quantity: input.quantity,
+    });
+  } catch (e) {
+    // A redirect (the session ended): the router is already navigating.
+    if (isControlFlow(e)) return false;
+    // No answer (offline, a server error, a deploy). Setting a quantity is
+    // safe to send again; the editor stays open with the typed number.
+    toast.error(requestFailedMessage(`change the quantity of ${input.itemName}`));
+    return false;
+  }
   if (!res.ok) {
     toast.error(res.error.message);
     return false;
@@ -564,7 +572,15 @@ async function commitLineRemoval(input: {
   lineId: string;
   itemName: string;
 }): Promise<boolean> {
-  const res = await removeOrderRequestLineAction({ id: input.orderId, lineId: input.lineId });
+  let res: Awaited<ReturnType<typeof removeOrderRequestLineAction>>;
+  try {
+    res = await removeOrderRequestLineAction({ id: input.orderId, lineId: input.lineId });
+  } catch (e) {
+    // A redirect (the session ended): the router is already navigating.
+    if (isControlFlow(e)) return false;
+    toast.error(requestFailedMessage(`remove ${input.itemName}`));
+    return false;
+  }
   if (!res.ok) {
     toast.error(res.error.message);
     return false;
@@ -581,8 +597,7 @@ async function commitLineRemoval(input: {
  */
 function warnIfPickSlipStale(stale: boolean) {
   if (!stale) return;
-  toast.warning(
-    'The printed pick slip is now out of date. Generate it again before picking.',
-    { duration: 8000 },
-  );
+  toast.warning('The printed pick slip is now out of date. Generate it again before picking.', {
+    duration: 8000,
+  });
 }

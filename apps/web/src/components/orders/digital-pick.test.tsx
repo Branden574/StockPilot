@@ -4,9 +4,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OrderReadinessResult } from '@stockpilot/core';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { completePickingAction, recordPickedLineAction } from '@/server/actions/order-requests';
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
-import { orderReadinessFacts, READINESS_FAILED, readinessOk, visibleItemFacts } from '@/test/order-readiness-facts';
+import {
+  orderReadinessFacts,
+  READINESS_FAILED,
+  readinessOk,
+  visibleItemFacts,
+} from '@/test/order-readiness-facts';
+
+import { toast } from 'sonner';
 
 import { DigitalPick } from './digital-pick';
 
@@ -23,7 +33,9 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: routerPush }),
 }));
 vi.mock('next/link', () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
+  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={href}>{children}</a>
+  ),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@/server/actions/order-requests', () => ({
@@ -37,7 +49,12 @@ const record = vi.mocked(recordPickedLineAction);
 
 const ORDER = '11111111-1111-4111-8111-111111111111';
 
-function line(id: string, name: string, requested: number, picked: number | null): OrderRequestLineWithItem {
+function line(
+  id: string,
+  name: string,
+  requested: number,
+  picked: number | null,
+): OrderRequestLineWithItem {
   return {
     id,
     order_request_id: ORDER,
@@ -65,7 +82,10 @@ function line(id: string, name: string, requested: number, picked: number | null
 }
 
 /** SO-000100: the notebooks picked, the pens not at all. */
-const LINES = [line('notebooks', 'Notebook', 60, 60), line('pens', 'L4L - Pen Black & Rose Gold', 60, null)];
+const LINES = [
+  line('notebooks', 'Notebook', 60, 60),
+  line('pens', 'L4L - Pen Black & Rose Gold', 60, null),
+];
 
 /** The order's readiness: notebooks and pens both on the rack and held. */
 const READY: OrderReadinessResult = readinessOk(
@@ -78,7 +98,11 @@ const READY: OrderReadinessResult = readinessOk(
     ],
     [
       visibleItemFacts('item-notebooks', { name: 'Notebook', here: { rack: 60 }, heldOwn: 60 }),
-      visibleItemFacts('item-pens', { name: 'L4L - Pen Black & Rose Gold', here: { rack: 60 }, heldOwn: 60 }),
+      visibleItemFacts('item-pens', {
+        name: 'L4L - Pen Black & Rose Gold',
+        here: { rack: 60 },
+        heldOwn: 60,
+      }),
     ],
   ),
 );
@@ -86,7 +110,13 @@ const READY: OrderReadinessResult = readinessOk(
 function renderPick(readiness: OrderReadinessResult | null = READY, lines = LINES) {
   const user = userEvent.setup();
   const { unmount } = render(
-    <DigitalPick orderId={ORDER} initialLines={lines} canPick assignedPickerName={null} readiness={readiness} />,
+    <DigitalPick
+      orderId={ORDER}
+      initialLines={lines}
+      canPick
+      assignedPickerName={null}
+      readiness={readiness}
+    />,
   );
   return Object.assign(user, { unmount });
 }
@@ -158,15 +188,26 @@ describe('DigitalPick — the confirm before completing a short pick (F2-2)', ()
 
   it('says when the pick would fail because units are still in Staging, even with every line entered', async () => {
     const staged = readinessOk(
-      orderReadinessFacts(ORDER, 'picking_in_progress', [{ lineId: 'pens', itemId: 'item-pens', requested: 10 }], [
-        visibleItemFacts('item-pens', { name: 'Maus I', here: { rack: 6, staging: 4 }, heldOwn: 10 }),
-      ]),
+      orderReadinessFacts(
+        ORDER,
+        'picking_in_progress',
+        [{ lineId: 'pens', itemId: 'item-pens', requested: 10 }],
+        [
+          visibleItemFacts('item-pens', {
+            name: 'Maus I',
+            here: { rack: 6, staging: 4 },
+            heldOwn: 10,
+          }),
+        ],
+      ),
     );
     const user = renderPick(staged, [line('pens', 'Maus I', 10, 10)]);
 
     await user.click(screen.getByRole('button', { name: /Complete picking/ }));
 
-    expect(screen.getByRole('dialog')).toHaveTextContent("Picking can't finish until 4 of Maus I in Staging are put away.");
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      "Picking can't finish until 4 of Maus I in Staging are put away.",
+    );
     expect(complete).not.toHaveBeenCalled();
   });
 });
@@ -276,5 +317,38 @@ describe('DigitalPick — the redesigned card and lock notice (P4.B1)', () => {
       expect(save.className).toMatch(/(^|\s)min-w-\[72px\](\s|$)/);
       expect(save.className).toMatch(/(^|\s)max-sm:h-11(\s|$)/);
     }
+  });
+});
+
+// B40: Save and Complete picking set their busy flags, awaited the action with
+// no catch and cleared them only when it answered. A call that got no answer
+// (offline, a server error, a deploy) left the line's Save or Complete picking
+// spinning for good, with no message.
+describe('DigitalPick when a request gets no answer', () => {
+  it("a line's Save says the picked quantity was not saved, and Save works again", async () => {
+    record.mockRejectedValueOnce(offline());
+    const user = renderPick();
+    const pens = screen.getAllByTestId('digital-pick-line')[1]!;
+    await user.type(
+      within(pens).getByRole('spinbutton', {
+        name: 'Picked quantity for L4L - Pen Black & Rose Gold',
+      }),
+      '60',
+    );
+    await user.click(within(pens).getByRole('button', { name: 'Save' }));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the picked quantity'));
+    expect(within(pens).getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('Complete picking says picking was not completed, stays on the pick and works again', async () => {
+    complete.mockRejectedValueOnce(offline());
+    const user = renderPick();
+    await user.click(screen.getByRole('button', { name: /Complete picking/ }));
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Complete picking' }),
+    );
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('complete picking'));
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Complete picking/ })).toBeEnabled();
   });
 });

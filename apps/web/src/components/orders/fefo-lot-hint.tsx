@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { recordLotPicksAction } from '@/server/actions/lots';
 import type { FefoSuggestion } from '@/server/services/lots';
 
@@ -57,13 +59,25 @@ export function FefoLotHint({
       return;
     }
     setSaving(true);
-    const res = await recordLotPicksAction({
-      orderRequestId: orderId,
-      orderRequestLineId: orderLineId,
-      itemId,
-      picks,
-    });
-    setSaving(false);
+    let res: Awaited<ReturnType<typeof recordLotPicksAction>>;
+    try {
+      res = await recordLotPicksAction({
+        orderRequestId: orderId,
+        orderRequestLineId: orderLineId,
+        itemId,
+        picks,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestUnconfirmedMessage('the lot picks were recorded', "each lot's remaining quantity"),
+      );
+      router.refresh();
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

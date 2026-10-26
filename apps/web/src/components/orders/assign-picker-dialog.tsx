@@ -23,6 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { assignPickingAction } from '@/server/actions/order-requests';
 
 interface Props {
@@ -32,12 +34,7 @@ interface Props {
   trigger: React.ReactNode;
 }
 
-export function AssignPickerDialog({
-  orderId,
-  pickers,
-  currentPickerId,
-  trigger,
-}: Props) {
+export function AssignPickerDialog({ orderId, pickers, currentPickerId, trigger }: Props) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<string>(currentPickerId ?? '');
@@ -49,8 +46,17 @@ export function AssignPickerDialog({
       return;
     }
     setPending(true);
-    const res = await assignPickingAction({ id: orderId, pickerUserId: selected });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof assignPickingAction>>;
+    try {
+      res = await assignPickingAction({ id: orderId, pickerUserId: selected });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('assign the picker'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -70,8 +76,8 @@ export function AssignPickerDialog({
           <DialogHeader>
             <DialogTitle>Assign picker</DialogTitle>
             <DialogDescription>
-              Pick the staff member who&apos;ll pick this order. It&apos;s locked to
-              them until they finish or a manager reassigns it.
+              Pick the staff member who&apos;ll pick this order. It&apos;s locked to them until they
+              finish or a manager reassigns it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

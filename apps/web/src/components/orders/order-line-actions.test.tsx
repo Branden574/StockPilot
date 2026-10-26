@@ -11,6 +11,9 @@ import {
 
 import { SHORT_LINE_FINAL_NOTE, type ShortLineActions } from '@stockpilot/core';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import {
   OrderLineActions,
   quantityBlockedReason,
@@ -681,5 +684,57 @@ describe('line controls keep their touch areas apart', () => {
       />,
     );
     expectApart(screen.getByRole('button', { name: /Lower to 2/ }).parentElement!);
+  });
+});
+
+// B40: the line's Save, Remove and the short-line fixes set their busy flags,
+// awaited the action with no catch and cleared them only when it answered. A
+// change that got no answer (offline, a server error, a deploy) left the
+// control spinning, and the remove confirm stuck open, with no message.
+describe('OrderLineActions and ShortLineFixes when a change gets no answer', () => {
+  it('Save says the quantity was not changed and keeps the editor open with the typed number', async () => {
+    updateLine.mockRejectedValueOnce(offline());
+    const user = renderRow();
+    const field = await openEditor(user);
+    await user.clear(field);
+    await user.type(field, '9');
+    await user.click(screen.getByRole('button', { name: /save quantity for blue widget/i }));
+    expect(toastMock.error).toHaveBeenCalledWith(
+      requestFailedMessage('change the quantity of Blue widget'),
+    );
+    expect(screen.getByLabelText(/requested quantity for blue widget/i)).toHaveValue(9);
+    expect(screen.getByRole('button', { name: /save quantity for blue widget/i })).toBeEnabled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('Remove says the item was not removed, and Remove item works again', async () => {
+    removeLine.mockRejectedValueOnce(offline());
+    const user = renderRow();
+    await user.click(screen.getByRole('button', { name: /remove blue widget/i }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /remove item/i }));
+    expect(toastMock.error).toHaveBeenCalledWith(requestFailedMessage('remove Blue widget'));
+    expect(screen.getByRole('button', { name: /remove item/i })).toBeEnabled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('a short-line "Lower to N" says the quantity was not changed, and works again', async () => {
+    updateLine.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(
+      <ShortLineFixes
+        orderId="11111111-1111-4111-8111-111111111111"
+        lineId="22222222-2222-4222-8222-222222222222"
+        itemName="Blue widget"
+        quantityRequested={60}
+        fixes={{ actions: [{ kind: 'lower', quantity: 30, label: 'Lower to 30' }], note: null }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Lower to 30: Blue widget' }));
+    expect(toastMock.error).toHaveBeenCalledWith(
+      requestFailedMessage('change the quantity of Blue widget'),
+    );
+    expect(screen.getByRole('button', { name: 'Lower to 30: Blue widget' })).toBeEnabled();
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 });

@@ -2,13 +2,16 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import type { FefoSuggestion } from '@/server/services/lots';
+import { offline } from '@/test/rejected-request';
 
 // Redesign P4.B1: the earliest-expiry hint inside a pick row keeps its words
 // (lot, expiry date or "no date", "avail N"), its empty sentence and its one
 // commit, and each lot's quantity field now has a name of its own.
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/server/actions/lots', () => ({
   recordLotPicksAction: vi.fn(async () => ({ ok: true, data: null })),
@@ -87,5 +90,26 @@ describe('FefoLotHint — the redesigned lot sub-panel (P4.B1)', () => {
       itemId: 'item-1',
       picks: [{ lotNumber: 'L-B', qty: 3, expirationDate: '2026-11-01' }],
     });
+  });
+});
+
+// B40: Record picked lots set `saving`, awaited the action with no catch and
+// cleared it only when it answered. A record that got no answer (offline, a
+// server error, a deploy) left the button spinning with no message. Each
+// record adds lot pick events, so the same record sent again could count the
+// picks twice: the message says to check first, and the lots are read again.
+describe('FefoLotHint when the record gets no answer', () => {
+  it("says to check each lot's remaining quantity first, and Record works again", async () => {
+    vi.mocked(recordLotPicksAction).mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderHint([lot('L-A')]);
+    await user.type(screen.getByRole('spinbutton', { name: 'Picked quantity from lot L-A' }), '2');
+    await user.click(screen.getByRole('button', { name: 'Record picked lots' }));
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      requestUnconfirmedMessage('the lot picks were recorded', "each lot's remaining quantity"),
+    );
+    expect(refresh).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Record picked lots' })).toBeEnabled();
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
   });
 });
