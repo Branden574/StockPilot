@@ -273,6 +273,11 @@ function RootGate() {
         <Stack.Screen name="order/new/browse" options={{ presentation: 'card' }} />
         <Stack.Screen name="order/new/checkout" options={{ presentation: 'card' }} />
         <Stack.Screen name="order/new/placed" options={{ presentation: 'card', gestureEnabled: false }} />
+        {/* Manage order items (ordering visibility, 0413): a native screen,
+            static beside order/[id] so /order/manage-items never reaches it
+            with id "manage-items". Opened from the Orders list and from the
+            storefront's top bar. */}
+        <Stack.Screen name="order/manage-items" options={{ presentation: 'card' }} />
         <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
         <Stack.Screen name="cycle-count/scan/[id]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />

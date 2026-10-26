@@ -27,6 +27,7 @@ import {
   KIT_ADD_COPY,
   KITS_ROW_SUB_COPY,
   KITS_TITLE_COPY,
+  ORDER_ITEMS_MANAGE_BUTTON_COPY,
   STOREFRONT_ADD_COPY,
   STOREFRONT_ALL_ITEMS_COPY,
   STOREFRONT_BACK_COPY,
@@ -411,9 +412,24 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           all: STOREFRONT_ALL_ITEMS_COPY,
         });
 
+  // Manage order items (ordering visibility, 0413; design 8.1): on the
+  // storefront's home, only when the FRESH storefront answer says exactly
+  // true (the capability, the Orders module and the rollout switch, decided
+  // by the server); hidden while that answer loads.
+  const canManageItems =
+    target === null && snap?.setup.status === 'ready' && snap.setup.answer.viewer.canManageOrderItems === true;
   const topBar = (
     <View style={styles.topbar}>
       <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={STOREFRONT_BACK_COPY} minTap />
+      {canManageItems ? (
+        <View style={styles.topbarEnd}>
+          <SmallAction
+            label={ORDER_ITEMS_MANAGE_BUTTON_COPY}
+            variant="ghost"
+            onPress={() => router.push('/order/manage-items' as Href)}
+          />
+        </View>
+      ) : null}
     </View>
   );
   // Past the row threshold the title scrolls with the list, so the search and
@@ -813,6 +829,7 @@ const INPUT_CAP = capTo(15, TYPE_CEILING.input);
 
 const styles = StyleSheet.create({
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
+  topbarEnd: { flex: 1, alignItems: 'flex-end', paddingRight: 11 },
   search: {
     flex: 1,
     minHeight: MIN_TAP,
