@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { parseNotificationLink } from './notification-link';
 import { rewriteWebPath } from './web-path-rewrite';
 
 /**
@@ -116,25 +117,36 @@ describe('an older bundle (the frozen pre-RX-1 table)', () => {
   });
 });
 
+/** Source with comments removed: a comment may name what the code may not do. */
+const codeOnly = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
 // ── How a push link reaches the router (desk check F5) ─────────────────────
 // The dual link must not dead-end on an older bundle on a cold start either.
 // Two facts make that hold, and both are pinned here:
-//   1. A push tap is rewritten in JS by the RUNNING bundle's table before it
-//      is opened (use-push-notifications.ts), so the router is handed a
-//      native path (an older bundle: /order/<original>), never the raw web
-//      path, warm or cold.
+//   1. A push tap is parsed with the RUNNING bundle's table and navigated
+//      inside the app; no URL is opened (notification-link.ts, then the
+//      notification host). The router is handed a native path, never the raw
+//      web path, warm or cold. (An older bundle still runs its own tap
+//      handler, which rewrote with ITS table: /order/<original>.)
 //   2. A raw URL that does reach the router as the initial URL goes through
 //      +native-intent's redirectSystemPath on this expo-router (57.x, the
 //      published bundle's version): getLinkingConfig passes the initial URL
 //      through it with initial: true. If an upgrade drops that, this fails
 //      and the cold-start shims become the only door again.
 describe('a push link reaches the router already rewritten (desk check F5)', () => {
-  it('the tap handler rewrites with the running bundle\'s table, then opens the native path', () => {
-    const src = readFileSync(path.join(__dirname, 'use-push-notifications.ts'), 'utf8');
-    const rewriteAt = src.indexOf('const native = rewriteWebPath(link);');
-    const openAt = src.indexOf("Linking.openURL(`stockpilot://${native.replace(/^\\//, '')}`)");
-    expect(rewriteAt).toBeGreaterThan(0);
-    expect(openAt).toBeGreaterThan(rewriteAt);
+  // Replaced on purpose 2026-10-12 (Phase 3, iPhone push tap). This pinned
+  // `const native = rewriteWebPath(link);` and the
+  // Linking.openURL(`stockpilot://...`) round trip in use-push-notifications.ts.
+  // That listener is gone: notification-intent.ts captures the tap and
+  // notification-link.ts parses it with this bundle's table, so the dual link
+  // still opens the RMA, inside the app, with no Safari or URL hop.
+  it("a push tap is parsed with the running bundle's table and opened inside the app, never as a URL", () => {
+    const parser = readFileSync(path.join(__dirname, 'notification-link.ts'), 'utf8');
+    expect(parser).toMatch(/import \{[^}]*\brewriteWebPath\b[^}]*\} from '\.\/web-path-rewrite';/);
+    const hook = codeOnly(readFileSync(path.join(__dirname, 'use-push-notifications.ts'), 'utf8'));
+    expect(hook).not.toContain('Linking.openURL');
+    expect(hook).not.toContain('addNotificationResponseReceivedListener');
+    expect(parseNotificationLink(DUAL)).toMatchObject({ ok: true, native: `/returns/${RMA}` });
   });
   it('+native-intent rewrites every incoming path, and this expo-router sends it the initial URL too', () => {
     const intent = readFileSync(path.join(__dirname, '..', '..', 'app', '+native-intent.ts'), 'utf8');

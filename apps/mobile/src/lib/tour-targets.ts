@@ -116,6 +116,37 @@ export function subscribeTourVisibility(fn: () => void): () => void {
 }
 
 /* ------------------------------------------------------------------ */
+/* The tapped notification's notice (notification-intent-host.tsx)      */
+/* is a full member of this lock. It waits for any tour on screen       */
+/* before it first shows, then keeps the slot until it closes: What's   */
+/* New waits for it (isAnyTourVisible above), and a tour's Modal yields */
+/* to it as it does to What's New. iOS refuses to present a sheet while */
+/* another is on screen, and React Native never asks again, so two      */
+/* interruptions presented together leave one of them never seen.       */
+/* ------------------------------------------------------------------ */
+
+export const NOTIFICATION_NOTICE_LOCK_ID = 'notification-notice';
+
+/** True while any holder but `id` is in the lock (a tour's offer or run). */
+export function isAnyTourVisibleExcept(id: string): boolean {
+  for (const held of visibleTours) if (held !== id) return true;
+  return false;
+}
+
+/** Reactive isAnyTourVisibleExcept. */
+export function useAnyTourVisibleExcept(id: string): boolean {
+  const read = React.useCallback(() => isAnyTourVisibleExcept(id), [id]);
+  return React.useSyncExternalStore(subscribeTourVisibility, read);
+}
+
+const noticeHoldsSlot = () => visibleTours.has(NOTIFICATION_NOTICE_LOCK_ID);
+
+/** Reactive: true while the notification notice holds the interruption slot. */
+export function useNotificationNoticeOpen(): boolean {
+  return React.useSyncExternalStore(subscribeTourVisibility, noticeHoldsSlot);
+}
+
+/* ------------------------------------------------------------------ */
 /* What's New ↔ tour MUTUAL LOCK. isAnyTourVisible (above) lets What's  */
 /* New defer to a tour; this lets a tour defer to What's New — so       */
 /* whichever presents first holds the one interruption slot and the     */

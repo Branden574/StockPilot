@@ -6570,8 +6570,16 @@ describe('the small fixes release (slice 1) is published', () => {
   // replaced in the app, say how to load it.
   it('says every phone change after the latest update, and how to load it', () => {
     const ota = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/use-ota-updates.ts'), 'utf8');
-    expect(ota).toContain('await Updates.checkForUpdateAsync();');
-    expect(ota).toContain('await Updates.reloadAsync();');
+    // 2026-10-24 (iPhone push tap, #371): the launch check moved into the
+    // injectable runStartupUpdate, which still checks, fetches and reloads on
+    // a cold launch. A launch from a tapped notification keeps the fetched
+    // update for the next launch, so closing the app completely and opening
+    // it again still loads it. Was: 'await Updates.checkForUpdateAsync();'
+    // and 'await Updates.reloadAsync();' in the hook itself.
+    expect(ota).toContain('checkForUpdateAsync: () => Updates.checkForUpdateAsync(),');
+    expect(ota).toContain('reloadAsync: () => Updates.reloadAsync(),');
+    expect(ota).toContain('await deps.checkForUpdateAsync();');
+    expect(ota).toContain('await deps.reloadAsync();');
     expect(release().summary).toContain('In the mobile app, after the latest update, you can cancel');
     expect(entry('duplicate-item-photos-kept').whatChanged).toContain(
       'or replacing it in the mobile app after the latest update',
@@ -8013,8 +8021,16 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
   // change is refused, so the summary says changes are refused in plain words.
   it('says every phone change after the latest update, and how to load it', () => {
     const ota = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/use-ota-updates.ts'), 'utf8');
-    expect(ota).toContain('await Updates.checkForUpdateAsync();');
-    expect(ota).toContain('await Updates.reloadAsync();');
+    // 2026-10-24 (iPhone push tap, #371): the launch check moved into the
+    // injectable runStartupUpdate, which still checks, fetches and reloads on
+    // a cold launch. A launch from a tapped notification keeps the fetched
+    // update for the next launch, so closing the app completely and opening
+    // it again still loads it. Was: 'await Updates.checkForUpdateAsync();'
+    // and 'await Updates.reloadAsync();' in the hook itself.
+    expect(ota).toContain('checkForUpdateAsync: () => Updates.checkForUpdateAsync(),');
+    expect(ota).toContain('reloadAsync: () => Updates.reloadAsync(),');
+    expect(ota).toContain('await deps.checkForUpdateAsync();');
+    expect(ota).toContain('await deps.reloadAsync();');
     // Re-pinned by the claims review (2026-10-06; was: "On the web now, and
     // in the mobile app after the latest update, Approve and other changes
     // ... and receiving is offered only to people who can receive stock."):
