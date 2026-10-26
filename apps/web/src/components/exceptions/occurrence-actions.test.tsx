@@ -30,6 +30,9 @@ vi.mock('@/server/actions/exceptions', () => ({
 
 import type { CountConfirmBlock } from '@stockpilot/core';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { ConfirmCountProvider } from './confirm-count-dialog';
 import { OccurrenceActions } from './occurrence-actions';
 
@@ -60,7 +63,9 @@ describe('OccurrenceActions', () => {
   });
 
   it('a failure shows inline, and the retry reuses the same client event id', async () => {
-    actOnExceptionAction.mockResolvedValueOnce({ error: { message: 'Could not save.', reason: null } });
+    actOnExceptionAction.mockResolvedValueOnce({
+      error: { message: 'Could not save.', reason: null },
+    });
     render(<OccurrenceActions occurrenceId={ID} acknowledged={false} />);
     await click('Acknowledge');
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save.');
@@ -78,29 +83,45 @@ describe('OccurrenceActions', () => {
     // types a note and presses Acknowledge again: that must not be sent as
     // a replay of the note-less request, or the server answers "ok" and the
     // note is never stored. Mutation caught: one id for every attempt.
-    actOnExceptionAction.mockResolvedValueOnce({ error: { message: 'Something went wrong.', reason: null } });
+    actOnExceptionAction.mockResolvedValueOnce({
+      error: { message: 'Something went wrong.', reason: null },
+    });
     render(<OccurrenceActions occurrenceId={ID} acknowledged={false} />);
     await click('Acknowledge');
     fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'checking rack 17' } });
-    actOnExceptionAction.mockResolvedValueOnce({ error: { message: 'Something went wrong.', reason: null } });
+    actOnExceptionAction.mockResolvedValueOnce({
+      error: { message: 'Something went wrong.', reason: null },
+    });
     await click('Acknowledge');
     actOnExceptionAction.mockResolvedValueOnce({ ok: true });
     await click('Add note');
-    const ids = actOnExceptionAction.mock.calls.map((c) => (c[1] as { clientEventId: string }).clientEventId);
+    const ids = actOnExceptionAction.mock.calls.map(
+      (c) => (c[1] as { clientEventId: string }).clientEventId,
+    );
     expect(new Set(ids).size).toBe(3);
-    expect(actOnExceptionAction.mock.calls[1]![1]).toMatchObject({ action: 'acknowledge', note: 'checking rack 17' });
+    expect(actOnExceptionAction.mock.calls[1]![1]).toMatchObject({
+      action: 'acknowledge',
+      note: 'checking rack 17',
+    });
   });
 
   it('a conflict answer drops the id, so pressing again sends a fresh request', async () => {
     actOnExceptionAction.mockResolvedValueOnce({
-      error: { message: 'This could not be saved as sent. Please try again.', reason: 'client_event_id_conflict' },
+      error: {
+        message: 'This could not be saved as sent. Please try again.',
+        reason: 'client_event_id_conflict',
+      },
     });
     render(<OccurrenceActions occurrenceId={ID} acknowledged={false} />);
     await click('Acknowledge');
-    expect(screen.getByRole('alert')).toHaveTextContent('This could not be saved as sent. Please try again.');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This could not be saved as sent. Please try again.',
+    );
     actOnExceptionAction.mockResolvedValueOnce({ ok: true });
     await click('Acknowledge');
-    const [a, b] = actOnExceptionAction.mock.calls.map((c) => (c[1] as { clientEventId: string }).clientEventId);
+    const [a, b] = actOnExceptionAction.mock.calls.map(
+      (c) => (c[1] as { clientEventId: string }).clientEventId,
+    );
     expect(b).not.toBe(a);
   });
 
@@ -158,8 +179,20 @@ describe('OccurrenceActions', () => {
   }
 
   it('on a count difference the page offers Confirm for, Confirm this count instead carries the typed note into the dialog', async () => {
-    confirmExceptionCountAction.mockResolvedValue({ ok: true, replay: false, reference: 'EX-000059' });
-    onPage(<OccurrenceActions occurrenceId={ID} acknowledged={false} rule="count_variance" ackHelp="help" />, true);
+    confirmExceptionCountAction.mockResolvedValue({
+      ok: true,
+      replay: false,
+      reference: 'EX-000059',
+    });
+    onPage(
+      <OccurrenceActions
+        occurrenceId={ID}
+        acknowledged={false}
+        rule="count_variance"
+        ackHelp="help"
+      />,
+      true,
+    );
     fireEvent.change(screen.getByLabelText(/Note \(optional when acknowledging\)/), {
       target: { value: 'Items recounted' },
     });
@@ -178,16 +211,33 @@ describe('OccurrenceActions', () => {
 
   it('is not offered where the page does not offer Confirm, on another rule, or once acknowledged', () => {
     const { unmount } = onPage(
-      <OccurrenceActions occurrenceId={ID} acknowledged={false} rule="count_variance" ackHelp="help" />,
+      <OccurrenceActions
+        occurrenceId={ID}
+        acknowledged={false}
+        rule="count_variance"
+        ackHelp="help"
+      />,
       false,
     );
-    expect(screen.queryByRole('button', { name: 'Confirm this count instead' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Confirm this count instead' }),
+    ).not.toBeInTheDocument();
     unmount();
-    const other = onPage(<OccurrenceActions occurrenceId={ID} acknowledged={false} rule="over_reserved" />, true);
-    expect(screen.queryByRole('button', { name: 'Confirm this count instead' })).not.toBeInTheDocument();
+    const other = onPage(
+      <OccurrenceActions occurrenceId={ID} acknowledged={false} rule="over_reserved" />,
+      true,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Confirm this count instead' }),
+    ).not.toBeInTheDocument();
     other.unmount();
-    onPage(<OccurrenceActions occurrenceId={ID} acknowledged rule="count_variance" ackHelp="help" />, true);
-    expect(screen.queryByRole('button', { name: 'Confirm this count instead' })).not.toBeInTheDocument();
+    onPage(
+      <OccurrenceActions occurrenceId={ID} acknowledged rule="count_variance" ackHelp="help" />,
+      true,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Confirm this count instead' }),
+    ).not.toBeInTheDocument();
   });
 
   it('refuses a note over 1,000 characters before sending it', () => {
@@ -195,5 +245,37 @@ describe('OccurrenceActions', () => {
     fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'x'.repeat(1001) } });
     expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Add note' })).toBeDisabled();
+  });
+});
+
+// B40: Acknowledge and Add note set `pending`, awaited the action with no catch
+// and cleared it only when it answered. A call that got no answer (offline, a
+// server error, a deploy) left both buttons disabled with nothing said.
+describe('OccurrenceActions when the request gets no answer', () => {
+  it('says the exception was not acknowledged, and the retry reuses the same client event id', async () => {
+    actOnExceptionAction.mockRejectedValueOnce(offline());
+    render(<OccurrenceActions occurrenceId={ID} acknowledged={false} />);
+    await click('Acknowledge');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      requestFailedMessage('acknowledge the exception'),
+    );
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
+    actOnExceptionAction.mockResolvedValueOnce({ ok: true });
+    await click('Acknowledge');
+    const [first, second] = actOnExceptionAction.mock.calls.map(
+      (c) => (c[1] as { clientEventId: string }).clientEventId,
+    );
+    expect(second).toBe(first);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the note was not added and keeps it', async () => {
+    actOnExceptionAction.mockRejectedValueOnce(offline());
+    render(<OccurrenceActions occurrenceId={ID} acknowledged />);
+    fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'moved to rack 4' } });
+    await click('Add note');
+    expect(screen.getByRole('alert')).toHaveTextContent(requestFailedMessage('add the note'));
+    expect(screen.getByLabelText(/Note/)).toHaveValue('moved to rack 4');
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeEnabled();
   });
 });

@@ -46,6 +46,8 @@ import {
   updateLocationAction,
 } from '@/server/actions/locations';
 import { useRouter } from 'next/navigation';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 interface LocationRow {
   id: string;
@@ -169,8 +171,19 @@ export function LocationsManager({
     const acknowledgeStock = archiveRefusal?.holdsStock === true;
     setArchiveRefusal(null);
     setArchiveBusy(true);
-    const res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveLocationAction>>;
+    try {
+      res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('archive the location');
+      setArchiveRefusal({ message, holdsStock: false });
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       // The guard's own words, verbatim: they name the units and the items,
       // which is precisely what the decision turns on. Not a toast as well,
@@ -193,8 +206,19 @@ export function LocationsManager({
     if (!restoreTarget) return;
     setRestoreError(null);
     setRestoreBusy(true);
-    const res = await restoreLocationAction(restoreTarget.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreLocationAction>>;
+    try {
+      res = await restoreLocationAction(restoreTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('restore the location');
+      setRestoreError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setRestoreError(res.error.message);
       toast.error(res.error.message);

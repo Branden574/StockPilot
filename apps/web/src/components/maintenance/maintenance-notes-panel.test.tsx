@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { hydrateAcrossClockShift } from '@/test/hydration';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -21,7 +23,12 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 import { MaintenanceNotesPanel, type MaintenanceNoteRow } from './maintenance-notes-panel';
 
 const NOTES: MaintenanceNoteRow[] = [
-  { id: 'n1', authorUserId: 'u-1', body: 'Ordered a replacement filter.', createdAt: '2026-08-01T12:00:00Z' },
+  {
+    id: 'n1',
+    authorUserId: 'u-1',
+    body: 'Ordered a replacement filter.',
+    createdAt: '2026-08-01T12:00:00Z',
+  },
 ];
 
 // Brief section 20's forbidden vocabulary + the specific phrase named in
@@ -103,7 +110,13 @@ describe('MaintenanceNotesPanel', () => {
 
   it('falls back to a generic author label when the note author is not in authorNames', () => {
     render(
-      <MaintenanceNotesPanel requestId="r1" canManage notes={NOTES} authorNames={{}} truncated={false} />,
+      <MaintenanceNotesPanel
+        requestId="r1"
+        canManage
+        notes={NOTES}
+        authorNames={{}}
+        truncated={false}
+      />,
     );
     expect(screen.getByText(/^StockPilot coordinator ·/)).toBeInTheDocument();
   });
@@ -163,5 +176,32 @@ describe('redesign structure (P4.F3)', () => {
       (_c, el) => el?.textContent === 'Line one\nLine two' && el.tagName === 'P',
     );
     expect(body).toHaveClass('whitespace-pre-wrap');
+  });
+});
+
+// B40: a note that got no answer (offline, a server error, a deploy) left Add
+// note spinning with nothing said. The note may have been saved before the
+// answer was lost, so the message says to look before adding it again.
+describe('MaintenanceNotesPanel when the note gets no answer', () => {
+  it('says to check the notes before trying again, keeps the text, and Add note works again', async () => {
+    addNote.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(
+      <MaintenanceNotesPanel
+        requestId="r1"
+        canManage
+        notes={NOTES}
+        authorNames={{ 'u-1': 'Jane Smith' }}
+        truncated={false}
+      />,
+    );
+    await user.type(screen.getByLabelText('New internal note'), 'Called the vendor for an ETA.');
+    await user.click(screen.getByRole('button', { name: 'Add note' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      requestUnconfirmedMessage('the note was added', "the request's notes"),
+    );
+    expect(screen.getByLabelText('New internal note')).toHaveValue('Called the vendor for an ETA.');
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeEnabled();
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 });

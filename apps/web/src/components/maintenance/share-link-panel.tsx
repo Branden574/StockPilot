@@ -15,6 +15,8 @@ import {
 } from '@/server/actions/maintenance-requests';
 
 import { useMaintenanceShareLink } from './share-link-context';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 export interface MaintenanceShareLinkStatus {
   expiresAt: string;
@@ -89,8 +91,17 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
   async function generate() {
     setGenerating(true);
-    const res = await issueMaintenanceShareLinkAction(requestId);
-    setGenerating(false);
+    let res: Awaited<ReturnType<typeof issueMaintenanceShareLinkAction>>;
+    try {
+      res = await issueMaintenanceShareLinkAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('create the share link'));
+      return;
+    } finally {
+      setGenerating(false);
+    }
     if ('error' in res) {
       toast.error(res.error.message);
       return;
@@ -114,8 +125,18 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
   async function revoke() {
     setRevoking(true);
-    const res = await revokeMaintenanceShareLinkAction(requestId);
-    setRevoking(false);
+    let res: Awaited<ReturnType<typeof revokeMaintenanceShareLinkAction>>;
+    try {
+      res = await revokeMaintenanceShareLinkAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setConfirmOpen(false);
+      toast.error(requestFailedMessage('revoke the share link'));
+      return;
+    } finally {
+      setRevoking(false);
+    }
     setConfirmOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);
@@ -138,19 +159,19 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
       bodyClassName="space-y-2.5"
     >
       <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
-        Grants photo access to this request for about 180 days, without a StockPilot account. Revocable at
-        any time.
+        Grants photo access to this request for about 180 days, without a StockPilot account.
+        Revocable at any time.
       </p>
 
       {generatedUrl ? (
         <p className="text-foreground text-[12.5px] font-medium leading-[18.75px]">
-          Link generated — copy it now. For security it is shown only this once; generating again replaces
-          it.
+          Link generated — copy it now. For security it is shown only this once; generating again
+          replaces it.
         </p>
       ) : hasActiveLink ? (
         <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
-          An active share link exists. Its URL is not stored and cannot be shown again — generate a new
-          link to get a copyable URL (the current one stops working).
+          An active share link exists. Its URL is not stored and cannot be shown again — generate a
+          new link to get a copyable URL (the current one stops working).
         </p>
       ) : (
         <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
@@ -169,7 +190,13 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
             {copied ? 'Copied' : 'Copy URL'}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" size="sm" disabled={generating} onClick={() => void generate()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={generating}
+          onClick={() => void generate()}
+        >
           {generating ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : hasActiveLink ? (

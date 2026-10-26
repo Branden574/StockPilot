@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 // Read-only rendering contract (auditor visibility): a visitor holding
 // cycle_counts:read but NOT stock:adjust gets canAdjust=false, which must
@@ -27,6 +31,7 @@ vi.mock('@/server/actions/cycle-counts', () => ({
 import { toast } from 'sonner';
 
 import {
+  assignCycleCountAction,
   cancelCycleCountAction,
   clearCycleCountLineAction,
   postCycleCountAction,
@@ -100,9 +105,7 @@ describe('CycleCountDetail read-only mode (canAdjust=false)', () => {
     expect(screen.getByText('Widget')).toBeInTheDocument();
     expect(screen.getByText('Gadget')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    expect(
-      screen.getByText(/view-only access to this count/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/view-only access to this count/i)).toBeInTheDocument();
   });
 
   it('defaults to read-only when canAdjust is omitted (fail closed)', () => {
@@ -145,7 +148,9 @@ describe('CycleCountDetail: who sees Post and Cancel', () => {
     render(<CycleCountDetail {...baseProps} canAdjust canAssign={false} role="staff" />);
     expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
-    expect(screen.getByTestId('manager-posts')).toHaveTextContent('A manager reviews and posts this count.');
+    expect(screen.getByTestId('manager-posts')).toHaveTextContent(
+      'A manager reviews and posts this count.',
+    );
     // They can still count.
     expect(screen.getAllByPlaceholderText('—')).toHaveLength(2);
   });
@@ -712,5 +717,111 @@ describe('CycleCountDetail: the count on a phone', () => {
       'Expected 5 · Variance -1',
     );
     expect(screen.queryByPlaceholderText('—')).not.toBeInTheDocument();
+  });
+});
+
+// B40: each of these set a busy flag, awaited the action with no catch and
+// cleared the flag only when it answered. A call that got no answer (offline,
+// a server error, a deploy) left the line, the dialog or the assignee picker
+// spinning with nothing said, and a typed count looked saved when it was not.
+describe('CycleCountDetail when a request gets no answer', () => {
+  beforeAll(() => {
+    // Radix Select needs pointer-capture APIs happy-dom doesn't implement.
+    Element.prototype.hasPointerCapture ??= () => false;
+    Element.prototype.setPointerCapture ??= () => {};
+    Element.prototype.releasePointerCapture ??= () => {};
+    Element.prototype.scrollIntoView ??= () => {};
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function rowFor(name: string): HTMLElement {
+    const row = screen.getByText(name).closest('tr');
+    if (!row) throw new Error(`no row for ${name}`);
+    return row as HTMLElement;
+  }
+
+  it('a count box puts the saved value back and says the quantity was not saved', async () => {
+    vi.mocked(recordCycleCountLineAction).mockRejectedValueOnce(offline());
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+    const row = rowFor('Gadget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage('save the counted quantity'),
+      ),
+    );
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the counted quantity'));
+    expect(input.value).toBe('');
+    expect(input).toBeEnabled();
+  });
+
+  it('emptying a box puts the saved count back and says it was not cleared', async () => {
+    vi.mocked(clearCycleCountLineAction).mockRejectedValueOnce(offline());
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+    const row = rowFor('Widget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(within(row).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage('clear the counted quantity'),
+      ),
+    );
+    expect(input.value).toBe('4');
+  });
+
+  it('Post adjustments says the count was not posted, inside the dialog, and works again', async () => {
+    vi.mocked(postCycleCountAction).mockRejectedValueOnce(offline());
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review & post' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Post this count?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post adjustments' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage('post the count'),
+      ),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Post adjustments' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('Cancel count says the count was not cancelled, inside the confirmation, and works again', async () => {
+    vi.mocked(cancelCycleCountAction).mockRejectedValueOnce(offline());
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel count' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cancel this cycle count?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel count' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage('cancel the count'),
+      ),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Cancel count' })).toBeEnabled();
+  });
+
+  it('the assignee picker says the count was not assigned and can be used again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(assignCycleCountAction).mockRejectedValueOnce(offline());
+    render(
+      <CycleCountDetail
+        {...baseProps}
+        canAdjust
+        canAssign
+        role="manager"
+        members={[{ id: 'u-2', name: 'Riley Counter', email: 'riley@example.com' }]}
+      />,
+    );
+    const picker = screen.getByRole('combobox', { name: 'Assigned to:' });
+    await user.click(picker);
+    await user.click(await screen.findByRole('option', { name: 'Riley Counter' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('assign the count')),
+    );
+    expect(picker).toBeEnabled();
   });
 });

@@ -2,6 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { MAINTENANCE_RESOLUTION_NOTE_MAX } from '@stockpilot/core';
 
 // The dialog now calls router.refresh() itself (fix wave Important 2 — it
@@ -86,7 +89,10 @@ describe('ResolveRequestDialog — note requirement (Step 1 test 1)', () => {
     renderDialog();
     const confirm = screen.getByRole('button', { name: 'Mark resolved' });
     expect(confirm).toBeDisabled();
-    await userEvent.type(screen.getByLabelText('Resolution note'), 'Replaced the leaking roof tile.');
+    await userEvent.type(
+      screen.getByLabelText('Resolution note'),
+      'Replaced the leaking roof tile.',
+    );
     expect(confirm).toBeEnabled();
   });
 
@@ -100,7 +106,10 @@ describe('ResolveRequestDialog — note requirement (Step 1 test 1)', () => {
 describe('ResolveRequestDialog — confirm action (Step 1 test 2)', () => {
   it('calls resolveMaintenanceRequestAction(requestId, { note }) — argument object pinned — and fires onResolved + a success toast', async () => {
     const { onResolved, onOpenChange } = renderDialog();
-    await userEvent.type(screen.getByLabelText('Resolution note'), 'Replaced the leaking roof tile.');
+    await userEvent.type(
+      screen.getByLabelText('Resolution note'),
+      'Replaced the leaking roof tile.',
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
 
     await waitFor(() =>
@@ -115,12 +124,19 @@ describe('ResolveRequestDialog — confirm action (Step 1 test 2)', () => {
 
 describe('ResolveRequestDialog — server error handling (Step 1 test 3)', () => {
   it('a ServiceError result toasts the server message, keeps the dialog open, and never fires onResolved', async () => {
-    resolveAction.mockResolvedValueOnce({ error: { message: 'This request is already resolved.' } });
+    resolveAction.mockResolvedValueOnce({
+      error: { message: 'This request is already resolved.' },
+    });
     const { onResolved, onOpenChange } = renderDialog();
-    await userEvent.type(screen.getByLabelText('Resolution note'), 'Replaced the leaking roof tile.');
+    await userEvent.type(
+      screen.getByLabelText('Resolution note'),
+      'Replaced the leaking roof tile.',
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith('This request is already resolved.'));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith('This request is already resolved.'),
+    );
     expect(onResolved).not.toHaveBeenCalled();
     // onOpenChange(false) is how the CALLER would close it; a failed
     // resolve must never invoke that — the dialog stays open, note and any
@@ -192,7 +208,10 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
         }),
     );
     renderDialog();
-    await userEvent.type(screen.getByLabelText('Resolution note'), 'Replaced the leaking roof tile.');
+    await userEvent.type(
+      screen.getByLabelText('Resolution note'),
+      'Replaced the leaking roof tile.',
+    );
     const confirmClick = userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
     // Submitting state (pending=true, both buttons disabled) — sweep here too.
     for (const banned of FORBIDDEN) {
@@ -211,7 +230,9 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     }
 
     // Error state.
-    resolveAction.mockResolvedValueOnce({ error: { message: 'This request is already resolved.' } });
+    resolveAction.mockResolvedValueOnce({
+      error: { message: 'This request is already resolved.' },
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
     for (const banned of FORBIDDEN) {
@@ -232,8 +253,18 @@ describe('ResolveRequestDialog — embedded photos panel (Step 1 test 5)', () =>
 
 describe('ResolveRequestDialog — resolutionPhotos prop-threaded, no fetch (fix wave Important 2)', () => {
   const PHOTOS = [
-    { id: 'proof-1', originalFilename: 'after.jpg', url: 'https://signed/after.jpg', thumbUrl: null },
-    { id: 'proof-2', originalFilename: 'before.jpg', url: 'https://signed/before.jpg', thumbUrl: 'https://signed/before-thumb.jpg' },
+    {
+      id: 'proof-1',
+      originalFilename: 'after.jpg',
+      url: 'https://signed/after.jpg',
+      thumbUrl: null,
+    },
+    {
+      id: 'proof-2',
+      originalFilename: 'before.jpg',
+      url: 'https://signed/before.jpg',
+      thumbUrl: 'https://signed/before-thumb.jpg',
+    },
   ];
 
   it('renders the passed-in resolutionPhotos via MaintenancePhotosPanel — coverage the old fetch-on-open path never had', () => {
@@ -241,7 +272,9 @@ describe('ResolveRequestDialog — resolutionPhotos prop-threaded, no fetch (fix
     expect(screen.getByTestId('photos-panel-stub')).toBeInTheDocument();
     // MUTATION GUARD (b): dropping the prop thread (or always rendering [])
     // fails this — the mock records exactly what the dialog passed down.
-    expect(photosPanelProps).toHaveBeenCalledWith(expect.objectContaining({ photos: PHOTOS, kind: 'resolution' }));
+    expect(photosPanelProps).toHaveBeenCalledWith(
+      expect.objectContaining({ photos: PHOTOS, kind: 'resolution' }),
+    );
   });
 
   it('never calls fetch — loadResolutionPhotos and its GET /api/v1/maintenance-requests/[id] are gone', async () => {
@@ -254,7 +287,8 @@ describe('ResolveRequestDialog — resolutionPhotos prop-threaded, no fetch (fix
 
   it("threads the embedded panel's onChange straight to router.refresh() — the SAME post-upload freshness mechanism the requester photos panel already relies on", () => {
     renderDialog({ resolutionPhotos: PHOTOS });
-    const lastCallProps = photosPanelProps.mock.calls.at(-1)?.[0] as { onChange?: () => void } | undefined;
+    const lastCallProps = photosPanelProps.mock.calls.at(-1)?.[0] as
+      { onChange?: () => void } | undefined;
     expect(typeof lastCallProps?.onChange).toBe('function');
     lastCallProps?.onChange?.();
     expect(routerMocks.refresh).toHaveBeenCalled();
@@ -272,5 +306,27 @@ describe('ResolveRequestDialog — resolution note maxLength cap (fix wave Minor
     expect(MAINTENANCE_RESOLUTION_NOTE_MAX).toBe(2000);
     renderDialog();
     expect(screen.getByLabelText('Resolution note')).toHaveAttribute('maxLength', '2000');
+  });
+});
+
+// B40: a resolve that got no answer (offline, a server error, a deploy) left
+// Mark resolved spinning, and the pending dialog refuses to close, so the page
+// was stuck with nothing said.
+describe('ResolveRequestDialog when the request gets no answer', () => {
+  it('says the request was not resolved, keeps the dialog and the note, and Mark resolved works again', async () => {
+    resolveAction.mockRejectedValueOnce(offline());
+    const { onResolved, onOpenChange } = renderDialog();
+    await userEvent.type(
+      screen.getByLabelText('Resolution note'),
+      'Replaced the leaking roof tile.',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(requestFailedMessage('resolve the request')),
+    );
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByLabelText('Resolution note')).toHaveValue('Replaced the leaking roof tile.');
+    expect(screen.getByRole('button', { name: 'Mark resolved' })).toBeEnabled();
   });
 });

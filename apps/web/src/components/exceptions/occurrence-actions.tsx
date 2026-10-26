@@ -9,6 +9,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { actOnExceptionAction } from '@/server/actions/exceptions';
 
 import { EXCEPTION_ACKNOWLEDGE_HELP, type ExceptionRule } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 const NOTE_MAX = 1000;
 
@@ -89,12 +91,25 @@ export function OccurrenceActions({
     lastAttempt.current = { action, note: payloadNote, id: clientEventId };
     setPending(action);
     setError(null);
-    const res = await actOnExceptionAction(occurrenceId, {
-      action,
-      note: payloadNote,
-      clientEventId,
-    });
-    setPending(null);
+    let res: Awaited<ReturnType<typeof actOnExceptionAction>>;
+    try {
+      res = await actOnExceptionAction(occurrenceId, {
+        action,
+        note: payloadNote,
+        clientEventId,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setError(
+        requestFailedMessage(
+          action === 'acknowledge' ? 'acknowledge the exception' : 'add the note',
+        ),
+      );
+      return;
+    } finally {
+      setPending(null);
+    }
     if ('error' in res) {
       // A conflict means this id already stands for another request: never
       // send it again.

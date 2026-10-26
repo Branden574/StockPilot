@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { createSupportTicketAction } from '@/server/actions/support-tickets';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 
 const CATEGORIES: Array<{ value: string; label: string }> = [
   { value: 'bug', label: "Something's broken" },
@@ -43,17 +45,26 @@ export function SupportForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const res = await createSupportTicketAction({
-      name: name.trim() || undefined,
-      email: email.trim(),
-      category: category as never,
-      priority: priority as never,
-      subject: subject.trim(),
-      message: message.trim(),
-      pageUrl: typeof document !== 'undefined' ? document.referrer || undefined : undefined,
-      company: company || undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createSupportTicketAction>>;
+    try {
+      res = await createSupportTicketAction({
+        name: name.trim() || undefined,
+        email: email.trim(),
+        category: category as never,
+        priority: priority as never,
+        subject: subject.trim(),
+        message: message.trim(),
+        pageUrl: typeof document !== 'undefined' ? document.referrer || undefined : undefined,
+        company: company || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('send your ticket'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

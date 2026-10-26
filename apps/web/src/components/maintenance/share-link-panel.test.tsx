@@ -2,7 +2,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
 import { BROWSER_ZONE, hydrateAcrossClockShift, inZone } from '@/test/hydration';
+import { offline } from '@/test/rejected-request';
 
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -12,11 +14,15 @@ vi.mock('next/navigation', () => ({
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 vi.mock('sonner', () => ({
-  toast: { error: (...a: unknown[]) => toastError(...a), success: (...a: unknown[]) => toastSuccess(...a) },
+  toast: {
+    error: (...a: unknown[]) => toastError(...a),
+    success: (...a: unknown[]) => toastSuccess(...a),
+  },
 }));
 
 type ActionResult = { ok: true } | { error: { message: string } };
-type IssueResult = ({ ok: true } & { url: string; expiresAt: string }) | { error: { message: string } };
+type IssueResult =
+  ({ ok: true } & { url: string; expiresAt: string }) | { error: { message: string } };
 const revoke = vi.fn(async (..._args: unknown[]): Promise<ActionResult> => ({ ok: true }));
 const issue = vi.fn(async (..._args: unknown[]): Promise<IssueResult> => ({
   ok: true,
@@ -117,7 +123,9 @@ describe('ShareLinkPanel (mig 0330 — show-once)', () => {
   });
 
   it('a failed generate surfaces via toast and never shows a Copy affordance', async () => {
-    issue.mockResolvedValueOnce({ error: { message: 'Missing permission: maintenance_requests:manage' } });
+    issue.mockResolvedValueOnce({
+      error: { message: 'Missing permission: maintenance_requests:manage' },
+    });
     render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
     expect(toastError).toHaveBeenCalledWith('Missing permission: maintenance_requests:manage');
@@ -143,7 +151,9 @@ describe('ShareLinkPanel (mig 0330 — show-once)', () => {
   });
 
   it('surfaces a failed revoke via toast without refreshing', async () => {
-    revoke.mockResolvedValueOnce({ error: { message: 'No active share link found for this request.' } });
+    revoke.mockResolvedValueOnce({
+      error: { message: 'No active share link found for this request.' },
+    });
     render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
@@ -216,5 +226,31 @@ describe('redesign structure (P4.F3)', () => {
     const generate = within(region).getByRole('button', { name: 'Generate new link' });
     expect(generate.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     expect(within(region).getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
+  });
+});
+
+// B40: Generate and Revoke set their busy flag, awaited the action with no
+// catch and cleared the flag only when it answered. A call that got no answer
+// (offline, a server error, a deploy) left the button spinning with nothing
+// said, and the Revoke confirm stuck open.
+describe('ShareLinkPanel when the request gets no answer', () => {
+  it('Generate says the link was not created, offers no Copy, and works again', async () => {
+    issue.mockRejectedValueOnce(offline());
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('create the share link'));
+    expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate link' })).toBeEnabled();
+  });
+
+  it('Revoke says the link was not revoked, closes the confirm and does not refresh', async () => {
+    revoke.mockRejectedValueOnce(offline());
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
+    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('revoke the share link'));
+    expect(screen.queryByText('Revoke this share link?')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeEnabled();
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 });

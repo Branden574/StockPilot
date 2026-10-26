@@ -7,7 +7,11 @@
  * interaction covering the optimistic update + action call.
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 const mockEdit = vi.fn(async (_input: { movementId: string; note: string }) => ({
   ok: true as const,
@@ -35,7 +39,9 @@ beforeEach(() => {
 
 describe('EditableMovementNote — permission gate', () => {
   it('read-only (canEdit=false) with a note shows the text but no edit affordance', () => {
-    render(<EditableMovementNote movementId={MOVEMENT_ID} note="found extra in back" canEdit={false} />);
+    render(
+      <EditableMovementNote movementId={MOVEMENT_ID} note="found extra in back" canEdit={false} />,
+    );
 
     expect(screen.getByText('found extra in back')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /edit note/i })).not.toBeInTheDocument();
@@ -64,14 +70,24 @@ describe('EditableMovementNote — permission gate', () => {
 
   it('falls back to the read-only reason when there is no note (cell)', () => {
     render(
-      <EditableMovementNote movementId={MOVEMENT_ID} note={null} reason="damaged" canEdit={false} />,
+      <EditableMovementNote
+        movementId={MOVEMENT_ID}
+        note={null}
+        reason="damaged"
+        canEdit={false}
+      />,
     );
     expect(screen.getByText('damaged')).toBeInTheDocument();
   });
 
   it('inline variant renders nothing when read-only and there is no note', () => {
     const { container } = render(
-      <EditableMovementNote movementId={MOVEMENT_ID} note={null} canEdit={false} variant="inline" />,
+      <EditableMovementNote
+        movementId={MOVEMENT_ID}
+        note={null}
+        canEdit={false}
+        variant="inline"
+      />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -162,5 +178,24 @@ describe('EditableMovementNote — the table editor fits its column', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /edit note/i }));
     expect(screen.getByRole('textbox', { name: /movement note/i })).toHaveClass('w-48');
+  });
+});
+
+// B40: a save that got no answer (offline, a server error, a deploy) left the
+// editor's Save spinning with nothing said.
+describe('EditableMovementNote when the save gets no answer', () => {
+  it('says the note was not saved, keeps the editor and the text, and Save works again', async () => {
+    mockEdit.mockRejectedValueOnce(offline());
+    render(<EditableMovementNote movementId={MOVEMENT_ID} note={null} canEdit />);
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }));
+    const input = screen.getByRole('textbox', { name: /movement note/i });
+    fireEvent.change(input, { target: { value: 'counted twice' } });
+    fireEvent.click(screen.getByRole('button', { name: /save note/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      requestFailedMessage('save the note'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the note'));
+    expect(screen.getByRole('textbox', { name: /movement note/i })).toHaveValue('counted twice');
+    expect(screen.getByRole('button', { name: /save note/i })).toBeEnabled();
   });
 });

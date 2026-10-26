@@ -48,6 +48,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn, formatNumber } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   assignCycleCountAction,
   cancelCycleCountAction,
@@ -324,12 +326,23 @@ export function CycleCountDetail({
     }
     setLineError((prev) => (prev?.id === line.id ? null : prev));
     setBusyLine(line.id);
-    const r = await recordCycleCountLineAction({
-      cycleCountId: header.id,
-      lineId: line.id,
-      countedQuantity: value,
-    });
-    setBusyLine(null);
+    let r: Awaited<ReturnType<typeof recordCycleCountLineAction>>;
+    try {
+      r = await recordCycleCountLineAction({
+        cycleCountId: header.id,
+        lineId: line.id,
+        countedQuantity: value,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return false;
+      const message = requestFailedMessage('save the counted quantity');
+      toast.error(message);
+      setLineError({ id: line.id, message });
+      return false;
+    } finally {
+      setBusyLine(null);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       setLineError({ id: line.id, message: r.error.message });
@@ -347,11 +360,22 @@ export function CycleCountDetail({
   async function clearLine(line: CycleCountLineWithItem): Promise<boolean> {
     setLineError((prev) => (prev?.id === line.id ? null : prev));
     setBusyLine(line.id);
-    const r = await clearCycleCountLineAction({
-      cycleCountId: header.id,
-      lineId: line.id,
-    });
-    setBusyLine(null);
+    let r: Awaited<ReturnType<typeof clearCycleCountLineAction>>;
+    try {
+      r = await clearCycleCountLineAction({
+        cycleCountId: header.id,
+        lineId: line.id,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return false;
+      const message = requestFailedMessage('clear the counted quantity');
+      toast.error(message);
+      setLineError({ id: line.id, message });
+      return false;
+    } finally {
+      setBusyLine(null);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       setLineError({ id: line.id, message: r.error.message });
@@ -365,8 +389,19 @@ export function CycleCountDetail({
   async function confirmCancel() {
     setCancelBusy(true);
     setCancelError(null);
-    const r = await cancelCycleCountAction(header.id);
-    setCancelBusy(false);
+    let r: Awaited<ReturnType<typeof cancelCycleCountAction>>;
+    try {
+      r = await cancelCycleCountAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('cancel the count');
+      toast.error(message);
+      setCancelError(message);
+      return;
+    } finally {
+      setCancelBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       setCancelError(r.error.message);
@@ -380,8 +415,19 @@ export function CycleCountDetail({
   async function post() {
     setPostBusy(true);
     setPostError(null);
-    const r = await postCycleCountAction(header.id);
-    setPostBusy(false);
+    let r: Awaited<ReturnType<typeof postCycleCountAction>>;
+    try {
+      r = await postCycleCountAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('post the count');
+      toast.error(message);
+      setPostError(message);
+      return;
+    } finally {
+      setPostBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       setPostError(r.error.message);
@@ -990,15 +1036,24 @@ function AssigneePicker({
     const nextId = next === UNASSIGNED ? null : next;
     if (nextId === currentAssignedTo) return;
     setBusy(true);
-    const res = await assignCycleCountAction({
-      id: cycleCountId,
-      assignedTo: nextId,
-      // Optimistic-concurrency: the page rendered with the current
-      // assignee, so pass it as expected. If a teammate changed it
-      // between page load and our click, we'll get a clean error.
-      expectedAssignee: currentAssignedTo,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof assignCycleCountAction>>;
+    try {
+      res = await assignCycleCountAction({
+        id: cycleCountId,
+        assignedTo: nextId,
+        // Optimistic-concurrency: the page rendered with the current
+        // assignee, so pass it as expected. If a teammate changed it
+        // between page load and our click, we'll get a clean error.
+        expectedAssignee: currentAssignedTo,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('assign the count'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

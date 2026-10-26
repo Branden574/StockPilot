@@ -23,6 +23,8 @@ import {
   useCountSelection,
   type CountPick,
 } from '@/lib/cycle-counts/use-count-selection';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { startCycleCountAction } from '@/server/actions/cycle-counts';
 
 const UNASSIGNED = '__unassigned';
@@ -71,14 +73,23 @@ export function SelectionConfirm({
   async function start() {
     if (picks.length === 0) return;
     setBusy(true);
-    const r = await startCycleCountAction({
-      scope: 'selection',
-      warehouseId: null,
-      itemIds: picks.map((p) => p.id),
-      notes: notes.trim() || null,
-      assignedTo: assignee === UNASSIGNED ? null : assignee,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof startCycleCountAction>>;
+    try {
+      r = await startCycleCountAction({
+        scope: 'selection',
+        warehouseId: null,
+        itemIds: picks.map((p) => p.id),
+        notes: notes.trim() || null,
+        assignedTo: assignee === UNASSIGNED ? null : assignee,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage('the count was started', 'Cycle counts'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
