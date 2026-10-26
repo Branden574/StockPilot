@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { SuppliersManager } from '@/components/suppliers/suppliers-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 
@@ -20,7 +20,7 @@ interface SuppliersPageProps {
 export default async function SuppliersPage({ searchParams }: SuppliersPageProps) {
   const moduleAccess = await checkModuleAccess('suppliers');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="suppliers" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="suppliers" access={moduleAccess} />;
   }
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';

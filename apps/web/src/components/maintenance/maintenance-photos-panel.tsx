@@ -41,7 +41,8 @@ export interface PhotoUploadTicket {
   path: string;
   signedUrl: string;
   /** Where the browser-made thumbnail goes. Absent when the server makes the
-   *  thumbnail itself (exception evidence), and then none is sent. */
+   *  thumbnail itself, and then none is sent: exception evidence, and since
+   *  B29 maintenance too. */
   thumbSignedUrl?: string | null;
 }
 
@@ -114,16 +115,15 @@ function unsettled(e: unknown, input: PhotoFinalizeInput): unknown {
     : e;
 }
 
-/** Mint-response shape from POST .../attachments (maintenance-attachments.ts
- *  createUploadUrl). Declared locally — this is a client fetch boundary, not
- *  a shared type, matching the rest of this panel's fetch calls. */
+/** The part of POST .../attachments's answer (maintenance-attachments.ts
+ *  createUploadUrl) this panel uses. Declared locally — this is a client
+ *  fetch boundary, not a shared type, matching the rest of this panel's fetch
+ *  calls. The answer also carries a thumbnail ticket (thumbPath,
+ *  thumbSignedUrl, thumbToken), kept for phones on older updates; the panel
+ *  does not use it (see maintenancePhotoEndpoints). */
 interface MintResponse {
   path: string;
   signedUrl: string;
-  token: string;
-  thumbPath: string;
-  thumbSignedUrl: string;
-  thumbToken: string;
 }
 
 interface QueuedUpload {
@@ -188,7 +188,10 @@ export function maintenancePhotoEndpoints(
         throw new Error(await humanizeUploadError(mintRes, 'Upload not allowed right now.'));
       }
       const mint = (await mintRes.json()) as MintResponse;
-      return { path: mint.path, signedUrl: mint.signedUrl, thumbSignedUrl: mint.thumbSignedUrl };
+      // No thumbSignedUrl (B29): finalize makes the thumbnail from the
+      // cleaned photo and writes it over anything sent to that name
+      // (2026-09-27), so a browser-made one was a second upload for nothing.
+      return { path: mint.path, signedUrl: mint.signedUrl };
     },
     async finalize({ path, originalFilename, declaredMime }) {
       // Finalize: server downloads + magic-byte-verifies before recording.

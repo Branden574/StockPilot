@@ -53,6 +53,7 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { clearOfflineCache } from '@/lib/offline-cache';
 import { countHeld, countRejected, countUnconfirmedAdjust } from '@/lib/queue';
 import { unsentWorkDetail } from '@/lib/rejected-work';
+import { goBackFromReturn } from '@/lib/return-path';
 import { isOnline, syncNow } from '@/lib/sync';
 import { settingsRolePill } from '@/lib/role-pill';
 import { refreshEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -226,15 +227,7 @@ export default function Settings() {
         <View style={styles.topbar}>
           <IconChip
             icon={ArrowLeft}
-            onPress={() => {
-              if (typeof returnPath === 'string' && returnPath.length > 0) {
-                router.replace(returnPath as never);
-              } else if (router.canGoBack()) {
-                router.back();
-              } else {
-                router.replace('/');
-              }
-            }}
+            onPress={() => goBackFromReturn(router, returnPath)}
             accessibilityLabel="Back"
             minTap
           />
