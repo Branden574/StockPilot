@@ -298,9 +298,29 @@ export function successMessageFor(used: OpenedTransport | null): string {
 export const DUPLICATE_WARNING =
   'A maintenance email draft was already opened for this request. Sending multiple copies may create duplicate Zendesk tickets.';
 
-/** Brief section 19, verbatim — the ONLY headline for a blocked open. Never
- *  blame link length for an actual failed/refused open. */
+/** Brief section 19, verbatim — the headline for a blocked open of OUTLOOK
+ *  (the app or Outlook on the web). Never blame link length for an actual
+ *  failed/refused open. */
 export const BLOCKED_HEADLINE = 'Outlook could not be opened automatically.';
+
+/**
+ * The same headline for a blocked open the device's default mail app was
+ * asked to make: the "Open in Default Email App" button, and the cc-safety
+ * reroute in `planOutlookOpen`. The F1-5 phone walk (2026-09-27) saw a
+ * refused mail-app open say "Outlook could not be opened automatically.",
+ * naming an app that was never asked — the untruth MAIL_APP_SUCCESS_MESSAGE
+ * already avoids on the success side.
+ */
+export const MAIL_APP_BLOCKED_HEADLINE = 'Your email app could not be opened automatically.';
+
+/** Picks the honest blocked headline for the transport the opener ASKED the
+ *  OS to open (`MeasuredOpenResult.attempted`), never the button that was
+ *  pressed. A null transport (nothing was asked: a draft no link can carry,
+ *  which offers no button) falls back to the Outlook wording only so the type
+ *  is total. */
+export function blockedHeadlineFor(attempted: OpenedTransport | null): string {
+  return attempted === 'default-mail' ? MAIL_APP_BLOCKED_HEADLINE : BLOCKED_HEADLINE;
+}
 
 /**
  * Sub-line shown under BLOCKED_HEADLINE (fast-follow fix, 2026-08-06). This

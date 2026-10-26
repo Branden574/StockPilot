@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
@@ -28,10 +28,12 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   // service refuses every read (assertModuleEnabled), which used to take this
   // page to the error screen; an old link or notification now lands on the
   // module-off panel, as the list does. The module set is the request-cached
-  // read the dashboard layout already made, so this adds no query.
+  // read the dashboard layout already made, so this adds no query. When that
+  // read failed, the page says it could not check and offers Try again, and
+  // still reads nothing.
   const moduleAccess = await checkModuleAccess('po_imports');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="po_imports" access={moduleAccess} />;
   }
 
   const { id } = await params;

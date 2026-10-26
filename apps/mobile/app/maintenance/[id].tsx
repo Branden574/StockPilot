@@ -106,7 +106,6 @@ import {
   type MobileMaintenanceRequestDetail,
 } from '@/lib/maintenance-api';
 import {
-  BLOCKED_HEADLINE,
   BLOCKED_RETRY_MESSAGE,
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
@@ -114,6 +113,7 @@ import {
   OVERSIZED_MESSAGE,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
+  blockedHeadlineFor,
   maintenanceEmailInputForRouting,
   maintenanceRoutingFromResponse,
   openMaintenanceDraft,
@@ -1405,8 +1405,11 @@ export default function MaintenanceRequestDetailScreen() {
           ) : null}
           {lastResult?.outcome === 'blocked' ? (
             <Card padding={10} style={{ marginTop: 12 }}>
+              {/* Names the app the opener asked for (`attempted`), never the
+                  button: a refused "Open in Default Email App" must not say
+                  Outlook could not be opened. */}
               <Body size={12.5} color={c.ink}>
-                {BLOCKED_HEADLINE}
+                {blockedHeadlineFor(lastResult.attempted)}
               </Body>
               <Body size={12.5} muted style={{ marginTop: 4 }}>
                 {BLOCKED_RETRY_MESSAGE}

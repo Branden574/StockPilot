@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinkEditor } from '@/components/settings/public-link-editor';
@@ -28,7 +28,7 @@ export default async function PublicLinkEditorPage({
 
   const access = await checkModuleAccess('public_requests');
   if (!access.enabled) {
-    return <ModuleNotEnabled moduleId="public_requests" canManage={access.canManage} />;
+    return <ModuleUnavailable moduleId="public_requests" access={access} />;
   }
 
   if (!can(ctx, 'public_links:manage')) {
