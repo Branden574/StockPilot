@@ -59,7 +59,10 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 function describeFinding(f: PendingFlagFinding, base: string): string {
-  return `${path.relative(base, f.file)}:${f.line} ${f.fn}: ${f.flag} (set at ${f.setLine}, cleared at ${f.clearLine}) stays set when the ${f.kind} of ${f.reaches} rejects`;
+  const where = `${path.relative(base, f.file)}:${f.line} ${f.fn}: ${f.flag} (set at ${f.setLine}, cleared at ${f.clearLine})`;
+  return f.problem === 'stays-set'
+    ? `${where} stays set when the ${f.kind} of ${f.reaches} rejects`
+    : `${where} is cleared in finally, but nothing catches the ${f.kind} of ${f.reaches}, so a rejection says nothing`;
 }
 
 /* ─────────────────────────────── self-test ─────────────────────────────── */
@@ -151,8 +154,20 @@ const PLANTED: ScanFile[] = [
       `  async function errorIsNotBusy() { setError(null); await saveThingAction('a'); setError('x'); }`,
       `  async function setAfterOnly() { const res = await saveThingAction('a'); setSaving(false); return res; }`,
       `  async function nestedCallbackClears() { setSaving(true); window.setTimeout(() => setSaving(false), 10); await saveThingAction('a'); }`,
-      `  return [saving, busy, phase, items, editing, error];`,
+      // A callback made while the flag is set, which awaits and then clears it:
+      `  function effectTimer() { setSaving(true); const t = window.setTimeout(async () => { await saveThingAction('a'); setSaving(false); }, 10); return () => window.clearTimeout(t); }`,
+      `  function transitionAfterFlag() { setSaving(true); React.startTransition(async () => { await saveThingAction('a'); setSaving(false); }); }`,
+      `  function effectTimerCaught() { setBusy('x'); window.setTimeout(async () => { try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } finally { setBusy(null); } }, 10); }`,
+      `  function callbackOwnsItsWindow() { setSaving(true); window.setTimeout(async () => { setSaving(true); try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } finally { setSaving(false); } }, 10); setSaving(false); }`,
+      // A finally clears the flag, but a rejection reaches no catch (reported unless a caller here catches):
+      `  async function finallyOnlyHandler() { setSaving(true); try { await saveThingAction('a'); } finally { setSaving(false); } }`,
+      `  async function finallyOnlyCaught() { setSaving(true); try { await saveThingAction('a'); } finally { setSaving(false); } }`,
+      `  async function callsAndCatches() { try { await finallyOnlyCaught(); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } }`,
+      `  function thenFinallyOnly() { setSaving(true); void saveThingAction('a').then(() => toast.error('ok')).finally(() => setSaving(false)); }`,
+      `  const handlers = { onClick: finallyOnlyHandler, onSave: callsAndCatches, onThen: thenFinallyOnly };`,
+      `  return [saving, busy, phase, items, editing, error, handlers];`,
       `}`,
+      `export async function exportedFinallyOnly(setSaving: (b: boolean) => void) { setSaving(true); try { await saveThingAction('a'); } finally { setSaving(false); } }`,
     ].join('\n'),
   },
   {
@@ -177,11 +192,23 @@ const PLANTED: ScanFile[] = [
       `  const load = React.useCallback(async () => { try { setRows(await fetchRows()); } catch { setRows([]); } }, []);`,
       `  async function refresh() { setRefreshing(true); await load(); setRefreshing(false); }`,
       `  async function loadMore() { setLoadingMore(true); const more = await api<unknown[]>('/rows?page=2'); setRows((r) => [...r, ...more]); setLoadingMore(false); }`,
-      `  return [refreshing, loadingMore, rows, refresh, loadMore];`,
+      `  const [saving, setSaving] = React.useState(false);`,
+      `  async function saveRow() { setSaving(true); try { await api('/rows', { method: 'POST' }); } finally { setSaving(false); } }`,
+      `  const props = { onPress: saveRow };`,
+      `  return [refreshing, loadingMore, rows, refresh, loadMore, saving, props];`,
       `}`,
     ].join('\n'),
   },
 ];
+
+/**
+ * Planted windows that are cleared on every path AND whose rejection is
+ * handled: finallyClears, catchClears, catchFallsThrough, thenCatchClears,
+ * effectTimerCaught, the timer in callbackOwnsItsWindow, finallyOnlyCaught
+ * (its caller catches) and exportedFinallyOnly (its callers are in other
+ * modules, so it is not judged).
+ */
+const GUARDED_PLANTED = 8;
 
 describe('the pending-flag scan (self-test on planted files)', () => {
   const scan = scanPendingFlags(PLANTED, PLANTED_ROOTS);
@@ -191,14 +218,19 @@ describe('the pending-flag scan (self-test on planted files)', () => {
     expect(reported).toEqual(
       [
         'b40Shape',
+        '(React.startTransition callback)',
+        '(window.setTimeout callback)',
         'catchReturnsEarly',
         'catchRethrows',
         'clearedInsideTry',
+        'finallyOnlyHandler',
         'loadMore',
         'phaseFlag',
         'refFlag',
         'stringFlag',
+        'saveRow',
         'thenCatchKeepsFlag',
+        'thenFinallyOnly',
         'thenNoCatch',
         'throwsInWindow',
         'viaAll',
@@ -231,10 +263,15 @@ describe('the pending-flag scan (self-test on planted files)', () => {
       'setAfterOnly',
       'nestedCallbackClears',
       'refresh',
+      'effectTimerCaught',
+      'callbackOwnsItsWindow',
+      'finallyOnlyCaught',
+      'callsAndCatches',
+      'exportedFinallyOnly',
     ]) {
       expect(reported).not.toContain(fn);
     }
-    expect(scan.guarded).toBe(4);
+    expect(scan.guarded).toBe(GUARDED_PLANTED);
   });
 
   it('says what stays set and what can reject', () => {
@@ -251,6 +288,18 @@ describe('the pending-flag scan (self-test on planted files)', () => {
     expect(byFn.get('refFlag')?.flag).toBe('busyRef.current');
     expect(byFn.get('loadMore')).toMatchObject({ flag: 'setLoadingMore', reaches: 'api' });
     expect(scan.rejecting.size).toBeGreaterThan(0);
+  });
+
+  it('tells a flag left set apart from a rejection that says nothing', () => {
+    const byFn = new Map(scan.findings.map((f) => [f.fn, f]));
+    expect(byFn.get('b40Shape')?.problem).toBe('stays-set');
+    expect(byFn.get('(window.setTimeout callback)')).toMatchObject({
+      problem: 'stays-set',
+      flag: 'setSaving',
+    });
+    for (const fn of ['finallyOnlyHandler', 'thenFinallyOnly', 'saveRow']) {
+      expect(byFn.get(fn)?.problem).toBe('says-nothing');
+    }
   });
 });
 

@@ -72,6 +72,12 @@ export interface PendingFlagFinding {
   kind: 'await' | 'then' | 'throw';
   /** What can reject: the action, `fetch`, or the function that reaches them. */
   reaches: string;
+  /**
+   * 'stays-set': nothing clears the flag when the call rejects (the spinner
+   * stays on). 'says-nothing': a `finally` clears it, but no catch on the way
+   * out of the handler handles the rejection, so the person is told nothing.
+   */
+  problem: 'stays-set' | 'says-nothing';
 }
 
 export interface PendingFlagScan {
@@ -185,7 +191,12 @@ function functionName(fn: FunctionNode): string {
     return fn.name.getText();
   }
   let p: ts.Node = fn.parent;
-  if (ts.isCallExpression(p)) p = p.parent;
+  if (ts.isCallExpression(p)) {
+    const callee = p.expression.getText();
+    // `useCallback(fn)` takes the variable's name; any other call names its callback.
+    if (!/(^|\.)(useCallback|useEvent|useEffectEvent)$/.test(callee)) return `(${callee} callback)`;
+    p = p.parent;
+  }
   if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
   if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) return p.name.text;
   if (ts.isJsxExpression(p) && ts.isJsxAttribute(p.parent)) return `(${p.parent.name.getText()})`;
@@ -505,6 +516,8 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
   /* ───────────────────────────── the flag windows ───────────────────────────── */
 
   const findings: PendingFlagFinding[] = [];
+  /** `<file>:<line>:<flag>` of every finding, so a window is reported once. */
+  const reported = new Set<string>();
   let guarded = 0;
 
   type SetKind = 'start' | 'end' | 'phase-start' | 'other';
@@ -521,7 +534,7 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
     kind: 'await' | 'then' | 'throw';
     reaches: string;
     /** For `.then`: the chain's fulfilment and rejection handlers. */
-    chain?: { fulfilled: ts.Node[]; handlers: ts.Node[] };
+    chain?: { fulfilled: ts.Node[]; handlers: ts.Node[]; catches: ts.Node[] };
   }
 
   const isFalsy = (e: ts.Expression): boolean => {
@@ -582,9 +595,8 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
       return FLAG_NAME.test(flag.replace(/^set/, '')) ? 'start' : 'other';
     };
 
-    const visitFunction = (fn: FunctionNode) => {
-      const body = fn.body;
-      if (!body || !ts.isBlock(body)) return;
+    /** The flag sets and the risks in `fn`'s own body (not in functions nested in it). */
+    const collect = (fn: FunctionNode): { sets: SetEvent[]; risks: RiskEvent[] } => {
       const sets: SetEvent[] = [];
       const risks: RiskEvent[] = [];
       const walk = (n: ts.Node) => {
@@ -638,49 +650,155 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
         }
         ts.forEachChild(n, walk);
       };
-      walk(body);
-      if (!risks.length) return;
+      if (fn.body) walk(fn.body);
+      return { sets, risks };
+    };
+
+    /**
+     * Judges one window: `start` set the flag, `risk` (in `owner`, whose own
+     * sets of the flag are `mine`) can reject, and a later set clears the
+     * flag. Returns true when it reported a finding.
+     */
+    const judge = (
+      owner: FunctionNode,
+      flag: string,
+      start: SetEvent,
+      risk: RiskEvent,
+      mine: SetEvent[],
+    ): boolean => {
+      let end: ts.Node | null = null;
+      if (risk.kind === 'then') {
+        end = risk.chain?.fulfilled.some((h) => callsFlag(h, flag)) ? risk.node : null;
+      } else {
+        const after = mine.find(
+          (s) => s.pos > risk.pos && (start.kind === 'phase-start' || s.kind === 'end'),
+        );
+        end = after ? after.node : null;
+      }
+      if (!end) return false;
+      const ok =
+        risk.kind === 'then'
+          ? (risk.chain?.handlers.some((h) => callsFlag(h, flag)) ?? false)
+          : protectedByTry(risk.node, owner, flag);
+      let problem: PendingFlagFinding['problem'] = 'stays-set';
+      if (ok) {
+        // The flag is cleared on every path. Is the rejection handled, or does
+        // it leave the handler with nothing said?
+        const handled =
+          risk.kind === 'then'
+            ? (risk.chain?.catches.length ?? 0) > 0
+            : caughtWithin(risk.node, owner) || callersCatch(owner);
+        if (handled) {
+          guarded++;
+          return false;
+        }
+        problem = 'says-nothing';
+      }
+      const key = `${info.file}:${line(risk.node)}:${flag}`;
+      if (!reported.has(key)) {
+        reported.add(key);
+        findings.push({
+          file: info.file,
+          line: line(risk.node),
+          fn: functionName(owner),
+          flag,
+          setLine: line(start.node),
+          clearLine: line(end),
+          kind: risk.kind,
+          reaches: risk.reaches,
+          problem,
+        });
+      }
+      return true;
+    };
+
+    /**
+     * True unless a rejection that leaves `fn` is known to reach no handler.
+     * Judged only where every caller is in this module: `fn` is an inline
+     * callback (a JSX handler, an effect), or a function of this module whose
+     * every use is here. A use that passes it on (`onClick={save}`,
+     * `onConfirm={save}`) reaches React or a child that does not catch; a call
+     * counts as caught inside a try with a catch or ahead of `.catch(...)`.
+     * An exported function, or one handed out by a hook, is not judged.
+     */
+    function callersCatch(fn: FunctionNode): boolean {
+      const name = declaredName(fn);
+      if (!name) return false; // an inline callback: whoever calls it is React or a child
+      const decl = declarationOf(fn);
+      if (decl && hasModifier(decl, ts.SyntaxKind.ExportKeyword)) return true;
+      const uses: ts.Identifier[] = [];
+      const findUses = (n: ts.Node) => {
+        if (ts.isIdentifier(n) && n.text === name && !isDeclarationName(n)) uses.push(n);
+        ts.forEachChild(n, findUses);
+      };
+      findUses(sf);
+      if (!uses.length) return true;
+      for (const use of uses) {
+        const p = parentSkippingParens(use);
+        // Handed out (`return { save }`, `return save`): its callers are elsewhere.
+        if (ts.isShorthandPropertyAssignment(p) || ts.isReturnStatement(p)) return true;
+        if (ts.isPropertyAssignment(p) && !ts.isJsxAttribute(p.parent) && isReturnedObject(p)) {
+          return true;
+        }
+        if (ts.isCallExpression(p) && p.expression === use) {
+          if (callIsCaught(p)) continue;
+          return false;
+        }
+        // Dependency arrays and other references that do not call it.
+        if (ts.isArrayLiteralExpression(p)) continue;
+        return false; // passed on as a value: a handler prop, a callback
+      }
+      return true;
+    }
+
+    const isStart = (s: SetEvent) => s.kind === 'start' || s.kind === 'phase-start';
+
+    const visitFunction = (fn: FunctionNode) => {
+      const body = fn.body;
+      if (!body || !ts.isBlock(body)) return;
+      const { sets, risks } = collect(fn);
 
       const flags = new Set(sets.filter((s) => s.kind !== 'other').map((s) => s.flag));
       for (const flag of flags) {
         const mine = sets.filter((s) => s.flag === flag);
         for (const risk of risks) {
-          const start = [...mine]
-            .reverse()
-            .find((s) => s.pos < risk.pos && (s.kind === 'start' || s.kind === 'phase-start'));
+          const start = [...mine].reverse().find((s) => s.pos < risk.pos && isStart(s));
           if (!start) continue;
           // A flag already cleared again before the risk is not in flight.
           const reset = mine.find((s) => s.pos > start.pos && s.pos < risk.pos && s.kind === 'end');
           if (reset) continue;
-          let end: ts.Node | null = null;
-          if (risk.kind === 'then') {
-            end = risk.chain?.fulfilled.some((h) => callsFlag(h, flag)) ? risk.node : null;
-          } else {
-            const after = mine.find(
-              (s) => s.pos > risk.pos && (start.kind === 'phase-start' || s.kind === 'end'),
-            );
-            end = after ? after.node : null;
+          if (judge(fn, flag, start, risk, mine)) break; // one report per flag and function
+        }
+      }
+
+      // A callback created while the flag is set (a timer, an effect's async
+      // load, a .then handler) that awaits something that can reject and then
+      // clears the flag: the Distribute preview set `previewing` in its effect
+      // and cleared it in the timer after the action answered.
+      const starts = sets.filter(isStart);
+      if (!starts.length) return;
+      const nested: FunctionNode[] = [];
+      const findNested = (n: ts.Node) => {
+        if (n !== fn && isFunctionNode(n)) nested.push(n);
+        ts.forEachChild(n, findNested);
+      };
+      findNested(body);
+      for (const inner of nested) {
+        const at = inner.getStart(sf);
+        const got = collect(inner);
+        if (!got.risks.length) continue;
+        for (const flag of new Set(starts.map((s) => s.flag))) {
+          const mine = sets.filter((s) => s.flag === flag);
+          const start = [...mine].reverse().find((s) => s.pos < at && isStart(s));
+          if (!start) continue;
+          if (mine.some((s) => s.pos > start.pos && s.pos < at && s.kind === 'end')) continue;
+          const innerSets = got.sets.filter((s) => s.flag === flag);
+          for (const risk of got.risks) {
+            // A callback that sets the flag itself before the risk owns that
+            // window; it is judged when the callback is visited.
+            if (innerSets.some((s) => s.pos < risk.pos && s.kind !== 'other')) continue;
+            if (judge(inner, flag, start, risk, innerSets)) break;
           }
-          if (!end) continue;
-          const ok =
-            risk.kind === 'then'
-              ? (risk.chain?.handlers.some((h) => callsFlag(h, flag)) ?? false)
-              : protectedByTry(risk.node, fn, flag);
-          if (ok) {
-            guarded++;
-            continue;
-          }
-          findings.push({
-            file: info.file,
-            line: line(risk.node),
-            fn: functionName(fn),
-            flag,
-            setLine: line(start.node),
-            clearLine: line(end),
-            kind: risk.kind,
-            reaches: risk.reaches,
-          });
-          break; // one report per flag and function
         }
       }
     };
@@ -725,9 +843,12 @@ function chainOf(last: ts.CallExpression): {
   head: ts.CallExpression | null;
   fulfilled: ts.Node[];
   handlers: ts.Node[];
+  /** The handlers that handle a rejection (`.catch(h)`, `.then(_, h)`), not `.finally`. */
+  catches: ts.Node[];
 } {
   const fulfilled: ts.Node[] = [];
   const handlers: ts.Node[] = [];
+  const catches: ts.Node[] = [];
   let c: ts.Expression = last;
   while (ts.isCallExpression(c)) {
     const callee = unwrap(c.expression);
@@ -735,9 +856,15 @@ function chainOf(last: ts.CallExpression): {
     const m = callee.name.text;
     if (m === 'then') {
       if (c.arguments[0]) fulfilled.push(c.arguments[0]);
-      if (c.arguments[1]) handlers.push(c.arguments[1]);
+      if (c.arguments[1]) {
+        handlers.push(c.arguments[1]);
+        catches.push(c.arguments[1]);
+      }
     } else if (m === 'catch') {
-      if (c.arguments[0]) handlers.push(c.arguments[0]);
+      if (c.arguments[0]) {
+        handlers.push(c.arguments[0]);
+        catches.push(c.arguments[0]);
+      }
     } else if (m === 'finally') {
       if (c.arguments[0]) {
         handlers.push(c.arguments[0]);
@@ -748,7 +875,7 @@ function chainOf(last: ts.CallExpression): {
     }
     c = unwrap(callee.expression);
   }
-  return { head: ts.isCallExpression(c) ? c : null, fulfilled, handlers };
+  return { head: ts.isCallExpression(c) ? c : null, fulfilled, handlers, catches };
 }
 
 /** True when `node` calls the setter (or assigns the ref) `flag` anywhere inside it. */
@@ -818,6 +945,73 @@ function protectedByTry(node: ts.Node, fn: FunctionNode, flag: string): boolean 
     }
   }
   return false;
+}
+
+/** True when a `try` with a catch around `node` (inside `fn`) handles its rejection. */
+function caughtWithin(node: ts.Node, fn: FunctionNode): boolean {
+  for (let child: ts.Node = node, p = node.parent; p && p !== fn; child = p, p = p.parent) {
+    if (ts.isTryStatement(p) && p.tryBlock === child && p.catchClause) return true;
+  }
+  return false;
+}
+
+/** True when a call's rejection is handled where it is made: a try with a catch, or `.catch`. */
+function callIsCaught(call: ts.CallExpression): boolean {
+  // `save().catch(...)`, `save().then(ok, fail)`.
+  const chainParent = call.parent;
+  if (
+    ts.isPropertyAccessExpression(chainParent) &&
+    ts.isCallExpression(chainParent.parent) &&
+    (chainParent.name.text === 'catch' ||
+      (chainParent.name.text === 'then' && chainParent.parent.arguments.length >= 2))
+  ) {
+    return true;
+  }
+  for (let child: ts.Node = call, p = call.parent; p; child = p, p = p.parent) {
+    if (isFunctionNode(p)) return false;
+    if (ts.isTryStatement(p) && p.tryBlock === child && p.catchClause) return true;
+  }
+  return false;
+}
+
+/** The name `fn` is declared under: `function save()`, `const save = async () =>`, `useCallback`. */
+function declaredName(fn: FunctionNode): string | null {
+  if (ts.isFunctionDeclaration(fn)) return fn.name?.text ?? null;
+  let p: ts.Node = fn.parent;
+  if (
+    ts.isCallExpression(p) &&
+    /(^|\.)(useCallback|useEvent|useEffectEvent)$/.test(p.expression.getText())
+  ) {
+    p = p.parent;
+  }
+  if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+  return null;
+}
+
+/** The statement that declares `fn` (for its export modifier). */
+function declarationOf(fn: FunctionNode): ts.Node | null {
+  if (ts.isFunctionDeclaration(fn)) return fn;
+  for (let p: ts.Node | undefined = fn.parent; p; p = p.parent) {
+    if (ts.isVariableStatement(p)) return p;
+    if (ts.isBlock(p) || ts.isSourceFile(p)) return null;
+  }
+  return null;
+}
+
+function isDeclarationName(id: ts.Identifier): boolean {
+  const p = id.parent;
+  return (
+    ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p) || ts.isParameter(p)) &&
+      p.name === id) ||
+    ts.isBindingElement(p)
+  );
+}
+
+/** `{ save: save }` in an object a function returns (a hook handing out its functions). */
+function isReturnedObject(prop: ts.PropertyAssignment): boolean {
+  const obj = prop.parent;
+  const p = obj && parentSkippingParens(obj);
+  return !!p && (ts.isReturnStatement(p) || ts.isArrowFunction(p));
 }
 
 /** True when `flag` is set again after statement `st` ends, inside `fn`. */
