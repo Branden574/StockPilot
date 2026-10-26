@@ -325,6 +325,11 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
           // also rejects a crafted submit.
           .eq('awaiting_first_receipt', false)
           .is('deleted_at', null)
+          // Ordering visibility (0413): an item hidden from new ordering is
+          // not in any customer's catalog, so checkout (which re-validates
+          // against this set) refuses it too. Showing it again adds nothing
+          // to an allowlist: the allowlist above still decides membership.
+          .eq('order_catalog_visible', true)
           .order('id')
           .range(from, to),
     );
@@ -386,10 +391,13 @@ export async function portalSubmitOrder(
   for (const l of parsed.lines) {
     qtyByItem.set(l.itemId, (qtyByItem.get(l.itemId) ?? 0) + l.quantity);
   }
-  const mergedLines = Array.from(qtyByItem.entries()).map(([itemId, quantity]) => ({
-    itemId,
-    quantity,
-  }));
+  // In item-id order: the lock order of every gated writer of new demand
+  // (0413: the ordering-visibility gate takes each item's key-share lock as
+  // its line is inserted, and a hide locks the same rows in id order), so a
+  // multi-line submit never deadlocks with a bulk hide.
+  const mergedLines = Array.from(qtyByItem.entries())
+    .map(([itemId, quantity]) => ({ itemId, quantity }))
+    .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
 
   const admin = createAdminClient();
 
@@ -489,6 +497,11 @@ export async function portalSubmitOrder(
   if (lineErr) {
     // Rollback-on-line-error pattern — never leave an orphan header.
     await admin.from('order_requests').delete().eq('id', header.id as string);
+    // The ordering-visibility gate (0413): an item hidden after the catalog
+    // read above. The customer hears what the pre-check says, never why.
+    if ((lineErr as { hint?: string | null }).hint === 'order_item_hidden') {
+      throw new Error('One of the items is no longer available to order.');
+    }
     void reportError(new Error(lineErr.message), { tag: 'portal.submit.lines' });
     throw new Error('Order could not be submitted. Please try again.');
   }

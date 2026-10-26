@@ -72,3 +72,60 @@ const KNOWN_INSERTERS: string[] = [
   // org member).
   'apps/web/src/server/services/portal.ts',
 ];
+
+/**
+ * NEW DEMAND (ordering visibility, 0413). Every client write of
+ * order_request_lines in product code, by kind. Each is gated in the database
+ * (the order-visibility trigger fires on INSERT and on a raised quantity, for
+ * every role, the service role included), and each is listed so a new writer
+ * fails here and gets reviewed. Add items is NOT a client write any more: it
+ * is one add_order_request_lines call (one transaction), so no service-role
+ * top-up remains.
+ */
+const LINE_WRITE = /from\(\s*['"`]order_request_lines['"`]\s*\)\s*\.(insert|update|upsert|delete)\(/g;
+
+function lineWriters(): string[] {
+  const out: string[] = [];
+  for (const f of FILES) {
+    const src = readFileSync(f, 'utf8');
+    for (const m of src.matchAll(LINE_WRITE)) out.push(`${path.relative(REPO, f)}#${m[1]}`);
+  }
+  return out.sort();
+}
+
+const KNOWN_LINE_WRITERS: string[] = [
+  // The public order link's lines (service role, sorted by item id; the gate
+  // refuses a hidden item and the header is deleted).
+  'apps/web/src/app/api/v1/public/order-requests/route.ts#insert',
+  // OrderRequestsService.updateLineQuantity (service role: lines have no
+  // UPDATE policy). A raise is gated; lowering never is.
+  'apps/web/src/server/services/order-requests.ts#update',
+  // OrderRequestsService.removeLine (service role). Removal is never new demand.
+  'apps/web/src/server/services/order-requests.ts#delete',
+  // The B2B portal's lines (service role, sorted by item id).
+  'apps/web/src/server/services/portal.ts#insert',
+];
+
+describe('every client write of order_request_lines is a known, gated writer (0413)', () => {
+  it('lists exactly the known writers', () => {
+    expect(lineWriters()).toEqual([...KNOWN_LINE_WRITERS].sort());
+  });
+
+  it('Add items is one add_order_request_lines call in the service', () => {
+    const svc = readFileSync(
+      path.join(REPO, 'apps/web/src/server/services/order-requests.ts'),
+      'utf8',
+    );
+    expect(svc.match(/rpc\('add_order_request_lines'/g)).toHaveLength(1);
+    // The top-up helper is reached only from inside the database function.
+    const callers = FILES.filter((f) =>
+      /['"`]_order_request_line_top_up['"`]/.test(readFileSync(f, 'utf8')),
+    );
+    expect(callers).toEqual([]);
+  });
+
+  it('control: the census sees a multi-line builder chain', () => {
+    const sample = "await admin\n  .from('order_request_lines')\n  .update({ quantity_requested: 2 })";
+    expect([...sample.matchAll(LINE_WRITE)].map((m) => m[1])).toEqual(['update']);
+  });
+});

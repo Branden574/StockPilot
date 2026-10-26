@@ -22,6 +22,7 @@ import {
   ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
   ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
   ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
+  orderItemHiddenCopy,
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_MODULE_OFF_COPY,
@@ -509,6 +510,18 @@ function kitStockNotOrderable(name: string): ServiceError {
 }
 
 /**
+ * An item hidden from new ordering (0413, Manage order items). Named from the
+ * caller's own read; the reason lets a screen mark the line. The database
+ * gate refuses the same item inside every write (order_item_hidden).
+ */
+function itemHiddenFromOrders(itemId: string | null, name: string): ServiceError {
+  return new ServiceError('validation_error', orderItemHiddenCopy(name), {
+    reason: 'hidden_from_orders',
+    ...(itemId ? { itemId } : {}),
+  });
+}
+
+/**
  * The refusals the order guards raise (0365) as whole sentences: the
  * order_requests insert guard (42501) and the order_request_lines guard
  * (42501 / 23514). They are written for the person placing the order, so they
@@ -529,21 +542,34 @@ function orderGuardRefusal(err: { message?: string | null }): ServiceError | nul
 }
 
 /**
- * Add items wrote part of the change before it failed (returns RX-3 fix round
- * 1, desk check F1): the top-ups of items already on the order are saved, the
- * rest is not. Non-retryable on purpose: sending the same request again would
- * add the saved quantities twice. A guard refusal's own sentence (which item
- * cannot be ordered) comes first.
+ * Add items in one change (0413, add_order_request_lines): at most this many
+ * entries per call. Both callers' schemas cap there (the web action and POST
+ * /api/v1/orders/[id]/lines), and so does the database function.
  */
-const ADD_LINES_PARTIAL_COPY =
-  'Part of this change was saved. Reload the order to see it before adding again.';
+const ADD_LINES_MAX = 200;
 
-function addLinesPartialRefusal(guardSentence: string | null): ServiceError {
-  return new ServiceError(
-    'conflict',
-    guardSentence ? `${guardSentence} ${ADD_LINES_PARTIAL_COPY}` : ADD_LINES_PARTIAL_COPY,
-    { reason: 'partial', retryable: false },
-  );
+/** add_order_request_lines' answer: the item ids it inserted and topped up.
+ *  Anything else is not a confirmed change (never reported as one). */
+function parseAddLinesAnswer(data: unknown): { added: string[]; merged: string[] } | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as { added?: unknown; merged?: unknown };
+  const ids = (v: unknown): string[] | null =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+  const added = ids(d.added);
+  const merged = ids(d.merged);
+  return added && merged ? { added, merged } : null;
+}
+
+/** order_item_not_addable's detail ({"itemId", "reason"}), or null. */
+function notAddableDetail(details: string | null | undefined): { itemId: string; reason: string } | null {
+  try {
+    const d = JSON.parse(details ?? '') as { itemId?: unknown; reason?: unknown };
+    return typeof d?.itemId === 'string' && typeof d?.reason === 'string'
+      ? { itemId: d.itemId, reason: d.reason }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** What started a hold (F2-2), recorded on its audit entry. */
@@ -1630,6 +1656,8 @@ export class OrderRequestsService {
       awaiting_first_receipt: boolean;
       is_rental: boolean;
       is_bundle: boolean | null;
+      /** 0413: false = hidden from new ordering (Manage order items). */
+      order_catalog_visible: boolean;
     }>
   > {
     const ctx = this.ctx;
@@ -1638,7 +1666,9 @@ export class OrderRequestsService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
-          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt, is_rental, is_bundle')
+          .select(
+            'id, name, warehouse_id, unit_cost, awaiting_first_receipt, is_rental, is_bundle, order_catalog_visible',
+          )
           .eq('organization_id', ctx.organizationId)
           .in('id', batch)
           .order('id')
@@ -2015,19 +2045,27 @@ export class OrderRequestsService {
     if (lines.length === 0) {
       throw new ServiceError('validation_error', 'Pick at least one item to add.');
     }
+    if (lines.length > ADD_LINES_MAX) {
+      throw new ServiceError('validation_error', `Add up to ${ADD_LINES_MAX} items at a time.`);
+    }
     for (const l of lines) {
       if (!Number.isFinite(l.quantity) || l.quantity <= 0) {
         throw new ServiceError('validation_error', 'Every added line needs a quantity above zero.');
       }
     }
 
-    const h = await this.loadEditableOrderHeader(id, {
+    const copy = {
       inTransit: 'This order is already out for delivery — create a new order for the extra items.',
       forbidden: 'Only the requester or someone who can approve orders may add items to it.',
-    });
+    };
+    const h = await this.loadEditableOrderHeader(id, copy);
 
-    // Validate items exactly like create(): must exist in-org, sit in THIS
-    // order's warehouse, and not be an unreceived (expected) phantom.
+    // The friendly pre-check, exactly like create(): each item must exist
+    // in-org, sit in THIS order's warehouse, not be an unreceived (expected)
+    // phantom, a rental or a kit, and not be hidden from new ordering (0413).
+    // It names the item in the person's own words; the database repeats every
+    // check inside the write (add_order_request_lines), so nothing here is the
+    // last word.
     const itemIds = [...new Set(lines.map((l) => l.itemId))];
     const items = await this.readOrderItems(itemIds);
     const itemMap = new Map(items.map((r) => [r.id, r]));
@@ -2048,115 +2086,39 @@ export class OrderRequestsService {
       }
       if (it.is_rental === true) throw rentalItemNotOrderable(it.name);
       if (it.is_bundle === true) throw kitStockNotOrderable(it.name);
+      if (it.order_catalog_visible === false) throw itemHiddenFromOrders(it.id, it.name);
     }
 
-    // Existing lines — an item already on the order is topped up, not duplicated.
-    const { data: existing, error: eErr } = await this.ctx.supabase
-      .from('order_request_lines')
-      .select('id, item_id, quantity_requested')
-      .eq('order_request_id', h.id);
-    if (eErr) throw new ServiceError('internal_error', eErr.message);
-    const existingByItem = new Map(
-      ((existing ?? []) as Array<{ id: string; item_id: string; quantity_requested: number }>).map(
-        (r) => [r.item_id, r],
-      ),
-    );
-
-    // Collapse duplicate itemIds in the caller's payload first.
-    const wanted = new Map<string, number>();
-    for (const l of lines) wanted.set(l.itemId, (wanted.get(l.itemId) ?? 0) + l.quantity);
-
-    let merged = 0;
-    let added = 0;
-    // Service role: see the note on the merge branch below.
-    const admin = createAdminClient();
-    const toInsert: Array<Record<string, unknown>> = [];
-    const mergedItems: Array<[string, number]> = [];
-    // The top-ups below are separate, COMMITTED statements, and the insert of
-    // the new lines comes after them (returns RX-3 fix round 1, desk check
-    // F1). A failure after a top-up must never be "Busy. Try again." (which
-    // promises nothing was written): a resend would add the merged quantities
-    // a second time, and the holds and the pick would follow. So busy is said
-    // only while nothing has been written; after that the answer is the
-    // non-retryable partial conflict, the audit records what was saved, and
-    // the person reloads the order. A single function for Add items (one
-    // transaction) is the later fix (a follow-up for a migration slice).
-    const failAfterWrite = async (
-      err: { message?: string | null; code?: string | null },
-      stage: 'merge' | 'insert',
-    ): Promise<never> => {
-      const guard = stage === 'insert' ? orderGuardRefusal(err) : null;
-      if (merged === 0) {
-        throw guard ?? orderBusyRefusal(err) ?? new ServiceError('internal_error', err.message ?? 'add lines failed');
-      }
-      if (!guard) {
-        void reportSrvError(new Error(err.message ?? 'add lines failed'), {
-          tag: 'orders.add_lines_partial',
-          organizationId: this.ctx.organizationId,
-          extra: { orderId: h.id, stage, code: err.code ?? null, merged },
-        });
-      }
-      await this.auditLinesAdded(h, itemMap, mergedItems, { added: 0, merged, partial: true });
-      throw addLinesPartialRefusal(guard?.message ?? null);
-    };
-    for (const [itemId, qty] of wanted) {
-      const prior = existingByItem.get(itemId);
-      if (prior) {
-        // PRIVILEGED write. order_request_lines carries RLS policies
-        // order_request_lines_no_update / _no_delete, both USING false (mig
-        // 0049, deliberate: "once a line is created it shouldn't be mutated
-        // outside the SQL approve/deliver/cancel functions"). Through the
-        // USER client this UPDATE therefore matched ZERO rows and PostgREST
-        // returned no error, so the top-up silently did nothing while the
-        // caller was told it merged. Shipped that way this morning and caught
-        // in review the same day.
-        //
-        // Opening RLS is the WRONG fix: policies are row-level, not
-        // column-level, so an UPDATE policy permissive enough to allow this
-        // would also let any requester write quantity_fulfilled/quantity_picked
-        // straight through PostgREST. The gates live in this method; the write
-        // goes through the service role, scoped to the line AND the order.
-        const { data: mergedRow, error: uErr } = await admin
-          .from('order_request_lines')
-          .update({ quantity_requested: Number(prior.quantity_requested) + qty })
-          .eq('id', prior.id)
-          .eq('order_request_id', h.id)
-          .select('id')
-          .maybeSingle();
-        if (uErr) await failAfterWrite(uErr, 'merge');
-        // Fail CLOSED: no row back means nothing changed, so never report success.
-        if (!mergedRow) {
-          if (merged > 0) await failAfterWrite({ message: 'merge matched no row' }, 'merge');
-          throw new ServiceError(
-            'internal_error',
-            'Could not update the existing line. Nothing was changed.',
-          );
-        }
-        merged += 1;
-        mergedItems.push([itemId, qty]);
-      } else {
-        toInsert.push({
-          order_request_id: h.id,
-          item_id: itemId,
-          quantity_requested: qty,
-          unit_cost_at_request: itemMap.get(itemId)?.unit_cost ?? 0,
-        });
-        added += 1;
-      }
+    // ONE TRANSACTION (0413). add_order_request_lines tops up the lines
+    // already on the order (through _order_request_line_top_up) and inserts
+    // the new ones as the caller, one item at a time in item-id order, with
+    // the insert policy, both line guards and the ordering-visibility gate
+    // firing inside each write. Any refusal rolls the whole change back, so a
+    // refused or busy answer always means nothing was written. It used to be
+    // separately committed service-role top-ups followed by an insert, which
+    // could save part of a change and then refuse the rest (returns RX-3 fix
+    // round 1 named this function as the later fix). Entries of one item are
+    // summed by the database, as this method used to sum them.
+    const { data, error } = await this.ctx.supabase.rpc('add_order_request_lines', {
+      p_order_id: h.id,
+      p_lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+    });
+    if (error) throw this.addLinesRefusal(error, itemMap, copy);
+    const answer = parseAddLinesAnswer(data);
+    // Fail CLOSED: an answer that does not say what was written is never
+    // reported as a change.
+    if (!answer) {
+      throw new ServiceError('internal_error', 'add_order_request_lines answered an unexpected shape');
     }
-    if (toInsert.length > 0) {
-      const { error: insErr } = await this.ctx.supabase
-        .from('order_request_lines')
-        .insert(toInsert);
-      // The line guard's refusal (0365) is a sentence for the user, not a
-      // fault; busy only while no top-up was written (failAfterWrite).
-      if (insErr) await failAfterWrite(insErr, 'insert');
-    }
+    const added = answer.added.length;
+    const merged = answer.merged.length;
 
     // A slip printed BEFORE this change no longer matches the order.
     const pickSlipStale = h.pick_slip_generated_at != null;
 
-    await this.auditLinesAdded(h, itemMap, [...wanted.entries()], { added, merged, partial: false });
+    const wanted = new Map<string, number>();
+    for (const l of lines) wanted.set(l.itemId, (wanted.get(l.itemId) ?? 0) + l.quantity);
+    await this.auditLinesAdded(h, itemMap, [...wanted.entries()], { added, merged });
 
     // After the lines are written (and audited): hold them, when an approver
     // added them at a hold status. Never undoes the add.
@@ -2164,12 +2126,95 @@ export class OrderRequestsService {
     return { added, merged, pickSlipStale, hold };
   }
 
+  /**
+   * add_order_request_lines' refusal as the ServiceError Add items shows,
+   * matched by the function's hint (never its message text), in the words of
+   * the pre-checks above. The line guards' own sentences (0365) pass through;
+   * a lock wait, timeout or deadlock is busy (nothing was written, so sending
+   * again is safe); anything else is internal_error.
+   */
+  private addLinesRefusal(
+    error: { message?: string | null; code?: string | null; hint?: string | null; details?: string | null },
+    itemMap: Map<string, { name: string }>,
+    copy: { inTransit: string; forbidden: string },
+  ): ServiceError | ForbiddenError {
+    const nameOf = (itemId: string | null | undefined) => (itemId ? itemMap.get(itemId)?.name : undefined);
+    switch (error.hint) {
+      case 'order_item_hidden': {
+        const itemId = typeof error.details === 'string' ? error.details : null;
+        return itemHiddenFromOrders(itemId, nameOf(itemId) ?? '');
+      }
+      case 'order_item_not_addable': {
+        const d = notAddableDetail(error.details);
+        const name = nameOf(d?.itemId);
+        if (d && name) {
+          switch (d.reason) {
+            case 'other_warehouse':
+              return new ServiceError('validation_error', `${name} isn't stocked at this order's warehouse.`);
+            case 'awaiting_first_receipt':
+              return new ServiceError(
+                'validation_error',
+                `This item hasn't been received yet: ${name}. It can be ordered once its first stock arrives.`,
+              );
+            case 'rental':
+              return rentalItemNotOrderable(name);
+            case 'kit':
+              return kitStockNotOrderable(name);
+            default:
+              break;
+          }
+        }
+        // Not found, deleted, or an item this caller did not read: the line
+        // guard's own sentence, which names no item.
+        return new ServiceError(
+          'validation_error',
+          'That item cannot be ordered: it is deleted, a rental item, or not received yet.',
+        );
+      }
+      case 'order_lines_invalid':
+        return new ServiceError(
+          'validation_error',
+          error.details === 'quantity'
+            ? 'Every added line needs a whole quantity from 1 to 100,000.'
+            : `Pick between 1 and ${ADD_LINES_MAX} items to add.`,
+        );
+      case 'order_not_found':
+        return new ServiceError('not_found', 'Order not found');
+      case 'replacement_lines_fixed':
+        return new ServiceError('forbidden', RETURN_ERROR_WORDS.replacementLinesFixed, {
+          reason: 'replacement_lines_fixed',
+        });
+      case 'order_closed':
+        return new ServiceError(
+          'conflict',
+          error.details === 'in_transit'
+            ? copy.inTransit
+            : `This order is ${error.details ?? 'closed'} and can no longer be changed.`,
+        );
+      case 'order_edit_forbidden':
+        return new ServiceError('forbidden', copy.forbidden);
+      case 'warehouse_read':
+        return new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
+      case 'module_disabled':
+        return new ServiceError('module_disabled', 'Module not enabled for this organization: orders');
+      case 'unauthenticated':
+        return new ServiceError('unauthenticated', 'Sign in again to change this order.');
+      default:
+        break;
+    }
+    return (
+      orderGuardRefusal(error) ??
+      orderBusyRefusal(error) ??
+      new ServiceError('internal_error', error.message ?? 'add lines failed')
+    );
+  }
+
   /** The order's history row for Add items: what was added and topped up. */
   private async auditLinesAdded(
     h: { id: string; status: OrderRequestStatus; pick_slip_generated_at: string | null },
     itemMap: Map<string, { name: string }>,
     items: Array<[string, number]>,
-    counts: { added: number; merged: number; partial: boolean },
+    counts: { added: number; merged: number },
   ): Promise<void> {
     await audit(
       {
@@ -2179,8 +2224,6 @@ export class OrderRequestsService {
         after: {
           added: counts.added,
           merged: counts.merged,
-          // Only on a partial add: the top-ups were saved, the rest was not.
-          ...(counts.partial ? { partial: true } : {}),
           items: items.map(([itemId, qty]) => ({
             itemId,
             name: itemMap.get(itemId)?.name ?? null,
@@ -2660,10 +2703,31 @@ export class OrderRequestsService {
       }
     }
 
+    // RAISING is new demand (0413): an item hidden from new ordering (Manage
+    // order items) cannot be raised, named from the caller's own read. The
+    // database gate refuses the same raise inside the write (order_item_hidden,
+    // mapped below), so a hide after this read is still refused. Lowering is
+    // never checked: existing demand may always shrink.
+    let raisedItemName: string | null = null;
+    if (quantity > prior) {
+      const { data: itemRow, error: itemErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, name, order_catalog_visible')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', line.item_id)
+        .maybeSingle();
+      if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+      const it = itemRow as { name?: string | null; order_catalog_visible?: boolean | null } | null;
+      raisedItemName = it?.name ?? null;
+      if (it?.order_catalog_visible === false) {
+        throw itemHiddenFromOrders(line.item_id, raisedItemName ?? '');
+      }
+    }
+
+    // PRIVILEGED, and fail CLOSED. RLS forbids end-user UPDATE on this table
+    // by design (order_request_lines_no_update, USING false), so the user
+    // client would match zero rows and report success.
     const admin = createAdminClient();
-    // PRIVILEGED, and fail CLOSED — see the note in addLines' merge branch.
-    // RLS forbids end-user UPDATE on this table by design, so the user client
-    // would match zero rows and report success.
     const { data: changed, error: uErr } = await admin
       .from('order_request_lines')
       .update({ quantity_requested: quantity })
@@ -2672,7 +2736,10 @@ export class OrderRequestsService {
       .select('id')
       .maybeSingle();
     // One statement, nothing written before it: busy is safe to send again.
-    if (uErr) throw orderBusyRefusal(uErr) ?? new ServiceError('internal_error', uErr.message);
+    if (uErr) {
+      if (uErr.hint === 'order_item_hidden') throw itemHiddenFromOrders(line.item_id, raisedItemName ?? '');
+      throw orderBusyRefusal(uErr) ?? new ServiceError('internal_error', uErr.message);
+    }
     if (!changed) {
       throw new ServiceError(
         'conflict',
@@ -2716,8 +2783,9 @@ export class OrderRequestsService {
       reservationFailure = synced.failure;
     }
 
-    // One lookup, shared by the audit payload and the requester notification.
-    const itemName = await this.lineItemName(line.item_id);
+    // One lookup, shared by the audit payload and the requester notification
+    // (a raise already read the name in its pre-check).
+    const itemName = raisedItemName ?? (await this.lineItemName(line.item_id));
     await audit(
       {
         event: 'order_request.line_quantity_changed',
