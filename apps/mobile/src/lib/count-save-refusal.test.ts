@@ -172,16 +172,108 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
     return { run, alert, setBusy, setScannedMap, sync };
   }
 
-  it('is said in the sentence, and the scanner is free for the next scan', async () => {
+  it('is said in the sentence, and the scanner takes the next scan once the alert is answered', async () => {
     const { run, alert, setBusy, setScannedMap, sync } = recordCount(refused());
 
     await expect(run({ id: 'l1' }, 3)).resolves.toBe(false);
 
-    expect(alert.mock.calls).toEqual([['Count not saved', LOADING]]);
-    // Left busy, onBarcode ignored every scan after this one.
-    expect(setBusy.mock.calls).toEqual([[true], [false]]);
+    expect(alert).toHaveBeenCalledTimes(1);
+    const [title, message, buttons, options] = alert.mock.calls[0] as [
+      string,
+      string,
+      { text: string; onPress?: () => void }[],
+      { cancelable?: boolean; onDismiss?: () => void },
+    ];
+    expect([title, message]).toEqual(['Count not saved', LOADING]);
+    // Paused while the alert is up (the camera stays on the code)...
+    expect(setBusy.mock.calls).toEqual([[true]]);
     expect(setScannedMap).not.toHaveBeenCalled();
     expect(sync.forceSync).not.toHaveBeenCalled();
+    // ...and free once it is answered: OK, or (Android) dismissed.
+    expect(buttons.map((b) => b.text)).toEqual(['OK']);
+    buttons[0]!.onPress!();
+    expect(setBusy.mock.calls).toEqual([[true], [false]]);
+    expect(options.cancelable).toBe(true);
+    options.onDismiss!();
+    expect(setBusy.mock.calls.at(-1)).toEqual([false]);
+  });
+
+  /**
+   * One scanner visit in Burst, the camera held on one barcode. Each scan is
+   * handled by the onBarcode and recordCount of the render it lands in (a
+   * render's handlers read that render's state), rebuilt here from the
+   * screen's source with the state at that moment.
+   */
+  function burstSession(updateLocalLine: ReturnType<typeof vi.fn>) {
+    const state = {
+      busy: false,
+      lastScan: null as { code: string; at: number } | null,
+      scannedMap: new Map<string, number>(),
+    };
+    const alert = vi.fn();
+    const line = { id: 'l1', itemBarcode: 'CODE-1', itemSku: 'SKU-1', counted: 2, expected: 5 };
+    let clock = 1000;
+    const sync = syncStub();
+    function scan(code: string) {
+      const recordCount = screenFunction(SCANNER, 'recordCount', {
+        setBusy: (v: boolean) => {
+          state.busy = v;
+        },
+        updateLocalLine,
+        countNotSavedAlert,
+        reportPhoneSaveFailure: vi.fn(),
+        Alert: { alert },
+        setScannedMap: (f: (m: Map<string, number>) => Map<string, number>) => {
+          state.scannedMap = f(state.scannedMap);
+        },
+        setLines: vi.fn(),
+        cycleCountSync: sync,
+      });
+      const onBarcode = screenFunction<(e: { data: string }) => Promise<void>>(
+        SCANNER,
+        'onBarcode',
+        {
+          busy: state.busy,
+          lastScan: state.lastScan,
+          setLastScan: (v: { code: string; at: number }) => {
+            state.lastScan = v;
+          },
+          Date: { now: () => clock },
+          findLineByCode: screenFunction(SCANNER, 'findLineByCode', { lines: [line] }),
+          Alert: { alert },
+          burstMode: true,
+          scannedMap: state.scannedMap,
+          recordCount,
+          setSheet: vi.fn(),
+        },
+      );
+      const done = onBarcode({ data: code });
+      clock += 700; // the camera fires again past the 600 ms de-dupe
+      return done;
+    }
+    return { scan, alert, state };
+  }
+
+  it('in Burst, scans during a refusal wait for the alert: one alert, not one per scan', async () => {
+    const save = refused();
+    const { scan, alert, state } = burstSession(save);
+
+    await scan('CODE-1');
+    await scan('CODE-1');
+    await scan('CODE-1');
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0]!.slice(0, 2)).toEqual(['Count not saved', LOADING]);
+
+    // Answered, and the workspace has loaded: the next scan is taken.
+    (alert.mock.calls[0]![2] as { onPress: () => void }[])[0]!.onPress();
+    save.mockResolvedValue({ outboxId: 1, idempotencyKey: 'k1' });
+    await scan('CODE-1');
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith('l1', 3);
+    expect(state.scannedMap.get('l1')).toBe(3);
+    expect(alert).toHaveBeenCalledTimes(1);
   });
 
   it('a saved count answers true and is sent', async () => {

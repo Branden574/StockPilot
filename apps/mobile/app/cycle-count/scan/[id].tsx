@@ -136,11 +136,16 @@ function CycleCountScanScreenInner() {
     } catch (e) {
       // Not saved and not queued: the outbox refused it (no account, or the
       // workspace still loading) or the phone's store failed. Said
-      // (count-save-refusal.ts), and the scanner takes the next scan: left
-      // busy, it ignored every scan after this one.
-      setBusy(false);
+      // (count-save-refusal.ts). The scanner stays busy until the alert is
+      // answered, then takes the next scan: left busy for good, it ignored
+      // every scan after this one; freed at once, the camera still on the
+      // code ran the same refused save every 600 ms in Burst, one alert each.
+      const free = () => setBusy(false);
       const { title, message } = countNotSavedAlert(e);
-      Alert.alert(title, message);
+      Alert.alert(title, message, [{ text: 'OK', onPress: free }], {
+        cancelable: true,
+        onDismiss: free,
+      });
       return false;
     }
     setScannedMap((m) => new Map(m).set(line.id, qty));
