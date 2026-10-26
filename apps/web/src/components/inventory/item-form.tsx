@@ -1115,11 +1115,35 @@ export function ItemForm({
   );
 
   // If the warehouse changes and the current charter no longer fits, clear it.
+  //
+  // Except a record's OWN charter on its own warehouse when editing (B26).
+  // This used to run on load too, so a record whose charter its warehouse no
+  // longer lists (an admin unlinked it after the record got it) opened showing
+  // Generic, and saving any other field sent Generic and took the record's
+  // charter away. That charter now shows as the record's own
+  // (`unlinkedCharter`) and is sent back unchanged; the server checks the pair
+  // only when the charter or the warehouse changes.
+  const loadedPlacementRef = React.useRef({
+    warehouseId: watchedWarehouseId,
+    charterId: watchedCharterId,
+  });
   React.useEffect(() => {
+    const ownCharter =
+      isEdit &&
+      watchedWarehouseId === loadedPlacementRef.current.warehouseId &&
+      watchedCharterId === loadedPlacementRef.current.charterId;
+    if (ownCharter) return;
     if (watchedCharterId && !allowedCharterIds.has(watchedCharterId)) {
       setValue('charterId', null);
     }
-  }, [watchedCharterId, allowedCharterIds, setValue]);
+  }, [isEdit, watchedWarehouseId, watchedCharterId, allowedCharterIds, setValue]);
+  const unlinkedCharter =
+    watchedCharterId && !allowedCharterIds.has(watchedCharterId)
+      ? {
+          id: watchedCharterId,
+          name: charterById.get(watchedCharterId) ?? `This record's ${charterLabel.toLowerCase()}`,
+        }
+      : null;
 
   async function uploadStagedImages(itemId: string) {
     if (staged.length === 0) return { uploaded: 0, failed: 0 };
@@ -2364,6 +2388,11 @@ export function ItemForm({
                 <SelectItem value="__generic">
                   Generic — any {charterLabel.toLowerCase()}
                 </SelectItem>
+                {unlinkedCharter ? (
+                  <SelectItem value={unlinkedCharter.id}>
+                    {unlinkedCharter.name} (not linked to this {warehouseLabel.toLowerCase()})
+                  </SelectItem>
+                ) : null}
                 {allowedCharters.length === 0 && watchedWarehouseId ? (
                   <div className="text-muted-foreground px-3 py-2 text-[12px]">
                     No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}{' '}

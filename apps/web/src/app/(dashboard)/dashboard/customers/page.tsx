@@ -3,7 +3,7 @@ import { TriangleAlert } from 'lucide-react';
 
 import { CustomersPanel } from '@/components/customers/customers-panel';
 import { PortalPricingModePanel } from '@/components/customers/portal-pricing-mode-panel';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader } from '@/components/patterns/page-header';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -23,7 +23,7 @@ import { can, planAllowsB2bPortal, resolvePortalPricingMode, type OrgBillingStat
 export default async function CustomersPage() {
   const moduleAccess = await checkModuleAccess('b2b_portal');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="b2b_portal" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="b2b_portal" access={moduleAccess} />;
   }
 
   const ctx = await requireOrgContext();

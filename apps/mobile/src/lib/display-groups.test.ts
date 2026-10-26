@@ -11,6 +11,7 @@ import {
   ADD_TO_GROUP_ACTION,
   attachDisplayGroups,
   describeGroupingError,
+  groupChoiceRadioNamesById,
   listIsNarrowed,
   groupSelectedHref,
   keyedGroupingBody,
@@ -611,11 +612,59 @@ describe('screen pins', () => {
   });
 
   // Recheck R2-5: each record's choice is named for its record with core's
-  // words, the same names the web's radios carry.
+  // words, the same names the web's radios carry. Redesign Stage 6
+  // (GROUP-REVIEW-RADIO-NAMES): both radios read their names from the
+  // review's names, worked out once per review by groupChoiceRadioNamesById,
+  // which also tells apart records whose names a screen reader says the same
+  // way (group-choice-radio-names.test.ts runs it and the screen). A record
+  // whose name is its own still has core's words alone.
   it("each record's Move it and Leave it out choice is named for its record with core's words (R2-5)", () => {
     const screen = read('../../app/group-selected.tsx');
-    expect(screen).toContain('GROUP_COPY.moveOneFor(r.name)');
-    expect(screen).toContain('GROUP_COPY.leaveOutOneFor(r.name)');
+    expect(screen).toContain("['move', moving, GROUP_COPY.moveOne, names.move],");
+    expect(screen).toContain("['leave', leaving, GROUP_COPY.leaveOutOne, names.leave],");
+    expect(screen).toContain('accessibilityLabel={a11yLabel}');
+    expect(screen).toContain('const names = choiceNames.get(r.id);');
+    expect(screen).toMatch(
+      /const choiceNames = React\.useMemo\(\s*\(\) =>\s*groupChoiceRadioNamesById\([\s\S]*?\),\s*\[choiceIds, review, view\],\s*\);/,
+    );
+    // Two records in one group, each with a name of its own.
+    const inOldShirts = (id: string, name: string): PhoneGroupingRecord => ({
+      id,
+      name,
+      sku: name.toUpperCase(),
+      barcode: null,
+      isbnFields: null,
+      itemType: 'product',
+      isBundle: false,
+      isRental: false,
+      productGroupId: null,
+      productGroupName: null,
+      variantSize: null,
+      charterId: null,
+      warehouseId: null,
+      binLocation: null,
+      customFields: null,
+      quantityOnHand: 4,
+      createdAt: null,
+      displayGroup: { id: G, name: 'Old shirts', version: 3 },
+      writable: true,
+      charterName: null,
+      warehouseName: null,
+      placementLabel: null,
+      imageUrl: null,
+    });
+    expect(
+      groupChoiceRadioNamesById(
+        [A, B],
+        [inOldShirts(A, 'Polo S'), inOldShirts(B, 'Polo M')],
+        'items',
+      ),
+    ).toEqual(
+      new Map([
+        [A, { move: GROUP_COPY.moveOneFor('Polo S'), leave: GROUP_COPY.leaveOutOneFor('Polo S') }],
+        [B, { move: GROUP_COPY.moveOneFor('Polo M'), leave: GROUP_COPY.leaveOutOneFor('Polo M') }],
+      ]),
+    );
   });
 
   // Recheck R2-4: "Add them to the selection" stays within one request's 100

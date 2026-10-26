@@ -78,6 +78,10 @@
       "schedule": "0 16 * * *"
     },
     {
+      "path": "/api/cron/maintenance-orphan-escalations",
+      "schedule": "20 15 * * *"
+    },
+    {
       "path": "/api/cron/exception-occurrences",
       "schedule": "*/15 * * * *"
     },

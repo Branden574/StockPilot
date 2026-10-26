@@ -1,7 +1,7 @@
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
 import { AutoReorderPanel } from '@/components/settings/auto-reorder-panel';
 import { PlanningParamsPanel } from '@/components/settings/planning-params-panel';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -38,7 +38,7 @@ const NUM = 'whitespace-nowrap text-right font-mono text-[13px] tabular-nums';
 export default async function PlanningPage() {
   const moduleAccess = await checkModuleAccess('planning');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="planning" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="planning" access={moduleAccess} />;
   }
 
   const ctx = await requireOrgContext();
