@@ -21,6 +21,10 @@ import { reportPhoneSaveFailure } from './phone-save-report';
  */
 
 const LOADING = 'Your workspace is still loading. Try again in a moment.';
+const NO_ACCOUNT = 'No signed-in account to queue this change for. Sign in and try again.';
+
+/** Lets a fire-and-forget save (`void (async () => ...)()`) finish. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // reportPhoneSaveFailure runs for real; only Sentry itself is stood in for.
 const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
@@ -33,10 +37,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
-const NO_ACCOUNT = 'No signed-in account to queue this change for. Sign in and try again.';
-
-/** Lets a fire-and-forget save (`void (async () => ...)()`) finish. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const refused = () => vi.fn(async () => Promise.reject(new OutboxWorkspaceLoadingError()));
 const saved = () => vi.fn(async () => ({ outboxId: 1, idempotencyKey: 'k1' }));
@@ -273,7 +273,9 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
   }
 
   it('in Burst, scans during a refusal wait for the alert: one alert, not one per scan', async () => {
-    const save = refused();
+    const save = vi.fn(async (): Promise<{ outboxId: number; idempotencyKey: string }> => {
+      throw new OutboxWorkspaceLoadingError();
+    });
     const { scan, alert, state } = burstSession(save);
 
     await scan('CODE-1');
