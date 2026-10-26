@@ -11,7 +11,7 @@ vi.mock('@/lib/env', () => envHolder);
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
 
 /**
  * The thumbnail backfill (B31): makes each missing thumbnail from its photo
@@ -217,6 +217,41 @@ describe('POST /api/admin/backfill-item-thumbs: the secret', () => {
   it('refuses a wrong secret', async () => {
     expect((await call(`?ids=${ROW_A}`, 'nope')).status).toBe(401);
     expect(world.uploads).toHaveLength(0);
+  });
+});
+
+describe('GET /api/admin/backfill-item-thumbs: the probe the plan runs first', () => {
+  // The build before B31 has no GET and ignores ids and dryRun, so every
+  // authorized POST to it writes: the plan's caller asks this first and stops
+  // unless it answers, and the answer must never cost a read or a write.
+  function probe(secret = 'test-backfill-secret') {
+    return GET(
+      new Request('https://app.test/api/admin/backfill-item-thumbs', {
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+  }
+
+  it('answers what this build accepts, and touches no row or object', async () => {
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    vi.mocked(createAdminClient).mockClear();
+    const res = await probe();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      backfill: 'item-thumbs',
+      version: 2,
+      accepts: ['ids', 'limit', 'dryRun'],
+      maxIds: 60,
+    });
+    expect(createAdminClient).not.toHaveBeenCalled();
+    expect(world.uploads).toHaveLength(0);
+    expect(world.updates).toHaveLength(0);
+  });
+
+  it('refuses a wrong secret, and every probe while the secret is unset', async () => {
+    expect((await probe('nope')).status).toBe(401);
+    envHolder.env.BACKFILL_ADMIN_SECRET = undefined;
+    expect((await probe()).status).toBe(401);
   });
 });
 

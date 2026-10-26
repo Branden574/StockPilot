@@ -35,6 +35,10 @@ export const maxDuration = 300;
  * Add `dryRun=1` to either: every check runs and each row's outcome is
  * reported as `would-create` / `would-link`, and nothing is written.
  *
+ * GET, with the same secret, writes nothing and says what this build accepts:
+ * a caller asks it first, because the build before B31 ignored `ids` and
+ * `dryRun` and wrote on every call.
+ *
  * Per row:
  *   1. The thumbnail's name is the web uploader's: the photo's folder, its
  *      name without the extension, then `-thumb.webp`.
@@ -233,14 +237,35 @@ function parseIds(raw: string | null): string[] | null | string {
   return ids;
 }
 
-export async function POST(req: Request) {
-  // Fail-closed when the secret is unset/empty so an unauthenticated
-  // POST can't drive service-role storage writes.
-  if (!env.BACKFILL_ADMIN_SECRET) {
+/** The bearer secret, compared in constant time. Fail-closed when it is unset
+ *  or empty, so an unauthenticated call can't drive service-role storage writes. */
+function authorized(req: Request): boolean {
+  if (!env.BACKFILL_ADMIN_SECRET) return false;
+  const auth = req.headers.get('authorization') ?? '';
+  return secretsEqual(auth, `Bearer ${env.BACKFILL_ADMIN_SECRET}`);
+}
+
+/**
+ * What this build of the route accepts, for the reviewed plan's caller to ask
+ * BEFORE its first POST. The build before B31 has no GET (405) and ignores
+ * `ids` and `dryRun`, so any authorized POST to it writes square-cropped
+ * thumbnails over up to 40 rows of any organization; the caller stops unless
+ * this answers. Reads and writes nothing.
+ */
+export async function GET(req: Request) {
+  if (!authorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
-  const auth = req.headers.get('authorization') ?? '';
-  if (!secretsEqual(auth, `Bearer ${env.BACKFILL_ADMIN_SECRET}`)) {
+  return NextResponse.json({
+    backfill: 'item-thumbs',
+    version: 2,
+    accepts: ['ids', 'limit', 'dryRun'],
+    maxIds: MAX_LIMIT,
+  });
+}
+
+export async function POST(req: Request) {
+  if (!authorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
