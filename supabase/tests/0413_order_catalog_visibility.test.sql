@@ -66,7 +66,7 @@
 
 begin;
 
-select plan(71);
+select plan(72);
 
 \set orgA    '\'04130000-0000-0000-0000-00000000000a\''
 \set orgB    '\'04130000-0000-0000-0000-00000000000b\''
@@ -140,23 +140,23 @@ select plan(71);
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,    '0413-own@test.local',    '{}'::jsonb),
-  (:adm,    '0413-adm@test.local',    '{}'::jsonb),
-  (:mgr,    '0413-mgr@test.local',    '{}'::jsonb),
-  (:mgrD,   '0413-mgrd@test.local',   '{}'::jsonb),
-  (:stf,    '0413-stf@test.local',    '{}'::jsonb),
-  (:stfA,   '0413-stfa@test.local',   '{}'::jsonb),
-  (:vwr,    '0413-vwr@test.local',    '{}'::jsonb),
-  (:vwrA,   '0413-vwra@test.local',   '{}'::jsonb),
-  (:dis,    '0413-dis@test.local',    '{}'::jsonb),
-  (:mgrB,   '0413-mgrb@test.local',   '{}'::jsonb),
-  (:nobody, '0413-nobody@test.local', '{}'::jsonb),
-  (:plat,   '0413-plat@test.local',   '{}'::jsonb),
-  (:ownC,   '0413-ownc@test.local',   '{}'::jsonb),
-  (:mOwn,   '0413-mown@test.local',   '{}'::jsonb),
-  (:mAdm,   '0413-madm@test.local',   '{}'::jsonb),
-  (:mMgr,   '0413-mmgr@test.local',   '{}'::jsonb),
-  (:mStf,   '0413-mstf@test.local',   '{}'::jsonb)
+  (:own,    '0413-own@ordvis.test',    '{}'::jsonb),
+  (:adm,    '0413-adm@ordvis.test',    '{}'::jsonb),
+  (:mgr,    '0413-mgr@ordvis.test',    '{}'::jsonb),
+  (:mgrD,   '0413-mgrd@ordvis.test',   '{}'::jsonb),
+  (:stf,    '0413-stf@ordvis.test',    '{}'::jsonb),
+  (:stfA,   '0413-stfa@ordvis.test',   '{}'::jsonb),
+  (:vwr,    '0413-vwr@ordvis.test',    '{}'::jsonb),
+  (:vwrA,   '0413-vwra@ordvis.test',   '{}'::jsonb),
+  (:dis,    '0413-dis@ordvis.test',    '{}'::jsonb),
+  (:mgrB,   '0413-mgrb@ordvis.test',   '{}'::jsonb),
+  (:nobody, '0413-nobody@ordvis.test', '{}'::jsonb),
+  (:plat,   '0413-plat@ordvis.test',   '{}'::jsonb),
+  (:ownC,   '0413-ownc@ordvis.test',   '{}'::jsonb),
+  (:mOwn,   '0413-mown@ordvis.test',   '{}'::jsonb),
+  (:mAdm,   '0413-madm@ordvis.test',   '{}'::jsonb),
+  (:mMgr,   '0413-mmgr@ordvis.test',   '{}'::jsonb),
+  (:mStf,   '0413-mstf@ordvis.test',   '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them). Org A's MFA
 -- policy is optional so the sections before MF test one thing at a time.
@@ -418,6 +418,14 @@ select is(
                from pg_proc where oid = 'public.get_request_context()'::regprocedure),
   'false:search_path=public|true:false:true|true|false|false:false',
   'S8: the re-bodied functions keep their posture (duplicate INVOKER pinned to public; public links service-role only; candidates to authenticated; the item check no API EXECUTE; the request context INVOKER, no anon)');
+
+select is(
+  (select string_agg(m[1], ',' order by m[1])
+     from pg_constraint c, regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''::text', 'g') as m
+    where c.conrelid = 'public.platform_admin_audit'::regclass and c.conname = 'platform_admin_audit_action_check'),
+  'acted_as_end,acted_as_start,billing_changed,deletion_passphrase_set,org_deleted,org_provisioned,password_reset_sent,'
+  'permission_exception_changed,ticket_updated,user_disabled,user_reenabled,viewed_org',
+  'S9: the re-added platform audit CHECK accepts every value it accepted before (the eleven through 0308) plus permission_exception_changed, and nothing else');
 
 -- ═══ P. Who holds the capability by default ═══════════════════════════════
 select is(

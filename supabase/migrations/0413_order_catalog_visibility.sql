@@ -144,7 +144,10 @@
 -- it. The CHECK re-add takes ACCESS EXCLUSIVE on platform_admin_audit. The
 -- new triggers take SHARE ROW EXCLUSIVE on order_request_lines and the three
 -- permission tables. The SQL-language functions read their tables when they
--- are created (ACCESS SHARE). One prelude takes every table lock the file
+-- are created, and the preflight's second half deparses two policies that
+-- name order_requests (ACCESS SHARE). The preflight's first half reads the
+-- catalogs only, so nothing is held before the prelude. One prelude takes
+-- every table lock the file
 -- needs at once, all NOWAIT, in a bounded retry (40 attempts, 50 to 150 ms
 -- apart, holding nothing between attempts; the last busy attempt raises 55P03
 -- and nothing is applied). No later statement takes a new lock on an
@@ -206,23 +209,8 @@ begin
     end if;
   end loop;
 
-  -- The two policies copied here: inventory_items_select (the visibility
-  -- write's scope query) and order_request_lines_insert (Add items inserts
-  -- as the caller under it; the top-up helper restates its rules).
-  for r in
-    select v.pol, v.want, (select md5(coalesce(pg_get_expr(p.polqual, p.polrelid), '') || '|'
-                                      || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), ''))
-                             from pg_policy p
-                            where p.polname = v.pol and p.polrelid = to_regclass(v.tbl)) as got
-      from (values
-        ('inventory_items_select',     'public.inventory_items',     '2596e419ad1bbf05b3af382e8543afa0'),
-        ('order_request_lines_insert', 'public.order_request_lines', '1148ba4defc9bcae9e744bd8a04dd82c')
-      ) v(pol, tbl, want)
-  loop
-    if r.got is distinct from r.want then
-      v_bad := v_bad || format(' policy %s drifted (md5 %s);', r.pol, coalesce(r.got, 'missing'));
-    end if;
-  end loop;
+  -- (The two copied policies are checked right after the lock prelude:
+  -- deparsing a policy expression opens every table it names.)
 
   -- The action CHECK this file restates, as 0308 left it.
   if (select md5(pg_get_constraintdef(c.oid)) from pg_constraint c
@@ -249,12 +237,12 @@ begin
                                      '_order_items_hidden_from_orders', 'add_order_request_lines',
                                      '_order_request_line_top_up', 'tg_inventory_items_order_visibility_guard',
                                      'tg_platform_managed_permission_guard',
-                                     'tg_order_request_lines_order_visibility'))
-     or exists (select 1 from public.role_default_permissions where permission = 'orders:manage_catalog_visibility')
-     or exists (select 1 from public.role_permission_overrides where permission = 'orders:manage_catalog_visibility')
-     or exists (select 1 from public.user_permission_overrides where permission = 'orders:manage_catalog_visibility') then
+                                     'tg_order_request_lines_order_visibility')) then
     v_bad := v_bad || ' the ordering-visibility objects already exist;';
   end if;
+  -- (The permission rows are checked right after the lock prelude: reading a
+  -- table here would hold its ACCESS SHARE lock through the prelude's retry
+  -- pauses. This block reads the catalogs only.)
 
   if v_bad <> '' then
     raise exception 'order_visibility_preflight: %', v_bad
@@ -282,9 +270,11 @@ begin
       -- Read when the SQL-language functions below are created (their bodies
       -- are checked then): ACCESS SHARE, which only a schema change conflicts
       -- with, taken here so no later statement can wait.
+      -- order_requests: read when the copied order_request_lines_insert
+      -- policy is deparsed by the preflight's second half.
       lock table only public.organization_members, public.organization_modules, public.user_profiles,
                       public.public_request_links, public.public_link_catalog_entries,
-                      public.warehouses, public.categories
+                      public.warehouses, public.categories, public.order_requests
         in access share mode nowait;
       exit;
     exception when lock_not_available then
@@ -297,6 +287,43 @@ begin
 end $lock$;
 
 set lock_timeout = '900ms';
+
+-- The rest of the preflight, now that every table it reads is locked: the two
+-- copied policies must be the text this file was written against, and no row
+-- for the new key may exist yet (half applied by hand).
+do $preflight_locked$
+declare
+  v_bad text := '';
+  r record;
+begin
+  -- The two policies copied here: inventory_items_select (the visibility
+  -- write's scope query) and order_request_lines_insert (Add items inserts
+  -- as the caller under it; the top-up helper restates its rules).
+  for r in
+    select v.pol, v.want, (select md5(coalesce(pg_get_expr(p.polqual, p.polrelid), '') || '|'
+                                      || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), ''))
+                             from pg_policy p
+                            where p.polname = v.pol and p.polrelid = to_regclass(v.tbl)) as got
+      from (values
+        ('inventory_items_select',     'public.inventory_items',     '2596e419ad1bbf05b3af382e8543afa0'),
+        ('order_request_lines_insert', 'public.order_request_lines', '1148ba4defc9bcae9e744bd8a04dd82c')
+      ) v(pol, tbl, want)
+  loop
+    if r.got is distinct from r.want then
+      v_bad := v_bad || format(' policy %s drifted (md5 %s);', r.pol, coalesce(r.got, 'missing'));
+    end if;
+  end loop;
+  if exists (select 1 from public.role_default_permissions where permission = 'orders:manage_catalog_visibility')
+     or exists (select 1 from public.role_permission_overrides where permission = 'orders:manage_catalog_visibility')
+     or exists (select 1 from public.user_permission_overrides where permission = 'orders:manage_catalog_visibility') then
+    v_bad := v_bad || ' permission rows for orders:manage_catalog_visibility already exist;';
+  end if;
+  if v_bad <> '' then
+    raise exception 'order_visibility_preflight: %', v_bad
+      using errcode = '55000', hint = 'order_visibility_preflight';
+  end if;
+end
+$preflight_locked$;
 
 -- ═══ 2. The columns ═══════════════════════════════════════════════════════
 -- NOT NULL DEFAULT true is a catalog-only change (no rewrite, no backfill):
