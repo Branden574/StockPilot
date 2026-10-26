@@ -186,11 +186,13 @@ export class MaintenanceAttachmentsService {
    * enabled, caller holds at least `maintenance_requests:submit` (the same
    * low bar as creating a request — also the MFA step-up trigger, via
    * assertPermission), the parent request exists in this org, the caller is
-   * either its requester or a manage-holder (mirrors 0314's
-   * maintenance_request_attachments_insert/_delete RLS ownership clause),
-   * and the request is not archived/cancelled — UNCONDITIONALLY, matching
-   * that same RLS policy's `r.archived_at is null and r.cancelled_at is
-   * null` clause, which applies regardless of role. Storage's own INSERT
+   * either its requester or a manage-holder (mirrors the ownership clause of
+   * the maintenance_request_attachments_delete RLS policy, and of the INSERT
+   * policy until 0407 dropped it: finalize writes the row with the service
+   * role, so for an insert this check is the only gate), and the request is
+   * not archived/cancelled — UNCONDITIONALLY, matching that same RLS
+   * policy's `r.archived_at is null and r.cancelled_at is null` clause,
+   * which applies regardless of role. Storage's own INSERT
    * policy (0315) only checks the org prefix, not per-request ownership —
    * this check is the ONLY place that boundary is enforced for a fresh
    * mint, since mint never touches the attachments table's RLS at all.
@@ -205,9 +207,11 @@ export class MaintenanceAttachmentsService {
    * Migration 0317: `resolved_at` closes the request the same way
    * `archived_at`/`cancelled_at` already do — the SAME message, since the
    * caller doesn't need to know WHICH closed state it hit, only that photos
-   * can no longer change. Mirrors the 0317 attachments INSERT/DELETE RLS
+   * can no longer change. Mirrors the 0317 attachments DELETE RLS
    * predicate exactly (`r.archived_at is null and r.cancelled_at is null
-   * and r.resolved_at is null`) — defense in depth, both directions.
+   * and r.resolved_at is null`; 0317's INSERT policy held the same until
+   * 0407 dropped it) — defense in depth on a delete, the only gate on an
+   * insert.
    */
   private async assertParentOwnedAndOpen(
     requestId: string,
@@ -651,11 +655,11 @@ export class MaintenanceAttachmentsService {
     const width = clean.width ?? sniffed.width;
     const height = clean.height ?? sniffed.height;
 
-    // The row is written with the SERVICE ROLE (L40), so the attachments
-    // INSERT policy can later be dropped: through it a requester could insert
-    // a row straight into the table, naming an upload that skipped every check
-    // above. The service role skips that policy too, so this call restates
-    // what it enforced:
+    // The row is written with the SERVICE ROLE (L40), which let 0407 drop the
+    // attachments INSERT policy and authenticated's INSERT privilege: through
+    // them a requester could insert a row straight into the table, naming an
+    // upload that skipped every check above. The service role skips row level
+    // security, so this call restates what that policy enforced:
     //   - uploaded_by = the caller: written from ctx below, never an input;
     //   - module on: assertModuleEnabled at the top of finalize;
     //   - kind allowed for the caller: validateKind ('resolution' needs
@@ -663,7 +667,7 @@ export class MaintenanceAttachmentsService {
     //   - request open, and the caller its requester or a manage-holder:
     //     assertParentOwnedAndOpen, run AGAIN here, just before the write,
     //     because the request may have closed while the photo was processed
-    //     (the policy checked it at insert time). A refusal here cleans up
+    //     (the policy used to check it at insert time). A refusal here cleans up
     //     the upload like every other refusal.
     try {
       await this.assertParentOwnedAndOpen(requestId);

@@ -859,7 +859,13 @@ select is(
       from pg_policy pol join pg_class c on c.oid = pol.polrelid
      where c.relnamespace = 'public'::regnamespace and c.relname in ('order_requests', 'schedule_events')
   ) g),
-  E'0380 report functions|13e9b93da345dd302ad93629ff2d1690|6\n'
+  -- Re-pinned by 0407 (was 13e9b93da345dd302ad93629ff2d1690|6): each body
+  -- lost its service-role test (the one that answered a call with no user
+  -- for service_role), and service_role lost EXECUTE (0407 R1-R4). Putting 0380's bodies and
+  -- service_role's grant back (in the original ACL order) on the post-0407
+  -- stack gives 13e9b93d|6 exactly, so nothing else moved. The functions
+  -- proven here call none of the six.
+  E'0380 report functions|0769b2794fa982df036c92971016b3cc|6\n'
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'

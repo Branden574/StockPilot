@@ -739,6 +739,17 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Grants and policy clean-up (0407, docket S9): anon and authenticated hold
+  # no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN on any public relation or in
+  # the postgres role's default privileges (the class is INV-42..INV-44 in the
+  # sweep above); the six report functions answer only a signed-in caller and
+  # service_role cannot execute them; idempotency keys are read, recorded and
+  # updated by managers of the organization only and deleted by no API role,
+  # and a receipt replay still returns the first receipt; maintenance photo
+  # rows are inserted by the service role only; item_attachments answers no
+  # API role. The data guards, the bucket delete and the lock footprint are
+  # scripts/db-concurrency/0407_migration_guards.sh.
+  supabase/tests/0407_grants_policy_cleanup.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

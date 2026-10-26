@@ -10,17 +10,19 @@
 --
 -- S. Structure: plpgsql, STABLE, SECURITY INVOKER, search_path=public and
 --    plan_cache_mode=force_custom_plan pinned; EXECUTE for authenticated,
---    never anon or PUBLIC; service_role keeps EXECUTE for the rollout only
---    (the follow-up that revokes it must change this file on purpose); the
+--    never anon or PUBLIC; service_role kept EXECUTE for the rollout only,
+--    and the follow-up, 0407, revoked it and removed the rollout branch; the
 --    gates are in every body; nothing writes or raises 40001/40P01.
--- G. Gates: signed out, and any caller with no user that is not the service
---    role (the test superuser included): 42501 unauthenticated. Another
+-- G. Gates: signed out, and any caller with no user (the test superuser
+--    included; since 0407 nobody is answered without a user): 42501
+--    unauthenticated. Another
 --    org's manager, a disabled member, a viewer without reports:read and a
 --    manager with reports:read revoked: the SAME 42501 forbidden. Bundles
 --    module off: P0001 module_disabled from the two bundle functions only.
 -- U. Unscoped readers: the owner, the manager and a manager of two orgs get
---    answers byte-identical to the service role's (the pre-0380 answer), for
---    every function and window. So do an admin with no warehouse assignment
+--    answers byte-identical to the organization-wide answer (the pre-0380
+--    answer: the same body read past RLS, see pg_temp.answer_all), for every
+--    function and window. So do an admin with no warehouse assignment
 --    and an auditor (a viewer with all_warehouses, one assignment per
 --    warehouse, reports:read and activity_logs:read granted), each also with
 --    activity_logs:read revoked: all-warehouse access gives the org-wide
@@ -35,7 +37,7 @@
 --    bundle runs the member-wide bundle_distributions policy: each equals
 --    what the persona's own client reads from those tables.
 -- X. Cross-org: a manager of two orgs asking about org A never gets org B's
---    rows, and the service role's org A answer carries none either.
+--    rows, and the organization-wide org A answer carries none either.
 --
 -- Roles: fixtures as the test superuser (RLS bypassed); persona calls run as
 -- `authenticated` with request.jwt.claim.sub set, through pg_temp wrappers.
@@ -236,14 +238,22 @@ begin
   return v;
 end $$;
 
--- The service role's answer (no user: the pre-0380 call and the rollout path).
-create function pg_temp.answer_svc(p_fn text, p_org uuid, p_days int) returns text language plpgsql as $$
-declare v text;
+-- The organization-wide answer: what the service role got before 0407 (the
+-- pre-0380 call). The same body, read past RLS: the test superuser, which
+-- owns the tables and bypasses row level security, with the user id of the
+-- organization's owner so the body's gates (signed in, member with
+-- reports:read) let it through. 0407 took service_role's EXECUTE and its
+-- no-user branch away, so the service role itself can no longer be asked.
+create function pg_temp.answer_all(p_fn text, p_org uuid, p_days int) returns text language plpgsql as $$
+declare v text; v_owner uuid;
 begin
-  perform set_config('role', 'service_role', true);
-  perform set_config('request.jwt.claim.sub', '', true);
-  v := pg_temp.answer(p_fn, p_org, p_days);
+  select m.user_id into strict v_owner
+    from public.organization_members m
+   where m.organization_id = p_org and m.role = 'owner' and m.accepted_at is not null;
   perform set_config('role', 'none', true);
+  perform set_config('request.jwt.claim.sub', v_owner::text, true);
+  v := pg_temp.answer(p_fn, p_org, p_days);
+  perform set_config('request.jwt.claim.sub', '', true);
   return v;
 end $$;
 
@@ -320,19 +330,19 @@ select is(
 select is(
   (select array_agg(f.fn order by f.fn) from fns f
     where has_function_privilege('service_role', f.sig, 'execute')),
-  (select array_agg(fn order by fn) from fns),
-  'S4: service_role keeps EXECUTE for the rollout only (the follow-up revoke must change this assertion)');
+  null::text[],
+  'S4: service_role cannot execute any of the six (0407 revoked the rollout grant)');
 
 select ok(
   (select bool_and(p.prosrc ~ 'auth\.uid\(\)'
                    and p.prosrc ~ 'is_org_member\(p_organization_id\)'
                    and p.prosrc ~ $re$has_permission\(p_organization_id, 'reports:read'\)$re$
-                   and p.prosrc ~ $re$current_user <> 'service_role'$re$
+                   and p.prosrc !~ 'service_role'
                    and (not f.bundle or p.prosrc ~ $re$module_enabled\(p_organization_id, 'bundles'\)$re$)
                    and p.prosrc !~ '40001|40P01'
                    and p.prosrc !~* '\m(insert\s+into|update\s+public|delete\s+from|truncate)\M')
      from fns f join pg_proc p on p.oid = f.sig),
-  'S5: every body holds its gates (signed in, member with reports:read; bundles module for the bundle pair), writes nothing, never raises 40001/40P01');
+  'S5: every body holds its gates (signed in, member with reports:read; bundles module for the bundle pair), has no service-role branch (0407), writes nothing, never raises 40001/40P01');
 
 -- ══ G. Gates ══════════════════════════════════════════════════════════════
 -- Signed out: role authenticated with no sub.
@@ -341,7 +351,8 @@ select is(
   array['42501:unauthenticated'],
   'G1: signed out (authenticated, no user): every function raises 42501 unauthenticated');
 
--- A caller with no user that is not the service role (here the test superuser).
+-- A caller with no user (here the test superuser; since 0407 the service role
+-- holds no EXECUTE and its no-user branch is gone, 0407 R1-R4).
 do $$
 declare v_state text; v_hint text; r text := '';
 begin
@@ -358,7 +369,7 @@ begin
   insert into res values ('G2', r);
 end $$;
 select is((select v from res where k = 'G2'), '42501:unauthenticated',
-  'G2: with no user, only the service role is answered: the superuser gets 42501 unauthenticated');
+  'G2: with no user, nobody is answered: the superuser gets 42501 unauthenticated');
 
 select is(
   (select array_agg(distinct pg_temp.err_as(u, fn, :orgA))
@@ -385,47 +396,47 @@ select is(
 update public.organization_modules set enabled = true where organization_id = :orgA and module_id = 'bundles';
 
 select isnt(
-  pg_temp.answer_svc('report_top_movers', :orgA, 30),
+  pg_temp.answer_all('report_top_movers', :orgA, 30),
   '[]',
-  'G6: the service role (no user) is still answered during the rollout');
+  'G6: the organization-wide answer (the body read past RLS) is not empty, so U1-U3 and U9-U12 compare real rows');
 
--- ══ U. Unscoped readers: byte-identical to the service role ═══════════════
+-- ══ U. Unscoped readers: byte-identical to the organization-wide answer ════
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:mgr, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:mgr, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U1: the manager''s answer equals the service role''s for all six functions at 30, 90 and 365 days');
+  'U1: the manager''s answer equals the organization-wide answer for all six functions at 30, 90 and 365 days');
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:own, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:own, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U2: the owner''s answer equals the service role''s for all six functions at 30, 90 and 365 days');
+  'U2: the owner''s answer equals the organization-wide answer for all six functions at 30, 90 and 365 days');
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:mgrAB, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:mgrAB, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U3: a manager of two orgs asking about org A gets the service role''s org A answer, exactly');
+  'U3: a manager of two orgs asking about org A gets the organization-wide org A answer, exactly');
 
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:adm, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:adm, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U9: an admin with no warehouse assignment gets the service role''s answer for all six at 30, 90 and 365 days');
+  'U9: an admin with no warehouse assignment gets the organization-wide answer for all six at 30, 90 and 365 days');
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:admNoAct, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:admNoAct, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
   'U10: the same with activity_logs:read revoked (movements then come in through the item branch of the policy)');
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:aud, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:aud, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U11: an auditor (a viewer with all_warehouses, one assignment per warehouse, reports:read and activity_logs:read) gets the service role''s answer');
+  'U11: an auditor (a viewer with all_warehouses, one assignment per warehouse, reports:read and activity_logs:read) gets the organization-wide answer');
 select is(
   (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
-    where pg_temp.answer_as(:audNoAct, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+    where pg_temp.answer_as(:audNoAct, fn, :orgA, d) is distinct from pg_temp.answer_all(fn, :orgA, d)),
   null::text[],
-  'U12: the same auditor shape without activity_logs:read gets the service role''s answer too');
+  'U12: the same auditor shape without activity_logs:read gets the organization-wide answer too');
 
 -- The numbers themselves (the manager), so U1-U3 and U9-U12 cannot pass on empty answers.
 select is(pg_temp.answer_as(:mgr, 'report_top_movers', :orgA, 30),
@@ -527,19 +538,20 @@ select is(
   format('%s=6.0000,%s=3.0000', :i1, :i3),
   'K12: staff out-movements: W1 items only, and a readable item keeps every one of its out-movements (6 for North visible)');
 
--- The leak itself, pinned: the service role (the pre-0380 call) still hands
--- out the South item, so K1-K12 are the policies at work, not empty fixtures.
+-- The leak itself, pinned: the organization-wide answer (the pre-0380 call)
+-- still holds the South item, so K1-K12 are the policies at work, not empty
+-- fixtures.
 select ok(
-  pg_temp.answer_svc('report_top_movers', :orgA, 30) ~ 'South secret'
-  and pg_temp.answer_svc('report_bundle_activity', :orgA, 30) ~ '0380 South',
-  'K13: CONTROL: the organization-wide answer (service role) carries the South item and warehouse');
+  pg_temp.answer_all('report_top_movers', :orgA, 30) ~ 'South secret'
+  and pg_temp.answer_all('report_bundle_activity', :orgA, 30) ~ '0380 South',
+  'K13: CONTROL: the organization-wide answer carries the South item and warehouse');
 
 -- ══ X. Cross-org ══════════════════════════════════════════════════════════
 select ok(
   not (pg_temp.answer_as(:mgrAB, 'report_top_movers', :orgA, 365) ~ 'R0380-B')
   and not (pg_temp.answer_as(:mgrAB, 'report_bundle_activity', :orgA, 365) ~ 'K-0380-B')
-  and not (pg_temp.answer_svc('report_shrinkage_totals', :orgA, 365) ~ '"total_units": 15'),
-  'X1: org A answers never carry org B rows, for a two-org manager or the service role');
+  and not (pg_temp.answer_all('report_shrinkage_totals', :orgA, 365) ~ '"total_units": 15'),
+  'X1: org A answers never carry org B rows, for a two-org manager or organization-wide');
 select is(
   pg_temp.q_fn(:mgrAB, 'report_top_movers', format(
     $s$select string_agg(sku, ',') from public.report_top_movers(%L::uuid, %L::timestamptz, 50)$s$, :orgB, pg_temp.since(30))),
