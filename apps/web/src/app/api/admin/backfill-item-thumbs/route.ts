@@ -3,41 +3,61 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
+import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
+import { makeItemPhotoThumbnail } from '@/lib/item-photo-thumbnail';
+import { isValidStoragePath, itemImageAnyPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Each row = sign + download + upload + update; a 60-row batch at
-// concurrency 5 can legitimately take minutes on large masters.
+// Each row = up to two reads, one thumbnail, one upload and one update; a
+// 60-row batch at concurrency 5 can take a while on large photos.
 export const maxDuration = 300;
 
 /**
- * Server-side port of scripts/backfill-item-thumbs.mjs (perf plan P1).
+ * Thumbnails for item photos stored without one (item_images.thumb_path
+ * null), so lists stop signing the full-size photo for them (docket B31).
+ * It runs on the server because SUPABASE_SERVICE_ROLE_KEY is marked Sensitive
+ * in Vercel (unpullable), so no local script can run this against
+ * production; the one it was ported from (scripts/backfill-item-thumbs.mjs)
+ * was retired in B31. This route does the work behind BACKFILL_ADMIN_SECRET,
+ * in bounded batches.
  *
- * Exists because SUPABASE_SERVICE_ROLE_KEY is marked Sensitive in
- * Vercel (unpullable), so the local script can't run against prod
- * without the key. This route does the same work behind
- * BACKFILL_ADMIN_SECRET, in bounded batches — invoke repeatedly until
- * `remaining` hits 0:
+ * POST, Authorization: Bearer $BACKFILL_ADMIN_SECRET, and one of:
  *
- *   curl -X POST -H "Authorization: Bearer $BACKFILL_ADMIN_SECRET" \
- *     "https://<host>/api/admin/backfill-item-thumbs?limit=40"
+ *   ?ids=<id>,<id>,...  exactly these item_images rows (at most 60), each
+ *                       only while its thumb_path is still null. The way the
+ *                       reviewed backfill plan runs it: the ids come from its
+ *                       read-only report, so no other row is touched.
+ *   ?limit=N            the first N rows by id that have a photo and no
+ *                       thumbnail, in every organization (1-60, default 40).
  *
- * Per candidate row (storage_path set, thumb_path null):
- *   1. sign a short-lived 200px cover-transform URL of the master,
- *   2. download the webp bytes,
- *   3. upload `<same dir>/<basename>-thumb.webp` (upsert),
- *   4. set thumb_path, guarded `.is('thumb_path', null)` so re-runs
- *      and concurrent invocations stay idempotent.
- * Per-row failures are reported in the response, never thrown.
+ * Add `dryRun=1` to either: every check runs and each row's outcome is
+ * reported as `would-create` / `would-link`, and nothing is written.
+ *
+ * Per row:
+ *   1. The thumbnail's name is the web uploader's: the photo's folder, its
+ *      name without the extension, then `-thumb.webp`.
+ *   2. An object ALREADY at that name (a thumbnail that was stored but whose
+ *      row was never pointed at it) is LINKED, never replaced, and only if
+ *      its bytes are an image the bucket accepts.
+ *   3. Otherwise the photo is downloaded, must be an image the bucket
+ *      accepts, and the thumbnail is made from it here
+ *      (lib/item-photo-thumbnail.ts: the web uploader's 200 px WEBP, aspect
+ *      kept). It is uploaded at that name without overwriting anything.
+ *   4. The row is pointed at it, guarded `.is('thumb_path', null)` and with
+ *      row proof, so a re-run or a concurrent call changes nothing twice and
+ *      a row changed meanwhile is reported, not overwritten.
+ * Per-row outcomes are reported (with the path written, for the plan's
+ * reversal), never thrown. A thumbnail uploaded for a row that then changed
+ * is left in place: it is harmless, and another row may name it by then.
  */
 
 const BUCKET = 'item-images';
-const THUMB_SIZE = 200;
-const SIGN_TTL_SEC = 600; // only needed long enough to download
 const CONCURRENCY = 5;
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 60;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Constant-time string compare (same as cron/drain-outbox — a naive
@@ -62,68 +82,155 @@ function thumbPathFor(storagePath: string): string {
 
 interface CandidateRow {
   id: string;
-  item_id: string;
-  storage_path: string;
+  storage_path: string | null;
+  thumb_path: string | null;
 }
 
-interface RowFailure {
-  path: string;
-  error: string;
+type RowResult =
+  | { id: string; outcome: 'created' | 'linked' | 'would-create' | 'would-link'; thumbPath: string }
+  | { id: string; outcome: 'skipped'; reason: string }
+  | { id: string; outcome: 'failed'; error: string };
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+type AdminBucket = ReturnType<AdminClient['storage']['from']>;
+
+/** The whole object, or null when it cannot be read. */
+async function download(store: AdminBucket, path: string): Promise<Uint8Array | null> {
+  try {
+    const { data, error } = await store.download(path);
+    if (error || !data) return null;
+    return new Uint8Array(await data.arrayBuffer());
+  } catch {
+    return null;
+  }
 }
 
-async function backfillRow(
-  supabase: ReturnType<typeof createAdminClient>,
-  row: CandidateRow,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const target = thumbPathFor(row.storage_path);
-  if (row.storage_path.endsWith('-thumb.webp')) {
-    return { ok: false, error: 'storage_path is already a thumb' };
+/**
+ * Is there an object at `path`? null when storage could not say. storage-js
+ * answers `{ data: false }` for a 400 or 404 (no object) and THROWS for
+ * anything else. A wrong "no" is still safe: the upload below never
+ * overwrites, so it is refused instead.
+ */
+async function objectExists(store: AdminBucket, path: string): Promise<boolean | null> {
+  try {
+    const { data } = await store.exists(path);
+    return data === true;
+  } catch {
+    return null;
   }
+}
 
-  // 1. Short-lived signed transform URL of the master.
-  const { data: signed, error: signErr } = await supabase.storage
-    .from(BUCKET)
-    .createSignedUrl(row.storage_path, SIGN_TTL_SEC, {
-      transform: { width: THUMB_SIZE, height: THUMB_SIZE, resize: 'cover' },
-    });
-  if (signErr || !signed?.signedUrl) {
-    return { ok: false, error: `sign: ${signErr?.message ?? 'no url'}` };
-  }
+/** The bytes are an image the item-images bucket accepts (magic bytes, not a name or a header). */
+function isAcceptedImage(bytes: Uint8Array): boolean {
+  const sniffed = sniffImage(bytes);
+  return !!sniffed && isSniffedKindAllowedInBucket(sniffed.kind, 'item-images');
+}
 
-  // 2. Download the transformed image (Accept: image/webp so the
-  //    render endpoint emits webp).
-  const res = await fetch(signed.signedUrl, { headers: { Accept: 'image/webp' } });
-  if (!res.ok) {
-    return { ok: false, error: `download: HTTP ${res.status}` };
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length === 0) {
-    return { ok: false, error: 'download: empty body' };
-  }
-  const contentType = res.headers.get('content-type') ?? 'image/webp';
-
-  // 3. Upload next to the master (upsert = idempotent re-runs).
-  const { error: upErr } = await supabase.storage
-    .from(BUCKET)
-    .upload(target, buf, { contentType, upsert: true });
-  if (upErr) {
-    return { ok: false, error: `upload: ${upErr.message}` };
-  }
-
-  // 4. Point the row at it. Guarded + .select().maybeSingle() so a
-  //    0-row update (row deleted / already backfilled concurrently)
-  //    is visible instead of a silent no-op.
-  const { data: updated, error: updErr } = await supabase
+async function pointRowAt(
+  admin: AdminClient,
+  id: string,
+  thumbPath: string,
+): Promise<{ ok: true } | { ok: false; why: string }> {
+  const { data, error } = await admin
     .from('item_images')
-    .update({ thumb_path: target })
-    .eq('id', row.id)
+    .update({ thumb_path: thumbPath })
+    .eq('id', id)
     .is('thumb_path', null)
     .select('id')
     .maybeSingle();
-  if (updErr) return { ok: false, error: `update: ${updErr.message}` };
-  if (!updated) return { ok: false, error: 'row changed/removed mid-run' };
-
+  if (error) return { ok: false, why: `update: ${error.message}` };
+  if (!data) return { ok: false, why: 'the row changed or was removed meanwhile' };
   return { ok: true };
+}
+
+async function backfillRow(
+  admin: AdminClient,
+  row: CandidateRow,
+  dryRun: boolean,
+): Promise<RowResult> {
+  const id = row.id;
+  if (row.thumb_path) return { id, outcome: 'skipped', reason: 'already has a thumbnail' };
+  const master = row.storage_path;
+  if (!master) return { id, outcome: 'skipped', reason: 'no photo path' };
+  // The service role can read the whole bucket, so a path that is not an item
+  // photo's shape is never handed to storage (HI-8; item-images.ts signs only
+  // these shapes too).
+  if (!isValidStoragePath(master, itemImageAnyPathShape())) {
+    return { id, outcome: 'failed', error: 'the photo path is not an item photo path' };
+  }
+  if (/-thumb\.[A-Za-z0-9]+$/.test(master)) {
+    return { id, outcome: 'skipped', reason: 'the photo path is itself a thumbnail' };
+  }
+  const target = thumbPathFor(master);
+  // The derived name must be an item photo path too: the web signs only those
+  // (item-images.ts isSignableItemImagePath), so a row pointed at any other
+  // name shows no photo at all. A photo named with two dots (`a.v2.jpg`)
+  // derives `a.v2-thumb.webp`, which is not one.
+  if (!isValidStoragePath(target, itemImageAnyPathShape())) {
+    return { id, outcome: 'failed', error: 'the thumbnail name would not be an item photo path' };
+  }
+  const store = admin.storage.from(BUCKET);
+
+  // 2. A thumbnail already stored at the name: link it, never replace it.
+  const present = await objectExists(store, target);
+  if (present === null)
+    return { id, outcome: 'failed', error: 'could not tell whether a thumbnail exists' };
+  if (present) {
+    const existing = await download(store, target);
+    if (!existing)
+      return { id, outcome: 'failed', error: 'the existing thumbnail could not be read' };
+    if (!isAcceptedImage(existing)) {
+      return {
+        id,
+        outcome: 'failed',
+        error: 'an object that is not an accepted image sits at the thumbnail name',
+      };
+    }
+    if (dryRun) return { id, outcome: 'would-link', thumbPath: target };
+    const linked = await pointRowAt(admin, id, target);
+    return linked.ok
+      ? { id, outcome: 'linked', thumbPath: target }
+      : { id, outcome: 'failed', error: linked.why };
+  }
+
+  // 3. Make it from the photo.
+  const photo = await download(store, master);
+  if (!photo) return { id, outcome: 'failed', error: 'the photo could not be read' };
+  if (!isAcceptedImage(photo))
+    return { id, outcome: 'failed', error: 'the photo is not an accepted image' };
+  const thumb = await makeItemPhotoThumbnail(photo);
+  if (!thumb) return { id, outcome: 'failed', error: 'the photo could not be decoded' };
+  if (dryRun) return { id, outcome: 'would-create', thumbPath: target };
+  // Never over an existing object (upsert false): one stored since the check
+  // above is refused here, and the next run links it instead.
+  const { error: upErr } = await store.upload(target, thumb, {
+    contentType: 'image/webp',
+    upsert: false,
+  });
+  if (upErr) return { id, outcome: 'failed', error: `upload: ${upErr.message}` };
+
+  // 4. Point the row at it.
+  const pointed = await pointRowAt(admin, id, target);
+  return pointed.ok
+    ? { id, outcome: 'created', thumbPath: target }
+    : { id, outcome: 'failed', error: pointed.why };
+}
+
+/** `ids` from the query: null when absent, an error string when malformed. */
+function parseIds(raw: string | null): string[] | null | string {
+  if (raw === null) return null;
+  const ids = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (ids.length === 0) return 'ids is empty';
+  if (ids.length > MAX_LIMIT) return `at most ${MAX_LIMIT} ids per call`;
+  if (!ids.every((v) => UUID.test(v))) return 'every id must be a uuid';
+  return ids;
 }
 
 export async function POST(req: Request) {
@@ -138,31 +245,52 @@ export async function POST(req: Request) {
   }
 
   const url = new URL(req.url);
+  const dryRun = url.searchParams.get('dryRun') === '1';
+  const ids = parseIds(url.searchParams.get('ids'));
+  if (typeof ids === 'string') {
+    return NextResponse.json({ error: ids }, { status: 400 });
+  }
   const rawLimit = Number(url.searchParams.get('limit') ?? DEFAULT_LIMIT);
   const limit = Number.isFinite(rawLimit)
     ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(rawLimit)))
     : DEFAULT_LIMIT;
 
   try {
-    const supabase = createAdminClient();
+    const admin = createAdminClient();
 
-    const { data: candidates, error } = await supabase
-      .from('item_images')
-      .select('id, item_id, storage_path')
-      .is('thumb_path', null)
-      .not('storage_path', 'is', null)
-      .order('id', { ascending: true })
-      .limit(limit);
-    if (error) {
-      return NextResponse.json(
-        { error: `candidate query failed: ${error.message}` },
-        { status: 500 },
-      );
+    let rows: CandidateRow[];
+    const results: RowResult[] = [];
+    if (ids) {
+      // in-list-bound: at most MAX_LIMIT ids, refused above past that.
+      const { data, error } = await admin
+        .from('item_images')
+        .select('id, storage_path, thumb_path')
+        .in('id', ids);
+      if (error) {
+        return NextResponse.json({ error: `row read failed: ${error.message}` }, { status: 500 });
+      }
+      rows = (data ?? []) as CandidateRow[];
+      // Every id asked for is answered: one that matches no row says so.
+      const found = new Set(rows.map((r) => r.id));
+      for (const id of ids) {
+        if (!found.has(id)) results.push({ id, outcome: 'skipped', reason: 'no such row' });
+      }
+    } else {
+      const { data, error } = await admin
+        .from('item_images')
+        .select('id, storage_path, thumb_path')
+        .is('thumb_path', null)
+        .not('storage_path', 'is', null)
+        .order('id', { ascending: true })
+        .limit(limit);
+      if (error) {
+        return NextResponse.json(
+          { error: `candidate query failed: ${error.message}` },
+          { status: 500 },
+        );
+      }
+      rows = (data ?? []) as CandidateRow[];
     }
-
-    const rows = (candidates ?? []) as CandidateRow[];
-    const failed: RowFailure[] = [];
-    let succeeded = 0;
 
     // Bounded worker pool — per-row failures are recorded, never thrown.
     let cursor = 0;
@@ -170,32 +298,36 @@ export async function POST(req: Request) {
       while (cursor < rows.length) {
         const row = rows[cursor++]!;
         try {
-          const result = await backfillRow(supabase, row);
-          if (result.ok) succeeded += 1;
-          else failed.push({ path: row.storage_path, error: result.error });
+          results.push(await backfillRow(admin, row, dryRun));
         } catch (err) {
-          failed.push({
-            path: row.storage_path,
+          results.push({
+            id: row.id,
+            outcome: 'failed',
             error: err instanceof Error ? err.message : String(err),
           });
         }
       }
     }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, rows.length) }, () => worker()),
-    );
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, () => worker()));
 
-    // How many legacy rows are still left after this batch.
-    const { count: remaining } = await supabase
+    // How many rows, in every organization, still have a photo and no thumbnail.
+    const { count: remaining } = await admin
       .from('item_images')
       .select('id', { count: 'exact', head: true })
       .is('thumb_path', null)
       .not('storage_path', 'is', null);
 
+    const tally = (o: RowResult['outcome']) => results.filter((r) => r.outcome === o).length;
     return NextResponse.json({
+      dryRun,
       processed: rows.length,
-      succeeded,
-      failed,
+      created: tally('created'),
+      linked: tally('linked'),
+      wouldCreate: tally('would-create'),
+      wouldLink: tally('would-link'),
+      skipped: tally('skipped'),
+      failed: tally('failed'),
+      results,
       remaining: remaining ?? null,
     });
   } catch (err) {
