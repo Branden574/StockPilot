@@ -49,6 +49,7 @@ import { revalidateTag, unstable_cache } from 'next/cache';
 
 import type { Permission } from '@stockpilot/core';
 
+import { bookSitesFor } from '@/components/inventory/inventory-table';
 import { isSiteLocation } from '@/lib/locations/groups';
 import { withContext, type ServiceContext } from '@/server/services/context';
 import {
@@ -447,6 +448,54 @@ describe('loadInventoryList (cached payload shape)', () => {
       { locationId: 'S7', label: 'Shelf 7', kind: 'location', quantity: 4 },
       { locationId: 'V1', label: 'Van', kind: 'location', quantity: 6 },
     ]);
+  });
+
+  // B37, pattern #26: the Books Rack cell (bookSitesFor) reads a book whose
+  // stock all sits on Sites by THESE lines' rule. One Site-only book per
+  // NULL-kind Site type, the loader's own row and lines, both answers
+  // compared: the type these lines call 'site' (the warehouse's building)
+  // reads "No rack" in the cell, and every other Site prints its name there
+  // as it does here. Changing either rule alone fails this.
+  it("the Books Rack cell reads each Site type as these placement lines do: only the building is 'site' (B37)", async () => {
+    const types = ['warehouse', 'room', 'vehicle', 'jobsite', 'other', null];
+    const id = (i: number) => `b${i}`;
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: {
+          data: types.map((_, i) => ({
+            ...baseItem,
+            id: id(i),
+            item_type: 'book',
+            custom_fields: { book_rack_number: '38', book_rack_row: 'A' },
+          })),
+          count: types.length,
+          error: null,
+        },
+        item_stock_levels: {
+          data: types.map((type, i) => ({
+            item_id: id(i),
+            location_id: `L${i}`,
+            quantity: 4,
+            locations: { name: `Place ${i}`, kind: null, type },
+          })),
+          error: null,
+        },
+        item_images: { data: [], error: null },
+      }),
+    );
+    const payload = await loadInventoryList('org-1', 'all', 'books');
+
+    const lineKinds = types.map((_, i) => payload.placement[id(i)]?.[0]?.kind);
+    expect(lineKinds).toEqual(['site', 'location', 'location', 'location', 'location', 'location']);
+    for (const [i, kind] of lineKinds.entries()) {
+      const row = payload.items.find((r) => r.id === id(i))!;
+      expect(bookSitesFor(row), `type ${types[i]}`).toEqual(
+        kind === 'site'
+          ? { buildings: [`Place ${i}`], places: [] }
+          : { buildings: [], places: [`Place ${i}`] },
+      );
+    }
   });
 
   // ── NULL locations.kind IS the Site encoding (pattern #26 sibling) ───────

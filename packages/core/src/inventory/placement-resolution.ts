@@ -144,14 +144,24 @@ export type PlacementResolution =
   /**
    * The holdings contradict any single label. `reason` records WHICH
    * contradiction so a caller can label the row honestly (the native scan
-   * sheet says "Split stock", "In crate" or "At site"). For 'site' the
-   * holdings are the item's Site holdings (`PlacedHoldingLike`); for the other
-   * two they are its rack and crate holdings.
+   * sheet says "Split stock", "In crate" or "At site"). For 'split' and
+   * 'crate' the holdings are the item's rack and crate holdings.
    */
   | {
       source: 'holdings';
-      reason: 'split' | 'crate' | 'site';
+      reason: 'split' | 'crate';
       holdings: readonly RackHoldingLike[];
+    }
+  /**
+   * Rule 0c: the item's Site holdings, each with the NULL kind and the type
+   * that made it a Site, so a caller can still tell the warehouse's own
+   * building (type 'warehouse') from a room, a vehicle or a job site (the web
+   * Books Rack cell does: only the building reads "No rack").
+   */
+  | {
+      source: 'holdings';
+      reason: 'site';
+      holdings: readonly PlacedHoldingLike[];
     }
   /**
    * The item's own structured rack/crate keys. At least one of the two is

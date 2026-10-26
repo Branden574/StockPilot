@@ -79,7 +79,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { bookRackLabelFor, bookSiteNamesFor } from '@/components/inventory/inventory-table';
+import { bookRackLabelFor, bookSitesFor } from '@/components/inventory/inventory-table';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { locationFor as packingSlipLocationFor } from '@/lib/pdf/packing-slip-shared';
 import { locationFor as pickSlipLocationFor } from '@/lib/pdf/pick-slip';
@@ -634,14 +634,15 @@ describe('stock that sits only on a Site (B37)', () => {
     }),
     slip: sharedLocationFor(asBookLine(), new Map(), new Map([['i1', onSite]])),
     core: formatPlacementLabel(resolvePlacement({ ...book, holdings: [], otherHoldings: onSite })),
-    // The Books Rack column names no rack at all: its cell reads "No rack",
-    // with the Site in the title, like the Items layout's site line.
+    // The Books Rack column names no rack at all for the warehouse's own
+    // building: its cell reads "No rack" with "At DC4" under it, like the
+    // Items layout's site line.
     booksRack: bookRackLabelFor({
       custom_fields: book.customFields,
       placed_holdings: [],
       other_holdings: onSite,
     }),
-    booksSites: bookSiteNamesFor({
+    booksSites: bookSitesFor({
       custom_fields: book.customFields,
       placed_holdings: [],
       other_holdings: onSite,
@@ -655,10 +656,33 @@ describe('stock that sits only on a Site (B37)', () => {
     expect(r.core).toBe('DC4 ×7');
   });
 
-  it('the Books Rack column names no rack, and knows the Site it says the stock is at', () => {
+  it('the Books Rack column names no rack for the building, and knows the Site it says the stock is at', () => {
     const r = rendered();
     expect(r.booksRack).toBeNull();
-    expect(r.booksSites).toEqual(['DC4']);
+    expect(r.booksSites).toEqual({ buildings: ['DC4'], places: [] });
+  });
+
+  it('a room, a vehicle or a job site is a place: every formatter, the Books column included, names it', () => {
+    // The Items layout prints such a NULL-kind place by name (2026-09-24);
+    // only the warehouse's own building reads "No rack".
+    const inRoom = [{ name: 'Room 101', quantity: 3, kind: null, type: 'room' }];
+    const row = { custom_fields: book.customFields, placed_holdings: [], other_holdings: inRoom };
+    expect(
+      countSheetLocationLabel({
+        item_type: book.itemType,
+        custom_fields: book.customFields,
+        bin_location: book.binLocation,
+        primaryLocationName: 'DC4',
+        rackHoldings: [],
+        otherHoldings: inRoom,
+      }),
+    ).toBe('Room 101 ×3');
+    expect(sharedLocationFor(asBookLine(), new Map(), new Map([['i1', inRoom]]))).toEqual({
+      primary: 'Room 101 ×3',
+      secondary: null,
+    });
+    expect(bookRackLabelFor(row)).toBe('Room 101');
+    expect(bookSitesFor(row)).toEqual({ buildings: [], places: ['Room 101'] });
   });
 
   it('NONE of them prints the rack, or the crate, the label still names', () => {
