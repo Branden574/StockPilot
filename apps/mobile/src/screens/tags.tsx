@@ -2,6 +2,8 @@ import { Tags } from 'lucide-react-native';
 import * as React from 'react';
 import { View } from 'react-native';
 
+import { safeHexColor } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body } from '@/components/ui/text';
@@ -139,7 +141,9 @@ export default function TagsScreen() {
  *  its own shows a muted ink3 mark (6.5:1 or more on the card). */
 function TagCard({ tag }: { tag: TagRow }) {
   const { c } = useTheme();
-  const swatch = tag.color ?? c.ink3;
+  // Only the #rrggbb form the app writes: the column takes any text through
+  // the Data API, and anything else draws the no-colour mark (docket T14).
+  const swatch = safeHexColor(tag.color) ?? c.ink3;
   return (
     <Card padding={14}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>

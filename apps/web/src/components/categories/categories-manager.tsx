@@ -44,6 +44,7 @@ import {
 import {
   countingUnitLabel,
   DEFAULT_SUBCATEGORY_PROFILES,
+  safeHexColor,
   SPORTS_SUBCATEGORIES,
   TRACKING_MODE_LABELS,
   type CountingUnit,
@@ -99,6 +100,11 @@ const PRESET_COLORS = [
   '#64748b',
   '#eab308',
 ];
+
+/** The dot of a category with no colour, and of one whose stored colour is refused. */
+const NO_COLOR_DOT = '#94a3b8';
+/** The colour the editor opens on for a new category, or one with no usable colour. */
+const DEFAULT_EDIT_COLOR = '#6366f1';
 
 /**
  * A card's Archive button (CONFLICTS D18). It used to be opacity-0 until the
@@ -301,7 +307,7 @@ export function CategoriesManager({
         <span
           aria-hidden
           className="mt-[5px] h-2.5 w-2.5 shrink-0 rounded-full"
-          style={{ backgroundColor: row.color ?? '#94a3b8' }}
+          style={{ backgroundColor: safeHexColor(row.color) ?? NO_COLOR_DOT }}
         />
         <div className="min-w-0 flex-1">
           {isArchivedView || !canManage ? (
@@ -567,7 +573,7 @@ function CategoryDialog({
     defaultValues: {
       name: '',
       description: '',
-      color: '#6366f1',
+      color: DEFAULT_EDIT_COLOR,
       supportsSizes: false,
       isSportsSubcategory: false,
       subcategoryKey: NO_SUBCATEGORY,
@@ -594,7 +600,10 @@ function CategoryDialog({
     reset({
       name: editing?.name ?? '',
       description: editing?.description ?? '',
-      color: editing?.color ?? '#6366f1',
+      // A stored colour the app did not write (the Data API takes any text)
+      // is never drawn; the editor opens on the default, so a rename saves a
+      // colour the server accepts (docket T14).
+      color: safeHexColor(editing?.color) ?? DEFAULT_EDIT_COLOR,
       supportsSizes: editing?.supports_sizes ?? false,
       isSportsSubcategory: Boolean(editing?.sports_subcategory_key),
       subcategoryKey: builtInKey ?? (isCustom ? CUSTOM_SUBCATEGORY : NO_SUBCATEGORY),

@@ -20,6 +20,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
+import { CategoryLabel } from '@/components/inventory/category-label';
 import {
   GroupSelectedDialog,
   RemoveFromGroupDialog,
@@ -3647,50 +3648,8 @@ const PAGER_EDGE_DISABLED =
 // so every one of these renders the SAME words, figures, titles and tones in a
 // table cell and on a card. Changing one changes both.
 
-type CategoryLookup = { name: string; color: string | null };
-
-/**
- * The Category cell: the category's name in ink 2 after a 6 px dot in its own
- * colour, or a dash. The name is never drawn in the colour itself (DESIGN-SPEC
- * 6.9 draws Category in ink 2; CONFLICTS C8 keeps the dot): a colour an org
- * picks is no text colour, and 7 of the 8 the categories manager offers fall
- * under 4.5:1 on white (FX2). The dot stays decorative, hidden from screen
- * readers, as the name is printed. `wrap` (the table): a name may wrap between
- * its words, and the dot stays beside the first line (7 px down is the centre
- * of a 20.25 px line, so a one-line name sits exactly where it did); a Grid
- * card passes nothing.
- */
-function CategoryLabel({
-  category,
-  wrap = false,
-}: {
-  category: CategoryLookup | null | undefined;
-  wrap?: boolean;
-}) {
-  return category ? (
-    <span
-      className={cn(
-        'text-ink-2',
-        wrap ? 'inline-flex items-start gap-1.5' : 'inline-flex items-center gap-1.5',
-      )}
-    >
-      {category.color && (
-        <span
-          aria-hidden
-          className={
-            wrap
-              ? 'mt-[7.125px] h-1.5 w-1.5 shrink-0 rounded-full'
-              : 'h-1.5 w-1.5 shrink-0 rounded-full'
-          }
-          style={{ backgroundColor: category.color }}
-        />
-      )}
-      {category.name}
-    </span>
-  ) : (
-    <span className="text-muted-foreground">—</span>
-  );
-}
+// The Category cell (CategoryLabel) lives in ./category-label: it draws the
+// category's stored colour, which it checks first (docket T14).
 
 /** The Charter cell: the charter's code (its name as the title), or "Generic". */
 function CharterLabel({ item, lookups }: { item: Item; lookups: Lookups }) {

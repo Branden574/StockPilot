@@ -1,18 +1,12 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './common';
+import { hexColorSchema } from './hex-color';
 
-/**
- * A hex color like #6366f1. Tags use the same format as categories so
- * downstream renderers can share swatch components.
- */
-const hexColor = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color like #6366f1');
-
+/** A tag's colour is the same `#rrggbb` form as a category's (hex-color.ts). */
 export const createTagSchema = z.object({
   name: z.string().min(1).max(60).trim(),
-  color: hexColor.nullable().optional(),
+  color: hexColorSchema.nullable().optional(),
 });
 export type CreateTagInput = z.infer<typeof createTagSchema>;
 
