@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   reenable: vi.fn(),
   reset: vi.fn(),
   ensure: vi.fn(),
+  orderItemsAccess: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -25,7 +26,11 @@ vi.mock('@/server/actions/platform/users', () => ({
   reenableUserAccountAction: (...a: unknown[]) => h.reenable(...a),
   sendUserPasswordResetAction: (...a: unknown[]) => h.reset(...a),
 }));
+vi.mock('@/server/actions/platform/permission-exceptions', () => ({
+  setOrderItemsAccessAction: (...a: unknown[]) => h.orderItemsAccess(...a),
+}));
 
+import type { OrderItemsAccessTarget } from './order-items-access-dialog';
 import { UserActionsMenu } from './user-actions-menu';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
@@ -51,6 +56,7 @@ function renderMenu(
     email: string | null;
     disabledAt: string | null;
     protectedAdmin: boolean;
+    orderItemsAccess: OrderItemsAccessTarget | null;
   }> = {},
 ) {
   return render(
@@ -59,6 +65,7 @@ function renderMenu(
       email={props.email === undefined ? EMAIL : props.email}
       disabledAt={props.disabledAt ?? null}
       protectedAdmin={props.protectedAdmin ?? false}
+      orderItemsAccess={props.orderItemsAccess ?? null}
     />,
   );
 }
@@ -448,5 +455,77 @@ describe('UserActionsMenu — password reset', () => {
 
     expect(h.reset).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+});
+
+/**
+ * Order items access (orders:manage_catalog_visibility, migration 0413): God
+ * Admin's per-member Allow / Deny / Follow role default lives in this menu,
+ * next to the account actions, so there is no second account-management
+ * surface. The item exists only when the Users tab could read the member's
+ * current state: without it there is nothing to compare-and-set against.
+ */
+describe('UserActionsMenu — Order items access', () => {
+  const ORG_ID = '22222222-2222-4222-8222-222222222222';
+  const access: OrderItemsAccessTarget = {
+    organizationId: ORG_ID,
+    userId: USER_ID,
+    name: 'Riley Example',
+    role: 'staff',
+    disabled: false,
+    exception: 'default',
+    ordersModuleEnabled: true,
+    canRequestOrders: true,
+  };
+
+  it('offers Order items access when the row carries it, and not otherwise', async () => {
+    const { unmount } = renderMenu({ orderItemsAccess: access });
+    await openMenu();
+    expect(screen.getByRole('menuitem', { name: /order items access/i })).toBeInTheDocument();
+    unmount();
+
+    renderMenu({ orderItemsAccess: null });
+    await openMenu();
+    expect(screen.queryByRole('menuitem', { name: /order items access/i })).toBeNull();
+    // The account actions are unaffected.
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+  });
+
+  it('opens the dialog for this member and saves through the row step-up', async () => {
+    h.orderItemsAccess
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: 'Not authorized.',
+          details: { reason: 'aal2_required' },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { before: 'default', after: 'allow', targetRole: 'staff', changed: true },
+      });
+    renderMenu({ orderItemsAccess: access });
+    const user = await openMenu();
+    await user.click(screen.getByRole('menuitem', { name: /order items access/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Riley Example');
+    await user.click(screen.getByRole('radio', { name: /^allow$/i }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
+    expect(h.ensure).toHaveBeenCalledTimes(1);
+    expect(h.orderItemsAccess).toHaveBeenCalledTimes(2);
+    expect(h.orderItemsAccess).toHaveBeenLastCalledWith({
+      organizationId: ORG_ID,
+      targetUserId: USER_ID,
+      state: 'allow',
+      expectedState: 'default',
+    });
+    expect(h.success).toHaveBeenCalledWith('Order items access saved: Allowed for Riley Example.');
+    // The account actions were not touched.
+    expect(h.disable).not.toHaveBeenCalled();
+    expect(h.reenable).not.toHaveBeenCalled();
   });
 });

@@ -112,12 +112,6 @@ const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: str
     file: 'order-requests.ts',
     reason: 'No caller: public-request token rotation has no settings control yet.',
   },
-  {
-    name: 'setOrderItemsAccessAction',
-    file: 'platform/permission-exceptions.ts',
-    reason:
-      'No caller YET: ordering visibility builds the action (step 2a) before the console dialog that calls it (components/platform/order-items-access-dialog.tsx, step 3b), which must remove this entry.',
-  },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {
