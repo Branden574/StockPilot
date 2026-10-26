@@ -10,7 +10,8 @@
  * - Row and header selection run through the shared Checkbox: the tour's
  *   `[role="checkbox"][aria-label="Select all placeable rows"]` and
  *   `main table` anchors still resolve, a selected row carries the selected
- *   tint, and a row without a warehouse cannot be ticked.
+ *   tint, and a row with no warehouse and none to place it in cannot be
+ *   ticked (with a warehouse to choose, it can: B38).
  * - The two empty states are the shared state panel, with their words.
  * - The bulk-place bar swaps in over the live count, in a band that always
  *   holds the bar's height, instead of appearing on top of the table: the
@@ -97,7 +98,9 @@ describe('Staging table, redesigned', () => {
   });
 
   it('keeps the tour anchors and draws selection with the shared checkbox', () => {
-    const { container } = renderTable();
+    // No warehouse names: Book B (no warehouse) has nowhere to go, so it
+    // cannot be ticked (B38 makes it placeable once there is one).
+    const { container } = renderTable({ warehouseNames: {} });
     expect(container.querySelector('table')).not.toBeNull();
     // The Staging page title (titleId="staging-title") names the scroll region.
     expect(container.querySelector('table')!.parentElement).toHaveAttribute(

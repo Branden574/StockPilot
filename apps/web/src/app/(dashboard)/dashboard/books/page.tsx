@@ -23,6 +23,7 @@ import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-una
 import {
   deriveInstantView,
   instantStateFromPageParams,
+  parseRevealGroupParam,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
 import {
@@ -115,6 +116,10 @@ type BooksSearchParams = {
   loc?: string | string[];
   charter?: string | string[];
   rack?: string;
+  /** A display group's id: open the page that draws its header (the "Show
+   *  it" link after Group selected, B5). The table drops it from the address
+   *  once that page is on screen. */
+  group?: string | string[];
 };
 
 export default async function BooksPage({
@@ -569,6 +574,8 @@ async function booksTableSection({
       client: createClient(),
       organizationId: sessionCtx.organizationId,
       logLabel: '[books page]',
+      // ?group= (B5): the page that draws that group's header, when it forms.
+      revealGroupId: parseRevealGroupParam(params.group),
     });
 
     const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
@@ -707,7 +714,9 @@ async function booksTableSection({
       rowLinkPrefix="/dashboard/books"
       basePath="/dashboard/books"
       showBookFields
-      page={page}
+      // The page the plan holds: ?group= (B5) can plan another page than
+      // ?page= asked for, and the plan clamps a page past the end.
+      page={data.plannedPage?.page ?? page}
       pageSize={PAGE_SIZE}
       trends={data.trends}
       savedViews={savedViews}

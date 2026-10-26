@@ -4,6 +4,7 @@ import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
+import { normalizeApparelLineNames } from '@/lib/po-scan/apparel-names';
 import { dropDuplicateNewIsbnLines } from '@/lib/po-scan/dedupe';
 import { env } from '@/lib/env';
 
@@ -479,6 +480,15 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
   // Collapse the "priced title row + (NEW)/ISBN $0 row" duplicates some vendor
   // PDFs print for each product (see dropDuplicateNewIsbnLines).
   parsed.lines = dropDuplicateNewIsbnLines(parsed.lines);
+
+  // "25 - Small : Carolina Blue" -> "Carolina Blue - S": drop a leading count
+  // that is the line's quantity and move the apparel size the line printed
+  // (its `size` above) to the end, so the sizes of one garment group as a size
+  // run (see normalizeApparelLineNames). After the dedupe, which matches the
+  // printed titles and copies a book's ISBN onto its priced line, so a book
+  // keeps its title. The stored document keeps the words as printed, and a
+  // new name never passes the text bound above.
+  parsed.lines = normalizeApparelLineNames(parsed.lines, MAX_SCAN_TEXT_LEN);
 
   return parsed;
 }

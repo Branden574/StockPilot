@@ -52,6 +52,11 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import type { DestinationOption } from '@/lib/locations/destination-option';
 import {
+  initialPlaceWarehouse,
+  PLACE_WAREHOUSE_HINT,
+  type PlaceWarehouseOption,
+} from '@/lib/locations/place-warehouse';
+import {
   destinationCrate,
   destinationFromFields,
   destinationIsRecordedStorage,
@@ -83,12 +88,33 @@ interface PlaceFromStagingDialogProps {
   sourceLocationId: string;
   /** Drives the "From" label + copy. 'unplaced' = on-hand stock that was never racked. */
   sourceKind: 'staging' | 'unplaced';
-  warehouseId: string;
+  /**
+   * The holding's warehouse. Null for the organization-level Staging or
+   * Unplaced bucket (migration 0194), which belongs to no warehouse: the
+   * dialog then asks for the warehouse first (`warehouseChoice`), and its
+   * racks and crates are the destinations (B38).
+   */
+  warehouseId: string | null;
   /** Warehouse display name — shown in the new-rack confirmation copy. */
   warehouseName?: string;
   /** Quantity sitting in the source holding (the placement ceiling). */
   availableQuantity: number;
+  /** The holding's warehouse's racks and crates. Unused when `warehouseId` is
+   *  null: the chosen warehouse's come from `warehouseChoice`. */
   destinations: DestinationOption[];
+  /**
+   * For a holding with no warehouse only: where it may go. `warehouses` are
+   * the page's warehouses by name (the ones the viewer can place into),
+   * `destinationsByWarehouse` the page's map of their racks and crates, and
+   * `defaultWarehouseId` the item's own warehouse, which the picker opens on
+   * when it is offered: order readiness counts the stock there once placed.
+   * The move itself is the same placeStockAction as any other row.
+   */
+  warehouseChoice?: {
+    warehouses: readonly PlaceWarehouseOption[];
+    destinationsByWarehouse: Readonly<Record<string, DestinationOption[]>>;
+    defaultWarehouseId?: string | null;
+  };
   /**
    * A BOOK's recorded rack/crate SUMMARY, or null for a non-book. Shown as
    * context and used to PREDICT the server's confirmation gate locally, so the
@@ -117,10 +143,11 @@ export function PlaceFromStagingDialog({
   itemType,
   sourceLocationId,
   sourceKind,
-  warehouseId,
-  warehouseName,
+  warehouseId: holdingWarehouseId,
+  warehouseName: holdingWarehouseName,
   availableQuantity,
-  destinations,
+  destinations: holdingDestinations,
+  warehouseChoice,
   bookStorage,
   canMintDestination = true,
   trigger,
@@ -129,6 +156,26 @@ export function PlaceFromStagingDialog({
   const [open, setOpen] = React.useState(false);
 
   const sourceLabel = sourceKind === 'unplaced' ? 'Unplaced' : 'Staging';
+
+  // ═══ THE WAREHOUSE, FIRST, FOR A HOLDING THAT HAS NONE (B38) ═══
+  //
+  // A holding in the organization-level bucket belongs to no warehouse, so
+  // nothing scopes its destinations until the person picks one. Everything
+  // below reads `warehouseId`, `warehouseName` and `destinations` as before;
+  // for such a holding they are the PICKED warehouse's. No warehouse picked:
+  // no destinations, and Place stays off.
+  const choosesWarehouse = holdingWarehouseId === null;
+  const warehouseOptions = warehouseChoice?.warehouses ?? [];
+  const [pickedWarehouseId, setPickedWarehouseId] = React.useState('');
+  const warehouseId: string | null = holdingWarehouseId ?? (pickedWarehouseId || null);
+  const warehouseName = choosesWarehouse
+    ? warehouseOptions.find((w) => w.id === warehouseId)?.name
+    : holdingWarehouseName;
+  const destinations: DestinationOption[] = choosesWarehouse
+    ? warehouseId
+      ? (warehouseChoice?.destinationsByWarehouse[warehouseId] ?? [])
+      : []
+    : holdingDestinations;
 
   const [destId, setDestId] = React.useState<string>('');
   const [quantity, setQuantity] = React.useState(String(availableQuantity));
@@ -194,6 +241,13 @@ export function PlaceFromStagingDialog({
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset all fields when dialog opens */
     setDestId('');
+    // A holding with no warehouse opens on the item's own warehouse when the
+    // viewer can place there, else on the only one offered, else on none.
+    setPickedWarehouseId(
+      choosesWarehouse
+        ? initialPlaceWarehouse(warehouseOptions, warehouseChoice?.defaultWarehouseId)
+        : '',
+    );
     setQuantity(String(availableQuantity));
     setNotes('');
     const seeded = seedDestinationFields(isBook ? bookStorage : null);
@@ -211,7 +265,14 @@ export function PlaceFromStagingDialog({
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
     setPendingConfirm(null);
-  }, [destId, rackNumber, rackRow, crateColor, crateNumber, quantity]);
+  }, [destId, rackNumber, rackRow, crateColor, crateNumber, quantity, pickedWarehouseId]);
+
+  /** A holding with no warehouse: the warehouse its destination is in. A rack
+   *  picked in the previous warehouse is not one of this one's, so it goes. */
+  function pickWarehouse(id: string) {
+    setPickedWarehouseId(id);
+    setDestId('');
+  }
 
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
@@ -280,9 +341,12 @@ export function PlaceFromStagingDialog({
     !submitting &&
     qtyValid &&
     !cannotMint &&
+    warehouseId !== null &&
     (isBook || isNew ? newReady : destId.length > 0);
 
-  function toActionDestination(dest: ChosenDestination): ActionDestination {
+  /** `warehouseId` is the holding's, or the one picked for a holding with
+   *  none: a new rack or crate is created there. */
+  function toActionDestination(dest: ChosenDestination, warehouseId: string): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
     if (dest.mode === 'new-crate') {
       // The rack pair travels WITH the crate when one was typed — it is the
@@ -465,6 +529,12 @@ export function PlaceFromStagingDialog({
       toast.error(`Quantity must be between 1 and ${availableQuantity}.`);
       return;
     }
+    // Unreachable through the disabled button; a holding with no warehouse
+    // has nowhere to go until one is picked.
+    if (warehouseId === null) {
+      toast.error('Choose a warehouse first.');
+      return;
+    }
 
     const dest = chosenDestination();
     if (!dest) {
@@ -483,7 +553,7 @@ export function PlaceFromStagingDialog({
       return;
     }
 
-    const destination = toActionDestination(dest);
+    const destination = toActionDestination(dest, warehouseId);
 
     // 1. Does this OVERWRITE a crate someone recorded? Predicted with the same
     //    comparator the server gate uses, against the book's summary and the
@@ -724,12 +794,33 @@ export function PlaceFromStagingDialog({
             <Label>From</Label>
             {/* Read only: the input's box on the sunk fill. */}
             <div className="border-border bg-sunk text-muted-foreground flex h-8 items-center rounded-md border px-2.5 text-[13px] max-sm:h-11 max-sm:text-base">
-              {sourceLabel}
+              {choosesWarehouse ? `${sourceLabel} (no warehouse)` : sourceLabel}
             </div>
           </div>
 
+          {/* A holding with no warehouse: the warehouse first (B38). Its racks
+              and crates are the destinations below once one is picked. */}
+          {choosesWarehouse && (
+            <div className="space-y-1.5">
+              <Label id="place-warehouse-label">To warehouse</Label>
+              <Select value={pickedWarehouseId} onValueChange={pickWarehouse}>
+                <SelectTrigger aria-labelledby="place-warehouse-label">
+                  <SelectValue placeholder="Select a warehouse" />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouseOptions.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-[12px]">{PLACE_WAREHOUSE_HINT}</p>
+            </div>
+          )}
+
           {/* ═══ BOOKS: the four fields ARE the destination ═══ */}
-          {isBook ? (
+          {warehouseId === null ? null : isBook ? (
             <>
               {/* Existing-location shortcut — FILLS the four fields below. */}
               <div className="space-y-1.5">
