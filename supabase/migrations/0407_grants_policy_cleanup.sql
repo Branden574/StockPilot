@@ -33,7 +33,7 @@
 --        (no API path deletes a key; see 6).
 --    4.5 maintenance_request_attachments: INSERT goes from anon and
 --        authenticated. The only writer is the finalize step
---        (apps/web/src/server/services/maintenance-attachments.ts:631),
+--        (apps/web/src/server/services/maintenance-attachments.ts:679),
 --        which inserts with the service-role client after its own checks
 --        since #325 (2026-10-05); the phone has only ever used the API
 --        (apps/mobile/src/lib/maintenance-api.ts).
