@@ -1355,6 +1355,18 @@ WEB_TESTS=(
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts
   src/server/services/inventory.order-catalog-visible.test.ts
+
+  # Ordering visibility (0413, step 2a): orders:manage_catalog_visibility is
+  # platform-managed. Only setOrderItemsAccessAction (fresh step-up) reaches
+  # PermissionExceptionsService.set (GoTrue-verified allowlisted actor), the one
+  # caller of platform_set_permission_exception; every other override writer
+  # refuses the key first (the guard pins the single caller and the writers).
+  # The web resolvers honour an explicit deny for the owner too, and fail
+  # closed for the key when the permission read fails.
+  src/server/services/platform/permission-exceptions.guard.test.ts
+  src/server/services/platform/permission-exceptions.test.ts
+  src/server/actions/platform/permission-exceptions.test.ts
+  src/lib/auth/effective-permissions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
