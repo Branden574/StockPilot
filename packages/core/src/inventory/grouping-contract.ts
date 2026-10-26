@@ -1350,6 +1350,11 @@ export const GROUP_COPY = {
   noopConfirm: 'OK',
   done: (name: string) => `Grouped in ${name}.`,
   noop: (name: string) => `These records are already in ${name}.`,
+  /** The done message's link to the list page that draws the group's header,
+   *  where the list cannot tell on its own which page that is (B5: a list
+   *  paged on the server). Its accessible name names the group. */
+  showIt: 'Show it',
+  showItFor: (group: string) => `Show it: ${group}`,
   cancel: 'Cancel',
   offline: 'Grouping needs a connection. Try again when you are online.',
   /** Announced when the review has loaded (iOS ignores live regions, P11). */
