@@ -39,13 +39,21 @@ import 'server-only';
  * read without its owner columns counts as a deleted member's. The one gap
  * it cannot close: a deleted member's ticket whose organization was deleted
  * too names neither and reads as a public ticket, so its kept address is
- * still emailed.
+ * still emailed. One path reaches it today: the platform console's
+ * organization delete with "also delete orphaned users" (deleteOrganization
+ * in server/actions/platform-admin.ts) deletes the organization first, which
+ * empties organization_id, and then each orphaned account, which empties
+ * submitted_by. No other column of a ticket says reliably that it was filed
+ * in the app, so nothing here guesses; the marker below closes the gap.
  *
- * WHAT REPLACES IT. Explicit markers, set by the account deletion before the
- * foreign keys empty the owner columns (maintenance_requests.
- * requester_deleted_at and support_tickets.submitter_deleted_at, designed in
- * the B23 pull request for the next database batch). These functions switch
- * to them in that same change, which also closes the gap above. Rentals keep
+ * WHAT REPLACES IT. Explicit markers, set in the database by the account
+ * deletion's own trigger before the foreign keys empty the owner columns, so
+ * every deletion path sets them (the app, the phone, the platform console,
+ * the Supabase dashboard) and an organization delete cannot erase them
+ * (maintenance_requests.requester_deleted_at and
+ * support_tickets.submitter_deleted_at, designed in the B23 pull request for
+ * the next database batch). These functions switch to them in that same
+ * change, which also closes the gap above. Rentals keep
  * a borrower's address too (borrower_email), but a borrower without an
  * account has no borrower_user_id either, so nothing can be inferred there:
  * its marker (rentals.borrower_deleted_at) is in the same design. Until then,
