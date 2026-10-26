@@ -135,8 +135,12 @@ describe('POST /auth/confirm', () => {
 describe('POST /auth/confirm from another site', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // The refusal has its own value, which the page answers with no words
+  // (lib/auth/auth-page-notices.ts, docket B39 review): the link was neither
+  // expired nor used, and the expired-link note, with its advice on getting a
+  // new link, would be words the other site chose to put on the card.
   it.each(['cross-site', 'same-site', 'none'])(
-    'Sec-Fetch-Site %s: the failure answer, and the token is not spent',
+    'Sec-Fetch-Site %s: the refused answer, never the expired one, and the token is not spent',
     async (site) => {
       verifyOtp.mockResolvedValue({ error: null });
       const res = await POST(
@@ -146,12 +150,12 @@ describe('POST /auth/confirm from another site', () => {
         ),
       );
       expect(res.status).toBe(303);
-      expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_expired`);
+      expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
       expect(verifyOtp).not.toHaveBeenCalled();
     },
   );
 
-  it('an invite or a sign-in link from another site: the /signin bounce, never a session', async () => {
+  it('an invite or a sign-in link from another site: the refused /signin bounce, never a session', async () => {
     verifyOtp.mockResolvedValue({ error: null });
     for (const type of ['invite', 'magiclink']) {
       const res = await POST(
@@ -160,7 +164,20 @@ describe('POST /auth/confirm from another site', () => {
           { 'sec-fetch-site': 'cross-site' },
         ),
       );
-      expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=auth_callback_failed`);
+      expect(res.status, type).toBe(303);
+      expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=link_refused`);
+    }
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('an unknown or missing type from another site: the refused /signin bounce', async () => {
+    const forms: Record<string, string>[] = [
+      { token_hash: 'held', type: 'signup' },
+      { token_hash: 'held' },
+    ];
+    for (const fields of forms) {
+      const res = await POST(postReq(fields, { 'sec-fetch-site': 'cross-site' }));
+      expect(res.headers.get('location')).toBe(`${BASE}/signin?error=link_refused`);
     }
     expect(verifyOtp).not.toHaveBeenCalled();
   });
