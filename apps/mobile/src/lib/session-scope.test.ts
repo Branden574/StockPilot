@@ -43,22 +43,17 @@ vi.mock('./supabase', async () => {
   };
 });
 
-// The saved workspace and the account that saved it (workspace-keys.ts). No
-// owner (an older build's) unless a test sets one.
+// The saved workspace and the account that saved it (workspace-keys.ts): u1's
+// own, as this build saves it, unless a test says otherwise. ownerId null is
+// an older build's record (its single workspace key, no owner).
 const saved = vi.hoisted(() => ({
   orgId: 'org-a' as string | null,
-  ownerId: null as string | null,
+  ownerId: 'u1' as string | null,
 }));
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: {
-    getItem: async (key: string) =>
-      key === 'workspace.activeOrgId'
-        ? saved.orgId
-        : key === 'workspace.activeOrgUserId'
-          ? saved.ownerId
-          : null,
-  },
-}));
+vi.mock('@react-native-async-storage/async-storage', async () => {
+  const { storedWorkspaceItem } = await import('./__fixtures__/saved-workspace');
+  return { default: { getItem: async (key: string) => storedWorkspaceItem(key, saved) } };
+});
 
 type Scope = typeof import('./session-scope');
 let scope: Scope;
@@ -70,7 +65,7 @@ beforeEach(async () => {
   auth.stored = { present: true, userId: 'u1' };
   auth.read = null;
   saved.orgId = 'org-a';
-  saved.ownerId = null;
+  saved.ownerId = 'u1';
   vi.resetModules(); // a fresh "last seen" per test
   scope = await import('./session-scope');
   OwnerUnknown = (await import('./outbox-scope')).OutboxOwnerUnknownError;
@@ -85,7 +80,9 @@ describe('liveOutboxScope reads the STORED session, never a refreshing getSessio
 
   it('nobody signed in reads as nobody', async () => {
     auth.stored = { present: false, userId: null };
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: null });
+    // Re-pinned by docket B10 (was `orgId: 'org-a'`, read from an older
+    // build's record): u1's own workspace is nobody's with nobody signed in.
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: null });
   });
 
   it('unreadable storage reads as nobody: every row is held, nothing is sent on a guess', async () => {
@@ -116,6 +113,7 @@ describe('outboxWriteScope never names NULL as the owner', () => {
   it('a new account signing in is stamped as itself at once', async () => {
     await scope.liveOutboxScope();
     auth.stored = { present: true, userId: 'u2' };
+    saved.ownerId = 'u2'; // its workspace load has saved its own choice
     expect((await scope.outboxWriteScope()).userId).toBe('u2');
   });
 
@@ -166,10 +164,36 @@ describe("the outbox stamps only the stamped account's own saved workspace", () 
   it('nothing saved (a fresh install before its first workspace load): stamped with no workspace, as on main', async () => {
     saved.orgId = null;
     expect(await scope.outboxWriteScope()).toEqual({ orgId: null, userId: 'u1' });
+    // ...and such a row waits for this account's own workspace before it is
+    // sent (outbox-scope.ts 'workspace-loading'): the readers see none yet.
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
   });
 
-  it('a workspace saved by an older build (no owner): stamped with it, as on main', async () => {
+  /**
+   * Integrator decision 3. An older build saved the workspace with no owner,
+   * and every account trusted it: a row stamped with it may carry another
+   * account's choice (left by a fallback sign-out on that build). A new row is
+   * refused instead, with the same retryable sentence, until this account's
+   * next workspace load records the owner; and a row with no workspace of its
+   * own is not sent under it (the readers see none). Requests still name it
+   * (api.org-header.test.ts): the server checks membership on each one.
+   */
+  it('a workspace saved by an older build (no owner): a new row is refused to try again, and the readers see none', async () => {
+    saved.ownerId = null;
+    const refusal = await scope.outboxWriteScope().catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(WorkspaceLoading);
+    expect((refusal as Error).message).toBe(
+      'Your workspace is still loading. Try again in a moment.',
+    );
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
+  });
+
+  it('once the workspace load records this account as its owner, the same write is stamped with it', async () => {
+    saved.ownerId = null;
+    await expect(scope.outboxWriteScope()).rejects.toBeInstanceOf(WorkspaceLoading);
+    saved.ownerId = 'u1';
     expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
   });
 
   it('with no account at all, the owner refusal comes first', async () => {

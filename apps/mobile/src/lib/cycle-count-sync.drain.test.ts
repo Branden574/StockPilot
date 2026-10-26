@@ -181,6 +181,50 @@ describe('CycleCountSyncEngine drain — own org, own account, per row (S4a)', (
     expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'markHeld:1']);
   });
 
+  // docket B10, integrator decision 3 (the twin of sync.drain.test.ts): a
+  // count with no workspace of its own used to be sent with the live one even
+  // when that was null, so api() sent no X-Organization-Id and the server
+  // recorded it in the account's default organization.
+  it("a count with no workspace of its own is HELD while the account's own is unknown, then sent under it once saved", async () => {
+    live.orgId = null;
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: null, user: null }), // an older build's
+      countRow(2, 'l2', { org: null, user: 'u1' }), // queued before any workspace was saved
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    // Not marked sending, bumped or rejected: still pending for the next pass.
+    expect(calls.log).toEqual([]);
+
+    live.orgId = 'org-own'; // this account's workspace load saved its choice
+    await cycleCountSync.forceSync();
+
+    expect(cacheMock.outboxMarkSending).toHaveBeenCalledWith(1, { orgId: 'org-own', userId: 'u1' });
+    expect(cacheMock.outboxMarkSending).toHaveBeenCalledWith(2, { orgId: 'org-own', userId: 'u1' });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      recordPath('l1'),
+      expect.objectContaining({ orgId: 'org-own', asUserId: 'u1' }),
+    );
+    expect(apiMock.api).toHaveBeenCalledWith(
+      recordPath('l2'),
+      expect.objectContaining({ orgId: 'org-own', asUserId: 'u1' }),
+    );
+  });
+
+  it('a count with its own workspace is not held: it goes under that one while the live one is unknown', async () => {
+    live.orgId = null;
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).toHaveBeenCalledWith(
+      recordPath('l1'),
+      expect.objectContaining({ orgId: 'org-a', asUserId: 'u1' }),
+    );
+  });
+
   it("a superseded row is acked when it is the live account's, parked (never deleted) when it is another's", async () => {
     // Two lines, each with an older row and a newer one (ids are monotonic).
     cacheMock.rows = [

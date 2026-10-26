@@ -3,25 +3,21 @@ import * as React from 'react';
 
 import { accountEpoch, endAccountEpoch } from './account-epoch';
 import { useAuth } from './auth-context';
+import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
-import { syncNow } from './sync';
+import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
 import { chooseActiveOrg } from './workspace-choice';
-import {
-  ACTIVE_ORG_OWNER_STORAGE_KEY,
-  ACTIVE_ORG_STORAGE_KEY,
-  readSavedWorkspace,
-  savedWorkspaceFor,
-} from './workspace-keys';
+import { readSavedWorkspace, saveWorkspace, savedWorkspaceFor } from './workspace-keys';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
  * single-org assumption baked into `use-org.ts` by adding:
  *
  *   • full list of the user's accepted memberships (one per org),
- *   • the active org id, persisted under ACTIVE_ORG_STORAGE_KEY (workspace-keys.ts)
- *     with the account that chose it under ACTIVE_ORG_OWNER_STORAGE_KEY,
+ *   • the active org id, saved with the account that chose it as one value
+ *     (workspace-keys.ts saveWorkspace),
  *   • full list of warehouses the user can read in the active org,
  *   • the active warehouse id (or `null` for "all warehouses"),
  *     persisted under `workspace.activeWarehouseId.<orgId>`.
@@ -249,16 +245,29 @@ async function loadWorkspace(userId: string) {
   }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
-  // Saved with its owner. A workspace saved before owners were recorded, or
-  // over another account's owner, gets this account's, so its requests keep
-  // naming it.
+  // EVERY LOAD THAT CHOOSES A WORKSPACE LEAVES IT SAVED AS THIS ACCOUNT'S
+  // (integrator decision 3). Either it is saved here, with this account as its
+  // owner, in one write (a new choice, a workspace saved by an older build
+  // with no owner, or one saved over another account's), or the saved one
+  // already is this account's own and is the one chosen (persist is false only
+  // when the choice is the stored one, and the stored one is only ever this
+  // account's or an older build's: savedWorkspaceFor). The outbox holds a row
+  // with no workspace of its own until that is true (outbox-scope.ts
+  // 'workspace-loading').
   if (activeOrgId && (choice.persist || saved.ownerId !== userId)) {
     try {
-      await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, activeOrgId);
-      await AsyncStorage.setItem(ACTIVE_ORG_OWNER_STORAGE_KEY, userId);
+      await saveWorkspace(AsyncStorage, activeOrgId, userId);
+      // Rows held for want of this account's own workspace can go now: a pass
+      // of each drain that STARTS after this save (sync.ts syncAfterRunning;
+      // forceSync waits for a drain already running). The 60 s ticks and every
+      // return to the foreground would send them too, up to a minute later.
+      void syncAfterRunning();
+      void cycleCountSync.forceSync();
     } catch (err) {
       // Still show the workspace (the server answers for the same default
       // when no header is saved); a failed save must not leave loading stuck.
+      // The previous record stays whole (one write), and a held row waits for
+      // the next load's save (each screen that mounts runs one).
       console.warn('[workspace] saving the chosen workspace failed', err);
     }
   }
@@ -377,20 +386,20 @@ export function setActiveOrg(orgId: string): Promise<void> {
 
 async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   if (orgId === cached.activeOrgId) return;
+  // Whose choice it is: the account signed in now (workspace-keys.ts). With
+  // none known, nothing is saved and the switch fails. The first version
+  // removed the owner then, which left a record every account's requests and
+  // queued work trusted (integrator decision 3).
+  const ownerId = epochUserId;
+  if (!ownerId) throw new Error('No signed-in account to save the workspace for.');
   switchesStarted += 1;
-  await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, orgId);
-  // Whose choice it is (workspace-keys.ts): the account signed in now. With
-  // none known, no owner is kept, so the saved workspace reads as an older
-  // build's (named as before) rather than as another account's. Written after
-  // the workspace, and a failure does not stop the switch: a stale owner can
-  // only make the next requests name no workspace (the server's default)
-  // until the next load records it, never name a workspace the screen left.
-  try {
-    if (epochUserId) await AsyncStorage.setItem(ACTIVE_ORG_OWNER_STORAGE_KEY, epochUserId);
-    else await AsyncStorage.removeItem(ACTIVE_ORG_OWNER_STORAGE_KEY);
-  } catch (err) {
-    console.warn('[workspace] saving whose workspace this is failed', err);
-  }
+  // ONE write, the workspace with its owner. A failed save is a failed switch:
+  // it throws here, before anything is wiped or shown, so the previous
+  // workspace stays on screen and in storage. (A load that ran alongside only
+  // refreshes the memberships, since switchesStarted moved: it shows nothing
+  // new either.) Counted before the write, as before, so a load deciding at
+  // the same moment either sees the switch or saves before it.
+  await saveWorkspace(AsyncStorage, orgId, ownerId);
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and
   // reset the delta cursor BEFORE the pull below. Without this, the local
   // items/POs/counts/bundles lists would transiently show the previous org's

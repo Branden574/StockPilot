@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { listTsx, parseTsx, readSource } from './__fixtures__/jsx-touch-audit';
+import { storedWorkspaceEntries } from './__fixtures__/saved-workspace';
 import { api, orgHeader } from './api';
 
 /**
@@ -75,10 +76,12 @@ function sentHeaders(): Record<string, string> {
   return init.headers;
 }
 
-/** The saved workspace as use-workspace.ts writes it (owner absent: an older build's). */
+/**
+ * The saved workspace as use-workspace.ts writes it, one value with its owner
+ * (owner absent: an older build's single key).
+ */
 function save(orgId: string, ownerId?: string) {
-  state.saved = { 'workspace.activeOrgId': orgId };
-  if (ownerId) state.saved['workspace.activeOrgUserId'] = ownerId;
+  state.saved = Object.fromEntries(storedWorkspaceEntries({ orgId, ownerId: ownerId ?? null }));
 }
 
 beforeEach(() => {

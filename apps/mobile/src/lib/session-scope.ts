@@ -6,12 +6,13 @@ import {
   type LiveScope,
 } from './outbox-scope';
 import { readDeviceAuthSession } from './supabase';
-import { readSavedWorkspace, savedWorkspaceFor, type SavedWorkspace } from './workspace-keys';
+import { ownSavedWorkspace, readSavedWorkspace, type SavedWorkspace } from './workspace-keys';
 
 /**
  * The workspace and account live on the device right now, for the outbox
- * (outbox-scope.ts): the saved workspace (the key use-workspace.ts writes and
- * api.ts orgHeader() sends) and the account whose session is PERSISTED here.
+ * (outbox-scope.ts): the saved workspace (workspace-keys.ts: the one
+ * use-workspace.ts saves and api.ts orgHeader() names) and the account whose
+ * session is PERSISTED here.
  *
  * The account is read from the stored session, never from
  * supabase.auth.getSession(). getSession() refreshes an expiring token first,
@@ -63,14 +64,17 @@ async function readLive(): Promise<{ saved: SavedWorkspace; userId: string | nul
 
 export async function liveOutboxScope(): Promise<LiveScope> {
   const { saved, userId } = await readLive();
-  // Only the account's own saved workspace (workspace-keys.ts
-  // savedWorkspaceFor), as api() names it (docket B10): the drains send a row
-  // that has no organization of its own (a legacy row) under it, never under
-  // another account's. A new row is not queued at all while the saved
-  // workspace is another account's (outboxWriteScope). Signed out, the owner
-  // is the account last seen this run, the one a row written now is queued
-  // for.
-  return { orgId: savedWorkspaceFor(saved, userId ?? lastSeenUserId), userId };
+  // Only a workspace this account saved itself (workspace-keys.ts
+  // ownSavedWorkspace; docket B10, integrator decision 3). The drains send a
+  // row that has no organization of its own (a legacy row, or one queued
+  // before any workspace was saved) under it, and HOLD that row while it is
+  // null (outbox-scope.ts 'workspace-loading'): nothing saved, another
+  // account's, or an older build's record with no owner, which may be another
+  // account's choice. Before, such a row went out with no workspace header at
+  // all and the server applied it in the account's default organization.
+  // Signed out, the owner is the account last seen this run, the one a row
+  // written now is queued for.
+  return { orgId: ownSavedWorkspace(saved, userId ?? lastSeenUserId), userId };
 }
 
 /**
@@ -81,23 +85,28 @@ export async function liveOutboxScope(): Promise<LiveScope> {
  * readable, else the last one seen this run; with neither, the write is
  * refused (OutboxOwnerUnknownError) rather than queued for nobody.
  *
- * The workspace is the one that owner saved (savedWorkspaceFor). While the
- * saved workspace is ANOTHER account's (the moment after a different account
- * signs in, before its workspace load saves its own choice, or longer when
- * that load fails offline), the write is refused too
- * (OutboxWorkspaceLoadingError: try again in a moment). Stamped with no
- * workspace, the row would be sent under whichever one is saved when it is
- * sent, after a switch the wrong one (S4a); stamped with the other account's,
- * the server refuses it and the change is lost. Nothing saved (a fresh
- * install before its first workspace load) stamps none, and a workspace saved
- * by an older build (no owner) is stamped, both as before.
+ * The workspace is the one that owner saved itself (ownSavedWorkspace). While
+ * the saved workspace is ANOTHER account's (the moment after a different
+ * account signs in, before its workspace load saves its own choice, or longer
+ * when that load fails offline), or an older build's with no owner (until
+ * this build's first workspace load records it: integrator decision 3), the
+ * write is refused too (OutboxWorkspaceLoadingError: try again in a moment).
+ * Stamped with no workspace, the row would be sent under whichever workspace
+ * this account saves next, after a switch not the one the change was made in
+ * (S4a); stamped with another account's, the server refuses it and the change
+ * is lost, or, where this account is a member there too, it lands in a
+ * workspace this account did not choose. Nothing saved (a fresh
+ * install before its first workspace load) stamps none, as before: such a
+ * row is held until this account's workspace is saved, then sent under it
+ * (outbox-scope.ts 'workspace-loading').
  */
 export async function outboxWriteScope(): Promise<{ orgId: string | null; userId: string }> {
   const { saved, userId: live } = await readLive();
   const userId = live ?? lastSeenUserId;
   if (!userId) throw new OutboxOwnerUnknownError();
-  const orgId = savedWorkspaceFor(saved, userId);
-  if (saved.orgId && !orgId) throw new OutboxWorkspaceLoadingError();
+  if (!saved.orgId) return { orgId: null, userId };
+  const orgId = ownSavedWorkspace(saved, userId);
+  if (!orgId) throw new OutboxWorkspaceLoadingError();
   return { orgId, userId };
 }
 

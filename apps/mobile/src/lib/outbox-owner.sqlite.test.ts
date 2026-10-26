@@ -25,8 +25,11 @@ import { REPLACED_BY_LATER_COUNT, outboxSendDecision } from './outbox-scope';
  *   - this code never writes a NULL owner, and a disabled account's eviction
  *     parks only that account's work (and legacy rows), never another's;
  *   - a new row is queued only under the workspace its own account saved:
- *     while the saved workspace is another account's, both writers refuse and
- *     write nothing (docket B10).
+ *     while the saved workspace is another account's, or an older build's
+ *     with no owner, both writers refuse and write nothing (docket B10);
+ *   - a row with no workspace of its own is held, as pending, until its
+ *     account's own workspace is saved, and then sent under it (docket B10,
+ *     integrator decision 3).
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -34,13 +37,14 @@ vi.mock('expo-sqlite', () => ({ openDatabaseAsync: sqlite.open }));
 
 /**
  * The device right now: the saved workspace and the account that saved it
- * (ownerId null = saved by an older build, which recorded no owner), and the
- * account whose session is STORED (userId null = none stored; `unreadable` =
- * stored, owner unreadable).
+ * (u1's own, as this build saves it, unless a test says otherwise; ownerId
+ * null = saved by an older build, which recorded no owner), and the account
+ * whose session is STORED (userId null = none stored; `unreadable` = stored,
+ * owner unreadable).
  */
 const live = vi.hoisted(() => ({
   orgId: 'org-a' as string | null,
-  ownerId: null as string | null,
+  ownerId: 'u1' as string | null,
   userId: 'u1' as string | null,
   unreadable: false,
 }));
@@ -62,16 +66,10 @@ vi.mock('./supabase', async () => {
         : { present: live.userId !== null, userId: live.userId },
   };
 });
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: {
-    getItem: async (key: string) =>
-      key === 'workspace.activeOrgId'
-        ? live.orgId
-        : key === 'workspace.activeOrgUserId'
-          ? live.ownerId
-          : null,
-  },
-}));
+vi.mock('@react-native-async-storage/async-storage', async () => {
+  const { storedWorkspaceItem } = await import('./__fixtures__/saved-workspace');
+  return { default: { getItem: async (key: string) => storedWorkspaceItem(key, live) } };
+});
 
 type Queue = typeof import('./queue');
 type Cache = typeof import('./cycle-count-cache');
@@ -85,7 +83,7 @@ let scope: Scope;
 
 beforeEach(async () => {
   live.orgId = 'org-a';
-  live.ownerId = null;
+  live.ownerId = 'u1';
   live.userId = 'u1';
   live.unreadable = false;
   raw = new DatabaseSync(':memory:');
@@ -548,7 +546,29 @@ describe("a new row is queued only under its own account's saved workspace", () 
     ]);
   });
 
-  it('a workspace saved by an older build (no owner): stamped with it, as before', async () => {
+  // Integrator decision 3: an older build's record (no owner) was trusted by
+  // every account, so a row stamped with it could carry another account's
+  // choice. Both writers refuse it now, retryably: the next workspace load
+  // records this account as its owner (use-workspace.owner.test.ts).
+  it('a workspace saved by an older build (no owner): both writers refuse with the sentence and write nothing', async () => {
+    live.ownerId = null;
+    cacheLine('l1');
+
+    await expect(cache.updateLocalLine('l1', 2)).rejects.toMatchObject({
+      name: 'OutboxWorkspaceLoadingError',
+      message: SENTENCE,
+    });
+    await expect(
+      queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 }),
+    ).rejects.toMatchObject({ name: 'OutboxWorkspaceLoadingError', message: SENTENCE });
+
+    expect(rows()).toEqual([]);
+    expect(
+      raw.prepare("select counted, local_dirty from cycle_count_lines where id = 'l1'").get(),
+    ).toEqual({ counted: null, local_dirty: 0 });
+
+    // The load records the owner; the same save then works.
+    live.ownerId = 'u1';
     await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
     expect(rows()).toEqual([
       { kind: 'distribute_bundle', organization_id: 'org-a', user_id: 'u1' },
@@ -579,14 +599,79 @@ describe("a new row is queued only under its own account's saved workspace", () 
     ]);
   });
 
-  it("while the saved workspace is another account's, a legacy row is adopted by the live account and never stamped with that workspace", async () => {
-    live.ownerId = 'u0';
-    seed({ id: 1, user: null, org: null, kind: 'receive_po_line' });
+  /**
+   * Integrator decision 3 (the HIGH finding): such a row used to be adopted
+   * and sent at once with no workspace (`orgId: null`), so api() sent no
+   * X-Organization-Id and the server applied it in the account's default
+   * organization. While the account's own workspace is unknown it is now
+   * HELD: untouched, still pending and counted as this account's, and sent
+   * under that workspace, stamped with it, once the workspace load saves it.
+   */
+  it.each([
+    ["another account's workspace is saved", { orgId: 'org-b', ownerId: 'u0' }],
+    ['nothing is saved', { orgId: null, ownerId: null }],
+    ["an older build's workspace (no owner) is saved", { orgId: 'org-b', ownerId: null }],
+  ] as const)(
+    'while %s, a legacy row is held, then sent under the account’s own once saved',
+    async (_while, savedNow) => {
+      live.orgId = savedNow.orgId;
+      live.ownerId = savedNow.ownerId;
+      seed({ id: 1, user: null, org: null, kind: 'receive_po_line' });
 
-    expect(await firstSend(1)).toEqual({ send: true, orgId: null, userId: 'u1', adopt: true });
-    expect(owners()).toEqual([
-      { id: 1, status: 'sending', organization_id: null, user_id: 'u1', last_error: null },
+      expect(await firstSend(1)).toEqual({ send: false, reason: 'workspace-loading' });
+      expect(owners()).toEqual([
+        { id: 1, status: 'pending', organization_id: null, user_id: null, last_error: null },
+      ]);
+      // Still this account's work waiting to go: the badge, Sync first and the
+      // sign-out prompt count it, and Unsent work does not offer it as held.
+      expect(await queue.pendingCount()).toBe(1);
+      expect(await cache.totalPendingCount()).toBe(1);
+      expect(await queue.countHeld()).toBe(0);
+
+      // This account's workspace load saves its choice.
+      live.orgId = 'org-own';
+      live.ownerId = 'u1';
+      expect(await firstSend(1)).toEqual({
+        send: true,
+        orgId: 'org-own',
+        userId: 'u1',
+        adopt: true,
+      });
+      expect(owners()).toEqual([
+        { id: 1, status: 'sending', organization_id: 'org-own', user_id: 'u1', last_error: null },
+      ]);
+    },
+  );
+
+  it("this account's own row queued while nothing was saved is held the same way, then sent under its own", async () => {
+    live.orgId = null;
+    cacheLine('l1');
+    const res = await cache.updateLocalLine('l1', 4); // stamped with no workspace, as on main
+    const { id } = await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    expect(rows()).toEqual([
+      { kind: 'record_count', organization_id: null, user_id: 'u1' },
+      { kind: 'distribute_bundle', organization_id: null, user_id: 'u1' },
     ]);
+
+    expect(await firstSend(id)).toEqual({ send: false, reason: 'workspace-loading' });
+    const count = (await cache.outboxQueued()).find((r) => r.id === res?.outboxId)!;
+    expect(outboxSendDecision(count, await scope.liveOutboxScope())).toEqual({
+      send: false,
+      reason: 'workspace-loading',
+    });
+
+    live.orgId = 'org-own';
+    expect(await firstSend(id)).toEqual({
+      send: true,
+      orgId: 'org-own',
+      userId: 'u1',
+      adopt: true,
+    });
+    expect(outboxSendDecision(count, await scope.liveOutboxScope())).toMatchObject({
+      send: true,
+      orgId: 'org-own',
+      userId: 'u1',
+    });
   });
 
   it("a row queued under the account's own workspace keeps it when another account's is saved later", async () => {
