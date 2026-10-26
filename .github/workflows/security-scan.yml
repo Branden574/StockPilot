@@ -123,9 +123,11 @@ jobs:
       # Reads pnpm version from package.json#packageManager.
       - uses: pnpm/action-setup@v6.1.0
 
+      # The production Node major, as every other setup-node step reads it
+      # (node-version-pins.guard.test.ts).
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
 
       # pnpm audit exits non-zero whenever it finds an advisory at
       # --audit-level or above, so its exit status is not the verdict:

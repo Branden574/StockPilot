@@ -28,7 +28,7 @@ import {
   lineNeedsMappingConfirmation,
 } from '@stockpilot/core';
 
-import { extractPoFromMedia, PO_SCHEMA } from './extract';
+import { extractPoFromMedia, MAX_SCAN_TEXT_LEN, PO_SCHEMA } from './extract';
 
 const MEDIA = [{ base64: 'AAAA', mimeType: 'image/jpeg' }];
 
@@ -284,5 +284,75 @@ describe('mappingConfidence is required of the model', () => {
     expect(
       lineNeedsMappingConfirmation({ mapping_confidence: l.mappingConfidence }),
     ).toBe(false);
+  });
+});
+
+describe('extractPoFromMedia: apparel names a size run can group', () => {
+  it('drops the leading count and moves the size to the end on inventory lines', async () => {
+    // The invoice shape seen 2026-08-20: "<qty> - <size> : <colour>". The
+    // scan also reads each line's size into its own field.
+    respond(
+      po([
+        baseLine({
+          lineNumber: 1,
+          description: '25 - Small : Carolina Blue, Carolina Blue',
+          quantity: 25,
+          size: 'Small',
+        }),
+        baseLine({
+          lineNumber: 2,
+          description: '30 - Medium : Carolina Blue, Carolina Blue',
+          quantity: 30,
+          size: 'Medium',
+        }),
+        baseLine({ lineNumber: 3, description: 'Setup charge', lineType: 'fee', quantity: 1 }),
+      ]),
+    );
+
+    const out = await extractPoFromMedia(MEDIA);
+
+    expect(out.lines.map((l) => l.description)).toEqual([
+      'Carolina Blue, Carolina Blue - S',
+      'Carolina Blue, Carolina Blue - M',
+      'Setup charge',
+    ]);
+  });
+
+  it('never makes a description longer than the scan bound', async () => {
+    // 499 printed characters; moving the size would make 501.
+    const printed = `S:${'B'.repeat(497)}`;
+    respond(po([baseLine({ description: printed, quantity: 4, size: 'S' })]));
+
+    const out = await extractPoFromMedia(MEDIA);
+
+    expect(out.lines[0]!.description).toBe(printed);
+    expect(out.lines[0]!.description.length).toBeLessThanOrEqual(MAX_SCAN_TEXT_LEN);
+  });
+
+  it('keeps the printed words when the line printed no size, or is a book', async () => {
+    respond(
+      po([
+        // A title whose first part reads as a size, on a line with no size.
+        baseLine({ lineNumber: 1, description: 'M: Son of the Century', quantity: 2 }),
+        // A number joined to the name by a hyphen, equal to the quantity.
+        baseLine({ lineNumber: 2, description: '3-Ring Binder, 1 inch', quantity: 3 }),
+        // A book (its vendor number is an ISBN) the scan read a size for.
+        baseLine({
+          lineNumber: 3,
+          description: 'M: Son of the Century',
+          quantity: 2,
+          vendorSku: '9780000000019',
+          size: 'M',
+        }),
+      ]),
+    );
+
+    const out = await extractPoFromMedia(MEDIA);
+
+    expect(out.lines.map((l) => l.description)).toEqual([
+      'M: Son of the Century',
+      '3-Ring Binder, 1 inch',
+      'M: Son of the Century',
+    ]);
   });
 });

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   isAllowedPoImportUploadMime,
   PO_IMPORT_UPLOAD_MIME_ERROR,
@@ -76,6 +77,7 @@ export async function presignPoUploadAction(input: {
     });
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -129,6 +131,7 @@ export async function recordPoUploadAction(input: {
     revalidatePath('/dashboard/purchase-orders/imports');
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -142,6 +145,7 @@ export async function parsePoImportAction(id: string): Promise<ActionResult<void
     revalidatePath('/dashboard/purchase-orders/imports');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -178,6 +182,7 @@ export async function approvePoImportAction(input: {
     revalidatePath('/dashboard/purchase-orders');
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -220,6 +225,7 @@ export async function createItemsFromPoLinesAction(input: {
     revalidatePath('/dashboard');
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -249,6 +255,7 @@ export async function findDuplicatesForPoLinesAction(input: {
     const { matches } = await svc.findDuplicatesForLines(parsed.data);
     return ok({ matches });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -275,6 +282,7 @@ export async function confirmPoImportMappingsAction(input: {
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -312,6 +320,7 @@ export async function resolvePoImportLineResultsAction(input: {
       }),
     );
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -341,6 +350,7 @@ export async function renamePoImportAction(input: {
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -354,6 +364,7 @@ export async function cancelPoImportAction(id: string): Promise<ActionResult<voi
     revalidatePath('/dashboard/purchase-orders/imports');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

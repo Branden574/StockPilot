@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import {
   autoDeleteArchivedSchema,
@@ -87,6 +88,7 @@ export async function setAutoDeleteArchivedSettingsAction(
     revalidatePath('/dashboard/settings/inventory-cleanup');
     return ok({ settings });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

@@ -23,6 +23,7 @@ import {
   section,
   statusPill,
 } from './es/components';
+import { countOf } from './es/count';
 import { esEmailById } from './es/registry';
 import { ES_LIGHT, esAssetUrl } from './es/tokens';
 import { sendEmail } from './resend';
@@ -570,9 +571,9 @@ function buildView(a: TemplateArgs): OrderEmailView {
           case 'none':
             return `Approved. ${NOTHING_HELD_YET}`;
           case 'part':
-            return `Reserved ${held!.heldUnits} of ${held!.owedUnits} units. The rest is waiting for stock.`;
+            return `Reserved ${held!.heldUnits} of ${countOf(held!.owedUnits, 'unit')}. The rest is waiting for stock.`;
           case 'unknown':
-            return `Approved. ${units} units across ${lines} lines from ${wh}.`;
+            return `Approved. ${countOf(units, 'unit')} across ${countOf(lines, 'line')} from ${wh}.`;
           case 'all':
             return def.preheader({ units, lines, shipDate, warehouse: wh });
         }
@@ -677,10 +678,22 @@ function approvedProse(greet: string, held: HeldSummary | null): string {
     case 'none':
       return `${greet}your request is approved. ${NOTHING_HELD_YET} ${next}`;
     case 'part':
-      return `${greet}we’ve reserved ${held!.heldUnits} of ${held!.owedUnits} units on this request; the rest is waiting for stock. ${next}`;
+      return `${greet}we’ve reserved ${held!.heldUnits} of ${countOf(held!.owedUnits, 'unit')} on this request; the rest is waiting for stock. ${next}`;
     case 'all':
       return `${greet}we’ve reserved every unit on this request. ${next}`;
   }
+}
+
+/**
+ * The cancelled email's sentence about stock, for both renderers. One unit is
+ * "The reserved unit", never "All 1 reserved units".
+ */
+function releasedUnitsClause(units: number): string {
+  if (units <= 0)
+    return 'Nothing was reserved, nothing shipped, and nothing partial is outstanding.';
+  const released =
+    units === 1 ? 'The reserved unit went back' : `All ${units} reserved units went back`;
+  return `${released} to stock; nothing shipped and nothing partial is outstanding.`;
 }
 
 /** "Hi Jane — …" / "Hi — …" (missing-name fallback per the design prompt). */
@@ -710,8 +723,10 @@ function orderGrid(
     noShipDate?: boolean;
   } = {},
 ): string {
-  const units = opts.heldOf ? `${opts.heldOf.held} of ${opts.heldOf.owed} units` : `${v.units} units`;
-  const contents = `${units} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
+  const units = opts.heldOf
+    ? `${opts.heldOf.held} of ${countOf(opts.heldOf.owed, 'unit')}`
+    : countOf(v.units, 'unit');
+  const contents = `${units} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${countOf(v.lines, 'line')}</span>`;
   const rows: [DetailCell, DetailCell][] = [
     [
       {
@@ -766,7 +781,7 @@ function itemsTable(a: TemplateArgs, totalLabel: string): string {
   const items = a.summary.items;
   const overflow =
     items.length > MAX_TABLE_LINES
-      ? `\n      ${ctaNote(`+ ${items.length - MAX_TABLE_LINES} more lines — the full order is available online.`)}`
+      ? `\n      ${ctaNote(`+ ${countOf(items.length - MAX_TABLE_LINES, 'more line')} — the full order is available online.`)}`
       : '';
   return `${itemTable({
     items: items.slice(0, MAX_TABLE_LINES).map((it) => ({
@@ -1064,10 +1079,7 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
 
     case 'cancelled': {
       // Neutral, factual treatment — no motion, nothing celebratory.
-      const releasedClause =
-        v.units > 0
-          ? `All ${v.units} reserved units went back to stock; nothing shipped and nothing partial is outstanding.`
-          : 'Nothing was reserved, nothing shipped, and nothing partial is outstanding.';
+      const releasedClause = releasedUnitsClause(v.units);
       const prose = `${hi(v.firstName, true)}this request was cancelled on ${escapeHtml(v.cancelledOn)} by ${escapeHtml(v.cancelledBy)}. ${releasedClause}`;
       const newRequestHref = a.request.requester_user_id
         ? `${a.appUrl}/dashboard/orders/new`
@@ -1130,7 +1142,7 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
 
     case 'packing_slip_generated': {
       // LATENT: dispatch decision pending (see policy audit).
-      const prose = `${hi(v.firstName, true)}${escapeHtml(v.wh)} is picking and packing your ${v.lines} lines now. Next you’ll hear from us when it’s staged for delivery.`;
+      const prose = `${hi(v.firstName, true)}${escapeHtml(v.wh)} is picking and packing your ${countOf(v.lines, 'line')} now. Next you’ll hear from us when it’s staged for delivery.`;
       return {
         rows: [
           introSection(v, `${escapeHtml(v.displayId)} is being packaged.`, 'Boxes, labels, tape.', prose),
@@ -1171,7 +1183,7 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
             },
             {
               label: 'Contents',
-              valueHtml: `${v.units} units <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`,
+              valueHtml: `${countOf(v.units, 'unit')} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${countOf(v.lines, 'line')}</span>`,
             },
           ],
         ],
@@ -1276,12 +1288,8 @@ function renderText(a: TemplateArgs): string {
     denied: `${greet}your request didn’t clear approval this time. Nothing was reserved or shipped. The reason is below, unedited.`,
     in_transit: `${greet}your order left ${v.wh} at ${v.dispatchedAt} and is headed to ${v.dest}.`,
     completed: `${greet}the full order arrived at ${v.dest} and was signed for by ${v.signer} at ${v.signedAt}. Thanks for routing it through StockPilot.`,
-    cancelled: `${greet}this request was cancelled on ${v.cancelledOn} by ${v.cancelledBy}. ${
-      v.units > 0
-        ? `All ${v.units} reserved units went back to stock; nothing shipped and nothing partial is outstanding.`
-        : 'Nothing was reserved, nothing shipped, and nothing partial is outstanding.'
-    }`,
-    packing_slip_generated: `${greet}${v.wh} is picking and packing your ${v.lines} lines now. Next you’ll hear from us when it’s staged for delivery.`,
+    cancelled: `${greet}this request was cancelled on ${v.cancelledOn} by ${v.cancelledBy}. ${releasedUnitsClause(v.units)}`,
+    packing_slip_generated: `${greet}${v.wh} is picking and packing your ${countOf(v.lines, 'line')} now. Next you’ll hear from us when it’s staged for delivery.`,
     staged_for_delivery: `${greet}your order is packed, checked, and staged at ${v.wh}. It’s ready for pickup.`,
   };
 
@@ -1302,11 +1310,13 @@ function renderText(a: TemplateArgs): string {
     lines.push('');
     lines.push('— Order summary —');
     lines.push(`Order: ${v.displayId}${v.displayId !== v.woId ? ` (${v.woId})` : ''}`);
-    lines.push(`Contents: ${v.units} units across ${v.lines} lines`);
+    lines.push(`Contents: ${countOf(v.units, 'unit')} across ${countOf(v.lines, 'line')}`);
     if (a.kind === 'approved') {
       const state = heldState(a.summary.held);
       if (state === 'part' && a.summary.held) {
-        lines.push(`Reserved: ${a.summary.held.heldUnits} of ${a.summary.held.owedUnits} units`);
+        lines.push(
+          `Reserved: ${a.summary.held.heldUnits} of ${countOf(a.summary.held.owedUnits, 'unit')}`,
+        );
       } else if (state === 'none') {
         lines.push('Reserved: nothing yet (waiting for stock)');
       }

@@ -1059,6 +1059,17 @@ WEB_TESTS=(
   # secret is unset. Both files carry the "Security invariant" marker.
   src/app/api/cron/embeddings-sweep/route.test.ts
   src/lib/ai/embeddings-sweep.test.ts
+  # Unlinked escalation requests (B29, F1-5 follow-up): the daily check reads
+  # each organization's maintenance requests and exception links on its own,
+  # under its own cap, with the service role, and only reads, so one
+  # organization's requests cannot hide another's; the run's one alert names
+  # each request by id, handle and EX reference and its organization by id in
+  # the text the alerts channel receives, never its subject, description or
+  # requester; an organization that reached its cap, or was not reached, is
+  # named in one error alert; a failed read in any organization alerts
+  # nothing about requests (a failed link read would make every request look
+  # unlinked); the CRON_SECRET gate fails closed when the secret is unset.
+  src/app/api/cron/maintenance-orphan-escalations/route.test.ts
 
   # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
   # hand-over through the sign route: a raw token whose sha256 is the order's
@@ -1318,7 +1329,8 @@ WEB_TESTS=(
   # reviewed. Every module that can run on the server is scanned, Server
   # Component pages and modules without the 'server-only' marker included;
   # the few browser-only modules skipped are checked to be imported only from
-  # client code.
+  # client code. Client code reports through the isomorphic core reporter,
+  # never the server one, which is server-only and would fail the build.
   src/server/fire-and-forget.guard.test.ts
 
   # One-click unsubscribe in member emails (B15): a link names one member, one
@@ -1395,7 +1407,10 @@ MOBILE_TESTS=(
   # and fetches it once more when one of them changed while it was loading.
   # The next account's first sync never joins a pull still out for the
   # previous one, whose answer is discarded once the account has changed: it
-  # runs after that pull and resets at once. A stored file's one-hour link
+  # runs after that pull and resets at once. A clear of a line's count,
+  # queued from an emptied count box, follows every rule of an unsent count:
+  # another account's is held for it, never sent under the next account, and
+  # gives way at that account's pull. A stored file's one-hour link
   # (proof of delivery, purchase order files) is signed again at the tap once
   # it is about to expire, never opened stale.
   src/lib/photo-cache-wipe.test.ts

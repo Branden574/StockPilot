@@ -537,9 +537,20 @@ async function readRequestMeta(): Promise<RequestMeta> {
   };
 }
 
-/** The one place an audit_logs row is shaped, so `audit` and `auditMany`
- *  write exactly the same columns and metadata for the same payload. */
+/**
+ * The one place an audit_logs row is shaped, so `audit` and `auditMany`
+ * write exactly the same columns and metadata for the same payload.
+ *
+ * `is_system` is decided by the context and nothing else. A scheduled job's
+ * context (`ctx.isSystem`) borrows an owner's or admin's user id, so its rows
+ * are stamped `is_system: true`, after `extra`, where a payload cannot unset
+ * it. Any other context's rows never carry the key, even when `extra` names
+ * it, so a person's row can never pass for a job's (the readers that skip
+ * job rows would then skip that person's own actions). A person's row keeps
+ * exactly the shape it always had.
+ */
 function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
+  const { is_system: _ignored, ...extra } = payload.extra ?? {};
   return {
     organization_id: c.organizationId,
     user_id: c.userId,
@@ -553,7 +564,8 @@ function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
       before: payload.before ?? null,
       after: payload.after ?? null,
       reason: payload.reason ?? null,
-      ...(payload.extra ?? {}),
+      ...extra,
+      ...(c.isSystem === true ? { is_system: true } : {}),
     },
   };
 }

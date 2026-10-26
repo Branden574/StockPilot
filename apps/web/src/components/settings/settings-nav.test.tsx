@@ -16,6 +16,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import {
+  SETTINGS_ENTRY_UNCHECKED_NOTE,
   SETTINGS_NAV_GROUPS,
   SettingsFrame,
   SettingsPanel,
@@ -84,6 +85,77 @@ describe('settings gate table', () => {
       'Integrations',
     );
     expect(activeSettingsEntry(groups, '/dashboard/settings')).toBeNull();
+  });
+
+  // Docket R7: a module whose state could not be read is not "off", and never "on".
+  describe('a module that could not be checked', () => {
+    const entriesOf = (access: Parameters<typeof visibleSettingsGroups>[0]) =>
+      visibleSettingsGroups(access).flatMap((g) => g.entries);
+
+    it('keeps the destination, marked unchecked, for a caller its permission shows it to', () => {
+      const entries = entriesOf({
+        permissions: ['maintenance_requests:configure'],
+        modules: [],
+        uncheckedModules: ['maintenance_requests'],
+      });
+      expect(entries.find((e) => e.title === 'Maintenance requests')).toMatchObject({
+        href: '/dashboard/settings/maintenance',
+        unchecked: true,
+      });
+      // No other destination is marked.
+      expect(entries.filter((e) => e.unchecked).map((e) => e.title)).toEqual([
+        'Maintenance requests',
+      ]);
+    });
+
+    it('never shows it to a caller without that permission', () => {
+      const entries = entriesOf({
+        permissions: [],
+        modules: [],
+        uncheckedModules: ['maintenance_requests'],
+      });
+      expect(entries.map((e) => e.title)).not.toContain('Maintenance requests');
+    });
+
+    it('a module that IS on is a plain link, whatever else is listed', () => {
+      const entry = entriesOf({ ...everything, uncheckedModules: ['maintenance_requests'] }).find(
+        (e) => e.title === 'Maintenance requests',
+      );
+      expect(entry?.unchecked).toBeUndefined();
+    });
+
+    it('is never the current destination, even on its own path', () => {
+      const groups = visibleSettingsGroups({
+        permissions: [...PERMISSIONS],
+        modules: [],
+        uncheckedModules: ['maintenance_requests'],
+      });
+      expect(activeSettingsEntry(groups, '/dashboard/settings/maintenance')).toBeNull();
+      expect(activeSettingsEntry(groups, '/dashboard/settings/email-routing')?.title).toBe(
+        'Email routing',
+      );
+    });
+
+    it('the sub-nav draws it without a link, with the note and Try again', () => {
+      render(
+        <SettingsSubNav
+          access={{
+            permissions: [...PERMISSIONS],
+            modules: [],
+            uncheckedModules: ['maintenance_requests'],
+          }}
+        />,
+      );
+      const nav = screen.getByRole('navigation', { name: 'Settings' });
+      // 21 destinations and All settings, less the one that is not a link.
+      expect(within(nav).getAllByRole('link')).toHaveLength(21);
+      expect(within(nav).queryByRole('link', { name: 'Maintenance requests' })).toBeNull();
+      const row = nav.querySelector('[data-slot="settings-entry-unchecked"]') as HTMLElement;
+      expect(row.closest('li')).not.toBeNull();
+      expect(within(row).getByText('Maintenance requests')).toBeInTheDocument();
+      expect(within(row).getByText(SETTINGS_ENTRY_UNCHECKED_NOTE)).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Try again' })).toHaveClass('h-7');
+    });
   });
 });
 

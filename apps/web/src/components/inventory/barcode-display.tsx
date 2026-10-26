@@ -367,7 +367,12 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
           <QrCode className="h-4 w-4" /> Label
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      {/* One column that never grows past the dialog. The content is a grid
+          whose implicit track took the width of the label-size select, which a
+          select sizes to its longest option: at 16 px on a phone "Thermal roll
+          · 50 × 80 mm (Phomemo large)" made it 370 px, the column 410 px in a
+          340 px dialog, and Print showed as a 27 px sliver past its edge. */}
+      <DialogContent className="grid-cols-[minmax(0,1fr)]">
         <DialogHeader>
           <DialogTitle>Print label</DialogTitle>
           <DialogDescription>Generate a barcode or QR code label for this item.</DialogDescription>
@@ -388,13 +393,20 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
               ]}
               onSelect={(id) => setType(id as 'code128' | 'qr')}
             />
-            <label className="flex items-center gap-2" htmlFor={`${fieldId}-size`}>
+            {/* The label and its select may shrink to the dialog's width (min-w-0):
+                the select keeps its 16 px phone text, so iOS does not zoom on
+                focus, and a long size is cut inside the box instead. WebKit
+                counted that cut text as overflow of the dialog, which then
+                scrolled sideways by 36 px, so the select clips it
+                (overflow-hidden; its focus ring is drawn outside it and stays
+                whole). */}
+            <label className="flex min-w-0 items-center gap-2" htmlFor={`${fieldId}-size`}>
               <span className="text-muted-foreground text-[12.5px]">Label size</span>
               <select
                 id={`${fieldId}-size`}
                 value={size}
                 onChange={(e) => setSize(e.target.value as Template | 'auto' | 'custom')}
-                className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
+                className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 min-w-0 overflow-hidden rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
               >
                 <option value="auto">Fit to printer (auto)</option>
                 {(Object.keys(TEMPLATES) as Template[]).map((t) => (

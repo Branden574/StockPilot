@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
@@ -86,7 +86,7 @@ export default async function NewMaintenanceRequestPage({
   }>;
 }) {
   const access = await checkModuleAccess('maintenance_requests');
-  if (!access.enabled) return <ModuleNotEnabled moduleId="maintenance_requests" canManage={access.canManage} />;
+  if (!access.enabled) return <ModuleUnavailable moduleId="maintenance_requests" access={access} />;
 
   const ctx = await withContext();
   if (!can(ctx, 'maintenance_requests:submit')) {

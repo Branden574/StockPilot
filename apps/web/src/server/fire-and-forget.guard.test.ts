@@ -289,6 +289,26 @@ function serverImportsOfBrowserModules(sources: Source[] = treeSources()): strin
   return out;
 }
 
+/**
+ * `importer imports lib/error-reporter` for every client module (a 'use
+ * client' component or a BROWSER_ONLY module) that imports the server
+ * reporter. That reporter is server-only (it imports 'server-only' and
+ * keepAlive's after()), so a browser bundle that reaches it fails the build.
+ */
+function clientImportsOfServerReporter(sources: Source[] = treeSources()): string[] {
+  const out: string[] = [];
+  for (const src of sources) {
+    const r = rel(src.file);
+    if (isTestHelper(r) || !(r in BROWSER_ONLY || directive(src.text, 'use client'))) continue;
+    for (const spec of specifiersOf(sourceFileOf(src))) {
+      if (moduleOf(src.file, spec) === 'lib/error-reporter') {
+        out.push(`${r} imports lib/error-reporter`);
+      }
+    }
+  }
+  return out;
+}
+
 function findingsIn(source: string, file = 'server/services/example.ts'): string[] {
   const sf = parse(path.join(WEB_SRC, file), source);
   const imports = importsOf(path.join(WEB_SRC, file), sf);
@@ -445,6 +465,62 @@ describe('server code leaves nothing running that the response can cut off', () 
     // browser instance reports through the core, and the server clients use
     // url-length-guard.server.ts, which passes the server reporter.
     expect(coreImporters).toEqual(['lib/error-reporter.ts', 'lib/supabase/url-length-guard.ts']);
+  });
+
+  // The other half. Caught at the merge with main at 0132fbd25: the settings
+  // error boundary main added (#391), a client component, imported the server
+  // reporter, so its browser bundle reached 'server-only' and the build
+  // failed ("'server-only' cannot be imported from a Client Component
+  // module"). Only the build saw it; no unit test did.
+  it('client code imports the core reporter (the server one is server-only, and a browser bundle that reaches it fails the build)', () => {
+    expect(clientImportsOfServerReporter()).toEqual([]);
+    // Not vacuous: the client modules that report errors are read, through the core.
+    const coreClients = treeSources()
+      .filter(
+        (s) => directive(s.text, 'use client') && /from '@\/lib\/error-reporter-core'/.test(s.text),
+      )
+      .map((s) => rel(s.file));
+    for (const file of [
+      'app/(dashboard)/error.tsx',
+      'app/(dashboard)/dashboard/settings/error.tsx',
+      'components/maintenance/maintenance-email-action.tsx',
+      'components/orders/storefront/delivery-request-action.tsx',
+    ]) {
+      expect(coreClients, file).toContain(file);
+    }
+  });
+
+  // The client check itself, on small sources.
+  it('the client check names a client import of the server reporter, and passes the core, type-only imports and server code', () => {
+    expect(
+      clientImportsOfServerReporter([
+        {
+          file: abs('app/example/error.tsx'),
+          text: "'use client';\nimport { reportError } from '@/lib/error-reporter';",
+        },
+        {
+          file: abs('components/example/panel.tsx'),
+          text: "'use client';\nimport { reportError } from '../../lib/error-reporter';",
+        },
+        { file: abs('lib/analytics.ts'), text: "import { reportError } from './error-reporter';" },
+        {
+          file: abs('components/example/core.tsx'),
+          text: "'use client';\nimport { reportError } from '@/lib/error-reporter-core';",
+        },
+        {
+          file: abs('components/example/types.tsx'),
+          text: "'use client';\nimport type { ErrorContext } from '@/lib/error-reporter';",
+        },
+        {
+          file: abs('server/services/example.ts'),
+          text: "import { reportError } from '@/lib/error-reporter';",
+        },
+      ]),
+    ).toEqual([
+      'app/example/error.tsx imports lib/error-reporter',
+      'components/example/panel.tsx imports lib/error-reporter',
+      'lib/analytics.ts imports lib/error-reporter',
+    ]);
   });
 
   // The rule itself, on small sources.

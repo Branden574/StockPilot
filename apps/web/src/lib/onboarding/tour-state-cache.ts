@@ -5,6 +5,8 @@
 // every request on the instance, i.e. one person's tour state served to
 // another. 'use client' makes a server import receive client references that
 // throw when called, instead of silently sharing state.
+import { isControlFlow } from '@/lib/control-flow';
+
 import {
   getTourStateAction,
   recordTourOutcomeAction,
@@ -50,7 +52,10 @@ async function fetchTourState(expectedUserId: string | null): Promise<TourStateS
     // another person's key.
     if (expectedUserId !== null && read.userId !== expectedUserId) return null;
     return { completed: read.completed, dismissed: read.dismissed };
-  } catch {
+  } catch (e) {
+    // A redirect (the session ended): no offer, and the router is already
+    // navigating to sign-in.
+    if (isControlFlow(e)) return null;
     // A rejected call (network, or "Failed to find Server Action" from a tab
     // one deployment behind) is a failed read like any other.
     return null;
@@ -105,7 +110,9 @@ export async function recordTourOutcome(input: {
     current.state = current.state.then(
       (state) => state && withOutcome(state, input.tourId, input.version, input.outcome),
     );
-  } catch {
+  } catch (e) {
+    // A redirect (the session ended): nothing to keep; the router is navigating.
+    if (isControlFlow(e)) return;
     /* best-effort, see above */
   }
 }

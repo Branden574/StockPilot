@@ -1,3 +1,4 @@
+import { clearCountPayload } from './cycle-count-clear';
 import {
   CACHED_CYCLE_COUNTS_LIST_SQL,
   CYCLE_COUNT_CACHE_HEADER_SQL,
@@ -339,6 +340,41 @@ export async function updateLocalLine(
   lineId: string,
   counted: number,
 ): Promise<{ outboxId: number; idempotencyKey: string } | null> {
+  return queueLineEdit(lineId, { kind: 'count', counted });
+}
+
+/**
+ * Clear a line's saved count on this phone (B4a), as the web count screen
+ * does when its box is emptied: the line is uncounted again, and a post skips
+ * it instead of applying a count the box no longer shows. Marks the line dirty
+ * and queues the clear (cycle-count-clear.ts) in one transaction, through the
+ * same outbox as a count, so one line's counts and clears reach the server in
+ * the order they were made.
+ *
+ * Only a line with a saved count is cleared, as on the web: with none there
+ * is nothing to clear, so nothing is queued and null comes back. That is read
+ * inside the transaction, where the edits of a line take turns, so a count of
+ * the same line whose write was still queued when the box was emptied is
+ * seen, and cleared.
+ */
+export async function clearLocalLine(
+  lineId: string,
+): Promise<{ outboxId: number; idempotencyKey: string } | null> {
+  return queueLineEdit(lineId, { kind: 'clear' });
+}
+
+/** One edit of a line's count on this phone: a count, or a clear of it. */
+type LineEdit = { kind: 'count'; counted: number } | { kind: 'clear' };
+
+/**
+ * THE one writer of a line edit, for updateLocalLine and clearLocalLine: the
+ * line's count and dirty flag, the earlier queued edits it supersedes and its
+ * own outbox row, in one transaction.
+ */
+async function queueLineEdit(
+  lineId: string,
+  edit: LineEdit,
+): Promise<{ outboxId: number; idempotencyKey: string } | null> {
   const db = await getDb();
   const line = await db.getFirstAsync<{
     id: string;
@@ -355,13 +391,24 @@ export async function updateLocalLine(
   const scope = await outboxWriteScope();
   const idempotencyKey = uuid();
   const now = Date.now();
+  // Set by the insert; still 0 when a clear found nothing to clear.
   let outboxId = 0;
   await withDbTransaction(db, async () => {
+    if (edit.kind === 'clear') {
+      // A clear needs a saved count to clear. Read here, not before the
+      // transaction: a count of this line saved a moment earlier may still
+      // be waiting its turn, and must be seen (and cleared).
+      const current = await db.getFirstAsync<{ counted: number | null }>(
+        'select counted from cycle_count_lines where id = ?',
+        [lineId],
+      );
+      if (!current || current.counted === null) return;
+    }
     await db.runAsync(
       `update cycle_count_lines
          set counted = ?, local_dirty = 1
        where id = ?`,
-      [counted, lineId],
+      [edit.kind === 'count' ? edit.counted : null, lineId],
     );
     // ═══ ONE LIVE OUTBOX ROW PER LINE ═══
     //
@@ -371,7 +418,9 @@ export async function updateLocalLine(
     // reordered them — the correction was lost to the server. An edit
     // supersedes every earlier queued edit for the same line; a row already
     // 'sending' is in flight and must not be touched (the drain-side
-    // newest-wins check in cycle-count-sync covers that window).
+    // newest-wins check in cycle-count-sync covers that window). A clear is
+    // an edit like a count: it supersedes the count it clears, and a count
+    // typed after it supersedes the clear.
     //
     // ACROSS ACCOUNTS TOO. Another account's queued count of this line is
     // held until they sign in here again; sent then, the OLDER count would
@@ -408,16 +457,22 @@ export async function updateLocalLine(
       [
         'record_count',
         idempotencyKey,
-        JSON.stringify({
-          cycleCountId: line.count_id,
-          lineId: line.id,
-          countedQuantity: counted,
-          // When the count was taken (server 0369): a count synced later is
-          // measured against the book at THIS moment, not at arrival, so a
-          // pick in between is not a phantom variance. Device clock; the
-          // server corrects its skew (cycle-count-record-body.ts).
-          capturedAt: new Date(now).toISOString(),
-        }),
+        JSON.stringify(
+          edit.kind === 'count'
+            ? {
+                cycleCountId: line.count_id,
+                lineId: line.id,
+                countedQuantity: edit.counted,
+                // When the count was taken (server 0369): a count synced
+                // later is measured against the quantity on record at THIS
+                // moment, not at arrival, so a pick in between is not a
+                // phantom variance. Device clock; the server corrects its
+                // skew (cycle-count-record-body.ts).
+                capturedAt: new Date(now).toISOString(),
+              }
+            : // No countedQuantity, ever (cycle-count-clear.ts).
+              clearCountPayload(line.count_id, line.id),
+        ),
         now,
         scope.orgId,
         scope.userId,
@@ -425,7 +480,7 @@ export async function updateLocalLine(
     );
     outboxId = result.lastInsertRowId as number;
   });
-  return { outboxId, idempotencyKey };
+  return outboxId > 0 ? { outboxId, idempotencyKey } : null;
 }
 
 /**

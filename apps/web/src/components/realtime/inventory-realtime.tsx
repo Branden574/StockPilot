@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
 import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 import { revalidateInventoryViewAction } from '@/server/actions/revalidate-inventory-view';
@@ -234,7 +235,12 @@ export function InventoryRealtime({
         const revalidated = await Promise.race([
           revalidateInventoryViewAction().then(
             (r) => r === true,
-            () => false,
+            // A redirect (the session ended) counts as handled: the router is
+            // already navigating, so no refresh is started under it.
+            (e: unknown) => {
+              if (isControlFlow(e)) return true;
+              return false;
+            },
           ),
           new Promise<false>((resolve) => {
             watchdog = setTimeout(() => resolve(false), ACTION_WATCHDOG_MS);
@@ -318,6 +324,7 @@ export function InventoryRealtime({
         }
       });
     } catch (err) {
+      if (isControlFlow(err)) return;
       console.warn('[realtime] subscription failed; falling back to manual refresh', err);
     }
     })();

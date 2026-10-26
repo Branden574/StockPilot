@@ -47,13 +47,31 @@ function deriveThumbPath(path: string): string {
   return path.replace(/\.(jpg|jpeg|png|webp)$/, '-thumb.webp');
 }
 
+/** An upload's NAME: its path without the extension ({org}/{request}/{uuid}).
+ *  Only called on a path that passed `validateFinalizePath`. */
+function uploadStem(path: string): string {
+  return path.replace(/\.(jpg|jpeg|png|webp)$/, '');
+}
+
 /** Every name of ONE upload: its uuid with each allowed extension. They all
  *  derive the same thumbnail name, so "is this upload recorded?" asks for all
  *  four. Only called on a path that passed `validateFinalizePath`. */
 function uploadNames(path: string): string[] {
-  const stem = path.replace(/\.(jpg|jpeg|png|webp)$/, '');
+  const stem = uploadStem(path);
   return ['jpg', 'jpeg', 'png', 'webp'].map((ext) => `${stem}.${ext}`);
 }
+
+/** How long a finalize's claim on its upload's name holds (B29: one finalize
+ *  per upload at a time; see `finalize`). Longer than a finalize can run (a
+ *  function stops at 800 s at most), so the claim outlives the finalize that
+ *  took it. The limiter has no release, and none is needed: the apps never
+ *  finalize one upload twice (each Retry starts from a new mint, so a new
+ *  name), and a finalize sent again after the photo is recorded is answered by
+ *  step 0, before the claim. */
+const FINALIZE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
+
+/** The answer when another finalize of this upload is (or may be) writing it. */
+const BEING_SAVED = 'This photo is already being saved.';
 
 /** Finalizes one person may send per FINALIZE_LIMIT_WINDOW_MS. Each finalize
  *  now decodes and re-encodes up to the bucket's 10 MB (and a small file can
@@ -389,21 +407,26 @@ export class MaintenanceAttachmentsService {
    * ICC), and writes the clean photo OVER the upload. The thumbnail is made
    * from the clean photo on the server and written at the name the mint
    * handed out ({uuid}-thumb.webp, derived below exactly as before),
-   * replacing whatever the client sent there (the web and phone still PUT
-   * their own before finalize; the ticket cannot replace an existing object,
-   * because the mint signs without upsert). The row describes the STORED
+   * replacing whatever a client sent there (since B29 the web and phone send
+   * none, but phones on older updates still PUT one before finalize; the
+   * ticket cannot replace an existing object, because the mint signs without
+   * upsert, which is also why the mint still hands the ticket out: those
+   * phones expect it). The row describes the STORED
    * file: its byte_size, and its width/height after orientation.
    *
    * A recorded upload is never read, rewritten or deleted by a later finalize
-   * (step 0). Every refusal after that deletes the upload (still the
-   * original, GPS included) and the thumbnail name, and records nothing,
-   * through `refuse`, which looks first (review 2026-09-27: two finalizes of
-   * one upload at once): a photo recorded at this path meanwhile keeps its
-   * files and the answer is "already recorded"; a recorded sibling keeps the
-   * thumbnail name they share; a failed look deletes nothing. Not deleted
-   * either: a 23505 (another finalize of the same upload won the row), and an
-   * upload that changed between the range read and the whole read (only
-   * another finalize writes over an upload; it is about to record it).
+   * (step 0), and one finalize of an upload runs at a time (step 1, B29):
+   * another is refused before it reads anything, and deletes nothing. Every
+   * refusal after that deletes the upload (still the original, GPS included)
+   * and the thumbnail name, and records nothing, through `refuse`, which
+   * looks first (review 2026-09-27: two finalizes of one upload at once; it
+   * stays as the defence behind the claim): a photo recorded at this path
+   * meanwhile keeps its files and the answer is "already recorded"; a
+   * recorded sibling keeps the thumbnail name they share; a failed look
+   * deletes nothing. Not deleted either: a 23505 (another finalize of the
+   * same upload won the row), and an upload that changed between the range
+   * read and the whole read (only another finalize writes over an upload; it
+   * is about to record it).
    */
   async finalize(
     requestId: string,
@@ -447,6 +470,26 @@ export class MaintenanceAttachmentsService {
       await store.remove([args.path]);
       throw new ServiceError('forbidden', 'Invalid upload path.');
     }
+
+    // 1. One finalize per upload at a time (B29). Two finalizes of one upload
+    //    at once each re-encoded the photo and wrote it back; two extensions
+    //    of one uuid (only a direct PUT makes a second) each wrote their own
+    //    thumbnail to the name they share and were both recorded; and a
+    //    duplicate refused below (the per-person limit, the byte checks)
+    //    could delete the files the other finalize was about to record. So
+    //    the first finalize past step 0 claims the upload's NAME (every
+    //    extension) in the shared limiter, and any other within
+    //    FINALIZE_UPLOAD_CLAIM_MS is refused HERE, before anything is read,
+    //    deleting nothing: the files may be the other's. CLOSED: when the
+    //    limiter cannot answer, nothing is read, written or deleted either.
+    //    Before the per-person limit, so a duplicate never spends it.
+    const claim = await checkRateLimit(
+      `maintenance:finalize-upload:${uploadStem(args.path)}`,
+      1,
+      FINALIZE_UPLOAD_CLAIM_MS,
+      'closed',
+    );
+    if (!claim.allowed) throw new ServiceError('conflict', BEING_SAVED);
 
     /**
      * THE cleanup for every refusal from here on. Step 0 saw nothing
@@ -568,8 +611,10 @@ export class MaintenanceAttachmentsService {
       // can change an upload (the bucket has no UPDATE policy), so another
       // finalize of this upload has written its clean photo over it and is
       // about to record it: deleting here would delete that photo's files
-      // (review 2026-09-27). Nothing is deleted, written or recorded.
-      throw new ServiceError('conflict', 'This photo is already being saved.');
+      // (review 2026-09-27). Nothing is deleted, written or recorded. The
+      // claim (step 1) keeps a second finalize from getting this far; this
+      // stays as the defence behind it.
+      throw new ServiceError('conflict', BEING_SAVED);
     }
     const wholeSniff = sniffImage(whole);
     if (

@@ -108,6 +108,12 @@ vi.mock('expo-network', () => ({
   }),
 }));
 
+// The count outbox's drain (cycle-count-sync.ts) reads AppState only in
+// start(), which nothing here calls: its forceSync() is run directly.
+vi.mock('react-native', () => ({
+  AppState: { addEventListener: () => ({ remove: () => {} }) },
+}));
+
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: async (k: string) => device.storage.get(k) ?? null,
@@ -392,6 +398,15 @@ const queuedCounts = () =>
          from pending_actions where kind = 'record_count' order by id`,
     )
     .all() as { user_id: string | null; status: string; count_id: string }[];
+/** The same rows by line, each a count or a clear of the line's count. */
+const queuedEdits = () =>
+  raw
+    .prepare(
+      `select user_id, status, json_extract(payload_json, '$.lineId') as line_id,
+              case when json_extract(payload_json, '$.clear') = 1 then 'clear' else 'count' end as edit
+         from pending_actions where kind = 'record_count' order by id`,
+    )
+    .all() as { user_id: string | null; status: string; line_id: string; edit: string }[];
 
 /** A photo is still in either of expo-image's caches. */
 const stillCached = (p: string) => device.memory.has(p) || device.disk.has(p);
@@ -480,6 +495,47 @@ async function countOnThePhone(countId: string): Promise<void> {
   );
   expect(await m.counts.updateLocalLine(`${countId}-l1`, 5)).not.toBeNull();
 }
+
+/** The signed-in account empties the box of a line with a saved count (RL1,
+ *  B4a: app/cycle-count/[id].tsx clearLocalLine): the line is uncounted and
+ *  unsynced, and a clear is queued in the count outbox in place of the
+ *  count it queued for the line, if any (cycle-count-clear.ts). */
+async function emptyTheBox(lineId: string): Promise<void> {
+  expect(await m.counts.clearLocalLine(lineId)).not.toBeNull();
+}
+
+/** A count's header, as the count screen fetched it in workspace org-1. */
+const countHeader = (id: string) => ({
+  id,
+  organizationId: 'org-1',
+  warehouseId: 'wh-org-1',
+  warehouseName: 'Main',
+  status: 'in_progress',
+  startedAt: '2026-10-24T08:00:00.000Z',
+});
+/** One of its lines as fetched, with the server's count. */
+const fetchedLine = (id: string, counted: number | null) => ({
+  id,
+  itemId: 'item-x',
+  itemName: 'X',
+  itemSku: 'SKU-X',
+  itemBarcode: null,
+  expected: 4,
+  counted,
+  updatedAt: null,
+});
+
+/** The count outbox's drain, for the account signed in now (cycle-count-sync.ts
+ *  forceSync: a tick, the foreground, a save on the count screen). */
+async function countsDrain(): Promise<void> {
+  const { cycleCountSync } = await import('./cycle-count-sync');
+  await cycleCountSync.forceSync();
+}
+
+/** What a queued line edit is sent to: a count to the line's record route,
+ *  a clear to its clear route (cycle-count-sync.ts sendRecordCount). */
+const editPath = (edit: 'count' | 'clear', countId: string, lineId: string) =>
+  `/api/v1/cycle-counts/${countId}/lines/${lineId}/${edit === 'clear' ? 'clear' : 'record'}`;
 
 /** origin/main's clearOrgScopedTables (db.ts at 96901a1b5), verbatim. It was
  *  the SQLite part of every cache wipe of the release before this one (a
@@ -1353,10 +1409,12 @@ const A_SCOPE = '{"hasAllAccess":false,"warehouseNames":["A only"]}';
 /** A's cache with no owner recorded (recordLost): its item and the count it
  *  counted (an unsent entry in the outbox), a PO and a kit its pulls cached,
  *  the delta cursor on its timeline and its persisted scope, permissions and
- *  modules. Then its session ends without a wipe. */
-async function aLeavesItsCacheWithNoOwner(): Promise<void> {
+ *  modules. Then its session ends without a wipe. With 'clear', A empties the
+ *  box it counted, so its unsent entry is a clear of the line (RL1, B4a). */
+async function aLeavesItsCacheWithNoOwner(lastEdit: 'count' | 'clear' = 'count'): Promise<void> {
   await aSignedInWithAPhoto();
   await countOnThePhone('cc-a');
+  if (lastEdit === 'clear') await emptyTheBox('cc-a-l1');
   raw.exec(`
     insert into purchase_orders (id, po_number, status, warehouse_id, expected_at, last_synced_at)
       values ('po-a', 'PO-A', 'ordered', 'wh-a', null, 1);
@@ -1889,6 +1947,213 @@ describe(
     });
   },
 );
+
+/*
+ * A QUEUED CLEAR (the merge with RL1, main at 0132fbd25). An emptied count box
+ * now clears the line's saved count (B4a): the line is uncounted and dirty,
+ * and a record_count row that names no count is queued (cycle-count-clear.ts)
+ * and sent to the line's clear route. Every rule above for an unsent count
+ * holds for it, through the same statements (they read the dirty flag, the
+ * entry's line and count, and its owner, never the number): another account's
+ * clear is held for that account and never sent under the next one, gives
+ * way at the next account's pull like its unsent count, and never shows as
+ * the next account's own cleared line; the next account's own clear keeps
+ * its count. And a clear, like a typed count, is not refused for the cache's
+ * owner (the "Not in this pull request" window).
+ */
+describe('a queued clear follows the rules of a queued count', SLOW, () => {
+  // Mutation caught: the count kept only for an entry that names a count
+  // (B's clear is then no reason to keep B's count, and the clear on screen
+  // goes with it).
+  it("another account's clear on a count the next account cannot see goes with the count, and the next account's own clear keeps its count, shown as its unsynced clear", async () => {
+    await aLeavesItsCacheWithNoOwner('clear');
+    // A's count of the line was replaced by A's clear of it.
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+    ]);
+    signIn(B);
+    await countOnThePhone('cc-b');
+    await emptyTheBox('cc-b-l1'); // before B's first pull
+    await m.sync.syncNow(); // B's first pull: the adopt, in full
+
+    expect(ids('select id from cycle_counts order by id')).toEqual(['cc-b']);
+    expect(ids("select id from cycle_count_lines where count_id = 'cc-a'")).toEqual([]);
+    expect(line('cc-b-l1')).toEqual({ counted: null, local_dirty: 1 });
+    expect((await m.counts.getCycleCount('cc-b'))?.lines).toEqual([
+      expect.objectContaining({ id: 'cc-b-l1', counted: null, localDirty: true }),
+    ]);
+    // Post waits for B's clear (Sync first), and only for B's.
+    expect(await m.counts.pendingCountFor('cc-b')).toBe(1);
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+      { user_id: B, status: 'pending', line_id: 'cc-b-l1', edit: 'clear' },
+    ]);
+  });
+
+  // Mutations caught: the release taking only a dirty line that holds a count
+  // (A's clear then stays as B's own cleared line, which the pull's write
+  // keeps), and Sync first counting another account's clear.
+  it("a count the next account can see: the other account's clear on it gives way to the server's count, and stays held for that account", async () => {
+    await aLeavesItsCacheWithNoOwner('clear');
+    bSees({
+      openCycleCounts: [
+        openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
+      ],
+    });
+    signIn(B);
+    await m.sync.syncNow();
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect((await m.counts.getCycleCount('cc-a'))?.lines).toEqual([
+      expect.objectContaining({ id: 'cc-a-l1', counted: 2, localDirty: false }),
+    ]);
+    expect(await m.counts.pendingCountFor('cc-a')).toBe(0);
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+    ]);
+  });
+
+  // Mutation caught: the same release, at the count screen's own write.
+  it("the count screen stores the other account's count before any pull of the next account's lands: it shows the server's count, not that account's clear", async () => {
+    await aLeavesItsCacheWithNoOwner('clear');
+    signIn(B);
+    device.snapshotFails = true;
+    await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
+    expect(owner()).toBe(B);
+
+    expect(
+      await m.counts.cacheCycleCount(
+        countHeader('cc-a'),
+        [fetchedLine('cc-a-l1', 2)],
+        await m.counts.cacheWriteScope(),
+      ),
+    ).toBe(true);
+
+    expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
+    expect(queuedEdits()).toEqual([
+      { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+    ]);
+  });
+
+  // Mutations caught: the release taking only a dirty line that holds a
+  // count, and (B's own clear) the count kept only for an entry naming one.
+  it.each(['count', 'clear'] as const)(
+    "the next account keeps the other account's count for its own unsent %s of another line, and its answer does not list the count: the other account's clear shows as not counted, never as the next account's cleared line",
+    async (bEdit) => {
+      await aLeavesItsCacheWithNoOwner('clear');
+      bSees({ openCycleCounts: [] });
+      signIn(B);
+      // A second line of A's count, with the server's count of 3 on it.
+      raw.exec(`insert into cycle_count_lines
+          (id, count_id, item_id, item_name, item_sku, expected, counted, local_dirty)
+        values ('cc-a-l2', 'cc-a', 'item-y', 'Y', 'SKU-Y', 3, 3, 0)`);
+      if (bEdit === 'count') expect(await m.counts.updateLocalLine('cc-a-l2', 7)).not.toBeNull();
+      else await emptyTheBox('cc-a-l2');
+      await m.sync.syncNow(); // B's first pull: the adopt, in full, without cc-a
+
+      expect(ids("select id from cycle_counts where id = 'cc-a'")).toEqual(['cc-a']);
+      expect(line('cc-a-l1')).toEqual({ counted: null, local_dirty: 0 });
+      expect(line('cc-a-l2')).toEqual({ counted: bEdit === 'count' ? 7 : null, local_dirty: 1 });
+      const shown = (await m.counts.getCycleCount('cc-a'))?.lines
+        .map((l) => [l.id, l.counted, l.localDirty])
+        .sort();
+      expect(shown).toEqual([
+        ['cc-a-l1', null, false],
+        ['cc-a-l2', bEdit === 'count' ? 7 : null, true],
+      ]);
+      expect(await m.counts.pendingCountFor('cc-a')).toBe(1);
+      expect(queuedEdits()).toEqual([
+        { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
+        { user_id: B, status: 'pending', line_id: 'cc-a-l2', edit: bEdit },
+      ]);
+    },
+  );
+
+  // The drain, end to end (cycle-count-sync.ts): it decides per row whose it
+  // is (outbox-scope.ts outboxSendDecision). Mutation caught: a clear sent
+  // whatever that decision says.
+  it.each(['count', 'clear'] as const)(
+    "another account's unsent %s is never sent under the next account, and is sent under its own once it signs in here again",
+    async (aEdit) => {
+      await aLeavesItsCacheWithNoOwner(aEdit);
+      bSees({
+        openCycleCounts: [
+          openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
+        ],
+      });
+      signIn(B);
+      await m.sync.syncNow(); // B's first pull
+      // B's own clear on a count of its own, so B's drain has a row to send
+      // (with none of its own it sends nothing at all).
+      await countOnThePhone('cc-b');
+      await emptyTheBox('cc-b-l1');
+      await countsDrain();
+
+      const aPath = editPath(aEdit, 'cc-a', 'cc-a-l1');
+      expect(device.requests).toContain(editPath('clear', 'cc-b', 'cc-b-l1'));
+      expect(device.requests).not.toContain(aPath);
+      expect(queuedEdits()).toEqual([
+        { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: aEdit },
+      ]);
+
+      // B's session ends without a wipe, and A signs in here again: A's pull
+      // resets B's cache, and A's drain sends A's edit, as A.
+      sessionEndsWithoutWipe();
+      signIn(A);
+      await m.sync.syncNow();
+      await countsDrain();
+
+      expect(device.requests.filter((p) => p === aPath)).toEqual([aPath]);
+      expect(queuedEdits()).toEqual([]);
+    },
+  );
+
+  // A clear is not refused where a typed count is not (pull request body,
+  // "Not in this pull request"): while the next account's first sync still
+  // waits for a pull of the previous account's, the count screen stores no
+  // count it fetches, but an edit typed on a count the previous account
+  // cached is saved. Both are queued as the typing account's, the reset wipes
+  // the line, and its drain sends them. Mutation caught: clearLocalLine
+  // refusing a clear while the cache is recorded as another account's.
+  it.each(['count', 'clear'] as const)(
+    "a %s typed while the next account's first sync waits for the previous account's pull is saved as the next account's, like a typed count, and sent under it after its reset",
+    async (edit) => {
+      await aSignedInWithAPhoto();
+      // A opened a count online; the server has a count of 3 on its line.
+      expect(
+        await m.counts.cacheCycleCount(
+          countHeader('cc-a'),
+          [fetchedLine('cc-a-l1', 3)],
+          await m.counts.cacheWriteScope(),
+        ),
+      ).toBe(true);
+      const { held, aSync } = await aPullIsOut();
+      sessionEndsWithoutWipe();
+      signIn(B);
+      const bFirst = m.sync.syncNow(); // waits for A's pull
+
+      // B's count screen still shows A's cached count: B types a count of 6,
+      // or empties the box.
+      const saved =
+        edit === 'count'
+          ? await m.counts.updateLocalLine('cc-a-l1', 6)
+          : await m.counts.clearLocalLine('cc-a-l1');
+      expect(saved).not.toBeNull();
+      expect(line('cc-a-l1')).toEqual({ counted: edit === 'count' ? 6 : null, local_dirty: 1 });
+      expect(queuedEdits()).toEqual([{ user_id: B, status: 'pending', line_id: 'cc-a-l1', edit }]);
+
+      held.release();
+      await Promise.all([aSync, bFirst]);
+
+      expect(owner()).toBe(B);
+      expect(ids("select id from cycle_count_lines where count_id = 'cc-a'")).toEqual([]);
+      expect(queuedEdits()).toEqual([{ user_id: B, status: 'pending', line_id: 'cc-a-l1', edit }]);
+      await countsDrain();
+      expect(device.requests).toContain(editPath(edit, 'cc-a', 'cc-a-l1'));
+      expect(queuedEdits()).toEqual([]);
+    },
+  );
+});
 
 describe('Settings > Offline cache > Clear is the same-account wipe', SLOW, () => {
   // The screen's own dependencies, which the Clear rows above reproduce.

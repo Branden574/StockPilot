@@ -4,6 +4,7 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { requireSession } from '@/lib/auth/session';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ORG_TIMEZONE_OPTIONS } from '@/lib/timezone-options';
@@ -169,6 +170,7 @@ export async function updateTerminologyAction(
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -251,6 +253,7 @@ export async function updateOrgPoTermsAction(
     revalidatePath('/dashboard/settings/organization');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -325,6 +328,7 @@ export async function updateOrgTimezoneAction(
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -395,6 +399,7 @@ export async function renameOrganizationAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
