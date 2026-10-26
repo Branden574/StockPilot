@@ -8,11 +8,11 @@ import { toast } from 'sonner';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setPortalPricingModeAction } from '@/server/actions/customers';
 
 import type { PortalPricingMode } from '@stockpilot/core';
-import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
 
 interface Option {
   value: PortalPricingMode;

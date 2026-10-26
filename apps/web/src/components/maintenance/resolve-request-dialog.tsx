@@ -21,9 +21,9 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { resolveMaintenanceRequestAction } from '@/server/actions/maintenance-requests';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { resolveMaintenanceRequestAction } from '@/server/actions/maintenance-requests';
 
 interface Props {
   requestId: string;

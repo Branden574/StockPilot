@@ -9,9 +9,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
-import { acceptInviteWithSignupAction } from '@/server/actions/team';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { acceptInviteWithSignupAction } from '@/server/actions/team';
 
 interface InviteSignupFormProps {
   token: string;

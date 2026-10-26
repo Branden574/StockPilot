@@ -46,6 +46,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   addItemSerialsAction,
   deleteItemSerialAction,
@@ -53,8 +55,6 @@ import {
   updateItemSerialAction,
 } from '@/server/actions/serials';
 import { formatRelative } from '@/lib/utils';
-import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
 
 /** Mirrors serial_registry.current_status (migration 0015 CHECK). */
 const SERIAL_STATUSES = ['available', 'reserved', 'damaged', 'rejected', 'sold', 'rma'] as const;

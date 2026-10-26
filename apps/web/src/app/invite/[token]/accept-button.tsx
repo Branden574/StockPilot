@@ -6,9 +6,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { acceptInviteAction } from '@/server/actions/team';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { acceptInviteAction } from '@/server/actions/team';
 
 export function AcceptInviteButton({ token }: { token: string }) {
   const router = useRouter();

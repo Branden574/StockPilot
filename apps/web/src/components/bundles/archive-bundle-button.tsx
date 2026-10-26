@@ -7,9 +7,9 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
-import { archiveBundleAction } from '@/server/actions/bundles';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { archiveBundleAction } from '@/server/actions/bundles';
 
 export function ArchiveBundleButton({
   bundleId,

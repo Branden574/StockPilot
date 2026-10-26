@@ -65,9 +65,9 @@ import {
   type DestinationFields,
 } from '@/lib/locations/placement-destination';
 import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { transferStockAction } from '@/server/actions/inventory';
 import { isWritableDestination, transferableHoldings } from '@/lib/placements';
-import { requestUnconfirmedMessage } from '@/lib/request-failure';
 
 /** NON-BOOKS only: sentinel Select value for the inline "create a new location"
  *  branch — mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */

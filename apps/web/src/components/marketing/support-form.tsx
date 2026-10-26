@@ -8,9 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { createSupportTicketAction } from '@/server/actions/support-tickets';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { createSupportTicketAction } from '@/server/actions/support-tickets';
 
 const CATEGORIES: Array<{ value: string; label: string }> = [
   { value: 'bug', label: "Something's broken" },

@@ -23,10 +23,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { adjustStockAction } from '@/server/actions/inventory';
-import { cn } from '@/lib/utils';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { adjustStockAction } from '@/server/actions/inventory';
+import { cn } from '@/lib/utils';
 
 import { type MovementType } from '@stockpilot/core';
 

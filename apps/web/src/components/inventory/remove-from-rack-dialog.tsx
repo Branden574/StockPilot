@@ -18,11 +18,11 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { removeStockFromLocationAction } from '@/server/actions/inventory';
 
 import { formatStockQuantity } from '@stockpilot/core';
-import { isControlFlow } from '@/lib/control-flow';
-import { requestUnconfirmedMessage } from '@/lib/request-failure';
 
 interface RemoveFromRackDialogProps {
   itemId: string;

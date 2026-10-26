@@ -25,10 +25,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { distributeBundleAction, previewBundleDistributionAction } from '@/server/actions/bundles';
-import { cn, formatNumber } from '@/lib/utils';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
+import { distributeBundleAction, previewBundleDistributionAction } from '@/server/actions/bundles';
+import { cn, formatNumber } from '@/lib/utils';
 
 interface Preview {
   fromPhantom: number;

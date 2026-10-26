@@ -5,9 +5,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { IsbnScanner } from '@/components/inventory/isbn-scanner';
-import { lookupBookByIsbnAction } from '@/server/actions/books-lookup';
 import { isControlFlow } from '@/lib/control-flow';
 import { requestFailedMessage } from '@/lib/request-failure';
+import { lookupBookByIsbnAction } from '@/server/actions/books-lookup';
 
 export interface BooksScanShortcutHandle {
   open: () => void;

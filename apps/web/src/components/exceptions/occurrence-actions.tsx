@@ -6,11 +6,11 @@ import * as React from 'react';
 import { ConfirmCountInsteadButton } from '@/components/exceptions/confirm-count-dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { actOnExceptionAction } from '@/server/actions/exceptions';
 
 import { EXCEPTION_ACKNOWLEDGE_HELP, type ExceptionRule } from '@stockpilot/core';
-import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
 
 const NOTE_MAX = 1000;
 

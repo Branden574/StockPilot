@@ -39,6 +39,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveLocationAction,
   createLocationAction,
@@ -46,8 +48,6 @@ import {
   updateLocationAction,
 } from '@/server/actions/locations';
 import { useRouter } from 'next/navigation';
-import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
 
 interface LocationRow {
   id: string;
