@@ -243,3 +243,16 @@ describe("the order screen's return sheets read the order again after a refusal"
     }
   });
 });
+
+describe('the release sheet outlives the read behind it', () => {
+  // The read after a refused release replaces the order. When the
+  // replacement block's own read fails, it comes back null, and a sheet
+  // mounted only on `order?.replacement` vanished with the refusal's sentence
+  // unread (docket B10 review). It stays mounted while it is open.
+  const file = 'app/order/[id].tsx';
+  const src = readSource(path.resolve(__dirname, '../..', file));
+
+  it('is mounted while the order has a replacement block or the sheet is open', () => {
+    expect(src).toMatch(/\{order\?\.replacement \|\| releaseOpen \? \(\s*<ReleaseReplacementSheet/);
+  });
+});

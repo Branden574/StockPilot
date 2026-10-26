@@ -4093,7 +4093,11 @@ export default function OrderDetail() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {order?.replacement ? (
+      {/* Mounted while open too: after a refusal the order is read again
+          behind the sheet, and a read that comes back without the
+          replacement block (its read failed) must not take the sheet and the
+          refusal's sentence away before the person has read them. */}
+      {order?.replacement || releaseOpen ? (
         <ReleaseReplacementSheet
           visible={releaseOpen}
           online={!offline}
