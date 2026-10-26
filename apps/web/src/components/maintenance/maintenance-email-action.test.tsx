@@ -284,7 +284,7 @@ describe('IMPORTANT 1 fix: recordMaintenanceDraftOpenedAction rejection is absor
     );
   });
 
-  it('blocked path (mailto fallback call site): recovery panel still renders, no unhandled rejection', async () => {
+  it('blocked path (mailto fallback): recovery panel renders, and there is no record call to reject (nothing is recorded there)', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
     recordAction.mockRejectedValueOnce(new Error('offline'));
     const unhandled: unknown[] = [];
@@ -300,10 +300,8 @@ describe('IMPORTANT 1 fix: recordMaintenanceDraftOpenedAction rejection is absor
     await new Promise((resolve) => setTimeout(resolve, 0));
     process.off('unhandledRejection', onUnhandledRejection);
     expect(unhandled).toEqual([]);
-    expect(reportErrorMock).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tag: 'maintenance.draft-opened.record' }),
-    );
+    expect(recordAction).not.toHaveBeenCalled();
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 });
 
@@ -343,7 +341,7 @@ describe('duplicate-draft protection (component test 11; brief section 21)', () 
 });
 
 describe('popup blocked (component test 8; brief section 19)', () => {
-  it('falls back: message, mailto once, all four recovery actions, still records ONE draft', async () => {
+  it('falls back: message, mailto once, all four recovery actions, and records NO draft (the browser cannot confirm the email app opened)', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
@@ -353,14 +351,51 @@ describe('popup blocked (component test 8; brief section 19)', () => {
     for (const label of ['Try Outlook Again', 'Open in Default Email App', 'Copy Email Details']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
+    // "Email draft opened" (outlook_draft_opened_at, the 'draft_opened'
+    // status) is recorded only for an open the browser confirmed: a mailto:
+    // navigation with no registered handler is a silent no-op, and recording
+    // it would silence the 24 h unsent-draft reminder (it reminds 'saved'
+    // requests only) and show "Email draft opened" on an escalated exception.
+    expect(recordAction).not.toHaveBeenCalled();
+    // Second blocked click: no second mailto navigation, still no record.
+    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    expect(assignSpy).toHaveBeenCalledTimes(1);
+    expect(recordAction).not.toHaveBeenCalled();
+  });
+  it('the mailto fallback is not recorded even when the navigation throws, and a later Outlook tab that opens IS recorded', async () => {
+    openSpy.mockReturnValueOnce(null as unknown as Window);
+    assignSpy.mockImplementation(() => {
+      throw new Error('navigation refused');
+    });
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(
+      await screen.findByText('Outlook could not be opened automatically.'),
+    ).toBeInTheDocument();
+    expect(recordAction).not.toHaveBeenCalled();
+    // Try Outlook Again runs the same handler; this time the tab opens.
+    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    expect(openSpy).toHaveBeenCalledTimes(2);
     expect(recordAction).toHaveBeenCalledTimes(1);
     // Minor 4: the count alone lets a hardcoded foreign UUID survive —
     // pin the ARGUMENT too, so recording under the wrong request id fails.
     expect(recordAction).toHaveBeenCalledWith('r1');
-    // Second blocked click: no second mailto navigation, no second record.
-    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
-    expect(assignSpy).toHaveBeenCalledTimes(1);
-    expect(recordAction).toHaveBeenCalledTimes(1);
+  });
+  it('after the fallback, Open in Outlook on this page still asks first: the email app may have opened a draft', async () => {
+    openSpy.mockReturnValue(null as unknown as Window);
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(
+      await screen.findByText('Outlook could not be opened automatically.'),
+    ).toBeInTheDocument();
+    openSpy.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        'A maintenance email draft was already opened for this request. Sending multiple copies may create duplicate Zendesk tickets.',
+      ),
+    ).toBeInTheDocument();
   });
   it('never shows the success message when blocked', async () => {
     openSpy.mockReturnValue(null as unknown as Window);

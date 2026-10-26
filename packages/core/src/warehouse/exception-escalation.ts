@@ -380,10 +380,10 @@ export interface EscalationRequestView {
    * maintenance_requests.outlook_draft_opened_at is set: the request's
    * screen recorded that the person opened the email draft. On the phone it
    * is recorded after the Outlook or mail app opened. On the web it is
-   * recorded when an Outlook tab opened, and also when a blocked pop-up fell
-   * back to the email app, which the browser cannot confirm opened (the
-   * maintenance module's existing rule; the words say "opened", nothing
-   * about sending).
+   * recorded only when an Outlook tab opened: a blocked pop-up's fallback to
+   * the email app is not recorded, because the browser cannot confirm that
+   * anything opened (B29; it used to be recorded). The words say "opened",
+   * nothing about sending.
    */
   draftOpened: boolean;
   /** cancelled_at is set: the escalation may be made again. */
