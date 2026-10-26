@@ -550,9 +550,9 @@ describe('AI launcher: the footer says what is true (D28)', () => {
     ]) {
       expect(words, w).toContain(w);
     }
-    expect(code).toMatch(
-      /if \(typeof returnPath === 'string' && returnPath\.length > 0\) \{\s*router\.replace\(returnPath as never\);/,
-    );
+    // Back follows ?return= only when it is a path inside the app (docket T14:
+    // return-path.ts; return-path-wiring.test.ts pins every reader).
+    expect(code).toMatch(/onPress=\{\(\) => goBackFromReturn\(router, returnPath\)\}/);
   });
 });
 
@@ -1375,9 +1375,9 @@ describe('Support (M-WS-14): Back and a named menu (D28)', () => {
       ['Menu', 'Open menu'],
     ]);
     for (const { el } of els) expect(attrText(el, 'minTap', sf)).toBe('true');
-    expect(code).toMatch(
-      /const goBack = \(\) => \{\s*if \(typeof returnPath === 'string' && returnPath\.length > 0\) \{\s*router\.replace\(returnPath as never\);\s*\} else if \(router\.canGoBack\(\)\) \{\s*router\.back\(\);\s*\} else \{\s*router\.replace\('\/'\);/,
-    );
+    // Back: a ?return= path inside the app, else back, else Home (docket T14:
+    // goBackFromReturn; return-path-wiring.test.ts pins every reader).
+    expect(code).toMatch(/const goBack = \(\) => goBackFromReturn\(router, returnPath\);/);
     expect(styleBlock(SUPPORT, 'topbar')).toMatch(/paddingHorizontal: 9,\s*paddingTop: 5,/);
     expect(styleBlock(SUPPORT, 'chipsSpacer')).toMatch(/width: 90/);
   });

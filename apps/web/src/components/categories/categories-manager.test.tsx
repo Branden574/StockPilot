@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { renderToString } from 'react-dom/server';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Radix Select needs pointer-capture APIs happy-dom doesn't implement.
@@ -422,5 +423,64 @@ describe('CategoriesManager — header, cards and gates (redesign)', () => {
     expect(roots[0]).toHaveTextContent('Shoes');
     expect(roots[0]).toHaveTextContent('Jerseys');
     expect(screen.getByRole('button', { name: /Add subcategory/ })).toBeTruthy();
+  });
+});
+
+/**
+ * A category's stored colour is plain text a manager (or anyone granted
+ * categories:manage) can write through the Data API, and a style value
+ * reaches the server HTML as given, so an unchecked `;` added CSS
+ * declarations to the page (docket T14). A value that is not `#rrggbb` draws
+ * the default grey dot, and the editor opens on the default colour.
+ */
+describe('CategoriesManager: a stored colour that is not #rrggbb (docket T14)', () => {
+  const INJECTED = '#000;position:fixed;inset:0;z-index:2147483647';
+  const plain = (over: Parameters<typeof row>[0]) =>
+    row({ parent_id: null, sports_subcategory_key: null, supports_sizes: false, ...over });
+
+  beforeEach(() => {
+    vi.mocked(updateCategoryAction).mockResolvedValue({ ok: true, data: { id: 'x' } } as never);
+  });
+
+  it('the dot draws the default grey in the server HTML, never the stored text', () => {
+    const html = renderToString(
+      <CategoriesManager
+        initial={[
+          plain({ id: 'cat-a', name: 'Apparel', color: '#10b981' }),
+          plain({ id: 'cat-x', name: 'Injected', color: INJECTED }),
+        ]}
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    expect(html).not.toContain('position:');
+    expect(html).not.toContain('z-index');
+    const styles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
+    expect(styles).toContain('background-color:#10b981');
+    expect(styles).toContain('background-color:#94a3b8');
+  });
+
+  it('Edit opens on the default colour, so a rename saves a colour the server accepts', async () => {
+    const user = userEvent.setup();
+    render(
+      <CategoriesManager
+        initial={[plain({ id: 'cat-x', name: 'Injected', color: INJECTED })]}
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Injected' }));
+    const name = await screen.findByLabelText('Name');
+    await user.clear(name);
+    await user.type(name, 'Renamed');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateCategoryAction).toHaveBeenCalled());
+    const [, payload] = vi.mocked(updateCategoryAction).mock.calls.at(-1)!;
+    expect(payload.name).toBe('Renamed');
+    expect(payload.color).toBe('#6366f1');
   });
 });

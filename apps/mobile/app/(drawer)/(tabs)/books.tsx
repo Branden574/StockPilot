@@ -76,6 +76,7 @@ import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { readPrimaryPhotos, readRackHoldings } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import { onlySiteLocations } from '@/lib/location-filter';
+import { goBackFromReturn } from '@/lib/return-path';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -880,15 +881,7 @@ export default function BooksScreen() {
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <IconChip
               icon={ArrowLeft}
-              onPress={() => {
-                if (typeof returnPath === 'string' && returnPath.length > 0) {
-                  router.replace(returnPath as never);
-                } else if (router.canGoBack()) {
-                  router.back();
-                } else {
-                  router.replace('/');
-                }
-              }}
+              onPress={() => goBackFromReturn(router, returnPath)}
               accessibilityLabel="Back"
               minTap
             />

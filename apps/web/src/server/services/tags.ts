@@ -7,6 +7,7 @@ import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabas
 import { audit, auditMany } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
+import { assertStoredColor } from './lib/stored-color';
 
 /**
  * Most tags one bulk add/remove may carry. The tag list rides in the SAME
@@ -81,6 +82,7 @@ export class TagsService {
 
   async create(input: CreateTagInput): Promise<TagRow> {
     assertPermission(this.ctx, 'categories:manage');
+    assertStoredColor(input.color);
     const { data, error } = await this.ctx.supabase
       .from('tags')
       .insert({
@@ -103,6 +105,7 @@ export class TagsService {
 
   async update(id: string, patch: UpdateTagInput): Promise<TagRow> {
     assertPermission(this.ctx, 'categories:manage');
+    assertStoredColor(patch.color);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.color !== undefined) updates.color = patch.color ?? null;

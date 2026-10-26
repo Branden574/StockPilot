@@ -6,9 +6,9 @@ import { formatRelative } from '@/lib/utils';
 import type { ProcedureListRow } from '@/server/services/procedures';
 
 import {
-  PROCEDURE_FALLBACK_COLOR,
   ProcedureCategoryPill,
   ProcedureFallbackBand,
+  procedureCategoryColor,
 } from './procedure-fallback-band';
 
 interface ProcedureCardProps {
@@ -29,7 +29,7 @@ interface ProcedureCardProps {
  * The whole card is one link to the detail page, as before.
  */
 export function ProcedureCard({ procedure }: ProcedureCardProps) {
-  const color = procedure.category_color ?? PROCEDURE_FALLBACK_COLOR;
+  const color = procedureCategoryColor(procedure.category_color);
   return (
     <Link
       href={`/dashboard/procedures/${procedure.id}`}

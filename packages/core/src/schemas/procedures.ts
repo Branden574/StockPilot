@@ -1,11 +1,7 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './common';
-
-/** Hex color like #6366f1. Shared with tags/categories swatch renderers. */
-const hexColor = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color like #6366f1');
+import { hexColorSchema } from './hex-color';
 
 // ---------------------------------------------------------------------------
 // procedure_categories — picklist (Plumbing / Lighting / HVAC / …)
@@ -13,7 +9,7 @@ const hexColor = z
 
 export const createProcedureCategorySchema = z.object({
   name: z.string().trim().min(1).max(80),
-  color: hexColor.nullable().optional(),
+  color: hexColorSchema.nullable().optional(),
   sortOrder: z.number().int().min(0).max(9999).optional(),
 });
 export type CreateProcedureCategoryInput = z.infer<typeof createProcedureCategorySchema>;
