@@ -19,9 +19,12 @@ import { describe, expect, it } from 'vitest';
  *
  * WHAT STOPS IT NOW: this test lists every tracked file (`git ls-files`),
  * reads each text file and fails on an address at one of the customer's mail
- * domains, in every spelling a file here can hold: any case, under a
- * subdomain, the @ written as %40 or an HTML entity, the dots escaped for a
- * regular expression. The only addresses allowed are the (file, address)
+ * domains, in each spelling the last test below lists: any case, under a
+ * subdomain, the @ written as %40 (encoded once or more, as an Outlook
+ * compose link carries it: %2540), as an HTML entity or as a \u0040 or \x40
+ * escape, the dots escaped for a regular expression. Each address in a
+ * compose link is found and hashed on its own, without the %-escape before
+ * it. The only addresses allowed are the (file, address)
  * pairs in ALLOWED, each with its reason; they are held as sha256 of the
  * address in lower case, so this file names none of them. An allowed pair
  * that is no longer in its file fails too, so the list cannot outlive its
@@ -73,22 +76,27 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A dot may be written escaped once or twice (a regular expression, or one
 // inside a string literal).
 const DOT = String.raw`\\{0,2}\.`;
-const AT = String.raw`(?:\\?@|%40|&#0*64;|&#x0*40;|&commat;)`;
+// The @ as written: plain or escaped with a backslash, URL-encoded once or
+// more (%40, %2540, ...), an HTML entity, or a JavaScript or JSON escape.
+const AT_SOURCE = String.raw`\\?@|%(?:25)*40|&#0*64;|&#x0*40;|&commat;|\\{1,2}(?:u0040|u\{0*40\}|x40)`;
+const AT = `(?:${AT_SOURCE})`;
+// A local part never starts inside a %-escape: in `%3Cintake%2540...` or
+// `%253Cintake%2540...` the address is `intake`, not `3Cintake`. A % is
+// therefore not a local-part character either, so two encoded addresses in
+// one link never run together into one match.
+const LOCAL = String.raw`(?<!%(?:25)*[0-9A-Fa-f]?)[A-Za-z0-9._+-]+`;
 const LABEL = '[A-Za-z0-9-]+';
 const DOMAINS = CUSTOMER_DOMAINS.map((d) => d.split('.').map(escapeRe).join(DOT)).join('|');
 
 /** An address at a customer domain or one of its subdomains, and nothing longer. */
 const ADDRESS = new RegExp(
-  `[A-Za-z0-9._%+-]+${AT}(?:${LABEL}${DOT})*(?:${DOMAINS})(?![A-Za-z0-9-])(?!${DOT}[A-Za-z0-9-])`,
+  `${LOCAL}${AT}(?:${LABEL}${DOT})*(?:${DOMAINS})(?![A-Za-z0-9-])(?!${DOT}[A-Za-z0-9-])`,
   'gi',
 );
 
 /** The address as the allowlist hashes it: lower case, @ and dots unescaped. */
 function normalise(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/\\?@|%40|&#0*64;|&#x0*40;|&commat;/g, '@')
-    .replace(/\\+\./g, '.');
+  return raw.toLowerCase().replace(new RegExp(AT_SOURCE, 'g'), '@').replace(/\\+\./g, '.');
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -179,11 +187,16 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
         `Reach ${plain.toUpperCase()} today`,
         `mailto:${plain}?subject=Hello`,
         `intake%40${domain}`,
+        `intake%2540${domain}`,
         `intake&#64;${domain}`,
+        String.raw`intake\u0040${domain}`,
+        String.raw`intake\x40${domain}`,
         `intake@mail.${domain}`,
         String.raw`/^intake@${label}\.${tld}$/`,
         String.raw`'intake@${label}\\.${tld}'`,
         `Write to ${plain}.`,
+        // An Outlook compose link: the name-addr form, encoded twice.
+        `mailtouri=mailto%3AFront%2520Desk%2520%253Cintake%2540${domain}%253E`,
       ];
       for (const text of spellings) {
         const found = findIn('sample.txt', text);
@@ -191,6 +204,12 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
         const expected = text.includes('mail.') ? `intake@mail.${domain}` : plain;
         expect(found[0]!.sha256, text).toBe(sha256(expected));
       }
+      // Two encoded addresses in one link are two matches, each hashed as itself.
+      const link = `mailto%3Aintake%2540${domain}%3Fcc%3Dlead%2540${domain}%26subject%3DHello`;
+      expect(findIn('sample.txt', link).map((f) => f.sha256)).toEqual([
+        sha256(plain),
+        sha256(`lead@${domain}`),
+      ]);
       const lookalikes = [
         `https://www.${domain}/`,
         `the ${label} portal`,
