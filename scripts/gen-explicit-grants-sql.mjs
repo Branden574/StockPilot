@@ -292,10 +292,12 @@ export function renderRevokesBlock(census) {
   for (const rel of relations) {
     if (KINDS[rel.kind].target !== 'table') continue;
     const n =
-      rel.privileges.filter(([role, p]) => CLIENT_ROLES.includes(role) && DDL_PRIVILEGES.includes(p))
-        .length +
-      rel.columns.filter(([, , role, p]) => CLIENT_ROLES.includes(role) && DDL_PRIVILEGES.includes(p))
-        .length;
+      rel.privileges.filter(
+        ([role, p]) => CLIENT_ROLES.includes(role) && DDL_PRIVILEGES.includes(p),
+      ).length +
+      rel.columns.filter(
+        ([, , role, p]) => CLIENT_ROLES.includes(role) && DDL_PRIVILEGES.includes(p),
+      ).length;
     if (n === 0) continue;
     held += n;
     const privs = DDL_PRIVILEGES.join(', ').toLowerCase();
@@ -343,7 +345,9 @@ export function censusFacts(census) {
   for (const rel of census.relations) {
     facts.add(`public.${rel.name} is a ${KINDS[rel.kind].word}`);
     for (const [role, privilege, grantable] of rel.privileges) {
-      facts.add(`${role} holds ${privilege}${grantable ? ' with grant option' : ''} on public.${rel.name}`);
+      facts.add(
+        `${role} holds ${privilege}${grantable ? ' with grant option' : ''} on public.${rel.name}`,
+      );
     }
     for (const [column, , role, privilege, grantable] of rel.columns) {
       facts.add(
@@ -459,7 +463,9 @@ function main(argv) {
       console.log(`${fileA} and ${fileB} hold the same privileges`);
       return 0;
     }
-    console.error(`${fileA} and ${fileB} differ: ${onlyA.length} facts only in the first, ${onlyB.length} only in the second`);
+    console.error(
+      `${fileA} and ${fileB} differ: ${onlyA.length} facts only in the first, ${onlyB.length} only in the second`,
+    );
     for (const f of onlyA) console.error(`  only in ${fileA}: ${f}`);
     for (const f of onlyB) console.error(`  only in ${fileB}: ${f}`);
     return 1;
@@ -469,10 +475,16 @@ function main(argv) {
   const censusFile = arg('--census');
   const dbUrl = arg('--db-url');
   if (!censusFile && !dbUrl) {
-    throw new Error('pass --census <census.json> or --db-url <local url> (see the usage at the top of this file)');
+    throw new Error(
+      'pass --census <census.json> or --db-url <local url> (see the usage at the top of this file)',
+    );
   }
-  const census = censusFile ? JSON.parse(readFileSync(censusFile, 'utf8')) : readCensusFromDb(dbUrl);
-  const [begin, end] = revokes ? [REVOKES_BEGIN_MARKER, REVOKES_END_MARKER] : [BEGIN_MARKER, END_MARKER];
+  const census = censusFile
+    ? JSON.parse(readFileSync(censusFile, 'utf8'))
+    : readCensusFromDb(dbUrl);
+  const [begin, end] = revokes
+    ? [REVOKES_BEGIN_MARKER, REVOKES_END_MARKER]
+    : [BEGIN_MARKER, END_MARKER];
   const block = revokes ? renderRevokesBlock(census) : renderGrantsBlock(census);
   const text = existsSync(file) ? readFileSync(file, 'utf8') : null;
   const current = text === null ? null : currentBlock(text, begin, end);
@@ -488,7 +500,9 @@ function main(argv) {
       return 0;
     }
     console.error(`${path.relative(ROOT, file)}: the ${what} differs from the census`);
-    const lines = revokes ? describeRevokeDifferences(current, block) : describeDifferences(current, block);
+    const lines = revokes
+      ? describeRevokeDifferences(current, block)
+      : describeDifferences(current, block);
     for (const l of lines) console.error(l);
     return 1;
   }
