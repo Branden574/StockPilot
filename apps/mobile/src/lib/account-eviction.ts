@@ -82,8 +82,8 @@ export async function runAccountEviction(steps: EvictionSteps): Promise<Eviction
  * comes back for any password at all. Anyone who could reach the sign-in screen
  * and knew one disabled colleague's email could therefore destroy whatever was
  * queued on the device, with no credentials whatsoever. And after "Use password
- * instead" on the biometric lock (signOutToFallback, which deliberately does
- * NOT wipe), what is queued routinely belongs to a different, healthy user.
+ * instead" on the biometric lock (signOutToFallback, which deliberately keeps
+ * the outbox), what is queued routinely belongs to a different, healthy user.
  *
  * So the verdict has to say whose it is. Only 'session' evidence — a probe of
  * the session this device holds, or an eviction broadcast corroborated by one —

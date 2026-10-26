@@ -256,6 +256,7 @@ export class ServiceError extends Error {
       | 'plan_limit_exceeded'
       | 'module_disabled'
       | 'conflict'
+      | 'rate_limited'
       | 'internal_error',
     message: string,
     public details?: Record<string, unknown>,
@@ -270,6 +271,22 @@ export class ServiceError extends Error {
     if (code === 'internal_error' && message && message !== generic) {
       this.internalDetail = message;
     }
+  }
+}
+
+/**
+ * A read or write a service's own rate limit refused (code `rate_limited`,
+ * 429 through serviceErrorStatus). Thrown where the limit lives in the service
+ * itself, so every surface that runs the service spends from the same bucket
+ * (VerificationService.location: the web page and the phone's route).
+ * `resetAt` (epoch ms) is when the window ends, for a 429's Retry-After.
+ */
+export class RateLimitedError extends ServiceError {
+  constructor(
+    message: string,
+    public readonly resetAt: number,
+  ) {
+    super('rate_limited', message, { reason: 'rate_limited' });
   }
 }
 
@@ -367,6 +384,7 @@ export function serviceErrorStatus(code: ServiceError['code']): number {
     case 'validation_error': return 400;
     case 'conflict':
     case 'plan_limit_exceeded': return 409;
+    case 'rate_limited': return 429;
     default: return 500;
   }
 }

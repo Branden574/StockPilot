@@ -749,15 +749,23 @@ export function locationOpenIssuesEmptyCopy(v: {
 export type VerificationSubject = 'item' | 'location';
 
 /** Why the server refused a verification read (never a failed read: that is
- *  VERIFICATION_UNAVAILABLE_COPY with "try again"). */
+ *  VERIFICATION_UNAVAILABLE_COPY with "try again"). `rate_limited`: the
+ *  person read location pages too often in the last minute (the web page and
+ *  the phone's location route share one limit). */
 export type VerificationRefusal =
-  'not_found' | 'forbidden' | 'aal2_required' | 'mfa_required' | 'invalid_id';
+  'not_found' | 'forbidden' | 'aal2_required' | 'mfa_required' | 'invalid_id' | 'rate_limited';
+
+/** The sentence for a read the rate limit refused: under "Couldn't load
+ *  verification" on the web page and the phone, and the 429's `message`. */
+export const VERIFICATION_RATE_LIMITED_COPY =
+  'Too many reads in a short time. Try again in a minute.';
 
 /** The refusal an app-authored error names (its code and details.reason), or
  *  null for anything else (a failed read). */
 export function verificationRefusalOf(code: unknown, reason: unknown): VerificationRefusal | null {
   if (code === 'not_found') return 'not_found';
   if (code === 'validation_error') return 'invalid_id';
+  if (code === 'rate_limited') return 'rate_limited';
   if (code === 'forbidden') {
     if (reason === 'aal2_required') return 'aal2_required';
     if (reason === 'mfa_required') return 'mfa_required';
@@ -784,6 +792,8 @@ export function verificationRefusalCopy(
       return 'Your organization requires two-factor authentication. Set it up on the web, then sign in again.';
     case 'invalid_id':
       return 'This link is not valid.';
+    case 'rate_limited':
+      return VERIFICATION_RATE_LIMITED_COPY;
   }
 }
 

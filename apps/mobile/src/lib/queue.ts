@@ -7,7 +7,7 @@ import {
   UNCONFIRMED_ADJUST_PREFIX,
 } from './adjust-outbox';
 import { getDb, queuedWrite } from './db';
-import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
+import { CLAIM_FOR_SEND_SQL, HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
@@ -152,17 +152,23 @@ export async function pendingCount(): Promise<number> {
 }
 
 /**
- * The row is going on the wire now. `owner` is the send's scope
- * (outboxSendDecision): a legacy row missing its organization or user is
- * stamped with it here, in the same statement, so a row is only ever sent
- * under the first account that sent it. coalesce() never overwrites an owner
- * already stored.
+ * CLAIM the row for the send about to start; true when it was claimed. Only a
+ * row still queued and still the sending account's and organization's (or not
+ * stamped yet) is claimed (outbox-scope.ts CLAIM_FOR_SEND_SQL): the drain read
+ * the queue once, and a row replaced, discarded, parked or re-owned since is
+ * never sent from its stale copy. The drain sends nothing for a row this
+ * answers false for.
+ *
+ * `owner` is the send's scope (outboxSendDecision): a legacy row missing its
+ * organization or user is stamped with it here, in the same statement, so a
+ * row is only ever sent under the first account that sent it. coalesce()
+ * never overwrites an owner already stored.
  */
 export async function markSending(
   id: number,
-  owner?: { orgId: string | null; userId: string },
-): Promise<void> {
-  await queuedWrite((db) =>
+  owner: { orgId: string | null; userId: string },
+): Promise<boolean> {
+  const result = await queuedWrite((db) =>
     db.runAsync(
       `update pending_actions
         set status = 'sending',
@@ -170,10 +176,11 @@ export async function markSending(
             last_attempt_at = ?,
             organization_id = coalesce(organization_id, ?),
             user_id = coalesce(user_id, ?)
-      where id = ?`,
-      [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+      where ${CLAIM_FOR_SEND_SQL}`,
+      [Date.now(), owner.orgId, owner.userId, id, owner.userId, owner.orgId],
     ),
   );
+  return result.changes > 0;
 }
 
 export async function markOk(id: number): Promise<void> {

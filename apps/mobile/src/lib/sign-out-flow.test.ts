@@ -325,7 +325,9 @@ describe('auth-context wiring', () => {
     const body = fn('signOutToFallback');
     const ended = body.indexOf('if (!ended)');
     const unlock = body.indexOf('setLocked(false)');
-    expect(body).toContain('endSession(');
+    // runFallbackSignOut ends the session (endSession, 'local') and answers
+    // whether it ended (sign-out-fallback.sqlite.test.ts).
+    expect(body).toContain('runFallbackSignOut(');
     expect(ended).toBeGreaterThan(-1);
     expect(unlock).toBeGreaterThan(ended);
     expect(body.slice(ended, unlock)).toContain('return false;');

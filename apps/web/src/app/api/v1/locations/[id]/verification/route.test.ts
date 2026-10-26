@@ -5,6 +5,7 @@ import {
   locationRowVerificationCopy,
   locationVerificationTotalsCopy,
   parseItemVerificationSummary,
+  VERIFICATION_RATE_LIMITED_COPY,
   type ModuleId,
 } from '@stockpilot/core';
 
@@ -43,6 +44,7 @@ vi.mock('@/lib/auth/warehouse', () => {
 });
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 import { GET } from './route';
 
@@ -159,6 +161,11 @@ const URL_ = `https://t.local/api/v1/locations/${LOC}/verification`;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkRateLimit).mockResolvedValue({
+    allowed: true,
+    count: 1,
+    resetAt: Date.now() + 60_000,
+  });
 });
 
 describe('GET /api/v1/locations/[id]/verification', () => {
@@ -293,6 +300,60 @@ describe('GET /api/v1/locations/[id]/verification', () => {
     expect(
       (await GET(bearer('https://t.local/api/v1/locations/x/verification'), params('x'))).status,
     ).toBe(400);
+  });
+
+  // B25 (F1-3 review L3): every page reads ALL of the location's holdings and
+  // their summaries, so a tight loop was uncapped. A light per-user limit,
+  // after the checks that read nothing, and before any read. It is spent in
+  // VerificationService.location itself, so the web page shares the bucket
+  // (location-verification-limit.test.tsx).
+  it('429 past 60 reads a minute for one user: the one error shape, Retry-After, not cached, nothing read', async () => {
+    const stub = ctxWith();
+    vi.mocked(checkRateLimit).mockResolvedValueOnce({
+      allowed: false,
+      count: 61,
+      resetAt: Date.now() + 30_000,
+    });
+    const res = await GET(bearer(URL_), params(LOC));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    const retryAfter = Number(res.headers.get('retry-after'));
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(30);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: 'rate_limited',
+      message: 'Too many reads in a short time. Try again in a minute.',
+      retryAt: expect.any(Number),
+    });
+    // The phone reads the status (verification-api.ts describeVerificationError).
+    expect(body.message).toBe(VERIFICATION_RATE_LIMITED_COPY);
+    expect(reportError).not.toHaveBeenCalled();
+    expect(stub.fromCalls).toHaveLength(0);
+    expect(stub.rpcCalls).toHaveLength(0);
+    // Keyed on the VERIFIED user, 60 a minute, failing open like the other
+    // signed-in routes (no 'closed' mode).
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    expect(checkRateLimit).toHaveBeenCalledWith('location-verification:user:u-1', 60, 60_000);
+  });
+
+  it('a served read spends one from the budget; a refusal that reads nothing (401, 403, 400) spends none', async () => {
+    ctxWith();
+    expect((await GET(bearer(URL_), params(LOC))).status).toBe(200);
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+
+    vi.mocked(checkRateLimit).mockClear();
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+    expect((await GET(bearer(URL_), params(LOC))).status).toBe(401);
+    ctxWith({ role: 'viewer', permissions: ['members:read', 'locations:read'] });
+    expect((await GET(bearer(URL_), params(LOC))).status).toBe(403);
+    ctxWith();
+    expect((await GET(bearer(`${URL_}?page=abc`), params(LOC))).status).toBe(400);
+    ctxWith();
+    expect(
+      (await GET(bearer('https://t.local/api/v1/locations/x/verification'), params('x'))).status,
+    ).toBe(400);
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
   it.each([

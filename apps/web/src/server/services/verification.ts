@@ -7,6 +7,7 @@ import {
   locationRecountProblem,
   locationVerificationTotals,
   resolveOrgTimezone,
+  VERIFICATION_RATE_LIMITED_COPY,
   type ItemVerificationSummary,
   type LocationVerificationTotals,
   type RecountUnavailableReason,
@@ -15,9 +16,16 @@ import {
   type VerificationPerson,
 } from '@stockpilot/core';
 
+import { checkRateLimit } from '@/lib/rate-limit';
 import { chunkInFilterValues, mapWithConcurrency } from '@/lib/supabase/in-filter';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertPermission,
+  RateLimitedError,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 import { countStartBlock } from './lib/count-start-preflight';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { personFor } from './lib/occurrence-person';
@@ -66,6 +74,20 @@ export const LOCATION_VERIFICATION_PAGE_SIZE = 50;
 export { LOCATION_HOLDINGS_CAP };
 /** Open exceptions read for one item or one location (a backstop). */
 const ISSUES_CAP = 1_000;
+
+/**
+ * One person's location page reads: LOCATION_VERIFICATION_READS_PER_WINDOW in
+ * LOCATION_VERIFICATION_RATE_WINDOW_MS, on the web page and the phone's route
+ * TOGETHER (one bucket, keyed on the verified user, spent in location()
+ * itself). Every page, not only the first, reads all of the location's
+ * holdings and their summaries, so a tight loop through either surface is
+ * capped. Fails open, like the app's other signed-in limits (lib/rate-limit.ts).
+ */
+export const LOCATION_VERIFICATION_READS_PER_WINDOW = 60;
+export const LOCATION_VERIFICATION_RATE_WINDOW_MS = 60_000;
+export function locationVerificationRateKey(userId: string): string {
+  return `location-verification:user:${userId}`;
+}
 
 // ── Shapes (the API returns these as JSON) ──────────────────────────────────
 
@@ -414,6 +436,11 @@ export class VerificationService {
    * Holdings of items the reader cannot open are counted (hiddenItems), not
    * listed. When the reader's warehouses do not cover the location at all,
    * nothing is listed and `holdingsVisible` is false.
+   *
+   * Rate limited per person (LOCATION_VERIFICATION_READS_PER_WINDOW): spent
+   * after the permission and id checks, which read nothing, and before any
+   * read; past it, RateLimitedError (the route's 429, the page's "Too many
+   * reads" sentence). item() and summaries() are not limited.
    */
   async location(
     rawLocationId: string,
@@ -425,6 +452,12 @@ export class VerificationService {
         reason: 'invalid_location_id',
       });
     }
+    const limit = await checkRateLimit(
+      locationVerificationRateKey(this.ctx.userId),
+      LOCATION_VERIFICATION_READS_PER_WINDOW,
+      LOCATION_VERIFICATION_RATE_WINDOW_MS,
+    );
+    if (!limit.allowed) throw new RateLimitedError(VERIFICATION_RATE_LIMITED_COPY, limit.resetAt);
     const locationId = canonicalId(rawLocationId);
     const orgId = this.ctx.organizationId;
 

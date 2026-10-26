@@ -1,7 +1,12 @@
 import { clearCountPayload } from './cycle-count-clear';
 import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
 import { getDb, queuedWrite, withDbTransaction } from './db';
-import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import {
+  CLAIM_FOR_SEND_SQL,
+  HELD_FOR_OTHER_SQL,
+  OWNED_BY_USER_SQL,
+  REPLACED_BY_LATER_COUNT,
+} from './outbox-scope';
 import { markRejectedWithin } from './queue';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
@@ -616,6 +621,14 @@ export async function outboxReject(id: number, error: string): Promise<void> {
   });
 }
 
+/**
+ * The send failed and may be retried: back to 'failed', with the backoff's
+ * attempt counted. ONLY a row still 'sending', as engine 1's markFailed: while
+ * the request was out the row can be taken out of the queue for good, parked
+ * by an account eviction (rejectAllPending) or deleted by "Sign out and
+ * discard", and putting a parked row back would send it the moment the
+ * account is re-enabled (B25).
+ */
 export async function outboxBumpFailure(id: number, error: string): Promise<void> {
   // Queued like every outbox write (db.ts queuedWrite): a plain statement
   // inside another flow's open transaction is undone by that flow's ROLLBACK.
@@ -626,32 +639,37 @@ export async function outboxBumpFailure(id: number, error: string): Promise<void
               attempts = attempts + 1,
               last_attempt_at = ?,
               last_error = ?
-        where id = ?`,
+        where id = ? and status = 'sending'`,
       [Date.now(), error.slice(0, 1000), id],
     ),
   );
 }
 
 /**
- * The row is going on the wire now. A legacy row missing its organization or
- * user is stamped with the send's scope in the same statement (see queue.ts
- * markSending): it is only ever sent under the first account that sent it.
+ * CLAIM the row for the send about to start; true when it was claimed (the
+ * same claim as queue.ts markSending, outbox-scope.ts CLAIM_FOR_SEND_SQL). A
+ * count replaced by a newer one of its line since the drain read the queue,
+ * discarded, parked or re-owned is not claimed, and the drain sends nothing
+ * for it. A legacy row missing its organization or user is stamped with the
+ * send's scope in the same statement: it is only ever sent under the first
+ * account that sent it.
  */
 export async function outboxMarkSending(
   id: number,
-  owner?: { orgId: string | null; userId: string },
-): Promise<void> {
-  await queuedWrite((db) =>
+  owner: { orgId: string | null; userId: string },
+): Promise<boolean> {
+  const result = await queuedWrite((db) =>
     db.runAsync(
       `update pending_actions
           set status = 'sending',
               last_attempt_at = ?,
               organization_id = coalesce(organization_id, ?),
               user_id = coalesce(user_id, ?)
-        where id = ?`,
-      [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+        where ${CLAIM_FOR_SEND_SQL}`,
+      [Date.now(), owner.orgId, owner.userId, id, owner.userId, owner.orgId],
     ),
   );
+  return result.changes > 0;
 }
 
 /**

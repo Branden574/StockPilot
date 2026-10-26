@@ -218,6 +218,9 @@ describe('text Back links and the cameras Done and Cancel: buttons, and a 44pt t
     expect(backLinks.map((t) => t.file).sort()).toEqual([
       'app/bundles/[id].tsx',
       'app/bundles/index.tsx',
+      // The count, read failed, not cached, and (B25) not in this workspace or
+      // not available.
+      'app/cycle-count/[id].tsx',
       'app/cycle-count/[id].tsx',
       'app/cycle-count/[id].tsx',
       'app/cycle-count/[id].tsx',

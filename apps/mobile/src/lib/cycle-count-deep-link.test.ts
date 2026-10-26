@@ -30,7 +30,9 @@ describe('cycle-count detail leaves safely after a cold-start link', () => {
 
   it('never calls router.back() directly (Back, post, release and reassign all use leave)', () => {
     expect(detail.match(/router\.back\(\)/g) ?? []).toHaveLength(1);
-    expect(detail.match(/onPress=\{leave\}/g) ?? []).toHaveLength(3);
+    // Back on the count, the read failure, not cached, and (B25) the count
+    // that is in another workspace or not available.
+    expect(detail.match(/onPress=\{leave\}/g) ?? []).toHaveLength(4);
     expect(detail.match(/\bleave\(\);/g) ?? []).toHaveLength(3);
   });
 });

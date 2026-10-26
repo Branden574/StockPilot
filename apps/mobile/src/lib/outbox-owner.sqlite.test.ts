@@ -211,14 +211,23 @@ describe('a legacy row is stamped at its FIRST send, an owned row never re-stamp
   it('markSending adopts a legacy row and leaves an owned one alone', async () => {
     seed({ id: 1, user: null, org: null, kind: 'receive_po_line' });
     seed({ id: 2, user: 'u1', org: 'org-a', kind: 'receive_po_line' });
+    seed({ id: 3, user: 'u1', org: 'org-a' });
 
-    await queue.markSending(1, { orgId: 'org-live', userId: 'u1' });
-    await queue.markSending(2, { orgId: 'org-other', userId: 'u1' });
-    await cache.outboxMarkSending(2, { orgId: 'org-other', userId: 'u1' });
+    expect(await queue.markSending(1, { orgId: 'org-live', userId: 'u1' })).toBe(true);
+    // An owned row is claimed under its own organization (the drain's
+    // decision sends a row under its own) and never re-stamped.
+    expect(await queue.markSending(2, { orgId: 'org-a', userId: 'u1' })).toBe(true);
+    // B25: a claim that does not match the row as stored (another
+    // organization, another account, a row no longer queued) changes nothing
+    // and is refused, so the drain sends nothing for it.
+    expect(await cache.outboxMarkSending(3, { orgId: 'org-other', userId: 'u1' })).toBe(false);
+    expect(await queue.markSending(3, { orgId: 'org-a', userId: 'u2' })).toBe(false);
+    expect(await queue.markSending(2, { orgId: 'org-a', userId: 'u1' })).toBe(false);
 
     expect(owners()).toEqual([
       { id: 1, status: 'sending', organization_id: 'org-live', user_id: 'u1', last_error: null },
       { id: 2, status: 'sending', organization_id: 'org-a', user_id: 'u1', last_error: null },
+      { id: 3, status: 'pending', organization_id: 'org-a', user_id: 'u1', last_error: null },
     ]);
   });
 

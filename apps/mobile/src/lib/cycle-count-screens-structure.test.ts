@@ -767,11 +767,13 @@ describe('count screen: offline capture and the Post rule', () => {
     expect(styleBlock(COUNT, 'lineFirst')).toContain('borderTopWidth: 1');
   });
 
-  it('reads nothing new (the organization and the count, as before)', () => {
+  // The organization's zone is read through org-zone.ts (B25), the same
+  // organizations.timezone read, shared with the other count screens.
+  it('reads nothing new (the count, as before; the zone through org-zone.ts)', () => {
     expect([...codeOnly(src).matchAll(/\.from\('(\w+)'\)/g)].map((m) => m[1])).toEqual([
-      'organizations',
       'cycle_counts',
     ]);
+    expect(codeOnly(src)).toContain('useOrgTimeZone(orgId)');
   });
 });
 

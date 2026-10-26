@@ -618,8 +618,16 @@ export async function drainQueue(): Promise<{
       }
     }
 
-    // Stamps a legacy row with this account, so it is never sent as another.
-    await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
+    // Claims the row, and stamps a legacy row with this account so it is
+    // never sent as another. `action` is this pass's copy, read before the
+    // first send: a row replaced, discarded, parked or stamped with another
+    // account since (a sign-out while a request was out) is not claimed, and
+    // nothing is sent for it (outbox-scope.ts CLAIM_FOR_SEND_SQL).
+    const claimed = await markSending(action.id, {
+      orgId: decision.orgId,
+      userId: decision.userId,
+    });
+    if (!claimed) continue;
     // When api() handed this row's request to fetch (null: not yet). Before
     // that moment nothing can have reached the server; an adjust_stock row's
     // failure is judged on it (adjust-outbox.ts), since its route cannot dedupe

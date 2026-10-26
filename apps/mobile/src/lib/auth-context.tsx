@@ -36,7 +36,7 @@ import { removeOrderCachesAtRest } from './order-storefront/caches-at-rest';
 import { signOutOrderSubmissions } from './order-storefront/services';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
-  endSession,
+  runFallbackSignOut,
   runSignOutFlow,
   STILL_SIGNED_IN_MESSAGE,
   STILL_SIGNED_IN_TITLE,
@@ -514,17 +514,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // sign-in screen renders, but does NOT revoke the user's other
     // sessions (web, other phone). Used when the user fails the
     // biometric prompt and wants to re-authenticate with password
-    // on this device only. The cache and the outbox are kept: the
-    // next account's first pull resets a cache that is not its own
-    // (sync.ts), and queued work stays held for this account.
-    const ended = await endSession(
-      {
-        signOut: signOutDeliberately,
-        hasSession: hasStoredSession,
-        warn: (m, e) => console.warn(m, e),
+    // on this device only. The outbox is kept, held for this account
+    // (its legacy rows are stamped as its own first); the cache is
+    // cleared once the session has ended, as the deliberate sign-out
+    // clears it (sign-out-flow.ts runFallbackSignOut).
+    // Whose queued work this is, read while the session still exists.
+    const scope = await liveOutboxScope();
+    const userId = scope.userId ?? session?.user?.id ?? null;
+    const ended = await runFallbackSignOut({
+      holdForAccount: async () => {
+        if (userId) await adoptLegacyRows({ userId, orgId: scope.orgId });
       },
-      'local',
-    );
+      signOut: signOutDeliberately,
+      hasSession: hasStoredSession,
+      wipeCache: wipeForSignOut,
+      warn: (m, e) => console.warn(m, e),
+    });
     if (!ended) {
       // A LOCAL sign-out needs the network too (auth-js POSTs /logout and
       // keeps the session on a transport failure). Lifting the biometric

@@ -67,6 +67,7 @@ import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-l
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { rememberOrgTimeZone, useOrgTimeZone } from '@/lib/org-zone';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -279,7 +280,12 @@ export default function CycleCounts() {
         setPage(res);
         setDownloaded(null);
         setError(null);
-        if (opts.withSummary) setSummary(res.summary ?? null);
+        if (opts.withSummary) {
+          setSummary(res.summary ?? null);
+          // An answer for this workspace (checked above): its zone is the
+          // organization's for every later render, offline included.
+          rememberOrgTimeZone(res.organizationId, res.summary?.timezone);
+        }
         if (res.page !== target.page) {
           // The server answered a different page (the list shrank under a
           // filter, or a stale page ran past the end): show the page it gave.
@@ -402,7 +408,11 @@ export default function CycleCounts() {
   const pendingTotal = pendingByCount
     ? Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0)
     : null;
-  const tz = summary?.timezone;
+  // The organization's zone for every time on the list: the summary's, else
+  // the one known or read for the organization, else core's default
+  // (org-zone.ts), so the list offline, or from a server whose summary
+  // carries none, names the web's clock time. Never the device's (B25).
+  const tz = useOrgTimeZone(orgId, summary?.timezone);
   const inProgressText = offline || !summary ? '—' : String(summary.inProgress);
   const todayText = offline || !summary ? '—' : String(summary.startedToday);
 
@@ -791,11 +801,9 @@ function PagerButton({
   );
 }
 
-function formatStarted(iso: string, timeZone: string | undefined): string {
-  if (!iso) return '';
-  if (timeZone) return formatOrgDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }, timeZone);
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+function formatStarted(iso: string, timeZone: string): string {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) return '';
+  return formatOrgDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }, timeZone);
 }
 
 function CountCard({
@@ -808,7 +816,8 @@ function CountCard({
   /** This phone's unsynced lines for the count; null when they could not be
    *  read, so the card makes no sync claim. */
   pending: number | null;
-  timeZone: string | undefined;
+  /** The organization's zone (useOrgTimeZone): never the device's. */
+  timeZone: string;
   onPress: () => void;
 }) {
   const { c } = useTheme();

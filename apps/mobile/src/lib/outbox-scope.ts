@@ -88,6 +88,31 @@ export const OWNED_BY_USER_SQL = '(user_id is null or user_id is ?)';
 export const HELD_FOR_OTHER_SQL = '(user_id is not null and user_id is not ?)';
 
 /**
+ * THE CLAIM (B25): the WHERE clause both drains mark a row 'sending' with,
+ * immediately before its request. The row must still be what the drain
+ * decided on: still queued ('pending' or 'failed'), and still owned by the
+ * account and the organization it is about to go out under, or not stamped
+ * yet (legacy). The drain sends only when that statement changed the row.
+ *
+ * Both drains read the queue ONCE per pass and send row by row, each send
+ * taking up to api()'s 20 s, so by a row's turn its copy can be stale: the
+ * row replaced by a newer count of its line (updateLocalLine; the AI scan
+ * records the newer count on the server directly and acks it), discarded by
+ * "Sign out and discard" before the same account signed in again, parked by
+ * an account eviction, or stamped with the leaving account at a sign-out
+ * (adoptLegacyRows) while the pass still held it as a legacy row that the
+ * NEXT account's session would adopt and send. An unconditional
+ * `where id = ?` sent all of those.
+ *
+ * Bind, in order: the row id, the sending account, the sending organization.
+ * `is` is SQLite's null-safe comparison, as in the fragments above.
+ */
+export const CLAIM_FOR_SEND_SQL = `id = ?
+          and status in ('pending','failed')
+          and (user_id is null or user_id is ?)
+          and (organization_id is null or organization_id is ?)`;
+
+/**
  * Thrown by api() when a request carrying `asUserId` finds the live session
  * belongs to somebody else (or to nobody) at the moment the bearer is read.
  * The drains treat it as "held", never as a failure: nothing was sent.

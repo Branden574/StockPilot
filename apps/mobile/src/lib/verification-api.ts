@@ -24,6 +24,7 @@ import {
 import { api } from './api';
 import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { exceptionTimeLabel } from './exceptions-api';
+import { withOrgTimeZone } from './org-zone';
 
 /**
  * "Last physical count" on the phone (F1-3): thin typed wrappers over the two
@@ -74,7 +75,8 @@ export interface MobileItemVerification {
   /** The reader may start a count (the item must also be countable). */
   canCount: boolean;
   countUnavailableReason: RecountUnavailableReason | null;
-  /** The org's time zone; null from a server that sent none. */
+  /** The org's time zone: the server's, else the organization's as the phone
+   *  reads it (org-zone.ts); null when neither is known. */
   timeZone: string | null;
 }
 
@@ -371,7 +373,8 @@ export async function getItemVerification(
   const parsed = parseItemVerification(res);
   if (parsed.organizationId !== opts.orgId) throw new VerificationResponseError('workspace');
   if (!sameId(parsed.itemId, itemId)) throw new VerificationResponseError();
-  return parsed;
+  // An older server sends no zone: the organization's (org-zone.ts).
+  return withOrgTimeZone(parsed);
 }
 
 export function locationVerificationPath(locationId: string, page: number): string {
@@ -395,7 +398,7 @@ export async function getLocationVerification(
   const parsed = parseLocationVerification(res);
   if (parsed.organizationId !== opts.orgId) throw new VerificationResponseError('workspace');
   if (!sameId(parsed.location.id, locationId)) throw new VerificationResponseError();
-  return parsed;
+  return withOrgTimeZone(parsed);
 }
 
 // ── What a failed read says ─────────────────────────────────────────────────
@@ -499,8 +502,10 @@ export function describeVerificationError(
     };
   }
   if (status === 429) {
+    // The server's per-person limit on location page reads (shared with the
+    // web page), or an edge refusal: the web page's sentence, from core.
     return {
-      detail: 'Too many requests. Wait a moment and try again.',
+      detail: verificationRefusalCopy('rate_limited', subject),
       retry: true,
       keepShown: true,
     };

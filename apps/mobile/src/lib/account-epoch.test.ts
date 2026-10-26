@@ -1,15 +1,33 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { accountEpoch, endAccountEpoch } from './account-epoch';
+import { accountEpoch, endAccountEpoch, forgetOnAccountChange } from './account-epoch';
 
 describe('account epoch', () => {
   it('only ever moves forward', () => {
     const before = accountEpoch();
     endAccountEpoch();
     expect(accountEpoch()).toBe(before + 1);
+  });
+
+  // B25: what modules remember about the account goes with it
+  // (account-change-forgets.test.ts drives the real ones).
+  it('runs every registered forget at each end, and one that throws never keeps the others', () => {
+    const first = vi.fn(() => {
+      throw new Error('could not forget');
+    });
+    const second = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    forgetOnAccountChange(first);
+    forgetOnAccountChange(second);
+    endAccountEpoch();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    endAccountEpoch();
+    expect(second).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it('the account eviction ends it before it clears the stored keys', () => {

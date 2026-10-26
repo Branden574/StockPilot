@@ -111,6 +111,9 @@ beforeEach(() => {
   for (const name of ['markSending', 'markOk', 'markFailed', 'markRejected', 'markHeld'] as const) {
     queueMock[name].mockReset().mockImplementation(async (id: number) => {
       calls.log.push(`${name}:${id}`);
+      // The claim (B25): the row is still queued and still this account's.
+      // outbox-claim.sqlite.test.ts runs the refusals against the real SQL.
+      return name === 'markSending' ? true : undefined;
     });
   }
   queueMock.listPending.mockReset();

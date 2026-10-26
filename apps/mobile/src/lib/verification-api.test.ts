@@ -606,8 +606,16 @@ describe('describeVerificationError', () => {
       retry: true,
       keepShown: true,
     });
+    // B25: the web location page's sentence (core), for the limit the phone
+    // and the web page share.
     expect(describeVerificationError(apiError(429, 'rate_limited'), 'item')).toMatchObject({
-      detail: 'Too many requests. Wait a moment and try again.',
+      detail: 'Too many reads in a short time. Try again in a minute.',
+      retry: true,
+      keepShown: true,
+    });
+    expect(describeVerificationError(apiError(429, 'rate_limited'), 'location')).toMatchObject({
+      detail: 'Too many reads in a short time. Try again in a minute.',
+      retry: true,
       keepShown: true,
     });
     expect(
