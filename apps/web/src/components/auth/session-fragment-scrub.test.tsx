@@ -7,10 +7,12 @@ import { SessionFragmentScrub } from './session-fragment-scrub';
 
 /**
  * A link Supabase verified itself hands its session back in the URL fragment,
- * and the app's redirects keep it on the way to /signin. The app never uses
- * that session (lib/supabase/client.test.ts), so the scrub takes the live
- * tokens out of the address bar and the history entry, and leaves a fragment
- * the sign-in form still reads as a failed link. Placeholder tokens only.
+ * and the app's redirects keep it on the way to the page the link names. The
+ * app never uses that session (lib/supabase/client.test.ts), so the scrub takes
+ * the live tokens out of the address bar and the history entry, and leaves a
+ * fragment the sign-in form still reads as a failed link. The root layout
+ * mounts it on every page: app/layout.session-fragment-scrub.test.tsx checks it
+ * there, landing by landing. Placeholder tokens only.
  */
 
 const SESSION =

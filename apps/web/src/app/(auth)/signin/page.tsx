@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Suspense } from 'react';
 
 import { AuthCard } from '@/components/auth/auth-card';
-import { SessionFragmentScrub } from '@/components/auth/session-fragment-scrub';
 import { SignInForm } from '@/components/auth/sign-in-form';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -19,8 +18,6 @@ export default function SignInPage() {
       description="Sign in to continue managing your inventory."
       footer={<>Need access? Ask your StockPilot administrator.</>}
     >
-      {/* Outside the form's Suspense boundary, so it runs as the page loads. */}
-      <SessionFragmentScrub />
       <Suspense fallback={<SignInSkeleton />}>
         <SignInForm />
       </Suspense>

@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * /signin with a spent emailed link whose session came back in the URL
  * fragment (docket B39 review). The app never uses that session
- * (lib/supabase/client.test.ts): the page says the link did not work, takes the
- * live tokens out of the address bar, and builds no browser Supabase client to
- * take a session from the URL, which would be a login CSRF path (docket S14).
- * Placeholder tokens only.
+ * (lib/supabase/client.test.ts): the page says the link did not work, and
+ * builds no browser Supabase client to take a session from the URL, which would
+ * be a login CSRF path (docket S14). The root layout, not this page, takes the
+ * live tokens out of the address bar, on every page; its test renders this page
+ * in it (app/layout.session-fragment-scrub.test.tsx). Placeholder tokens only.
  */
 
 const { createClient } = vi.hoisted(() => ({
@@ -23,8 +24,6 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-
-import { SPENT_SESSION_FRAGMENT } from '@/lib/auth/auth-page-notices';
 
 import SignInPage from './page';
 
@@ -42,7 +41,7 @@ afterEach(() => {
 });
 
 describe('the sign-in page and a session in the URL fragment', () => {
-  it('says the link did not work and takes the session out of the address bar', () => {
+  it('says the link did not work, and builds no browser client to take the session', () => {
     window.history.replaceState(null, '', `/signin?error=auth_callback_failed${SESSION}`);
     const { container } = render(<SignInPage />);
     vi.runAllTimers();
@@ -51,7 +50,6 @@ describe('the sign-in page and a session in the URL fragment', () => {
       'That link has expired or was already used.',
     );
     expect(window.location.search).toBe('?error=auth_callback_failed');
-    expect(window.location.hash).toBe(SPENT_SESSION_FRAGMENT);
     expect(createClient).not.toHaveBeenCalled();
   });
 });

@@ -16,8 +16,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * earlier. Either way it keeps no session and leaves the fragment in place.
  *
  * So the sign-in page treats such a fragment as a spent link
- * (lib/auth/auth-page-notices.ts) and takes the tokens out of the address bar
- * (components/auth/session-fragment-scrub.tsx). If this ever fails after an
+ * (lib/auth/auth-page-notices.ts), and the root layout takes the tokens out of
+ * the address bar on every page (components/auth/session-fragment-scrub.tsx).
+ * If this ever fails after an
  * upgrade, do NOT make the page adopt the session (setSession, or a client in
  * the implicit flow): any page could then sign a signed-out browser in to
  * another account by linking to /signin#access_token=<theirs> (login CSRF,

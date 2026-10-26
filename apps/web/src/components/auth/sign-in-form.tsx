@@ -27,7 +27,8 @@ import {
 
 // The fragment is read, not watched: the notice is about the link the browser
 // arrived from, and nothing on this page changes what the fragment says.
-// SessionFragmentScrub swaps a session for SPENT_SESSION_FRAGMENT, and both read
+// SessionFragmentScrub (in the root layout) swaps a session for
+// SPENT_SESSION_FRAGMENT, and both read
 // as a failed link, so every render shows the same note. The server has no
 // fragment, so a server render reads 'none'.
 const unwatched = () => () => {};
