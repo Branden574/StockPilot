@@ -3,7 +3,8 @@ import { wasAnswered } from './adjust-outbox';
 /**
  * Whether the order screen reads the order again after one of its actions
  * failed (Approve, Deny, Mark picked, Hand over, Cancel and the rest, all
- * through the screen's runAction).
+ * through the screen's runAction; and the two return sheets' Release
+ * replacement and Create return, which say why in the sheet).
  *
  * A REFUSAL is the server's answer that the order on screen is not the one it
  * holds: someone else moved it on (409), the viewer's role or warehouse

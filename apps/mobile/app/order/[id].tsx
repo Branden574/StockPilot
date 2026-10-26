@@ -1220,6 +1220,10 @@ export default function OrderDetail() {
       await load();
     } catch (e) {
       setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
+      // The sheet says why; behind it, the order is read again when the
+      // server answered (409 return_changed: the replacement was substituted,
+      // re-issued, picked or sent elsewhere), still busy, as runAction does.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
     } finally {
       setReleaseBusy(false);
     }
@@ -1321,6 +1325,11 @@ export default function OrderDetail() {
       setReturnError(
         extractApiErrorMessage(e, 'Could not create the return. Please try again.'),
       );
+      // Then read the order again when the server answered, still busy: an
+      // over-budget refusal means the returnable budget on screen is stale
+      // (another device returned those units), and the sheet's caps and its
+      // own check (buildReturnPayload) follow the order that is read.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
     } finally {
       setReturnSubmitting(false);
     }
