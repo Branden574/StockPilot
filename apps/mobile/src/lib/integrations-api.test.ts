@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { screenFunction } from './__fixtures__/screen-functions';
 import { ApiError } from './api';
 import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import {
+  INTEGRATIONS_AAL2_REQUIRED,
+  INTEGRATIONS_MFA_REQUIRED,
   disconnect,
   getConnections,
+  integrationsMfaSentence,
   isForbiddenError,
   saveAccountMapping,
 } from './integrations-api';
@@ -105,5 +109,138 @@ describe('Integrations: a refusal from the server is the Access denied state', (
     expect(isForbiddenError({ status: 403 })).toBe(false);
     expect(isForbiddenError(null)).toBe(false);
     expect(isForbiddenError('403')).toBe(false);
+  });
+});
+
+/**
+ * THE MFA GATE (docket B10 review). The server runs it before the permission
+ * check on the mapping save and the disconnect, and answers 403 with
+ * details.reason. Read as Access denied, an owner or admin who only had to
+ * sign in again with their code (or set up a factor) lost the screen to
+ * "Reopen this screen after an admin updates access". The bodies are the
+ * server's own (mfaGateError, forwarded with its details).
+ */
+const STEP_UP = JSON.stringify({
+  error: 'forbidden',
+  message: 'Re-authenticate with MFA before performing this action.',
+  details: { reason: 'aal2_required' },
+});
+const ENROLL = JSON.stringify({
+  error: 'forbidden',
+  message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+  details: { reason: 'mfa_required' },
+});
+const NO_PERMISSION = JSON.stringify({
+  error: 'forbidden',
+  message: 'Missing permission: integrations:manage',
+});
+const MAPPING = { billExpense: '1', inventoryAsset: '2', valuationOffset: '3' };
+
+describe("Integrations: the MFA gate's refusal is not Access denied", () => {
+  it.each([
+    ['sign in again with the code', STEP_UP, INTEGRATIONS_AAL2_REQUIRED],
+    ['set up a factor', ENROLL, INTEGRATIONS_MFA_REQUIRED],
+  ])('%s: the save and the disconnect say so', async (_what, body, sentence) => {
+    respondWith(403, body);
+    for (const call of [
+      () => saveAccountMapping('quickbooks', MAPPING),
+      () => disconnect('quickbooks'),
+    ]) {
+      const err = await call().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(isForbiddenError(err)).toBe(false);
+      expect(integrationsMfaSentence(err)).toBe(sentence);
+    }
+  });
+
+  it('a missing permission, the module off and a 403 for any other reason stay Access denied', async () => {
+    for (const body of [
+      NO_PERMISSION,
+      MODULE_OFF,
+      JSON.stringify({ error: 'forbidden', message: 'No.', details: { reason: 'other' } }),
+      '<!doctype html><title>Forbidden</title>',
+    ]) {
+      respondWith(403, body);
+      const err = await disconnect('quickbooks').catch((e: unknown) => e);
+      expect(isForbiddenError(err)).toBe(true);
+      expect(integrationsMfaSentence(err)).toBeNull();
+    }
+  });
+
+  it('the reason on any status but 403, or on a value that is not an error, is not the gate', () => {
+    const reason = { reason: 'aal2_required' };
+    expect(integrationsMfaSentence(new ApiError('x', 401, 'unauthenticated', reason))).toBeNull();
+    expect(integrationsMfaSentence({ status: 403, details: reason })).toBeNull();
+    expect(integrationsMfaSentence(new Error(REQUEST_TIMED_OUT_COPY))).toBeNull();
+    expect(integrationsMfaSentence(null)).toBeNull();
+  });
+});
+
+describe("Settings > Integrations (app/(drawer)/settings/integrations.tsx) on the MFA gate's refusal", () => {
+  const SCREEN = 'app/(drawer)/settings/integrations.tsx';
+
+  /** The screen's handlers, RUN from its source with the real api() under them. */
+  function handlers() {
+    const alert = vi.fn();
+    const setForbidden = vi.fn();
+    const deps = {
+      PROVIDER: 'quickbooks',
+      Alert: { alert },
+      setForbidden,
+      load: vi.fn(async () => undefined),
+      isForbiddenError,
+      integrationsMfaSentence,
+      // onSave's form state
+      saving: false,
+      billExpense: MAPPING.billExpense,
+      inventoryAsset: MAPPING.inventoryAsset,
+      valuationOffset: MAPPING.valuationOffset,
+      setSaving: vi.fn(),
+      saveAccountMapping,
+      disconnectConnection: disconnect,
+    };
+    return {
+      alert,
+      setForbidden,
+      onSave: screenFunction<() => Promise<void>>(SCREEN, 'onSave', deps),
+      onDisconnect: screenFunction<() => void>(SCREEN, 'onDisconnect', deps),
+    };
+  }
+
+  /** Disconnect asks first; this taps its Disconnect button. */
+  async function confirmDisconnect(alert: ReturnType<typeof vi.fn>) {
+    const buttons = alert.mock.calls[0]![2] as { text: string; onPress?: () => Promise<void> }[];
+    await buttons.find((b) => b.text === 'Disconnect')!.onPress!();
+  }
+
+  it.each([
+    [STEP_UP, INTEGRATIONS_AAL2_REQUIRED],
+    [ENROLL, INTEGRATIONS_MFA_REQUIRED],
+  ])('Save mapping and Disconnect say what to do, and the screen stays', async (body, sentence) => {
+    respondWith(403, body);
+    const save = handlers();
+    await save.onSave();
+    expect(save.setForbidden).not.toHaveBeenCalled();
+    expect(save.alert.mock.calls).toEqual([['Could not save', sentence]]);
+
+    const drop = handlers();
+    drop.onDisconnect();
+    await confirmDisconnect(drop.alert);
+    expect(drop.setForbidden).not.toHaveBeenCalled();
+    expect(drop.alert.mock.calls[1]).toEqual(['Could not disconnect', sentence]);
+  });
+
+  it('a missing permission is still the Access denied state, with no alert', async () => {
+    respondWith(403, NO_PERMISSION);
+    const save = handlers();
+    await save.onSave();
+    expect(save.setForbidden).toHaveBeenCalledWith(true);
+    expect(save.alert).not.toHaveBeenCalled();
+
+    const drop = handlers();
+    drop.onDisconnect();
+    await confirmDisconnect(drop.alert);
+    expect(drop.setForbidden).toHaveBeenCalledWith(true);
+    expect(drop.alert).toHaveBeenCalledTimes(1);
   });
 });
