@@ -360,13 +360,21 @@ describe('wiring: every owner and session-presence read goes through the stored 
     const enqueue = fnBody(code(read('./queue.ts')), 'export async function enqueue(');
     expect(enqueue).toContain('await outboxWriteScope()');
     expect(enqueue).not.toContain('liveOutboxScope');
-    const update = fnBody(
-      code(read('./cycle-count-cache.ts')),
-      'export async function updateLocalLine(',
-    );
-    expect(update).toContain('await outboxWriteScope()');
-    expect(update).not.toContain('liveOutboxScope');
+    // The count outbox's one writer (a count or a clear of it, B4a), and
+    // both of its callers going through it.
+    const cache = code(read('./cycle-count-cache.ts'));
+    const write = fnBody(cache, 'async function queueLineEdit(');
+    expect(write).toContain('await outboxWriteScope()');
+    expect(write).not.toContain('liveOutboxScope');
     // No "nobody" branch that could delete another account's held row.
-    expect(update).not.toMatch(/\? is null/);
+    expect(write).not.toMatch(/\? is null/);
+    expect(fnBody(cache, 'export async function updateLocalLine(')).toContain(
+      "return queueLineEdit(lineId, { kind: 'count', counted });",
+    );
+    expect(fnBody(cache, 'export async function clearLocalLine(')).toContain(
+      "return queueLineEdit(lineId, { kind: 'clear' });",
+    );
+    // Nothing else in the cache writes an outbox row.
+    expect(cache.match(/insert into pending_actions/g)).toHaveLength(1);
   });
 });

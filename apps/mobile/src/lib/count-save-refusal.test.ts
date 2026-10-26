@@ -1,6 +1,8 @@
+import { countFromText } from '@stockpilot/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
+import { reviewNotACountMessage } from './count-box-words';
 import { COUNT_NOT_SAVED_ON_PHONE, countNotSavedAlert } from './count-save-refusal';
 import {
   OutboxOwnerUnknownError,
@@ -89,7 +91,12 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
         flushAll: vi.fn(),
       }),
       SAVE_DEBOUNCE_MS: 300,
-      countFromBox: screenFunction(COUNT, 'countFromBox', {}),
+      // The screen's own box rules (B4a: an emptied box, core countFromText).
+      countFromBox: screenFunction(COUNT, 'countFromBox', {
+        isEmptyBox: screenFunction(COUNT, 'isEmptyBox', {}),
+        countFromText,
+      }),
+      isEmptyBox: screenFunction(COUNT, 'isEmptyBox', {}),
       updateLocalLine,
       countNotSavedAlert,
       reportPhoneSaveFailure,
@@ -312,6 +319,7 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
       const setSheet = vi.fn();
       const confirmSheet = screenFunction<() => Promise<void>>(SCANNER, 'confirmSheet', {
         sheet: { line: { id: 'l1' }, qty: '4' },
+        countFromText,
         Alert: { alert: vi.fn() },
         recordCount: vi.fn(async () => wasSaved),
         setSheet,
@@ -356,6 +364,8 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the serv
     });
     const run = screenFunction<() => Promise<void>>(AI_SCAN, 'onConfirm', {
       phase: reviewPhase,
+      overrideNotACount: screenFunction(AI_SCAN, 'overrideNotACount', { countFromText }),
+      reviewNotACountMessage,
       lineCountToWrite: (rl: { override: string }) => Number(rl.override),
       Alert: { alert },
       setPhase,

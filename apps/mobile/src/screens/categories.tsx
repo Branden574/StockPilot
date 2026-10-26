@@ -2,6 +2,8 @@ import { Tag } from 'lucide-react-native';
 import * as React from 'react';
 import { View } from 'react-native';
 
+import { safeHexColor } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
@@ -215,7 +217,9 @@ export default function Categories() {
  *  the well; the old fixed grey was the faint ink4, 3.0:1 on it in light). */
 function CategoryCard({ category, depth = 0 }: { category: Category; depth?: number }) {
   const { c } = useTheme();
-  const swatch = category.color ?? c.ink3;
+  // Only the #rrggbb form the app writes: the column takes any text through
+  // the Data API, and anything else draws the no-colour mark (docket T14).
+  const swatch = safeHexColor(category.color) ?? c.ink3;
   const isChild = depth > 0;
   return (
     <View style={{ marginLeft: depth * 20 }}>

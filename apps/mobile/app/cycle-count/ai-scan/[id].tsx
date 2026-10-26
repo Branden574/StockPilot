@@ -21,11 +21,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { countFromText } from '@stockpilot/core';
+
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { Button } from '@/components/ui/button';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { reviewNotACountMessage } from '@/lib/count-box-words';
 import {
   getCycleCount,
   mirrorRecordedCount,
@@ -85,16 +88,29 @@ type Phase =
  * A box the person emptied holds no number, so nothing is written for it:
  * Number('') is 0, and an emptied box used to record a count of 0, which a
  * post then applies as the loss of every one expected (the count scanner's
- * fix, P3.8; the count screen never saves an empty box either).
+ * fix, P3.8).
+ *
+ * The typed number is read by the rule every count box reads by (core
+ * countFromText) and written as typed, decimals and all, as the count screen
+ * saves it (counted_quantity keeps four decimal places). It used to be rounded
+ * down: 2.7 was written as 2, and 0.5 as a count of 0. A box that holds
+ * something that is not a number writes nothing either; Confirm names it
+ * first (overrideNotACount).
  */
 function lineCountToWrite(rl: ReviewLine): number | null {
-  if (rl.override !== null) {
-    if (rl.override.trim() === '') return null;
-    const n = Number(rl.override);
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
-  }
+  if (rl.override !== null) return countFromText(rl.override);
   if (rl.result && rl.result.confidence >= AI_CONFIDENCE_THRESHOLD) return rl.result.count;
   return null;
+}
+
+/**
+ * Whether the person typed something over the AI's count that is not a
+ * number (a second point, a comma, a lone minus sign). It writes nothing, and
+ * nothing else would say so: the line kept the count it had while the person
+ * read their own number in the box. Confirm names these lines and waits.
+ */
+function overrideNotACount(rl: ReviewLine): boolean {
+  return rl.override !== null && rl.override.trim() !== '' && countFromText(rl.override) === null;
 }
 
 /**
@@ -284,6 +300,18 @@ export default function AiScanScreen() {
 
   async function onConfirm() {
     if (phase.kind !== 'review') return;
+
+    // A box that holds something that is not a number writes nothing, so a
+    // line the person typed over would silently keep its old count. Name
+    // them, and write nothing until each box holds a count or nothing.
+    const notCounts = phase.reviewLines.filter(overrideNotACount);
+    if (notCounts.length > 0) {
+      Alert.alert(
+        'Check the counts',
+        reviewNotACountMessage(notCounts.map((rl) => rl.line.itemName)),
+      );
+      return;
+    }
 
     // Decide each line's final count (lineCountToWrite):
     //   • User override wins (an emptied box writes nothing, never a 0).

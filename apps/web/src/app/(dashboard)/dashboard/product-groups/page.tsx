@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { can } from '@stockpilot/core';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ProductGroupRollupList } from '@/components/inventory/product-group-rollup-list';
 import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
@@ -44,7 +44,7 @@ export default async function ProductGroupsPage(props: {
 }) {
   const moduleAccess = await checkModuleAccess('sports');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="sports" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="sports" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   if (!can(ctx, 'sports:manage')) redirect('/dashboard');

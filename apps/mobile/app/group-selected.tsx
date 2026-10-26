@@ -37,6 +37,7 @@ import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import {
   describeGroupingError,
+  groupChoiceRadioNamesById,
   groupSelectedReviewKey,
   keyedGroupingBody,
   notifyDisplayGroupsChanged,
@@ -49,6 +50,7 @@ import {
   type GroupSelectedParams,
   type GroupingIdentity,
   type PendingGroupingBody,
+  type PhoneGroupingRecord,
   type PhoneGroupingReview,
   type ReviewLoadState,
 } from '@/lib/display-groups';
@@ -316,6 +318,33 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
     return full ? [full] : [];
   });
   const leftOutReason = new Map((plan?.leftOut ?? []).map((l) => [l.id, l.reason]));
+  // A record in another group than the target: its row asks to move it here
+  // or leave it out (P10).
+  const otherGroupOf = (r: Pick<PhoneGroupingRecord, 'displayGroup'>) =>
+    r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+  // The rows that carry those two radios, in the order listed. They are read
+  // from the plan's records (the review's own, in that order) rather than
+  // from the list built above, which the React Compiler lint cannot tell is
+  // left unchanged after the names below are worked out
+  // (preserve-manual-memoization). A choice made in them never changes which
+  // rows these are, so the key holds from one tap to the next.
+  const choiceIds = (plan?.records ?? [])
+    .filter((r) => {
+      const reason = leftOutReason.get(r.id);
+      return (!reason || reason === 'chosen') && otherGroupOf(r) !== null;
+    })
+    .map((r) => r.id)
+    .join(',');
+  // Each of those radios' names, by record: core's words for the record,
+  // told apart from the other records here whose names a screen reader says
+  // the same way by the words of their lines, as on the web (redesign Stage
+  // 6). Worked out once per review and target, not on every tap or every
+  // letter typed.
+  const choiceNames = React.useMemo(
+    () =>
+      groupChoiceRadioNamesById(choiceIds ? choiceIds.split(',') : [], review?.records ?? [], view),
+    [choiceIds, review, view],
+  );
   const siblings = plan?.conflicts.sameSkuSiblings ?? [];
   const editions = plan?.conflicts.editions ?? null;
   const showEditions = editions !== null && (editions.editions > 1 || editions.unknown > 0);
@@ -345,6 +374,12 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
         </View>
       </SafeAreaView>
 
+      {/* The keyboard: the Group name box sits under the records and the
+          keyboard covered it while it was being typed in (the redesign drew
+          it about 20pt lower, so the typed words went under the keyboard's
+          edge). The scroll insets itself by the keyboard on iOS and brings
+          the box being typed in into view above it, as on New count. The
+          footer stays pinned under the keyboard; Return puts it away. */}
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 20,
@@ -353,6 +388,7 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
         }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
       >
         {!params ? (
           <Body muted size={13.5}>
@@ -403,8 +439,8 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
             <Card padding={0}>
               {records.map((r, i) => {
                 const reason = leftOutReason.get(r.id);
-                const other =
-                  r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+                const other = otherGroupOf(r);
+                const names = choiceNames.get(r.id);
                 const inTarget = !!targetGroupId && r.displayGroup?.id === targetGroupId;
                 const moving = decisions.moveIds.has(r.id);
                 const leaving = decisions.leaveOutIds.has(r.id);
@@ -437,22 +473,21 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
                             {GROUP_COPY.alreadyInTarget}
                           </Body>
                         ) : null}
-                        {(!reason || reason === 'chosen') && other ? (
+                        {names && other ? (
                           // One explicit choice per record (P10): move it
                           // here, or leave it out (it stays in its group).
+                          // Each radio names its record, so two records in
+                          // one group are told apart (R2-5), and two records
+                          // with one name by the words of their lines
+                          // (redesign Stage 6).
                           <View accessibilityRole="radiogroup" style={{ gap: 2 }}>
                             <Body size={12.5} color={c.ink}>
                               {GROUP_COPY.otherGroup(other.name)}
                             </Body>
                             {(
                               [
-                                ['move', moving, GROUP_COPY.moveOne, GROUP_COPY.moveOneFor(r.name)],
-                                [
-                                  'leave',
-                                  leaving,
-                                  GROUP_COPY.leaveOutOne,
-                                  GROUP_COPY.leaveOutOneFor(r.name),
-                                ],
+                                ['move', moving, GROUP_COPY.moveOne, names.move],
+                                ['leave', leaving, GROUP_COPY.leaveOutOne, names.leave],
                               ] as const
                             ).map(([choice, on, label, a11yLabel]) => (
                               <Pressable

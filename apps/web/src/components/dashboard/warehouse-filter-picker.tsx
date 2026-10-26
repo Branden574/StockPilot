@@ -42,6 +42,10 @@ export function WarehouseFilterPicker({
   const [pending, startTransition] = React.useTransition();
   const active = warehouses.find((w) => w.id === activeId) ?? null;
   const allLabel = allWarehousesLabel(warehouseLabel, warehousePluralLabel);
+  const shown = active ? active.name : allLabel;
+  // The whole name, for a screen reader and as the hover title, even where the
+  // bar cuts the visible name short (a long warehouse name on a phone).
+  const name = `Filter by ${warehouseLabel.toLowerCase()}: ${shown}`;
 
   function pick(id: string | null) {
     startTransition(async () => {
@@ -56,15 +60,26 @@ export function WarehouseFilterPicker({
 
   return (
     <DropdownMenu>
+      {/* min-w-16: however narrow the bar, the button keeps the room of its
+          icon, its padding and its chevron (2 + 20 + 14 + 8 + 8 + 12 = 64
+          px), so the chevron is always inside it; only the name gives way. */}
       <DropdownMenuTrigger
-        className="border-border bg-card flex h-8 min-w-0 max-w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
+        className="border-border bg-card flex h-8 min-w-16 max-w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
         disabled={pending}
-        aria-label={`Filter by ${warehouseLabel.toLowerCase()}`}
+        aria-label={name}
+        title={name}
       >
-        <Warehouse aria-hidden strokeWidth={1.6} className="size-3.5 shrink-0" />
+        {/* Left out on a phone narrower than 390px (a top bar under 358px
+            inside; the bar is the container), where its 22px is what keeps
+            "All warehouses" whole beside the 44px touch buttons. */}
+        <Warehouse
+          aria-hidden
+          strokeWidth={1.6}
+          className="@max-[358px]:hidden size-3.5 shrink-0"
+        />
         {/* min-w-0: in a narrow top bar the name truncates rather than
             pushing the buttons after it past the edge. */}
-        <span className="min-w-0 max-w-[160px] truncate">{active ? active.name : allLabel}</span>
+        <span className="min-w-0 max-w-[160px] truncate">{shown}</span>
         <ChevronDown
           aria-hidden
           strokeWidth={2}

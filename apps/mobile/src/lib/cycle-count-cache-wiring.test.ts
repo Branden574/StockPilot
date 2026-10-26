@@ -53,9 +53,11 @@ describe('one live outbox row per line (SP-021)', () => {
   // unchanged, into supersedeQueuedCounts, which mirrorRecordedCount (the AI
   // shelf scan's copy of a count the server recorded) runs too, so the rule
   // is written once. outbox-owner.sqlite.test.ts runs both on a real SQLite.
-  it('updateLocalLine supersedes earlier pending/failed rows for the same line inside the transaction', () => {
+  it('a line edit (a count, or a clear of it) supersedes earlier pending/failed rows for the same line inside the transaction', () => {
+    // updateLocalLine and clearLocalLine both write through queueLineEdit
+    // (session-scope.test.ts pins the delegation).
     const fn = cache.slice(
-      cache.indexOf('export async function updateLocalLine'),
+      cache.indexOf('async function queueLineEdit('),
       cache.indexOf('async function supersedeQueuedCounts'),
     );
     const tx = fn.indexOf('await withDbTransaction(db, async () => {');

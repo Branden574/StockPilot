@@ -1,8 +1,8 @@
 /**
  * Multi-photo upload for a maintenance request (Task 19). Mirrors the WEB
  * upload sequence step-for-step (maintenance-photos-panel.tsx's `uploadOne`):
- * resize/transcode -> mint -> PUT master (+ best-effort PUT thumb) ->
- * finalize.
+ * resize/transcode -> mint -> PUT master -> finalize (the server makes the
+ * thumbnail; B29 dropped the client's own).
  *
  * THE STEPS LIVE IN signed-photo-upload.ts (F1-4). `uploadSignedPhoto` there
  * is the one orchestration (and it documents the native-PUT and
@@ -63,8 +63,11 @@ export async function uploadMaintenancePhoto(
         err instanceof ApiError && err.status === 409
           ? new UploadError('rate_limited', err.message)
           : err,
-      // The maintenance server still takes a client-made 400px thumbnail.
-      thumbUploadUrl: (ticket) => ticket.thumbSignedUrl,
+      // No thumbUploadUrl (B29): finalize makes the thumbnail from the
+      // cleaned photo and writes it over anything sent to that name
+      // (2026-09-27), as exception evidence's does, so the phone no longer
+      // makes or sends one. The mint still answers a thumbSignedUrl: phones
+      // on older updates PUT to it, and finalize replaces what they sent.
       // Finalize downloads + magic-byte-verifies before recording a row, so a
       // failure is a refusal, not a dropped connection. `kind` threaded
       // through explicitly (Task 10): this IS the step that records the kind

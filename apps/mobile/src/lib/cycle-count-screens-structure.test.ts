@@ -4,6 +4,8 @@ import * as vm from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { countFromText } from '@stockpilot/core';
+
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
 import { buttonTone, meterColor, meterTrack, pillTone } from '../components/ui/tones';
 import {
@@ -15,6 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { notACountMessage, reviewNotACountMessage } from './count-box-words';
 import { palette, type Palette } from './theme';
 
 /**
@@ -184,6 +187,8 @@ function screenFunctions(
   names: string[],
   /** Top-level constants the functions read (taken from the same source). */
   consts: string[] = [],
+  /** What the functions import, by name (the real imports, from the test). */
+  imports: Record<string, unknown> = {},
 ): Record<string, (...args: unknown[]) => unknown> {
   const sf = treeOf(file);
   const constParts = sf.statements
@@ -207,7 +212,10 @@ function screenFunctions(
     `${[...constParts, ...parts].join('\n')}\n({ ${names.join(', ')} });`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
-  return new vm.Script(js).runInNewContext({}) as Record<string, (...args: unknown[]) => unknown>;
+  return new vm.Script(js).runInNewContext({ ...imports }) as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
 }
 
 /** An opaque colour laid at `alpha` over another, as '#rrggbb'. */
@@ -331,6 +339,8 @@ describe('count screen: every word, name and role survives the restyle', () => {
     'Could not post',
     'Posted',
     'Variance adjustments applied.',
+    // B4(a): a box that holds something that is not a count.
+    'Check the counts',
   ])('says "%s"', (word) => {
     expect(words).toContain(word);
   });
@@ -421,17 +431,22 @@ describe('count screen: offline capture and the Post rule', () => {
   // Post is refused offline, then while THIS count has unsynced edits (a
   // count still waiting for its save among them), and only then asks to
   // confirm and posts.
-  it('Post is blocked offline and while this count has unsynced edits', () => {
+  it('Post is blocked offline, while a box holds something that is not a count, and while this count has unsynced edits', () => {
     const body = functionBody(COUNT, 'postCount');
     const offline = body.indexOf("if (syncSnapshot.status === 'offline') {");
-    const unsaved = body.indexOf('const unsaved = hasUnsavedCount(draft);');
+    const notCount = body.indexOf('const notCounts = linesNotACount(draft, lines);');
+    const unsaved = body.indexOf('const unsaved = hasUnsavedEdit(draft);');
     const flush = body.indexOf('if (unsaved) lineSaver.flushAll();');
     const read = body.indexOf('pending = await pendingCountFor(header.id);');
     const pending = body.indexOf('if (unsaved || pending > 0) {');
     const confirm = body.indexOf("'Post cycle count?'");
     const post = body.indexOf('await postCycleCount(header.id);');
     expect(offline).toBeGreaterThan(-1);
-    expect(unsaved).toBeGreaterThan(offline);
+    expect(notCount).toBeGreaterThan(offline);
+    expect(body).toMatch(
+      /if \(notCounts\.length > 0\) \{\s*Alert\.alert\('Check the counts', notACountMessage\(notCounts\.map\(\(l\) => l\.itemName\)\)\);\s*return;\s*\}/,
+    );
+    expect(unsaved).toBeGreaterThan(notCount);
     expect(flush).toBeGreaterThan(unsaved);
     expect(read).toBeGreaterThan(flush);
     expect(pending).toBeGreaterThan(read);
@@ -448,18 +463,37 @@ describe('count screen: offline capture and the Post rule', () => {
   // Fix: a count typed within SAVE_DEBOUNCE_MS (300 ms) of tapping Post was
   // neither saved nor queued, so Post was not blocked; the post could reach
   // the server before that line's count, which then posted without it and
-  // had its queued count refused. The screen's own rule, run: which boxes
-  // hold a count, and whether one is still waiting for its save.
-  it('a count still waiting for its save blocks Post; an emptied box or a lone minus does not', () => {
-    const { countFromBox, hasUnsavedCount } = screenFunctions(COUNT, [
-      'countFromBox',
-      'hasUnsavedCount',
-    ]);
+  // had its queued count refused. The screen's own rules, run: what a box
+  // counts as, and whether an edit is still waiting for its save.
+  //
+  // Every count box reads by core countFromText: a plain number of zero or
+  // more, never the number in front of a second point or a comma (parseFloat
+  // saved "1.2.3" as 1.2 and "2,5" as 2), and never a sign, exponent or other
+  // base (the web's Number() saved "1e3" as 1000).
+  it('a box holds a count only when it holds a plain number of zero or more', () => {
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox'], [], {
+      countFromText,
+    });
     const verdicts = Object.fromEntries(
-      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', '-', 'abc', '.'].map((raw) => [
-        raw,
-        countFromBox!(raw),
-      ]),
+      [
+        '',
+        '   ',
+        '0',
+        ' 0 ',
+        '12',
+        '2.5',
+        '.25',
+        '-1',
+        '-',
+        'abc',
+        '.',
+        '1.2.3',
+        '2,5',
+        '1e3',
+        '0x10',
+        '+5',
+        '5abc',
+      ].map((raw) => [raw, countFromBox!(raw)]),
     );
     expect(verdicts).toEqual({
       '': null,
@@ -468,16 +502,108 @@ describe('count screen: offline capture and the Post rule', () => {
       ' 0 ': 0,
       '12': 12,
       '2.5': 2.5,
+      '.25': 0.25,
       '-1': null,
       '-': null,
       abc: null,
       '.': null,
+      '1.2.3': null,
+      '2,5': null,
+      '1e3': null,
+      '0x10': null,
+      '+5': null,
+      '5abc': null,
     });
-    expect(hasUnsavedCount!({})).toBe(false);
-    expect(hasUnsavedCount!({ l1: '' })).toBe(false);
-    expect(hasUnsavedCount!({ l1: '', l2: '-' })).toBe(false);
-    expect(hasUnsavedCount!({ l1: '', l2: '7' })).toBe(true);
-    expect(hasUnsavedCount!({ l1: '0' })).toBe(true);
+    expect(importsFrom(COUNT, '@stockpilot/core')).toContain('countFromText');
+    expect(codeOnly(src)).not.toMatch(/parseFloat/);
+  });
+
+  // B4(a): a box's draft is dropped only once its own save has finished (the
+  // pins below: setDraft(withoutSavedDraft) runs after the awaited
+  // updateLocalLine or clearLocalLine, whose transaction queues the outbox
+  // row), so any draft left is a save still waiting or running, and Post
+  // waits for it. Post used to judge an emptied box by the count the line
+  // showed, which is set only when its save finishes: a count typed and then
+  // emptied while that count's write still waited its turn (behind a
+  // snapshot pull) counted as nothing to save, Post listed the line as "not
+  // counted will be skipped", and the count was queued and sent after.
+  it('any box whose edit has not finished saving blocks Post, whatever its line shows', () => {
+    const { hasUnsavedEdit } = screenFunctions(COUNT, ['hasUnsavedEdit']);
+    expect(hasUnsavedEdit!({})).toBe(false);
+    // A count waiting for its save, a count of 0 among them.
+    expect(hasUnsavedEdit!({ l1: '7' })).toBe(true);
+    expect(hasUnsavedEdit!({ l1: '0' })).toBe(true);
+    // An emptied box: its clear is waiting where the line has a count, and
+    // where the line is still shown uncounted, the count typed a moment ago
+    // may still be on its way to the phone's store (the window above).
+    expect(hasUnsavedEdit!({ l1: '' })).toBe(true);
+    expect(hasUnsavedEdit!({ l2: '   ' })).toBe(true);
+    // The line's count on screen plays no part: the rule takes no lines.
+    expect(functionBody(COUNT, 'hasUnsavedEdit')).toBe(
+      '{\n  return Object.keys(draft).length > 0;\n}',
+    );
+    // Post asks it of the drafts alone, after naming the boxes that hold
+    // something that is not a count (a lone minus is never saved, so its
+    // draft stays: Post names it rather than waiting on it).
+    expect(functionBody(COUNT, 'postCount')).toContain('const unsaved = hasUnsavedEdit(draft);');
+    expect(codeOnly(src)).not.toMatch(/hasUnsavedCount/);
+  });
+
+  // B4(a): a box holding something that is not a count saves nothing, so its
+  // line kept the count saved before and Post applied a number the box did
+  // not show (emptying a box and then tapping the point key left it that
+  // way). Post now names those lines and waits. The screen's own rules, run.
+  it('Post names the boxes that hold something that is not a count, and says what to do', () => {
+    const { linesNotACount } = screenFunctions(
+      COUNT,
+      ['isEmptyBox', 'countFromBox', 'linesNotACount'],
+      [],
+      { countFromText },
+    );
+    const lines = [
+      { id: 'l1', itemName: 'Pencils', counted: 5 },
+      { id: 'l2', itemName: 'Erasers', counted: null },
+      { id: 'l3', itemName: 'Rulers', counted: 2 },
+    ];
+    const named = (draft: Record<string, string>) =>
+      (linesNotACount!(draft, lines) as { id: string }[]).map((l) => l.id);
+    // A count, an emptied box and an untouched box: nothing to name.
+    expect(named({ l1: '7', l2: '', l3: ' ' })).toEqual([]);
+    expect(named({})).toEqual([]);
+    // A stray point, a lone minus, a negative number, words: named, in the
+    // screen's order.
+    expect(named({ l3: '-', l1: '.' })).toEqual(['l1', 'l3']);
+    expect(named({ l2: '-4', l1: 'abc' })).toEqual(['l1', 'l2']);
+    // A second point or a comma: named, never saved as the number before it.
+    expect(named({ l1: '1.2.3', l2: '2,5', l3: '4' })).toEqual(['l1', 'l2']);
+    // The words, shared with the AI review (count-box-words.ts).
+    expect(importsFrom(COUNT, '@/lib/count-box-words')).toEqual(['notACountMessage']);
+    expect(notACountMessage(['Pencils'])).toBe(
+      'The count box for Pencils does not hold a number. Type the count, or empty the box to leave the line uncounted.',
+    );
+    expect(notACountMessage(['Pencils', 'Erasers'])).toBe(
+      'The count boxes for Pencils and Erasers do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+    expect(notACountMessage(['A', 'B', 'C'])).toBe(
+      'The count boxes for A, B and C do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+    expect(notACountMessage(['A', 'B', 'C', 'D', 'E'])).toBe(
+      'The count boxes for A, B, C and 2 more do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+  });
+
+  // A finished save used to drop its box's draft unconditionally, so a box
+  // typed in again while the save ran (emptied right after a count was
+  // saved, say) flicked back to the older value until the newer save
+  // landed, and did not count as unsaved meanwhile.
+  it("a finished save drops its box's draft only while the box still holds what was saved", () => {
+    const { withoutSavedDraft } = screenFunctions(COUNT, ['withoutSavedDraft']);
+    const draft = { l1: '5', l2: '9' };
+    expect(withoutSavedDraft!(draft, 'l1', '5')).toEqual({ l2: '9' });
+    // Typed again while the save ran: the newer text stays, the same object.
+    expect(withoutSavedDraft!(draft, 'l1', '')).toBe(draft);
+    expect(withoutSavedDraft!({ l1: '' }, 'l1', '')).toEqual({});
+    expect(withoutSavedDraft!({}, 'l1', '5')).toEqual({});
   });
 
   // The live variance reads a box by the same rule, so a negative number
@@ -491,12 +617,30 @@ describe('count screen: offline capture and the Post rule', () => {
 
   // Re-pinned by docket B10 (the save was a bare `await updateLocalLine`): a
   // count the phone did not save is said, and the box keeps it
-  // (count-save-refusal.test.ts runs the saver).
+  // (count-save-refusal.test.ts runs the saver). Merged with B4a: an emptied
+  // box clears the line's saved count first (pinned below).
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) return;\s*try \{\s*await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}[\s\S]*?void cycleCountSync\.forceSync\(\);/,
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*try \{\s*await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
+  });
+
+  // B4(a): an emptied box kept the line's saved count (the saver returned
+  // on it), and Post applied that count while the box showed nothing. The
+  // saver now clears it, as the web count screen does: clearLocalLine writes
+  // the line uncounted and unsynced and queues the clear in one transaction
+  // (only when there is a count to clear), and the clear syncs like a count.
+  // Anything else that is not a count still saves nothing.
+  it("an emptied box clears the line's saved count, which syncs like a count; a lone minus saves nothing", () => {
+    expect(importsFrom(COUNT, '@/lib/cycle-count-cache')).toContain('clearLocalLine');
+    expect(codeOnly(src)).toMatch(
+      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*const cleared = await clearLocalLine\(lineId\);\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
+    );
+    // The box then shows the line's saved count, which is none.
+    expect(codeOnly(src)).toMatch(
+      /const display = isDrafting\s*\? draftVal\s*: l\.counted !== null\s*\? String\(l\.counted\)\s*: '';/,
+    );
   });
 
   // Every box that holds a count is saved before the confirm, so the lines
@@ -840,7 +984,8 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     'Search items to count',
     'Clear search',
     'Couldn&rsquo;t load',
-    '. Check your connection and pull back in.',
+    '. Check your connection and try again.',
+    'Try again',
     'on hand',
     'Load more (',
     'remaining)',
@@ -908,6 +1053,36 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     expect(code).not.toContain("console.warn('count picker', error);");
   });
 
+  // B4(c): a failed read told the person to "pull back in", but the screen
+  // had no pull-to-refresh and no button, so the only way to read again was
+  // to leave and come back. Try again now runs the page-1 read again for the
+  // same tab, search and workspace. Mutations caught: the button's press not
+  // bumping the attempt, or the attempt missing from the read's dependencies.
+  it('a failed read offers Try again, which runs the page-1 read again', () => {
+    const { sf, els } = elements(
+      PICKER,
+      (el, s) => tagOf(el, s) === 'Button' && textOf(el, s) === 'Try again',
+    );
+    expect(els).toHaveLength(1);
+    const retry = els[0]!;
+    // The shared small Button, which frames itself at 44pt (P2.5c).
+    expect(attrText(retry, 'size', sf)).toBe('sm');
+    expect(attrText(retry, 'variant', sf)).toBe('outline');
+    expect(attrText(retry, 'onPress', sf)).toBe('() => setAttempt((n) => n + 1)');
+    // Only on the failed read, under its sentence.
+    expect(code).toMatch(
+      /status === 'failed' \? \(\s*<View style=\{styles\.failed\}>\s*<Body muted size=\{13\} style=\{styles\.failedText\}>\s*Couldn&rsquo;t load \{noun\}\. Check your connection and try again\.\s*<\/Body>\s*<Button variant="outline" size="sm" onPress=\{\(\) => setAttempt\(\(n\) => n \+ 1\)\}>\s*Try again\s*<\/Button>\s*<\/View>\s*\) : rows\.length === 0/,
+    );
+    // The bump runs the page-1 read again: the effect that shows the spinner
+    // and reads page 1 depends on it.
+    expect(code).toContain('const [attempt, setAttempt] = React.useState(0);');
+    expect(code).toMatch(
+      /setStatus\('loading'\);\s*const t = setTimeout\(\(\) => \{\s*void \(async \(\) => \{\s*const res = await fetchPage\(0\);[\s\S]*?\}, \[fetchPage, activeOrgId, attempt\]\);/,
+    );
+    // Nothing offers a pull the screen does not have.
+    expect(wordsOf(PICKER).join(' ')).not.toMatch(/\bpull\b/i);
+  });
+
   it('the tabs are tabs (role and selected state), 44pt segments on a recessed track', () => {
     const { sf, els } = elements(
       PICKER,
@@ -925,9 +1100,9 @@ describe('count picker: the shared selection, as checkbox rows', () => {
   // (it was a pressable on the ink colour with no role).
   it('Start count is the shared ink Button, off with no picks or while starting', () => {
     const { sf, els } = elements(PICKER, (el, s) => tagOf(el, s) === 'Button');
-    expect(els).toHaveLength(1);
-    const start = els[0]!;
-    expect(textOf(start, sf)).toBe('Start count');
+    // Start count, and Try again on a failed read (below).
+    expect(els.map((el) => textOf(el, sf))).toEqual(['Start count', 'Try again']);
+    const start = els.find((el) => textOf(el, sf) === 'Start count')!;
     expect(attrText(start, 'variant', sf)).toBeUndefined();
     expect(attrText(start, 'onPress', sf)).toBe('start');
     expect(attrText(start, 'disabled', sf)).toBe('busy || picks.length === 0');
@@ -1065,6 +1240,40 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(styleBlock(COUNTS_TAB, 'filterChip')).toMatch(/minHeight: MIN_TAP\b/);
   });
 
+  // B4(d): the prompt offered Pick books with no module check, so in an
+  // organization without the Books module it opened a Books screen that is
+  // not in its tab bar: a dead end. Books is offered, and named in the empty
+  // list's hint, only where the module is on, read from the module set the
+  // tab bar and the side menu gate with. The screen's own helpers, run.
+  it('Start a cycle count offers Books only where the Books module is on', () => {
+    const { startCountChoices, startCountHint } = screenFunctions(COUNTS_TAB, [
+      'startCountChoices',
+      'startCountHint',
+    ]);
+    expect(startCountChoices!(true)).toEqual([
+      { text: 'Pick items', path: '/inventory' },
+      { text: 'Pick books', path: '/books' },
+    ]);
+    expect(startCountChoices!(false)).toEqual([{ text: 'Pick items', path: '/inventory' }]);
+    expect(startCountHint!(true)).toBe(
+      'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.',
+    );
+    expect(startCountHint!(false)).toBe(
+      'Tap ＋ to start a count — pick items, tap Select, then Review. Or start one from the web.',
+    );
+    // The prompt and the hint both follow the Books module, read from the
+    // module set the tab bar gates with.
+    expect(importsFrom(COUNTS_TAB, '@/lib/enabled-modules')).toEqual(['useEnabledModules']);
+    expect(code).toContain("const booksOn = useEnabledModules().has('books');");
+    expect(code).toMatch(
+      /Alert\.alert\('Start a cycle count', 'Pick what you want to count, then tap Select\.', \[\s*\.\.\.startCountChoices\(booksOn\)\.map\(\(choice\) => \(\{\s*text: choice\.text,\s*onPress: \(\) => router\.push\(choice\.path\),\s*\}\)\),\s*\{ text: 'Cancel', style: 'cancel' \},\s*\]\)/,
+    );
+    expect(code).toContain('const startHint = startCountHint(booksOn);');
+    expect(code).toMatch(/: canStartCount\s*\? startHint\s*:/);
+    // No other way from this tab to the Books screen.
+    expect(code).not.toMatch(/router\.push\('\/books'\)/);
+  });
+
   // P5.4b: the shared small Button now frames itself at 44pt, so a button
   // whose 44pt was for the target alone draws at 36pt in that frame; the
   // error card's full-width Try again keeps its drawn 44pt (TAP).
@@ -1179,6 +1388,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     '%',
     'Nothing to save',
     'Tap a line to confirm the AI count or enter a manual value.',
+    'Check the counts',
     'No cached lines',
     'Open this cycle count from the list once while online so it can be cached for AI scanning.',
     'Could not load this count',
@@ -1217,6 +1427,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
       AI_SCAN,
       ['lineCountToWrite'],
       ['AI_CONFIDENCE_THRESHOLD'],
+      { countFromText },
     );
     const write = (override: string | null, result?: { count: number; confidence: number }) =>
       lineCountToWrite!({
@@ -1230,17 +1441,90 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     expect(write(null, sure)).toBe(5);
     expect(write(null, unsure)).toBeNull();
     expect(write(null)).toBeNull();
-    // Typed: the person's number wins, whole units as before.
+    // Typed: the person's number wins, as typed.
     expect(write('7', unsure)).toBe(7);
     expect(write('0', sure)).toBe(0);
     expect(write(' 3 ')).toBe(3);
-    expect(write('2.9')).toBe(2);
+    // B4(b): decimals are kept, as the count screen keeps them (they were
+    // rounded down: 2.7 wrote 2, and 0.5 wrote a count of 0).
+    expect(write('2.7', sure)).toBe(2.7);
+    expect(write('2.9')).toBe(2.9);
+    expect(write('0.5')).toBe(0.5);
+    expect(write('.25')).toBe(0.25);
+    expect(write('12.5', unsure)).toBe(12.5);
     // Emptied, or not a count: nothing at all, never 0 and never the AI's.
     expect(write('', sure)).toBeNull();
     expect(write('   ', unsure)).toBeNull();
     expect(write('', undefined)).toBeNull();
     expect(write('-1', sure)).toBeNull();
     expect(write('abc')).toBeNull();
+    // A second point, a comma, an exponent or another base: nothing, never
+    // a number read out of them (Number() wrote "1e3" as 1000).
+    expect(write('1.2.3', sure)).toBeNull();
+    expect(write('2,5')).toBeNull();
+    expect(write('1e3', unsure)).toBeNull();
+    expect(write('0x10')).toBeNull();
+    expect(importsFrom(AI_SCAN, '@stockpilot/core')).toEqual(['countFromText']);
+  });
+
+  // B4(b): the review writes a typed number as the count screen saves the
+  // same box. Both screens' own rules, run on the same words. Mutation
+  // caught: any rounding (Math.floor, Math.round, toFixed) on the review.
+  it('a typed number is written as the count screen saves it, decimals and all', () => {
+    const { lineCountToWrite } = screenFunctions(
+      AI_SCAN,
+      ['lineCountToWrite'],
+      ['AI_CONFIDENCE_THRESHOLD'],
+      { countFromText },
+    );
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox'], [], {
+      countFromText,
+    });
+    for (const raw of ['0', '1', '2.7', '0.5', '.25', '12.5', '3.1416', ' 4.2 ', '1000000']) {
+      const written = lineCountToWrite!({ line: { id: 'l1' }, override: raw });
+      expect(written, raw).toBe(countFromBox!(raw));
+      expect(written, raw).toBe(Number(raw));
+    }
+    // And nothing where the count screen saves nothing.
+    for (const raw of ['', ' ', '-', '-2', '.', '1.2.3', '2,5', '1e3', '+5', 'abc']) {
+      expect(lineCountToWrite!({ line: { id: 'l1' }, override: raw }), raw).toBeNull();
+      expect(countFromBox!(raw), raw).toBeNull();
+    }
+  });
+
+  // x3: a box typed over with something that is not a number writes nothing,
+  // and Confirm used to say nothing of it, so the line silently kept its old
+  // count while the person read their own number in the box. Confirm now
+  // names those lines and waits, as the count screen's Post does. The
+  // screen's own rule, run, and where Confirm asks it.
+  it('Confirm names the boxes typed over with something that is not a number, and writes nothing', () => {
+    const { overrideNotACount } = screenFunctions(AI_SCAN, ['overrideNotACount'], [], {
+      countFromText,
+    });
+    const notACount = (override: string | null) =>
+      overrideNotACount!({ line: { id: 'l1' }, override });
+    // Left alone, emptied, or a count: nothing to name.
+    for (const override of [null, '', '   ', '0', '7', '2.5', '.25'])
+      expect(notACount(override), String(override)).toBe(false);
+    // Typed over with something that is not a number: named.
+    for (const override of ['-', '-1', '.', '1.2.3', '2,5', '1e3', 'abc'])
+      expect(notACount(override), override).toBe(true);
+    const body = functionBody(AI_SCAN, 'onConfirm');
+    expect(body).toMatch(
+      /const notCounts = phase\.reviewLines\.filter\(overrideNotACount\);\s*if \(notCounts\.length > 0\) \{\s*Alert\.alert\(\s*'Check the counts',\s*reviewNotACountMessage\(notCounts\.map\(\(rl\) => rl\.line\.itemName\)\),\s*\);\s*return;\s*\}/,
+    );
+    // Before anything is decided or written.
+    expect(body.indexOf('const notCounts = ')).toBeLessThan(body.indexOf('const toWrite'));
+    expect(body.indexOf('const notCounts = ')).toBeLessThan(
+      body.indexOf("setPhase({ kind: 'saving' })"),
+    );
+    expect(importsFrom(AI_SCAN, '@/lib/count-box-words')).toEqual(['reviewNotACountMessage']);
+    expect(reviewNotACountMessage(['Atlas'])).toBe(
+      'The count box for Atlas does not hold a number. Type the count, or empty the box to save nothing for that line.',
+    );
+    expect(reviewNotACountMessage(['Atlas', 'Bible', 'Codex', 'Dune'])).toBe(
+      'The count boxes for Atlas, Bible, Codex and 1 more do not hold a number. Type each count, or empty a box to save nothing for its line.',
+    );
   });
 
   it('Confirm counts is the one ink Button, off while saving', () => {

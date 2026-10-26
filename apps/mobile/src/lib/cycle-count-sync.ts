@@ -12,6 +12,7 @@ import {
   outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { clearCountPath, isClearCountPayload } from './cycle-count-clear';
 import { recordCountBody } from './cycle-count-record-body';
 import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
@@ -363,13 +364,26 @@ class CycleCountSyncEngine {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =
       typeof payload.cycleCountId === 'string' ? payload.cycleCountId : '';
+    if (!lineId || !cycleCountId) {
+      throw new Error('record_count: missing ids');
+    }
+    // A clear of the line's saved count (B4a, cycle-count-clear.ts): the line
+    // is uncounted again on the server, through the service the web count
+    // screen's emptied box uses, with the same gates as a count. No body.
+    // It names no countedQuantity, so it never reaches the count path below.
+    if (isClearCountPayload(payload)) {
+      await api(clearCountPath(cycleCountId, lineId), {
+        method: 'POST',
+        signal,
+        orgId: scope.orgId,
+        asUserId: scope.asUserId,
+      });
+      return;
+    }
     const counted =
       typeof payload.countedQuantity === 'number'
         ? payload.countedQuantity
         : Number(payload.countedQuantity);
-    if (!lineId || !cycleCountId) {
-      throw new Error('record_count: missing ids');
-    }
     if (!Number.isFinite(counted) || counted < 0) {
       throw new Error('record_count: invalid counted quantity');
     }
