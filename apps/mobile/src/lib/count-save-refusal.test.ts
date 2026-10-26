@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
-import {
-  COUNT_NOT_SAVED_ON_PHONE,
-  countNotSavedAlert,
-  partialSaveMessage,
-} from './count-save-refusal';
+import { COUNT_NOT_SAVED_ON_PHONE, countNotSavedAlert } from './count-save-refusal';
 import {
   OutboxOwnerUnknownError,
   OutboxWorkspaceLoadingError,
@@ -19,9 +15,9 @@ import { reportPhoneSaveFailure } from './phone-save-report';
  * beside OutboxOwnerUnknownError), and every caller says the refusal in the
  * outbox's own sentence. The count screen and the count scanner let the throw
  * escape (nothing said; the scanner stayed busy and ignored every scan after
- * it), and the AI shelf scan said to check the connection. Each screen's own
- * handler is RUN here from its source (screen-functions.ts) with the outbox
- * refusing.
+ * it). The AI shelf scan no longer queues its copy of a count the server
+ * recorded, so it is never refused (last block). Each screen's own handler is
+ * RUN here from its source (screen-functions.ts).
  */
 
 const LOADING = 'Your workspace is still loading. Try again in a moment.';
@@ -70,15 +66,6 @@ describe('what a count screen says when the phone did not save a count', () => {
     expect(countNotSavedAlert('a string').message).toBe(COUNT_NOT_SAVED_ON_PHONE);
     expect(outboxRefusalSentence(disk)).toBeNull();
     expect(outboxRefusalSentence(undefined)).toBeNull();
-  });
-
-  it('Partially saved names the refusal; any other failure keeps the connection sentence', () => {
-    expect(partialSaveMessage(5, 2, LOADING)).toBe(
-      `3 of 5 counts saved. 2 couldn't save: ${LOADING}`,
-    );
-    expect(partialSaveMessage(5, 2, null)).toBe(
-      "3 of 5 counts saved. 2 couldn't save — check your connection and tap Confirm to retry.",
-    );
   });
 });
 
@@ -333,10 +320,22 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
   });
 });
 
-describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a line whose copy on the phone is refused', () => {
+/**
+ * The AI shelf scan records each line on the server, then copies the count to
+ * the phone. It copied it with updateLocalLine, which since decision 2 refuses
+ * to queue while the saved workspace is another account's, so a count the
+ * server had saved was said to be not saved, the review list stayed and the
+ * scan was not confirmed (docket B10 review). It now copies it with
+ * mirrorRecordedCount, which queues nothing and so needs no workspace
+ * (outbox-owner.sqlite.test.ts runs it on a real SQLite).
+ */
+describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the server recorded', () => {
   const AI_SCAN = 'app/cycle-count/ai-scan/[id].tsx';
+  const RETRY =
+    "1 of 2 counts saved. 1 couldn't save — check your connection and tap Confirm to retry.";
 
-  function onConfirm(updateLocalLine: ReturnType<typeof vi.fn>) {
+  /** `recorded`: whether the server took each line's count, in order. */
+  function onConfirm(mirror: ReturnType<typeof vi.fn>, recorded: boolean[] = [true, true]) {
     const alert = vi.fn();
     const setPhase = vi.fn();
     const back = vi.fn();
@@ -348,6 +347,11 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a line whose cop
         { line: { id: 'l2' }, override: '4' },
       ],
     };
+    let line = 0;
+    const fetch = vi.fn(async (url: string) => {
+      const ok = url.endsWith('/confirm') || (recorded[line++] ?? true);
+      return { ok, status: ok ? 200 : 503, text: async () => '' };
+    });
     const run = screenFunction<() => Promise<void>>(AI_SCAN, 'onConfirm', {
       phase: reviewPhase,
       lineCountToWrite: (rl: { override: string }) => Number(rl.override),
@@ -360,57 +364,55 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a line whose cop
           }),
         },
       },
-      // The server accepted both counts.
-      fetch: vi.fn(async () => ({ ok: true, text: async () => '' })),
+      fetch,
       API_BASE: 'https://api.example.test',
       cycleCountId: 'cc1',
       orgHeader: async () => ({}),
-      updateLocalLine,
-      outboxAck: vi.fn(async () => undefined),
-      outboxRefusalSentence,
-      partialSaveMessage,
+      mirrorRecordedCount: mirror,
       cycleCountSync: syncStub(),
       router: { back },
       console: { warn: vi.fn() },
     });
-    return { run, alert, setPhase, back, reviewPhase };
+    const confirmed = () => fetch.mock.calls.some(([url]) => String(url).endsWith('/confirm'));
+    return { run, alert, setPhase, back, reviewPhase, confirmed };
   }
 
-  it('Partially saved says the refusal, and the review list stays for Confirm', async () => {
-    const mirror = vi
-      .fn()
-      .mockResolvedValueOnce({ outboxId: 1, idempotencyKey: 'k1' })
-      .mockRejectedValueOnce(new OutboxWorkspaceLoadingError());
-    const { run, alert, setPhase, back, reviewPhase } = onConfirm(mirror);
+  it('each recorded count is copied for the account that sent it, with nothing queued: nothing said, the scan confirmed', async () => {
+    const mirror = vi.fn(async () => undefined);
+    const { run, alert, back, confirmed } = onConfirm(mirror);
 
     await run();
 
-    expect(alert.mock.calls).toEqual([
-      ['Partially saved', `1 of 2 counts saved. 1 couldn't save: ${LOADING}`],
+    expect(mirror.mock.calls).toEqual([
+      ['l1', 3, 'u-a'],
+      ['l2', 4, 'u-a'],
     ]);
+    expect(alert).not.toHaveBeenCalled();
+    expect(confirmed()).toBe(true);
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it('a count the server did not take is not copied, and Partially saved keeps the review list for Confirm', async () => {
+    const mirror = vi.fn(async () => undefined);
+    const { run, alert, setPhase, back, reviewPhase, confirmed } = onConfirm(mirror, [true, false]);
+
+    await run();
+
+    expect(mirror.mock.calls).toEqual([['l1', 3, 'u-a']]);
+    expect(alert.mock.calls).toEqual([['Partially saved', RETRY]]);
     expect(setPhase.mock.calls.at(-1)).toEqual([reviewPhase]);
     expect(back).not.toHaveBeenCalled();
+    expect(confirmed()).toBe(false);
   });
 
-  it('any other failure keeps the connection sentence', async () => {
+  it("the phone's store failing to copy a count keeps the line for Confirm, as before", async () => {
     const mirror = vi
       .fn()
-      .mockResolvedValueOnce({ outboxId: 1, idempotencyKey: 'k1' })
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('SQLITE_IOERR: disk I/O error'));
-    const { run, alert } = onConfirm(mirror);
+    const { run, alert, back } = onConfirm(mirror);
     await run();
-    expect(alert.mock.calls).toEqual([
-      [
-        'Partially saved',
-        "1 of 2 counts saved. 1 couldn't save — check your connection and tap Confirm to retry.",
-      ],
-    ]);
-  });
-
-  it('every line saved: nothing said, back to the count', async () => {
-    const { run, alert, back } = onConfirm(saved());
-    await run();
-    expect(alert).not.toHaveBeenCalled();
-    expect(back).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls).toEqual([['Partially saved', RETRY]]);
+    expect(back).not.toHaveBeenCalled();
   });
 });

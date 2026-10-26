@@ -26,16 +26,13 @@ import { Button } from '@/components/ui/button';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { partialSaveMessage } from '@/lib/count-save-refusal';
 import {
   getCycleCount,
-  outboxAck,
-  updateLocalLine,
+  mirrorRecordedCount,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
-import { outboxRefusalSentence } from '@/lib/outbox-scope';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -324,10 +321,6 @@ export default function AiScanScreen() {
       // ABSOLUTE counted_quantity (not an increment), so re-recording a line
       // is idempotent and retry is always safe.
       const failed: string[] = [];
-      // The outbox's sentence when it refused a line's copy on the phone (no
-      // account, or the workspace still loading): said in place of the
-      // connection, which was not the cause.
-      let refusal: string | null = null;
       for (const w of toWrite) {
         try {
           const res = await fetch(
@@ -352,14 +345,13 @@ export default function AiScanScreen() {
           // Mirror into the local SQLite cache so the detail screen reflects
           // the new count without waiting for a sync round-trip.
           //
-          // ═══ AND ACK IT IMMEDIATELY (SP-036) ═══
-          // `updateLocalLine` is the OFFLINE edit path: besides writing
-          // `counted` it sets local_dirty=1 and enqueues a `record_count`
-          // outbox row carrying {cycleCountId, lineId, countedQuantity} —
-          // and NOTHING ELSE. The server has already accepted this exact
-          // count one statement above, so letting that row replay (the
-          // `forceSync()` at the end of this function drains it seconds
-          // later) did two kinds of damage:
+          // ═══ AND QUEUE NOTHING (SP-036) ═══
+          // The server has already accepted this exact count one statement
+          // above. This used to copy it with `updateLocalLine`, the OFFLINE
+          // edit path, which also queues a `record_count` row carrying
+          // {cycleCountId, lineId, countedQuantity} and NOTHING ELSE. Left
+          // to replay (the `forceSync()` at the end of this function drains
+          // it seconds later), that row did two kinds of damage:
           //
           //   1. the replay POSTs this same route WITHOUT aiScanId, and the
           //      route records a missing aiScanId as NULL — wiping the
@@ -371,17 +363,17 @@ export default function AiScanScreen() {
           //      confirm tripped 429s → rows to 'failed' with backoff →
           //      "Sync issue · retrying" and posting blocked by hasPending.
           //
-          // `outboxAck` is exactly the "the server has this" bookkeeping:
-          // it deletes the outbox row and clears local_dirty in ONE
-          // transaction. Nothing is lost by acking — this screen is
-          // online-only by design, so there is no offline edit to preserve,
-          // and the count itself is already durable server-side.
-          const mirrored = await updateLocalLine(w.lineId, w.count);
-          if (mirrored) await outboxAck(mirrored.outboxId);
+          // The row was then deleted straight after it was queued, and
+          // since docket B10 the outbox refuses to queue at all while the
+          // saved workspace is another account's, which reported a count
+          // the server had saved as not saved. `mirrorRecordedCount` writes
+          // the count and supersedes the line's older queued counts in ONE
+          // transaction, and queues nothing, so it needs no workspace. The
+          // account is the one whose session sent the count.
+          await mirrorRecordedCount(w.lineId, w.count, session.user.id);
         } catch (lineErr) {
           console.warn('[cycle-count] line save failed', w.lineId, lineErr);
           failed.push(w.lineId);
-          refusal ??= outboxRefusalSentence(lineErr);
         }
       }
 
@@ -390,7 +382,11 @@ export default function AiScanScreen() {
         // and retry. Re-confirming re-sends every line, but record is an
         // idempotent absolute SET so already-saved lines are unaffected.
         await cycleCountSync.refreshPendingCount();
-        Alert.alert('Partially saved', partialSaveMessage(toWrite.length, failed.length, refusal));
+        Alert.alert(
+          'Partially saved',
+          `${toWrite.length - failed.length} of ${toWrite.length} counts saved. ` +
+            `${failed.length} couldn't save — check your connection and tap Confirm to retry.`,
+        );
         setPhase(reviewPhase);
         return;
       }

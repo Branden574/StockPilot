@@ -598,6 +598,73 @@ describe("a new row is queued only under its own account's saved workspace", () 
   });
 });
 
+/**
+ * The AI shelf scan records each line on the server first, then copies the
+ * count to the phone (docket B10 review). It used to copy it with
+ * updateLocalLine, the offline edit path, and delete the queued row straight
+ * after (SP-036). While the saved workspace was another account's,
+ * updateLocalLine refused, and the scan said a count the server had saved
+ * "couldn't save". mirrorRecordedCount queues nothing, so it needs no
+ * workspace, and it supersedes the line's older queued counts exactly as
+ * updateLocalLine does: sent after the scan, an older count would overwrite
+ * the newer one on the server (the record is an absolute set).
+ */
+describe("the AI shelf scan's copy of a count the server recorded (mirrorRecordedCount)", () => {
+  const line = (id: string) =>
+    raw.prepare('select counted, local_dirty from cycle_count_lines where id = ?').get(id);
+  const queued = () =>
+    raw.prepare('select id, status, user_id, last_error from pending_actions order by id').all();
+
+  it('writes the count on the line and queues nothing: the server has it', async () => {
+    cacheLine('l1');
+    await cache.mirrorRecordedCount('l1', 6, 'u1');
+    expect(line('l1')).toEqual({ counted: 6, local_dirty: 0 });
+    expect(queued()).toEqual([]);
+  });
+
+  it("needs no workspace: while the saved workspace is another account's it still copies the count, where updateLocalLine refuses", async () => {
+    live.ownerId = 'u0';
+    cacheLine('l1');
+    await expect(cache.updateLocalLine('l1', 6)).rejects.toMatchObject({
+      name: 'OutboxWorkspaceLoadingError',
+    });
+    await cache.mirrorRecordedCount('l1', 6, 'u1');
+    expect(line('l1')).toEqual({ counted: 6, local_dirty: 0 });
+    expect(queued()).toEqual([]);
+  });
+
+  it("supersedes the line's earlier queued counts as updateLocalLine does: this account's and legacy ones deleted, another account's kept as a record", async () => {
+    cacheLine('l1', 1);
+    cacheLine('l2', 1);
+    seed({ id: 1, user: 'u1', lineId: 'l1' }); // this account's older count
+    seed({ id: 2, user: 'u1', lineId: 'l1', status: 'failed' }); // in backoff
+    seed({ id: 3, user: null, org: null, lineId: 'l1' }); // an older build's
+    seed({ id: 4, user: 'u2', lineId: 'l1' }); // another account's, held
+    seed({ id: 5, user: 'u1', lineId: 'l2' }); // another line
+    await cache.mirrorRecordedCount('l1', 6, 'u1');
+    expect(queued()).toEqual([
+      { id: 4, status: 'rejected', user_id: 'u2', last_error: REPLACED_BY_LATER_COUNT },
+      { id: 5, status: 'pending', user_id: 'u1', last_error: null },
+    ]);
+    expect(line('l1')).toEqual({ counted: 6, local_dirty: 0 });
+    expect(line('l2')).toEqual({ counted: null, local_dirty: 1 });
+  });
+
+  it('a row for the line already on its way is left alone, and the line stays unsynced until it settles', async () => {
+    cacheLine('l1', 1);
+    seed({ id: 1, user: 'u1', lineId: 'l1', status: 'sending' });
+    await cache.mirrorRecordedCount('l1', 6, 'u1');
+    expect(queued()).toEqual([{ id: 1, status: 'sending', user_id: 'u1', last_error: null }]);
+    expect(line('l1')).toEqual({ counted: 6, local_dirty: 1 });
+  });
+
+  it('a line this phone does not hold: nothing is written and nothing superseded, as updateLocalLine', async () => {
+    seed({ id: 1, user: 'u1', lineId: 'l9' });
+    await cache.mirrorRecordedCount('l9', 6, 'u1');
+    expect(queued()).toEqual([{ id: 1, status: 'pending', user_id: 'u1', last_error: null }]);
+  });
+});
+
 describe("an unrelated transaction's ROLLBACK cannot undo an outbox write (plain writes are queued)", () => {
   /**
    * Reproduced before the fix: enqueue() returned an id (the screen said

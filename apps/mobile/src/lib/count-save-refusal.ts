@@ -10,8 +10,10 @@ import { outboxRefusalSentence } from './outbox-scope';
  * failed. Nothing is saved either way. The count screen and the count scanner
  * let that throw escape as an unhandled rejection, so nothing was said: the
  * count screen kept the number in its box as if it were saved, and the
- * scanner stayed busy and ignored every scan after it. The AI shelf scan said
- * to check the connection. Each now says why, in the outbox's own sentence.
+ * scanner stayed busy and ignored every scan after it. Each now says why, in
+ * the outbox's own sentence. (The AI shelf scan copies a count the server
+ * already recorded with mirrorRecordedCount, which queues nothing and is
+ * never refused.)
  */
 
 /** The phone's own store failed. Its error text is not written for people. */
@@ -23,17 +25,4 @@ export function countNotSavedAlert(e: unknown): { title: string; message: string
     title: 'Count not saved',
     message: outboxRefusalSentence(e) ?? COUNT_NOT_SAVED_ON_PHONE,
   };
-}
-
-/**
- * The AI shelf scan's "Partially saved" sentence. `refusal` is the outbox's
- * sentence when a line's copy on the phone was refused
- * (outboxRefusalSentence), said as it is; otherwise the connection is the
- * likely cause, as before.
- */
-export function partialSaveMessage(total: number, failed: number, refusal: string | null): string {
-  const saved = `${total - failed} of ${total} counts saved. `;
-  return refusal
-    ? `${saved}${failed} couldn't save: ${refusal}`
-    : `${saved}${failed} couldn't save — check your connection and tap Confirm to retry.`;
 }
