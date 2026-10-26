@@ -13,8 +13,9 @@ import { Sentry } from './sentry';
  * reached the team. Caught, it reached only the person. It is reported here.
  *
  * The outbox's two refusals (no account to queue the change for, or the
- * workspace still loading after a different account signed in) are expected
- * and retryable: said to the person, never reported.
+ * workspace still loading: the saved one is another account's, or an older
+ * build's not yet recorded as this account's) are expected and retryable:
+ * said to the person, never reported.
  *
  * `area` names the save, as the web's error reporter tags do
  * ('cycle-count.save', 'cycle-count.clear', 'cycle-count.scan',

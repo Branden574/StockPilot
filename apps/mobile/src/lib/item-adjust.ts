@@ -264,8 +264,10 @@ async function queueOffline(
     );
   } catch (e) {
     // queue.ts refuses when no account can be named as the row's owner
-    // (OutboxOwnerUnknownError) or while the saved workspace is another
-    // account's (OutboxWorkspaceLoadingError), or the local database failed.
+    // (OutboxOwnerUnknownError) or while the saved workspace is not this
+    // account's own: another account's, or an older build's not yet recorded
+    // as this account's (OutboxWorkspaceLoadingError). Or the local database
+    // failed.
     // Nothing was saved and nothing was sent.
     const message = e instanceof Error && e.message ? e.message : 'This phone could not save it.';
     return {

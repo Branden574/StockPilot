@@ -6,9 +6,9 @@ import { outboxRefusalSentence } from './outbox-scope';
  *
  * updateLocalLine (cycle-count-cache.ts) saves a count on the phone and queues
  * it for the server in one step, and throws when it cannot: the outbox refused
- * it (no account to queue it for, or the workspace still loading after a
- * different account signed in; outbox-scope.ts), or the phone's own store
- * failed. Nothing is saved either way. The count screen and the count scanner
+ * it (no account to queue it for, or the workspace still loading: the saved
+ * one is another account's, or an older build's not yet recorded as this
+ * account's; outbox-scope.ts), or the phone's own store failed. Nothing is saved either way. The count screen and the count scanner
  * let that throw escape as an unhandled rejection, so nothing was said: the
  * count screen kept the number in its box as if it were saved, and the
  * scanner stayed busy and ignored every scan after it. Each now says why, in
