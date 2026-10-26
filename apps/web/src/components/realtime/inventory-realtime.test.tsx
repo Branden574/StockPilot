@@ -61,7 +61,11 @@ vi.mock('@/server/actions/revalidate-inventory-view', () => ({
   revalidateInventoryViewAction: () => h.revalidate(),
 }));
 
-import { InventoryRealtime } from './inventory-realtime';
+import {
+  InventoryRealtime,
+  isVisibilityOnlyEvent,
+  visibilityEventRule,
+} from './inventory-realtime';
 
 Object.defineProperty(document, 'visibilityState', {
   configurable: true,
@@ -447,5 +451,230 @@ describe('InventoryRealtime refreshes', () => {
 
     expect(h.revalidate).not.toHaveBeenCalled();
     expect(h.refresh).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ORDERING VISIBILITY (0413; design 7.2 item 8): Show or Hide writes only
+ * order_catalog_visible and its stamp and keeps updated_at, so every open
+ * Items, Books and Orders tab would otherwise get an UPDATE event per toggled
+ * row and call revalidateInventoryViewAction, which expires the org's Items
+ * list cache and re-renders the page, for a change none of them shows. A
+ * visibility-only event (the stamp later than updated_at) is dropped outside
+ * Place an Order and Manage order items; on those two it is router.refresh()
+ * (the writer already expired the catalog), never the list-busting action.
+ */
+const HIDE = (over: Record<string, unknown> = {}) => ({
+  schema: 'public',
+  table: 'inventory_items',
+  eventType: 'UPDATE',
+  commit_timestamp: '2026-10-26T15:00:05.200Z',
+  new: {
+    id: 'i-1',
+    order_catalog_visible: false,
+    updated_at: '2026-10-26T14:00:00.000000+00:00',
+    order_catalog_visibility_changed_at: '2026-10-26T15:00:05.123456+00:00',
+  },
+  ...over,
+});
+
+describe('isVisibilityOnlyEvent', () => {
+  it('true when the last write to the row was the visibility write (stamp later than updated_at)', () => {
+    expect(isVisibilityOnlyEvent(HIDE())).toBe(true);
+  });
+
+  it('reads the database text form too (space separator, short offset, any fraction)', () => {
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: '2026-10-26 14:00:00+00',
+            order_catalog_visibility_changed_at: '2026-10-26 15:00:05.1+00',
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: '2026-10-26T07:00:00-07:00',
+            order_catalog_visibility_changed_at: '2026-10-26T14:00:00.001Z',
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('false for an ordinary write after a hide (updated_at moved past the stamp)', () => {
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: '2026-10-26T15:10:00.000000+00:00',
+            order_catalog_visibility_changed_at: '2026-10-26T15:00:05.123456+00:00',
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('a tie at millisecond precision counts as ordinary (the safe direction)', () => {
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: '2026-10-26T15:00:05.123001+00:00',
+            order_catalog_visibility_changed_at: '2026-10-26T15:00:05.123999+00:00',
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('false when a field is missing or unreadable, never visibility-only by guess', () => {
+    expect(isVisibilityOnlyEvent(undefined)).toBe(false);
+    expect(isVisibilityOnlyEvent({})).toBe(false);
+    expect(isVisibilityOnlyEvent(HIDE({ new: { updated_at: '2026-10-26T14:00:00Z' } }))).toBe(
+      false,
+    );
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: { updated_at: null, order_catalog_visibility_changed_at: '2026-10-26T15:00:05Z' },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: 'yesterday',
+            order_catalog_visibility_changed_at: '2026-10-26T15:00:05Z',
+          },
+        }),
+      ),
+    ).toBe(false);
+    // A timestamp without a zone is not read as one.
+    expect(
+      isVisibilityOnlyEvent(
+        HIDE({
+          new: {
+            updated_at: '2026-10-26 14:00:00',
+            order_catalog_visibility_changed_at: '2026-10-26 15:00:05',
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('false for an insert, a delete, or another table', () => {
+    expect(isVisibilityOnlyEvent(HIDE({ eventType: 'INSERT' }))).toBe(false);
+    expect(isVisibilityOnlyEvent(HIDE({ eventType: 'DELETE' }))).toBe(false);
+    expect(isVisibilityOnlyEvent(HIDE({ table: 'stock_movements' }))).toBe(false);
+  });
+});
+
+describe('visibilityEventRule', () => {
+  it.each([
+    ['/dashboard/orders/new', 'refresh'],
+    ['/dashboard/orders/manage-items', 'refresh'],
+    ['/dashboard/inventory', 'drop'],
+    ['/dashboard/books', 'drop'],
+    ['/dashboard/orders', 'drop'],
+    ['/dashboard/orders/0a000000-0000-4000-8000-000000000001', 'drop'],
+    ['/dashboard/orders/newest', 'drop'],
+    ['/dashboard', 'drop'],
+    [null, 'drop'],
+  ] as const)('%s -> %s', (path, rule) => {
+    expect(visibilityEventRule(path)).toBe(rule);
+  });
+});
+
+describe('InventoryRealtime and visibility-only events', () => {
+  async function mount(path: string) {
+    h.pathname.value = path;
+    render(<InventoryRealtime organizationId="org-1" />);
+    await waitFor(() => expect(h.handlers.length).toBe(5));
+    return h.handlers[0]!; // inventory_items
+  }
+
+  it('Items: dropped, no action, no refresh, so no Items list expiry', async () => {
+    const onItem = await mount('/dashboard/inventory');
+    vi.useFakeTimers();
+    onItem(HIDE());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.revalidate).not.toHaveBeenCalled();
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('Place an Order: one router.refresh(), never the list-busting action', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    onItem(HIDE());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('a 500-row hide is one transaction: one refresh per ordering tab', async () => {
+    const onItem = await mount('/dashboard/orders/manage-items');
+    vi.useFakeTimers();
+    for (let i = 0; i < 500; i++) onItem(HIDE({ new: { ...HIDE().new, id: `i-${i}` } }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary event is unchanged on an ordering page: it still runs the action', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    onItem({
+      ...HIDE(),
+      commit_timestamp: 't-ordinary',
+      new: {
+        updated_at: '2026-10-26T16:00:00Z',
+        order_catalog_visibility_changed_at: '2026-10-26T15:00:05Z',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a visibility event then an ordinary one in the same window: the trailing refresh is the action', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    onItem(HIDE({ commit_timestamp: 't1' }));
+    onItem({
+      ...HIDE(),
+      commit_timestamp: 't2',
+      new: { updated_at: '2026-10-26T16:00:00Z', order_catalog_visibility_changed_at: null },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a hidden ordering tab refreshes once on return, with router.refresh()', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(HIDE());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.refresh).not.toHaveBeenCalled();
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('other tables keep their behaviour on every page (stock_movements still refreshes Items)', async () => {
+    await mount('/dashboard/inventory');
+    const onMovement = h.handlers[1]!;
+    vi.useFakeTimers();
+    onMovement({ table: 'stock_movements', eventType: 'INSERT', commit_timestamp: 't9', new: {} });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
   });
 });

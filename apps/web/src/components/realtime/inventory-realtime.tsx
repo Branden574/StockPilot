@@ -94,6 +94,82 @@ const REALTIME_SKIP_PREFIXES = [
  */
 const THROTTLE_MS = 250;
 
+// ═══ VISIBILITY-ONLY EVENTS (ordering visibility, migration 0413; design 7.2 item 8) ═══
+//
+// Show or Hide (set_order_catalog_visibility) writes only order_catalog_visible
+// and its stamp, as a derived write that keeps updated_at, and stamps
+// order_catalog_visibility_changed_at with clock_timestamp(). Every ordinary
+// write moves updated_at to its transaction's now(). So an UPDATE whose stamp
+// is LATER than its updated_at is one whose last write was the visibility
+// write. Unfiltered, each toggle sent an event to every open Items, Books and
+// Orders tab, and each tab ran revalidateInventoryViewAction (expiring the
+// org's Items list cache and re-rendering the page) for a change none of
+// those pages shows.
+//
+// Such an event is dropped everywhere except the two ordering pages, which
+// re-render with router.refresh() (the writer already expired the catalog
+// tag, and the catalog's own overlay covers the rest), never the list-busting
+// action. Every other event is unchanged. Accepted edge: an ordinary item edit
+// that waited on a hide's row lock commits with updated_at earlier than the
+// stamp and is dropped too; a stock write still refreshes through its
+// stock_movements event, and the list's 60 s TTL bounds the rest.
+
+/** The pages that show what appears in Orders: they re-read on a
+ *  visibility-only event. */
+const VISIBILITY_REFRESH_PATHS = ['/dashboard/orders/new', '/dashboard/orders/manage-items'];
+
+function withinPath(pathname: string, base: string): boolean {
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
+
+/** What this page does with a visibility-only event. */
+export function visibilityEventRule(pathname: string | null | undefined): 'refresh' | 'drop' {
+  if (!pathname) return 'drop';
+  return VISIBILITY_REFRESH_PATHS.some((base) => withinPath(pathname, base)) ? 'refresh' : 'drop';
+}
+
+const PG_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?\s*(Z|[+-]\d{2}(?::?\d{2})?)$/i;
+
+/**
+ * A timestamptz as realtime sends it ("2026-10-26T15:00:05.123456+00:00", or
+ * the database's "2026-10-26 15:00:05.1+00"), in whole milliseconds (the
+ * fraction is cut, never rounded). Null for anything else, a value without a
+ * zone included: an unreadable stamp never makes an event visibility-only.
+ */
+function timestampMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const m = PG_TIMESTAMP.exec(value.trim());
+  if (!m) return null;
+  const [, y, mo, d, hh, mi, ss, frac, zone] = m;
+  const ms = (frac ?? '').padEnd(3, '0').slice(0, 3);
+  let offset = 'Z';
+  if (zone && zone.toUpperCase() !== 'Z') {
+    const digits = zone.slice(1).replace(':', '');
+    offset = `${zone[0]}${digits.slice(0, 2)}:${(digits.slice(2) || '00').padEnd(2, '0')}`;
+  }
+  const t = Date.parse(`${y}-${mo}-${d}T${hh}:${mi}:${ss}.${ms}${offset}`);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * True for an inventory_items UPDATE whose last write was the ordering
+ * visibility write: its stamp is later than its updated_at, compared in whole
+ * milliseconds. A tie, a missing field or an unreadable value is an ordinary
+ * event (the safe direction: it refreshes as before).
+ */
+export function isVisibilityOnlyEvent(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as { table?: unknown; eventType?: unknown; new?: unknown };
+  if (p.table !== 'inventory_items' || p.eventType !== 'UPDATE') return false;
+  if (!p.new || typeof p.new !== 'object') return false;
+  const row = p.new as Record<string, unknown>;
+  const changedAt = timestampMs(row.order_catalog_visibility_changed_at);
+  const updatedAt = timestampMs(row.updated_at);
+  if (changedAt === null || updatedAt === null) return false;
+  return changedAt > updatedAt;
+}
+
 /**
  * How long a refresh may hold the one-at-a-time lock before we stop waiting.
  *
@@ -119,6 +195,12 @@ export function InventoryRealtime({
 }: InventoryRealtimeProps) {
   const router = useRouter();
   const pathname = usePathname();
+  // Read by the subscription at event time (the effect does not re-run on a
+  // navigation that keeps `skip`), for the visibility-only rule.
+  const pathnameRef = React.useRef(pathname);
+  React.useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   // Key the effect on the joined VALUE, not the array reference. A caller
   // that builds its list inline (`tables={['inventory_items']}`) hands us a
   // fresh identity every render; keying on the string means an unchanged
@@ -183,6 +265,11 @@ export function InventoryRealtime({
       let inFlight = false;
       let rerun = false;
       let dirtyWhileHidden = false;
+      //   needsAction: an ordinary event is waiting, so the next refresh is
+      //     the action. While only visibility-only events (on an ordering
+      //     page) are waiting it is a plain router.refresh(): no Items list
+      //     cache expiry for a change that list does not show.
+      let needsAction = false;
       const isHidden = () => document.visibilityState === 'hidden';
       //   seenSinceStart / covered: ONE refresh per database transaction. One
       //     adjust_stock sends two events, the inventory_items UPDATE and the
@@ -218,7 +305,8 @@ export function InventoryRealtime({
           rerun = true;
           return;
         }
-        inFlight = true;
+        const useAction = needsAction;
+        needsAction = false;
         lastRefreshRef.current = Date.now();
         for (const commit of seenSinceStart) {
           covered.add(commit);
@@ -227,6 +315,13 @@ export function InventoryRealtime({
           if (covered.size > COVERED_MAX) covered.delete(covered.values().next().value as string);
         }
         seenSinceStart.clear();
+        if (!useAction) {
+          // Only visibility-only events are waiting: re-render an ordering
+          // page; a page navigated away from in the meantime drops them.
+          if (visibilityEventRule(pathnameRef.current) === 'refresh') router.refresh();
+          return;
+        }
+        inFlight = true;
         let watchdog: ReturnType<typeof setTimeout> | undefined;
         // false on failure, on "did not invalidate" and on the watchdog: in
         // all three no re-render is coming from the action, so we refresh.
@@ -283,11 +378,14 @@ export function InventoryRealtime({
       }
 
       function onChange(payload?: { commit_timestamp?: unknown }) {
+        const visibilityOnly = isVisibilityOnlyEvent(payload);
+        if (visibilityOnly && visibilityEventRule(pathnameRef.current) === 'drop') return;
         const commit = typeof payload?.commit_timestamp === 'string' ? payload.commit_timestamp : null;
         if (commit !== null) {
           if (covered.has(commit)) return;
           seenSinceStart.add(commit);
         }
+        if (!visibilityOnly) needsAction = true;
         nudge();
       }
 
