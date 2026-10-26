@@ -12,7 +12,9 @@ import { ORDER_ITEMS_PHONE_REVIEW_EMPTY_COPY } from './words';
 
 /**
  * MANAGE ORDER ITEMS ON THE PHONE: SHOW AND HIDE (ordering visibility, 0413;
- * design 4.2, 8.6). The pattern of display-groups.ts's keyed grouping body:
+ * design 4.2, 8.6). The pattern of the phone grouping client's keyed body
+ * (this file reads no grouping data, and the web guard that keeps display
+ * groups off order paths scans it):
  *
  *   - a Show or Hide is the EXPLICIT ids, lower-cased, once each (bulk actions
  *     apply only to explicitly selected ids, brief 6);
