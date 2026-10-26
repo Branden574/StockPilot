@@ -29,7 +29,9 @@ import { REPLACED_BY_LATER_COUNT, outboxSendDecision } from './outbox-scope';
  *     with no owner, both writers refuse and write nothing (docket B10);
  *   - a row with no workspace of its own is held, as pending, until its
  *     account's own workspace is saved, and then sent under it (docket B10,
- *     integrator decision 3).
+ *     integrator decision 3);
+ *   - an emptied count box's clear (B4a) follows every one of these rules
+ *     as a count does.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -680,6 +682,85 @@ describe("a new row is queued only under its own account's saved workspace", () 
     live.orgId = 'org-b';
     live.ownerId = 'u0';
     expect(await firstSend(id)).toEqual({ send: true, orgId: 'org-a', userId: 'u1', adopt: false });
+  });
+
+  /**
+   * An emptied count box's clear (B4a, main #382) is queued by the same
+   * writer as a count (queueLineEdit), so it follows the same owner rules:
+   * refused while the saved workspace is another account's or an older
+   * build's, stamped with the account's own, and, queued while nothing was
+   * saved, held until the account's own workspace is saved, then sent under
+   * it (never with no workspace).
+   */
+  describe("an emptied box's clear follows the same rules as a count", () => {
+    /** A line holding a count already synced from the server (5). */
+    function countedLine(lineId: string) {
+      raw
+        .prepare(
+          `insert into cycle_count_lines (id, count_id, item_id, expected, counted, local_dirty)
+           values (?, 'cc1', 'i1', 10, 5, 0)`,
+        )
+        .run(lineId);
+    }
+    const line = (id: string) =>
+      raw.prepare('select counted, local_dirty from cycle_count_lines where id = ?').get(id);
+
+    it.each([
+      ["another account's", 'u0'],
+      ["an older build's (no owner)", null],
+    ] as const)(
+      'while %s workspace is saved, the clear is refused and the line keeps its count',
+      async (_whose, ownerId) => {
+        live.ownerId = ownerId;
+        countedLine('l1');
+
+        await expect(cache.clearLocalLine('l1')).rejects.toMatchObject({
+          name: 'OutboxWorkspaceLoadingError',
+          message: SENTENCE,
+        });
+
+        expect(rows()).toEqual([]);
+        expect(line('l1')).toEqual({ counted: 5, local_dirty: 0 });
+      },
+    );
+
+    it("under the account's own saved workspace, the clear is stamped with it", async () => {
+      countedLine('l1');
+      await cache.clearLocalLine('l1');
+      expect(rows()).toEqual([{ kind: 'record_count', organization_id: 'org-a', user_id: 'u1' }]);
+      expect(line('l1')).toEqual({ counted: null, local_dirty: 1 });
+    });
+
+    it("queued while nothing was saved, the clear is held, then sent under the account's own once saved", async () => {
+      live.orgId = null;
+      countedLine('l1');
+      const res = await cache.clearLocalLine('l1');
+      expect(rows()).toEqual([{ kind: 'record_count', organization_id: null, user_id: 'u1' }]);
+
+      const clear = (await cache.outboxQueued()).find((r) => r.id === res?.outboxId)!;
+      expect(clear.payload).toEqual({ cycleCountId: 'cc1', lineId: 'l1', clear: true });
+      expect(outboxSendDecision(clear, await scope.liveOutboxScope())).toEqual({
+        send: false,
+        reason: 'workspace-loading',
+      });
+      // Still this account's work waiting to go: Post waits for it.
+      expect(await cache.pendingCountFor('cc1')).toBe(1);
+
+      live.orgId = 'org-own'; // this account's workspace load saved its choice
+      const decision = outboxSendDecision(clear, await scope.liveOutboxScope());
+      expect(decision).toEqual({ send: true, orgId: 'org-own', userId: 'u1', adopt: true });
+      // The count drain's markSending stamps it with that workspace.
+      await cache.outboxMarkSending(clear.id, { orgId: 'org-own', userId: 'u1' });
+      expect(owners()).toEqual([
+        {
+          id: clear.id,
+          status: 'sending',
+          organization_id: 'org-own',
+          user_id: 'u1',
+          last_error: null,
+        },
+      ]);
+    });
   });
 });
 

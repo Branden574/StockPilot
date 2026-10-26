@@ -631,11 +631,15 @@ describe('count screen: offline capture and the Post rule', () => {
   // saver now clears it, as the web count screen does: clearLocalLine writes
   // the line uncounted and unsynced and queues the clear in one transaction
   // (only when there is a count to clear), and the clear syncs like a count.
-  // Anything else that is not a count still saves nothing.
+  // Anything else that is not a count still saves nothing. Re-pinned by
+  // docket B10 (was a bare `await clearLocalLine`): the clear is queued by
+  // the same writer as a count, so it is refused in the same cases, and a
+  // refusal is said while the box keeps its draft (count-save-refusal.test.ts
+  // runs the saver).
   it("an emptied box clears the line's saved count, which syncs like a count; a lone minus saves nothing", () => {
     expect(importsFrom(COUNT, '@/lib/cycle-count-cache')).toContain('clearLocalLine');
     expect(codeOnly(src)).toMatch(
-      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*const cleared = await clearLocalLine\(lineId\);\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
+      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*let cleared: Awaited<ReturnType<typeof clearLocalLine>>;\s*try \{\s*cleared = await clearLocalLine\(lineId\);\s*\} catch \(e\) \{[\s\S]*?countNotClearedAlert\(e\)[\s\S]*?return;\s*\}\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
     );
     // The box then shows the line's saved count, which is none.
     expect(codeOnly(src)).toMatch(

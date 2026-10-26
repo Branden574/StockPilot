@@ -443,6 +443,46 @@ describe('a queued clear of a line (B4a)', () => {
     expect(calls.log).toEqual(['outboxMarkSending:1', `api:${clearPath('l1')}`, 'outboxReject:1']);
   });
 
+  /**
+   * docket B10 merged with B4a: a clear travels as a count does, so it obeys
+   * the same owner rules. A clear queued before any workspace was saved has
+   * no workspace of its own: it is held while this account's own workspace
+   * is unknown, never sent with no workspace header (on main it was, with
+   * orgId null), and goes under that workspace once saved.
+   */
+  it("with no workspace of its own, is HELD while the account's own is unknown, then sent under it once saved", async () => {
+    live.orgId = null;
+    cacheMock.rows = [{ ...clearRow(1, 'l1'), organizationId: null }];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    // Not marked sending, bumped or rejected: still pending for the next pass.
+    expect(calls.log).toEqual([]);
+
+    live.orgId = 'org-own'; // this account's workspace load saved its choice
+    await cycleCountSync.forceSync();
+
+    expect(cacheMock.outboxMarkSending).toHaveBeenCalledWith(1, { orgId: 'org-own', userId: 'u1' });
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+    expect(apiMock.api).toHaveBeenCalledWith(
+      clearPath('l1'),
+      expect.objectContaining({ method: 'POST', orgId: 'org-own', asUserId: 'u1' }),
+    );
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${clearPath('l1')}`, 'outboxAck:1']);
+  });
+
+  it("another account's queued clear is HELD: never sent under this account, nor while nobody is signed in", async () => {
+    cacheMock.rows = [{ ...clearRow(1, 'l1'), userId: 'u9' }];
+
+    await cycleCountSync.forceSync();
+    live.userId = null;
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
   // An update rolled back while a clear waits on a phone: the older build
   // does not know `clear` and reads the row as a count. Its count rule, the
   // one below since the first offline count engine, finds no number and

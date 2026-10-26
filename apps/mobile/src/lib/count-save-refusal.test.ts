@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
 import { reviewNotACountMessage } from './count-box-words';
-import { COUNT_NOT_SAVED_ON_PHONE, countNotSavedAlert } from './count-save-refusal';
+import {
+  COUNT_NOT_CLEARED_ON_PHONE,
+  COUNT_NOT_SAVED_ON_PHONE,
+  countNotClearedAlert,
+  countNotSavedAlert,
+} from './count-save-refusal';
 import {
   OutboxOwnerUnknownError,
   OutboxWorkspaceLoadingError,
@@ -69,13 +74,35 @@ describe('what a count screen says when the phone did not save a count', () => {
     expect(outboxRefusalSentence(disk)).toBeNull();
     expect(outboxRefusalSentence(undefined)).toBeNull();
   });
+
+  // An emptied box's clear (B4a) is queued by the same writer as a count, so
+  // it is refused for the same reasons, said in the same sentences.
+  it('an emptied box the phone did not clear is said the same way', () => {
+    expect(countNotClearedAlert(new OutboxWorkspaceLoadingError())).toEqual({
+      title: 'Count not cleared',
+      message: LOADING,
+    });
+    expect(countNotClearedAlert(new OutboxOwnerUnknownError())).toEqual({
+      title: 'Count not cleared',
+      message: NO_ACCOUNT,
+    });
+    const disk = new Error('SQLITE_FULL: database or disk is full');
+    expect(countNotClearedAlert(disk)).toEqual({
+      title: 'Count not cleared',
+      message: COUNT_NOT_CLEARED_ON_PHONE,
+    });
+    expect(COUNT_NOT_CLEARED_ON_PHONE).toBe('This phone could not clear the count. Try again.');
+  });
 });
 
 describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone refused', () => {
   const COUNT = 'app/cycle-count/[id].tsx';
 
   /** The screen's line saver, built by its own useState initializer. */
-  function lineSaver(updateLocalLine: ReturnType<typeof vi.fn>) {
+  function lineSaver(
+    updateLocalLine: ReturnType<typeof vi.fn>,
+    clearLocalLine: ReturnType<typeof vi.fn> = vi.fn(async () => null),
+  ) {
     const alert = vi.fn();
     const setLines = vi.fn();
     const setDraft = vi.fn();
@@ -98,7 +125,9 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
       }),
       isEmptyBox: screenFunction(COUNT, 'isEmptyBox', {}),
       updateLocalLine,
+      clearLocalLine,
       countNotSavedAlert,
+      countNotClearedAlert,
       reportPhoneSaveFailure,
       Alert: { alert },
       setLines,
@@ -158,6 +187,99 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
     expect(setLines).toHaveBeenCalledTimes(1);
     expect(setDraft).toHaveBeenCalledTimes(1);
     expect(sync.forceSync).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * An emptied box clears the line's saved count (B4a, main #382) through
+   * clearLocalLine, the same writer as a count (queueLineEdit), so since
+   * decisions 2 and 3 it is refused in the same cases: the saved workspace is
+   * another account's or an older build's, or no account can be named. The
+   * saver awaited the clear with nothing to catch it: the refusal escaped
+   * unhandled, nothing was said, the box stayed empty over a line that kept
+   * its count, and Post said only "Sync first". It is said now, as a refused
+   * count is, and Try again clears it again.
+   */
+  it.each([
+    ['the workspace still loading', () => new OutboxWorkspaceLoadingError(), LOADING],
+    ['no account to queue it for', () => new OutboxOwnerUnknownError(), NO_ACCOUNT],
+  ] as const)(
+    'an emptied box the outbox refused (%s) is said, nothing is marked cleared, and Try again clears it again',
+    async (_why, refusal, sentence) => {
+      const save = saved();
+      const clear = vi.fn(async () => Promise.reject(refusal()));
+      const { saver, alert, setLines, setDraft, sync } = lineSaver(save, clear);
+
+      saver.persist('l1', '');
+      await settle();
+
+      expect(clear).toHaveBeenCalledWith('l1');
+      expect(save).not.toHaveBeenCalled();
+      expect(alert).toHaveBeenCalledTimes(1);
+      const [title, message, buttons] = alert.mock.calls[0] as [
+        string,
+        string,
+        { text: string; style?: string; onPress?: () => void }[],
+      ];
+      expect([title, message]).toEqual(['Count not cleared', sentence]);
+      expect(buttons.map((b) => [b.text, b.style])).toEqual([
+        ['Cancel', 'cancel'],
+        ['Try again', undefined],
+      ]);
+      // The box stays empty (its draft stays), so Post still waits for it, and
+      // the line keeps the count it had: nothing claims a clear.
+      expect(setLines).not.toHaveBeenCalled();
+      expect(setDraft).not.toHaveBeenCalled();
+      expect(sync.refreshPendingCount).not.toHaveBeenCalled();
+      expect(sync.forceSync).not.toHaveBeenCalled();
+
+      buttons[1]!.onPress!();
+      expect(saver.schedule).toHaveBeenCalledWith('l1', '');
+      // Expected and retryable: never reported to the team.
+      expect(sentry.captureException).not.toHaveBeenCalled();
+    },
+  );
+
+  it("an emptied box the phone's store failed to clear is said, and reported to the team", async () => {
+    const disk = new Error('SQLITE_IOERR: disk I/O error');
+    const { saver, alert, setDraft } = lineSaver(
+      saved(),
+      vi.fn(async () => Promise.reject(disk)),
+    );
+    saver.persist('l1', '');
+    await settle();
+    expect(alert.mock.calls[0]?.slice(0, 2)).toEqual([
+      'Count not cleared',
+      COUNT_NOT_CLEARED_ON_PHONE,
+    ]);
+    expect(setDraft).not.toHaveBeenCalled();
+    // Caught to say it, so no longer an unhandled rejection Sentry reports.
+    expect(sentry.captureException).toHaveBeenCalledWith(disk, {
+      tags: { area: 'cycle-count.clear' },
+    });
+  });
+
+  it('an emptied box over a saved count is marked cleared and sent, with nothing said', async () => {
+    const clear = vi.fn(async () => ({ outboxId: 2, idempotencyKey: 'k2' }));
+    const { saver, alert, setLines, setDraft, sync } = lineSaver(saved(), clear);
+    saver.persist('l1', '');
+    await settle();
+    expect(alert).not.toHaveBeenCalled();
+    expect(setLines).toHaveBeenCalledTimes(1);
+    expect(setDraft).toHaveBeenCalledTimes(1);
+    expect(sync.forceSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('an emptied box over a line with no saved count: nothing to clear, nothing said, the box settles', async () => {
+    const { saver, alert, setLines, setDraft, sync } = lineSaver(
+      saved(),
+      vi.fn(async () => null),
+    );
+    saver.persist('l1', '');
+    await settle();
+    expect(alert).not.toHaveBeenCalled();
+    expect(setLines).not.toHaveBeenCalled();
+    expect(setDraft).toHaveBeenCalledTimes(1);
+    expect(sync.forceSync).not.toHaveBeenCalled();
   });
 });
 

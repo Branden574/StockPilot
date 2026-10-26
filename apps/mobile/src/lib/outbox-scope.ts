@@ -119,10 +119,11 @@ export class OutboxSessionChangedError extends Error {
 }
 
 /**
- * Thrown by enqueue() and updateLocalLine() when no account can be named as
- * the owner of the row (nobody is signed in and nobody has been this run).
- * Refusing is the safe answer: a row queued with no owner is a legacy row,
- * and the next account to sign in would adopt it and send it as its own.
+ * Thrown by enqueue(), updateLocalLine() and clearLocalLine() when no account
+ * can be named as the owner of the row (nobody is signed in and nobody has
+ * been this run). Refusing is the safe answer: a row queued with no owner is
+ * a legacy row, and the next account to sign in would adopt it and send it as
+ * its own.
  */
 export class OutboxOwnerUnknownError extends Error {
   constructor() {
@@ -132,17 +133,18 @@ export class OutboxOwnerUnknownError extends Error {
 }
 
 /**
- * Thrown by enqueue() and updateLocalLine() while the saved workspace is not
- * one the row's account saved itself (docket B10): ANOTHER account's (the
- * moment after a different account signs in, before its workspace load saves
- * its own choice, or longer when that load fails offline), or an older
- * build's with no owner (until this build's first workspace load records it:
- * integrator decision 3). The row's workspace cannot be named then. Queued
- * with none, it would be sent under whichever workspace this account saves
- * next, after a switch the wrong one (S4a); queued with the other account's,
- * the server refuses it and the change is lost, or it lands in a workspace
- * this account did not choose. Nothing is written. Retryable: the same save
- * works once this account's workspace has loaded.
+ * Thrown by enqueue(), updateLocalLine() and clearLocalLine() while the saved
+ * workspace is not one the row's account saved itself (docket B10): ANOTHER
+ * account's (the moment after a different account signs in, before its
+ * workspace load saves its own choice, or longer when that load fails
+ * offline), or an older build's with no owner (until this build's first
+ * workspace load records it: integrator decision 3). The row's workspace
+ * cannot be named then. Queued with none, it would be sent under whichever
+ * workspace this account saves next, after a switch the wrong one (S4a);
+ * queued with the other account's, the server refuses it and the change is
+ * lost, or it lands in a workspace this account did not choose. Nothing is
+ * written. Retryable: the same save works once this account's workspace has
+ * loaded.
  */
 export class OutboxWorkspaceLoadingError extends Error {
   constructor() {

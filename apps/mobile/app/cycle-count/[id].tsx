@@ -37,7 +37,7 @@ import {
   rememberedCloseGate,
   type CloseGateState,
 } from '@/lib/count-close-gate';
-import { countNotSavedAlert } from '@/lib/count-save-refusal';
+import { countNotClearedAlert, countNotSavedAlert } from '@/lib/count-save-refusal';
 import { showWriteCta } from '@/lib/cta-gating';
 import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
@@ -303,7 +303,23 @@ export default function CycleCountDetail() {
           // while the box showed nothing (B4a). Anything else that is not a
           // count (a lone minus sign) saves nothing; Post waits on it.
           if (!isEmptyBox(raw)) return;
-          const cleared = await clearLocalLine(lineId);
+          let cleared: Awaited<ReturnType<typeof clearLocalLine>>;
+          try {
+            cleared = await clearLocalLine(lineId);
+          } catch (e) {
+            // Not cleared and nothing queued: the clear is queued by the same
+            // writer as a count, so it is refused in the same cases, or the
+            // phone's store failed. Said as a refused count is; the box stays
+            // empty over a line that keeps its count, so Post still waits for
+            // it, and Try again clears it again.
+            reportPhoneSaveFailure(e, 'cycle-count.clear');
+            const { title, message } = countNotClearedAlert(e);
+            Alert.alert(title, message, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
+            ]);
+            return;
+          }
           if (cleared) {
             setLines((curr) =>
               curr.map((l) =>
