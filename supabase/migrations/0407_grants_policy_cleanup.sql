@@ -52,8 +52,14 @@
 --    gets them for anon or authenticated. Supabase's 2026-10-30 change takes
 --    SELECT, INSERT, UPDATE and DELETE out of the same defaults and leaves
 --    these four in (0402's header); after this file they are out on every
---    stack too. Other schemas are Supabase's own (storage, auth, graphql and
---    the rest belong to its admin roles), out of this role's reach.
+--    stack too. The same revoke is made database-wide: Postgres adds the
+--    database-wide defaults to every schema's, so a revoke in public alone
+--    could not take away a database-wide grant. No stack has one (the
+--    preflight file reads production's), so there it changes nothing. Only
+--    public is ours: our migrations create no relation in another schema.
+--    (The postgres role's defaults in storage, from Supabase's own setup,
+--    hold the four too; storage's tables belong to Supabase's storage admin
+--    role, and the other schemas' defaults to its other admin roles.)
 -- 5. The lock prelude for the policy statements (LOCKS below).
 -- 6. Policies:
 --    4.4 idempotency_keys: the FOR ALL write policy becomes an INSERT and an
@@ -287,9 +293,11 @@ end
 $pre407$;
 
 -- ═══ 1. The report functions answer only for a signed-in caller (4.2) ═════
--- Each body is 0380's (md5 in the preflight) without the four lines that
--- answered a call with no user for service_role. Header, owner, comment and
--- the authenticated grant are kept; plpgsql takes no table lock here.
+-- Each body is 0380's (md5 in the preflight) with its service-role test taken
+-- out: the `if current_user <> 'service_role'` and `end if` around the
+-- unauthenticated raise, which let a call with no user through for
+-- service_role. Header, owner, comment and the authenticated grant are kept;
+-- plpgsql takes no table lock here.
 
 -- report_movement_type_summary
 create or replace function public.report_movement_type_summary(
@@ -796,8 +804,11 @@ revoke truncate, references, trigger, maintain
 revoke truncate, references, trigger, maintain on table public.warehouses from anon, authenticated;
 -- END GENERATED REVOKES
 
--- ═══ 4. ...and out of the postgres role's default privileges in public ════
+-- ═══ 4. ...and out of the postgres role's default privileges ══════════════
 alter default privileges for role postgres in schema public
+  revoke truncate, references, trigger, maintain on tables from anon, authenticated;
+-- Database-wide: a no-op unless such a default exists (see 4 above).
+alter default privileges for role postgres
   revoke truncate, references, trigger, maintain on tables from anon, authenticated;
 
 -- ═══ 5. The lock prelude (see LOCKS above) ═══════════════════════════════

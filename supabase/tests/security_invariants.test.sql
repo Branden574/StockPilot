@@ -1616,7 +1616,8 @@ create function pg_temp.inv42_holders() returns setof text language sql stable a
      and a.privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
 $f$;
 create function pg_temp.inv43_defaults() returns setof text language sql stable as $f$
-  select coalesce(d.defaclnamespace::regnamespace::text, '(all schemas)') || ':' || a.grantee::regrole::text
+  select case when d.defaclnamespace = 0 then '(all schemas)' else d.defaclnamespace::regnamespace::text end
+         || ':' || a.grantee::regrole::text
          || ':' || a.privilege_type
     from pg_default_acl d
     cross join lateral aclexplode(d.defaclacl) a
@@ -1643,28 +1644,31 @@ select is(
 
 -- INV-44. VACUITY + MUTATION CONTROL for INV-42 and INV-43: the swept
 -- population is not empty, a table created now is clean, and a planted grant
--- of each kind (table-level, column-level, default) is seen.
+-- of each kind (table-level, column-level, default) is seen. What the defaults
+-- give for SELECT, INSERT, UPDATE and DELETE is not judged here: it follows
+-- config.toml's auto_expose_new_tables (0402), not this invariant.
 create table public._sec_inv_probe_ddl_privs (id int primary key, note text);
 select ok(
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f')) > 100
-  and not exists (select 1 from pg_temp.inv42_holders() h where h like '\_sec\_inv\_probe\_ddl\_privs%')
-  and (select bool_and(has_table_privilege('authenticated', 'public._sec_inv_probe_ddl_privs', p))
-         from unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p),
-  'INV-44 control: the population is not empty, and a table created now holds the old defaults without the four'
+  and not exists (select 1 from pg_temp.inv42_holders() h where h like '\_sec\_inv\_probe\_ddl\_privs%'),
+  'INV-44 control: the population is not empty, and a table created now gives anon and authenticated none of the four'
 );
 grant truncate on table public._sec_inv_probe_ddl_privs to authenticated;
 grant references (note) on table public._sec_inv_probe_ddl_privs to anon;
 alter default privileges for role postgres in schema public grant maintain on tables to anon;
+alter default privileges for role postgres grant trigger on tables to authenticated;
 select is(
   array(select x from (select h from pg_temp.inv42_holders() h where h like '\_sec\_inv\_probe\_ddl\_privs%'
                        union all
                        select d from pg_temp.inv43_defaults() d) s(x) order by 1),
   array(select x from unnest(array['_sec_inv_probe_ddl_privs.note:anon:REFERENCES',
                                    '_sec_inv_probe_ddl_privs:authenticated:TRUNCATE',
-                                   'public:anon:MAINTAIN']) x order by 1),
-  'INV-44 control: a planted table-level, column-level and default grant are each seen'
+                                   'public:anon:MAINTAIN',
+                                   '(all schemas):authenticated:TRIGGER']) x order by 1),
+  'INV-44 control: a planted table-level, column-level, schema default and database-wide default grant are each seen'
 );
+alter default privileges for role postgres revoke trigger on tables from authenticated;
 alter default privileges for role postgres in schema public revoke maintain on tables from anon;
 drop table public._sec_inv_probe_ddl_privs;
 

@@ -14,8 +14,8 @@
 --    deletes from; service_role keeps everything it held.
 -- T. TRUNCATE, REFERENCES, TRIGGER and MAINTAIN: no public relation gives
 --    them to anon or authenticated, the postgres role's default privileges
---    in public give them only to service_role, and a table created now gets
---    exactly that.
+--    (in public and database-wide) give them to neither, and a table created
+--    now gets none of them for either.
 -- P. idempotency_keys policies: SELECT, INSERT and UPDATE for managers of the
 --    key's organization, no FOR ALL and no DELETE policy. A viewer and a
 --    staff member read no key; a manager reads their organization's keys and
@@ -123,7 +123,7 @@ select is(
   'report_movement_type_summary|42233e0aa916ae19bb416d3f1f56180c\n'
   'report_shrinkage_totals|9b5bcbea4bce96eb397fb554df28157a\n'
   'report_top_movers|3345ef4a35b5db0be5da578b4888fdec',
-  'R3: no body names service_role, each refuses a call with no user first, and each is 0380''s body without the four rollout lines');
+  'R3: no body names service_role, each refuses a call with no user first, and each is 0380''s body without its service-role test');
 
 -- EXECUTE back for this test only (rolled back): the body itself refuses.
 grant execute on function public.report_top_movers(uuid, timestamptz, integer) to service_role;
@@ -186,25 +186,29 @@ select is(
   0::bigint,
   'T1: no relation in public gives anon or authenticated TRUNCATE, REFERENCES, TRIGGER or MAINTAIN');
 
+-- Only the four are judged: what the same defaults give for SELECT, INSERT,
+-- UPDATE and DELETE is 0402's business and changes with config.toml's
+-- auto_expose_new_tables, not with this file.
 select is(
-  (select array_agg(a.grantee::regrole::text || ':' || a.privilege_type
-                    order by a.grantee::regrole::text, a.privilege_type)
+  (select array_agg(case when d.defaclnamespace = 0 then '(database-wide)' else d.defaclnamespace::regnamespace::text end || ':'
+                    || a.grantee::regrole::text || ':' || a.privilege_type order by 1)
      from pg_default_acl d cross join lateral aclexplode(d.defaclacl) a
-    where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace
+    where d.defaclrole = 'postgres'::regrole
+      and (d.defaclnamespace = 'public'::regnamespace or d.defaclnamespace = 0)
       and d.defaclobjtype = 'r'
-      and a.grantee in ('anon'::regrole, 'authenticated'::regrole)),
-  array['anon:DELETE', 'anon:INSERT', 'anon:SELECT', 'anon:UPDATE',
-        'authenticated:DELETE', 'authenticated:INSERT', 'authenticated:SELECT', 'authenticated:UPDATE'],
-  'T2: the postgres role''s default table privileges in public give anon and authenticated none of the four');
+      and a.grantee in ('anon'::regrole, 'authenticated'::regrole)
+      and a.privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')),
+  null::text[],
+  'T2: the postgres role''s default table privileges, in public and database-wide, give anon and authenticated none of the four');
 
 create table public.t407_probe (id int primary key);
 select is(
   (select array_agg(r || ':' || p order by r, p)
-     from unnest(array['anon', 'authenticated', 'service_role']) r,
+     from unnest(array['anon', 'authenticated']) r,
           unnest(array['TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN']) p
     where has_table_privilege(r, 'public.t407_probe', p)),
-  array['service_role:MAINTAIN', 'service_role:REFERENCES', 'service_role:TRIGGER', 'service_role:TRUNCATE'],
-  'T3: a table created in public now gives the four to service_role only (default privileges)');
+  null::text[],
+  'T3: a table created in public now gives anon and authenticated none of the four (default privileges)');
 drop table public.t407_probe;
 
 -- ══ P. idempotency_keys policies (4.4) ══════════════════════════════════════

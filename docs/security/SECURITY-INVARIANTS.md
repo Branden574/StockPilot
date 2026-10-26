@@ -1202,16 +1202,18 @@ actually fire.
   Before 0407 the two roles held the four on 122 of the 145 relations, 871
   privileges in all, every one from Supabase's default privileges.
 - **Enforced by**: 0407's GENERATED REVOKES block (one statement per relation
-  that held any of them, from `node scripts/gen-explicit-grants-sql.mjs
-  --revokes`) and its `alter default privileges ... revoke`. No function or
-  trigger in `public` or `ledger` truncates, locks, refreshes or maintains a
-  table, and foreign key checks run as the table owner, which is why the
-  revoke changes no API path. `service_role` keeps them: it is the server's own
-  role and bypasses RLS anyway.
+  that held any of them, written by
+  `node scripts/gen-explicit-grants-sql.mjs --revokes`) and its two
+  `alter default privileges ... revoke` statements
+  (in `public`, and database-wide, where no stack holds a grant today). No
+  function or trigger in `public` or `ledger` truncates, locks, refreshes or
+  maintains a table, and foreign key checks run as the table owner, which is
+  why the revoke changes no API path. `service_role` keeps them: it is the
+  server's own role and bypasses RLS anyway.
 - **Tested at**: INV-42 (every relation, table and column level), INV-43 (the
   default privileges), INV-44 (control: the population is not empty, a table
-  created now is clean, and a planted table-level, column-level and default
-  grant are each seen); per object in
+  created now is clean, and a planted table-level, column-level, schema
+  default and database-wide default grant are each seen); per object in
   [`0407_grants_policy_cleanup.test.sql`](../../supabase/tests/0407_grants_policy_cleanup.test.sql)
   (T1-T3).
 
