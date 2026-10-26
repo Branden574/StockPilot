@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 const DETAIL = readFileSync(path.resolve(__dirname, '../../app/rentals/[id].tsx'), 'utf8');
 const LIST = readFileSync(path.resolve(__dirname, '../screens/rentals.tsx'), 'utf8');
+const LIST_READ = readFileSync(path.resolve(__dirname, './rental-list.ts'), 'utf8');
 const LAYOUT = readFileSync(path.resolve(__dirname, '../../app/_layout.tsx'), 'utf8');
 
 function code(src: string): string {
@@ -161,11 +162,35 @@ describe('src/screens/rentals.tsx: the list', () => {
       /setCheckouts\(\(prev\) => settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)\);/,
     );
     expect(src).toMatch(
-      /setCheckouts\(\(prev\) => settleRentalCheckouts\(prev, orgId, \{ ok: true, rows, context, readAt \}\)\);/,
+      /setCheckouts\(\(prev\) =>\s*settleRentalCheckouts\(prev, orgId, \{ ok: true, rows, extent, context, readAt \}\),?\s*\);/,
     );
-    expect(src).toContain('const reason = rentalReadErrorMessage(error, status);');
+    expect(src).toContain('const reason = read.message;');
     expect(src).toContain('{rentalListStaleCopy(shown.staleReason)}');
     expect(src).toMatch(/shown\?\.staleReason \? \(/);
+  });
+
+  // B32: the list read the newest 100 rentals of every status, so an older
+  // rental still out was neither listed nor in "N OUT · N OVERDUE". It reads
+  // every rental still out and the newest closed ones (rental-list.ts, where
+  // the read is tested), and says how many closed ones it leaves out.
+  // Mutation caught: the old `.limit(100)` read, or the note left off.
+  it('reads every rental still out through readRentalList, and says what it leaves out', () => {
+    const src = code(LIST);
+    expect(src).toContain(
+      'settleIdBatchRead(readRentalList(supabase, orgId), rentalReadFailureMessage),',
+    );
+    expect(src).not.toContain(".from('rentals')");
+    expect(src).not.toMatch(/\.limit\(100\)/);
+    expect(src).toContain("const more = shown?.extent?.openCapped ? '+' : '';");
+    expect(src).toContain(
+      "`RENTALS · ${out}${more} OUT${overdue > 0 ? ` · ${overdue}${more} OVERDUE` : ''}`",
+    );
+    expect(src).toContain(
+      'const historyNote = checkoutsFailed ? null : rentalHistoryNote(shown?.extent ?? null);',
+    );
+    expect(src).toMatch(
+      /footer=\{\s*historyNote \? \(\s*<Body size=\{13\} muted style=\{styles\.historyNote\}>\s*\{historyNote\}/,
+    );
   });
 
   it('with no workspace, both views say so and a pull loads the workspace again', () => {
@@ -184,7 +209,11 @@ describe('src/screens/rentals.tsx: the list', () => {
 
   it('selects the reminder columns and reads the reminder context with the rows', () => {
     const src = code(LIST);
-    expect(src).toContain('${RENTAL_LIST_REMINDER_COLUMNS}');
+    // The select is the list read's (rental-list.ts, B32).
+    expect(code(LIST_READ)).toMatch(
+      /RENTAL_LIST_COLUMNS = `[^`]*\$\{RENTAL_LIST_REMINDER_COLUMNS\}/,
+    );
+    expect(src).toContain('readRentalList(supabase, orgId)');
     expect(src).toContain('loadRentalReminderContext(supabase, orgId),');
     expect(src).toContain('overdue_reminder_sent_at: (r.overdue_reminder_sent_at as string | null) ?? null,');
     expect(src).toContain('borrower_user_id: (r.borrower_user_id as string | null) ?? null,');

@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -348,5 +349,34 @@ describe('DataListScreen keeps loading, empty, failed and offline apart', () => 
     );
     // The rows are the caller's, whatever the read did.
     expect(attrText(els[0]!, 'data', sf)).toBe('data');
+  });
+
+  // B32: the phone Rentals list's "Showing the newest 100 of N returned or
+  // cancelled rentals" line reaches the screen only through `footer`
+  // (screens/rentals.tsx passes it: rental-detail-wiring.test.ts). The
+  // FlatList's footer is taken from the source, compiled and drawn with
+  // stand-in elements. Mutation caught: ListFooterComponent dropped (the
+  // line never drawn), or drawn under the empty or failed state's words.
+  it("the caller's footer is drawn under the last row, and only when there are rows", () => {
+    const footer = attrExpression(els[0]!, 'ListFooterComponent', sf);
+    expect(footer, 'ListFooterComponent').toBeDefined();
+    const js = ts.transpileModule(`(${footer!.getText(sf)});`, {
+      fileName: 'footer.tsx',
+      compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, jsxFactory: 'h' },
+    }).outputText;
+    const draw = (given: unknown, data: unknown[]) =>
+      new vm.Script(js).runInNewContext({
+        h: (type: unknown, props: unknown, ...children: unknown[]) => ({ type, props, children }),
+        View: 'View',
+        footer: given,
+        data,
+      }) as unknown;
+    const note = { type: 'Body', props: null, children: ['Showing the newest 100 of 240'] };
+    expect(draw(note, [{ id: 'r1' }])).toEqual({ type: 'View', props: null, children: [note] });
+    // No rows (the empty state, or a failed read's words): no footer under them.
+    expect(draw(note, [])).toBeFalsy();
+    // No footer given: nothing drawn.
+    expect(draw(undefined, [{ id: 'r1' }])).toBeFalsy();
+    expect(draw(null, [{ id: 'r1' }])).toBeFalsy();
   });
 });

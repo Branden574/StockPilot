@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'v
  */
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/lib/use-catalog-thumbnails', () => ({ useCatalogThumbnails: () => ({}) }));
+vi.mock('@/lib/use-catalog-thumbnails', () => ({
+  useCatalogPages: () => ({ urls: {}, lqip: {}, descriptions: {} }),
+}));
 vi.mock('next/image', () => ({ default: () => null }));
 
 import { PublicOrdersV2 } from './public-orders-v2';
@@ -38,7 +40,6 @@ function item(over: Partial<PublicCatalogItem> & { id: string }): PublicCatalogI
   return {
     displayName: `Item ${over.id}`,
     publicDescription: null,
-    itemType: null,
     categoryId: null,
     categoryLabel: null,
     imageUrl: null,
@@ -118,7 +119,6 @@ describe('public fields only', () => {
       | 'id'
       | 'displayName'
       | 'publicDescription'
-      | 'itemType'
       | 'categoryId'
       | 'categoryLabel'
       | 'imageUrl'

@@ -15,7 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Done does on the New order page, so nothing is written back.
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/lib/use-catalog-thumbnails', () => ({ useCatalogThumbnails: () => ({}) }));
+vi.mock('@/lib/use-catalog-thumbnails', () => ({
+  useCatalogPages: () => ({ urls: {}, lqip: {}, descriptions: {} }),
+}));
 vi.mock('next/image', () => ({ default: () => null }));
 
 import { PublicOrdersV2 } from './public-orders-v2';
@@ -29,7 +31,6 @@ const CABLE: PublicCatalogItem = {
   id: 'cable',
   displayName: 'HDMI Cable',
   publicDescription: null,
-  itemType: null,
   categoryId: null,
   categoryLabel: null,
   imageUrl: null,

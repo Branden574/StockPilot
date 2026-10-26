@@ -350,16 +350,27 @@ describe('settleRentalCheckouts: what the list shows after a read', () => {
     readAt: 1_000,
     failed: false,
     staleReason: null,
+    extent: { closedShown: 1, closedTotal: 1, openCapped: false },
   };
 
   it('a read that worked replaces everything, and clears a banner', () => {
+    const extent = { closedShown: 100, closedTotal: 140, openCapped: false };
     const next = settleRentalCheckouts({ ...shownA, staleReason: 'x' }, 'org-a', {
       ok: true,
       rows: ['r3'],
+      extent,
       context: ctxA,
       readAt: 2_000,
     });
-    expect(next).toEqual({ orgId: 'org-a', rows: ['r3'], context: ctxA, readAt: 2_000, failed: false, staleReason: null });
+    expect(next).toEqual({
+      orgId: 'org-a',
+      rows: ['r3'],
+      context: ctxA,
+      readAt: 2_000,
+      failed: false,
+      staleReason: null,
+      extent,
+    });
   });
 
   // Review 2026-09-26: offline, going back from a rental re-read the list and
@@ -381,7 +392,15 @@ describe('settleRentalCheckouts: what the list shows after a read', () => {
       context: ctxUnknown,
       readAt: 2_000,
     });
-    expect(next).toEqual({ orgId: 'org-b', rows: [], context: ctxUnknown, readAt: 2_000, failed: true, staleReason: null });
+    expect(next).toEqual({
+      orgId: 'org-b',
+      rows: [],
+      context: ctxUnknown,
+      readAt: 2_000,
+      failed: true,
+      staleReason: null,
+      extent: null,
+    });
   });
 
   it('with nothing shown yet (or only a failure), a failure is the failure', () => {

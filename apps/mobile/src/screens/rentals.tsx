@@ -11,6 +11,7 @@ import { IconChip } from '@/components/ui/row';
 import { Thumb } from '@/components/ui/thumb';
 import { Body, Mono } from '@/components/ui/text';
 import { showWriteCta } from '@/lib/cta-gating';
+import { settleIdBatchRead } from '@/lib/id-batches';
 import { signListThumbnails } from '@/lib/image-cache';
 import {
   RENTAL_ITEMS_LIMIT,
@@ -19,14 +20,14 @@ import {
   type RentalItemRow,
   type RentalItemSource,
 } from '@/lib/rental-items';
+import { readRentalList, rentalHistoryNote } from '@/lib/rental-list';
 import {
   RENTAL_LIST_NO_WORKSPACE_TITLE,
-  RENTAL_LIST_REMINDER_COLUMNS,
   loadRentalReminderContext,
   rentalDayLabel,
   rentalListReminderMark,
   rentalListStaleCopy,
-  rentalReadErrorMessage,
+  rentalReadFailureMessage,
   rentalStatusPill,
   settleRentalCheckouts,
   type RentalCheckoutsView,
@@ -106,19 +107,13 @@ export default function RentalsScreen() {
     // rule): overdue badges refresh exactly when the list does - on focus and
     // pull-to-refresh - instead of whenever an unrelated re-render happens.
     const readAt = Date.now();
-    // The reminder context rides along; it never fails the list (an
-    // unreadable switch leaves only the marks that do not depend on it).
-    const [{ data, error, status }, context] = await Promise.all([
-      supabase
-        .from('rentals')
-        .select(
-          `id, status, borrower_name, borrower_email, ${RENTAL_LIST_REMINDER_COLUMNS},
-           checked_out_at, expected_return_at, returned_at, notes,
-           warehouse:warehouses!warehouse_id (name)`,
-        )
-        .eq('organization_id', orgId)
-        .order('checked_out_at', { ascending: false })
-        .limit(100),
+    // Every rental still out and the newest returned or cancelled ones
+    // (rental-list.ts): it read the newest 100 of every status, and an older
+    // rental still out was neither listed nor counted (B32). The reminder
+    // context rides along; it never fails the list (an unreadable switch
+    // leaves only the marks that do not depend on it).
+    const [read, context] = await Promise.all([
+      settleIdBatchRead(readRentalList(supabase, orgId), rentalReadFailureMessage),
       loadRentalReminderContext(supabase, orgId),
     ]);
     if (seq !== loadSeqRef.current) return;
@@ -127,13 +122,14 @@ export default function RentalsScreen() {
     // organization already shows, with a banner (settleRentalCheckouts):
     // offline, coming back from a rental used to replace them with "Could not
     // load rentals.".
-    if (error) {
-      console.warn('rentals list', error);
-      const reason = rentalReadErrorMessage(error, status);
+    if (!read.ok) {
+      console.warn('rentals list', read.message);
+      const reason = read.message;
       setCheckouts((prev) => settleRentalCheckouts(prev, orgId, { ok: false, reason, context, readAt }));
       return;
     }
-    const rows: RentalRow[] = (data ?? []).map((row) => {
+    const { extent } = read.value;
+    const rows: RentalRow[] = read.value.rows.map((row) => {
       const r = row as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
       return {
@@ -150,7 +146,9 @@ export default function RentalsScreen() {
         warehouse: Array.isArray(wh) ? wh[0] ?? null : wh,
       };
     });
-    setCheckouts((prev) => settleRentalCheckouts(prev, orgId, { ok: true, rows, context, readAt }));
+    setCheckouts((prev) =>
+      settleRentalCheckouts(prev, orgId, { ok: true, rows, extent, context, readAt }),
+    );
   }, [orgId]);
 
   // The rental inventory. Same rule as web's Rentals -> Items: the shared
@@ -291,17 +289,22 @@ export default function RentalsScreen() {
   const checkoutsFailed = shown?.failed ?? false;
   const now = shown?.readAt ?? 0;
   const reminderContext: RentalReminderContext = shown?.context ?? { remindersOn: null, timeZone: null };
+  // Every rental still out is read (rental-list.ts), so these counts are
+  // exact; past the read's ceiling they end in "+".
   const out = rows.filter((r) => r.status === 'out').length;
   const overdue = rows.filter(
     (r) => r.status === 'out' && new Date(r.expected_return_at) < new Date(),
   ).length;
+  const more = shown?.extent?.openCapped ? '+' : '';
+  // Under the list when it does not show every returned or cancelled rental.
+  const historyNote = checkoutsFailed ? null : rentalHistoryNote(shown?.extent ?? null);
 
   return (
     <DataListScreen
       eyebrow={
         checkoutsFailed || !shown
           ? 'RENTALS · CHECKOUTS'
-          : `RENTALS · ${out} OUT${overdue > 0 ? ` · ${overdue} OVERDUE` : ''}`
+          : `RENTALS · ${out}${more} OUT${overdue > 0 ? ` · ${overdue}${more} OVERDUE` : ''}`
       }
       title="Rental"
       italic="checkouts."
@@ -345,6 +348,13 @@ export default function RentalsScreen() {
       loading={shown === null && !noWorkspace}
       refreshing={refreshing}
       onRefresh={refresh}
+      footer={
+        historyNote ? (
+          <Body size={13} muted style={styles.historyNote}>
+            {historyNote}
+          </Body>
+        ) : undefined
+      }
       trailing={
         canCreate ? (
           // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
@@ -561,4 +571,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 10,
   },
+  // The line under the last card when older returned or cancelled rentals
+  // are not listed: centred, after the list's own 10pt gap.
+  historyNote: { textAlign: 'center', paddingTop: 6, paddingHorizontal: 8 },
 });

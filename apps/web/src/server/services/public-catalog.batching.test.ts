@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The public catalog and the link editor batch their id lists.
  *
- * A link's catalog serves up to 500 items and the editor changes up to 1000
+ * A link's catalog serves up to 2,000 items and the editor changes up to 1000
  * at once. One `.in()` past ~215 uuids answers 414 locally and fails as
  * "fetch failed" in production after ~7 s of retries. The catalog's item and
  * reservation reads ignored their errors: items silently dropped out and
  * reserved stock read as available, cached for 60 s. Both now throw (a throw
- * is never cached); categories and blur placeholders degrade, reported.
+ * is never cached); category labels degrade, reported. Blur placeholders are
+ * no longer read here: they come with the photo pages (B32 decision 3).
  */
 
 const { reportError, adminRef, revalidateTag } = vi.hoisted(() => ({
@@ -30,13 +31,14 @@ import {
   type MockCall,
 } from '@/test/supabase-mock';
 
+import { expandPublicCatalog } from '@/components/orders/public-v2/catalog-index';
+
 import { audit } from './audit';
 import { getPublicCatalogForLink } from './public-catalog';
 import { PublicLinksService } from './public-links';
 
 const uuid = (i: number, p = '0') => `${p.repeat(8)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const ITEMS = Array.from({ length: 250 }, (_, i) => uuid(i, 'a'));
-const LINK = { id: 'link-1', organizationId: 'org-1', availabilityDisplay: 'exact' as const };
 
 function inList(call: MockCall, column: string): string[] {
   return (inFilters(call).find(([c]) => c === column)?.[1] ?? []) as string[];
@@ -49,13 +51,16 @@ function catalogAdmin(
     failItemsBatch?: number;
     failReservationBatch?: number;
     failCategories?: boolean;
-    failLqip?: boolean;
   } = {},
 ) {
   let itemCalls = 0;
   let resvCalls = 0;
   const lists = { items: [] as string[][], resv: [] as string[][], lqip: [] as string[][] };
   const stub = makeSupabaseStub({
+    'public_request_links.select': {
+      data: { organization_id: 'org-1', availability_display: 'exact' },
+      error: null,
+    },
     'rpc:public_link_eligible_items': {
       data: ITEMS.map((item_id) => ({ item_id, max_qty: null })),
       error: null,
@@ -70,11 +75,9 @@ function catalogAdmin(
           id,
           name: `Item ${id.slice(-3)}`,
           public_display_name: null,
-          public_description: null,
           quantity_on_hand: 5,
-          item_type: 'book',
           category_id: 'cat-1',
-          custom_fields: null,
+          thumbnail_url: null,
         })),
         error: null,
       };
@@ -97,10 +100,10 @@ function catalogAdmin(
     'categories.select': opts.failCategories
       ? { data: null, error: { message: 'boom' } }
       : { data: [{ id: 'cat-1', name: 'Novels' }], error: null },
+    // Recorded so a test can say the catalog no longer reads it.
     'item_images.select': (call) => {
       const list = inList(call, 'item_id');
       lists.lqip.push(list);
-      if (opts.failLqip) return { data: null, error: { message: 'boom' } };
       return { data: list.map((item_id) => ({ item_id, lqip: `data:${item_id}` })), error: null };
     },
   });
@@ -113,36 +116,44 @@ beforeEach(() => {
 });
 
 describe('getPublicCatalogForLink with 250 eligible items', () => {
-  it('reads items, reservations and blurs in batches and nets a reservation from the last batch', async () => {
+  const load = async () => expandPublicCatalog(await getPublicCatalogForLink('link-1', 'wh-1'));
+
+  it('reads items and reservations in batches and nets a reservation from the last batch', async () => {
     const lists = catalogAdmin();
-    const out = await getPublicCatalogForLink(LINK, 'wh-1');
+    const out = await load();
     expect(lists.items.map((l) => l.length)).toEqual([100, 100, 50]);
     expect(lists.resv.map((l) => l.length)).toEqual([100, 100, 50]);
-    expect(lists.lqip.map((l) => l.length)).toEqual([100, 100, 50]);
     expect(out).toHaveLength(250);
     const last = out.find((i) => i.id === uuid(249, 'a'));
     expect(last?.availability).toEqual({ kind: 'exact', count: 1 });
-    expect(last?.lqip).toBe(`data:${uuid(249, 'a')}`);
     expect(last?.categoryLabel).toBe('Novels');
+  });
+
+  // Decision 3: blur placeholders are heavy (up to 2,000 characters each) and
+  // ride with the photo pages, a page at a time, not in the cached catalog.
+  it('reads no blur placeholders: they come with the photo pages', async () => {
+    const lists = catalogAdmin();
+    const out = await load();
+    expect(lists.lqip).toEqual([]);
+    expect(out.every((i) => i.lqip === null && i.publicDescription === null)).toBe(true);
   });
 
   it('throws when an item batch fails, instead of dropping its items', async () => {
     catalogAdmin({ failItemsBatch: 2 });
-    await expect(getPublicCatalogForLink(LINK, 'wh-1')).rejects.toBeTruthy();
+    await expect(load()).rejects.toBeTruthy();
   });
 
   it('throws when a reservation batch fails, instead of showing reserved stock as available', async () => {
     catalogAdmin({ failReservationBatch: 3 });
-    await expect(getPublicCatalogForLink(LINK, 'wh-1')).rejects.toBeTruthy();
+    await expect(load()).rejects.toBeTruthy();
   });
 
-  it('still renders, reported, when category labels or blur placeholders fail', async () => {
-    catalogAdmin({ failCategories: true, failLqip: true });
-    const out = await getPublicCatalogForLink(LINK, 'wh-1');
+  it('still renders, reported, when category labels fail', async () => {
+    catalogAdmin({ failCategories: true });
+    const out = await load();
     expect(out).toHaveLength(250);
     expect(out[0]?.categoryLabel).toBeNull();
-    expect(out[0]?.lqip).toBeNull();
-    expect(tags().sort()).toEqual(['public_catalog.categories', 'public_catalog.lqip']);
+    expect(tags()).toEqual(['public_catalog.categories']);
   });
 });
 

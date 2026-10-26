@@ -148,6 +148,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
               is: (_c: string, _v: unknown) => self,
               order: (_c: string, _o?: unknown) => self,
               limit: (_n: number) => self,
+              // The list reads a page (B32); this stub hands back every row.
+              range: (_from: number, _to: number) => self,
               // Thenable: resolves when awaited directly (list path)
               then: (
                 resolve: (v: { data: unknown[]; error: null }) => unknown,

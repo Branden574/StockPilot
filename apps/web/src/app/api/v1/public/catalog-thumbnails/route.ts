@@ -1,51 +1,75 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
+import {
+  EMPTY_PUBLIC_PHOTO_PAGE,
+  parsePublicPhotoPageQuery,
+  publicPhotoPageUrl,
+  type PublicPhotoPage,
+} from '@/components/orders/public-v2/photo-pages';
 import { ItemImagesService } from '@/server/services/item-images';
-import { isLinkOpen } from '@/server/services/public-catalog';
+import { isLinkOpen, readPublicPhotoPage } from '@/server/services/public-catalog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Public version of /api/orders/catalog-thumbnails.
+ * The photo pages of a request link's public catalog (/r/<token>).
  *
- * Auth: validated via `?token=<public_request_token>` instead of a
- * logged-in session. The token resolves to an organization, then we
- * confirm the warehouseId belongs to that org and is publicly orderable.
- * On success, returns the same `{ urls: Record<itemId, signedUrl> }` map
- * that the staff endpoint returns, so the public picker can reuse the
- * same deferred-thumbnail pattern without any signed-in credentials.
+ * Auth: `?token=<request link token>` instead of a signed-in session. The
+ * token resolves to a request link and its organization; the warehouse must
+ * belong to that organization and be publicly orderable; the items are the
+ * link's, through the same `public_link_eligible_items` predicate as the page
+ * and the submit endpoint, so the route cannot be used to list items a link
+ * does not offer.
+ *
+ * One request answers ONE page of the link's eligible items, at most
+ * PUBLIC_PHOTO_PAGE_ITEMS (500) in item_id order, with the URL of the next
+ * page (components/orders/public-v2/photo-pages.ts): each item's photo (or
+ * external cover), its blur placeholder and its public description, at most
+ * PHOTO_PAGE_ITEM_MAX_BYTES an item, so a page stays under Vercel's 4.5 MB.
+ * So an anonymous request signs at most 500 photos and reads the database at
+ * most 14 times. It used to sign a photo for every eligible item (to the
+ * catalog's ceiling) on each request (B32, integrator decisions 1 and 3).
+ *
+ * Only the one URL of a page is answered. Any other query the route sees (an
+ * extra parameter, another order, page=0) is a 400 with no-store before
+ * anything is read: each would be a CDN cache key of its own, so the work
+ * above could be repeated at will (decision 2). Next rewrites some spellings
+ * into the page's own URL before this handler runs (a parameter named nxtP...
+ * or nxtI..., a percent-escape, an empty `&` segment: see photo-pages.ts), so
+ * those are answered as the page; the page's eligibility window, its costly
+ * read, then comes from the data cache whatever the spelling.
+ *
+ * The answer is the same for every visitor of the same URL until item-image
+ * or warehouse state changes, so the Vercel CDN serves it for 60 s and stale
+ * for 5 more minutes. Anonymous, no personalization: a public cache is safe.
  */
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const token = url.searchParams.get('token');
-  const warehouseId = url.searchParams.get('warehouseId');
+const CDN_CACHE = 'public, s-maxage=60, stale-while-revalidate=300';
 
-  if (!token || !warehouseId) {
+function answer(page: PublicPhotoPage) {
+  return NextResponse.json(page, { headers: { 'Cache-Control': CDN_CACHE } });
+}
+
+export async function GET(req: NextRequest) {
+  // Checks that cost no read come first: a refused URL never reaches the
+  // database.
+  const query = parsePublicPhotoPageQuery(new URL(req.url).search);
+  if (!query) {
     return NextResponse.json(
-      { error: 'token + warehouseId required' },
-      { status: 400 },
+      { error: 'not a photo page URL' },
+      { status: 400, headers: { 'Cache-Control': 'no-store' } },
     );
   }
-
-  // Same response is returned for every visitor of the same
-  // (token, warehouseId) pair until item-image or warehouse-publicity state
-  // changes. Allow the Vercel CDN to serve it from edge for 60s and serve
-  // stale-while-revalidate for another 5 minutes. Anonymous endpoint —
-  // no personalization, no auth context — so public-cache is safe.
-  const cdnCacheControl = 'public, s-maxage=60, stale-while-revalidate=300';
+  const { token, warehouseId, page } = query;
 
   const admin = createAdminClient();
 
-  // Resolve the token: links-table first (mig 0261 — the migrated General
-  // links carry the legacy org tokens), organizations fallback. The signed
-  // set is the LINK's eligible catalog, resolved through the same
-  // `public_link_eligible_items` predicate as the page and the submit
-  // endpoint, so thumbnails can't be used to enumerate items a link
-  // doesn't expose.
-  // Mig 0330: compare sha256(token) against the hashed at-rest column.
+  // Resolve the token through the links table (mig 0261: the migrated
+  // General links carry the legacy org tokens). Mig 0330: compare
+  // sha256(token) against the hashed at-rest column.
   const { data: linkRow } = await admin
     .from('public_request_links')
     .select('id, organization_id, active, expires_at, available_from, available_until')
@@ -61,37 +85,26 @@ export async function GET(req: NextRequest) {
   };
   const link = (linkRow as LinkRow | null) ?? null;
 
-  let organizationId: string;
-  if (link) {
-    if (
-      !isLinkOpen({
-        active: link.active,
-        expiresAt: link.expires_at,
-        availableFrom: link.available_from,
-        availableUntil: link.available_until,
-      })
-    ) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = link.organization_id;
-  } else {
-    // Legacy fallback — org token without a links row.
-    const { data: org } = await admin
-      .from('organizations')
-      .select('id')
-      .eq('public_request_token_hash', sha256Hex(token))
-      .maybeSingle();
-    if (!org) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = (org as { id: string }).id;
+  // No links row: either no such token, or a legacy organization token. The
+  // page renders an EMPTY catalog for a legacy token (r/[token]/page.tsx, fail
+  // closed), so there is nothing of its to sign.
+  if (!link) return answer(EMPTY_PUBLIC_PHOTO_PAGE);
+  if (
+    !isLinkOpen({
+      active: link.active,
+      expiresAt: link.expires_at,
+      availableFrom: link.available_from,
+      availableUntil: link.available_until,
+    })
+  ) {
+    return answer(EMPTY_PUBLIC_PHOTO_PAGE);
   }
+  const organizationId = link.organization_id;
 
   // Module gate (review finding 2026-07-12): mirror the submit route — the
   // `public_requests` module is optional, so an explicit enabled row is
   // required. Without this, an org that disabled the module kept signing
-  // catalog thumbnails for anyone holding an old link. Empty response (not
-  // an error) — same shape as every other ineligible branch here.
+  // catalog photos for anyone holding an old link.
   const { data: modRow } = await admin
     .from('organization_modules')
     .select('module_id')
@@ -99,9 +112,7 @@ export async function GET(req: NextRequest) {
     .eq('module_id', 'public_requests')
     .eq('enabled', true)
     .maybeSingle();
-  if (!modRow) {
-    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-  }
+  if (!modRow) return answer(EMPTY_PUBLIC_PHOTO_PAGE);
 
   // Confirm warehouseId belongs to this org and is publicly orderable.
   const { data: wh } = await admin
@@ -111,38 +122,10 @@ export async function GET(req: NextRequest) {
     .eq('organization_id', organizationId)
     .eq('is_public_orderable', true)
     .maybeSingle();
-  if (!wh) {
-    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-  }
+  if (!wh) return answer(EMPTY_PUBLIC_PHOTO_PAGE);
 
-  // Eligible item_ids for this link + warehouse (or the pre-0261 book set
-  // on the legacy fallback path).
-  let itemIds: string[];
-  if (link) {
-    const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
-      p_link_id: link.id,
-      p_warehouse_id: warehouseId,
-    });
-    itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
-      .map((r) => r.item_id)
-      .slice(0, 500);
-  } else {
-    const { data: items } = await admin
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('item_type', 'book')
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .limit(500);
-    itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
-  }
-  if (itemIds.length === 0) {
-    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-  }
-
-  // Use ItemImagesService with an admin-level ctx so it can sign URLs.
+  // The service signs; an admin-level context so it can (ItemImagesService
+  // calls no module gate, and `inventory` is a core module).
   const imagesSvc = new ItemImagesService({
     supabase: admin,
     organizationId,
@@ -150,18 +133,35 @@ export async function GET(req: NextRequest) {
     role: 'admin',
     mfaRequired: false,
     mfaSatisfied: true,
-    // No module gating on this public image-signing path; ItemImagesService
-    // doesn't call assertModuleEnabled and `inventory` is a core module.
     enabledModules: new Set(),
   });
-  // Sign the MASTER (sharp) source, not the 200px thumb — the public page
-  // renders through next/image, which downscales to the exact card cell, so
-  // feeding a large source produces a crisp retina thumbnail. A 200px thumb
-  // would upscale ~2.5× in the cell and read blurry.
-  const urlMap = await imagesSvc.primaryMasterUrlsForItems(itemIds);
 
-  const urls: Record<string, string> = {};
-  for (const [k, v] of urlMap) urls[k] = v;
-
-  return NextResponse.json({ urls }, { headers: { 'Cache-Control': cdnCacheControl } });
+  // A failed read is not an empty page. An empty map with the CDN header
+  // would show no photos to every visitor for a minute and five more stale;
+  // a 500 no cache keeps, and the page's hook retries it
+  // (lib/use-catalog-thumbnails.ts).
+  try {
+    // Signs the MASTER (sharp) source, not the 200px thumb — the public page
+    // renders through next/image, which downscales to the exact card cell.
+    const content = await readPublicPhotoPage(
+      admin,
+      { id: link.id, organizationId },
+      warehouseId,
+      page,
+      (paths) => imagesSvc.signedUrls(paths),
+    );
+    return answer({
+      urls: content.urls,
+      lqip: content.lqip,
+      descriptions: content.descriptions,
+      next:
+        content.nextPage === null ? null : publicPhotoPageUrl(token, warehouseId, content.nextPage),
+    });
+  } catch (err) {
+    void reportError(err, { tag: 'public.catalog_thumbnails.page', organizationId });
+    return NextResponse.json(
+      { error: 'internal_error' },
+      { status: 500, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
 }

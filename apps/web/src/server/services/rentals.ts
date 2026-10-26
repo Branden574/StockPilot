@@ -71,6 +71,27 @@ export interface RentalLineRow {
 export interface ListRentalsFilters {
   status?: RentalStatus | 'overdue' | 'all';
   warehouseId?: string;
+  /** 1-based page of RENTALS_PAGE_SIZE rows; anything else reads page 1. */
+  page?: number;
+}
+
+/** Rentals per page on the web Rentals list. */
+export const RENTALS_PAGE_SIZE = 50;
+
+/**
+ * The highest page a URL can ask for. Larger values read as this, so a
+ * hostile `?page=` never becomes a huge offset; past the end clamps anyway.
+ */
+const RENTALS_MAX_PAGE = 10_000;
+
+function rentalsPage(raw: number | undefined): number {
+  if (raw === undefined || !Number.isFinite(raw) || raw < 1) return 1;
+  return Math.min(Math.floor(raw), RENTALS_MAX_PAGE);
+}
+
+/** PostgREST's 416 for a `count=exact` window that starts past the end. */
+function isRangeNotSatisfiable(error: { code?: string } | null): boolean {
+  return error?.code === 'PGRST103';
 }
 
 export class RentalsService {
@@ -81,35 +102,78 @@ export class RentalsService {
   }
 
   /**
-   * Lists rentals with optional status filter. 'overdue' is derived
-   * (status='out' AND expected_return_at < now()) so consumers don't
-   * need to know about the underlying column shape.
+   * One page of rentals (RENTALS_PAGE_SIZE) with the exact total for the
+   * view, checked out newest first. 'overdue' is derived (status='out' AND
+   * expected_return_at < now()) so consumers don't need to know about the
+   * underlying column shape.
+   *
+   * It read `.limit(500)` and nothing said so: on the All and Returned views
+   * of an organization with more than 500 rentals, the older ones were just
+   * not there (B32). The order ends on id: two rentals checked out at the
+   * same instant otherwise have no fixed order, and one could land on two
+   * pages or none.
+   *
+   * A page past the end (a stale link, or rentals that left this view since,
+   * like the last ones on Out being returned) answers the last page and its
+   * number, never an empty page beside a total that says otherwise. The usual
+   * read is one request; only a page past the end takes another (and a count
+   * first when PostgREST refuses the window outright, 416).
    */
   async list(filters: ListRentalsFilters = {}): Promise<{
     rentals: Array<RentalRow & { lines: RentalLineRow[] }>;
+    total: number;
+    page: number;
+    pageSize: number;
   }> {
     assertModuleEnabled(this.ctx, 'rentals');
-    // Build base query. We need a typed local variable so we can conditionally
-    // attach filters without fighting TS's inference on chained query builders.
-    let query = this.ctx.supabase
-      .from('rentals')
-      .select('*, lines:rental_lines(*)')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('checked_out_at', { ascending: false })
-      .limit(500);
+    const pageSize = RENTALS_PAGE_SIZE;
+    // One instant for every read of this listing, so the Overdue count and
+    // its rows agree.
+    const nowIso = new Date().toISOString();
+    const view = (head: boolean) => {
+      // The column list is a plain string: a head count reads no columns.
+      let query = this.ctx.supabase
+        .from('rentals')
+        .select((head ? 'id' : '*, lines:rental_lines(*)') as string, { count: 'exact', head })
+        .eq('organization_id', this.ctx.organizationId);
+      if (filters.warehouseId) {
+        query = query.eq('warehouse_id', filters.warehouseId);
+      }
+      if (filters.status === 'overdue') {
+        query = query.eq('status', 'out').lt('expected_return_at', nowIso);
+      } else if (filters.status && filters.status !== 'all') {
+        query = query.eq('status', filters.status);
+      }
+      return query;
+    };
+    const readPage = (page: number) =>
+      view(false)
+        .order('checked_out_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range((page - 1) * pageSize, page * pageSize - 1);
 
-    if (filters.warehouseId) {
-      query = query.eq('warehouse_id', filters.warehouseId);
+    let page = rentalsPage(filters.page);
+    let res = await readPage(page);
+    const pastTheEnd =
+      isRangeNotSatisfiable(res.error) || (!res.error && page > 1 && (res.data ?? []).length === 0);
+    if (pastTheEnd) {
+      let total = !res.error && typeof res.count === 'number' ? res.count : null;
+      if (total === null) {
+        const counted = await view(true);
+        if (counted.error) throw new ServiceError('internal_error', counted.error.message);
+        total = counted.count ?? 0;
+      }
+      page = Math.max(1, Math.ceil(total / pageSize));
+      res = await readPage(page);
     }
-    if (filters.status === 'overdue') {
-      query = query.eq('status', 'out').lt('expected_return_at', new Date().toISOString());
-    } else if (filters.status && filters.status !== 'all') {
-      query = query.eq('status', filters.status);
-    }
-
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return { rentals: (data ?? []) as Array<RentalRow & { lines: RentalLineRow[] }> };
+    if (res.error) throw new ServiceError('internal_error', res.error.message);
+    const rentals = (res.data ?? []) as unknown as Array<RentalRow & { lines: RentalLineRow[] }>;
+    return {
+      rentals,
+      total: typeof res.count === 'number' ? res.count : (page - 1) * pageSize + rentals.length,
+      page,
+      pageSize,
+    };
   }
 
   async get(id: string): Promise<(RentalRow & { lines: RentalLineRow[] }) | null> {

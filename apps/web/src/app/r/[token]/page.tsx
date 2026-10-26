@@ -4,8 +4,12 @@ import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
-import { PublicOrdersV2 } from '@/components/orders/public-v2/public-orders-v2';
-import type { PublicCatalogItem } from '@/components/orders/public-v2/types';
+import {
+  EMPTY_PUBLIC_CATALOG,
+  PUBLIC_CATALOG_ROW_CEILING,
+  type PublicCatalogIndex,
+} from '@/components/orders/public-v2/catalog-index';
+import { PublicCatalogStorefront } from '@/components/orders/public-v2/public-catalog-storefront';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
@@ -46,8 +50,10 @@ export const dynamic = 'force-dynamic';
  * decides what this page shows: active/expiry/date-window gate the whole
  * page, and the catalog is the link's curated item set resolved through
  * the shared `public_link_eligible_items` predicate — the same one the
- * submit endpoint enforces. The payload is PublicCatalogItem only: no
- * sku, cost, location, reserved, or charter data ever serializes here.
+ * submit endpoint enforces. The payload is the compact catalog
+ * (catalog-index.ts), as the data cache holds it: no sku, cost, location,
+ * reserved, or charter data ever serializes here, and photos, blur
+ * placeholders and descriptions come after first paint from the photo pages.
  *
  * Redesign (P5.1 step B): the storefront look of the New order page
  * (storefront.css, P4.B2) with the public layer (public-orders.css) on top.
@@ -135,13 +141,15 @@ export default async function PublicOrderRequestPage({
   const activeWarehouse = requested ?? warehouses[0];
   if (!activeWarehouse) notFound();
 
-  // 3. The link's curated catalog, rendered as PublicCatalogItem directly.
+  // 3. The link's curated catalog, from the data cache by the link id and a
+  // warehouse id read just above as one of the link organization's publicly
+  // orderable warehouses, so no query parameter can make a new entry (B32).
   // link=null is the legacy fallback for a token that predates the 0261
   // backfill — it has no catalog config, so it resolves to an empty catalog
   // (fail closed) and the page shows the "no items available" message.
-  const items: PublicCatalogItem[] = link
-    ? await getPublicCatalogForLink(link, activeWarehouse.id)
-    : [];
+  const catalog: PublicCatalogIndex = link
+    ? await getPublicCatalogForLink(link.id, activeWarehouse.id)
+    : EMPTY_PUBLIC_CATALOG;
 
   // Charters serviced by the active warehouse — restricted to status=
   // 'active' so the dropdown never shows archived/inactive sites. The
@@ -178,15 +186,15 @@ export default async function PublicOrderRequestPage({
         org={org}
         link={link}
         warehouseName={activeWarehouse.name}
-        catalogCount={items.length}
+        catalogCount={catalog.rows.length}
+        catalogCut={catalog.cut}
       />
-      <PublicOrdersV2
+      <PublicCatalogStorefront
         token={token}
         orgName={org.name}
         warehouses={warehouses}
         initialWarehouseId={activeWarehouse.id}
-        items={items}
-        availabilityDisplay={link?.availabilityDisplay ?? 'none'}
+        catalog={catalog}
         chartersForWarehouse={chartersForWarehouse}
       />
       <p className="sfp-track">
@@ -230,11 +238,14 @@ function Header({
   link,
   warehouseName,
   catalogCount,
+  catalogCut,
 }: {
   org: { name: string; public_request_blurb: string | null };
   link?: { instructions: string | null } | null;
   warehouseName?: string;
   catalogCount?: number;
+  /** The link offers more items than the page lists (the catalog's ceiling). */
+  catalogCut?: boolean;
 }) {
   // Per-link instructions beat the org-wide blurb when set. May contain
   // line breaks — rendered as plain text, breaks preserved (white-space:
@@ -250,6 +261,16 @@ function Header({
               'to you. Our team reviews every request before stock is pulled — ' +
               "you'll get an email confirmation once it's approved."}
         </div>
+        {/* Past the ceiling the list is cut (logged on the server). The
+            search runs over the listed items only, so it says so rather than
+            sending people to look for the rest with it. */}
+        {catalogCut ? (
+          <p className="sf-sub" role="note">
+            This link offers more items than this page can list. It lists{' '}
+            {PUBLIC_CATALOG_ROW_CEILING.toLocaleString('en-US')} of them, and the search finds only
+            those. To ask for an item you can&apos;t find here, contact {org.name}.
+          </p>
+        ) : null}
       </div>
       {warehouseName && typeof catalogCount === 'number' ? (
         <dl className="sfp-meta">

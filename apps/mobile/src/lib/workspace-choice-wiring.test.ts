@@ -14,7 +14,9 @@ const hydrate = src.slice(src.indexOf('async function hydrate('), src.indexOf('/
 describe('hydrate() saves the workspace it chooses', () => {
   it('chooses with the stored id, the profile default and the memberships', () => {
     expect(hydrate).toMatch(/chooseActiveOrg\(\{ orgIds: orgs\.map\(\(o\) => o\.id\), stored: persisted, profileDefault \}\)/);
-    expect(hydrate).toMatch(/\.from\('user_profiles'\)|loadProfileDefaultOrg\(userId\)/);
+    // Through the 15 s bound (B24): an unbounded read held the load for good.
+    expect(hydrate).toMatch(/loadProfileDefaultOrgBounded\(userId\)/);
+    expect(hydrate).toMatch(/loadOrgsBounded\(userId\)/);
   });
 
   it('writes the choice to the key the API header is read from', () => {

@@ -82,12 +82,20 @@ function returnableLines(order: PortalOrder): ReturnableLine[] {
 export function PortalShop({
   catalog,
   orders,
+  ordersTotal = null,
+  ordersFailed = false,
   returnsEnabled,
   exchangesEnabled = false,
   pricingMode,
 }: {
   catalog: PortalCatalogItem[];
+  /** The newest orders (services/portal.ts PORTAL_ORDERS_SHOWN). */
   orders: PortalOrder[];
+  /** How many orders the customer has in all, or null when unknown: more
+   *  than `orders` holds is said under the list (B32). */
+  ordersTotal?: number | null;
+  /** The history could not be read: said in its place, never "No orders yet". */
+  ordersFailed?: boolean;
   returnsEnabled: boolean;
   /** The exchange kill switch (RETURNS_EXCHANGE_CREATE): the button's words only. */
   exchangesEnabled?: boolean;
@@ -275,7 +283,14 @@ export function PortalShop({
 
       <section>
         <h2 className={SECTION_TITLE}>Your orders</h2>
-        {orders.length === 0 ? (
+        {ordersFailed ? (
+          <StatePanel
+            kind="failed"
+            size="sm"
+            headingLevel={null}
+            title="Your orders could not be loaded. Reload the page to try again."
+          />
+        ) : orders.length === 0 ? (
           <StatePanel
             kind="empty"
             size="sm"
@@ -393,6 +408,13 @@ export function PortalShop({
             })}
           </div>
         )}
+        {/* The list holds the newest orders only: said when there are more
+            (B32), which it never said. */}
+        {!ordersFailed && ordersTotal !== null && ordersTotal > orders.length ? (
+          <p className="text-muted-foreground mt-2 text-[12.5px] leading-[18.75px]">
+            {`Showing your ${orders.length} most recent orders of ${ordersTotal.toLocaleString('en-US')}. Your supplier can find older ones.`}
+          </p>
+        ) : null}
       </section>
 
       {/* Sticky cart bar: an opaque card edge, no blur (perf rule: nothing

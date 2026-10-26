@@ -126,6 +126,27 @@ describe('rentals/new.tsx — item selection (SP-012)', () => {
     expect(src).toMatch(/const visibleItems = React\.useMemo\(\(\) => \{[\s\S]*?return items\.filter\(/);
   });
 
+  // B32: every item read (to the 10,000-row ceiling) was drawn at once, a
+  // row of steppers each, inside the form's ScrollView. The list draws the
+  // window rentalPickerWindow gives (rental-items.test.ts pins it), with a
+  // Load more, back to the first 50 when the items load again. Mutation
+  // caught: visibleItems.map( back, the window not reset, or no Load more.
+  it('draws a window of the matching items with Load more, never every item at once', () => {
+    const src = code();
+    expect(src).toContain(
+      'const [pickerLimit, setPickerLimit] = React.useState(RENTAL_PICKER_WINDOW);',
+    );
+    expect(src).toMatch(
+      /const drawn = React\.useMemo\(\s*\(\) => rentalPickerWindow\(visibleItems, pickerLimit, cart\),\s*\[visibleItems, pickerLimit, cart\],\s*\);/,
+    );
+    expect(src).not.toContain('visibleItems.map(');
+    expect(src).toContain('{drawn.rows.map((it) => {');
+    expect(itemsEffect()).toMatch(/setCart\(\{\}\);\s*setPickerLimit\(RENTAL_PICKER_WINDOW\);/);
+    expect(src).toMatch(
+      /\{drawn\.loadMoreLabel \? \(\s*<Pressable\s*onPress=\{\(\) => setPickerLimit\(\(n\) => n \+ RENTAL_PICKER_WINDOW\)\}\s*accessibilityRole="button"\s*accessibilityLabel=\{drawn\.loadMoreLabel\}/,
+    );
+  });
+
   it('reads open reservations so availability shown matches what the server enforces', () => {
     // Server-side truth is quantity_on_hand - open reservations (SP-052). If
     // the phone showed on-hand it would offer units the route then refuses.
@@ -225,7 +246,7 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
   it('a blocked picker renders the failure and a retry, not the list or its steppers', () => {
     const jsx = source.slice(source.indexOf('return (\n    <View'));
     const blocked = jsx.indexOf(') : picker.blocked ? (');
-    const list = jsx.indexOf('visibleItems.map(');
+    const list = jsx.indexOf('drawn.rows.map(');
     expect(blocked).toBeGreaterThan(-1);
     expect(blocked).toBeLessThan(list);
     expect(jsx).toContain('onRetry={() => setItemsNonce((n) => n + 1)}');

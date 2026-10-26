@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * /r/<token>, the public order page (redesign P5.1 step B): what the server
  * page draws around the storefront, in its own words, and what it hands the
  * storefront. A closed link is the external pages' status card under the
- * brand row; an open link hands PublicOrdersV2 the eligible warehouses as
+ * brand row; an open link hands the storefront the eligible warehouses as
  * {id, name}, the active delivery sites as {id, name, code} and the
- * service's PublicCatalogItem list, and nothing else.
+ * service's compact catalog, and nothing else.
+ *
+ * B32 (integrator decision 3): the catalog is read from the data cache by
+ * the link id and the warehouse id only, and the warehouse is one the page
+ * read as the link organization's publicly orderable warehouses, so no query
+ * parameter can make a new cache entry. Past the public ceiling the catalog
+ * is cut, and the page says so.
  */
 
 const SUPABASE = 'https://lab.supabase.test';
@@ -62,8 +68,8 @@ vi.mock('next/image', () => ({
 }));
 
 const captured = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
-vi.mock('@/components/orders/public-v2/public-orders-v2', () => ({
-  PublicOrdersV2: (props: Record<string, unknown>) => {
+vi.mock('@/components/orders/public-v2/public-catalog-storefront', () => ({
+  PublicCatalogStorefront: (props: Record<string, unknown>) => {
     captured.props = props;
     return <div data-testid="storefront" />;
   },
@@ -95,32 +101,16 @@ const LINK = {
   defaultMaxQty: null,
 };
 
-const ITEMS = [
-  {
-    id: 'i-1',
-    displayName: 'Colored Pencils',
-    publicDescription: null,
-    itemType: null,
-    categoryId: 'c-1',
-    categoryLabel: 'Art',
-    imageUrl: null,
-    lqip: null,
-    availability: { kind: 'exact', count: 12 },
-    maxQty: 40,
-  },
-  {
-    id: 'i-2',
-    displayName: 'Safety Scissors',
-    publicDescription: 'Blunt tip.',
-    itemType: null,
-    categoryId: null,
-    categoryLabel: null,
-    imageUrl: null,
-    lqip: null,
-    availability: { kind: 'exact', count: 0 },
-    maxQty: null,
-  },
-];
+/** The compact catalog the service answers (catalog-index.ts). */
+const CATALOG = {
+  mode: 'exact' as const,
+  categories: [['c-1', 'Art']],
+  rows: [
+    ['i-1', 'Colored Pencils', 0, 12, 40, null],
+    ['i-2', 'Safety Scissors', -1, 0, null, null],
+  ],
+  cut: false,
+};
 
 async function renderPage(params: { token?: string; w?: string } = {}) {
   const ui = await PublicOrderRequestPage({
@@ -144,7 +134,7 @@ beforeEach(() => {
   ];
   svc.resolvePublicRequestToken.mockReset().mockResolvedValue({ org: ORG, link: LINK });
   svc.isLinkOpen.mockReset().mockReturnValue(true);
-  svc.getPublicCatalogForLink.mockReset().mockResolvedValue(ITEMS);
+  svc.getPublicCatalogForLink.mockReset().mockResolvedValue(CATALOG);
 });
 
 describe('/r/<token>: links that do not resolve', () => {
@@ -224,7 +214,9 @@ describe('/r/<token>: an open link', () => {
     ).toHaveAttribute('href', '/r/track');
   });
 
-  it('hands the storefront only public fields: warehouses as id and name, active sites as id, name and code, and the service items', async () => {
+  // Mutation caught: expanding the catalog on the server, which puts every
+  // item's object (keys and all) in the page instead of the compact rows.
+  it('hands the storefront only public fields: warehouses as id and name, active sites as id, name and code, and the service’s compact catalog', async () => {
     await renderPage();
     const props = captured.props!;
     expect(props.token).toBe(TOKEN);
@@ -237,14 +229,12 @@ describe('/r/<token>: an open link', () => {
     expect(props.chartersForWarehouse).toEqual([
       { id: 'ch-1', name: 'Harbor Academy', code: 'HA' },
     ]);
-    expect(props.items).toBe(ITEMS);
-    expect(props.availabilityDisplay).toBe('exact');
+    expect(props.catalog).toBe(CATALOG);
     expect(Object.keys(props).sort()).toEqual(
       [
-        'availabilityDisplay',
+        'catalog',
         'chartersForWarehouse',
         'initialWarehouseId',
-        'items',
         'orgName',
         'token',
         'warehouses',
@@ -252,10 +242,25 @@ describe('/r/<token>: an open link', () => {
     );
   });
 
-  it('keeps the warehouse a reload asked for (?w=) when it still takes requests', async () => {
+  // Mutation caught: the old key (the link object, with its organization and
+  // display mode) instead of the link id.
+  it('keeps the warehouse a reload asked for (?w=) when it still takes requests, and reads its catalog by link id and warehouse id', async () => {
     await renderPage({ w: 'wh-s' });
     expect(captured.props!.initialWarehouseId).toBe('wh-s');
-    expect(svc.getPublicCatalogForLink).toHaveBeenCalledWith(LINK, 'wh-s');
+    expect(svc.getPublicCatalogForLink).toHaveBeenCalledWith('link-1', 'wh-s');
+  });
+
+  it('a ?w= that is not one of the warehouses read never reaches the catalog: the first warehouse is used', async () => {
+    await renderPage({ w: 'another-orgs-warehouse' });
+    expect(svc.getPublicCatalogForLink).toHaveBeenCalledTimes(1);
+    expect(svc.getPublicCatalogForLink).toHaveBeenCalledWith('link-1', 'wh-n');
+  });
+
+  it('a legacy organization token (no link row) shows an empty catalog without reading one', async () => {
+    svc.resolvePublicRequestToken.mockResolvedValue({ org: ORG, link: null });
+    await renderPage();
+    expect(svc.getPublicCatalogForLink).not.toHaveBeenCalled();
+    expect(captured.props!.catalog).toEqual({ mode: 'none', categories: [], rows: [], cut: false });
   });
 
   it('draws the logo only from the public org-logos bucket, else the initial letter', async () => {
@@ -278,5 +283,25 @@ describe('/r/<token>: an open link', () => {
       'src',
       allowed,
     );
+  });
+});
+
+describe('/r/<token>: a catalog cut at the ceiling', () => {
+  // Decision 3: past PUBLIC_CATALOG_ROW_CEILING the list is cut, and the page
+  // says so. The search runs in the browser over the listed items, so the
+  // page says it finds only those rather than sending people to look for the
+  // rest with it.
+  it('says the page lists 2,000 of the link’s items, that search finds only those, and whom to ask', async () => {
+    svc.getPublicCatalogForLink.mockResolvedValue({ ...CATALOG, cut: true });
+    await renderPage();
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent(
+      "This link offers more items than this page can list. It lists 2,000 of them, and the search finds only those. To ask for an item you can't find here, contact Lincoln Unified.",
+    );
+  });
+
+  it('a catalog that is not cut says nothing about it', async () => {
+    await renderPage();
+    expect(screen.queryByRole('note')).toBeNull();
   });
 });
