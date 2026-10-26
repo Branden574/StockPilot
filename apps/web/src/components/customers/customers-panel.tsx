@@ -19,6 +19,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   addCatalogItemAction,
   createCustomerAction,
@@ -136,8 +138,17 @@ export function CustomersPanel({
   async function createCustomer() {
     setCreateError(null);
     setBusy('create');
-    const res = await createCustomerAction({ name: newName, notes: newNotes || null });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof createCustomerAction>>;
+    try {
+      res = await createCustomerAction({ name: newName, notes: newNotes || null });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setCreateError(requestUnconfirmedMessage('the customer was added', 'the customer list'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       setCreateError(res.error.message);
       return;
@@ -293,13 +304,22 @@ function CustomerCard({
 
   async function setPriceList(priceListId: string | null) {
     setBusy(`pl-${customer.id}`);
-    const res = await updateCustomerAction({
-      id: customer.id,
-      name: customer.name,
-      notes: customer.notes,
-      priceListId,
-    });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof updateCustomerAction>>;
+    try {
+      res = await updateCustomerAction({
+        id: customer.id,
+        name: customer.name,
+        notes: customer.notes,
+        priceListId,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('change the price list'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -310,8 +330,17 @@ function CustomerCard({
   async function invite() {
     setInviteError(null);
     setBusy(`invite-${customer.id}`);
-    const res = await inviteCustomerUserAction({ customerId: customer.id, email: inviteEmail });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof inviteCustomerUserAction>>;
+    try {
+      res = await inviteCustomerUserAction({ customerId: customer.id, email: inviteEmail });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setInviteError(requestFailedMessage('send the invite'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       setInviteError(res.error.message);
       return;
@@ -323,8 +352,17 @@ function CustomerCard({
 
   async function removeUser(userId: string) {
     setBusy(`rmuser-${userId}`);
-    const res = await removeCustomerUserAction({ customerId: customer.id, userId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof removeCustomerUserAction>>;
+    try {
+      res = await removeCustomerUserAction({ customerId: customer.id, userId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('remove the user'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -334,8 +372,17 @@ function CustomerCard({
 
   async function addToCatalog(itemId: string) {
     setBusy(`cat-${customer.id}`);
-    const res = await addCatalogItemAction({ customerId: customer.id, itemId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof addCatalogItemAction>>;
+    try {
+      res = await addCatalogItemAction({ customerId: customer.id, itemId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('add the item to the catalog'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -345,8 +392,17 @@ function CustomerCard({
 
   async function removeFromCatalog(itemId: string) {
     setBusy(`rmcat-${itemId}`);
-    const res = await removeCatalogItemAction({ customerId: customer.id, itemId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof removeCatalogItemAction>>;
+    try {
+      res = await removeCatalogItemAction({ customerId: customer.id, itemId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('remove the item from the catalog'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -523,8 +579,17 @@ function PriceListsSection({
 
   async function createList() {
     setBusy('newlist');
-    const res = await createPriceListAction({ name: newListName });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof createPriceListAction>>;
+    try {
+      res = await createPriceListAction({ name: newListName });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage('the price list was created', 'the price lists'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -627,12 +692,21 @@ function PriceListCard({
       return;
     }
     setBusy(`price-${list.id}`);
-    const res = await setPriceAction({
-      priceListId: list.id,
-      itemId: pendingItem.id,
-      unitPrice: value,
-    });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof setPriceAction>>;
+    try {
+      res = await setPriceAction({
+        priceListId: list.id,
+        itemId: pendingItem.id,
+        unitPrice: value,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('save the price'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -644,8 +718,17 @@ function PriceListCard({
 
   async function remove(itemId: string) {
     setBusy(`rmprice-${itemId}`);
-    const res = await removePriceAction({ priceListId: list.id, itemId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof removePriceAction>>;
+    try {
+      res = await removePriceAction({ priceListId: list.id, itemId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('remove the price'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

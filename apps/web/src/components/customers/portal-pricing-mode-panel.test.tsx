@@ -3,7 +3,11 @@
 // description, and Save enabled only when the choice changed.
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 const h = vi.hoisted(() => ({ save: vi.fn() }));
 
@@ -53,5 +57,23 @@ describe('PortalPricingModePanel', () => {
       screen.getByRole('radio', { name: 'Customers are charged from a price list' }),
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+});
+
+// B40: a save that got no answer (offline, a server error, a deploy) left Save
+// spinning with nothing said.
+describe('PortalPricingModePanel when the save gets no answer', () => {
+  it('says the pricing mode was not saved and Save works again', async () => {
+    const user = userEvent.setup();
+    h.save.mockRejectedValueOnce(offline());
+    render(<PortalPricingModePanel initial="no_charge" />);
+    await user.click(
+      screen.getByRole('radio', { name: 'Customers are charged from a price list' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the pricing mode')),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

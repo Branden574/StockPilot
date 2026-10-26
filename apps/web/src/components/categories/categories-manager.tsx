@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveCategoryAction,
   createCategoryAction,
@@ -245,8 +247,17 @@ export function CategoriesManager({
   async function confirmArchive() {
     if (!archiveTarget) return;
     setArchiveBusy(true);
-    const res = await archiveCategoryAction(archiveTarget.id);
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveCategoryAction>>;
+    try {
+      res = await archiveCategoryAction(archiveTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('archive the category'));
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -259,8 +270,17 @@ export function CategoriesManager({
   async function confirmRestore() {
     if (!restoreTarget) return;
     setRestoreBusy(true);
-    const res = await restoreCategoryAction(restoreTarget.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreCategoryAction>>;
+    try {
+      res = await restoreCategoryAction(restoreTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('restore the category'));
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -272,8 +292,17 @@ export function CategoriesManager({
 
   async function handleSetupSports() {
     setSetupBusy(true);
-    const res = await setupSportsCategoriesAction();
-    setSetupBusy(false);
+    let res: Awaited<ReturnType<typeof setupSportsCategoriesAction>>;
+    try {
+      res = await setupSportsCategoriesAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('set up the Sports categories'));
+      return;
+    } finally {
+      setSetupBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -878,11 +907,21 @@ function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
     setBusy(true);
     setError(null);
     setValue(visibility);
-    const res = await setCategoryPublicVisibilityAction({
-      categoryId: category.id,
-      visibility,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof setCategoryPublicVisibilityAction>>;
+    try {
+      res = await setCategoryPublicVisibilityAction({
+        categoryId: category.id,
+        visibility,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setValue(previous);
+      setError(requestFailedMessage('change who can see the category'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       setValue(previous);
       setError(res.error.message);

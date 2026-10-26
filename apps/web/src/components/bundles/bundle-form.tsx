@@ -25,6 +25,8 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { generateSku } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
 
 interface ComponentRow {
@@ -134,6 +136,14 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
         router.push(`/dashboard/bundles/${res.data.id}`);
         router.refresh();
       }
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        isEdit
+          ? requestFailedMessage('save the bundle')
+          : requestUnconfirmedMessage('the bundle was created', 'the Bundles list'),
+      );
     } finally {
       setSubmitting(false);
     }
