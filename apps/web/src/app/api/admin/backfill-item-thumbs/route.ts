@@ -261,10 +261,10 @@ export async function POST(req: Request) {
     let rows: CandidateRow[];
     const results: RowResult[] = [];
     if (ids) {
-      // in-list-bound: at most MAX_LIMIT ids, refused above past that.
       const { data, error } = await admin
         .from('item_images')
         .select('id, storage_path, thumb_path')
+        // in-list-bound: at most MAX_LIMIT (60) ids; parseIds refuses more.
         .in('id', ids);
       if (error) {
         return NextResponse.json({ error: `row read failed: ${error.message}` }, { status: 500 });
