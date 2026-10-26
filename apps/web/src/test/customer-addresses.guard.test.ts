@@ -18,10 +18,14 @@ import { describe, expect, it } from 'vitest';
  * purchase order a synthetic document in the same layout.
  *
  * WHAT STOPS IT NOW: this test lists every tracked file (`git ls-files`),
- * reads each one its extension does not skip (UTF-8, or UTF-16 behind a
- * byte-order mark) and fails on an address at one of the customer's mail
- * domains. It reads each line twice, and an address in either reading is a
- * finding, once per line and address, so the guard fails closed:
+ * reads every path and each file its extension does not skip, and fails on an
+ * address at one of the customer's mail domains. A file is read as UTF-8 (NUL
+ * bytes and all) and, behind a byte-order mark, as UTF-16 too. A path is read
+ * one folder or file name at a time, as written and with its extensions taken
+ * off one at a time, so a file named <address>.csv is found (in a name, a
+ * longer domain cannot be told from an extension, so it is found too). Each
+ * line, and each name, is read twice, and an address in either reading is a
+ * finding, once per line (or path) and address, so the guard fails closed:
  *
  * - As written: in any case, under a subdomain, with the @ and the dots
  *   escaped with backslashes (a regular expression, or one inside a string
@@ -47,21 +51,23 @@ import { describe, expect, it } from 'vitest';
  * file names none of them. An allowed pair that is no longer in its file
  * fails too, so the list cannot outlive its reason.
  *
- * NOT COVERED: files skipped by their extension (images, PDFs, fonts, media
- * and archives), whose text this test cannot read; files named .env* (the
- * two tracked templates hold variable names only, and a test that opens .env
- * files is one rename away from opening a real one); names, which no pattern
- * can tell from words; and an address split across lines of the file, put
- * together at run time from pieces (as the domains below are), broken up by
- * other markup or by spaces, written in words with no brackets, spelled with
- * lookalike letters from another script, or in an encoding not listed above
- * (base64, for one). Git history keeps the old content.
+ * NOT COVERED: the contents of files skipped by their extension (images, PDFs,
+ * fonts, media and archives), whose text this test cannot read, and of files
+ * named .env* (the two tracked templates hold variable names only, and a test
+ * that opens .env files is one rename away from opening a real one), though
+ * their paths are read; people's names, which no pattern can tell from words;
+ * and an address split across lines of the file, put together at run time
+ * from pieces (as the domains below are), broken up by other markup or by
+ * spaces, written in words with no brackets, spelled with lookalike letters
+ * from another script, or in an encoding not listed above (base64, for one).
+ * Git history keeps the old content.
  *
  * IF THIS FAILS: replace the address with a synthetic one at a reserved
- * domain (example.org, example.com, *.test, *.example) and keep the test's
- * intent (the same length where a test measures one). Add a pair to ALLOWED
- * only for a file that can never change (an applied migration) or an address
- * the product must name, with the reason on its line.
+ * domain (example.org, example.com, *.test, *.example), or rename the file or
+ * folder that names one, and keep the test's intent (the same length where a
+ * test measures one). Add a pair to ALLOWED only for a file that can never
+ * change (an applied migration) or an address the product must name, with the
+ * reason on its line.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
@@ -301,6 +307,7 @@ const isScannedPath = (file: string) =>
 // hold an address there.
 const HINT = new RegExp(CUSTOMER_DOMAINS.map((d) => escapeRe(d.split('.')[0]!)).join('|'), 'i');
 
+/** An address in a file's line (from 1), or in its path (line 0). */
 type Found = { file: string; line: number; sha256: string; domain: string };
 
 /** Every address on each line, as written and decoded, once per line and address. */
@@ -327,22 +334,80 @@ function findIn(file: string, text: string): Found[] {
   return found;
 }
 
-/** A file's text: UTF-16 behind a byte-order mark, else UTF-8 (NUL bytes and all). */
-function textOf(bytes: Buffer): string {
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+/**
+ * A file's texts: its bytes as UTF-8 (NUL bytes and all) and, behind a
+ * byte-order mark, as UTF-16 too. The mark is not trusted on its own, since
+ * 8-bit text can follow one.
+ */
+function textsOf(bytes: Buffer): string[] {
+  const texts = [bytes.toString('utf8')];
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) texts.push(bytes.subarray(2).toString('utf16le'));
   if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    return Buffer.from(bytes.subarray(2, bytes.length - (bytes.length % 2)))
-      .swap16()
-      .toString('utf16le');
+    texts.push(
+      Buffer.from(bytes.subarray(2, bytes.length - (bytes.length % 2)))
+        .swap16()
+        .toString('utf16le'),
+    );
   }
-  return bytes.toString('utf8');
+  return texts;
 }
 
-/** Every finding in one tracked file's bytes. */
+/**
+ * Every finding in one tracked file's bytes, in each of its texts, once per
+ * line and address. Each line is decoded by itself, with no filter on the
+ * whole file first: decoded whole, a U& string left open on one line would
+ * run into the next and hide its escapes.
+ */
 function findInFile(file: string, bytes: Buffer): Found[] {
-  const text = textOf(bytes);
-  if (!HINT.test(text) && !HINT.test(withoutBreaks(decode(text)))) return [];
-  return findIn(file, text);
+  const seen = new Set<string>();
+  return textsOf(bytes)
+    .flatMap((text) => findIn(file, text))
+    .filter((f) => {
+      const key = `${f.line} ${f.sha256}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+/**
+ * Each folder and file name in a path, as written and with its extensions
+ * taken off one at a time (report.csv.gz, report.csv, report).
+ */
+function pathReadings(file: string): string[] {
+  return file.split('/').flatMap((name) => {
+    const readings = [name];
+    for (let dot = name.lastIndexOf('.'); dot > 0; dot = name.lastIndexOf('.', dot - 1)) {
+      readings.push(name.slice(0, dot));
+    }
+    return readings;
+  });
+}
+
+/** Every address in a tracked path itself, once each, as line 0. */
+function findInPath(file: string): Found[] {
+  const seen = new Set<string>();
+  return findIn(file, pathReadings(file).join('\n')).flatMap((f) => {
+    if (seen.has(f.sha256)) return [];
+    seen.add(f.sha256);
+    return [{ ...f, line: 0 }];
+  });
+}
+
+/**
+ * Every finding in the listed paths, and in the files the scan reads, each
+ * read by `read` (undefined: not on disk). Every path is read, even where its
+ * contents are not: a name is as public as a file.
+ */
+function scanFiles(files: readonly string[], read: (file: string) => Buffer | undefined): Found[] {
+  const found: Found[] = [];
+  for (const file of files) {
+    found.push(...findInPath(file));
+    if (!isScannedPath(file)) continue;
+    const bytes = read(file);
+    if (bytes) found.push(...findInFile(file, bytes));
+  }
+  return found;
 }
 
 let scanned: Found[] | undefined;
@@ -355,20 +420,15 @@ function scanTrackedTree(): Found[] {
     maxBuffer: 64 * 1024 * 1024,
   })
     .split('\0')
-    .filter((file) => file.length > 0)
-    .filter(isScannedPath);
-  const found: Found[] = [];
-  for (const file of files) {
-    let bytes: Buffer;
+    .filter((file) => file.length > 0);
+  scanned = scanFiles(files, (file) => {
     try {
-      bytes = readFileSync(join(REPO_ROOT, file));
+      return readFileSync(join(REPO_ROOT, file));
     } catch {
-      continue; // listed but not on disk (deleted in a working tree)
+      return undefined; // listed but not on disk (deleted in a working tree)
     }
-    found.push(...findInFile(file, bytes));
-  }
-  scanned = found;
-  return found;
+  });
+  return scanned;
 }
 
 type Spelling = [name: string, text: string, finds: readonly string[]];
@@ -402,7 +462,7 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
   it('finds none outside the allowed (file, address) pairs', () => {
     const unexpected = scanTrackedTree()
       .filter((f) => !ALLOWED.some((a) => a.file === f.file && a.sha256 === f.sha256))
-      .map((f) => `${f.file}:${f.line} (an address at ${f.domain})`);
+      .map((f) => `${f.file}:${f.line || 'path'} (an address at ${f.domain})`);
     expect(unexpected).toEqual([]);
   }, 60_000);
 
@@ -507,8 +567,14 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
             [...plain].map((c) => `\\u00${hex(c)}`).join(''),
             [plain],
           ],
+          [
+            'the whole address as \\x escapes',
+            [...plain].map((c) => `\\x${hex(c)}`).join(''),
+            [plain],
+          ],
           ['a domain letter %-encoded', `intake@%${hex(first)}${rest}.${tld}`, [plain]],
           ['a domain letter as a reference', `intake@&#${charCode(first)};${rest}.${tld}`, [plain]],
+          ['a domain letter as \\x', `intake@\\x${hex(first)}${rest}.${tld}`, [plain]],
           ['@ as &#64 with no semicolon', `intake&#64${domain}`, [plain]],
           ['@ as \\u0040 behind three backslashes', `intake\\\\\\u0040${domain}`, [plain]],
           ['@ as an octal escape', `intake\\100${domain}`, [plain]],
@@ -523,6 +589,23 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
           ['a \\u-escaped %40', `intake\\u002540${domain}`, [plain]],
           ['a %-encoded \\u escape', `intake%5Cu0040${domain}`, [plain]],
           ['an HTML reference encoded twice', `intake&amp;#64;${domain}`, [plain]],
+          // Each of these needs a round per layer: three, three, then the most
+          // the decoded reading takes (16).
+          [
+            'a domain letter %-encoded three times',
+            `intake@%2525${hex(first)}${rest}.${tld}`,
+            [plain],
+          ],
+          [
+            'an HTML-encoded %-escape, encoded again',
+            `intake@&amp;#37;${hex(first)}${rest}.${tld}`,
+            [plain],
+          ],
+          [
+            'a domain letter %-encoded sixteen times',
+            `intake@%${'25'.repeat(15)}${hex(first)}${rest}.${tld}`,
+            [plain],
+          ],
           [
             'full-width letters',
             [...plain].map((c) => String.fromCharCode(charCode(c) + 0xfee0)).join(''),
@@ -594,7 +677,7 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
     }
   });
 
-  it('reads a file that names the domain only encoded, a UTF-16 file and NUL bytes', () => {
+  it('reads each line of a file by itself, as UTF-8 and as UTF-16 behind a byte-order mark', () => {
     const missed: string[] = [];
     CUSTOMER_DOMAINS.forEach((domain, i) => {
       const [label, tld] = domain.split('.') as [string, string];
@@ -610,10 +693,58 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
         ['UTF-16BE with a byte-order mark', Buffer.from(`\uFEFF${plain}\n`, 'utf16le').swap16()],
         ['UTF-16LE with no byte-order mark', Buffer.from(`Write to ${plain}\n`, 'utf16le')],
         ['NUL bytes before it', Buffer.concat([Buffer.from([0, 1, 2, 0, 10]), Buffer.from(plain)])],
+        // Each line is read by itself: a U& string left open on an earlier
+        // line does not run into a later one and hide its escapes.
+        [
+          "a SQL Unicode escape after an unclosed U&' line",
+          Buffer.from(`-- U&'x\nU&'intake@\\${first.padStart(4, '0')}${label.slice(1)}.${tld}'\n`),
+        ],
+        // A byte-order mark is not trusted: what follows it is read as UTF-8 too.
+        [
+          'FF FE, then 8-bit text',
+          Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`Write to ${plain}\n`)]),
+        ],
+        [
+          'FE FF, then a CSV in 8-bit text',
+          Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(`id,email\n1,${plain}\n`)]),
+        ],
+        [
+          'UTF-16LE with a byte-order mark, then UTF-8 appended',
+          Buffer.concat([Buffer.from('\uFEFFWrite to us\n', 'utf16le'), Buffer.from(`${plain}\n`)]),
+        ],
       ];
       for (const [name, bytes] of files) {
         const found = findInFile('sample.txt', bytes).map((f) => f.sha256);
         if (found.join(' ') !== sha256(plain)) {
+          missed.push(`${name} (domain ${i + 1}): ${found.length} findings`);
+        }
+      }
+    });
+    expect(missed).toEqual([]);
+  });
+
+  it('reads every tracked path, folder and file names included', () => {
+    const missed: string[] = [];
+    CUSTOMER_DOMAINS.forEach((domain, i) => {
+      const plain = `intake@${domain}`;
+      const paths: [name: string, path: string, finds: readonly string[]][] = [
+        ['a folder named after it', `exports/${plain}/report.csv`, [plain]],
+        ['a file named after it', `exports/${plain}.csv`, [plain]],
+        ['a file name holding it', `exports/report-${plain}.csv`, [`report-${plain}`]],
+        ['a file with two extensions', `exports/${plain}.csv.gz`, [plain]],
+        ['a folder with an extension', `exports/${plain}.d/report.csv`, [plain]],
+        ['a folder and its file both named after it', `exports/${plain}/${plain}.csv`, [plain]],
+        ['an encoded @ in a file name', `exports/intake%40${domain}.csv`, [plain]],
+        // Names are read even where the contents are not.
+        ['a file whose contents are skipped', `assets/${plain}.png`, [plain]],
+        ['a folder holding a .env file', `config/${plain}/.env.local`, [plain]],
+        ['the domain alone as a folder', `docs/${domain}/notes.md`, []],
+        ['a longer first label in a folder name', `exports/intake@not${domain}/report.csv`, []],
+      ];
+      for (const [name, path, finds] of paths) {
+        const found = scanFiles([path], () => Buffer.from('id,total\n1,10\n'));
+        const expected = finds.map((address) => `0 ${sha256(address)}`);
+        if (found.map((f) => `${f.line} ${f.sha256}`).join(' ') !== expected.join(' ')) {
           missed.push(`${name} (domain ${i + 1}): ${found.length} findings`);
         }
       }
