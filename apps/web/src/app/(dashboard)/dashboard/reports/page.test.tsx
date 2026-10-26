@@ -150,6 +150,24 @@ describe('Reports hub: the redesigned page', () => {
     for (const tile of tiles) expect(tile.prefetch).toBe(false);
   });
 
+  // The arrow is hidden at rest and shows on hover and while its tile has
+  // keyboard focus: the descendant selector `.group:focus-visible &`, whose
+  // group is the tile.
+  it("shows each tile's arrow on hover and while the tile has keyboard focus", async () => {
+    modules.on = new Set(ALL);
+    render(await ReportsPage());
+    const tile = screen
+      .getAllByRole('link')
+      .find((a) => a.getAttribute('href') === '/dashboard/reports/inventory-valuation')!;
+    const arrow = tile.querySelector('svg.opacity-0')!;
+    expect(arrow).toHaveClass(
+      'opacity-0',
+      'group-hover:opacity-100',
+      '[.group:focus-visible_&]:opacity-100',
+    );
+    expect(arrow.closest('.group')).toBe(tile);
+  });
+
   it('keeps each report on its own route, in the order the hub has always listed them', async () => {
     modules.on = new Set(ALL);
     render(await ReportsPage());

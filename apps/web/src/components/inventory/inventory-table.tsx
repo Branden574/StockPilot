@@ -38,6 +38,7 @@ import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { chipActionClass, filterChipClass, MetaChip } from '@/components/patterns/chip';
 import { FilterTrigger } from '@/components/patterns/filter-bar';
 import { ItemCell } from '@/components/patterns/item-cell';
+import { MissingPhoto } from '@/components/patterns/missing-photo';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { SizeBadge } from '@/components/patterns/size-badge';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -100,7 +101,9 @@ import {
   deriveInstantView,
   expandInstantPlacementRows,
   filterInstantRows,
+  findDisplayGroupPage,
   instantStateFromSearchParams,
+  parseRevealGroupParam,
   type InstantFirstPage,
   type PlannedServerPage,
   type InstantModeState,
@@ -638,6 +641,12 @@ export function rowKeysToItemIds(keys: Iterable<string>): string[] {
  *  memo'd <Sparkline> from re-rendering on a fallback. */
 const EMPTY_SERIES: number[] = [];
 
+/** B5: how long, after a grouping, the list waits for the refreshed rows (to
+ *  turn to the group's page) or for the group's header to be drawn (to scroll
+ *  to it). A refresh that has not landed by then turns and scrolls nothing,
+ *  so a late one never pulls the person away from where they went since. */
+const REVEAL_WAIT_MS = 20_000;
+
 /**
  * On-demand master-image URL for payload-diet rows (rank 5): instant-mode
  * dataset rows ship only the ~200px thumb; the 2048px master (hover
@@ -1090,13 +1099,19 @@ export function InventoryTable({
     return qs ? `${basePath}?${qs}` : basePath;
   }
 
-  function hrefForPage(p: number): string {
-    const next = new URLSearchParams(params.toString());
-    if (p <= 1) next.delete('page');
-    else next.set('page', String(p));
-    const qs = next.toString();
-    return qs ? `${basePath}?${qs}` : basePath;
-  }
+  const hrefForPage = React.useCallback(
+    (p: number): string => {
+      const next = new URLSearchParams(params.toString());
+      if (p <= 1) next.delete('page');
+      else next.set('page', String(p));
+      // A page link chooses a page: never with ?group= (B5), which would
+      // plan the group's page instead.
+      next.delete('group');
+      const qs = next.toString();
+      return qs ? `${basePath}?${qs}` : basePath;
+    },
+    [params, basePath],
+  );
 
   // Encoded full current list URL — used to round-trip search/filter
   // state when the user clicks into a row, views, and comes back.
@@ -1945,9 +1960,9 @@ export function InventoryTable({
   }
 
   /** Opens an explicit group's header (after a grouping put records in it). */
-  function openExplicitGroup(groupId: string) {
+  const openExplicitGroup = React.useCallback((groupId: string) => {
     setExpandedExplicitGroups((prev) => (prev.has(groupId) ? prev : new Set(prev).add(groupId)));
-  }
+  }, []);
 
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
@@ -1957,6 +1972,169 @@ export function InventoryTable({
       return next;
     });
   }
+
+  // ── B5 (2026-10-25): show the group a grouping made ────────────────────
+  // A display group is one unit that clusters at its best-ranked record, and
+  // pages are packed unit by unit, so after Group selected (or Add to group)
+  // the group's header can be drawn on another page than the one the records
+  // were picked on: records picked on two pages, or a unit that no longer
+  // fits the end of its page. Opening the group (C3) did not show it there.
+  //
+  // INSTANT MODE holds every record, so it works the page out itself: once
+  // the refreshed rows carry the grouping (every changed record it holds is
+  // in the group), it turns to the page that draws the header (the rule
+  // deriveInstantView pages with) and scrolls the header into view. A person
+  // who moved on in the meantime (another page, a filter, a search) is not
+  // pulled back.
+  //
+  // A LIST PAGED ON THE SERVER holds one page and cannot tell which page that
+  // is: the done message links to ?group=<id> ("Show it"), which the server
+  // plans to that page (planLivePage), and the landing below opens the group
+  // there, scrolls to it and drops ?group= from the address (the page it chose
+  // is in ?page= from then on, so a refresh, a page link or Back stays on it).
+  // No link during a server-mode search (the list shows the search's matches,
+  // not pages) or without a planned page (over the instant-mode cap the pages
+  // are fixed slices, and the server cannot plan the group's page).
+  const instantStateKey = React.useMemo(
+    () => (instantState ? JSON.stringify(instantState) : null),
+    [instantState],
+  );
+  const [pendingReveal, setPendingReveal] = React.useState<{
+    groupId: string;
+    changedItemIds: readonly string[];
+    /** The view the grouping was made in: another view drops the reveal. */
+    stateKey: string;
+    until: number;
+  } | null>(null);
+  /** The group header to scroll into view once it is drawn (a ref: setting it
+   *  draws nothing; the effect below reads it after every render). */
+  const scrollToGroup = React.useRef<{ groupId: string; until: number } | null>(null);
+  const scrollToGroupHeader = React.useCallback((groupId: string) => {
+    scrollToGroup.current = { groupId, until: Date.now() + REVEAL_WAIT_MS };
+  }, []);
+
+  /** After a grouping applied (Group selected, Add to group): open the group
+   *  and show it (C3, B5). */
+  const revealGroup = React.useCallback(
+    (groupId: string, changedItemIds: readonly string[]) => {
+      openExplicitGroup(groupId);
+      if (instantMode && instantStateKey !== null) {
+        setPendingReveal({
+          groupId,
+          changedItemIds,
+          stateKey: instantStateKey,
+          until: Date.now() + REVEAL_WAIT_MS,
+        });
+      } else {
+        // Server mode: the header is drawn on this page only when the
+        // group's records sort here; scroll to it if it is.
+        scrollToGroupHeader(groupId);
+      }
+    },
+    [openExplicitGroup, instantMode, instantStateKey, scrollToGroupHeader],
+  );
+
+  React.useEffect(() => {
+    if (!pendingReveal) return;
+    if (
+      !effectiveInstant ||
+      !instantState ||
+      !instantView ||
+      instantStateKey !== pendingReveal.stateKey ||
+      Date.now() > pendingReveal.until
+    ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- drop a reveal the view moved past
+      setPendingReveal(null);
+      return;
+    }
+    const groupOf = new Map(effectiveInstant.items.map((r) => [r.id, r.display_group_id ?? null]));
+    const landed = pendingReveal.changedItemIds.every(
+      (id) => !groupOf.has(id) || groupOf.get(id) === pendingReveal.groupId,
+    );
+    // The refreshed rows have not landed yet: wait for them.
+    if (!landed) return;
+    setPendingReveal(null);
+    const page = findDisplayGroupPage(
+      effectiveInstant.items,
+      instantState,
+      effectiveInstant.view,
+      pageSize,
+      pendingReveal.groupId,
+    );
+    // The group does not form in this view (fewer than two of its records
+    // are in it): there is no header to show.
+    if (page === null) return;
+    scrollToGroupHeader(pendingReveal.groupId);
+    if (page !== instantView.page) shallowPush(hrefForPage(page));
+  }, [
+    pendingReveal,
+    effectiveInstant,
+    instantState,
+    instantStateKey,
+    instantView,
+    pageSize,
+    scrollToGroupHeader,
+    shallowPush,
+    hrefForPage,
+  ]);
+
+  // Landing on ?group=<id> (the "Show it" link): the page on screen is the
+  // one that draws that group's header (planned on the server, or turned to
+  // by deriveInstantView). Open it, scroll to it, and put the page in the
+  // address in place of ?group=.
+  const groupParam = params.get('group');
+  const groupParamCount = params.getAll('group').length;
+  React.useEffect(() => {
+    if (groupParam === null) return;
+    const groupId = groupParamCount === 1 ? parseRevealGroupParam(groupParam) : null;
+    if (groupId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot: opens the group a navigation asked for, then ?group= leaves the address
+      openExplicitGroup(groupId);
+      scrollToGroupHeader(groupId);
+    }
+    shallowReplace(hrefForPage(effectivePage));
+  }, [
+    groupParam,
+    groupParamCount,
+    effectivePage,
+    openExplicitGroup,
+    scrollToGroupHeader,
+    shallowReplace,
+    hrefForPage,
+  ]);
+
+  // Scroll the header asked for above into view once it is drawn (after the
+  // page turned, the refresh landed or the group opened). Runs after every
+  // render; it reads a ref, so it costs nothing while nothing is asked for.
+  React.useEffect(() => {
+    const target = scrollToGroup.current;
+    if (!target) return;
+    if (Date.now() > target.until) {
+      scrollToGroup.current = null;
+      return;
+    }
+    const key = `display-group:${target.groupId}`;
+    const header = Array.from(document.querySelectorAll('[data-group-key]')).find(
+      (el) => el.getAttribute('data-group-key') === key,
+    );
+    if (!header) return;
+    scrollToGroup.current = null;
+    // Optional call: some test DOMs lack it.
+    header.scrollIntoView?.({ block: 'center' });
+  });
+
+  // The done message's "Show it" link (B5), for a list paged on the server:
+  // this view, with ?group= in place of ?page=.
+  const showGroupHref = React.useCallback(
+    (groupId: string) => {
+      const next = new URLSearchParams(params.toString());
+      next.delete('page');
+      next.set('group', groupId);
+      return `${basePath}?${next.toString()}`;
+    },
+    [params, basePath],
+  );
+  const offerShowGroup = !instantMode && plannedPage != null && !q.trim();
 
   // ── Row and card pieces (one source for the Table and the Grid) ─────────
 
@@ -2420,11 +2598,19 @@ export function InventoryTable({
           itemIds={groupAction.ids}
           initialGroupId={groupAction.groupId}
           view={showBookFields ? 'books' : 'items'}
+          showGroupHref={offerShowGroup ? showGroupHref : undefined}
           onDone={(o) => {
             if (o.outcome !== 'applied') return;
             router.refresh();
-            // The record joined: show the group open (C3).
-            if (o.group?.id) openExplicitGroup(o.group.id);
+            // The record joined: show the group open (C3), on the page that
+            // draws it (B5).
+            const groupId = o.group?.id;
+            if (groupId) {
+              revealGroup(
+                groupId,
+                o.changes.filter((c) => c.toGroupId === groupId).map((c) => c.itemId),
+              );
+            }
           }}
           onOpenChange={(v) => (v ? null : setGroupAction(null))}
         />
@@ -2681,8 +2867,10 @@ export function InventoryTable({
             ungroupShownUnder={ungroupShownUnder}
             groupItemIds={groupFacts?.canGroup ? selectedItemIds : []}
             groupingView={showBookFields ? 'books' : 'items'}
-            // C3 (design 5): after a grouping the list opens the group.
-            onGrouped={openExplicitGroup}
+            // C3 (design 5): after a grouping the list opens the group, and
+            // B5: shows it, on the page that draws it.
+            onGrouped={revealGroup}
+            showGroupHref={offerShowGroup ? showGroupHref : undefined}
             onAddToSelection={(ids) =>
               // An explicit choice in the review: add those records (their
               // rows on screen when loaded, else the record itself).
@@ -3462,10 +3650,15 @@ const PAGER_EDGE_DISABLED =
 type CategoryLookup = { name: string; color: string | null };
 
 /**
- * The Category cell: the category's name in its own colour with its dot, or a
- * dash. `wrap` (the table): a name may wrap between its words, and the dot
- * stays beside the first line (7 px down is the centre of a 20.25 px line, so a
- * one-line name sits exactly where it did); a Grid card passes nothing.
+ * The Category cell: the category's name in ink 2 after a 6 px dot in its own
+ * colour, or a dash. The name is never drawn in the colour itself (DESIGN-SPEC
+ * 6.9 draws Category in ink 2; CONFLICTS C8 keeps the dot): a colour an org
+ * picks is no text colour, and 7 of the 8 the categories manager offers fall
+ * under 4.5:1 on white (FX2). The dot stays decorative, hidden from screen
+ * readers, as the name is printed. `wrap` (the table): a name may wrap between
+ * its words, and the dot stays beside the first line (7 px down is the centre
+ * of a 20.25 px line, so a one-line name sits exactly where it did); a Grid
+ * card passes nothing.
  */
 function CategoryLabel({
   category,
@@ -3476,8 +3669,10 @@ function CategoryLabel({
 }) {
   return category ? (
     <span
-      className={wrap ? 'inline-flex items-start gap-1.5' : 'inline-flex items-center gap-1.5'}
-      style={category.color ? { color: category.color } : undefined}
+      className={cn(
+        'text-ink-2',
+        wrap ? 'inline-flex items-start gap-1.5' : 'inline-flex items-center gap-1.5',
+      )}
     >
       {category.color && (
         <span
@@ -3673,20 +3868,30 @@ function hasOnHandNotes(item: Item, reservedByItem?: Map<string, number>): boole
   return (item.staged_quantity ?? 0) + (item.unplaced_quantity ?? 0) > 0;
 }
 
-/** A grid card's one-line meta: its parts with a quiet "·" between them. */
+/**
+ * A grid card's meta: its parts with a quiet "·" between them, in order. On
+ * one line where the card has room, drawn exactly as before; where it has not
+ * (a group card's "N records · Category · Generic" on a 390 px phone, W5) it
+ * wraps between whole parts, and inside a part only between its words, so no
+ * word is cut or hidden. Each "·" stays with the part before it, so a wrapped
+ * line never starts with one, and the lines sit 18 px apart, as text does.
+ */
 function MetaLine({ children }: { children: React.ReactNode }) {
   const parts = React.Children.toArray(children);
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+    <span
+      data-slot="meta-line"
+      className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5"
+    >
       {parts.map((part, i) => (
-        <React.Fragment key={i}>
-          {i > 0 ? (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {part}
+          {i < parts.length - 1 ? (
             <span aria-hidden className="text-muted-foreground">
               ·
             </span>
           ) : null}
-          {part}
-        </React.Fragment>
+        </span>
       ))}
     </span>
   );
@@ -3969,6 +4174,14 @@ function rollupText(
  * the photo at once, the missing-photo hatch stands in for no photo, and the
  * 2,048 px master loads only on hover intent (on demand for payload-diet rows
  * that carry the thumb alone).
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a row with no photo does; it used to leave the 34 px
+ * tile empty. CardPhoto's rule (below): the failed address is remembered, so
+ * a new one (a refresh signs the photos again) gets a fresh attempt, and
+ * because next/image is given an onError it sets the address once more after
+ * hydration, so a photo that failed before the page came alive is caught too.
  */
 function ListThumb({
   photo,
@@ -3986,15 +4199,18 @@ function ListThumb({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
+  // The photo did not load: the hatch, and no preview of it.
+  const shown = photo && thumbSrc && failedSrc !== thumbSrc ? photo : null;
   return (
     <ImageHoverPreview
-      src={photo?.image_url ?? null}
+      src={shown?.image_url ?? null}
       // Diet rows: master on demand (org-scoped route, same 25-day-stable URL
       // the row used to carry).
       srcLoader={
-        photo && !photo.image_url && photo.image_thumb_url
-          ? () => loadMasterImageUrl(photo.id)
+        shown && !shown.image_url && shown.image_thumb_url
+          ? () => loadMasterImageUrl(shown.id)
           : undefined
       }
       alt={alt}
@@ -4004,17 +4220,18 @@ function ListThumb({
       className="shrink-0"
     >
       <Thumb size={34}>
-        {photo && thumbSrc ? (
+        {shown && thumbSrc ? (
           <Image
             src={thumbSrc}
-            unoptimized={!!photo.image_thumb_url}
+            unoptimized={!!shown.image_thumb_url}
             alt=""
             width={68}
             height={68}
             sizes="34px"
             priority={priority}
-            placeholder={photo.image_lqip ? 'blur' : 'empty'}
-            blurDataURL={photo.image_lqip ?? undefined}
+            placeholder={shown.image_lqip ? 'blur' : 'empty'}
+            blurDataURL={shown.image_lqip ?? undefined}
+            onError={() => setFailedSrc(thumbSrc)}
             className="absolute inset-0 h-full w-full object-cover"
           />
         ) : undefined}
@@ -4033,6 +4250,16 @@ function hasPhoto(photo: Item | null): photo is Item {
  * uncropped in the card's fixed square, with the row's hover preview and
  * loading rules (ListThumb above). No photo: null, and the card draws the
  * missing-photo hatch.
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a card with no photo does. Before R8 it left the
+ * square empty: a blank card. The failed address is remembered, so a new
+ * one (a refresh signs the photos again) gets a fresh attempt without an
+ * effect resetting state. Because next/image is given an onError, it sets
+ * the address once more after hydration, so a cover that failed before the
+ * page came alive (the first cards fetch with the HTML) reports its error
+ * too. Which photos go through the optimizer is unchanged (ListThumb's rule).
  */
 function CardPhoto({
   photo,
@@ -4047,8 +4274,10 @@ function CardPhoto({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
   if (!photo || !thumbSrc) return null;
+  if (failedSrc === thumbSrc) return <MissingPhoto className="absolute inset-0" />;
   return (
     <ImageHoverPreview
       src={photo.image_url ?? null}
@@ -4071,6 +4300,7 @@ function CardPhoto({
         priority={priority}
         placeholder={photo.image_lqip ? 'blur' : 'empty'}
         blurDataURL={photo.image_lqip ?? undefined}
+        onError={() => setFailedSrc(thumbSrc)}
         style={{ objectFit: 'contain' }}
         className="h-full w-full object-contain"
       />
@@ -5460,9 +5690,14 @@ function SavedViewChip({
   // The owner's share and delete controls appear on hover with a mouse, and
   // stay visible on a touch screen, below sm, and whenever keyboard focus is
   // inside the chip (CONFLICTS D18: hover-only controls could not be reached
-  // by touch or by Tab-and-see).
+  // by touch or by Tab-and-see). Focus inside the chip is the descendant
+  // selector `.group\/view:focus-within &`, not Tailwind's group-focus-within
+  // variant, which Safari pays for on every focus change of every page
+  // (lib/group-focus-variants.guard.test.ts). String.raw keeps the one
+  // backslash of the escaped "/" in the class the browser gets and in the text
+  // Tailwind scans; an ordinary '\\/' string leaves two in the scanned text.
   const ownerControl = cn(
-    'grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 group-focus-within/view:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100',
+    String.raw`grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 [.group\/view:focus-within_&]:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100`,
     isActive ? 'hover:bg-background/20' : 'hover:bg-foreground/10',
   );
   return (

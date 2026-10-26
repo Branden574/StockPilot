@@ -1,11 +1,15 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { sniffImage } from './image-signature';
 import { fetchObjectPrefix, SNIFF_PREFIX_BYTES } from './storage-object-prefix';
 
 /**
- * The helper is the storage-read seam for the three magic-byte sniff callers
- * (item-images.record, maintenance-attachments.finalize, setOrgLogoUrlAction),
+ * The helper is the storage-read seam for the magic-byte sniff callers
+ * (item-images.record, maintenance-attachments.finalize, setOrgLogoUrlAction,
+ * and verifyStoredDocumentOrDelete for po-attachments and order-attachments),
  * so its two load-bearing properties are proven here against a stubbed fetch:
  *
  *   1. the returned totalSize is the object's FULL size — from Content-Range
@@ -318,5 +322,65 @@ describe('fetchObjectPrefix — indeterminate-window fallback', () => {
       }),
     );
     expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+/**
+ * B29: the bucket sizes the module's comments give are the buckets' own
+ * file_size_limit, as the migrations set it. The header said 15 MB for
+ * maintenance-photos, a bucket 0315 created at 10 MB. Every "<N> MB for
+ * <bucket>[ and <bucket>]" in storage-object-prefix.ts is checked against the
+ * last migration that sets that bucket's limit.
+ */
+describe("the comments give each bucket's real size limit", () => {
+  const MIGRATIONS_DIR = path.resolve(__dirname, '../../../../supabase/migrations');
+
+  /** The limit, in MB, the last migration to set one gives `bucket`. A
+   *  statement that sets it in a form this cannot read fails the test rather
+   *  than being skipped. */
+  function migratedLimitMb(bucket: string): number | null {
+    let mb: number | null = null;
+    const files = readdirSync(MIGRATIONS_DIR)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    for (const file of files) {
+      const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').replace(/--[^\n]*/g, '');
+      for (const statement of sql.split(';')) {
+        if (!/storage\.buckets/.test(statement) || !statement.includes('file_size_limit')) continue;
+        if (!statement.includes(`'${bucket}'`)) continue;
+        const sizes = [...statement.matchAll(/(\d+)\s*\*\s*1024\s*\*\s*1024/g)];
+        if (sizes.length !== 1) throw new Error(`${file}: cannot read the limit for ${bucket}`);
+        mb = Number(sizes[0]![1]);
+      }
+    }
+    return mb;
+  }
+
+  /** Every "<N> MB for <bucket>[ and <bucket>]" the source states. */
+  function statedLimits(): Array<{ bucket: string; mb: number }> {
+    const text = readFileSync(path.resolve(__dirname, 'storage-object-prefix.ts'), 'utf8')
+      .replace(/\n\s*\*\s?/g, ' ')
+      .replace(/\s+/g, ' ');
+    const BUCKET = '[a-z]+(?:-[a-z]+)+';
+    const claim = new RegExp(`(\\d+) MB for (${BUCKET}(?: and ${BUCKET})*)`, 'g');
+    return [...text.matchAll(claim)].flatMap((m) =>
+      m[2]!.split(' and ').map((bucket) => ({ bucket, mb: Number(m[1]) })),
+    );
+  }
+
+  it('reads the limits the migrations set (a vacuous reader would prove nothing)', () => {
+    expect(
+      ['maintenance-photos', 'item-images', 'org-logos', 'po-attachments', 'order-attachments'].map(
+        migratedLimitMb,
+      ),
+    ).toEqual([10, 10, 5, 15, 15]);
+  });
+
+  it('every size the comments give is the one its bucket has', () => {
+    const stated = statedLimits();
+    expect(stated.map((s) => s.bucket)).toContain('maintenance-photos');
+    for (const { bucket, mb } of stated) {
+      expect(`${bucket}: ${mb} MB`).toBe(`${bucket}: ${migratedLimitMb(bucket)} MB`);
+    }
   });
 });

@@ -722,6 +722,14 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(src).not.toMatch(/Copy Email Details below/);
   });
 
+  it('the blocked-state headline follows the transport the opener tried, never the bare Outlook constant (F1-5 phone walk, 2026-09-27)', () => {
+    // A refused "Open in Default Email App" used to say "Outlook could not be
+    // opened automatically." blockedHeadlineFor (maintenance-email-actions.ts,
+    // its own tests) picks the words from the result's `attempted` transport.
+    expect(src).toContain('{blockedHeadlineFor(lastResult.attempted)}');
+    expect(src).not.toContain('{BLOCKED_HEADLINE}');
+  });
+
   it('renders the detail-page StockPilot-activity note (web page.tsx\'s own verbatim sentence) — no fake ticket-conversation timeline', () => {
     expect(src).toContain(
       'Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here.',

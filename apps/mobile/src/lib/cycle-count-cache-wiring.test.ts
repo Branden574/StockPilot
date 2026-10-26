@@ -49,8 +49,11 @@ describe('assigned_to round-trips through the cache (SP-003)', () => {
 });
 
 describe('one live outbox row per line (SP-021)', () => {
-  it('updateLocalLine supersedes earlier pending/failed rows for the same line inside the transaction', () => {
-    const fn = cache.slice(cache.indexOf('export async function updateLocalLine'), cache.indexOf('export async function pendingCountFor'));
+  it('a line edit (a count, or a clear of it) supersedes earlier pending/failed rows for the same line inside the transaction', () => {
+    // updateLocalLine and clearLocalLine both write through queueLineEdit
+    // (session-scope.test.ts pins the delegation).
+    const fn = cache.slice(cache.indexOf('async function queueLineEdit('), cache.indexOf('export async function pendingCountFor'));
+    expect(fn.indexOf('await withDbTransaction(db, async () => {')).toBeGreaterThan(-1);
     const del = fn.indexOf('delete from pending_actions');
     const ins = fn.indexOf('insert into pending_actions');
     expect(del, 'supersede delete missing').toBeGreaterThan(-1);

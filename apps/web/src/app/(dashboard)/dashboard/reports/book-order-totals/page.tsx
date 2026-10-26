@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import {
   BookOrderTotalsBody,
@@ -38,8 +38,8 @@ export default async function BookOrderTotalsPage({
     checkModuleAccess('orders'),
     checkModuleAccess('books'),
   ]);
-  if (!orders.enabled) return <ModuleNotEnabled moduleId="orders" canManage={orders.canManage} />;
-  if (!books.enabled) return <ModuleNotEnabled moduleId="books" canManage={books.canManage} />;
+  if (!orders.enabled) return <ModuleUnavailable moduleId="orders" access={orders} />;
+  if (!books.enabled) return <ModuleUnavailable moduleId="books" access={books} />;
 
   return (
     // The page area every redesigned list shares (DESIGN-SPEC 4 and 5.3):

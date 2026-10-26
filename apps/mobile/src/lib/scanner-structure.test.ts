@@ -4,6 +4,8 @@ import * as vm from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { countFromText } from '@stockpilot/core';
+
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
 import {
   TOUCHABLE_TAG,
@@ -377,7 +379,7 @@ describe('count scanner: the counting rules are unchanged', () => {
   it('a count of 0 is a count: only a negative or non-number is refused', () => {
     const body = functionBody(src, COUNT_SCANNER, 'confirmSheet');
     expect(body).toMatch(
-      /if \(!Number\.isFinite\(num\) \|\| num < 0\) \{\s*Alert\.alert\('Invalid count', 'Enter a non-negative number\.'\);\s*return;\s*\}/,
+      /const num = countFromText\(sheet\.qty\);\s*if \(num === null\) \{\s*Alert\.alert\('Invalid count', 'Enter a non-negative number\.'\);\s*return;\s*\}/,
     );
     expect(body).not.toMatch(/num <= 0|num < 1|num === 0/);
     expect(functionBody(src, COUNT_SCANNER, 'recordCount')).toMatch(
@@ -494,31 +496,39 @@ describe('count scanner: defects fixed in this package', () => {
   // before the typing recorded a count of zero for the line, where the count
   // screen (app/cycle-count/[id].tsx) records nothing from an empty box. This
   // runs the screen's own lines that turn the box into a number, then its own
-  // check. Mutation caught: the old `Number(sheet.qty)` (it accepts '' and
-  // '   ' as 0), or a check that refuses a typed 0.
+  // check, with the rule every count box reads by (core countFromText).
+  // Mutation caught: the old `Number(sheet.qty)` (it accepts '' and '   ' as
+  // 0, and "1e3" as 1000), or a check that refuses a typed 0.
   it('an emptied Counted box is refused, never saved as 0; a typed 0 still counts', () => {
     const body = functionBody(sourceOf(COUNT_SCANNER), COUNT_SCANNER, 'confirmSheet');
     const from = body.indexOf('if (!sheet) return;') + 'if (!sheet) return;'.length;
-    const to = body.indexOf('if (!Number.isFinite(num) || num < 0)');
+    const to = body.indexOf('if (num === null)');
     expect(from).toBeGreaterThan('if (!sheet) return;'.length - 1);
     expect(to).toBeGreaterThan(from);
     // The screen's own statements (read from the repository's source, never
-    // from input), run in an empty context that holds only the sheet.
-    const parse = new vm.Script(`${body.slice(from, to)}\n!(!Number.isFinite(num) || num < 0);`);
-    const accepts = (qty: string): boolean => parse.runInNewContext({ sheet: { qty } }) as boolean;
+    // from input), run in a context that holds only the sheet and the rule.
+    const parse = new vm.Script(`${body.slice(from, to)}\nnum === null ? null : num;`);
+    const saved = (qty: string): unknown =>
+      parse.runInNewContext({ sheet: { qty }, countFromText });
     const verdicts = Object.fromEntries(
-      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', 'abc', '1,5'].map((qty) => [qty, accepts(qty)]),
+      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', 'abc', '1,5', '1.2.3', '1e3', '0x10', '+5'].map(
+        (qty) => [qty, saved(qty)],
+      ),
     );
     expect(verdicts).toEqual({
-      '': false,
-      '   ': false,
-      '0': true,
-      ' 0 ': true,
-      '12': true,
-      '2.5': true,
-      '-1': false,
-      abc: false,
-      '1,5': false,
+      '': null,
+      '   ': null,
+      '0': 0,
+      ' 0 ': 0,
+      '12': 12,
+      '2.5': 2.5,
+      '-1': null,
+      abc: null,
+      '1,5': null,
+      '1.2.3': null,
+      '1e3': null,
+      '0x10': null,
+      '+5': null,
     });
   });
 });
@@ -1050,7 +1060,11 @@ describe('Scan tab: the flows and their gates are unchanged', () => {
     const rowCode = codeOnly(row.getText(rows.sf));
     expect(rowCode).toContain("{c.charterName ?? 'Unassigned charter'}");
     expect(rowCode).toMatch(/SKU \{c\.sku\}/);
-    expect(rowCode).toMatch(/\{c\.binLocation \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/);
+    // B26: the line names where the record's stock is by the one placement
+    // rule (scan-resolve scanCandidatePlacementLabel), not its raw rack text.
+    expect(rowCode).toMatch(
+      /\{c\.placementLabel \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/,
+    );
     const cancel = elements(
       SCAN_TAB,
       (el, s) =>

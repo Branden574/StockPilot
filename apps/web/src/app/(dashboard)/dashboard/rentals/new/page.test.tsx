@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -25,9 +25,19 @@ const {
   ceiling,
   rackHoldings,
   moduleAccess,
+  refresh,
 } = vi.hoisted(() => ({
   // The Rentals module gate's answer; the module-off suite turns it off.
-  moduleAccess: vi.fn(async (_moduleId: string) => ({ enabled: true, canManage: false })),
+  moduleAccess: vi.fn(
+    async (
+      _moduleId: string,
+    ): Promise<{ enabled: boolean; canManage: boolean; checkFailed?: boolean }> => ({
+      enabled: true,
+      canManage: false,
+    }),
+  ),
+  // The router's refresh, which the "could not check" panel's Try again calls.
+  refresh: vi.fn(),
   adminRef: { current: null as unknown },
   // The caller's OWN client (row level security applies). null: the same
   // stub as the admin client, i.e. a caller whose RLS view is the full one
@@ -52,7 +62,10 @@ const {
   ceiling: { value: 10_000 },
 }));
 
-vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  redirect: vi.fn(),
+  useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+}));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
@@ -200,7 +213,12 @@ describe('New rental: every rental item, not the first 500 by name', () => {
     { ...rentalRows(1)[0]!, id: uuid(2, 'd'), name: 'A other warehouse', warehouse_id: 'wh-2' },
     { ...rentalRows(1)[0]!, id: uuid(3, 'd'), name: 'A not a rental', is_rental: false },
     { ...rentalRows(1)[0]!, id: uuid(4, 'd'), name: 'A archived', status: 'archived' },
-    { ...rentalRows(1)[0]!, id: uuid(5, 'd'), name: 'A deleted', deleted_at: '2026-09-01T00:00:00Z' },
+    {
+      ...rentalRows(1)[0]!,
+      id: uuid(5, 'd'),
+      name: 'A deleted',
+      deleted_at: '2026-09-01T00:00:00Z',
+    },
   ];
 
   const byNameThenId = (a: Row, b: Row) =>
@@ -276,14 +294,19 @@ describe('New rental: every rental item, not the first 500 by name', () => {
     const props = await renderPage();
 
     expect(props.items.map((i) => i.id)).toEqual(
-      [...many].sort(byNameThenId).slice(0, 1500).map((r) => r.id),
+      [...many]
+        .sort(byNameThenId)
+        .slice(0, 1500)
+        .map((r) => r.id),
     );
     // The last window is cut to the ceiling; nothing past it is asked for.
     expect(stub.chainArgsAll.get('inventory_items.select')?.map((a) => a.at(-1))).toEqual([
       [0, 999],
       [1000, 1499],
     ]);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('1500-row ceiling for warehouse wh-1'));
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('1500-row ceiling for warehouse wh-1'),
+    );
     error.mockRestore();
   });
 
@@ -359,7 +382,11 @@ describe('New rental: photos arrive with the page', () => {
   // photo from the cached warehouse thumbnail map (the Orders storefront's).
   const photoItems = [
     { ...items[0]!, id: uuid(1, 'a'), custom_fields: {} },
-    { ...items[0]!, id: uuid(2, 'a'), custom_fields: { thumbnail_url: 'https://covers.example/2.jpg' } },
+    {
+      ...items[0]!,
+      id: uuid(2, 'a'),
+      custom_fields: { thumbnail_url: 'https://covers.example/2.jpg' },
+    },
     { ...items[0]!, id: uuid(3, 'a'), custom_fields: {} },
     { ...items[0]!, id: uuid(4, 'a'), custom_fields: null },
   ];
@@ -477,6 +504,46 @@ describe('New rental with the Rentals module off', () => {
 
     expect(moduleAccess.mock.calls).toEqual([['rentals']]);
     expect(formProps).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+});
+
+describe('New rental when the module set could not be read (docket R7)', () => {
+  // A failed read is not "Rentals is off": the module-off panel would send an
+  // admin to switch on a module that is on. The page says it could not check,
+  // offers Try again, and still reads and offers nothing.
+  it('says it could not check, with Try again, and reads nothing', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    moduleAccess.mockResolvedValue({ enabled: false, canManage: true, checkFailed: true });
+
+    render(await NewRentalPage({ searchParams: Promise.resolve({ warehouseId: 'wh-1' }) }));
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: "We couldn't check whether Rentals is on" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Rentals isn't enabled")).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Enable in Settings → Modules' })).toBeNull();
+    expect(borrowerMembers).not.toHaveBeenCalled();
+    expect(thumbMap).not.toHaveBeenCalled();
+    expect(reserved).not.toHaveBeenCalled();
+    expect(formProps).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a member without rentals:create is still sent to the list before the module is asked', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    moduleAccess.mockResolvedValue({ enabled: false, canManage: false, checkFailed: true });
+    session.current = { ...session.current, permissions: new Set<string>() };
+    const { redirect } = await import('next/navigation');
+
+    render(await NewRentalPage({ searchParams: Promise.resolve({}) }));
+
+    expect(redirect).toHaveBeenCalledWith('/dashboard/rentals');
+    const redirectAt = vi.mocked(redirect).mock.invocationCallOrder[0]!;
+    const moduleAt = moduleAccess.mock.invocationCallOrder[0]!;
+    expect(redirectAt).toBeLessThan(moduleAt);
   });
 });
 
@@ -562,7 +629,9 @@ describe('New rental: only the rental items the caller can read, and only their 
     const own = makeSupabaseStub(itemReadScopeResults(caller, { items: world, images: [] }));
     adminRef.current = admin.client;
     callerRef.current = own.client;
-    thumbMap.mockResolvedValue(Object.fromEntries(world.map((w) => [w.id, { url: photo(w.id), lqip: null }])));
+    thumbMap.mockResolvedValue(
+      Object.fromEntries(world.map((w) => [w.id, { url: photo(w.id), lqip: null }])),
+    );
     reserved.mockResolvedValue(new Map());
     return { admin, own };
   }

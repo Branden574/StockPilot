@@ -324,3 +324,95 @@ describe('the snapshot the header badge reads', () => {
     expect(cycleCountSync.snapshot()).toMatchObject({ rejectedCount: 3, unconfirmedCount: 1 });
   });
 });
+
+/**
+ * A queued clear (B4a): what the count screen queues for an emptied box, so
+ * the line is uncounted on the server as the web count screen leaves it. It
+ * rides the count outbox as a record_count row with `clear: true` and no
+ * count (cycle-count-clear.ts).
+ */
+describe('a queued clear of a line (B4a)', () => {
+  const own = { org: 'org-a', user: 'u1' };
+  const clearPath = (lineId: string) => `/api/v1/cycle-counts/cc1/lines/${lineId}/clear`;
+  const clearRow = (id: number, lineId: string): Row => ({
+    ...countRow(id, lineId, own),
+    payload: { cycleCountId: 'cc1', lineId, clear: true },
+  });
+
+  it('is sent to the clear route with no body, under the org and account it was queued in, then acked', async () => {
+    live.orgId = 'org-b';
+    cacheMock.rows = [clearRow(1, 'l1')];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+    const [path, opts] = apiMock.api.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe(clearPath('l1'));
+    expect(opts).toMatchObject({ method: 'POST', orgId: 'org-a', asUserId: 'u1' });
+    expect(opts.body).toBeUndefined();
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${clearPath('l1')}`, 'outboxAck:1']);
+  });
+
+  it('takes its turn with the line counts: the newest edit of each line is the one sent', async () => {
+    cacheMock.rows = [
+      countRow(1, 'l1', own), // a count of l1, then the box emptied
+      clearRow(2, 'l1'),
+      clearRow(3, 'l2'), // l2 emptied, then counted again
+      countRow(4, 'l2', own),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(calls.log).toEqual([
+      'outboxAck:1',
+      'outboxAck:3',
+      'outboxMarkSending:2',
+      `api:${clearPath('l1')}`,
+      'outboxAck:2',
+      'outboxMarkSending:4',
+      `api:${recordPath('l2')}`,
+      'outboxAck:4',
+    ]);
+  });
+
+  it('a 404 with no code (the route not deployed yet) keeps it for another try; a refusal with a code parks it', async () => {
+    cacheMock.rows = [clearRow(1, 'l1')];
+    apiMock.api.mockImplementationOnce(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('That is not available on this version of the app.'), {
+        status: 404,
+      });
+    });
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([
+      'outboxMarkSending:1',
+      `api:${clearPath('l1')}`,
+      'outboxBumpFailure:1',
+    ]);
+
+    calls.log = [];
+    apiMock.api.mockImplementationOnce(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('Line not found or no longer editable. Reload the count.'), {
+        status: 404,
+        code: 'not_found',
+      });
+    });
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${clearPath('l1')}`, 'outboxReject:1']);
+  });
+
+  // An update rolled back while a clear waits on a phone: the older build
+  // does not know `clear` and reads the row as a count. Its count rule, the
+  // one below since the first offline count engine, finds no number and
+  // keeps the row waiting; nothing reaches the server as a count of 0.
+  it('a build that does not know clears keeps the row waiting, never sending it as a count of 0', async () => {
+    // The row as that build reads it: the ids, and no count.
+    cacheMock.rows = [{ ...countRow(1, 'l1', own), payload: { cycleCountId: 'cc1', lineId: 'l1' } }];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual(['outboxMarkSending:1', 'outboxBumpFailure:1']);
+  });
+});
