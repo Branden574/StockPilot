@@ -1569,8 +1569,9 @@ export class PoImportsService {
               // ownership-charter sibling is the SAME product, so its group and
               // variant attributes must travel with it or the copy lands ungrouped
               // and the next import creates a second variant for the same size.
+              // Its ordering visibility (0413) travels too: see the create below.
               .select(
-                'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
+                'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, order_catalog_visible',
               )
               .eq('organization_id', ctx.organizationId)
               .in('id', batch)
@@ -1601,6 +1602,7 @@ export class PoImportsService {
           variant_color: string | null;
           jersey_number: string | null;
           player_name: string | null;
+          order_catalog_visible?: boolean | null;
         };
         const byId = new Map(
           ((linkedItems ?? []) as LinkedItem[]).map((i) => [i.id, i]),
@@ -1702,7 +1704,15 @@ export class PoImportsService {
               // the charter sibling — the common case for a book that already
               // exists under a different charter — showed up as a real
               // "Out of stock" row instead of hiding under the Expected chip.
-            }, { awaitingFirstReceipt: true });
+            }, {
+              awaitingFirstReceipt: true,
+              // A clone of a product hidden from new ordering stays hidden
+              // (0413, design 2.3): it becomes orderable on its first receipt,
+              // which clears only awaiting_first_receipt, so a default of shown
+              // would republish the product with nobody choosing that. Only a
+              // hidden source sends the option; a shown one takes the default.
+              ...(it.order_catalog_visible === false ? { orderCatalogVisible: false } : {}),
+            });
             remap.set(id, created.id as string);
           }
         }

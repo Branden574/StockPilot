@@ -51,6 +51,17 @@ const PHONE_ONLY = new Set([
   'cartCountsCopy',
 ]);
 
+/**
+ * Names the web cart shows through core's cartLineView (stale-cart.ts, the
+ * phone's rule; ordering visibility design 6.5): the web names cartLineView,
+ * and stale-cart.ts names these, so each word still changes in one place.
+ */
+const THROUGH_CART_LINE_VIEW = new Set(['cartLineAtMaxCopy', 'cartLineOverCopy']);
+const STALE_CART = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'stale-cart.ts'),
+  'utf8',
+);
+
 const CONSTANTS: Array<[string, string]> = Object.entries(copy as Record<string, unknown>).flatMap(
   ([name, value]) => (typeof value === 'string' ? [[name, value] as [string, string]] : []),
 );
@@ -62,6 +73,11 @@ describe('the web storefront takes its words from copy.ts', () => {
   });
 
   it.each(NAMES.filter((n) => !PHONE_ONLY.has(n)))('%s is used by the web storefront', (name) => {
+    if (THROUGH_CART_LINE_VIEW.has(name)) {
+      expect(RAW).toMatch(/\bcartLineView\b/);
+      expect(STALE_CART).toMatch(new RegExp(`\\b${name}\\b`));
+      return;
+    }
     expect(RAW).toMatch(new RegExp(`\\b${name}\\b`));
   });
 

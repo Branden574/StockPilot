@@ -252,6 +252,10 @@ function AddItemsBody({
       // of its own — so without this the dialog would be the ONE path that can
       // put a bundle line on an order.
       p.set('bundles', 'exclude');
+      // Ordering visibility (0413): only records shown in Orders. addLines
+      // refuses a hidden item in the database (order_item_hidden), so the
+      // picker never offers one; Items and Books keep showing it.
+      p.set('orderable', '1');
       p.set('sort', 'name_asc');
       p.set('limit', String(PAGE_SIZE));
       // Hard-pinned to THIS order's warehouse. addLines rejects an item stocked

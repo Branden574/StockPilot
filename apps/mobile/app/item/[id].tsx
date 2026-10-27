@@ -43,12 +43,10 @@ import {
   DISPLAY_GROUP_FALLBACK_NAME,
   formatCycleCountNumber,
   isCountableItem,
-  itemPhotoPath,
   formatOrderNumber,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   legacyOrderRefId,
-  randomPhotoFileBase,
   randomRequestUuid,
   readDisplayStorage,
   reasonWithoutRefLabel,
@@ -87,8 +85,8 @@ import { isOfflineState } from '@/lib/exceptions-api';
 import { canOpenCountScreen } from '@/lib/verification-api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
-import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
+import { uploadItemPhoto } from '@/lib/item-photo-upload';
 import { ADJUST_STOCK_KIND, describeQueuedChanges } from '@/lib/adjust-outbox';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
@@ -496,15 +494,6 @@ async function resolveReceiptPoNumbers(
     if (po?.po_number) map.set(r.id as string, po.po_number);
   }
   return map;
-}
-
-function mimeForExt(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-  if (e === 'png') return 'image/png';
-  if (e === 'heic') return 'image/heic';
-  if (e === 'webp') return 'image/webp';
-  return `image/${e}`;
 }
 
 export default function ItemDetail() {
@@ -1638,22 +1627,15 @@ export default function ItemDetail() {
     const itemId = item.id;
     setPhotoBusy(true);
     try {
-      // Resize on-device so the bucket only stores list-friendly sizes
-      // (~400 KB JPEGs instead of multi-megapixel phone photos).
-      const resized = await resizeForUpload(uri);
-      // The one path builder every writer uses; the database (0381) refuses
-      // any other shape (packages/core item-photo-path.test.ts pins it).
-      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
-      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
-      // to Supabase Storage in RN/Expo, so use arrayBuffer().
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const { error: upErr } = await supabase.storage
-        .from('item-images')
-        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) {
-        Alert.alert('Upload failed', upErr.message);
+      // The photo, resized on the device (~400 KB JPEGs instead of
+      // multi-megapixel phone photos), and its thumbnail beside it, so lists
+      // never need the full photo (lib/item-photo-upload.ts builds both paths).
+      const upload = await uploadItemPhoto({ supabase, orgId, itemId, uri });
+      if (!upload.ok) {
+        Alert.alert('Upload failed', upload.error);
         return;
       }
+      const path = upload.path;
       // SP-078 — this block USED to remove the old storage objects and delete
       // every item_images row for the item BEFORE inserting the new row, with
       // neither destructive result checked and no compensation if the insert
@@ -1668,6 +1650,7 @@ export default function ItemDetail() {
         orgId,
         itemId,
         newPath: path,
+        newThumbPath: upload.thumbPath,
       });
       if (!outcome.ok) {
         Alert.alert('Save failed', outcome.error);

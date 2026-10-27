@@ -133,6 +133,9 @@ export function AddOrderItemsSheet({
         // Rental items go out through Rentals, never on an order, and
         // addLines refuses them, so they must never be offerable either.
         .eq('is_rental', false)
+        // Ordering visibility (0413): a record hidden from Orders is never
+        // offered for new demand. The server's line gate refuses it anyway.
+        .eq('order_catalog_visible', true)
         .is('deleted_at', null)
         .order('name', { ascending: true })
         .range(plan.range.from, plan.range.to);

@@ -158,6 +158,9 @@ describe('routes that rely on the late skeleton', () => {
       'orders/[id]/page.tsx',
       'orders/[id]/pick/page.tsx',
       'orders/[id]/print/page.tsx',
+      // Manage order items (ordering visibility, 0413): like the Orders list,
+      // no loading.tsx on purpose; the late skeleton draws the list's rows.
+      'orders/manage-items/page.tsx',
       'orders/page.tsx',
       'page.tsx',
       'support/page.tsx',
