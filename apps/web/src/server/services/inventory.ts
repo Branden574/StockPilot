@@ -31,7 +31,7 @@ import type {
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
-import type { RackHoldingLike } from '@stockpilot/core';
+import type { PlacedHoldingLike, RackHoldingLike } from '@stockpilot/core';
 import type { PlacementFailure } from '@stockpilot/core';
 import type { HoldingsElsewhere, ItemElsewhere } from '@stockpilot/core';
 import type {
@@ -110,6 +110,7 @@ import {
 } from './lib/fetch-by-ids';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { otherHoldingsField } from './lib/other-holdings';
 import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 import { fetchAllRows } from './lib/paginate';
 import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
@@ -1786,6 +1787,12 @@ export class InventoryService {
     // location_id so two same-named racks in different warehouses stay two
     // holdings, matching rackHoldingsCount rather than placed_racks.
     const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
+    // Every OTHER placed holding (a NULL-kind Site, an area, a NULL-kind
+    // shelf or bin), carrying kind AND type, from the same rows: core
+    // resolvePlacement's `otherHoldings`. Without it a book whose stock all
+    // sits on the Site resolves to the rack its keys still name (B37). Keyed
+    // by location_id like placedHoldingsByItem.
+    const otherHoldingsByItem = new Map<string, Map<string, PlacedHoldingLike>>();
     // STOCK IN OTHER WAREHOUSES (0371), for callers that opt in
     // (`withElsewhere`: the Items, Books and Rentals lists). A member below
     // manager reads holdings only in their own warehouses, so the loop below
@@ -1821,7 +1828,7 @@ export class InventoryService {
       try {
         levels = await this.holdingsForItemIds<unknown>(
           ids,
-          'item_id, location_id, quantity, locations!inner(name, kind)',
+          'item_id, location_id, quantity, locations!inner(name, kind, type)',
         );
       } catch (e) {
         // `internalDetail` carries the raw PostgREST text; ServiceError's public
@@ -1838,7 +1845,7 @@ export class InventoryService {
         item_id: string;
         location_id: string;
         quantity: number;
-        locations: { name: string; kind: string };
+        locations: { name: string; kind: string | null; type?: string | null };
       }>) {
         const kind = lvl.locations?.kind;
         if (kind === 'staging') {
@@ -1864,6 +1871,20 @@ export class InventoryService {
             kind,
           });
           placedHoldingsByItem.set(lvl.item_id, byLoc);
+        } else if (lvl.locations?.name) {
+          // Placed, but not on a rack or crate. Counts toward none of the
+          // figures above (placed_quantity already includes it), and only
+          // feeds the Site rule.
+          const byLoc =
+            otherHoldingsByItem.get(lvl.item_id) ?? new Map<string, PlacedHoldingLike>();
+          const prior = byLoc.get(lvl.location_id);
+          byLoc.set(lvl.location_id, {
+            name: lvl.locations.name,
+            quantity: (prior?.quantity ?? 0) + Number(lvl.quantity),
+            kind: kind ?? null,
+            type: lvl.locations.type ?? null,
+          });
+          otherHoldingsByItem.set(lvl.item_id, byLoc);
         }
       }
     }
@@ -1889,6 +1910,9 @@ export class InventoryService {
         placed_holdings: [...(placedHoldingsByItem.get(id)?.values() ?? [])].sort((a, b) =>
           a.name.localeCompare(b.name),
         ),
+        // Only when there are any: most rows have none, and every row of the
+        // cached sibling (loaders/inventory-list.ts) carries the same rule.
+        ...otherHoldingsField(otherHoldingsByItem.get(id)),
         elsewhere_quantity: holdingsElsewhereTotal(hidden),
       };
     });
@@ -1956,6 +1980,10 @@ export class InventoryService {
          *  consumer can apply the crate rule, and `placed_racks` (names only,
          *  name-deduped) cannot supply it. */
         placed_holdings: RackHoldingLike[];
+        /** Every OTHER placed holding (a Site, an area, a NULL-kind shelf or
+         *  bin) with kind AND type, deduped by location_id: resolvePlacement's
+         *  `otherHoldings` (B37). Absent when the item has none. */
+        other_holdings?: PlacedHoldingLike[];
         /** Units this item holds in warehouses the caller cannot see
          *  (item_holdings_elsewhere, 0371). 0 for managers and above, and for
          *  an item with nothing out of view. Already folded into the staged/

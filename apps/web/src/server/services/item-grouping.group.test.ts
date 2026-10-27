@@ -36,7 +36,7 @@ vi.mock('./context', () => ({
 }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: h.invalidate }));
 vi.mock('next/cache', () => ({ revalidateTag: h.revalidateTag }));
-vi.mock('./rack-holdings', () => ({ fetchRackHoldingsByItem: h.holdings }));
+vi.mock('./rack-holdings', () => ({ fetchPlacementHoldingsByItem: h.holdings }));
 vi.mock('./item-images', () => ({
   ItemImagesService: class {
     primaryImagesWithThumbsForItems = h.images;
@@ -155,7 +155,7 @@ beforeEach(() => {
   h.invalidate.mockReset();
   h.revalidateTag.mockReset();
   h.holdings.mockReset();
-  h.holdings.mockResolvedValue(new Map());
+  h.holdings.mockResolvedValue({ rack: new Map(), other: new Map() });
   h.images.mockReset();
   h.images.mockResolvedValue(new Map());
 });
@@ -196,8 +196,8 @@ describe('Group selected: the gate runs before anything else', () => {
 
 describe('Group selected: the review', () => {
   it('asks item_grouping_preview as the caller for the distinct ids and the target, and names each record', async () => {
-    h.holdings.mockResolvedValue(
-      new Map([
+    h.holdings.mockResolvedValue({
+      rack: new Map([
         [
           A,
           [
@@ -206,7 +206,8 @@ describe('Group selected: the review', () => {
           ],
         ],
       ]),
-    );
+      other: new Map(),
+    });
     h.images.mockResolvedValue(
       new Map([[A, { url: 'https://img/a', thumbUrl: 'https://img/a-thumb', lqip: null }]]),
     );
@@ -231,6 +232,25 @@ describe('Group selected: the review', () => {
     expect(review.records[1]!.placementLabel).toBe('15-A');
     // Every read is scoped to the organization and is the caller's own client.
     for (const r of reads) expect(r.filters).toContainEqual(['eq', 'organization_id', ORG]);
+  });
+
+  // B37: a record whose stock all sits on a Site is named by the Site and its
+  // count, not by the rack its bin text (15-A) still names. The review reads
+  // the records' holdings in one query and must give each record the Site
+  // half of it; the field is optional, so typecheck would not notice it
+  // dropped.
+  it('names a record whose stock all sits on a Site by the Site, and keeps the rack for one on a rack (B37)', async () => {
+    h.holdings.mockResolvedValue({
+      rack: new Map([[A, [{ name: '15-A', quantity: 2, kind: 'rack' }]]]),
+      other: new Map([[B, [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }]]]),
+    });
+    const { svc } = harness([{ data: PREVIEW, error: null }]);
+    const review = await svc.previewGroup([A, B]);
+    expect(h.holdings).toHaveBeenCalledWith(expect.anything(), [A, B]);
+    expect(review.records.map((r) => [r.id, r.placementLabel])).toEqual([
+      [A, '15-A'],
+      [B, 'DC4 ×7'],
+    ]);
   });
 
   it('refuses more than 100 records and ids that are not uuids, before any call', async () => {

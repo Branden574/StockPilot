@@ -118,10 +118,10 @@ const READERS: Record<string, Entry> = {
     foldedBy: ['location'],
   },
   // ── Others ─────────────────────────────────────────────────────────────
-  'server/services/rack-holdings.ts::fetchRackHoldingsByItem': {
+  'server/services/rack-holdings.ts::fetchPlacementHoldingsByItem': {
     classification: 'label-only',
     count: 1,
-    why: 'Pick slip / packing slip / scanner lookup rack labels; never drives a write (design NO CHANGE, optional follow-up).',
+    why: 'Pick slip / packing slip / count sheet / rentals catalog / grouping review / scanner lookup location labels (fetchRackHoldingsByItem is its rack half); never drives a write (design NO CHANGE, optional follow-up). B37 reads every placed kind in this one query so the Site rule never names a Site for stock whose rack read failed; under a warehouse scope it also reads the org-level locations (no warehouse) for the Site rule only, never as racks.',
   },
   'server/services/archive-cleanup.ts::itemIdsStillHolding': {
     classification: 'service-client',

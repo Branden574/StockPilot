@@ -17,7 +17,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
+import {
+  formatPlacementLabel,
+  resolvePlacement,
+  type PlacedHoldingLike,
+  type RackHoldingLike,
+} from '@stockpilot/core';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { cn } from '@/lib/utils';
 
@@ -38,6 +43,10 @@ interface PickerRow {
    *  label a counter reads while CHOOSING what to count disagrees with the
    *  count sheet the choice produces. */
   placed_holdings?: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area), from the same scan: an
+   *  item whose stock all sits on a Site reads the Site here, as the count
+   *  sheet does (B37). Absent when there are none. */
+  other_holdings?: PlacedHoldingLike[];
 }
 
 /** A product group as the picker lists it. Carries a DERIVED roll-up only —
@@ -379,6 +388,7 @@ export function CountItemPicker({
                       itemType: row.item_type,
                       customFields: row.custom_fields,
                       holdings: row.placed_holdings,
+                      otherHoldings: row.other_holdings,
                     }),
                   ) ?? '';
                 return (

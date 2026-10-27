@@ -48,6 +48,7 @@ import {
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   legacyOrderRefId,
+  partitionPlacementHoldings,
   randomPhotoFileBase,
   randomRequestUuid,
   readDisplayStorage,
@@ -58,6 +59,7 @@ import {
   UNGROUP_COPY,
   type DisplayGroupRef,
   type ItemElsewhere,
+  type PlacedHoldingLike,
   type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
@@ -223,6 +225,10 @@ interface Item {
    *  so it hid the correct label to print the stale one. Carries
    *  `locations.kind`, without which the crate rule cannot fire. */
   rackHoldings: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area), from the same read, with
+   *  kind AND type. When every placed unit sits on a Site, the card names the
+   *  Site instead of leaving only the rack the item's keys still name (B37). */
+  otherHoldings: PlacedHoldingLike[];
   /** Rental equipment and kits are never counted (0369 D8): "Count this
    *  item" is not offered for them (F1-2). */
   is_rental: boolean;
@@ -773,15 +779,17 @@ export default function ItemDetail() {
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', r.organization_id as string)
         .eq('item_id', r.id as string),
-      // Rack/crate holdings ride the same round trip. No warehouse scope: this
+      // Placed holdings ride the same round trip. No warehouse scope: this
       // screen has no single-warehouse context, same as the scan sheet and the
-      // web lookup API.
+      // web lookup API. Every placed kind, with the location TYPE (B37), split
+      // below by partitionPlacementHoldings: a Site is a NULL-kind row only its
+      // type tells from a legacy shelf, and a NOT IN filter on the buckets
+      // would drop the NULL-kind rows too (the 0292 trap).
       supabase
         .from('item_stock_levels')
-        .select('quantity, locations!inner(name, kind)')
+        .select('quantity, locations!inner(name, kind, type)')
         .eq('organization_id', r.organization_id as string)
         .eq('item_id', r.id as string)
-        .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0),
       elsewhereRead,
       // Ungroup (0399): how many OTHER records this member can read carry
@@ -798,17 +806,28 @@ export default function ItemDetail() {
       readItemDisplayGroup(supabase as never, r.organization_id as string, r.id as string),
     ]);
     if (seq !== loadSeq.current) return;
-    const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
-      quantity: number;
-      locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
-    }[])
-      .map((h): RackHoldingLike | null => {
+    type HoldingLocation = { name: string; kind: string | null; type: string | null };
+    const placed: PlacedHoldingLike[] = (
+      (holdingResp?.data ?? []) as unknown as {
+        quantity: number;
+        locations: HoldingLocation | HoldingLocation[] | null;
+      }[]
+    )
+      .map((h): PlacedHoldingLike | null => {
         const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
         return l?.name
-          ? { name: l.name, quantity: Number(h.quantity) || 0, kind: l.kind ?? null }
+          ? {
+              name: l.name,
+              quantity: Number(h.quantity) || 0,
+              kind: l.kind ?? null,
+              type: l.type ?? null,
+            }
           : null;
       })
-      .filter((h): h is RackHoldingLike => h !== null);
+      .filter((h): h is PlacedHoldingLike => h !== null);
+    // The rack and crate rows (exactly the rows this read returned before), and
+    // the rest, from the one read, so the two can never disagree.
+    const { holdings: rackHoldings, otherHoldings } = partitionPlacementHoldings(placed);
     setSerialCount(serialResp.count ?? 0);
     warehouseName = (whResp?.data?.name as string | undefined) ?? null;
     charterName = charterId ? ((chResp?.data?.name as string | undefined) ?? null) : 'Generic';
@@ -866,6 +885,7 @@ export default function ItemDetail() {
       grade,
       imageUrl,
       rackHoldings,
+      otherHoldings,
       is_rental: r.is_rental === true,
       is_bundle: r.is_bundle === true,
       group_id: (r.group_id as string | null) ?? null,
@@ -2206,6 +2226,7 @@ export default function ItemDetail() {
                 grade: item.grade,
                 binLocation: item.bin_location,
                 holdings: item.rackHoldings,
+                otherHoldings: item.otherHoldings,
                 elsewhere: item.elsewhere,
               });
               // 0371: a failed stock-in-other-warehouses read is SAID, never

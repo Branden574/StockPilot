@@ -249,6 +249,43 @@ describe('GET /api/items/search', () => {
     expect(body.items[0].image_url).toBe('https://cf.example/i1.jpg');
   });
 
+  // B37: the cycle-count picker and the Books table name the Site for an item
+  // whose stock all sits on one, from the list row's other_holdings. Carried
+  // only when the row has it, like the list row itself.
+  it('carries other_holdings when the list row has it, and adds no field when it does not', async () => {
+    const base = {
+      sku: 'SP-1',
+      barcode: null,
+      name: 'X',
+      quantity_on_hand: 7,
+      reorder_point: 0,
+      unit_cost: 0,
+      retail_price: 0,
+      status: 'active',
+      category_id: null,
+      primary_location_id: null,
+      warehouse_id: null,
+      item_type: 'book',
+      custom_fields: { book_rack_number: '39', book_rack_row: 'C' },
+      updated_at: '2026-05-14T00:00:00Z',
+    };
+    const onSite = [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }];
+    const onRack = [{ name: '2-C', quantity: 3, kind: 'rack' }];
+    inventoryListMock.mockResolvedValueOnce({
+      items: [
+        { ...base, id: 'i1', placed_holdings: [], other_holdings: onSite },
+        { ...base, id: 'i2', placed_holdings: onRack },
+      ],
+      total: 2,
+    });
+
+    const body = await (await GET(makeReq('q=shir'))).json();
+    expect(body.items[0].other_holdings).toEqual(onSite);
+    expect(body.items[0].placed_holdings).toEqual([]);
+    expect(body.items[1]).not.toHaveProperty('other_holdings');
+    expect(body.items[1].placed_holdings).toEqual(onRack);
+  });
+
   it('caps limit at 200 and offset at 10000', async () => {
     inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
     await GET(makeReq('q=shir&limit=9999&offset=99999'));

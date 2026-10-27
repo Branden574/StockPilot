@@ -15,7 +15,7 @@ import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
-import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { fetchPlacementHoldingsByItem } from '@/server/services/rack-holdings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -193,9 +193,12 @@ export async function GET(
     // holding) get the full breakdown in the LOCATION column instead of
     // a single (possibly stale/misleading) bin_location label — see
     // locationFor in lib/pdf/packing-slip-shared.tsx. A fetch failure
-    // degrades to the label (fetchRackHoldingsByItem reports + returns
-    // whatever it has rather than throwing), never a broken PDF.
-    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+    // degrades to the label (fetchPlacementHoldingsByItem reports + returns
+    // whatever it has rather than throwing), never a broken PDF. The same
+    // read carries every other placed holding, an org-level Site (no
+    // warehouse) included, so an item whose stock all sits on a Site prints
+    // the Site (B37).
+    const placementHoldings = await fetchPlacementHoldingsByItem(
       ctx,
       itemIds,
       detail.request.warehouse_id,
@@ -209,7 +212,8 @@ export async function GET(
       imageUrlByItemId,
       qrDataUrl,
       orgTimezone,
-      rackHoldingsByItemId,
+      rackHoldingsByItemId: placementHoldings.rack,
+      otherHoldingsByItemId: placementHoldings.other,
     });
     const bytes = new Uint8Array(pdf);
     return new NextResponse(bytes, {

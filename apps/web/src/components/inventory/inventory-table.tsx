@@ -67,6 +67,8 @@ import {
   groupingSelectionFacts,
   type CountingUnit,
   type DisplayGroupChip,
+  type PlacedHoldingLike,
+  type PlacementResolution,
   type RackHoldingLike,
   type SizeRunGroup,
 } from '@stockpilot/core';
@@ -209,6 +211,11 @@ interface Item {
    *  what lets that column apply the crate rule. Optional so older callers
    *  render unchanged. */
   placed_holdings?: RackHoldingLike[];
+  /** Every OTHER placed holding (a Site, an area, a NULL-kind shelf or bin),
+   *  with kind AND type. With it the BOOKS Rack column says "No rack" for a
+   *  book whose stock all sits on the Site, instead of the rack its keys still
+   *  name (B37). Absent when the item has none, and for older callers. */
+  other_holdings?: PlacedHoldingLike[];
   /** Units this item holds in warehouses the viewer cannot see
    *  (item_holdings_elsewhere, 0371). Staff and viewers read holdings only in
    *  their own warehouses, so the rack cells above describe those; this is
@@ -3772,10 +3779,28 @@ function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
 
 /** The Books layout's Rack cell: the resolved rack label and "+N in other warehouses". */
 function BookRackContent({ item }: { item: Item }) {
-  const label = bookRackLabelFor(item);
   // 0371: this cell describes the viewer's own warehouses; the rest is
   // counted, not named.
   const elsewhere = elsewhereSuffix(item);
+  // B37: every placed unit is on a Site, so the rack the book's keys still
+  // name is where the stock LEFT. The cell reads as the Items layout's lines
+  // for the same holdings: a room, a vehicle or a job site prints its name;
+  // the warehouse's own building is not a rack and reads "No rack".
+  const sites = bookSitesFor(item);
+  if (sites) {
+    return (
+      <>
+        {sites.places.length > 0 && (
+          <span className="font-mono tabular-nums">{sites.places.join(', ')}</span>
+        )}
+        {sites.buildings.length > 0 && <BuildingNoRack sites={sites.buildings} />}
+        {elsewhere && (
+          <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{elsewhere}</div>
+        )}
+      </>
+    );
+  }
+  const label = bookRackLabelFor(item);
   if (!label) {
     return <span className="text-muted-foreground">{elsewhere ?? '—'}</span>;
   }
@@ -3786,6 +3811,29 @@ function BookRackContent({ item }: { item: Item }) {
         <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{elsewhere}</div>
       )}
     </>
+  );
+}
+
+/**
+ * The Books Rack cell's "No rack" for stock at the warehouse's own building
+ * (B37), in the Items layout's words for its site line, with the building
+ * named UNDER it as text. A title is not reached by a keyboard, a touch screen
+ * or every screen reader, and the row's Location column names the item's
+ * primary location, which is not always where this stock sits. The title
+ * keeps the put-away hint for a pointer.
+ */
+function BuildingNoRack({ sites }: { sites: readonly string[] }) {
+  const names = sites.join(', ');
+  return (
+    <div>
+      <span
+        className="text-warning"
+        title={`At ${names} (${sites.length === 1 ? 'the site' : 'the sites'}), not on a rack. Use Set rack to put it away.`}
+      >
+        No rack
+      </span>
+      <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">At {names}</div>
+    </div>
   );
 }
 
@@ -4076,12 +4124,64 @@ function ElsewhereTail({ items }: { items: readonly Item[] }) {
  * `itemType: 'book'` is asserted rather than read: every caller is inside a
  * `showBookFields` branch, and that flag is what puts the row in this layout.
  */
-export function bookRackLabelFor(item: {
-  custom_fields?: Record<string, unknown> | null;
-  placed_holdings?: RackHoldingLike[];
-}): string | null {
+export function bookRackLabelFor(item: BookPlacementRow): string | null {
   const names = bookRackNamesFor(item);
   return names.length > 0 ? names.join(', ') : null;
+}
+
+/** What the Books layout's placement helpers read off a row. */
+type BookPlacementRow = {
+  custom_fields?: Record<string, unknown> | null;
+  placed_holdings?: RackHoldingLike[];
+  other_holdings?: PlacedHoldingLike[];
+};
+
+/** The shared resolver over a books row: `resolvePlacement` decides, as everywhere. */
+function bookPlacementFor(item: BookPlacementRow): PlacementResolution {
+  return resolvePlacement({
+    itemType: 'book',
+    customFields: item.custom_fields ?? null,
+    holdings: item.placed_holdings,
+    otherHoldings: item.other_holdings,
+  });
+}
+
+/**
+ * The one NULL-kind Site type that is the warehouse's own BUILDING (such as
+ * DC4) rather than a place in it. The Items layout's rule (owner report
+ * 2026-09-24), in its two list paths: loaders/inventory-list.ts and
+ * InventoryService.placementBreakdown turn a NULL kind of this type into the
+ * 'site' line that reads "No rack", and any other NULL-kind place into a
+ * 'location' line that prints its name. inventory-list.test.ts pins the Books
+ * cell to the loader's lines for every type.
+ */
+const SITE_BUILDING_TYPE = 'warehouse';
+
+/** A books row's Sites, split by the Items layout's rule above. */
+export interface BookSites {
+  /** The warehouse's own building(s): not a rack. The cell says "No rack",
+   *  and the header counts the row as unset. */
+  buildings: string[];
+  /** Every other Site (a room, a vehicle, a job site, a place with no type):
+   *  a place. The cell prints its name and the header counts it. */
+  places: string[];
+}
+
+function splitSites(holdings: readonly PlacedHoldingLike[]): BookSites {
+  const buildings = new Set<string>();
+  const places = new Set<string>();
+  for (const h of holdings) (h.type === SITE_BUILDING_TYPE ? buildings : places).add(h.name);
+  const sorted = (names: Set<string>) => [...names].sort((a, b) => a.localeCompare(b));
+  return { buildings: sorted(buildings), places: sorted(places) };
+}
+
+/**
+ * The Sites a books row's stock all sits on (core rule 0c, B37), each list
+ * sorted and distinct, or null when its stock is not wholly on Sites.
+ */
+export function bookSitesFor(item: BookPlacementRow): BookSites | null {
+  const res = bookPlacementFor(item);
+  return res.source === 'holdings' && res.reason === 'site' ? splitSites(res.holdings) : null;
 }
 
 /**
@@ -4094,17 +4194,15 @@ export function bookRackLabelFor(item: {
  * the header announce "1 rack" directly above its own tooltip naming two. So
  * the header counts these, and only joins for display.
  */
-export function bookRackNamesFor(item: {
-  custom_fields?: Record<string, unknown> | null;
-  placed_holdings?: RackHoldingLike[];
-}): string[] {
-  return placementPhysicalNames(
-    resolvePlacement({
-      itemType: 'book',
-      customFields: item.custom_fields ?? null,
-      holdings: item.placed_holdings,
-    }),
-  );
+export function bookRackNamesFor(item: BookPlacementRow): string[] {
+  const res = bookPlacementFor(item);
+  // Stock wholly on Sites (B37), counted as the Items header counts the same
+  // lines: the warehouse's own building is not a rack (owner report
+  // 2026-09-24, "No rack"), so it names nothing and the row reads as unset
+  // rather than as a rack called "DC4"; a room, a vehicle or a job site is a
+  // place and counts by its name.
+  if (res.source === 'holdings' && res.reason === 'site') return splitSites(res.holdings).places;
+  return placementPhysicalNames(res);
 }
 
 function rollupText(

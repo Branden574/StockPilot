@@ -68,6 +68,23 @@
  *      same shelf, and the label is the richer render (it carries the book's
  *      crate summary alongside).
  *
+ *      c. SITE-ONLY (B37) — the item has no rack or crate holding at all, and
+ *         every OTHER placed holding (`otherHoldings`) is on a SITE: a NULL
+ *         `locations.kind` with a site type (`isSiteLocation`; the kind is
+ *         never backfilled, it IS the Site encoding). Stock gets there through
+ *         a Transfer to a Site, and a Site is not a rack, so the item's rack
+ *         keys and bin_location can go on naming the rack the stock left,
+ *         exactly as in (b) — while the rack and crate rules above cannot see
+ *         the Site row at all, because it is neither. The holdings name the
+ *         Site(s); prefer them.
+ *
+ *         Narrow on purpose. It needs BOTH halves: no rack or crate holding
+ *         (one beside the Site keeps (a), (b) or the fall-through exactly as
+ *         before), and nothing in `otherHoldings` that is not a Site (an area,
+ *         or a NULL-kind shelf or bin, is a place of its own the Site rule
+ *         would leave behind). A holding whose kind or type was not carried is
+ *         not a Site.
+ *
  *   1. STRUCTURED rack/crate from `custom_fields` — books read the
  *      `book_rack_*` / `book_crate_*` keys, everything else the neutral
  *      `rack_*` pair.
@@ -89,6 +106,12 @@
  * holdings still prints the stale rack; it just does so through one predicate
  * instead of its own. The fix for such a site is DATA, and the guard test
  * (apps/web/src/lib/placement-label.guard.test.ts) pins which sites carry it.
+ *
+ * `otherHoldings` (rule 0c) is additive in the same way, and stricter: a row
+ * counts as a Site only when the caller carried BOTH its kind and its type.
+ * The readers that carry them split their rows with `partitionPlacementHoldings`
+ * below, so `holdings` keeps exactly the rack and crate rows every earlier
+ * reader returned and nothing that reads `holdings` sees a new row.
  */
 import {
   locationNameSitsOnRack,
@@ -96,16 +119,50 @@ import {
   readBookStorage,
   readItemRack,
 } from './book-storage';
+import { isSiteLocation, isSystemLocation } from './location-groups';
 import { formatRackHoldings, type RackHoldingLike } from './rack-holdings';
+
+/**
+ * A PLACED holding that carries both classifying columns of its location.
+ *
+ * `kind` alone cannot say what a Site is: a NULL kind is the Site encoding, but
+ * it is also how a legacy shelf or bin is stored, and only `locations.type`
+ * tells them apart (`isSiteLocation`: not a system bucket, not a rack, crate or
+ * area kind, not a shelf or bin type). Both are REQUIRED here so a reader that
+ * builds one cannot forget either; at runtime a missing one (`undefined`) is
+ * read as "not said", never as NULL.
+ */
+export interface PlacedHoldingLike extends RackHoldingLike {
+  /** `locations.kind`: rack, crate, area, staging, unplaced, or NULL. */
+  kind: string | null;
+  /** `locations.type`: warehouse, room, shelf, bin, vehicle, jobsite, other, or NULL. */
+  type: string | null;
+}
 
 /** What an item's placement is known FROM — see the precedence above. */
 export type PlacementResolution =
   /**
    * The holdings contradict any single label. `reason` records WHICH
    * contradiction so a caller can label the row honestly (the native scan
-   * sheet says "Split stock" for one and "In crate" for the other).
+   * sheet says "Split stock", "In crate" or "At site"). For 'split' and
+   * 'crate' the holdings are the item's rack and crate holdings.
    */
-  | { source: 'holdings'; reason: 'split' | 'crate'; holdings: readonly RackHoldingLike[] }
+  | {
+      source: 'holdings';
+      reason: 'split' | 'crate';
+      holdings: readonly RackHoldingLike[];
+    }
+  /**
+   * Rule 0c: the item's Site holdings, each with the NULL kind and the type
+   * that made it a Site, so a caller can still tell the warehouse's own
+   * building (type 'warehouse') from a room, a vehicle or a job site (the web
+   * Books Rack cell does: only the building reads "No rack").
+   */
+  | {
+      source: 'holdings';
+      reason: 'site';
+      holdings: readonly PlacedHoldingLike[];
+    }
   /**
    * The item's own structured rack/crate keys. At least one of the two is
    * non-null — a resolution with both null is never produced.
@@ -129,6 +186,59 @@ export interface PlacementInput {
    * cannot fire and a stale rack keeps printing.
    */
   holdings?: readonly RackHoldingLike[];
+  /**
+   * Every OTHER placed holding of THIS item (rule 0c, B37): the rows on a
+   * location that is neither a rack or crate (those are `holdings`) nor the
+   * Staging or Unplaced bucket. Sites, mostly; also areas and NULL-kind
+   * shelves and bins, which are here so that rule 0c can see it must NOT fire.
+   *
+   * Read it in the SAME query as `holdings` (`partitionPlacementHoldings`
+   * splits one read into both). From two reads, a failed rack read beside a
+   * good Site read would look like "no rack or crate holding" and name the
+   * Site for stock that is on a rack.
+   */
+  otherHoldings?: readonly PlacedHoldingLike[];
+}
+
+/**
+ * Splits one read of an item's `item_stock_levels` rows (with kind AND type)
+ * into the two inputs above:
+ *
+ *   holdings       rack and crate rows, with `type` dropped, so they are the
+ *                  rows every rack reader returned before B37 and every rule
+ *                  and consumer of `holdings` sees exactly what it always saw
+ *   otherHoldings  every other placed row: Sites, areas, NULL-kind shelves
+ *                  and bins
+ *
+ * Staging and Unplaced rows go to neither: stock awaiting put-away is no place
+ * to send a picker, and the readers count those buckets separately. Order is
+ * kept; quantities are not filtered here (the readers ask for quantity > 0).
+ */
+export function partitionPlacementHoldings(rows: readonly PlacedHoldingLike[]): {
+  holdings: RackHoldingLike[];
+  otherHoldings: PlacedHoldingLike[];
+} {
+  const holdings: RackHoldingLike[] = [];
+  const otherHoldings: PlacedHoldingLike[] = [];
+  for (const r of rows) {
+    if (r.kind === 'rack' || r.kind === 'crate') {
+      holdings.push({ name: r.name, quantity: r.quantity, kind: r.kind });
+    } else if (!isSystemLocation({ kind: r.kind ?? null, type: r.type ?? null })) {
+      otherHoldings.push({ name: r.name, quantity: r.quantity, kind: r.kind, type: r.type });
+    }
+  }
+  return { holdings, otherHoldings };
+}
+
+/**
+ * True when the holding is on a SITE (rule 0c). Both columns must have been
+ * CARRIED: `undefined` is "the caller did not say", and reading a missing kind
+ * as NULL would make every unclassified row a Site — the same "absence of
+ * evidence resolves to the OLD behaviour" rule as `isCrateOnly`.
+ */
+function isSiteHolding(h: PlacedHoldingLike): boolean {
+  if (h.kind !== null || h.type === undefined) return false;
+  return isSiteLocation({ kind: null, type: h.type });
 }
 
 /**
@@ -170,6 +280,15 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
         reason: holdings.length > 1 ? 'split' : 'crate',
         holdings,
       };
+    }
+  }
+
+  // 0c. SITE-ONLY. Only with NO rack or crate holding: one beside the Site
+  // keeps every rule above, and the fall-through, exactly as it was.
+  if (holdings.length === 0) {
+    const others = input.otherHoldings ?? [];
+    if (others.length > 0 && others.every(isSiteHolding)) {
+      return { source: 'holdings', reason: 'site', holdings: others };
     }
   }
 
@@ -292,6 +411,11 @@ export function formatPlacementLabel(res: PlacementResolution): string | null {
 export function placementPhysicalNames(res: PlacementResolution): string[] {
   switch (res.source) {
     case 'holdings': {
+      // A SITE is its own place, named as it is called: its name is never read
+      // for a crate's "… on rack X" suffix, whatever it happens to say.
+      if (res.reason === 'site') {
+        return [...new Set(res.holdings.map((h) => h.name))].sort((a, b) => a.localeCompare(b));
+      }
       // ═══ DISTINCT RACK POSITIONS, ONCE EACH — Hunger Games, 2026-08-17 ═══
       // A holding contributes the RACK it stands at, not its full name: a
       // crate "Blue #0 on rack 38-B" is ON rack 38-B, and a book with 97 loose

@@ -168,19 +168,71 @@ describe('the placement picker line (B26)', () => {
     expect(scanCandidatePlacementLabel(none)).toBeNull();
   });
 
-  it('groups the holdings read by record, from either embed shape, and skips a row with no location', () => {
-    const byItem = scanHoldingsByItem([
-      { item_id: 'item-a', quantity: 20, locations: { name: '2-C', kind: 'rack' } },
-      { item_id: 'item-a', quantity: '5', locations: [{ name: '5-A', kind: 'rack' }] },
+  // B37: a record whose stock all sits on a Site (a NULL kind with a site
+  // type) was named by the rack its keys still name, because the picker's read
+  // handed the rule its rack and crate rows only.
+  it('names the Site when all of the stock sits on one, not the rack its keys still name (B37)', () => {
+    expect(
+      scanCandidatePlacementLabel({
+        ...none,
+        itemType: 'book',
+        customFields: { book_rack_number: '38', book_rack_row: 'A' },
+        binLocation: '38-A',
+        otherHoldings: [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }],
+      }),
+    ).toBe('DC4 ×7');
+    // Stock on a rack beside the Site keeps naming the rack, as before.
+    expect(
+      scanCandidatePlacementLabel({
+        ...none,
+        itemType: 'book',
+        customFields: { book_rack_number: '38', book_rack_row: 'A' },
+        holdings: [{ name: '38-A', quantity: 5, kind: 'rack' }],
+        otherHoldings: [{ name: 'DC4', quantity: 2, kind: null, type: 'warehouse' }],
+      }),
+    ).toBe('Rack 38-A');
+  });
+
+  it('groups the holdings read by record, from either embed shape, skips a row with no location, and splits the racks and crates from the rest', () => {
+    const { rack, other } = scanHoldingsByItem([
+      { item_id: 'item-a', quantity: 20, locations: { name: '2-C', kind: 'rack', type: 'shelf' } },
+      {
+        item_id: 'item-a',
+        quantity: '5',
+        locations: [{ name: '5-A', kind: 'rack', type: 'shelf' }],
+      },
       { item_id: 'item-b', quantity: 3, locations: null },
-      { item_id: 'item-b', quantity: 7, locations: { name: 'Blue Shelf', kind: 'crate' } },
+      {
+        item_id: 'item-b',
+        quantity: 7,
+        locations: { name: 'Blue Shelf', kind: 'crate', type: 'bin' },
+      },
+      { item_id: 'item-c', quantity: 4, locations: { name: 'DC4', kind: null, type: 'warehouse' } },
+      {
+        item_id: 'item-c',
+        quantity: 1,
+        locations: { name: 'Staging', kind: 'staging', type: 'other' },
+      },
+      {
+        item_id: 'item-d',
+        quantity: 2,
+        locations: { name: 'Unplaced', kind: 'unplaced', type: 'other' },
+      },
     ]);
-    expect(byItem.get('item-a')).toEqual([
+    expect(rack.get('item-a')).toEqual([
       { name: '2-C', quantity: 20, kind: 'rack' },
       { name: '5-A', quantity: 5, kind: 'rack' },
     ]);
-    expect(byItem.get('item-b')).toEqual([{ name: 'Blue Shelf', quantity: 7, kind: 'crate' }]);
-    expect(byItem.get('item-c')).toBeUndefined();
+    expect(rack.get('item-b')).toEqual([{ name: 'Blue Shelf', quantity: 7, kind: 'crate' }]);
+    // The Site row goes to the rule's other holdings with its kind AND type;
+    // stock awaiting put-away goes to neither.
+    expect(rack.has('item-c')).toBe(false);
+    expect(other.get('item-c')).toEqual([
+      { name: 'DC4', quantity: 4, kind: null, type: 'warehouse' },
+    ]);
+    expect(other.has('item-a')).toBe(false);
+    expect(rack.has('item-d')).toBe(false);
+    expect(other.has('item-d')).toBe(false);
   });
 
   it('the scan screen shows that line (source pin: the screen is not rendered under vitest)', () => {
@@ -188,5 +240,10 @@ describe('the placement picker line (B26)', () => {
     expect(src).toMatch(/\{c\.placementLabel \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/);
     expect(src).not.toMatch(/\{c\.binLocation \?\?/);
     expect(src).toContain('scanCandidatePlacementLabel(');
+    // B37: the picker's read carries every placed kind with its type, and the
+    // line is given the Site rows (a NOT IN on the kinds would drop the
+    // NULL-kind Sites, the 0292 trap).
+    expect(src).toContain("select('item_id, quantity, locations!inner(name, kind, type)')");
+    expect(src).toContain('otherHoldings: holdings.other.get(r.id)');
   });
 });

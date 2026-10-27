@@ -1,4 +1,9 @@
-import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
+import {
+  formatPlacementLabel,
+  resolvePlacement,
+  type PlacedHoldingLike,
+  type RackHoldingLike,
+} from '@stockpilot/core';
 
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
 
@@ -34,6 +39,13 @@ import type { OrderRequestLineWithItem } from '@/server/services/order-requests'
  * "Crate Red 5"), which says which box on the shelf. Every other resolution is
  * one line.
  *
+ * ═══ THE SITE (B37) ═══
+ *
+ * `otherHoldingsByItemId` carries each item's placed holdings that are not on a
+ * rack or crate, from the same read as the rack map (fetchPlacementHoldingsByItem).
+ * With it, an item whose stock all sits on a Site prints "DC4 ×12" instead of
+ * the rack its label still names. Omitted, the column reads as it always did.
+ *
  * Exported for direct unit testing: @react-pdf's rendered output is not
  * text-extractable in this suite (the render tests only assert buffer size and
  * the %PDF magic header), so this decision is covered by calling it directly.
@@ -41,6 +53,7 @@ import type { OrderRequestLineWithItem } from '@/server/services/order-requests'
 export function locationFor(
   line: OrderRequestLineWithItem,
   rackHoldingsByItemId?: Map<string, RackHoldingLike[]>,
+  otherHoldingsByItemId?: Map<string, PlacedHoldingLike[]>,
 ): {
   primary: string | null;
   secondary: string | null;
@@ -56,6 +69,7 @@ export function locationFor(
     // to that embed changes every consumer of the detail payload, and the
     // holdings above already carry the crate by name for the case that matters.
     holdings: rackHoldingsByItemId?.get(item.id),
+    otherHoldings: otherHoldingsByItemId?.get(item.id),
   });
 
   switch (res.source) {
@@ -63,6 +77,7 @@ export function locationFor(
       // formatPlacementLabel IS formatRackHoldings for this branch — going
       // through it rather than re-spelling the join keeps the breakdown
       // byte-identical to the cycle-count sheet and the native scan sheet.
+      // A split, a crate and a Site all print this way ("DC4 ×12").
       return { primary: formatPlacementLabel(res), secondary: null };
     case 'structured':
       return {

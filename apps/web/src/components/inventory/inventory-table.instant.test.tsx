@@ -1620,6 +1620,115 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       expect(named).toEqual(['39-B', '5-A']);
       expect(cell.textContent).toBe(`${named.length} racks +1 unset`);
     });
+
+    // B37. A placement whose stock all sits on Sites (NULL-kind locations with
+    // a site type). The rack it still names in its keys is where the stock
+    // LEFT. The cell follows the Items layout's rule for a NULL-kind place
+    // (2026-09-24; loaders/inventory-list.ts and placementBreakdown): only the
+    // warehouse's own BUILDING (type 'warehouse', such as DC4) is not a rack,
+    // reads "No rack" and counts as unset in the header; a room, a vehicle, a
+    // job site or a place with no type IS a place and keeps its name.
+    const onSite = (
+      id: string,
+      sku = 'SP-THV69-MG8',
+      sites: Array<{ name: string; type: string | null }> = [{ name: 'DC4', type: 'warehouse' }],
+    ) =>
+      item({
+        id,
+        name: 'Persepolis',
+        sku,
+        custom_fields: { book_rack_number: '38', book_rack_row: 'A' },
+        placed_holdings: [],
+        other_holdings: sites.map((s) => ({ name: s.name, quantity: 6, kind: null, type: s.type })),
+      });
+    /** The cell's lines as a reader meets them, one per block or leaf. */
+    const cellLines = (cell: Element) =>
+      Array.from(cell.querySelectorAll('span, div'))
+        .filter((el) => el.children.length === 0)
+        .map((el) => el.textContent);
+
+    it('a row whose stock all sits on the building Site reads "No rack" and names the Site as text, not only in its title (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], { items: [onSite('v1', 'SP-ONLY')] });
+      const cell = bodyRows(container)[0]!.children[RACK_CELL]!;
+      const noRack = cell.querySelector('.text-warning')!;
+      expect(noRack.textContent).toBe('No rack');
+      expect(noRack.getAttribute('title')).toBe(
+        'At DC4 (the site), not on a rack. Use Set rack to put it away.',
+      );
+      // A title is not reached by a keyboard, a touch screen or every screen
+      // reader: the Site is named in the cell's own text, under "No rack".
+      expect(cellLines(cell)).toEqual(['No rack', 'At DC4']);
+      expect(cell.querySelector('.sr-only')).toBeNull();
+      expect(cell.textContent).not.toContain('38-A');
+    });
+
+    it.each(['room', 'vehicle', 'jobsite', 'other', null])(
+      'a row whose stock all sits on a Site of type %s prints that place, never "No rack", as the Items layout does (B37)',
+      (type) => {
+        const { container } = renderSurface(SURFACES[1], {
+          items: [onSite('p1', 'SP-PLACE', [{ name: 'Room 101', type }])],
+        });
+        const cell = bodyRows(container)[0]!.children[RACK_CELL]!;
+        expect(cellLines(cell)).toEqual(['Room 101']);
+        expect(cell.querySelector('.text-warning')).toBeNull();
+        expect(cell.querySelector('[title]')).toBeNull();
+        expect(cell.textContent).not.toContain('38-A');
+      },
+    );
+
+    it('a row with stock on the building and in a room names the room, and says No rack at the building (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          onSite('m1', 'SP-MIXED', [
+            { name: 'Room 101', type: 'room' },
+            { name: 'DC4', type: 'warehouse' },
+          ]),
+        ],
+      });
+      const cell = bodyRows(container)[0]!.children[RACK_CELL]!;
+      expect(cellLines(cell)).toEqual(['Room 101', 'No rack', 'At DC4']);
+      expect(cell.querySelector('.text-warning')?.getAttribute('title')).toBe(
+        'At DC4 (the site), not on a rack. Use Set rack to put it away.',
+      );
+    });
+
+    it('the header counts a room as a place and the building as unset, as the Items header does (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          rack('h1', '38', 'A'),
+          onSite('h2'),
+          onSite('h3', 'SP-THV69-MG8', [{ name: 'Room 101', type: 'room' }]),
+        ],
+      });
+      const cell = headerRows(container)[0]!.children[RACK_CELL]!;
+      expect(cell.textContent).toBe('2 racks +1 unset');
+      expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+        'Placements span: 38-A, Room 101 (+1 with no rack set)',
+      );
+    });
+
+    it('the header counts a Site-only placement as unset, never as the rack its keys name (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [rack('u1', '38', 'A'), onSite('u2')],
+      });
+      const cell = headerRows(container)[0]!.children[RACK_CELL]!;
+      expect(cell.textContent).toBe('1 rack +1 unset');
+      expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+        'Placements span: 38-A (+1 with no rack set)',
+      );
+    });
+
+    it('stock on a rack AND on the Site still reads the rack: the rack rules stand (B37)', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          {
+            ...onSite('w1', 'SP-BOTH'),
+            placed_holdings: [{ name: '38-A', quantity: 4, kind: 'rack' as const }],
+          },
+        ],
+      });
+      expect(bodyRows(container)[0]!.children[RACK_CELL]!.textContent).toBe('38-A');
+    });
   });
 
   // W5. D4 was fixed on Books only. The ITEMS header's twin cell still

@@ -109,7 +109,15 @@ describe('native item screen — the rows are DELEGATED, and the screen keeps th
 
   it('still carries the live holdings, without which the crate rule cannot fire', () => {
     expect(itemCode).toContain('holdings: item.rackHoldings');
-    expect(itemCode).toContain("select('quantity, locations!inner(name, kind)')");
+    // B37: one read of every placed kind WITH the location type, split by the
+    // core rule, so the card can name a Site; never a kind filter in the query
+    // (a Site's kind is NULL, and the rack-and-crate filter dropped its rows).
+    expect(itemCode).toContain("select('quantity, locations!inner(name, kind, type)')");
+    expect(itemCode).not.toContain(".in('locations.kind'");
+    expect(itemCode).toContain(
+      'const { holdings: rackHoldings, otherHoldings } = partitionPlacementHoldings(placed);',
+    );
+    expect(itemCode).toContain('otherHoldings: item.otherHoldings');
   });
 
   it('...and those checks can actually fail', () => {
@@ -156,7 +164,9 @@ describe('native books list — the card fallback order is unchanged by the 0335
 
   it('still resolves through the shared rule, so a departed rack never prints', () => {
     expect(booksCode).toContain('resolvePlacement({');
-    expect(booksCode).toContain('holdings: holdings.get(b.id)');
+    expect(booksCode).toContain('holdings: holdings.rack.get(b.id)');
+    // B37: the Site rows of the same read, so a book wholly on the Site says so.
+    expect(booksCode).toContain('otherHoldings: holdings.other.get(b.id)');
   });
 });
 
@@ -179,7 +189,18 @@ describe('native scan sheet — the third card of the same fold', () => {
   });
 
   it('still shows the live holdings as their OWN row — added information, not a swap', () => {
-    expect(scanCode).toContain("placement.reason === 'split' ? 'Split stock' : 'In crate'");
+    expect(scanCode).toMatch(
+      /placement\.reason === 'split'\s*\?\s*'Split stock'\s*:\s*placement\.reason === 'site'\s*\?\s*'At site'\s*:\s*'In crate'/,
+    );
+  });
+
+  it('B37: reads every placed kind with its type in one read, and hands the Site rows over', () => {
+    expect(scanCode).toContain("select('quantity, locations!inner(name, kind, type)')");
+    expect(scanCode).not.toContain(".in('locations.kind'");
+    expect(scanCode).toContain(
+      'const { holdings: rackHoldings, otherHoldings } = partitionPlacementHoldings(placed);',
+    );
+    expect(scanCode).toContain('otherHoldings: item.otherHoldings');
   });
 
   it('reads the summary rack from the STRUCTURED arm, not from a rendered label', () => {

@@ -79,7 +79,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { bookRackLabelFor } from '@/components/inventory/inventory-table';
+import { bookRackLabelFor, bookSitesFor } from '@/components/inventory/inventory-table';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { locationFor as packingSlipLocationFor } from '@/lib/pdf/packing-slip-shared';
 import { locationFor as pickSlipLocationFor } from '@/lib/pdf/pick-slip';
@@ -593,6 +593,133 @@ describe('every formatter names the SAME physical location', () => {
         );
       }
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARM 1d — STOCK THAT SITS ONLY ON A SITE (B37)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A Site is a NULL-kind location with a site type; a move onto one rewrites no
+// rack label, and the rack and crate rules never see its row. So every
+// formatter printed the rack the label still names for a book whose stock had
+// all gone to the Site. The fix is rule 0c in core, fed by each item's OTHER
+// placed holdings (`otherHoldings`, read in the same query as the rack ones).
+// Not in FIXTURES above: the storefront is holdings-blind and cannot agree on
+// this one (its own pin below says so), which would break ARM 1c's agreement.
+
+describe('stock that sits only on a Site (B37)', () => {
+  const book = {
+    itemType: 'book' as const,
+    customFields: {
+      book_rack_number: '39',
+      book_rack_row: 'C',
+      book_crate_color: 'red',
+      book_crate_number: '5',
+    },
+    binLocation: '39-C',
+  };
+  const onSite = [{ name: 'DC4', quantity: 7, kind: null, type: 'warehouse' }];
+  const asBookLine = () =>
+    asLine({ what: 'site', ...book, holdings: [], walkTo: ['DC4'] } satisfies Fixture);
+
+  const rendered = () => ({
+    countSheet: countSheetLocationLabel({
+      item_type: book.itemType,
+      custom_fields: book.customFields,
+      bin_location: book.binLocation,
+      primaryLocationName: 'DC4',
+      rackHoldings: [],
+      otherHoldings: onSite,
+    }),
+    slip: sharedLocationFor(asBookLine(), new Map(), new Map([['i1', onSite]])),
+    core: formatPlacementLabel(resolvePlacement({ ...book, holdings: [], otherHoldings: onSite })),
+    // The Books Rack column names no rack at all for the warehouse's own
+    // building: its cell reads "No rack" with "At DC4" under it, like the
+    // Items layout's site line.
+    booksRack: bookRackLabelFor({
+      custom_fields: book.customFields,
+      placed_holdings: [],
+      other_holdings: onSite,
+    }),
+    booksSites: bookSitesFor({
+      custom_fields: book.customFields,
+      placed_holdings: [],
+      other_holdings: onSite,
+    }),
+  });
+
+  it('the count sheet, both order slips and the core render name the Site (literals)', () => {
+    const r = rendered();
+    expect(r.countSheet).toBe('DC4 ×7');
+    expect(r.slip).toEqual({ primary: 'DC4 ×7', secondary: null });
+    expect(r.core).toBe('DC4 ×7');
+  });
+
+  it('the Books Rack column names no rack for the building, and knows the Site it says the stock is at', () => {
+    const r = rendered();
+    expect(r.booksRack).toBeNull();
+    expect(r.booksSites).toEqual({ buildings: ['DC4'], places: [] });
+  });
+
+  it('a room, a vehicle or a job site is a place: every formatter, the Books column included, names it', () => {
+    // The Items layout prints such a NULL-kind place by name (2026-09-24);
+    // only the warehouse's own building reads "No rack".
+    const inRoom = [{ name: 'Room 101', quantity: 3, kind: null, type: 'room' }];
+    const row = { custom_fields: book.customFields, placed_holdings: [], other_holdings: inRoom };
+    expect(
+      countSheetLocationLabel({
+        item_type: book.itemType,
+        custom_fields: book.customFields,
+        bin_location: book.binLocation,
+        primaryLocationName: 'DC4',
+        rackHoldings: [],
+        otherHoldings: inRoom,
+      }),
+    ).toBe('Room 101 ×3');
+    expect(sharedLocationFor(asBookLine(), new Map(), new Map([['i1', inRoom]]))).toEqual({
+      primary: 'Room 101 ×3',
+      secondary: null,
+    });
+    expect(bookRackLabelFor(row)).toBe('Room 101');
+    expect(bookSitesFor(row)).toEqual({ buildings: [], places: ['Room 101'] });
+  });
+
+  it('NONE of them prints the rack, or the crate, the label still names', () => {
+    const r = rendered();
+    for (const label of [r.countSheet, r.slip.primary, r.slip.secondary, r.core, r.booksRack]) {
+      expect(label ?? '').not.toContain('39-C');
+      expect(label ?? '').not.toContain('Red 5');
+    }
+  });
+
+  it('Site stock BESIDE a rack holding changes nothing: the rack rules stand', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '2', rack_row: 'C' },
+        bin_location: '2-C',
+        primaryLocationName: 'DC4',
+        rackHoldings: [{ name: '2-C', quantity: 12, kind: 'rack' }],
+        otherHoldings: onSite,
+      }),
+    ).toBe('Rack 2-C');
+  });
+
+  it('KNOWN LIMIT: the orders storefront carries no holdings, so it still prints the bin', () => {
+    // Recorded, like the storefront's other known limit above. If this ever
+    // flips to the Site, the storefront gained holdings and this pin, and
+    // the bin-first exception, should be retired together.
+    expect(
+      ordersCatalogRackLabelFor({
+        item_type: 'book',
+        bin_location: book.binLocation,
+        rack_number: null,
+        rack_row: null,
+        book_rack_number: '39',
+        book_rack_row: 'C',
+      }),
+    ).toBe('39-C');
   });
 });
 

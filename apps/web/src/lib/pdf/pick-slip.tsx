@@ -1,4 +1,4 @@
-import { formatOrderNumber, type RackHoldingLike } from '@stockpilot/core';
+import { formatOrderNumber, type PlacedHoldingLike, type RackHoldingLike } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -585,6 +585,11 @@ export interface RenderPickSlipOptions {
    *  the order's warehouse. Drives the LOCATION column's split-item
    *  breakdown in `locationFor`; omitted/empty falls back to the label. */
   rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
+  /** Every OTHER placed holding (Sites, areas), from the SAME read as
+   *  `rackHoldingsByItemId` (fetchPlacementHoldingsByItem). An item whose
+   *  stock all sits on a Site prints the Site, not the rack its label still
+   *  names (B37); omitted, the column reads as before. */
+  otherHoldingsByItemId?: Map<string, PlacedHoldingLike[]>;
 }
 
 export async function renderPickSlipPdf(
@@ -594,6 +599,7 @@ export async function renderPickSlipPdf(
   const { request, lines, warehouseName, assignedPickerName } = detail;
   const imageUrlByItemId = opts.imageUrlByItemId ?? new Map<string, string>();
   const rackHoldingsByItemId = opts.rackHoldingsByItemId;
+  const otherHoldingsByItemId = opts.otherHoldingsByItemId;
 
   const totalLines = lines.length;
   const totalUnits = lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
@@ -724,7 +730,7 @@ export async function renderPickSlipPdf(
               (rawImgUrl.startsWith('data:image/') || rawImgUrl.startsWith('https://'))
                 ? rawImgUrl
                 : undefined;
-            const loc = locationFor(l, rackHoldingsByItemId);
+            const loc = locationFor(l, rackHoldingsByItemId, otherHoldingsByItemId);
             const isLast = i === lines.length - 1;
             return (
               <View

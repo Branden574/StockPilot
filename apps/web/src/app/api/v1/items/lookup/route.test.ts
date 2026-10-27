@@ -239,6 +239,59 @@ describe('GET /api/v1/items/lookup', () => {
       expect(await labelFor(lookupRow({ bin_location: ' 14-D ' }))).toBe('14-D');
       expect(await labelFor(lookupRow({}))).toBeNull();
     });
+
+    // B37: a Site is a NULL kind with a site type. The label named the rack the
+    // stock had left, because the rule was handed the rack and crate rows only.
+    it('names the Site when all of the stock sits on one, not the rack its keys still name (B37)', async () => {
+      const book = lookupRow({
+        item_type: 'book',
+        bin_location: '38-A',
+        custom_fields: { book_rack_number: '38', book_rack_row: 'A' },
+      });
+      const dc4 = { name: 'DC4', kind: null, type: 'warehouse', warehouse_id: null };
+      expect(
+        await labelFor(book, [
+          { item_id: 'item-1', quantity: 7, locations: dc4 },
+          {
+            item_id: 'item-1',
+            quantity: 1,
+            locations: { name: 'Staging', kind: 'staging', type: 'other', warehouse_id: 'wh-1' },
+          },
+        ]),
+      ).toBe('DC4 ×7');
+      // Stock on a rack beside the Site keeps naming the rack, as before.
+      expect(
+        await labelFor(book, [
+          {
+            item_id: 'item-1',
+            quantity: 5,
+            locations: { name: '38-A', kind: 'rack', type: 'shelf', warehouse_id: 'wh-1' },
+          },
+          { item_id: 'item-1', quantity: 2, locations: dc4 },
+        ]),
+      ).toBe('Rack 38-A');
+    });
+
+    it('keeps rackHoldings to the racks and crates: a Site row is in the label only (B37)', async () => {
+      const stub = makeSupabaseStub({
+        'inventory_items.select': { data: [lookupRow({ bin_location: '38-A' })], error: null },
+        'item_stock_levels.select': {
+          data: [
+            {
+              item_id: 'item-1',
+              quantity: 7,
+              locations: { name: 'DC4', kind: null, type: 'warehouse', warehouse_id: null },
+            },
+          ],
+          error: null,
+        },
+      });
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
+      const res = await GET(req('SKU-3'));
+      const match = ((await res.json()) as { matches: Array<Record<string, unknown>> }).matches[0]!;
+      expect(match.placementLabel).toBe('DC4 ×7');
+      expect(match.rackHoldings).toEqual([]);
+    });
   });
 
   it('an exact barcode match is unambiguous and wins over a same-code sku-only row', async () => {

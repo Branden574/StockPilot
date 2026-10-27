@@ -52,7 +52,7 @@ const {
       permissions: new Set(['rentals:create']),
     } as Record<string, unknown>,
   },
-  rackHoldings: vi.fn(async (..._args: unknown[]) => new Map()),
+  rackHoldings: vi.fn(async (..._args: unknown[]) => ({ rack: new Map(), other: new Map() })),
   reserved: vi.fn(),
   formProps: vi.fn(),
   reportError: vi.fn(async () => {}),
@@ -99,7 +99,7 @@ vi.mock('@/server/services/rentals', () => ({
   },
 }));
 vi.mock('@/server/services/rack-holdings', () => ({
-  fetchRackHoldingsByItem: rackHoldings,
+  fetchPlacementHoldingsByItem: rackHoldings,
 }));
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: {
@@ -713,5 +713,50 @@ describe('New rental: only the rental items the caller can read, and only their 
 
     expect(ids).toEqual([]);
     expectNeverShown(serialized, [IN, CHARTER_A, CHARTER_B, CAT_OUT]);
+  });
+});
+
+describe('New rental: where each card says the stock is (B37)', () => {
+  const ON_SITE = uuid(1, 'b');
+  const ON_RACK = uuid(2, 'b');
+  const placeItems = [
+    // Both still remember rack 38-A; only one has stock left on it.
+    {
+      ...items[0]!,
+      id: ON_SITE,
+      custom_fields: { rack_number: '38', rack_row: 'A' },
+      bin_location: '38-A',
+    },
+    {
+      ...items[0]!,
+      id: ON_RACK,
+      custom_fields: { rack_number: '38', rack_row: 'A' },
+      bin_location: '38-A',
+    },
+  ];
+
+  it("names the Site for an item whose stock all sits on it, not the rack its label still names, and reads the page's warehouse", async () => {
+    adminRef.current = makeSupabaseStub({
+      'inventory_items.select': { data: placeItems, error: null },
+      'categories.select': { data: [], error: null },
+    }).client;
+    reserved.mockResolvedValue(new Map());
+    rackHoldings.mockResolvedValue({
+      rack: new Map([[ON_RACK, [{ name: '38-A', quantity: 2, kind: 'rack' }]]]),
+      other: new Map([
+        [ON_SITE, [{ name: 'DC4', quantity: 2, kind: null, type: 'warehouse' }]],
+        // Site stock BESIDE a rack holding keeps the rack, as before.
+        [ON_RACK, [{ name: 'DC4', quantity: 1, kind: null, type: 'warehouse' }]],
+      ]),
+    });
+
+    const props = (await renderPage()) as unknown as {
+      items: Array<{ id: string; rackLabel: string | null }>;
+    };
+
+    expect(rackHoldings.mock.calls[0]?.[2]).toBe('wh-1');
+    const byId = new Map(props.items.map((i) => [i.id, i.rackLabel]));
+    expect(byId.get(ON_SITE)).toBe('DC4');
+    expect(byId.get(ON_RACK)).toBe('38-A');
   });
 });

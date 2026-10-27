@@ -1,4 +1,4 @@
-import type { RackHoldingLike } from '@stockpilot/core';
+import type { PlacedHoldingLike, RackHoldingLike } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -39,6 +39,9 @@ export interface WarehousePackingSlipInput extends PackingSlipInputCore {
    *  customer-facing slip never shows the Location column so it has no
    *  equivalent field. */
   rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
+  /** Every OTHER placed holding (Sites, areas), from the SAME read as
+   *  `rackHoldingsByItemId`: a Site-only item's Location is its Site (B37). */
+  otherHoldingsByItemId?: Map<string, PlacedHoldingLike[]>;
 }
 
 /**
@@ -61,6 +64,7 @@ export async function renderWarehousePackingSlipPdf(
     qrDataUrl,
     orgTimezone,
     rackHoldingsByItemId,
+    otherHoldingsByItemId,
   } = input;
   const tz = orgTimezone ?? 'UTC';
   const { request, lines } = detail;
@@ -137,7 +141,12 @@ export async function renderWarehousePackingSlipPdf(
 
         <LinesTable
           lines={lines}
-          options={{ showLocation: true, imageUrlByItemId, rackHoldingsByItemId }}
+          options={{
+            showLocation: true,
+            imageUrlByItemId,
+            rackHoldingsByItemId,
+            otherHoldingsByItemId,
+          }}
         />
 
         {/* Manual signature block — fallback for when the QR/digital
