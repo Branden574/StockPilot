@@ -97,11 +97,11 @@ function wireHappyAdmin() {
       ],
       error: null,
     },
-    'order_requests.insert.single': {
+    // The header, side row and lines: one transaction (0413 review fix round).
+    'rpc:insert_order_request_with_lines': {
       data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
       error: null,
     },
-    'order_request_lines.insert': { data: null, error: null },
     'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
   });
   adminHolder.client = stub.client;
@@ -250,7 +250,7 @@ describe('POST /api/v1/public/order-requests: a normal cart still validates', ()
     // The coercion still runs, on the number or the string the cart sent.
     expect(coerced).toEqual([quantity.startsWith('"') ? 'string' : 'number']);
     // The line is written with the number 3, not the string.
-    const inserted = stub.chainArgsAll.get('order_request_lines.insert');
+    const inserted = stub.rpcCalls.find((c) => c.name === 'insert_order_request_with_lines')?.args;
     expect(JSON.stringify(inserted)).toContain('"quantity_requested":3,');
   });
 

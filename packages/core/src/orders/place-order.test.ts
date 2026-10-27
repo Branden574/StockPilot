@@ -61,7 +61,9 @@ import {
   ORDER_TOO_MANY_UNITS_COPY,
   ORDER_UNCONFIRMED_BODY_COPY,
   ORDER_WITHDRAWN_COPY,
+  ORDER_ITEM_HIDDEN_COPY,
   orderCreateRequestSchema,
+  orderItemHiddenCopy,
   orderItemRefusalCopy,
   orderRefusalCopy,
   orderSubmissionLocked,
@@ -80,6 +82,7 @@ import {
   type OrderSubmissionEvent,
   type OrderSubmissionState,
   type PendingOrderSubmission,
+  type OrderItemRefusalReason,
 } from './place-order';
 import * as placeOrder from './place-order';
 
@@ -2050,6 +2053,29 @@ describe('the words', () => {
     expect(orderItemRefusalCopy('awaiting_first_receipt', 'Mug')).toBe(
       "This item hasn't been received yet: Mug. It can be ordered once its first stock arrives.",
     );
+  });
+
+  // Ordering visibility (0413): a hidden item is refused at step 8 as
+  // item_not_orderable {itemId: 'hidden_from_orders'}, and a hide that lands
+  // between step 8 and the insert is recorded the same way. The top-level
+  // reason stays item_not_orderable, so an old build still marks the line
+  // and blocks Submit with its default sentence.
+  it('a hidden item says it is no longer available for new orders', () => {
+    expect(ORDER_ITEM_HIDDEN_COPY).toBe('This item is no longer available for new orders.');
+    expect(orderItemRefusalCopy('hidden_from_orders', 'Backpack')).toBe(ORDER_ITEM_HIDDEN_COPY);
+    // The named form, for a surface that has the name from the person's own
+    // cart or read (Add items).
+    expect(orderItemHiddenCopy('Backpack')).toBe('Backpack is no longer available for new orders.');
+    expect(orderItemHiddenCopy('  ')).toBe(ORDER_ITEM_HIDDEN_COPY);
+    const reason: OrderItemRefusalReason = 'hidden_from_orders';
+    expect(reason).toBe('hidden_from_orders');
+    // The whole cart refusal still names the line from the cart.
+    expect(
+      orderRefusalCopy('item_not_orderable', d({ items: { [ITEM_A]: 'hidden_from_orders' } }), ctx),
+    ).toBe("Some items can't be ordered from here anymore: Backpack. Remove them to continue.");
+    expect(readOrderRefusalDetails({ reason: 'item_not_orderable', items: { [ITEM_A]: 'hidden_from_orders' } }).items).toEqual({
+      [ITEM_A]: 'hidden_from_orders',
+    });
   });
 
   it('the unconfirmed panel says why the key is still live', () => {

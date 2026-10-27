@@ -270,6 +270,23 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect(res.placementFailed).toBeNull();
   });
 
+  // Ordering visibility (0413, design 2.3 and review item 3): Add size builds
+  // new records from typed input and copies no hidden record, so a new size
+  // starts shown in Orders like any new record (the database default). Pinned
+  // as the chosen default; a manager can hide it in Manage order items.
+  it('a new size starts shown in Orders: no row names order_catalog_visible', async () => {
+    const stub = buildStub();
+    await makeSvc(stub).bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [
+        { size: 'S', quantity: 0 },
+        { size: 'M', quantity: 2 },
+      ],
+    });
+    expect(stub.insertedItems).toHaveLength(2);
+    for (const row of stub.insertedItems) expect(row).not.toHaveProperty('order_catalog_visible');
+  });
+
   it('audits every variant of the run in one batched write (auditMany), not one request each', async () => {
     const stub = buildStub();
     const svc = makeSvc(stub);

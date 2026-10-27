@@ -36,3 +36,24 @@ describe('permissionChangeMessage', () => {
     expect(m.description).toBe('Your permissions changed — refreshing.');
   });
 });
+
+describe('permissionChangeMessage: Manage order items (platform-managed, ordering visibility 3.7)', () => {
+  it('names the capability when StockPilot allows it', () => {
+    const m = permissionChangeMessage('orders:manage_catalog_visibility', true);
+    expect(m.title).toBe('Access granted');
+    expect(m.description).toBe('You were granted "Manage order items" — refreshing.');
+  });
+
+  it('names the capability when StockPilot denies it', () => {
+    const m = permissionChangeMessage('orders:manage_catalog_visibility', false);
+    expect(m.description).toBe('"Manage order items" was revoked — refreshing.');
+  });
+
+  it('a reset says it returned to the role default (a manager gets it back, a staff member loses it)', () => {
+    const m = permissionChangeMessage('orders:manage_catalog_visibility', null);
+    expect(m.title).toBe('Access updated');
+    expect(m.description).toBe(
+      `"Manage order items" returned to your role's default — refreshing.`,
+    );
+  });
+});
