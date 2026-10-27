@@ -1,6 +1,16 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -19,7 +29,9 @@ import { describe, expect, it } from 'vitest';
  *
  * WHAT STOPS IT NOW: this test lists every tracked file (`git ls-files`),
  * reads every path and each file its extension does not skip, and fails on an
- * address at one of the customer's mail domains. A file is read as UTF-8 (NUL
+ * address at one of the customer's mail domains. A symbolic link is never
+ * followed: git publishes it as the path it points to, so that path is read
+ * as a path too, whatever the link is named. A file is read as UTF-8 (NUL
  * bytes and all) and, behind a byte-order mark, as UTF-16 too. A path is read
  * one folder or file name at a time, as written and with its extensions taken
  * off one at a time, and in a name an address is found whatever follows it
@@ -68,11 +80,11 @@ import { describe, expect, it } from 'vitest';
  * Git history keeps the old content.
  *
  * IF THIS FAILS: replace the address with a synthetic one at a reserved
- * domain (example.org, example.com, *.test, *.example), or rename the file or
- * folder that names one, and keep the test's intent (the same length where a
- * test measures one). Add a pair to ALLOWED only for a file that can never
- * change (an applied migration) or an address the product must name, with the
- * reason on its line.
+ * domain (example.org, example.com, *.test, *.example), rename the file or
+ * folder that names one, or point a link that names one elsewhere, and keep
+ * the test's intent (the same length where a test measures one). Add a pair
+ * to ALLOWED only for a file that can never change (an applied migration) or
+ * an address the product must name, with the reason on its line.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
@@ -410,10 +422,14 @@ function pathReadings(file: string): string[] {
   });
 }
 
-/** Every address in a tracked path itself, whatever follows it in a name, once each, as line 0. */
-function findInPath(file: string): Found[] {
+/**
+ * Every address in a tracked path itself, and in the path a symbolic link
+ * points to (`target`), whatever follows it in a name, once each, as line 0.
+ */
+function findInPath(file: string, target?: string): Found[] {
   const seen = new Set<string>();
-  return findIn(file, pathReadings(file).join('\n'), IN_PATH).flatMap((f) => {
+  const names = target === undefined ? [file] : [file, target];
+  return findIn(file, names.flatMap(pathReadings).join('\n'), IN_PATH).flatMap((f) => {
     if (seen.has(f.sha256)) return [];
     seen.add(f.sha256);
     return [{ ...f, line: 0 }];
@@ -421,41 +437,75 @@ function findInPath(file: string): Found[] {
 }
 
 /**
- * Every finding in the listed paths, and in the files the scan reads, each
- * read by `read` (undefined: not on disk). Every path is read, even where its
- * contents are not: a name is as public as a file.
+ * Every finding in the listed paths, and in the files the scan reads. `read`
+ * gives a file's bytes (undefined: not on disk), and `linkTarget` the path a
+ * symbolic link points to (undefined: not a link). Every path is read, even
+ * where its contents are not: a name is as public as a file. A link is read as
+ * the path it points to, whatever its own name, and never followed.
  */
-function scanFiles(files: readonly string[], read: (file: string) => Buffer | undefined): Found[] {
+function scanFiles(
+  files: readonly string[],
+  read: (file: string) => Buffer | undefined,
+  linkTarget: (file: string) => string | undefined = () => undefined,
+): Found[] {
   const found: Found[] = [];
   for (const file of files) {
-    found.push(...findInPath(file));
-    if (!isScannedPath(file)) continue;
+    const target = linkTarget(file);
+    found.push(...findInPath(file, target));
+    if (target !== undefined || !isScannedPath(file)) continue;
     const bytes = read(file);
     if (bytes) found.push(...findInFile(file, bytes));
   }
   return found;
 }
 
+/**
+ * Every finding in the checkout at `root`, over each path git tracks there
+ * (`git ls-files --stage`). A symbolic link is never followed: git holds it as
+ * a blob (mode 120000) whose text is the path it points to, and publishes that
+ * text, so that path is what is read, from the link itself or, when the
+ * checkout holds the link as a plain file (core.symlinks false), from git's
+ * blob. Any other path is a file whose bytes are read. Git runs with `env`.
+ */
+function scanCheckout(root: string, env: NodeJS.ProcessEnv = process.env): Found[] {
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  // Each tracked path once, with its blob when git holds it as a link. Each
+  // record is "<mode> <object> <stage>\t<path>".
+  const tracked = new Map<string, string | undefined>();
+  for (const record of git('ls-files', '--stage', '-z').split('\0')) {
+    const tab = record.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode, object] = record.slice(0, tab).split(' ');
+    const file = record.slice(tab + 1);
+    if (mode === '120000') tracked.set(file, object);
+    else if (!tracked.has(file)) tracked.set(file, undefined);
+  }
+  return scanFiles(
+    [...tracked.keys()],
+    (file) => {
+      try {
+        return readFileSync(join(root, file));
+      } catch {
+        return undefined; // listed but not on disk (deleted in a working tree)
+      }
+    },
+    (file) => {
+      const path = join(root, file);
+      try {
+        if (lstatSync(path).isSymbolicLink()) return readlinkSync(path);
+      } catch {
+        // not on disk; a link git holds is still read from its blob
+      }
+      const blob = tracked.get(file);
+      return blob === undefined ? undefined : git('cat-file', 'blob', blob);
+    },
+  );
+}
+
 let scanned: Found[] | undefined;
 
-function scanTrackedTree(): Found[] {
-  if (scanned) return scanned;
-  const files = execFileSync('git', ['ls-files', '-z'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-  scanned = scanFiles(files, (file) => {
-    try {
-      return readFileSync(join(REPO_ROOT, file));
-    } catch {
-      return undefined; // listed but not on disk (deleted in a working tree)
-    }
-  });
-  return scanned;
-}
+const scanTrackedTree = (): Found[] => (scanned ??= scanCheckout(REPO_ROOT));
 
 type Spelling = [name: string, text: string, finds: readonly string[]];
 
@@ -828,4 +878,115 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
     });
     expect(missed).toEqual([]);
   });
+
+  // The security review's link cases (2026-10-27): git holds a symbolic link
+  // as a blob whose text is the path it points to, and publishes that text, so
+  // the scan reads it as a path. Following the link instead reads nothing for
+  // a dangling one and, for a live one, a file that may be outside the
+  // checkout or a .env file.
+  it('reads a symbolic link as the path it points to, and never follows it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'address-guard-'));
+    const checkout = join(root, 'checkout');
+    const outside = join(root, 'outside');
+    // No variable a git hook sets (GIT_DIR, GIT_INDEX_FILE, ...) may point
+    // these runs at another repository.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: checkout, env, encoding: 'utf8', stdio: 'pipe' }).trim();
+    type Case = { name: string; path: string; line: number; finds: readonly string[]; at: number };
+    const cases: Case[] = [];
+    const plainFiles: string[] = [];
+    const swaps: [path: string, target: string][] = [];
+    try {
+      mkdirSync(checkout);
+      git('init', '-q');
+      CUSTOMER_DOMAINS.forEach((domain, i) => {
+        const plain = `intake@${domain}`;
+        const dir = `d${i + 1}`;
+        mkdirSync(join(checkout, dir));
+        mkdirSync(join(outside, dir), { recursive: true });
+        writeFileSync(join(outside, dir, `${plain}.txt`), 'id,total\n1,10\n');
+        writeFileSync(join(outside, dir, 'contacts.csv'), `id,email\n1,${plain}\n`);
+        writeFileSync(join(outside, dir, '.env.local'), `CONTACT=${plain}\n`);
+        const add = (name: string, path: string, line: number, finds: readonly string[]) =>
+          cases.push({ name, path: `${dir}/${path}`, line, finds, at: i + 1 });
+        const link = (name: string, path: string, target: string, finds: readonly string[]) => {
+          symlinkSync(target, join(checkout, dir, path));
+          add(name, path, 0, finds);
+        };
+        link('a dangling link to a dated file', 'latest.csv', `../archive/${plain}-2026.csv`, [
+          plain,
+        ]);
+        link('a dangling link to the address alone', 'inbox', plain, [plain]);
+        link(
+          'a live link to a file outside named after it',
+          'report.txt',
+          `../../outside/${dir}/${plain}.txt`,
+          [plain],
+        );
+        link('a link whose contents the scan skips', 'logo.png', `${plain}.png`, [plain]);
+        link('a link named .env.local', '.env.local', `../${plain}/.env`, [plain]);
+        link('a link named after it, to a name holding it', `${plain}-link`, `${plain}.csv`, [
+          plain,
+        ]);
+        // Never followed: what a live link points to is not read.
+        link(
+          'a live link to a file outside holding it',
+          'contacts.csv',
+          `../../outside/${dir}/contacts.csv`,
+          [],
+        );
+        link(
+          'a live link to a .env file outside holding it',
+          'settings.txt',
+          `../../outside/${dir}/.env.local`,
+          [],
+        );
+        link('a link to a longer first label', 'lookalike.csv', `intake@not${domain}.csv`, []);
+        // With core.symlinks false git checks a link out as a plain file that
+        // holds the path, and git still holds it as a link.
+        writeFileSync(join(checkout, dir, 'plain-link.csv'), `../archive/${plain}-2026.csv`);
+        plainFiles.push(`${dir}/plain-link.csv`);
+        add('a link checked out as a plain file', 'plain-link.csv', 0, [plain]);
+        // A link not yet staged, in place of a tracked file, is not followed either.
+        writeFileSync(join(checkout, dir, 'swapped.csv'), 'id,total\n1,10\n');
+        swaps.push([`${dir}/swapped.csv`, `../archive/${plain}-2026.csv`]);
+        add('a link not yet staged, in place of a tracked file', 'swapped.csv', 0, [plain]);
+        // Files are read as before.
+        writeFileSync(join(checkout, dir, `${plain}-2026.csv`), 'id,total\n1,10\n');
+        add('a file named after it', `${plain}-2026.csv`, 0, [plain]);
+        writeFileSync(join(checkout, dir, 'orders.csv'), `id,email\n1,${plain}\n`);
+        add('a file holding it', 'orders.csv', 2, [plain]);
+      });
+      git('add', '-f', '--', ...cases.map((c) => c.path));
+      for (const file of plainFiles) {
+        git(
+          'update-index',
+          '--cacheinfo',
+          `120000,${git('hash-object', '-w', '--', file)},${file}`,
+        );
+      }
+      for (const [file, target] of swaps) {
+        rmSync(join(checkout, file));
+        symlinkSync(target, join(checkout, file));
+      }
+      expect(git('ls-files', '-s', '--', 'd1/plain-link.csv')).toMatch(/^120000 /);
+      expect(git('ls-files', '-s', '--', 'd1/latest.csv')).toMatch(/^120000 /);
+      expect(git('ls-files', '-s', '--', 'd1/swapped.csv')).toMatch(/^100644 /);
+
+      const found = scanCheckout(checkout, env);
+      const missed = cases.flatMap((c) => {
+        const got = found.filter((f) => f.file === c.path).map((f) => `${f.line} ${f.sha256}`);
+        const expected = c.finds.map((address) => `${c.line} ${sha256(address)}`);
+        return got.join(' ') === expected.join(' ')
+          ? []
+          : [`${c.name} (domain ${c.at}): ${got.length} findings`];
+      });
+      expect(missed).toEqual([]);
+      expect(found.filter((f) => !cases.some((c) => c.path === f.file))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
