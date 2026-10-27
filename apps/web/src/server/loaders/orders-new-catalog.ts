@@ -112,8 +112,9 @@ const THUMB_TRANSFORM_WIDTH = 200;
  * Legacy transform signs are individual POSTs to Supabase storage —
  * cap the parallelism so a catalog with hundreds of pre-0122 images
  * (L4L had 270) doesn't fire an unbounded sign storm per recompute.
- * scripts/backfill-item-thumbs.mjs exists to shrink this branch to
- * zero; the cap protects any org that hasn't been backfilled yet.
+ * The admin thumbnail backfill (api/admin/backfill-item-thumbs) shrinks
+ * this branch to zero; the cap protects any org that hasn't been
+ * backfilled yet.
  */
 const TRANSFORM_SIGN_CONCURRENCY = 20;
 /**
