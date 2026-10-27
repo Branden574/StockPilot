@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // (axe landmark-unique).
 
 const ctxHolder = vi.hoisted(() => ({
-  current: { role: 'staff' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer' },
+  current: {
+    role: 'staff' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
+    permissions: null as Set<string> | null,
+  },
 }));
 
 vi.mock('@/lib/auth/session', () => ({
@@ -16,7 +19,7 @@ vi.mock('@/lib/auth/session', () => ({
     organizationId: 'org-1',
     userId: 'user-1',
     role: ctxHolder.current.role,
-    permissions: null,
+    permissions: ctxHolder.current.permissions,
   })),
 }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
@@ -24,11 +27,13 @@ vi.mock('@/components/settings/role-permission-matrix', () => ({
   RolePermissionMatrix: () => <div data-testid="role-permission-matrix" />,
 }));
 
+import { ORDER_ITEMS_ROLES_LOCK_NOTE_COPY } from '@stockpilot/core';
+
 import RolesPage from './page';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  ctxHolder.current = { role: 'staff' };
+  ctxHolder.current = { role: 'staff', permissions: null };
 });
 
 describe('Roles & permissions: the read-only matrix', () => {
@@ -44,5 +49,48 @@ describe('Roles & permissions: the read-only matrix', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'All roles at a glance' }).closest('section'),
     ).not.toHaveAttribute('aria-labelledby');
+  });
+});
+
+/**
+ * Manage order items (orders:manage_catalog_visibility, migration 0413) is
+ * platform-managed: a member's effective access can differ from their role's
+ * default only by StockPilot's exception, so the reference says who manages
+ * it, and "Your role can" never claims it from a static fallback (a denied
+ * manager whose effective set is unknown must not read that they hold it).
+ */
+describe('Roles & permissions: the platform-managed Manage order items row', () => {
+  const yourRolePanel = () =>
+    screen.getByRole('heading', { level: 2, name: /You.re signed in as/ }).closest('section')!;
+
+  it('notes in the read-only matrix that StockPilot support manages it', async () => {
+    render(await RolesPage());
+    const region = screen.getByRole('region', { name: 'All roles at a glance' });
+    const row = within(region)
+      .getByRole('rowheader', { name: /Manage order items/ })
+      .closest('tr')!;
+    expect(within(row).getByText(ORDER_ITEMS_ROLES_LOCK_NOTE_COPY)).toBeInTheDocument();
+  });
+
+  it('"Your role can" leaves it out when only the static role default is known', async () => {
+    ctxHolder.current = { role: 'manager', permissions: null };
+    render(await RolesPage());
+    expect(within(yourRolePanel()).queryByText('Manage order items')).toBeNull();
+    // The rest of the manager's defaults are still listed.
+    expect(within(yourRolePanel()).getAllByRole('listitem').length).toBeGreaterThan(0);
+  });
+
+  it('"Your role can" lists it from the effective set, and not after a deny', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:manage_catalog_visibility']),
+    };
+    const { unmount } = render(await RolesPage());
+    expect(within(yourRolePanel()).getByText('Manage order items')).toBeInTheDocument();
+    unmount();
+
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read']) };
+    render(await RolesPage());
+    expect(within(yourRolePanel()).queryByText('Manage order items')).toBeNull();
   });
 });

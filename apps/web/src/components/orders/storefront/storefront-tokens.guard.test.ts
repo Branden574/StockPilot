@@ -308,3 +308,17 @@ describe('the public order page draws its states with the shared primitives', ()
     expect(ruleBody(CODE, '.sp-storefront .sf-cb')).not.toMatch(/width|border|background/);
   });
 });
+
+describe('product photos', () => {
+  // The redesign (#369) drew every photo whole (object-fit: contain) on a
+  // white backing, so a tall warehouse photo in the 4:3 box showed white bars
+  // down both sides, in dark mode too. Photos fill their box again, as they
+  // did before the redesign; only the blurred LQIP preview was ever cropped
+  // on purpose.
+  it('fill their box, with no white backing behind them', () => {
+    const body = ruleBody(CODE, '.sp-storefront .sf-ph img');
+    expect(body).toMatch(/object-fit:\s*cover;/);
+    expect(body).not.toMatch(/object-fit:\s*contain/);
+    expect(body).not.toMatch(/background:\s*#fff/i);
+  });
+});

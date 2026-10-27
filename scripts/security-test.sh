@@ -739,6 +739,21 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Ordering visibility (0413): order_catalog_visible is written only by
+  # set_order_catalog_visibility (SECURITY DEFINER, EXECUTE to authenticated):
+  # the item guard refuses every other UPDATE of the column, service_role
+  # included. The write checks can_manage_order_catalog (explicit deny, then
+  # allow, then role default, the owner included), the app's MFA rule (a
+  # 48-case parity table) and the caller's read scope (set-based, held equal
+  # to caller_can_read_item and RLS per persona; a foreign or unreadable id
+  # refuses the whole call naming only the caller's ids). The key's exception
+  # rows are written only by platform_set_permission_exception (service_role):
+  # org admins, owners and service-role writes of the key, role rows and the
+  # global defaults are refused in the database. The new-demand gate on
+  # order_request_lines refuses a hidden item for every writer and leaks
+  # nothing about an item the writer cannot read. The two-session proofs are
+  # scripts/db-concurrency/0413_hide_vs_submit.sh and 0413_exchange_reissue_vs_hide.sh.
+  supabase/tests/0413_order_catalog_visibility.test.sql
   # Order signature images (0403, owner decision O1): the data block, replayed
   # from the recorded statements, copies every stored image to the side table
   # byte for byte BEFORE it nulls the row, and each abort check raises on a
@@ -979,6 +994,11 @@ WEB_TESTS=(
   # every other refusal keeps its words and its reason. The file carries the
   # "Security invariant" marker.
   src/server/actions/restore-points.test.ts
+  # Duplicate (2026-10-24): an internal failure gets fixed words and no
+  # details, never the raw exception text; every other refusal keeps its
+  # details (the new-rack question rides them). The file carries the
+  # "Security invariant" marker.
+  src/server/actions/duplicate-item.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1065,6 +1085,17 @@ WEB_TESTS=(
   # secret is unset. Both files carry the "Security invariant" marker.
   src/app/api/cron/embeddings-sweep/route.test.ts
   src/lib/ai/embeddings-sweep.test.ts
+  # Unlinked escalation requests (B29, F1-5 follow-up): the daily check reads
+  # each organization's maintenance requests and exception links on its own,
+  # under its own cap, with the service role, and only reads, so one
+  # organization's requests cannot hide another's; the run's one alert names
+  # each request by id, handle and EX reference and its organization by id in
+  # the text the alerts channel receives, never its subject, description or
+  # requester; an organization that reached its cap, or was not reached, is
+  # named in one error alert; a failed read in any organization alerts
+  # nothing about requests (a failed link read would make every request look
+  # unlinked); the CRON_SECRET gate fails closed when the secret is unset.
+  src/app/api/cron/maintenance-orphan-escalations/route.test.ts
 
   # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
   # hand-over through the sign route: a raw token whose sha256 is the order's
@@ -1290,6 +1321,63 @@ WEB_TESTS=(
   src/components/portal/portal-shop.test.tsx
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
+
+  # One-click unsubscribe in member emails (B15): a link names one member, one
+  # organization and one email kind under an HMAC keyed on UNSUBSCRIBE_SECRET,
+  # domain-separated from the address links; a changed part, an unknown kind,
+  # a malformed link and an unset signing value are all refused. GET changes
+  # nothing and touches no database. POST is rate limited per link (its hash)
+  # and per address after the signature check, failing closed; it is honoured
+  # only for an accepted, non-act-as member of the organization the link names,
+  # and every refusal (a removed member included) is the same page. It turns
+  # off exactly the switch the signed-in Notifications page shows, for that
+  # member only, through the page's own write.
+  src/lib/email/member-unsubscribe.test.ts
+  src/server/services/member-email-unsubscribe.test.ts
+  src/app/unsubscribe/route.members.test.ts
+  src/app/unsubscribe/route.settings-parity.test.tsx
+
+  # Ordering visibility (0413, step 2b). Manage order items checks the Orders
+  # module, the rollout switch (ORDER_ITEMS_MANAGE_ORGS), the MFA floor and the
+  # platform-managed orders:manage_catalog_visibility before any read or write;
+  # its list and family reads use the caller's own client (RLS is the scope);
+  # Show or Hide goes through set_order_catalog_visibility only, refusals are
+  # mapped by hint and never carry database text, foreign ids are echoed only
+  # when the caller sent them, and the catalog tags are expired with
+  # { expire: 0 } (never 'max' or the global tag). No requester surface offers
+  # a hidden item: the storefront loader filters and overlays recent hides, the
+  # public link page overlays every render, the legacy public thumbnails answer
+  # an empty map, Frequently ordered and the picker thumbnails filter; Add
+  # items is one atomic database call, and a raise, the portal and the public
+  # form refuse a hidden item; PO-import charter siblings and restore points
+  # keep a hidden choice.
+  src/server/services/order-catalog-visibility.test.ts
+  src/server/actions/order-catalog-visibility.test.ts
+  src/app/api/v1/orders/catalog-visibility/route.test.ts
+  src/server/services/order-requests.add-lines.test.ts
+  src/server/services/order-requests.edit-lines.test.ts
+  src/server/services/portal.pricing-mode.test.ts
+  src/app/api/v1/public/order-requests/route.order-visibility.test.ts
+  src/app/api/v1/public/catalog-thumbnails/route.test.ts
+  src/server/services/public-catalog.order-visibility.test.ts
+  src/app/api/orders/freq/route.test.ts
+  src/app/api/orders/catalog-thumbnails/route.test.ts
+  src/server/services/po-imports.charter-decoupling.test.ts
+  src/server/services/po-imports-lines.charter-sibling.test.ts
+  src/server/services/restore-points.test.ts
+  src/server/services/inventory.order-catalog-visible.test.ts
+
+  # Ordering visibility (0413, step 2a): orders:manage_catalog_visibility is
+  # platform-managed. Only setOrderItemsAccessAction (fresh step-up) reaches
+  # PermissionExceptionsService.set (GoTrue-verified allowlisted actor), the one
+  # caller of platform_set_permission_exception; every other override writer
+  # refuses the key first (the guard pins the single caller and the writers).
+  # The web resolvers honour an explicit deny for the owner too, and fail
+  # closed for the key when the permission read fails.
+  src/server/services/platform/permission-exceptions.guard.test.ts
+  src/server/services/platform/permission-exceptions.test.ts
+  src/server/actions/platform/permission-exceptions.test.ts
+  src/lib/auth/effective-permissions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

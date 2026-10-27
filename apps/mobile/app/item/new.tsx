@@ -19,8 +19,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  itemPhotoPath,
-  randomPhotoFileBase,
+  newRackBlockerFor,
   SIZE_SYSTEM_LABELS,
   SIZE_SYSTEMS,
   sizePlaceholder,
@@ -32,7 +31,6 @@ import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/te
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
-import { resizeForUpload } from '@/lib/image-resize';
 import {
   apparelFallbackSizeOptions,
   buildCreateItemInput,
@@ -56,11 +54,14 @@ import {
   submitSizedVariants,
   type ItemFormState,
 } from '@/lib/item-create';
+import { uploadItemPhoto } from '@/lib/item-photo-upload';
 import { checkCreateRack, rackDestinationHint, type CreateRackCheck } from '@/lib/create-rack-check';
 import { sectionLabelText } from '@/lib/section-label';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { loadWarehouseRackNames } from '@/lib/warehouse-racks';
@@ -81,16 +82,6 @@ const HOME_AWAY_OPTIONS: { value: SportsGroupFieldValues['homeAway']; label: str
  *  real frame at least this tall (never hitSlop). Declared before the module's
  *  StyleSheets, which read it when the module loads. */
 const MIN_TAP = 44;
-
-/** Maps a file extension to an image MIME type for storage uploads. */
-function mimeForExt(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-  if (e === 'png') return 'image/png';
-  if (e === 'heic') return 'image/heic';
-  if (e === 'webp') return 'image/webp';
-  return `image/${e}`;
-}
 
 /**
  * The New-rack question as an awaitable answer. Near-matches come first as one
@@ -115,7 +106,9 @@ function askAboutNewRack(
           onPress: () => resolve({ use: label }),
         })),
         {
-          text: check.kind === 'new' ? 'Create rack and save' : 'Save anyway',
+          // "Create rack and save" only when the yes creates the rack and
+          // moves the stock onto it (checkCreateRack decides, 2026-10-25).
+          text: check.kind === 'new' && check.createsRack ? 'Create rack and save' : 'Save anyway',
           onPress: () => resolve('create'),
         },
       ],
@@ -332,6 +325,11 @@ export default function NewItem() {
   // Create into the ACTIVE workspace org (was useOrg's .limit(1), which
   // created items in the user's first org regardless of the switcher).
   const { activeOrgId: orgId } = useWorkspace();
+  // What a yes to "Create new rack?" can do for this member (2026-10-25): a
+  // Staff member cannot create racks (no Manage locations), so the question
+  // says so, the server's own rule (newRackBlockerFor).
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
   const { c } = useTheme();
   const params = useLocalSearchParams<{ barcode?: string; type?: string }>();
   const itemType: 'product' | 'book' = params.type === 'book' ? 'book' : 'product';
@@ -740,30 +738,19 @@ export default function NewItem() {
     let isFirst = true;
     for (const p of photos) {
       try {
-        // Phone-camera photos are typically 4000×3000 (~3-5 MB) which
-        // makes the Items list lag during scroll. Resize on the device
-        // before upload so the bucket only stores list-friendly sizes.
-        const resized = await resizeForUpload(p.uri);
-        // The one path builder every writer uses; the database (0381) refuses
-        // any other shape (packages/core item-photo-path.test.ts pins it).
-        const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
-        // IMPORTANT: read the local file as an ArrayBuffer, NOT a Blob.
-        // `fetch(uri).blob()` in React Native/Expo uploads a 0-byte object
-        // to Supabase Storage (the RN Blob can't be read by the storage
-        // client), so the image row exists but renders blank everywhere.
-        // ArrayBuffer is the supported Expo upload path.
-        const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-        const { error: upErr } = await supabase.storage
-          .from('item-images')
-          .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-        if (upErr) {
-          console.warn('[new-item] photo upload failed:', upErr.message);
+        // The photo, resized on the device so the bucket only stores
+        // list-friendly sizes, and its thumbnail beside it, so lists never
+        // need the full photo (lib/item-photo-upload.ts builds both paths).
+        const upload = await uploadItemPhoto({ supabase, orgId, itemId, uri: p.uri });
+        if (!upload.ok) {
+          console.warn('[new-item] photo upload failed:', upload.error);
           continue;
         }
         const { error: rowErr } = await supabase.from('item_images').insert({
           organization_id: orgId,
           item_id: itemId,
-          storage_path: path,
+          storage_path: upload.path,
+          thumb_path: upload.thumbPath,
           is_primary: isFirst,
         });
         if (rowErr) console.warn('[new-item] photo row insert failed:', rowErr.message);
@@ -859,6 +846,10 @@ export default function NewItem() {
       units,
       warehouseName: warehouses.find((w) => w.id === whId)?.name ?? null,
       existingRacks: existing,
+      // Only once the role and the effective permissions are known. Until
+      // then, the words for a yes that creates the rack: saying "no rack" over
+      // a yes that creates one is the answer this question exists to stop.
+      blockedBy: role && permissions ? newRackBlockerFor({ role, permissions }) : null,
     });
     if (check.kind === 'none' || check.kind === 'existing') return form;
     const choice = await askAboutNewRack(check);

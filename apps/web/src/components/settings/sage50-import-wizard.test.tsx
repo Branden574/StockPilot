@@ -13,7 +13,13 @@ import { Sage50ImportWizard } from './sage50-import-wizard';
 
 describe('Sage50ImportWizard', () => {
   it('shows the three steps, a named multi-file CSV input and a disabled Import', () => {
-    render(<Sage50ImportWizard warehouses={[{ id: 'w1', name: 'Main' }]} />);
+    render(
+      <Sage50ImportWizard
+        warehouses={[{ id: 'w1', name: 'Main' }]}
+        userId="user-1"
+        organizationId="org-1"
+      />,
+    );
     expect(screen.getByRole('heading', { name: '1 · Export from Sage 50' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '2 · Drop the files here' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '3 · Import' })).toBeInTheDocument();
@@ -32,7 +38,7 @@ describe('Sage50ImportWizard', () => {
   });
 
   it('says to create a warehouse first when the caller can write to none', () => {
-    render(<Sage50ImportWizard warehouses={[]} />);
+    render(<Sage50ImportWizard warehouses={[]} userId="user-1" organizationId="org-1" />);
     expect(
       screen.getByText('Create a warehouse first — imported items need one to belong to.'),
     ).toBeInTheDocument();

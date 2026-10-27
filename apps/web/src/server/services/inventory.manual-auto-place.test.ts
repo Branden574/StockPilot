@@ -141,7 +141,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     );
   });
 
-  it('(b) no matching location: a rack is created (kind rack, type shelf, parsed number/row) and the seeded holding transfers there', async () => {
+  it('(b) no matching location, and the person confirmed the new rack: a rack is created (kind rack, type shelf, parsed number/row) and the seeded holding transfers there', async () => {
     const stub = buildStub({
       'locations.select': { data: [], error: null },
       'locations.insert': { data: { id: 'rack-new' }, error: null },
@@ -149,7 +149,9 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    const item = await svc.create({ ...BASE });
+    // Since 2026-10-24 a new rack is created only on the person's yes; without
+    // it the create is refused first (inventory.new-rack-question.test.ts).
+    const item = await svc.create({ ...BASE, confirmNewRack: true });
 
     expect(item).toEqual({ id: 'item-new', placementFailed: null });
     const createdLoc = stub.chainArgs.get('locations.insert')?.[0]?.[0] as Record<
@@ -183,7 +185,8 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    const item = await svc.create({ ...BASE });
+    // Confirmed, so the create reaches the rack create that then fails.
+    const item = await svc.create({ ...BASE, confirmNewRack: true });
 
     // Create still succeeds — placement is never a precondition for it — but
     // it no longer succeeds SILENTLY. The item now carries a bin_location
@@ -410,8 +413,9 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     // Should not throw — falls back to unplaced (the retry's resolve step
     // uses the SAME canned empty-array select, so it also finds nothing and
-    // this degrades to fail-soft rather than looping forever).
-    const item = await svc.create({ ...BASE });
+    // this degrades to fail-soft rather than looping forever). Confirmed, so
+    // the create reaches the rack create at all.
+    const item = await svc.create({ ...BASE, confirmNewRack: true });
     // Degrading to fail-soft is still a placement that did not happen, and the
     // retry succeeding at NOT looping is not the same as the stock arriving.
     // This is the subtlest of the three unplaced paths — the code did

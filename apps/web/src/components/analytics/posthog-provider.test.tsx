@@ -82,6 +82,42 @@ describe('PostHogProvider', () => {
     expect(options.before_send?.(product)).toBe(product);
   });
 
+  // Docket B39 review. A link Supabase verified itself lands on /signin with a
+  // live session in the fragment, and posthog-js records the fragment in
+  // $current_url (and the first and session-entry URLs) unless told not to:
+  // the option defaults to off when `defaults` is unset, as here.
+  it('MUTATION GUARD — tells the SDK never to record a URL fragment', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ disable_capture_url_hashes: true }),
+    );
+  });
+
+  // The path guard below keeps PostHog off a share page, but a credential can
+  // sit in another page's URL: the invite page's Sign in link is
+  // /signin?redirect=/invite/<token>, and the SDK puts that URL on every event
+  // there. The hook takes the token out of product events too; the full
+  // behaviour is lib/analytics-before-send.test.ts's business.
+  it('MUTATION GUARD — the before_send hook takes a share token out of a product event', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    const options = posthogMock.init.mock.calls[0]?.[1] as {
+      before_send?: (event: Record<string, unknown>) => Record<string, unknown> | null;
+    };
+    const token = 'placeholdertoken0000000000000000';
+    const signin = `https://app.example.test/signin?redirect=/invite/${token}`;
+    const out = options.before_send?.({
+      event: '$pageview',
+      properties: { $current_url: signin, $set_once: { $initial_current_url: signin } },
+    });
+    expect(JSON.stringify(out)).not.toContain(token);
+    expect((out?.properties as Record<string, unknown>).$current_url).toBe(
+      'https://app.example.test/signin?redirect=/invite/[redacted]',
+    );
+  });
+
   it('MUTATION GUARD — never initializes on a maintenance share path (/m/<token>), even with a key configured', async () => {
     pathnameRef.value = '/m/abcdef0123456789';
     render(<PostHogProvider>{null}</PostHogProvider>);

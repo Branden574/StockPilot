@@ -970,6 +970,15 @@ describe('the words', () => {
     expect(GROUP_COPY.moveOneFor('x').startsWith(GROUP_COPY.moveOne)).toBe(true);
     expect(GROUP_COPY.leaveOutOneFor('x').startsWith(GROUP_COPY.leaveOutOne)).toBe(true);
   });
+
+  // B5 (2026-10-25): where the list cannot tell which page holds the new
+  // group's header, the done message links to it. Its accessible name starts
+  // with the words on screen and names the group.
+  it('links the done message to the group, named for it', () => {
+    expect(GROUP_COPY.showIt).toBe('Show it');
+    expect(GROUP_COPY.showItFor('Polo XXXL')).toBe('Show it: Polo XXXL');
+    expect(GROUP_COPY.showItFor('x').startsWith(GROUP_COPY.showIt)).toBe(true);
+  });
 });
 
 describe('what a review answer is for', () => {

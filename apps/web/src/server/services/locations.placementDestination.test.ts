@@ -29,8 +29,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
+
 import { ServiceError } from './context';
-import { LocationsService, type CreateLocationInput } from './locations';
+import { TRANSFER_WAREHOUSE_WRITE_REFUSED } from './inventory';
+import {
+  LocationsService,
+  PLACEMENT_WAREHOUSE_WRITE_REFUSED,
+  type CreateLocationInput,
+} from './locations';
 
 const ORG = 'org-test';
 const WAREHOUSE = '00000000-0000-0000-0000-000000000001';
@@ -71,10 +78,25 @@ function stubWith(opts: {
   mintError?: { message: string; code?: string };
   /** What a DIRECT `create` insert would answer, for the "still refused" pins. */
   inserted?: Record<string, unknown>;
+  /**
+   * The warehouses a STAFF caller is assigned to (B38: below manager, the mint
+   * needs write access to its warehouse). Defaults to the crate's warehouse, so
+   * a staff put-away works where they work; `'unreadable'` fails the read.
+   */
+  assigned?: string[] | 'unreadable';
 }): SupabaseStub {
+  const assigned = opts.assigned ?? [WAREHOUSE];
   return makeSupabaseStub({
     'locations.select': { data: opts.existing ?? [], error: null },
     'locations.insert': { data: opts.inserted ?? { id: 'loc-direct' }, error: null },
+    'user_warehouse_assignments.select':
+      assigned === 'unreadable'
+        ? { data: null, error: { message: 'boom' } }
+        : {
+            data: assigned.map((w, i) => ({ warehouse_id: w, is_primary: i === 0 })),
+            error: null,
+          },
+    'organization_members.select': { data: { all_warehouses: false }, error: null },
     'rpc:mint_placement_location': opts.mintError
       ? { data: null, error: opts.mintError }
       : { data: opts.minted === null ? null : [opts.minted ?? YELLOW_ROW], error: null },
@@ -276,5 +298,93 @@ describe('the exception is SCOPED: ordinary location creation still needs locati
     expect(res.ok).toBe(true);
     expect(stub.chainArgs.get('locations.insert')).toBeDefined();
     expect(mints(stub)).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// B38: THE MINT ASKS ABOUT THE WAREHOUSE BEFORE IT CREATES ANYTHING
+//
+// mint_placement_location (0340) checks that the warehouse is the org's, not
+// that the caller may put stock there. Below manager, transfer_stock (0365)
+// refuses a move into a warehouse the caller does not work in, but only AFTER
+// the placement path has minted the destination, so the refusal left an empty
+// rack or crate behind. The phone's transfer route got there with a source in
+// another warehouse (stale or hand-made: it takes a new rack's warehouse from
+// the source, and locations are readable org-wide), and the web with a viewer
+// granted stock:transfer. Staff on the web are refused earlier, by the place
+// actions' own read of the warehouse under their access. The mint now checks
+// first, in the transfer's own words.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('findOrCreatePlacementDestination: the warehouse, before the mint (B38)', () => {
+  it("staff cannot mint in a warehouse they do not work in: refused in the transfer's words, nothing minted", async () => {
+    const stub = stubWith({ assigned: ['00000000-0000-0000-0000-0000000000ff'] });
+    const res = await outcome(
+      svcFor(stub, 'staff').findOrCreatePlacementDestination(YELLOW_6_ON_38B),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect((res.error as ServiceError).code).toBe('forbidden');
+      expect((res.error as ServiceError).message).toBe(PLACEMENT_WAREHOUSE_WRITE_REFUSED);
+    }
+    expect(mints(stub)).toHaveLength(0);
+    expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
+  });
+
+  it('staff whose access cannot be read are refused as retryable, and nothing is minted', async () => {
+    const stub = stubWith({ assigned: 'unreadable' });
+    const res = await outcome(
+      svcFor(stub, 'staff').findOrCreatePlacementDestination(YELLOW_6_ON_38B),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect((res.error as ServiceError).code).toBe('conflict');
+      expect((res.error as ServiceError).message).toBe(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
+    }
+    expect(mints(stub)).toHaveLength(0);
+  });
+
+  it('a viewer granted stock:transfer still writes no warehouse: refused, nothing minted', async () => {
+    const stub = stubWith({});
+    const svc = new LocationsService(
+      makeServiceContext(stub.client, {
+        role: 'viewer',
+        organizationId: ORG,
+        permissions: new Set(['stock:transfer', 'items:read']),
+      }),
+    );
+    const res = await outcome(svc.findOrCreatePlacementDestination(YELLOW_6_ON_38B));
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect((res.error as ServiceError).code).toBe('forbidden');
+      expect((res.error as ServiceError).message).toBe('Permission denied');
+    }
+    expect(mints(stub)).toHaveLength(0);
+  });
+
+  it('a manager writes every warehouse: no access read at all, and the mint runs', async () => {
+    const stub = stubWith({ assigned: [] });
+    const row = (await svcFor(stub, 'manager').findOrCreatePlacementDestination(
+      YELLOW_6_ON_38B,
+    )) as {
+      id: string;
+    };
+    expect(row.id).toBe(MINTED_ID);
+    expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
+    expect(mints(stub)).toHaveLength(1);
+  });
+
+  it('reusing a row that already exists mints nothing, so it asks nothing (the transfer rules on the move)', async () => {
+    const stub = stubWith({ existing: [YELLOW_ROW], assigned: [] });
+    const row = (await svcFor(stub, 'staff').findOrCreatePlacementDestination(YELLOW_6_ON_38B)) as {
+      id: string;
+    };
+    expect(row.id).toBe(MINTED_ID);
+    expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
+    expect(mints(stub)).toHaveLength(0);
+  });
+
+  it("the refusal is transferStock's own sentence, word for word (one rule, two places it is checked)", () => {
+    expect(PLACEMENT_WAREHOUSE_WRITE_REFUSED).toBe(TRANSFER_WAREHOUSE_WRITE_REFUSED);
   });
 });

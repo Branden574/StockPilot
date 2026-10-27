@@ -2,12 +2,12 @@ import type { Metadata } from 'next';
 import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { formatOrderNumber, RETURNS_COPY } from '@stockpilot/core';
+import { formatOrderNumber, ORDER_ITEMS_MANAGE_BUTTON_COPY, RETURNS_COPY } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Orders' };
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
@@ -27,6 +27,7 @@ import {
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
+import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
 import { OrderRequestsService, type OrderRequestSummary } from '@/server/services/order-requests';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
@@ -83,7 +84,7 @@ export default async function OrdersPage({
   contextStarted.catch(() => {});
   const [moduleAccess, params] = await Promise.all([checkModuleAccess('orders'), searchParams]);
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');
@@ -120,6 +121,18 @@ export default async function OrdersPage({
     loadFailed = true;
   }
 
+  // Ordering visibility (design 8.1): Manage order items, beside Place order,
+  // for whoever holds the EFFECTIVE orders:manage_catalog_visibility where the
+  // Orders module and the rollout switch are on. Decided from the service
+  // context the list read already resolved (request-cached: no extra round
+  // trip). A context that failed offers nothing; the page still renders.
+  let manageOrderItems = false;
+  try {
+    manageOrderItems = canManageOrderItems(await contextStarted);
+  } catch {
+    manageOrderItems = false;
+  }
+
   const hasNext = canApprove && rows.length > PAGE_SIZE;
   const visible = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
   const showTable = !loadFailed && visible.length > 0;
@@ -149,13 +162,20 @@ export default async function OrdersPage({
         }
         tour={<PageTour tour={ORDERS_TOUR} />}
         actions={
-          // Export the org-wide order history (CSV or PDF). Gated on
-          // orders:approve (manager+) — the same permission that lets this
-          // page show every org order; requesters without it only see
-          // their own requests and have nothing org-wide to export. Both
-          // links carry the active status tab so the file matches what's
-          // on screen.
-          canApprove ? <OrdersExportMenu tab={tab} /> : null
+          <>
+            {/* Export the org-wide order history (CSV or PDF). Gated on
+                orders:approve (manager+) — the same permission that lets this
+                page show every org order; requesters without it only see
+                their own requests and have nothing org-wide to export. Both
+                links carry the active status tab so the file matches what's
+                on screen. */}
+            {canApprove ? <OrdersExportMenu tab={tab} /> : null}
+            {manageOrderItems ? (
+              <Button asChild variant="outline">
+                <Link href="/dashboard/orders/manage-items">{ORDER_ITEMS_MANAGE_BUTTON_COPY}</Link>
+              </Button>
+            ) : null}
+          </>
         }
         primaryAction={
           <Button asChild variant="gradient">

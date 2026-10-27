@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader } from '@/components/patterns/page-header';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { RentalsListTable } from '@/components/rentals/rentals-list-table';
@@ -75,7 +75,7 @@ export default async function RentalsPage({
 }) {
   const moduleAccess = await checkModuleAccess('rentals');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="rentals" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   // Visibility gates on rentals:read (staff+ by default, grantable to

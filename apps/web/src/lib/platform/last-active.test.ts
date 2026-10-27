@@ -16,10 +16,14 @@ import {
  */
 
 const NOW = new Date('2026-09-18T12:00:00Z');
+/** The organization's stored zone, which the thirty-day date is printed in. */
+const ORG_TZ = 'America/Los_Angeles';
 
-// Every date here must come out in UTC whatever the server's zone. CI runs in
-// UTC, where a local getter and a UTC getter agree and a `getDate()` regression
-// would pass unnoticed, so the zone is pinned to one where they differ.
+// Every date here must come out in the zone it was asked for (UTC for the
+// exact instants, the organization's for the thirty-day date) whatever the
+// server's zone. CI runs in UTC, where a local getter and a UTC getter agree
+// and a `getDate()` regression would pass unnoticed, so the zone is pinned to
+// one where they differ.
 const ORIGINAL_TZ = process.env.TZ;
 beforeAll(() => {
   process.env.TZ = 'America/Los_Angeles';
@@ -231,33 +235,40 @@ describe('resolveLastActive — the app reporting on itself (migration 0352)', (
 
 describe('formatLastActive', () => {
   it('is coarse on purpose: the signal has about one hour of resolution', () => {
-    expect(formatLastActive('2026-09-18T11:59:30Z', NOW)).toBe('Within the last hour');
-    expect(formatLastActive('2026-09-18T11:00:01Z', NOW)).toBe('Within the last hour');
-    expect(formatLastActive('2026-09-18T11:00:00Z', NOW)).toBe('1 hour ago');
-    expect(formatLastActive('2026-09-18T09:00:00Z', NOW)).toBe('3 hours ago');
-    expect(formatLastActive('2026-09-17T12:00:01Z', NOW)).toBe('23 hours ago');
+    expect(formatLastActive('2026-09-18T11:59:30Z', NOW, ORG_TZ)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T11:00:01Z', NOW, ORG_TZ)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T11:00:00Z', NOW, ORG_TZ)).toBe('1 hour ago');
+    expect(formatLastActive('2026-09-18T09:00:00Z', NOW, ORG_TZ)).toBe('3 hours ago');
+    expect(formatLastActive('2026-09-17T12:00:01Z', NOW, ORG_TZ)).toBe('23 hours ago');
   });
 
   it('counts whole elapsed days, which needs no time zone', () => {
-    expect(formatLastActive('2026-09-17T12:00:00Z', NOW)).toBe('1 day ago');
-    expect(formatLastActive('2026-09-15T12:00:00Z', NOW)).toBe('3 days ago');
-    expect(formatLastActive('2026-08-19T12:00:01Z', NOW)).toBe('29 days ago');
+    expect(formatLastActive('2026-09-17T12:00:00Z', NOW, ORG_TZ)).toBe('1 day ago');
+    expect(formatLastActive('2026-09-15T12:00:00Z', NOW, ORG_TZ)).toBe('3 days ago');
+    expect(formatLastActive('2026-08-19T12:00:01Z', NOW, ORG_TZ)).toBe('29 days ago');
   });
 
-  it('switches to a UTC calendar date from thirty days on', () => {
-    expect(formatLastActive('2026-08-19T12:00:00Z', NOW)).toBe('19 Aug 2026');
-    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW)).toBe('29 May 2026');
+  it("switches to a calendar date in the organization's zone from thirty days on", () => {
+    expect(formatLastActive('2026-08-19T12:00:00Z', NOW, 'UTC')).toBe('19 Aug 2026');
+    // B9: 11:30 PM Pacific on 28 May is 29 May in UTC. It used to print the
+    // UTC day, unlabelled, for every organization.
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, ORG_TZ)).toBe('28 May 2026');
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, 'UTC')).toBe('29 May 2026');
+    // A zone that did not arrive or that this runtime does not know: the
+    // documented default (Pacific), never a throw.
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, null)).toBe('28 May 2026');
+    expect(formatLastActive('2026-05-28T23:30:00-07:00', NOW, 'Not/AZone')).toBe('28 May 2026');
   });
 
   it('never throws and never invents a time', () => {
-    expect(formatLastActive(null, NOW)).toBe('Never');
-    expect(formatLastActive(undefined, NOW)).toBe('Never');
-    expect(formatLastActive('', NOW)).toBe('Never');
-    expect(formatLastActive('not-a-date', NOW)).toBe('Never');
+    expect(formatLastActive(null, NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive(undefined, NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive('', NOW, ORG_TZ)).toBe('Never');
+    expect(formatLastActive('not-a-date', NOW, ORG_TZ)).toBe('Never');
   });
 
   it('treats a clock-skewed future instant as just now, not as a negative age', () => {
-    expect(formatLastActive('2026-09-18T12:00:20Z', NOW)).toBe('Within the last hour');
+    expect(formatLastActive('2026-09-18T12:00:20Z', NOW, ORG_TZ)).toBe('Within the last hour');
   });
 });
 
@@ -283,7 +294,7 @@ describe('describeLastActive', () => {
   const HEDGE = 'may have kept using the product after it';
 
   it('lists every known signal with its exact instant, so the winner can be checked', () => {
-    expect(describeLastActive(measured)).toBe(
+    expect(describeLastActive(measured, 'UTC')).toBe(
       'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, any organization; accurate to about an hour). ' +
         'Last recorded action in this organization 17 Sep 2026, 23:30 UTC. ' +
         'Last signed in 22 Jul 2026, 08:00 UTC.',
@@ -291,15 +302,18 @@ describe('describeLastActive', () => {
   });
 
   it('does NOT hedge a measured value', () => {
-    expect(describeLastActive(measured)).not.toContain(HEDGE);
+    expect(describeLastActive(measured, 'UTC')).not.toContain(HEDGE);
   });
 
   it('hedges a bare sign-in, because that is when the number is most likely stale', () => {
-    const text = describeLastActive({
-      lastSignInAt: '2026-08-12T15:00:00Z',
-      lastSessionAt: null,
-      lastActionAt: null,
-    });
+    const text = describeLastActive(
+      {
+        lastSignInAt: '2026-08-12T15:00:00Z',
+        lastSessionAt: null,
+        lastActionAt: null,
+      },
+      'UTC',
+    );
     expect(text).toBe(
       'No open sign-ins on any device. Last signed in 12 Aug 2026, 15:00 UTC. ' +
         'The sign-in behind this value is no longer open, so they may have kept using the product after it.',
@@ -307,33 +321,42 @@ describe('describeLastActive', () => {
   });
 
   it('hedges an ACTION with no session behind it just the same', () => {
-    const text = describeLastActive({
-      lastSignInAt: '2026-07-22T08:00:00Z',
-      lastSessionAt: null,
-      lastActionAt: '2026-07-22T15:00:00Z',
-    });
+    const text = describeLastActive(
+      {
+        lastSignInAt: '2026-07-22T08:00:00Z',
+        lastSessionAt: null,
+        lastActionAt: '2026-07-22T15:00:00Z',
+      },
+      'UTC',
+    );
     expect(text).toContain('No open sign-ins on any device.');
     expect(text).toContain('Last recorded action in this organization 22 Jul 2026, 15:00 UTC.');
     expect(text).toContain(HEDGE);
   });
 
   it('does not claim "no open sign-ins" when an older session survives a newer sign-in', () => {
-    const text = describeLastActive({
-      lastSignInAt: '2026-09-12T15:00:00Z',
-      lastSessionAt: '2026-09-01T00:00:00Z',
-      lastActionAt: null,
-    });
+    const text = describeLastActive(
+      {
+        lastSignInAt: '2026-09-12T15:00:00Z',
+        lastSessionAt: '2026-09-01T00:00:00Z',
+        lastActionAt: null,
+      },
+      'UTC',
+    );
     expect(text).toContain('Sign-in last renewed 1 Sep 2026, 00:00 UTC');
     expect(text).not.toContain('No open sign-ins');
     expect(text).toContain(HEDGE);
   });
 
   it('names the stamp as what it is: the app open in THIS organization', () => {
-    const text = describeLastActive({
-      lastSignInAt: '2026-07-22T08:00:00Z',
-      lastSessionAt: null,
-      lastSeenAt: '2026-09-17T16:55:00Z',
-    });
+    const text = describeLastActive(
+      {
+        lastSignInAt: '2026-07-22T08:00:00Z',
+        lastSessionAt: null,
+        lastSeenAt: '2026-09-17T16:55:00Z',
+      },
+      'UTC',
+    );
     expect(text).toBe(
       'No open sign-ins on any device. ' +
         'Last had StockPilot open in this organization 17 Sep 2026, 16:55 UTC. ' +
@@ -343,17 +366,67 @@ describe('describeLastActive', () => {
 
   it('never says "signed out": a disable or a password change ends a sign-in too', () => {
     expect(
-      describeLastActive({
-        lastSignInAt: '2026-08-12T15:00:00Z',
-        lastSessionAt: null,
-        lastActionAt: null,
-      }),
+      describeLastActive(
+        {
+          lastSignInAt: '2026-08-12T15:00:00Z',
+          lastSessionAt: null,
+          lastActionAt: null,
+        },
+        'UTC',
+      ),
     ).not.toMatch(/signed out/i);
   });
 
   it('explains never', () => {
     expect(
-      describeLastActive({ lastSignInAt: null, lastSessionAt: null, lastActionAt: null }),
+      describeLastActive({ lastSignInAt: null, lastSessionAt: null, lastActionAt: null }, 'UTC'),
     ).toBe('This person has never signed in and has no recorded activity in this organization.');
+  });
+});
+
+/**
+ * B9 review: the thirty-day date on the cell moved to the organization's zone,
+ * but the tooltip kept printing UTC, so for a Pacific evening more than a month
+ * back the cell read "Signed in 24 Oct 2026" and its tooltip "Last signed in
+ * 25 Oct 2026, 01:30 UTC". The tooltip is now in the same zone, named.
+ */
+describe("describeLastActive — the organization's zone", () => {
+  // 6:30 PM Pacific on 24 Oct is 01:30 UTC on 25 Oct.
+  const EVENING = '2026-10-25T01:30:00Z';
+  const LATER = new Date('2026-12-15T12:00:00Z');
+
+  it('prints each instant in the zone and names it, so the tooltip and the cell name the same day', () => {
+    const signals = { lastSignInAt: EVENING, lastSessionAt: null, lastActionAt: null };
+    expect(formatLastActive(EVENING, LATER, ORG_TZ)).toBe('24 Oct 2026');
+    const text = describeLastActive(signals, ORG_TZ);
+    expect(text).toContain('Last signed in 24 Oct 2026, 18:30 PDT.');
+    expect(text).not.toContain('25 Oct 2026');
+    expect(text).not.toContain('UTC');
+  });
+
+  it('names standard time in winter, and every signal is in the same zone', () => {
+    const text = describeLastActive(
+      {
+        lastSignInAt: '2026-11-20T02:15:00Z',
+        lastSessionAt: '2026-12-01T03:00:00Z',
+        lastActionAt: '2026-11-30T23:45:00Z',
+        lastSeenAt: '2026-12-01T02:59:00Z',
+      },
+      ORG_TZ,
+    );
+    expect(text).toBe(
+      'Sign-in last renewed 30 Nov 2026, 19:00 PST (any device, any organization; accurate to about an hour). ' +
+        'Last had StockPilot open in this organization 30 Nov 2026, 18:59 PST. ' +
+        'Last recorded action in this organization 30 Nov 2026, 15:45 PST. ' +
+        'Last signed in 19 Nov 2026, 18:15 PST.',
+    );
+  });
+
+  it('a zone that did not arrive or that this runtime does not know is the documented default, never a throw', () => {
+    const signals = { lastSignInAt: EVENING, lastSessionAt: null, lastActionAt: null };
+    expect(describeLastActive(signals, null)).toContain('Last signed in 24 Oct 2026, 18:30 PDT.');
+    expect(describeLastActive(signals, 'Not/AZone')).toContain(
+      'Last signed in 24 Oct 2026, 18:30 PDT.',
+    );
   });
 });

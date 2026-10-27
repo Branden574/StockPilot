@@ -2,7 +2,10 @@ import 'server-only';
 
 import {
   effectivePermissions,
+  isPlatformManagedPermission,
+  PLATFORM_MANAGED_PERMISSIONS,
   ROLE_PERMISSIONS,
+  withoutPlatformManaged,
   type Permission,
   type PermissionOverride,
   type Role,
@@ -27,10 +30,16 @@ interface QueryableClient {
  * FAIL-SAFE: a failed override read NEVER throws — it falls back to the static
  * role defaults. Grants not applying is fail-closed; revokes not applying just
  * preserves the prior behavior. Neither widens access beyond the role's static
- * set, so a flaky read can't escalate privilege or 500 the request.
+ * set, so a flaky read can't escalate privilege or 500 the request. The one
+ * exception is the PLATFORM-MANAGED keys (orders:manage_catalog_visibility,
+ * migration 0413): StockPilot support may have DENIED one to this member, and
+ * a fallback that kept the role default would hand a denied manager the
+ * capability for that request. So every fallback drops them (fail closed);
+ * the database refuses regardless (can_manage_order_catalog).
  *
- * Owner short-circuits to the full set with no DB round-trip (owner is
- * immutable — the org's lockout escape hatch).
+ * Owner: every permission, except a platform-managed key StockPilot support
+ * explicitly denied to them. Only those rows are read (one query); the owner
+ * stays the org's lockout escape hatch for every key an org editor can touch.
  */
 export async function loadEffectivePermissions(
   supabase: QueryableClient,
@@ -38,7 +47,7 @@ export async function loadEffectivePermissions(
   userId: string,
   role: Role,
 ): Promise<Set<Permission>> {
-  if (role === 'owner') return effectivePermissions('owner');
+  if (role === 'owner') return loadOwnerPermissions(supabase, organizationId, userId);
   try {
     const [roleRes, userRes] = await Promise.all([
       supabase
@@ -60,6 +69,30 @@ export async function loadEffectivePermissions(
     );
   } catch (err) {
     console.error('[loadEffectivePermissions] fail-safe to static defaults:', err);
-    return new Set<Permission>(ROLE_PERMISSIONS[role]);
+    return withoutPlatformManaged(new Set<Permission>(ROLE_PERMISSIONS[role]));
+  }
+}
+
+async function loadOwnerPermissions(
+  supabase: QueryableClient,
+  organizationId: string,
+  userId: string,
+): Promise<Set<Permission>> {
+  try {
+    const { data, error } = await supabase
+      .from('user_permission_overrides')
+      .select('permission, granted')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      // in-list-bound: the platform-managed keys (one today)
+      .in('permission', [...PLATFORM_MANAGED_PERMISSIONS]);
+    if (error) throw error;
+    const rows = ((data ?? []) as PermissionOverride[]).filter((r) =>
+      isPlatformManagedPermission(r.permission),
+    );
+    return effectivePermissions('owner', [], rows);
+  } catch (err) {
+    console.error('[loadEffectivePermissions] owner exception read failed, closed for platform-managed keys:', err);
+    return withoutPlatformManaged(effectivePermissions('owner'));
   }
 }
