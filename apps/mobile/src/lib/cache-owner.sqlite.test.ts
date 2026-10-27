@@ -4,7 +4,11 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
+import { savedWorkspaceIn } from './__fixtures__/saved-workspace';
+import { saveWorkspace } from './workspace-keys';
 
 /**
  * WHOSE PHOTOS: the record of whose cache this is (`cache_user_id`,
@@ -58,6 +62,18 @@ import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
  * account's own cursor, modules, permissions and warehouse scope and pulling
  * in full. Another account's unsent count released on a count this account
  * keeps but its pull does not return also stayed as a clean, counted line.
+ *
+ * UNDER THE WORKSPACE OWNER RULES (docket B10, merged after this file was
+ * written). The saved workspace is one value with the account that chose it
+ * (workspace-keys.ts), and a queued row, a count the count screen stores and
+ * a row with no workspace of its own use only the live account's OWN saved
+ * workspace (session-scope.ts liveOutboxScope, outboxWriteScope). Each
+ * account's workspace load saves its own before it shows a workspace, and the
+ * count screen fetches and counts only in a workspace shown, so here each
+ * account's sign-in saves its own (signIn) before it opens or counts anything,
+ * and the snapshot stand-in names the workspace as api.ts orgHeader does. The
+ * last describe pins the combined rule: a count fetched before the account's
+ * own workspace is saved is not stored.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -183,16 +199,29 @@ function snapshotFor(userId: string, orgId: string | null): SnapshotAnswer {
   };
 }
 
-vi.mock('./api', () => ({
-  api: vi.fn(async (path: string, opts: { asUserId?: string } = {}) => {
-    device.requests.push(path);
-    if (!device.online || device.snapshotFails) throw new TypeError('Network request failed');
-    // api.ts refuses a request whose session changed since it was asked for.
-    if (opts.asUserId !== device.userId || !device.userId) throw new Error('session changed');
-    const snap = snapshotFor(device.userId, device.storage.get('workspace.activeOrgId') ?? null);
-    return device.answer ? device.answer(snap, device.userId) : snap;
-  }),
-}));
+vi.mock('./api', async () => {
+  const { savedWorkspaceIn } = await import('./__fixtures__/saved-workspace');
+  const { savedWorkspaceFor } = await import('./workspace-keys');
+  return {
+    api: vi.fn(async (path: string, opts: { asUserId?: string; orgId?: string } = {}) => {
+      device.requests.push(path);
+      if (!device.online || device.snapshotFails) throw new TypeError('Network request failed');
+      // api.ts refuses a request whose session changed since it was asked for.
+      if (opts.asUserId !== device.userId || !device.userId) throw new Error('session changed');
+      // The workspace the request names, as api.ts does: the caller's, else
+      // the saved one when it is this account's (orgHeader). Read as the
+      // request is sent. Naming none, the server answers for the account's
+      // default: its first membership here, with no profile default.
+      const named =
+        opts.orgId ?? savedWorkspaceFor(savedWorkspaceIn(device.storage), device.userId);
+      const snap = snapshotFor(
+        device.userId,
+        named ?? device.memberships[device.userId]?.[0] ?? null,
+      );
+      return device.answer ? device.answer(snap, device.userId) : snap;
+    }),
+  };
+});
 
 vi.mock('./supabase', () => {
   const offline = {
@@ -331,10 +360,17 @@ async function relaunch(): Promise<void> {
   await launch();
 }
 
-function signIn(userId: string): void {
+/** The account signs in, and its workspace load saves `workspace` as its own
+ *  (use-workspace.ts loadWorkspace, through workspace-keys.ts saveWorkspace,
+ *  the one write every load and switch makes) before any of its screens
+ *  shows a workspace: the count screen fetches and counts only then (docket
+ *  B10). With `workspace` null the load has not saved yet, and the workspace
+ *  saved is still the previous account's, if any. */
+async function signIn(userId: string, workspace: string | null = 'org-1'): Promise<void> {
   device.userId = userId;
   auth.user = { id: userId };
   device.authListener?.('SIGNED_IN', { user: { id: userId } });
+  if (workspace) await saveWorkspace(AsyncStorage, workspace, userId);
 }
 
 /** "Use password instead", "Use a different account", a session revoked
@@ -452,8 +488,7 @@ const backgroundPullsSettle = () => m.sync.syncNow();
 /** A signs in to workspace org-1: its cache is pulled and recorded as its
  *  own, and a photo is drawn. */
 async function aSignedInWithAPhoto(): Promise<void> {
-  device.storage.set('workspace.activeOrgId', 'org-1');
-  signIn(A);
+  await signIn(A);
   await m.sync.syncNow();
   expect(owner()).toBe(A);
   expect(items()).toEqual([`item-${A}-org-1`]);
@@ -645,7 +680,7 @@ describe('a wipe that keeps the photos keeps the record of whose they are', SLOW
       expect.soft(owner()).toBe(A);
 
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       device.online = mode === 'online';
       await m.sync.syncNow(); // B's first pull
 
@@ -656,20 +691,24 @@ describe('a wipe that keeps the photos keeps the record of whose they are', SLOW
   );
 
   // The repair can run inside the next account's OWN sign-in: a fallback
-  // sign-out keeps the saved workspace, and it is not one of B's. A record
-  // re-stamped to the live account at that wipe would hand B A's photos.
+  // sign-out keeps the saved workspace, and it is not B's. B's load does not
+  // take it as B's (workspace-keys.ts savedWorkspaceFor), so with two
+  // memberships and no default it cannot tell which workspace the server was
+  // answering for, and clears the cache (workspace-choice.ts resetCache). A
+  // record re-stamped to the live account at that wipe would hand B A's
+  // photos.
   it.each(['online', 'offline'] as const)(
     "the repair run by the next account's own sign-in, before its first pull: that pull (%s) still clears the previous account's photos",
     async (mode) => {
       await aSignedInWithAPhoto();
-      sessionEndsWithoutWipe(); // keeps workspace.activeOrgId = org-1
-      device.memberships[B] = ['org-9'];
-      signIn(B);
+      sessionEndsWithoutWipe(); // keeps A's saved workspace, org-1
+      device.memberships[B] = ['org-9', 'org-8'];
+      await signIn(B, null); // B's own load, below, saves B's workspace
       device.dropAfterMemberships = mode === 'offline';
       await workspaceLoads('org-9'); // resetCache: deleteOrgData, then a forced pull
       await backgroundPullsSettle();
 
-      expect(device.storage.get('workspace.activeOrgId')).toBe('org-9');
+      expect(savedWorkspaceIn(device.storage)).toEqual({ orgId: 'org-9', ownerId: B });
       await expectForgotten(PHOTO_A);
       expect(items().filter((id) => id.startsWith(`item-${A}`))).toEqual([]);
       expect(owner()).toBe(B);
@@ -701,7 +740,7 @@ describe('the reset for another account', SLOW, () => {
   it("a pull that fails after the reset leaves the cache recorded as the new account's: its next pull keeps a count it cached since, and another account's pull still resets", async () => {
     await aSignedInWithAPhoto();
     sessionEndsWithoutWipe();
-    signIn(B);
+    await signIn(B);
     device.snapshotFails = true; // weak Wi-Fi: the snapshot times out
     await m.sync.syncNow(); // B's first pull: the reset, then no answer
     device.snapshotFails = false;
@@ -725,7 +764,7 @@ describe('the reset for another account', SLOW, () => {
 
     // B's session ends without a wipe too: C's first pull clears B's things.
     sessionEndsWithoutWipe();
-    signIn(C);
+    await signIn(C);
     await m.sync.syncNow();
     expect(await m.counts.getCycleCount('cc-b')).toBeNull();
     await expectForgotten(PHOTO_B);
@@ -736,7 +775,7 @@ describe('the reset for another account', SLOW, () => {
   it('a reset whose SQLite wipe fails leaves the previous account recorded: the next pull resets again rather than adopting', async () => {
     await aSignedInWithAPhoto();
     sessionEndsWithoutWipe();
-    signIn(B);
+    await signIn(B);
     device.failWipe = true;
     await m.sync.syncNow(); // the reset's wipe throws; syncNow reports it
 
@@ -812,7 +851,7 @@ describe("a session that ends while the previous account's pull is still out", S
     // "Use password instead": the session ends with no wipe, B signs in, and
     // useSync runs B's first sync (use-sync.ts, on the user change).
     sessionEndsWithoutWipe();
-    signIn(B);
+    await signIn(B);
     const bFirst = m.sync.syncNow();
     held.release(); // A's answer arrives
     await Promise.all([aSync, bFirst]);
@@ -837,7 +876,7 @@ describe("a session that ends while the previous account's pull is still out", S
     await aSignedInWithAPhoto();
     const { held, aSync } = await aPullIsOut();
     sessionEndsWithoutWipe();
-    signIn(B);
+    await signIn(B);
     const bFirst = m.sync.syncNow();
     held.release();
     await Promise.all([aSync, bFirst]);
@@ -846,7 +885,7 @@ describe("a session that ends while the previous account's pull is still out", S
     await countOnThePhone('cc-b');
     // B's session is revoked elsewhere (no wipe), and A signs in again.
     sessionEndsWithoutWipe();
-    signIn(A);
+    await signIn(A);
     await m.sync.syncNow();
 
     expect(owner()).toBe(A);
@@ -872,7 +911,7 @@ describe("a session that ends while the previous account's pull is still out", S
     expect(metaValue('last_synced_at')).toBe(cursor);
     expect(owner()).toBe(A);
 
-    signIn(A);
+    await signIn(A);
     await m.sync.syncNow();
     // A delta from the same cursor, on A's own cache, with A's photos kept.
     expect(device.requests.at(-1)).toBe(
@@ -911,7 +950,7 @@ describe('the record changes only once the photos are gone', SLOW, () => {
       await relaunch();
       expect(device.disk.has(PHOTO_A)).toBe(true); // the clear never finished
       expect.soft(owner()).toBe(A);
-      signIn(B);
+      await signIn(B);
       await m.sync.syncNow();
 
       expect(device.disk.has(PHOTO_A)).toBe(false);
@@ -924,7 +963,7 @@ describe('the record changes only once the photos are gone', SLOW, () => {
   it('a reset the app is closed during, before the photo disk clear finished: the next launch resets again', async () => {
     await aSignedInWithAPhoto();
     sessionEndsWithoutWipe();
-    signIn(B);
+    await signIn(B);
     device.holdDiskClear = true;
     void m.sync.syncNow();
     await vi.waitFor(() => expect(image.clearDiskCache).toHaveBeenCalledTimes(1), WAIT);
@@ -955,7 +994,7 @@ describe('the record changes only once the photos are gone', SLOW, () => {
       expect(items()).toEqual([]);
       await expectForgotten(PHOTO_A);
 
-      signIn(B);
+      await signIn(B);
       await countOnThePhone('cc-b');
       await m.sync.syncNow();
 
@@ -977,9 +1016,9 @@ describe('a pull that finds no owner recorded', SLOW, () => {
       auth.user = null;
       await m.photoWipe.wipeWithPhotoCaches(m.db.wipeForSignOut);
     },
-    'on a fresh install': async () => {
-      device.storage.set('workspace.activeOrgId', 'org-1');
-    },
+    // Nothing saved and nothing cached: the next account's sign-in saves its
+    // own workspace.
+    'on a fresh install': async () => {},
   };
   const modes = ['online', 'offline'] as const;
 
@@ -991,7 +1030,7 @@ describe('a pull that finds no owner recorded', SLOW, () => {
       await NO_OWNER[start]!();
       expect(owner()).toBeNull();
 
-      signIn(B);
+      await signIn(B);
       device.snapshotFails = true; // online, but the snapshot times out (weak warehouse Wi-Fi)
       await m.sync.syncNow(); // B's first pull: no owner recorded, then no answer
       expect.soft(owner()).toBe(B);
@@ -1002,7 +1041,7 @@ describe('a pull that finds no owner recorded', SLOW, () => {
       await countOnThePhone('cc-b');
 
       sessionEndsWithoutWipe();
-      signIn(C);
+      await signIn(C);
       device.snapshotFails = false;
       device.online = mode === 'online';
       await m.sync.syncNow(); // C's first pull
@@ -1044,7 +1083,7 @@ describe('a pull that finds no owner recorded', SLOW, () => {
       expect(owner()).toBeNull();
       expect(device.disk.has(PHOTO_A)).toBe(true);
 
-      signIn(B);
+      await signIn(B);
       device.online = mode === 'online';
       await m.sync.syncNow();
 
@@ -1058,7 +1097,7 @@ describe('a pull that finds no owner recorded', SLOW, () => {
   it('an adopt the app is closed during, before the photo disk clear finished: no owner is recorded yet, and the next launch clears the photos again', async () => {
     await aSignedInWithAPhoto();
     await PREVIOUS_RELEASE_LEFT['its sign-out']!();
-    signIn(B);
+    await signIn(B);
     device.holdDiskClear = true;
     void m.sync.syncNow();
     await vi.waitFor(() => expect(image.clearDiskCache).toHaveBeenCalledTimes(1), WAIT);
@@ -1077,7 +1116,7 @@ describe('a pull that finds no owner recorded', SLOW, () => {
   // tick whose pull fails would adopt again and clear the account's own photos.
   it("the adopting account's photos are cleared once, before its first pull: what it draws after is kept through pulls that keep failing, online and offline", async () => {
     await NO_OWNER['on a fresh install']!();
-    signIn(B);
+    await signIn(B);
     device.snapshotFails = true;
     await m.sync.syncNow(); // the adopt, then no answer
     await viewPhoto(PHOTO_B);
@@ -1106,7 +1145,7 @@ describe('a photo clear that fails still records the account, with the clear owe
       await aSignedInWithAPhoto();
       recordLost();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS[failure]!();
       await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
 
@@ -1132,7 +1171,7 @@ describe('a photo clear that fails still records the account, with the clear owe
     async (failure) => {
       await aSignedInWithAPhoto();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS[failure]!();
       await m.sync.syncNow(); // B's first pull: the reset; its clear fails; the pull lands
 
@@ -1177,7 +1216,7 @@ describe('a photo clear that fails still records the account, with the clear owe
       expect(items()).toEqual([]);
       expect(stillCached(PHOTO_A)).toBe(true);
 
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS[failure]!(); // B's first pull: the clear fails again
       await m.sync.syncNow();
       expect(stillCached(PHOTO_A)).toBe(true);
@@ -1200,7 +1239,7 @@ describe('a photo clear that fails still records the account, with the clear owe
       await aSignedInWithAPhoto();
       recordLost();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS['the disk clear answers false']!();
       await m.sync.syncNow();
       expect(photoClearOwed()).toBe(B);
@@ -1223,10 +1262,9 @@ describe('a photo clear that fails still records the account, with the clear owe
     async (wipe) => {
       // A photo an earlier account left with no owner recorded (an older
       // release's wipes), then A's first pull, whose clear fails.
-      device.storage.set('workspace.activeOrgId', 'org-1');
       device.memory.add(PHOTO_B);
       device.disk.add(PHOTO_B);
-      signIn(A);
+      await signIn(A);
       PHOTO_CLEAR_FAILS['the disk clear answers false']!();
       await m.sync.syncNow();
       expect(owner()).toBe(A);
@@ -1289,7 +1327,7 @@ describe('an account whose photo clear failed still owns its rows', SLOW, () => 
     async (start, failure) => {
       await B_FIRST_PULLS[start]!();
       device.answer = (snap, userId) => (userId === B ? { ...snap, openPOs: [B_PO] } : snap);
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS[failure]!();
       await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
       expect(items()).toEqual([`item-${B}-org-1`]);
@@ -1298,7 +1336,7 @@ describe('an account whose photo clear failed still owns its rows', SLOW, () => 
       await viewPhoto(PHOTO_B);
 
       sessionEndsWithoutWipe();
-      signIn(C);
+      await signIn(C);
       device.online = false;
       await m.sync.syncNow(); // C's first pull, offline
 
@@ -1327,7 +1365,7 @@ describe('an account whose photo clear failed still owns its rows', SLOW, () => 
     "%s whose clear fails (%s), then keeps failing: each of B's next pulls tries the photo clear again, and only that, until one works",
     async (start, failure) => {
       await B_FIRST_PULLS[start]!();
-      signIn(B);
+      await signIn(B);
       PHOTO_CLEAR_FAILS[failure]!();
       await m.sync.syncNow(); // B's first pull: the clear fails, the pull lands
       await countOnThePhone('cc-b');
@@ -1382,7 +1420,7 @@ describe('an account whose photo clear failed still owns its rows', SLOW, () => 
   // answered. An app closed during that clear then never cleared again.
   it('a retry the app is closed during, before the photo disk clear finished: the clear is still owed, and the next launch tries again', async () => {
     await B_FIRST_PULLS['a pull that finds the record lost']!();
-    signIn(B);
+    await signIn(B);
     PHOTO_CLEAR_FAILS['the disk clear answers false']!();
     await m.sync.syncNow(); // B's first pull: the clear fails
     expect(photoClearOwed()).toBe(B);
@@ -1455,7 +1493,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
   // a count kept for an unsent entry that is not this account's.
   it("another account's rows, cursor and scope: after the next account's first pull none of them is left, and the count it counted before that pull stays", async () => {
     await aLeavesItsCacheWithNoOwner();
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b'); // before B's first pull
     await m.sync.syncNow(); // B's first pull
 
@@ -1491,7 +1529,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
   // next pull is in full although the cache is recorded as B's by then.
   it("offline, the adopt forgets the other account's cursor, scope, permissions and modules at once, and the next pull is in full", async () => {
     await aLeavesItsCacheWithNoOwner();
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     device.online = false;
     await m.sync.syncNow(); // B's first pull, offline
@@ -1517,7 +1555,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
   it("B's answer is a full page of 50 counts: A's count still goes, and B's own stays", async () => {
     await aLeavesItsCacheWithNoOwner();
     bSees({ openCycleCounts: Array.from({ length: 50 }, (_, i) => openCount(`cc-open-${i}`)) });
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     await m.sync.syncNow();
 
@@ -1537,7 +1575,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
     const ahead = Date.now() + 365 * 24 * 60 * 60 * 1000;
     raw.prepare('update items set last_synced_at = ?').run(ahead);
     raw.prepare('update bundles set last_synced_at = ?').run(ahead);
-    signIn(B);
+    await signIn(B);
     await m.sync.syncNow();
 
     expect(items()).toEqual([`item-${B}-org-1`]);
@@ -1569,7 +1607,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
         bundles: page,
         ...(withActiveList ? { activeBundleIds: [...page.map((k) => k.id), 'b-a'] } : {}),
       });
-      signIn(B);
+      await signIn(B);
       await m.sync.syncNow();
 
       expect(ids("select id from bundles where id = 'b-a'")).toEqual([]);
@@ -1590,7 +1628,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
         openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
       ],
     });
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     await m.sync.syncNow();
 
@@ -1609,7 +1647,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
   // reads the marks, never sees it again.
   it("B opens A's count on the count screen before any pull of B's lands: it shows the server's count, not A's unsent one", async () => {
     await aLeavesItsCacheWithNoOwner();
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     device.snapshotFails = true;
     await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
@@ -1683,7 +1721,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
     async (_case, answer) => {
       await aLeavesItsCacheWithNoOwner();
       answer();
-      signIn(B);
+      await signIn(B);
       await bCountsTheOtherLineOfAsCount();
       await m.sync.syncNow(); // B's first pull: the adopt, in full, without cc-a
 
@@ -1715,7 +1753,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
         ]),
       ],
     });
-    signIn(B);
+    await signIn(B);
     await bCountsTheOtherLineOfAsCount();
     await m.sync.syncNow();
 
@@ -1727,7 +1765,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
   // The same, at the count screen's own release (one count, before its write).
   it("a count both accounts counted, opened on the count screen before any pull of B's lands: A's line shows the server's count, and B's own unsent count stays", async () => {
     await aLeavesItsCacheWithNoOwner();
-    signIn(B);
+    await signIn(B);
     await bCountsTheOtherLineOfAsCount();
     device.snapshotFails = true;
     await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
@@ -1769,7 +1807,7 @@ describe('a pull that finds no owner recorded trusts none of the rows it finds',
     await aLeavesItsCacheWithNoOwner();
     expect(ids('select id from warehouses')).toEqual(['wh-org-1']);
     bSees({ warehouses: [], items: [], openCycleCounts: [] });
-    signIn(B);
+    await signIn(B);
     await m.sync.syncNow();
 
     expect(ids('select id from warehouses')).toEqual([]);
@@ -1833,7 +1871,7 @@ describe(
       await aSignedInWithAPhoto();
       const fetchedUnder = await m.counts.cacheWriteScope();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
 
       expect(await storeFetchedCount(fetchedUnder)).toBe(false);
       expect(cachedCounts()).toEqual([]);
@@ -1892,7 +1930,7 @@ describe(
     it("a fetch that lands while the cache is still recorded as another account's is discarded: that account, signing in again first, never finds it", async () => {
       await aSignedInWithAPhoto();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       device.failWipe = true;
       await m.sync.syncNow(); // B's reset: the SQLite wipe throws, A stays recorded
       expect.soft(owner()).toBe(A);
@@ -1902,7 +1940,7 @@ describe(
       await m.counts.updateLocalLine('cc-b-l1', 5); // B counts what the screen shows
       // B's session is revoked elsewhere (no wipe), and A signs in again.
       sessionEndsWithoutWipe();
-      signIn(A);
+      await signIn(A);
       await m.sync.syncNow();
 
       expect(owner()).toBe(A);
@@ -1917,7 +1955,7 @@ describe(
       await aSignedInWithAPhoto();
       const { held, aSync } = await aPullIsOut();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       const bFirst = m.sync.syncNow();
 
       const fetchedUnder = await m.counts.cacheWriteScope();
@@ -1945,6 +1983,42 @@ describe(
       expect(await storeFetchedCount(fetchedUnder)).toBe(true);
       expect(cachedCounts()).toEqual(['cc-a']);
     });
+
+    // The combined rule with the workspace owner rules (docket B10): a count
+    // is stored only in the live account's OWN saved workspace. Until the next
+    // account's workspace load has saved its own, the saved one is the
+    // previous account's, and a count fetched then is not stored. The screen
+    // never fetches in that window (the load saves before it shows a
+    // workspace), and its next pass stores the count. Mutation caught: the
+    // cache trusting a workspace another account saved, as before B10
+    // (session-scope.ts liveOutboxScope naming the saved workspace whoever
+    // saved it).
+    it("a fetch that lands before the next account's own workspace is saved is discarded, and stored once its workspace load has saved it", async () => {
+      await aSignedInWithAPhoto();
+      sessionEndsWithoutWipe(); // A's saved workspace, org-1, stays
+      await signIn(B, null);
+      await m.sync.syncNow(); // B's first pull: the reset, answered for B's default
+      expect(owner()).toBe(B);
+      expect(items()).toEqual([`item-${B}-org-1`]);
+
+      expect(await storeFetchedCount(await m.counts.cacheWriteScope(), 'cc-b')).toBe(false);
+      expect(cachedCounts()).toEqual([]);
+
+      await workspaceLoads('org-1'); // B's own load: saves org-1 as B's, then shows it
+      expect(savedWorkspaceIn(device.storage)).toEqual({ orgId: 'org-1', ownerId: B });
+      await backgroundPullsSettle();
+
+      expect(await storeFetchedCount(await m.counts.cacheWriteScope(), 'cc-b')).toBe(true);
+      expect(cachedCounts()).toEqual(['cc-b']);
+      expect(await m.counts.updateLocalLine('cc-b-l1', 5)).not.toBeNull();
+      expect(
+        raw
+          .prepare(
+            "select organization_id, user_id from pending_actions where kind = 'record_count'",
+          )
+          .all(),
+      ).toEqual([{ organization_id: 'org-1', user_id: B }]);
+    });
   },
 );
 
@@ -1971,7 +2045,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
     expect(queuedEdits()).toEqual([
       { user_id: A, status: 'pending', line_id: 'cc-a-l1', edit: 'clear' },
     ]);
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     await emptyTheBox('cc-b-l1'); // before B's first pull
     await m.sync.syncNow(); // B's first pull: the adopt, in full
@@ -1998,7 +2072,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
   it("B's answer is a full page of 50 counts: the count another account's clear is on still goes, and the next account's own clear keeps its count", async () => {
     await aLeavesItsCacheWithNoOwner('clear');
     bSees({ openCycleCounts: Array.from({ length: 50 }, (_, i) => openCount(`cc-open-${i}`)) });
-    signIn(B);
+    await signIn(B);
     await countOnThePhone('cc-b');
     await emptyTheBox('cc-b-l1'); // before B's first pull
     await m.sync.syncNow(); // B's first pull: the adopt, in full
@@ -2026,7 +2100,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
         openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
       ],
     });
-    signIn(B);
+    await signIn(B);
     await m.sync.syncNow();
 
     expect(line('cc-a-l1')).toEqual({ counted: 2, local_dirty: 0 });
@@ -2042,7 +2116,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
   // Mutation caught: the same release, at the count screen's own write.
   it("the count screen stores the other account's count before any pull of the next account's lands: it shows the server's count, not that account's clear", async () => {
     await aLeavesItsCacheWithNoOwner('clear');
-    signIn(B);
+    await signIn(B);
     device.snapshotFails = true;
     await m.sync.syncNow(); // B's first pull: the cache is adopted and marked, nothing lands
     expect(owner()).toBe(B);
@@ -2067,7 +2141,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
   // and Sync first and the drain would still count it and send it.
   it("a count both accounts emptied a box of, opened on the count screen before any pull of the next account's lands: the other account's clear gives way to the server's count, and the next account's own clear stays", async () => {
     await aLeavesItsCacheWithNoOwner('clear');
-    signIn(B);
+    await signIn(B);
     // A second line of A's count, with the server's count of 3 on it, whose
     // box B empties.
     raw.exec(`insert into cycle_count_lines
@@ -2110,7 +2184,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
     async (bEdit) => {
       await aLeavesItsCacheWithNoOwner('clear');
       bSees({ openCycleCounts: [] });
-      signIn(B);
+      await signIn(B);
       // A second line of A's count, with the server's count of 3 on it.
       raw.exec(`insert into cycle_count_lines
           (id, count_id, item_id, item_name, item_sku, expected, counted, local_dirty)
@@ -2149,7 +2223,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
           openCount('cc-a', [{ id: 'cc-a-l1', itemId: 'item-x', expected: 4, counted: 2 }]),
         ],
       });
-      signIn(B);
+      await signIn(B);
       await m.sync.syncNow(); // B's first pull
       // B's own clear on a count of its own, so B's drain has a row to send
       // (with none of its own it sends nothing at all).
@@ -2167,7 +2241,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
       // B's session ends without a wipe, and A signs in here again: A's pull
       // resets B's cache, and A's drain sends A's edit, as A.
       sessionEndsWithoutWipe();
-      signIn(A);
+      await signIn(A);
       await m.sync.syncNow();
       await countsDrain();
 
@@ -2197,7 +2271,7 @@ describe('a queued clear follows the rules of a queued count', SLOW, () => {
       ).toBe(true);
       const { held, aSync } = await aPullIsOut();
       sessionEndsWithoutWipe();
-      signIn(B);
+      await signIn(B);
       const bFirst = m.sync.syncNow(); // waits for A's pull
 
       // B's count screen still shows A's cached count: B types a count of 6,
