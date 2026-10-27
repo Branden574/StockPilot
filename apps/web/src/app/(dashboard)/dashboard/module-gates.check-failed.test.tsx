@@ -92,6 +92,7 @@ import InsightsPage from './insights/page';
 import MaintenanceRequestPage from './maintenance/[id]/page';
 import NewMaintenanceRequestPage from './maintenance/new/page';
 import MaintenancePage from './maintenance/page';
+import ManageOrderItemsPage from './orders/manage-items/page';
 import NewOrderPage from './orders/new/page';
 import OrdersPage from './orders/page';
 import PlanningPage from './planning/page';
@@ -146,6 +147,12 @@ const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
     'Maintenance requests',
     MaintenancePage,
     'maintenance_requests',
+    () => ({ searchParams: Promise.resolve({}) }),
+  ],
+  [
+    'Manage order items',
+    ManageOrderItemsPage,
+    'orders',
     () => ({ searchParams: Promise.resolve({}) }),
   ],
   ['New order', NewOrderPage, 'orders', () => ({ searchParams: Promise.resolve({}) })],

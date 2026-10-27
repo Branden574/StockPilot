@@ -62,6 +62,14 @@ export const PERMISSIONS = [
   'orders:request',
   'orders:approve',
   'orders:assign_delivery',
+  // Ordering visibility (owner brief 2026-10-26, migration 0413): choose which
+  // items and books appear in Place an Order and which are hidden from NEW
+  // ordering. Managers, admins and owners hold it by default; staff and
+  // viewers do not. PLATFORM-MANAGED (see PLATFORM_MANAGED_PERMISSIONS below):
+  // only StockPilot support may allow it to, deny it to or reset it for one
+  // member, and an explicit deny holds for the owner too. Holding it grants
+  // nothing else (no stock edits, approvals or access changes).
+  'orders:manage_catalog_visibility',
   // Public request links (public_requests module): create/disable the shared
   // /r/<token> links and curate exactly which items each link's catalog
   // exposes (per-link allowlist, public pool, qty caps). Admin-only by
@@ -166,6 +174,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:request',
     'orders:approve',
     'orders:assign_delivery',
+    // Ordering visibility: managers choose what Place an Order offers (0413
+    // seeds the matching role_default_permissions row).
+    'orders:manage_catalog_visibility',
     // Managers run the B2B relationships whose orders they approve.
     'customers:manage',
     'schedule:read',
@@ -243,7 +254,12 @@ export function can(
   // carry the effective set, so overrides apply. Synthetic system contexts
   // (cron jobs, OAuth callbacks, tests) omit it and fall back to the static
   // role defaults — exactly their prior behavior, no override awareness needed.
-  return ctx.permissions ? ctx.permissions.has(permission) : hasPermission(ctx.role, permission);
+  if (ctx.permissions) return ctx.permissions.has(permission);
+  // A platform-managed key is decided per member (an explicit deny takes it
+  // from a manager or the owner), so the role default alone never proves it:
+  // without an effective set, fail closed.
+  if (isPlatformManagedPermission(permission)) return false;
+  return hasPermission(ctx.role, permission);
 }
 
 /**
@@ -283,6 +299,46 @@ export function assertPermission(role: Role, permission: Permission): void {
 
 const PERMISSION_SET = new Set<string>(PERMISSIONS);
 
+/**
+ * PLATFORM-MANAGED permissions (ordering visibility, migration 0413). Only
+ * StockPilot support, through the platform console, may give one member an
+ * explicit allow or deny, or reset them to their role default; ordinary
+ * owners and admins use their default but cannot delegate it. For these keys,
+ * for EVERY role including the owner, resolution is: explicit user deny, then
+ * explicit user allow, then the role default. Role-level overrides of them are
+ * ignored here and refused by the database.
+ *
+ * The SQL twin is public._platform_managed_permissions(); the parity test in
+ * permissions.test.ts reads it from the migrations. The database refuses every
+ * write of these keys to user_permission_overrides, role_permission_overrides
+ * and role_default_permissions except from platform_set_permission_exception
+ * (tg_platform_managed_permission_guard, 42501 permission_platform_managed).
+ */
+export const PLATFORM_MANAGED_PERMISSIONS = ['orders:manage_catalog_visibility'] as const;
+export type PlatformManagedPermission = (typeof PLATFORM_MANAGED_PERMISSIONS)[number];
+
+export function isPlatformManagedPermission(
+  permission: string,
+): permission is PlatformManagedPermission {
+  return (PLATFORM_MANAGED_PERMISSIONS as readonly string[]).includes(permission);
+}
+
+/** The words every org-level permission editor answers for a platform-managed
+ *  key (the database raises the same sentence). */
+export const PLATFORM_MANAGED_PERMISSION_COPY = 'This permission is managed by StockPilot support.';
+
+/**
+ * A FALLBACK set (an override read that failed, a static role default) with
+ * every platform-managed key removed: without the member's own rows nobody
+ * can tell whether StockPilot denied it, so such a set never grants it.
+ * Returns a new set.
+ */
+export function withoutPlatformManaged(permissions: ReadonlySet<Permission>): Set<Permission> {
+  const out = new Set<Permission>(permissions);
+  for (const key of PLATFORM_MANAGED_PERMISSIONS) out.delete(key);
+  return out;
+}
+
 export interface PermissionOverride {
   permission: Permission;
   /** true = grant a permission the role lacks; false = revoke one it has. */
@@ -292,8 +348,14 @@ export interface PermissionOverride {
 /**
  * Resolves a role's effective permission set after applying org-level role
  * overrides and per-user overrides. Pure — the DB equivalent is
- * public.has_permission(). Unknown permission strings (e.g. a deleted perm
- * still referenced by a stale override row) are ignored defensively.
+ * public.has_permission() (and, for the platform-managed keys,
+ * public.can_manage_order_catalog()). Unknown permission strings (e.g. a
+ * deleted perm still referenced by a stale override row) are ignored
+ * defensively.
+ *
+ * Platform-managed keys (PLATFORM_MANAGED_PERMISSIONS): role overrides are
+ * ignored for every role, and a user override applies to every role,
+ * the owner included.
  */
 export function effectivePermissions(
   role: Role,
@@ -302,18 +364,30 @@ export function effectivePermissions(
 ): Set<Permission> {
   // Owner is never editable — always the full set. This is the lockout escape
   // hatch: even if every other role is stripped bare, the owner can fix it.
-  if (role === 'owner') return new Set<Permission>(ALL_PERMISSIONS);
+  // The one exception is a platform-managed key StockPilot support explicitly
+  // denied to this member (the owner's brief: "an explicit deny overrides the
+  // normal manager/admin/owner default"). That key edits no permission, so
+  // the escape hatch is intact.
+  if (role === 'owner') {
+    const set = new Set<Permission>(ALL_PERMISSIONS);
+    for (const o of userOverrides) {
+      if (!o.granted && isPlatformManagedPermission(o.permission)) set.delete(o.permission);
+    }
+    return set;
+  }
 
   const set = new Set<Permission>(ROLE_PERMISSIONS[role]);
-  const apply = (overrides: readonly PermissionOverride[]): void => {
+  const apply = (overrides: readonly PermissionOverride[], level: 'role' | 'user'): void => {
     for (const o of overrides) {
       if (!PERMISSION_SET.has(o.permission)) continue; // defensive: skip unknown
+      // Only the platform sets a platform-managed key, and only per member.
+      if (level === 'role' && isPlatformManagedPermission(o.permission)) continue;
       if (o.granted) set.add(o.permission);
       else set.delete(o.permission);
     }
   };
-  apply(roleOverrides); // role-level first…
-  apply(userOverrides); // …then user-level wins
+  apply(roleOverrides, 'role'); // role-level first…
+  apply(userOverrides, 'user'); // …then user-level wins
   return set;
 }
 
@@ -417,6 +491,11 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // the warehouse bounds a grant on every path. A grant is fully effective
   // end-to-end, and a revoke is effective in the database.
   'returns:manage',
+  // Ordering visibility (mig 0413): the one write path,
+  // set_order_catalog_visibility, gates on can_manage_order_catalog, which is
+  // has_permission plus the explicit deny, and the item scope is read access.
+  // Platform-managed: only StockPilot support grants it, per member.
+  'orders:manage_catalog_visibility',
 ]);
 
 /**
@@ -623,6 +702,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Order requests',
     label: 'Assign deliveries',
     description: 'Assign a staged delivery to a driver. Manager+ only.',
+  },
+  'orders:manage_catalog_visibility': {
+    group: 'Order requests',
+    label: 'Manage order items',
+    description:
+      "Choose which items and books appear in Place an Order. Does not allow editing stock, approving orders or changing anyone's access.",
   },
   'public_links:manage': {
     group: 'Order requests',

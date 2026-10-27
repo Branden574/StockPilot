@@ -61,6 +61,9 @@ function catalogAdmin(
       error: null,
     },
     'inventory_items.select': (call) => {
+      // The ordering-visibility check after the cached read (0413): nothing
+      // was hidden recently. Not one of the item batches.
+      if (call.methods.includes('gte')) return { data: [], error: null };
       itemCalls += 1;
       const list = inList(call, 'id');
       lists.items.push(list);

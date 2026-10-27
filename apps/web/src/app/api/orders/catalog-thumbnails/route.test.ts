@@ -78,6 +78,8 @@ type Fixture = {
   is_rental: boolean;
   is_bundle: boolean | null;
   custom_fields: Record<string, unknown>;
+  /** Ordering visibility (0413); every fixture starts shown. */
+  order_catalog_visible?: boolean;
 };
 
 /**
@@ -106,6 +108,7 @@ function warehouse(prefix: string) {
       is_rental: opts.rental ?? false,
       is_bundle: opts.bundle ?? (i % 2 === 0 ? null : false),
       custom_fields: opts.cover ? { thumbnail_url: `https://covers.example/${i}.jpg` } : {},
+      order_catalog_visible: true,
     };
     items.push(row);
     if (opts.photo) photos.add(row.id);
@@ -254,7 +257,7 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     // The exact PostgREST request, method for method: filters, order of the
     // filters and the trailing rental exclusion are unchanged.
     expect(firstChain(stub)).toEqual({
-      methods: ['select', 'eq', 'eq', 'eq', 'is', 'or', 'limit', 'eq'],
+      methods: ['select', 'eq', 'eq', 'eq', 'is', 'or', 'limit', 'eq', 'eq'],
       args: [
         ['id'],
         ['organization_id', ORG],
@@ -264,6 +267,9 @@ describe('GET /api/orders/catalog-thumbnails', () => {
         ['is_bundle.is.null,is_bundle.eq.false'],
         [500],
         ['is_rental', false],
+        // Ordering visibility (0413): the picker's set leaves out an item
+        // hidden from new ordering.
+        ['order_catalog_visible', true],
       ],
     });
     // Orderable, non-rental, non-bundle items with a photo or a cover.
@@ -275,6 +281,18 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     }
     expect(body).toEqual({ urls: expected });
     expect(Object.keys(body.urls!)).toHaveLength(340);
+  });
+
+  it('default: an item hidden from ordering gets no photo URL', async () => {
+    const { items, photos } = setup('e');
+    const hidden = items.filter((it) => photos.has(it.id) && !it.is_rental && it.is_bundle !== true).slice(0, 3);
+    for (const it of hidden) it.order_catalog_visible = false;
+
+    const { status, body } = await get(`warehouseId=${WH}`);
+
+    expect(status).toBe(200);
+    for (const it of hidden) expect(body.urls![it.id]).toBeUndefined();
+    expect(Object.keys(body.urls!)).toHaveLength(337);
   });
 
   it('rentalsOnly=1: reads exactly the New rental page rows and signs only their photos', async () => {

@@ -399,6 +399,8 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     ['order/new/browse', "{ presentation: 'card' }"],
     ['order/new/checkout', "{ presentation: 'card' }"],
     ['order/new/placed', "{ presentation: 'card', gestureEnabled: false }"],
+    // Manage order items (ordering visibility, 0413; design 8.6).
+    ['order/manage-items', "{ presentation: 'card' }"],
     ['scan-po/index', "{ presentation: 'card' }"],
     ['cycle-count/scan/[id]', "{ presentation: 'fullScreenModal' }"],
     ['bundles/index', "{ presentation: 'card' }"],
@@ -426,7 +428,7 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
 
   it('registers no other screen', () => {
     const { els } = elements(ROOT_LAYOUT, (el, s) => tagOf(el, s) === 'Stack.Screen');
-    expect(els).toHaveLength(24);
+    expect(els).toHaveLength(25);
   });
 });
 

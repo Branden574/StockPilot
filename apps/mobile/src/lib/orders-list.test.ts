@@ -16,6 +16,7 @@ import {
   orderStatusPill,
   ordersListEmpty,
   ordersListReloadNote,
+  showManageOrderItems,
   showPlaceOrder,
 } from './orders-list';
 
@@ -75,6 +76,23 @@ describe('the Orders list (phone ordering PO-4; audit D4, D6)', () => {
     // Not loaded: the role's defaults (every role requests by default).
     expect(showPlaceOrder({ role: 'viewer', permissions: undefined, ordersModuleEnabled: true })).toBe(true);
     expect(showPlaceOrder({ role: null, permissions: undefined, ordersModuleEnabled: true })).toBe(true);
+  });
+
+  // Ordering visibility (0413, design 8.1): the Orders list is the entry every
+  // member with the Orders module reaches, so a member StockPilot allowed who
+  // cannot place orders still finds Manage order items. STRICT: hidden while
+  // the effective set is unknown (never the "show while unknown" rule of
+  // cta-gating.ts), and never from the role alone, because a denied manager,
+  // admin or owner must not see it. Not gated by orders:request.
+  it('Manage order items: the Orders module on and the effective set holds the key; hidden while unknown', () => {
+    const key = new Set<Permission>(['orders:manage_catalog_visibility']);
+    const requestOnly = new Set<Permission>(['orders:request']);
+    expect(showManageOrderItems({ permissions: key, ordersModuleEnabled: true })).toBe(true);
+    expect(showManageOrderItems({ permissions: key, ordersModuleEnabled: false })).toBe(false);
+    expect(showManageOrderItems({ permissions: requestOnly, ordersModuleEnabled: true })).toBe(false);
+    expect(showManageOrderItems({ permissions: new Set<Permission>(), ordersModuleEnabled: true })).toBe(false);
+    // Not loaded: hidden (the role would say yes for a manager who is denied).
+    expect(showManageOrderItems({ permissions: undefined, ordersModuleEnabled: true })).toBe(false);
   });
 });
 

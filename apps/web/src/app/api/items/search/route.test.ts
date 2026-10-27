@@ -173,6 +173,20 @@ describe('GET /api/items/search', () => {
     );
   });
 
+  it('?orderable=1 forwards orderCatalogVisibleOnly so an item hidden from ordering is not offered (0413)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('browse=1&type=product&bundles=exclude&orderable=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeBundles: true, orderCatalogVisibleOnly: true }),
+    );
+  });
+
+  it('without ?orderable=1 the listing never narrows to shown records (Items, Books, POs keep hidden ones)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('browse=1&type=product&orderable=yes'));
+    expect(inventoryListMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('orderCatalogVisibleOnly');
+  });
+
   it('attaches signed image URLs', async () => {
     inventoryListMock.mockResolvedValueOnce({
       items: [
@@ -617,6 +631,13 @@ describe('GET /api/items/search — ?rank=relevance (best match first)', () => {
     });
     expect(inventoryListMock).not.toHaveBeenCalled();
     expect(primaryImagesMock).not.toHaveBeenCalled();
+  });
+
+  it('?orderable=1 narrows the ranked search to records shown in Orders too (0413)', async () => {
+    await GET(makeReq(`${COMPONENT_QS}&orderable=1`));
+    expect(searchForPickerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ orderCatalogVisibleOnly: true }),
+    );
   });
 
   it('answers with the ranked rows and the full match count, unchanged', async () => {
