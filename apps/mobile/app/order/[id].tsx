@@ -260,6 +260,7 @@ import {
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
+import { linkToOpen, signerFor, STORED_FILE_LINK_SECONDS } from '@/lib/stored-file-link';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
 import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
@@ -436,6 +437,9 @@ interface Attachment {
   contentType: string | null;
   fileName: string | null;
   url: string | null;
+  /** When `url` was signed (ms), so a tap can tell an expired link
+   *  (lib/stored-file-link.ts). Null with no link. */
+  signedAt: number | null;
   createdAt: string;
 }
 
@@ -1345,21 +1349,30 @@ export default function OrderDetail() {
     const rows = (data ?? []) as Record<string, unknown>[];
     const paths = rows.map((r) => r.storage_path as string);
     const signed = new Map<string, string>();
+    // Timed from before the request, so a link is never thought to last
+    // longer than it does.
+    const signedAt = Date.now();
     if (paths.length > 0) {
-      const { data: urls } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 60 * 60);
+      const { data: urls } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUrls(paths, STORED_FILE_LINK_SECONDS);
       for (const u of (urls ?? []) as { path?: string | null; signedUrl: string }[]) {
         if (u.path) signed.set(u.path, u.signedUrl);
       }
     }
-    const next: Attachment[] = rows.map((r) => ({
-      id: r.id as string,
-      storagePath: r.storage_path as string,
-      kind: (r.kind as string | null) ?? 'other',
-      contentType: (r.content_type as string | null) ?? null,
-      fileName: (r.file_name as string | null) ?? null,
-      url: signed.get(r.storage_path as string) ?? null,
-      createdAt: r.created_at as string,
-    }));
+    const next: Attachment[] = rows.map((r) => {
+      const url = signed.get(r.storage_path as string) ?? null;
+      return {
+        id: r.id as string,
+        storagePath: r.storage_path as string,
+        kind: (r.kind as string | null) ?? 'other',
+        contentType: (r.content_type as string | null) ?? null,
+        fileName: (r.file_name as string | null) ?? null,
+        url,
+        signedAt: url ? signedAt : null,
+        createdAt: r.created_at as string,
+      };
+    });
     setAttachments(next);
     return { attachments: next, error: error ? error.message : null };
   }, [orgId, id]);
@@ -2502,22 +2515,39 @@ export default function OrderDetail() {
     await loadAttachments();
   }
 
-  function openAttachment(a: Attachment) {
-    if (!a.url) {
-      // Signed-URL minting failed (offline, or a storage-RLS denial) — say so
-      // instead of a dead tap on the tile.
+  async function openAttachment(a: Attachment) {
+    const isImage = (a.contentType ?? '').startsWith('image/');
+    // The link the list signed lasts an hour, and this screen can stay open
+    // longer: one that is about to expire, or missing, is signed again now
+    // (lib/stored-file-link.ts) and kept for the next tap and the tile.
+    const link = await linkToOpen(
+      { url: a.url, signedAt: a.signedAt },
+      signerFor(supabase, BUCKET, a.storagePath),
+    );
+    if (link?.resigned) {
+      setAttachments((prev) =>
+        prev.map((x) => (x.id === a.id ? { ...x, url: link.url, signedAt: link.signedAt } : x)),
+      );
+    }
+    // Offline, a photo can still open from the image cache, which keys it by
+    // its storage path rather than the link, so its old link is still worth
+    // trying. A file needs a live link.
+    const url = link?.url ?? (isImage ? a.url : null);
+    if (!url) {
+      // Signing failed (offline, or a storage-RLS denial): say so instead of
+      // a dead tap on the tile.
       Alert.alert(
         'Couldn’t open file',
-        'No download link is available right now. Pull to refresh and try again.',
+        'No download link is available right now. Check your connection and try again.',
       );
       return;
     }
     // Images open in an in-app full-screen viewer; PDFs/other open in the
     // device's browser/viewer via the signed URL.
-    if ((a.contentType ?? '').startsWith('image/')) {
-      setViewerUrl(a.url);
+    if (isImage) {
+      setViewerUrl(url);
     } else {
-      Linking.openURL(a.url).catch(() =>
+      Linking.openURL(url).catch(() =>
         Alert.alert('Could not open', 'Unable to open this file on your device.'),
       );
     }
@@ -3672,7 +3702,7 @@ export default function OrderDetail() {
                           modes (DESIGN-SPEC 6.14), a file on the recessed
                           fill. */}
                       <Pressable
-                        onPress={() => openAttachment(a)}
+                        onPress={() => void openAttachment(a)}
                         accessibilityRole="button"
                         accessibilityLabel={KIND_LABELS[a.kind] ?? 'Other'}
                       >

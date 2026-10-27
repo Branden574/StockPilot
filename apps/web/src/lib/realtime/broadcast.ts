@@ -1,13 +1,34 @@
 import 'server-only';
 
 import { env } from '@/lib/env';
+import { keepAlive } from '@/server/services/lib/defer';
 
 /**
  * Posts a Realtime Broadcast message to a public channel (best-effort; never
  * throws). Plain pub/sub — no RLS/replica-identity/token dependency. Callers
  * carry only non-sensitive routing data in `payload`.
+ *
+ * KEPT ALIVE PAST THE RESPONSE. The order screens' ping is sent as `void
+ * broadcastOrderChanged(...)` (14 call sites on 2026-10-24) as the action
+ * returns. The POST starts here and is handed to after() (lib/defer.ts
+ * keepAlive), so the platform keeps the invocation running until it answers
+ * (at most its 4 s timeout). Without it, Vercel could suspend the instance
+ * with the POST in flight, and the other open screens never heard of the
+ * change. The returned promise is the same POST, so the callers that await a
+ * broadcast (sessions, permissions) see no change.
  */
-export async function broadcastToChannel(
+export function broadcastToChannel(
+  topic: string,
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const post = postBroadcast(topic, event, payload);
+  keepAlive(post);
+  return post;
+}
+
+/** The body of `broadcastToChannel()`. Never rejects. */
+async function postBroadcast(
   topic: string,
   event: string,
   payload: Record<string, unknown>,

@@ -27,6 +27,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import { keepAlive } from './lib/defer';
 import { maintenanceShareLinksEnabled, MaintenanceShareLinksService } from './maintenance-share-links';
 import { notifyMaintenanceEvent } from './maintenance-notify';
 import { isDefiniteRefusal } from './lib/postgrest-error';
@@ -231,14 +232,18 @@ export class MaintenanceRequestsService {
    *  belt-and-suspenders binding constraint 5 asks for — a notify failure
    *  must never surface as an unhandled rejection or delay/fail the parent
    *  write, which has already committed and returned by the time this
-   *  settles. */
+   *  settles. Kept alive past the response (lib/defer.ts keepAlive): a bare
+   *  `void` held nothing once the action returned, so a suspended instance
+   *  never sent the notification. */
   private emitNotify(args: Parameters<typeof notifyMaintenanceEvent>[0]): void {
-    void notifyMaintenanceEvent(args).catch((err) => {
-      void reportError(err instanceof Error ? err : new Error(String(err)), {
-        tag: 'maintenance_notify.emit_failed',
-        extra: { event: args.event, requestId: args.requestId },
-      });
-    });
+    keepAlive(
+      notifyMaintenanceEvent(args).catch((err) => {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'maintenance_notify.emit_failed',
+          extra: { event: args.event, requestId: args.requestId },
+        });
+      }),
+    );
   }
 
   /** Task 17 / binding constraint 2 (extended fix wave 2 / C1 to
@@ -906,20 +911,25 @@ export class MaintenanceRequestsService {
     // with no path to resend. Wrapping construction in the SAME try/catch as
     // the send makes that throw just another best-effort failure, exactly
     // like a send_failed from inside maybeSendMaintenanceResolvedEmail
-    // itself.
-    void (async () => {
-      try {
-        await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, {
-          appUrl: APP_URL,
-          shareToken,
-        });
-      } catch (err) {
-        void reportError(err instanceof Error ? err : new Error(String(err)), {
-          tag: 'maintenance_resolved.email',
-          extra: { requestId: id },
-        });
-      }
-    })();
+    // itself. Kept alive past the response (lib/defer.ts keepAlive): a bare
+    // `void (async () => ...)()` held nothing once resolve() returned, so a
+    // suspended instance never sent the email (the stamp makes a resend safe,
+    // but nothing resends it).
+    keepAlive(
+      (async () => {
+        try {
+          await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, {
+            appUrl: APP_URL,
+            shareToken,
+          });
+        } catch (err) {
+          void reportError(err instanceof Error ? err : new Error(String(err)), {
+            tag: 'maintenance_resolved.email',
+            extra: { requestId: id },
+          });
+        }
+      })(),
+    );
   }
 
   /** manage-only. "Local owner" is a StockPilot coordinator, never a

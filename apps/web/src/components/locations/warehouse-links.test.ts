@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { newOrderFromWarehouseHref, warehouseMailtoUrl, warehouseTelUrl } from './warehouse-links';
+import { newOrderFromWarehouseHref, warehouseTelUrl } from './warehouse-links';
 
 /**
  * The warehouse page used to build `tel:${contact_phone}` from the stored
@@ -102,34 +102,6 @@ describe('warehouseTelUrl', () => {
     }
     expect(warehouseTelUrl(null)).toBeNull();
     expect(warehouseTelUrl(undefined)).toBeNull();
-  });
-});
-
-describe('warehouseMailtoUrl', () => {
-  it('one plain address becomes a mailto: link', () => {
-    expect(warehouseMailtoUrl('dock@example.com')).toBe('mailto:dock@example.com');
-    expect(warehouseMailtoUrl(' jo.lee+north@lab.example.org ')).toBe(
-      'mailto:jo.lee%2Bnorth@lab.example.org',
-    );
-  });
-
-  it('an address that would do more than address one person is not a link', () => {
-    for (const email of [
-      'a@b.com?bcc=x@y.z',
-      'a@b.com,c@d.com',
-      'a@b.com;c@d.com',
-      'a b@c.com',
-      'a@b',
-      'a@@b.com',
-      '"a"@b.com',
-      'a@b.com#x',
-      'jöe@b.com',
-      '',
-      'x'.repeat(65) + '@b.com',
-    ]) {
-      expect(warehouseMailtoUrl(email), JSON.stringify(email)).toBeNull();
-    }
-    expect(warehouseMailtoUrl(null)).toBeNull();
   });
 });
 

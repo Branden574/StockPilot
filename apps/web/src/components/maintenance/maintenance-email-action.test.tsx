@@ -20,7 +20,7 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 // rejection tests below can assert the breadcrumb actually fires, not just
 // that the rejection was swallowed.
 const reportErrorMock = vi.fn(async (..._args: unknown[]) => undefined);
-vi.mock('@/lib/error-reporter', () => ({
+vi.mock('@/lib/error-reporter-core', () => ({
   reportError: (...args: unknown[]) => reportErrorMock(...args),
 }));
 

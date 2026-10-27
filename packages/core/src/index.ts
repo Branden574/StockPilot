@@ -114,6 +114,7 @@ export * from './auth/account-status';
 export * from './email/outlook-compose';
 export * from './email/cc-notice';
 export * from './email/org-email-routing';
+export * from './email/mailto-link';
 export * from './maintenance/constants';
 export * from './maintenance/recipients';
 export * from './maintenance/mr-number';

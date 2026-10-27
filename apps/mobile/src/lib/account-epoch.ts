@@ -5,6 +5,10 @@
  * queue) belongs to an account that is gone, so it must not save or show a
  * workspace. use-workspace.ts ends it on auth changes; the eviction also ends
  * it directly before it clears the account's stored keys.
+ *
+ * A snapshot pull started under an earlier value writes nothing of its
+ * answer, and the next account's first sync never joins it (sync.ts): a
+ * session that ends without a wipe moves no cache generation.
  */
 let epoch = 0;
 

@@ -12,7 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const reported = vi.hoisted(() => ({ calls: [] as unknown[][] }));
-vi.mock('@/lib/error-reporter', () => ({
+// The boundary reports through the isomorphic core: it is a client
+// component, and @/lib/error-reporter is server-only.
+vi.mock('@/lib/error-reporter-core', () => ({
   reportError: vi.fn(async (...args: unknown[]) => {
     reported.calls.push(args);
   }),

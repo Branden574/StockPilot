@@ -660,7 +660,9 @@ describe('the attachments panel', () => {
       "{ text: 'Take Photo', onPress: () => void takePhoto() },",
       "{ text: 'Choose from Library', onPress: () => void pickFromLibrary() },",
       "{ text: 'Choose File (PDF)', onPress: () => void pickDocument() },",
-      "'Couldn’t open file', 'No download link is available right now. Pull to refresh and try again.',",
+      // The card's screen has no pull to refresh, so the refusal no longer
+      // offers one (lib/stored-file-link.ts signs the file again at the tap).
+      "'Couldn’t open file', 'No download link is available right now. Check your connection and try again.',",
       "Alert.alert('File too large', 'Files must be 15 MB or smaller.');",
     ]) {
       expect(code).toContain(words);

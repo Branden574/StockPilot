@@ -50,6 +50,15 @@ function remember(key: string, url: string) {
   cache.set(key, { url, expiresAt: Date.now() + TTL_SECONDS * 1000 - SAFETY_MS });
 }
 
+/**
+ * Drops every link this session signed. Called when the account leaves the
+ * device (photo-cache-wipe.ts): the links were signed under its session, and
+ * the next account signs its own.
+ */
+export function forgetSignedImageUrls(): void {
+  cache.clear();
+}
+
 /** Signs a single storage path, reusing a cached URL when still valid. */
 export async function signItemImage(
   path: string,

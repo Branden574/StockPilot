@@ -2,6 +2,8 @@ import { Truck } from 'lucide-react-native';
 import * as React from 'react';
 import { Linking, Pressable, StyleSheet, View } from 'react-native';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
@@ -152,36 +154,10 @@ export default function SuppliersScreen() {
  * card never names, and a phone with letters or symbols dialled something
  * other than the number shown.
  *
- * The mailto: link for a supplier's email, or null when the stored text is not
- * one plain address (the card then shows the text, not a link). Plain is an
- * allow-list, so anything not named here fails closed: the text without its
- * outer spaces is one '@' between a name and a domain, both ASCII only. The
- * name is dot-separated runs of letters, digits and ! $ ' * + = ^ _ ` { | } ~ -
- * (never '?', '&', ',', ';', '#', '%', '/', quotes, brackets, colons or
- * spaces, which make a mailto: link do more than address one person). The
- * domain is two or more dot-separated labels of letters, digits and inner
- * hyphens. The name is at most 64 characters, each domain label at most 63
- * and the whole address at most 254 (RFC 5321). So no control, invisible,
- * look-alike or other non-ASCII character, and no over-long address, can
- * reach the link. The name and the domain go out percent-encoded
- * (encodeURIComponent) on either side of a literal '@': RFC 6068 keeps the
- * separating '@' literal (addr-spec = local-part "@" domain), and an encoded
- * %40 would be a character inside the name, leaving no domain.
- */
-function supplierMailtoUrl(email: string | null): string | null {
-  const address = (email ?? '').trim();
-  if (address.length > 254) return null;
-  const parts = address.split('@');
-  if (parts.length !== 2) return null;
-  const [name = '', domain = ''] = parts;
-  const atom = "[A-Za-z0-9!$'*+=^_`{|}~-]+";
-  const label = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
-  if (!new RegExp(`^${atom}(?:\\.${atom})*$`).test(name) || name.length > 64) return null;
-  if (!new RegExp(`^${label}(?:\\.${label})+$`).test(domain)) return null;
-  return `mailto:${encodeURIComponent(name)}@${encodeURIComponent(domain)}`;
-}
-
-/**
+ * The email's link is plainAddressMailtoUrl (@stockpilot/core): one plain
+ * ASCII address or no link. That rule started here (P5.8) and now lives in
+ * core, so the Team and Users cards and the web's pages use the same copy.
+ *
  * The tel: link for a supplier's phone, or null when the stored text is not
  * one plain phone number (the card then shows the text, not a link). Plain is
  * an allow-list that fails closed. The text, with its outer spaces trimmed and
@@ -285,10 +261,10 @@ function SupplierCard({ supplier }: { supplier: SupplierRow }) {
             </Mono>
           ) : null}
           {/* Each opens Mail or the phone, and only with a link made from a
-              plain address or the number's digits (supplierMailtoUrl,
+              plain address or the number's digits (plainAddressMailtoUrl,
               supplierTelUrl); the words shown are the stored text. */}
           {supplier.email ? (
-            <ContactLine text={supplier.email} url={supplierMailtoUrl(supplier.email)} />
+            <ContactLine text={supplier.email} url={plainAddressMailtoUrl(supplier.email)} />
           ) : null}
           {supplier.phone ? (
             <ContactLine text={supplier.phone} url={supplierTelUrl(supplier.phone)} />

@@ -193,6 +193,8 @@ const LONG_ITEM_NAME =
 function wireFullAdmin(
   opts: {
     unsubscribed?: boolean;
+    /** The approver's stored email (user_profiles.email). */
+    approverEmail?: string;
     items?: { item_id?: string; quantity_picked: number | null; quantity_requested: number | null; item: { name: string; sku: string } }[];
   } = {},
 ): SupabaseStub {
@@ -232,7 +234,7 @@ function wireFullAdmin(
       error: null,
     },
     'user_profiles.select.maybeSingle': {
-      data: { full_name: 'Morgan Diaz', email: 'morgan@example.org' },
+      data: { full_name: 'Morgan Diaz', email: opts.approverEmail ?? 'morgan@example.org' },
       error: null,
     },
   });
@@ -441,6 +443,30 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
     expect(args.html).toContain('Not approved');
     // Plaintext twin carries the reason verbatim.
     expect(args.text).toContain(reason);
+  });
+
+  // SECURITY (B6): Contact approver was `mailto:${approverEmail}` from the
+  // stored text, so an address such as "a@b.com?bcc=x@y.z" opened a message
+  // copied to someone the email never names. The link is made only from one
+  // plain address (core plainAddressMailtoUrl); anything else drops it.
+  it('denied: Contact approver links only one plain address', async () => {
+    wireFullAdmin();
+    const plain = await send('denied', { status: 'denied', approved_by: 'appr-1' });
+    expect(plain.html).toContain('href="mailto:morgan@example.org"');
+    expect(plain.html).toContain('Contact approver');
+
+    for (const approverEmail of [
+      'morgan@example.org?bcc=eve@evil.test',
+      'morgan@example.org,eve@evil.test',
+      'mor\u200Dgan@example.org',
+      'morgan@example.\uFF4Frg',
+    ]) {
+      vi.clearAllMocks();
+      wireFullAdmin({ approverEmail });
+      const args = await send('denied', { status: 'denied', approved_by: 'appr-1' });
+      expect(args.html, approverEmail).not.toContain('mailto:');
+      expect(args.html, approverEmail).not.toContain('Contact approver');
+    }
   });
 
   it('confirm: essential footer, no unsubscribe in the body, headers unchanged', async () => {
