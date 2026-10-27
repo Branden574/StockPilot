@@ -254,15 +254,11 @@ async function loadWorkspace(userId: string) {
   // account's or an older build's: savedWorkspaceFor). The outbox holds a row
   // with no workspace of its own until that is true (outbox-scope.ts
   // 'workspace-loading').
+  let savedNow = false;
   if (activeOrgId && (choice.persist || saved.ownerId !== userId)) {
     try {
       await saveWorkspace(AsyncStorage, activeOrgId, userId);
-      // Rows held for want of this account's own workspace can go now: a pass
-      // of each drain that STARTS after this save (sync.ts syncAfterRunning;
-      // forceSync waits for a drain already running). The 60 s ticks and every
-      // return to the foreground would send them too, up to a minute later.
-      void syncAfterRunning();
-      void cycleCountSync.forceSync();
+      savedNow = true;
     } catch (err) {
       // Still show the workspace (the server answers for the same default
       // when no header is saved); a failed save must not leave loading stuck.
@@ -283,6 +279,18 @@ async function loadWorkspace(userId: string) {
     } catch (err) {
       console.warn('[workspace] deleteOrgData on workspace repair failed', err);
     }
+  }
+  if (savedNow) {
+    // Rows held for want of this account's own workspace can go now: a pass
+    // of each drain that STARTS after this save (sync.ts syncAfterRunning;
+    // forceSync waits for a drain already running). The 60 s ticks and every
+    // return to the foreground would send them too, up to a minute later.
+    // Asked for once the repair's wipe above is done (the merge with #380):
+    // asked before it, the pass's pull ran beside the wipe, which discarded
+    // the snapshot it fetched, and its check of whose cache this is read the
+    // record before, during or after the wipe.
+    void syncAfterRunning();
+    void cycleCountSync.forceSync();
   }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;

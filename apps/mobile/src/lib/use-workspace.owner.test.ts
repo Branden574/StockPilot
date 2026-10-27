@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { savedWorkspaceIn, storedWorkspaceEntries } from './__fixtures__/saved-workspace';
+import { deleteOrgData } from './db';
 import { OutboxWorkspaceLoadingError, outboxSendDecision } from './outbox-scope';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
 import { setActiveOrg, useWorkspace } from './use-workspace';
@@ -300,6 +301,37 @@ describe("a load that saves this account's workspace sends the rows held for it"
     await settled();
     expect(drains.syncAfterRunning).not.toHaveBeenCalled();
     expect(drains.forceSync).not.toHaveBeenCalled();
+  });
+
+  // The merge with #380 (SEC-A). A load that also clears the cache (the
+  // repair: the saved workspace is one this account has since left) asks for
+  // the passes once its wipe is done. Asked before it, as at c2946c99f, the
+  // pass's pull ran beside the wipe: the wipe discarded the snapshot it had
+  // fetched, and its check of whose cache this is (cache-owner.ts) read the
+  // record before, during or after the wipe, so a repair inside the next
+  // account's sign-in no longer came before that account's first pull.
+  it('a load that also clears the cache asks for the passes only once its wipe is done', async () => {
+    put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
+    vi.mocked(deleteOrgData).mockClear();
+    let wipeDone!: () => void;
+    vi.mocked(deleteOrgData).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          wipeDone = resolve;
+        }),
+    );
+    useWorkspace();
+    await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+    expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' }); // saved first
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(drains.syncAfterRunning).not.toHaveBeenCalled();
+    expect(drains.forceSync).not.toHaveBeenCalled();
+
+    wipeDone();
+    await settled();
+    expect(shown()).toBe('org-a');
+    expect(drains.syncAfterRunning).toHaveBeenCalledTimes(1);
+    expect(drains.forceSync).toHaveBeenCalledTimes(1);
   });
 
   it('a save that fails asks for nothing: the rows stay held until a save works', async () => {
