@@ -11,7 +11,11 @@ import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-
 import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import type { ServiceContext } from '@/server/services/context';
 
-import { parseRequestContextBundle } from '@/lib/auth/request-context-bundle';
+import {
+  holdMembership,
+  parseRequestContextBundle,
+  type BundleMembership,
+} from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
 import { effectivePermissions, isAdminRole } from '@stockpilot/core';
@@ -192,6 +196,10 @@ type ApiBundleResolution =
       mfaPolicy: MfaPolicy;
       enabledModules: Set<ModuleId>;
       permissions: Set<Permission>;
+      /** The membership that answered, attached to the context it produces
+       *  (holdMembership): a catalog load reads the organization's
+       *  ordering-visibility hide mark from it with no round trip (0413). */
+      held: BundleMembership;
     };
 
 async function resolveApiContextFromBundle(
@@ -256,11 +264,11 @@ async function resolveApiContextFromBundle(
       ),
       // The SAME bundle the role came from, so a role and the overrides that
       // modify it can never be read from two different moments. Owner is never
-      // overridable, exactly as resolvePermissions() has it on the page path.
-      permissions:
-        held.role === 'owner'
-          ? effectivePermissions('owner')
-          : effectivePermissions(held.role, held.role_overrides, held.user_overrides),
+      // overridable except for a platform-managed key StockPilot denied them
+      // (core effectivePermissions applies only that), exactly as
+      // resolvePermissions() has it on the page path.
+      permissions: effectivePermissions(held.role, held.role_overrides, held.user_overrides),
+      held,
     };
   } catch {
     // A fixed string, never the error: it can quote request details.
@@ -477,23 +485,26 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     const fast = await resolveApiContextFromBundle(supabase, userRes.user.id, requestedOrgId);
     if (fast) {
       if (!fast.ok) return null;
-      return {
-        organizationId: fast.organizationId,
-        userId: userRes.user.id,
-        role: fast.role,
-        permissions: fast.permissions,
-        supabase,
-        ...(await mfaFromPolicy(
+      return holdMembership<ServiceContext>(
+        {
+          organizationId: fast.organizationId,
+          userId: userRes.user.id,
+          role: fast.role,
+          permissions: fast.permissions,
           supabase,
-          fast.mfaPolicy,
-          fast.role,
-          userHasVerifiedFactor(userRes.user),
-          // The bearer client has no stored session, so read AAL from the token
-          // itself (already verified above by adminAuth.auth.getUser(bearer)).
-          aalFromJwt(bearer),
-        )),
-        enabledModules: fast.enabledModules,
-      };
+          ...(await mfaFromPolicy(
+            supabase,
+            fast.mfaPolicy,
+            fast.role,
+            userHasVerifiedFactor(userRes.user),
+            // The bearer client has no stored session, so read AAL from the token
+            // itself (already verified above by adminAuth.auth.getUser(bearer)).
+            aalFromJwt(bearer),
+          )),
+          enabledModules: fast.enabledModules,
+        },
+        fast.held,
+      );
     }
 
     // Status and membership in parallel. The status read is NOT free on this
@@ -595,17 +606,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   const fast = await resolveApiContextFromBundle(supabase, user.id, requestedOrgId);
   if (fast) {
     if (!fast.ok) return null;
-    return {
-      organizationId: fast.organizationId,
-      userId: user.id,
-      role: fast.role,
-      permissions: fast.permissions,
-      supabase,
-      // No bearer AAL on this path: the cookie client reads its own assurance
-      // level, exactly as it did before.
-      ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
-      enabledModules: fast.enabledModules,
-    };
+    return holdMembership<ServiceContext>(
+      {
+        organizationId: fast.organizationId,
+        userId: user.id,
+        role: fast.role,
+        permissions: fast.permissions,
+        supabase,
+        // No bearer AAL on this path: the cookie client reads its own assurance
+        // level, exactly as it did before.
+        ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
+        enabledModules: fast.enabledModules,
+      },
+      fast.held,
+    );
   }
 
   // Same parallel shape as the bearer branch above — a disabled account is

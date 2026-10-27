@@ -14,6 +14,13 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
  * tokens: each guess is a new URL, so the CDN cache in front of the route
  * never absorbs it. Now 120 requests an hour per IP, checked before the token
  * is looked up, closed on a limiter outage, and the 429 is never cached.
+ *
+ * ORDERING VISIBILITY (0413, design 5.1). A link's covers are signed only for
+ * its eligible items (public_link_eligible_items, which leaves out an item
+ * hidden from ordering). The legacy organization token (no links row) used to
+ * sign the cover of every active book of the warehouse with no visibility
+ * rule at all, while its page renders an empty catalog; it now answers the
+ * empty map its page shows, so no cover URL leaks through it.
  */
 
 const { checkRateLimit, admin, signed } = vi.hoisted(() => ({
@@ -158,5 +165,66 @@ describe('GET /api/v1/public/catalog-thumbnails', () => {
     expect((await get(`warehouseId=${WH}`)).status).toBe(400);
     expect((await get(`token=${LINK_REF}`)).status).toBe(400);
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/public/catalog-thumbnails: ordering visibility (0413)', () => {
+  /** A token that is a links row (open, eligible items as given) or a legacy
+   *  organization token (no links row, but an organization that has it). */
+  function wire(viaLink: boolean, eligible: string[] = []) {
+    const stub = makeSupabaseStub({
+      'public_request_links.select.maybeSingle': viaLink
+        ? {
+            data: {
+              id: LINK,
+              organization_id: ORG,
+              active: true,
+              expires_at: null,
+              available_from: null,
+              available_until: null,
+            },
+            error: null,
+          }
+        : { data: null, error: null },
+      'organizations.select.maybeSingle': { data: { id: ORG }, error: null },
+      'organization_modules.select.maybeSingle': {
+        data: { module_id: 'public_requests' },
+        error: null,
+      },
+      'warehouses.select.maybeSingle': { data: { id: WH }, error: null },
+      'rpc:public_link_eligible_items': {
+        data: eligible.map((item_id) => ({ item_id, max_qty: null })),
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [{ id: 'book-shown' }, { id: 'book-hidden' }],
+        error: null,
+      },
+    });
+    admin.current = stub.client;
+    return stub;
+  }
+
+  it('the legacy organization token answers an empty map: no item read, nothing signed', async () => {
+    const stub = wire(false);
+    const res = await get(QUERY);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ urls: {} });
+    expect(res.headers.get('cache-control')).toBe(
+      'public, s-maxage=60, stale-while-revalidate=300',
+    );
+    expect(stub.fromCalls).not.toContain('inventory_items');
+    expect(signed.ids).toEqual([]);
+    // The bucket is still spent first: a guessed legacy token costs a request.
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a link signs only its eligible items' covers", async () => {
+    wire(true, ['book-shown']);
+    const res = await get(QUERY);
+    expect(await res.json()).toEqual({
+      urls: { 'book-shown': 'https://signed.example/book-shown' },
+    });
+    expect(signed.ids).toEqual([['book-shown']]);
   });
 });

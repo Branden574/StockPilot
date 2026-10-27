@@ -1,7 +1,8 @@
-import { Check, Minus, ShieldCheck } from 'lucide-react';
+import { Check, Lock, Minus, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 
 import {
+  ORDER_ITEMS_ROLES_LOCK_NOTE_COPY,
   PERMISSIONS,
   PERMISSION_META,
   PERMISSION_GROUP_ORDER,
@@ -10,6 +11,8 @@ import {
   ROLE_PERMISSIONS,
   hasPermission,
   isAdminRole,
+  isPlatformManagedPermission,
+  withoutPlatformManaged,
   type Permission,
   type Role,
 } from '@stockpilot/core';
@@ -54,10 +57,13 @@ export default async function RolesPage() {
   const canConfigure = isAdminRole(myRole);
 
   // The "Your role can:" panel reflects the caller's EFFECTIVE permissions
-  // (overrides applied), not just the static role defaults.
+  // (overrides applied), not just the static role defaults. The static
+  // fallback drops platform-managed keys (0413): without the member's own rows
+  // nobody can tell whether StockPilot denied it, the core rule for every
+  // fallback set.
   const myPermissions: Permission[] = ctx.permissions
     ? [...ctx.permissions]
-    : [...ROLE_PERMISSIONS[myRole]];
+    : [...withoutPlatformManaged(new Set(ROLE_PERMISSIONS[myRole]))];
   const myPermSet = new Set(myPermissions);
 
   const myGrouped = groupedPermissions()
@@ -257,6 +263,14 @@ function RoleGroupRows({ group, myRole }: { group: GroupedRow; myRole: Role }) {
           >
             <div className="text-foreground">{p.label}</div>
             <div className="text-muted-foreground mt-0.5 text-[11.5px]">{p.description}</div>
+            {isPlatformManagedPermission(p.id) ? (
+              // A role's box here is its DEFAULT; StockPilot support can
+              // allow or deny it for one member (0413).
+              <div className="text-muted-foreground mt-0.5 flex items-start gap-1 text-[11.5px]">
+                <Lock aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
+                <span>{ORDER_ITEMS_ROLES_LOCK_NOTE_COPY}</span>
+              </div>
+            ) : null}
           </th>
           {ROLES.map((r) => {
             const granted = hasPermission(r, p.id);

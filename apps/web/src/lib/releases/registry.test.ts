@@ -4795,7 +4795,11 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
       resolve(__dirname, '../../components/orders/storefront/storefront-cart.tsx'),
       'utf8',
     );
-    expect(cart).toContain('{orderItemRefusalCopy(refused, item?.name ?? line.itemId)}');
+    // Ordering visibility (0413, design 6.5) moved the line's words to core's
+    // cartLineView, the phone's rule: a refused line still says its reason by
+    // the item's name (orderItemRefusalCopy inside it), never by its id.
+    expect(cart).toContain('const view = cartLineView(line, item, unorderable, refusedReason);');
+    expect(cart).toContain('const refusedReason = refusedItems.get(line.itemId);');
     // The success sentence names who hears about the order, Pick up at no
     // longer promises a ready time, and approvers are offered Review and
     // approve (orders:approve, not a viewer).

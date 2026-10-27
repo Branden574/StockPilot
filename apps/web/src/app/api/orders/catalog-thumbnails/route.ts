@@ -48,6 +48,13 @@ export const dynamic = 'force-dynamic';
  * Neither web nor phone sends either one, and a tab still running a bundle
  * that old only keeps its placeholders.
  *
+ * ORDERING VISIBILITY (0413): the orders picker's set must never include an
+ * item hidden from new ordering. Answering it would mean filtering
+ * order_catalog_visible = true next to is_rental = false; refusing it signs
+ * no photo for any item, hidden or shown. The New rental page is not
+ * ordering: rentalsOnly=1 repeats that page's read, which has no visibility
+ * filter.
+ *
  * RATE LIMIT: 60 requests a minute per user (`catalog-thumbnails:user:<id>`),
  * checked before any read. The page asks once per warehouse it shows, and its
  * hook (lib/use-catalog-thumbnails.ts) retries a failure three times with

@@ -296,8 +296,11 @@ const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * always produced.
  *
  * Returns null when the sanitized term is empty (nothing to filter on).
+ *
+ * Exported (unchanged) for Manage order items (ordering visibility, 0413),
+ * which searches its list with exactly this clause.
  */
-function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | null {
+export function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | null {
   // PostgREST's .or() takes a raw filter string. Strip characters
   // that would let a search term escape its clause and fan out the
   // filter tree (commas, parens, asterisks, percent signs). Also
@@ -528,6 +531,13 @@ export interface ItemListFilters {
    * caller keeps its current result set.
    */
   excludeBundles?: boolean;
+  /**
+   * Only records shown in Orders (order_catalog_visible = true, migration
+   * 0413): the order Add items picker, matching the order-creation catalog.
+   * Opt-in, like excludeBundles: Items, Books, counts, the PO form, the bundle
+   * picker and rentals keep listing hidden records.
+   */
+  orderCatalogVisibleOnly?: boolean;
   lowStock?: boolean;
   outOfStock?: boolean;
   /**
@@ -1091,6 +1101,7 @@ export interface ItemPickerSearchFilters {
   itemType?: ItemListFilters['itemType'];
   itemTypes?: ItemListFilters['itemTypes'];
   excludeBundles?: boolean;
+  orderCatalogVisibleOnly?: boolean;
   status?: ItemListFilters['status'];
   expected?: ItemListFilters['expected'];
   isbnVariants?: string[];
@@ -1397,6 +1408,10 @@ export class InventoryService {
     // (the order add-items picker, matching loadCatalogItems) drop them.
     if (filters.excludeBundles) {
       query = query.or('is_bundle.is.null,is_bundle.eq.false');
+    }
+    // Ordering visibility (0413): only the records Place an Order offers.
+    if (filters.orderCatalogVisibleOnly) {
+      query = query.eq('order_catalog_visible', true);
     }
 
     // Rentals (circulating assets like canopies) are a separate
@@ -2234,6 +2249,9 @@ export class InventoryService {
       }
       if (filters.excludeBundles) {
         query = query.or('is_bundle.is.null,is_bundle.eq.false');
+      }
+      if (filters.orderCatalogVisibleOnly) {
+        query = query.eq('order_catalog_visible', true);
       }
       return query.eq('is_rental', false);
     };
@@ -3144,6 +3162,17 @@ export class InventoryService {
        * bag.
        */
       allowUnconfirmedNewRack?: boolean;
+      /**
+       * Ordering visibility (migration 0413) for a record that is a COPY of an
+       * existing one: a restore point re-creating a record it captured hidden,
+       * and a PO-import charter sibling cloned from a hidden source. Only
+       * `false` is written (born hidden from new ordering; the database stamps
+       * order_catalog_visibility_changed_at); anything else leaves the column
+       * default, shown. A new record typed by a person always starts shown.
+       * Server-only, like the rest of this bag: no request schema parses into
+       * it, so a payload cannot hide or show anything.
+       */
+      orderCatalogVisible?: boolean;
     } = {},
   ) {
     assertPermission(this.ctx, 'items:create');
@@ -3481,6 +3510,8 @@ export class InventoryService {
         ...(opts.awaitingFirstReceipt && !(input.quantityOnHand > 0)
           ? { awaiting_first_receipt: true }
           : {}),
+        // A copy of a record hidden from new ordering stays hidden (0413).
+        ...(opts.orderCatalogVisible === false ? { order_catalog_visible: false } : {}),
         created_by: this.ctx.userId,
         updated_by: this.ctx.userId,
       })

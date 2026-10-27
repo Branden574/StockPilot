@@ -96,6 +96,8 @@ type Fixture = {
   is_rental: boolean;
   is_bundle: boolean | null;
   custom_fields: Record<string, unknown>;
+  /** Ordering visibility (0413); every fixture starts shown. */
+  order_catalog_visible?: boolean;
 };
 
 /**
@@ -124,6 +126,7 @@ function warehouse(prefix: string) {
       is_rental: opts.rental ?? false,
       is_bundle: opts.bundle ?? (i % 2 === 0 ? null : false),
       custom_fields: opts.cover ? { thumbnail_url: `https://covers.example/${i}.jpg` } : {},
+      order_catalog_visible: true,
     };
     items.push(row);
     if (opts.photo) photos.add(row.id);
@@ -278,6 +281,31 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
     expect(createSignedUrlMock).not.toHaveBeenCalled();
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  // Ordering visibility (0413): the orders picker's set never signs a photo
+  // for an item hidden from new ordering. Main kept answering that set and
+  // added order_catalog_visible = true to its read; this route refuses the
+  // set outright (the test above), so a hidden item gets no URL because
+  // nothing is read or signed for the request at all, shown or hidden.
+  // Mutation caught: answering the default request again, with or without
+  // the visibility filter.
+  it('default: an item hidden from ordering gets no photo URL', async () => {
+    const { stub, items, photos } = setup('e');
+    const hidden = items
+      .filter((it) => photos.has(it.id) && !it.is_rental && it.is_bundle !== true)
+      .slice(0, 3);
+    expect(hidden).toHaveLength(3);
+    for (const it of hidden) it.order_catalog_visible = false;
+
+    const { status, body } = await get(`warehouseId=${WH}`);
+
+    expect(status).toBe(400);
+    for (const it of hidden) expect(body.urls?.[it.id]).toBeUndefined();
+    expect(body.urls).toBeUndefined();
+    expect(stub.fromCalls).toEqual([]);
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
 
   it('rentalsOnly=1: reads exactly the New rental page rows and signs only their photos', async () => {

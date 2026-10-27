@@ -69,8 +69,8 @@ export async function GET(req: NextRequest) {
 
   const admin = createAdminClient();
 
-  // Resolve the token: links-table first (mig 0261 — the migrated General
-  // links carry the legacy org tokens), organizations fallback. The signed
+  // Resolve the token through the links table (mig 0261: the migrated General
+  // links carry the legacy org tokens). The signed
   // set is the LINK's eligible catalog, resolved through the same
   // `public_link_eligible_items` predicate as the page and the submit
   // endpoint, so thumbnails can't be used to enumerate items a link
@@ -91,31 +91,25 @@ export async function GET(req: NextRequest) {
   };
   const link = (linkRow as LinkRow | null) ?? null;
 
-  let organizationId: string;
-  if (link) {
-    if (
-      !isLinkOpen({
-        active: link.active,
-        expiresAt: link.expires_at,
-        availableFrom: link.available_from,
-        availableUntil: link.available_until,
-      })
-    ) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = link.organization_id;
-  } else {
-    // Legacy fallback — org token without a links row.
-    const { data: org } = await admin
-      .from('organizations')
-      .select('id')
-      .eq('public_request_token_hash', sha256Hex(token))
-      .maybeSingle();
-    if (!org) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = (org as { id: string }).id;
+  // Legacy organization token (no links row): the empty map, always. Its page
+  // renders an empty catalog (app/r/[token]/page.tsx), and this branch used to
+  // sign the cover of every active book of the warehouse with no ordering
+  // visibility rule at all (0413, design 5.1), so it answers exactly what its
+  // page shows and no cover URL leaks through it.
+  if (!link) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
+  if (
+    !isLinkOpen({
+      active: link.active,
+      expiresAt: link.expires_at,
+      availableFrom: link.available_from,
+      availableUntil: link.available_until,
+    })
+  ) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
+  const organizationId = link.organization_id;
 
   // Module gate (review finding 2026-07-12): mirror the submit route — the
   // `public_requests` module is optional, so an explicit enabled row is
@@ -145,29 +139,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
 
-  // Eligible item_ids for this link + warehouse (or the pre-0261 book set
-  // on the legacy fallback path).
-  let itemIds: string[];
-  if (link) {
-    const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
-      p_link_id: link.id,
-      p_warehouse_id: warehouseId,
-    });
-    itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
-      .map((r) => r.item_id)
-      .slice(0, 500);
-  } else {
-    const { data: items } = await admin
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('item_type', 'book')
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .limit(500);
-    itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
-  }
+  // Eligible item_ids for this link + warehouse, through the same predicate
+  // as the page and the submit (it leaves out an item hidden from ordering).
+  const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
+    p_link_id: link.id,
+    p_warehouse_id: warehouseId,
+  });
+  const itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
+    .map((r) => r.item_id)
+    .slice(0, 500);
   if (itemIds.length === 0) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
