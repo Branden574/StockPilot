@@ -20,23 +20,41 @@ import {
  * reads exactly the rental items that page lists.
  *
  * The route runs for real here, with the real ItemImagesService; only the
- * database, storage and Next's data cache are stubbed, and each is COUNTED,
- * so the numbers below are the before/after cost of one page load.
+ * database, storage, Next's data cache and the rate limiter are stubbed, and
+ * each is COUNTED, so the numbers below are the cost of one page load. The
+ * old shapes (no flag, and includeRentals=1) are refused now: nothing sends
+ * them, and each one signed a photo for every orderable item in the
+ * warehouse.
  */
 
-const { apiCtx, cacheReads, createSignedUrlsMock, createSignedUrlMock, reportError, ceiling } =
-  vi.hoisted(() => ({
-    apiCtx: { current: null as unknown },
-    cacheReads: { count: 0 },
-    createSignedUrlsMock: vi.fn(),
-    createSignedUrlMock: vi.fn(),
-    reportError: vi.fn(async (_err: unknown, _context: unknown) => undefined),
-    // The loader's CATALOG_ROW_CEILING, lowered by the ceiling test.
-    ceiling: { value: 10_000 },
-  }));
+const {
+  apiCtx,
+  cacheReads,
+  createSignedUrlsMock,
+  createSignedUrlMock,
+  reportError,
+  ceiling,
+  checkRateLimit,
+} = vi.hoisted(() => ({
+  apiCtx: { current: null as unknown },
+  cacheReads: { count: 0 },
+  createSignedUrlsMock: vi.fn(),
+  createSignedUrlMock: vi.fn(),
+  reportError: vi.fn(async (_err: unknown, _context: unknown) => undefined),
+  // The loader's CATALOG_ROW_CEILING, lowered by the ceiling test.
+  ceiling: { value: 10_000 },
+  checkRateLimit: vi.fn(
+    async (_key: string, _limit: number, _windowMs: number, _mode?: 'open' | 'closed') => ({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 60_000,
+    }),
+  ),
+}));
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn(async () => apiCtx.current) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit }));
 // The route imports only CATALOG_ROW_CEILING from the loader. A getter, so a
 // test can lower it (the route reads the binding on every request).
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
@@ -142,23 +160,9 @@ function warehouse(prefix: string) {
   return { items, images, photos, covers, rentals };
 }
 
-/** inventory_items as PostgREST would answer, including the picker's `.or()`
- *  bundle filter (the shared stub cannot evaluate `.or()`). */
+/** inventory_items as PostgREST would answer. */
 function servedItems(rows: Fixture[]) {
-  const serve = servedLikePostgrest(rows as unknown as Array<Record<string, unknown>>);
-  return (call: MockCall) => {
-    const orAt = call.methods.indexOf('or');
-    if (orAt === -1) return serve(call);
-    expect(call.args[orAt]).toEqual(['is_bundle.is.null,is_bundle.eq.false']);
-    const withoutBundles = servedLikePostgrest(
-      rows.filter((r) => r.is_bundle !== true) as unknown as Array<Record<string, unknown>>,
-    );
-    return withoutBundles({
-      ...call,
-      methods: call.methods.filter((_, i) => i !== orAt),
-      args: call.args.filter((_, i) => i !== orAt),
-    });
-  };
+  return servedLikePostgrest(rows as unknown as Array<Record<string, unknown>>);
 }
 
 function setup(prefix: string, opts: { itemsError?: boolean } = {}) {
@@ -177,7 +181,11 @@ async function get(query: string) {
   const { GET } = await import('./route');
   const res = await GET(new NextRequest(`http://localhost/api/orders/catalog-thumbnails?${query}`));
   const text = await res.text();
-  return { status: res.status, body: JSON.parse(text) as { urls?: Record<string, string> }, bytes: text.length };
+  return {
+    status: res.status,
+    body: JSON.parse(text) as { urls?: Record<string, string> },
+    bytes: text.length,
+  };
 }
 
 /** What one request cost: database reads, storage calls, cache lookups. */
@@ -186,7 +194,10 @@ function cost(stub: ReturnType<typeof makeSupabaseStub>, bytes: number, urls: nu
     itemReads: stub.fromCalls.filter((t) => t === 'inventory_items').length,
     imageReads: stub.fromCalls.filter((t) => t === 'item_images').length,
     signCalls: createSignedUrlsMock.mock.calls.length + createSignedUrlMock.mock.calls.length,
-    pathsSigned: createSignedUrlsMock.mock.calls.reduce((n, [paths]) => n + (paths as string[]).length, 0),
+    pathsSigned: createSignedUrlsMock.mock.calls.reduce(
+      (n, [paths]) => n + (paths as string[]).length,
+      0,
+    ),
     cacheReads: cacheReads.count,
     urls,
     bytes,
@@ -240,6 +251,7 @@ beforeEach(() => {
   cacheReads.count = 0;
   ceiling.value = 10_000;
   reportError.mockClear();
+  checkRateLimit.mockClear();
   createSignedUrlMock.mockReset();
   createSignedUrlsMock.mockReset();
   createSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
@@ -249,50 +261,51 @@ beforeEach(() => {
 });
 
 describe('GET /api/orders/catalog-thumbnails', () => {
-  it('default (the orders picker): the same query and the same answer as before', async () => {
-    const { stub, items, photos, covers } = setup('a');
-    const { status, body } = await get(`warehouseId=${WH}`);
-
-    expect(status).toBe(200);
-    // The exact PostgREST request, method for method: filters, order of the
-    // filters and the trailing rental exclusion are unchanged.
-    expect(firstChain(stub)).toEqual({
-      methods: ['select', 'eq', 'eq', 'eq', 'is', 'or', 'limit', 'eq', 'eq'],
-      args: [
-        ['id'],
-        ['organization_id', ORG],
-        ['warehouse_id', WH],
-        ['status', 'active'],
-        ['deleted_at', null],
-        ['is_bundle.is.null,is_bundle.eq.false'],
-        [500],
-        ['is_rental', false],
-        // Ordering visibility (0413): the picker's set leaves out an item
-        // hidden from new ordering.
-        ['order_catalog_visible', true],
-      ],
-    });
-    // Orderable, non-rental, non-bundle items with a photo or a cover.
-    const expected: Record<string, string> = {};
-    for (const it of items) {
-      if (it.is_rental || it.is_bundle === true) continue;
-      if (photos.has(it.id)) expected[it.id] = `https://signed.example/${ORG}/${it.id}/master.webp`;
-      else if (covers.has(it.id)) expected[it.id] = it.custom_fields.thumbnail_url as string;
+  // The two shapes nothing sends any more (the pre-storefront orders picker,
+  // gone since 2026-07-21, and the rentals form before #266): each read every
+  // orderable item in the warehouse (up to 500) and signed a photo for each.
+  // Mutation caught: answering them again.
+  it('without rentalsOnly=1 (the old orders picker and includeRentals=1): 400, nothing read or signed', async () => {
+    for (const query of [
+      `warehouseId=${WH}`,
+      `warehouseId=${WH}&includeRentals=1`,
+      `warehouseId=${WH}&rentalsOnly=0`,
+      `warehouseId=${WH}&rentalsOnly=true`,
+    ]) {
+      const { stub } = setup('a');
+      const { status, body } = await get(query);
+      expect(status, query).toBe(400);
+      expect(body).toEqual({ error: 'validation_error', message: 'rentalsOnly=1 is required' });
+      expect(stub.fromCalls, query).toEqual([]);
     }
-    expect(body).toEqual({ urls: expected });
-    expect(Object.keys(body.urls!)).toHaveLength(340);
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
+  // Ordering visibility (0413): the orders picker's set never signs a photo
+  // for an item hidden from new ordering. Main kept answering that set and
+  // added order_catalog_visible = true to its read; this route refuses the
+  // set outright (the test above), so a hidden item gets no URL because
+  // nothing is read or signed for the request at all, shown or hidden.
+  // Mutation caught: answering the default request again, with or without
+  // the visibility filter.
   it('default: an item hidden from ordering gets no photo URL', async () => {
-    const { items, photos } = setup('e');
-    const hidden = items.filter((it) => photos.has(it.id) && !it.is_rental && it.is_bundle !== true).slice(0, 3);
+    const { stub, items, photos } = setup('e');
+    const hidden = items
+      .filter((it) => photos.has(it.id) && !it.is_rental && it.is_bundle !== true)
+      .slice(0, 3);
+    expect(hidden).toHaveLength(3);
     for (const it of hidden) it.order_catalog_visible = false;
 
     const { status, body } = await get(`warehouseId=${WH}`);
 
-    expect(status).toBe(200);
-    for (const it of hidden) expect(body.urls![it.id]).toBeUndefined();
-    expect(Object.keys(body.urls!)).toHaveLength(337);
+    expect(status).toBe(400);
+    for (const it of hidden) expect(body.urls?.[it.id]).toBeUndefined();
+    expect(body.urls).toBeUndefined();
+    expect(stub.fromCalls).toEqual([]);
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
 
   it('rentalsOnly=1: reads exactly the New rental page rows and signs only their photos', async () => {
@@ -336,39 +349,6 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     });
   });
 
-  it('before and after, for the New rental page in a DC4-sized warehouse', async () => {
-    // BEFORE: what the rentals form sent until now (still answered, for a tab
-    // running the previous bundle).
-    const legacy = setup('c');
-    const before = await get(`warehouseId=${WH}&includeRentals=1`);
-    const beforeCost = cost(legacy.stub, before.bytes, Object.keys(before.body.urls!).length);
-
-    cacheReads.count = 0;
-    createSignedUrlsMock.mockClear();
-    const current = setup('d');
-    const after = await get(`warehouseId=${WH}&rentalsOnly=1`);
-    const afterCost = cost(current.stub, after.bytes, Object.keys(after.body.urls!).length);
-
-    // 406 items read (400 orderable + 6 non-bundle rentals) to show 7 rentals.
-    expect(beforeCost).toEqual({
-      itemReads: 2,
-      imageReads: 5, // 406 ids in batches of 100
-      signCalls: 1,
-      pathsSigned: 324,
-      cacheReads: 324,
-      urls: 345,
-      bytes: expect.any(Number),
-    });
-    expect(afterCost).toMatchObject({ imageReads: 1, pathsSigned: 5, cacheReads: 5, urls: 6 });
-    // Every rental photo the old request delivered, the new one delivers too
-    // (plus the rental bundle's, which the old bundle filter dropped).
-    for (const id of current.rentals) {
-      const legacyId = id.replace(/^d{8}/, 'c'.repeat(8));
-      if (before.body.urls![legacyId]) expect(after.body.urls![id]).toBeTruthy();
-    }
-    expect(after.bytes).toBeLessThan(before.bytes / 40);
-  });
-
   it('rentalsOnly=1: more than 1000 rental items are all read and signed (no 500-row limit)', async () => {
     const rows = rentalRows(1234);
     const stub = makeSupabaseStub({
@@ -391,7 +371,10 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     const { stub } = setup('e', { itemsError: true });
     const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
     expect(status).toBe(500);
-    expect(body).toEqual({ error: 'internal_error', message: 'Could not load rental item photos.' });
+    expect(body).toEqual({
+      error: 'internal_error',
+      message: 'Could not load rental item photos.',
+    });
     expect(stub.fromCalls).not.toContain('item_images');
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
   });
@@ -429,13 +412,18 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
 
     expect(status).toBe(500);
-    expect(body).toEqual({ error: 'internal_error', message: 'Could not load rental item photos.' });
+    expect(body).toEqual({
+      error: 'internal_error',
+      message: 'Could not load rental item photos.',
+    });
     expect(stub.chainArgsAll.get('inventory_items.select')?.map((args) => args.at(-1))).toEqual([
       [0, 999],
       [1000, 1999],
     ]);
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
-    expect((reportError.mock.calls[0]?.[0] as Error | undefined)?.message).toContain('upstream timeout');
+    expect((reportError.mock.calls[0]?.[0] as Error | undefined)?.message).toContain(
+      'upstream timeout',
+    );
   });
 
   it('rentalsOnly=1: signing stops at CATALOG_ROW_CEILING, the first rows by name then id', async () => {
@@ -460,7 +448,10 @@ describe('GET /api/orders/catalog-thumbnails', () => {
       .slice(0, 1500)
       .map((r) => r.id);
     expect(Object.keys(body.urls!).sort()).toEqual([...firstByNameThenId].sort());
-    const signed = createSignedUrlsMock.mock.calls.reduce((n, [paths]) => n + (paths as string[]).length, 0);
+    const signed = createSignedUrlsMock.mock.calls.reduce(
+      (n, [paths]) => n + (paths as string[]).length,
+      0,
+    );
     expect(signed).toBe(1500);
   });
 
@@ -469,5 +460,46 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     expect((await get('rentalsOnly=1')).status).toBe(400);
     apiCtx.current = null;
     expect((await get(`warehouseId=${WH}&rentalsOnly=1`)).status).toBe(401);
+    expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/orders/catalog-thumbnails: rate limit', () => {
+  it("counts every request against the caller's own bucket, 60 a minute, before any read", async () => {
+    const { stub } = setup('h');
+    apiCtx.current = makeServiceContext(stub.client, { organizationId: ORG, userId: 'user-7' });
+    const { status } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+    expect(status).toBe(200);
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    // Open on a limiter outage (the default mode), like the other signed-in routes.
+    expect(checkRateLimit.mock.calls[0]).toEqual(['catalog-thumbnails:user:user-7', 60, 60_000]);
+  });
+
+  // Mutation caught: no limit at all, or one checked after the reads and
+  // the signing it is there to bound.
+  it('over the limit: 429 with retry-after, and nothing read or signed', async () => {
+    const { stub } = setup('i');
+    checkRateLimit.mockResolvedValueOnce({
+      allowed: false,
+      count: 60,
+      resetAt: Date.now() + 42_000,
+    });
+    const { GET } = await import('./route');
+    const res = await GET(
+      new NextRequest(
+        `http://localhost/api/orders/catalog-thumbnails?warehouseId=${WH}&rentalsOnly=1`,
+      ),
+    );
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: 'rate_limited',
+      message: 'Too many photo requests. Try again in a minute.',
+    });
+    const retryAfter = Number(res.headers.get('retry-after'));
+    expect(retryAfter).toBeGreaterThanOrEqual(41);
+    expect(retryAfter).toBeLessThanOrEqual(42);
+    expect(stub.fromCalls).toEqual([]);
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
 });

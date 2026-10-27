@@ -108,7 +108,9 @@ describe('clearLocalLine: an emptied box over a saved count', () => {
     // Never a count: a build that does not know clears cannot send it as 0.
     expect('countedQuantity' in queued[0]!.payload).toBe(false);
     // The screen reads it back uncounted, and Post waits for it (Sync first).
-    await cache.cacheCycleCount(header, []); // the count's header, no lines
+    // The count's header, no lines, stored under the note the count screen
+    // takes before its fetch (cacheWriteScope).
+    expect(await cache.cacheCycleCount(header, [], await cache.cacheWriteScope())).toBe(true);
     const snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,
@@ -209,7 +211,13 @@ describe('a queued clear and the server read', () => {
   it('a fresh read of the count keeps the pending clear (the phone wins until it syncs), then shows the server once it has', async () => {
     const clear = await cache.clearLocalLine('l1');
     // Read again while the clear is queued: the server still has 5.
-    await cache.cacheCycleCount(header, [serverLine('l1', 5), serverLine('l2', null)]);
+    expect(
+      await cache.cacheCycleCount(
+        header,
+        [serverLine('l1', 5), serverLine('l2', null)],
+        await cache.cacheWriteScope(),
+      ),
+    ).toBe(true);
     let snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,
@@ -217,7 +225,13 @@ describe('a queued clear and the server read', () => {
     });
     // The clear is acknowledged; the next read shows the server's uncounted line.
     await cache.outboxAck(clear!.outboxId);
-    await cache.cacheCycleCount(header, [serverLine('l1', null), serverLine('l2', null)]);
+    expect(
+      await cache.cacheCycleCount(
+        header,
+        [serverLine('l1', null), serverLine('l2', null)],
+        await cache.cacheWriteScope(),
+      ),
+    ).toBe(true);
     snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,

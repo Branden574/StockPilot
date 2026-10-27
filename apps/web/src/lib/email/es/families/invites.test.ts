@@ -346,6 +346,29 @@ describe('portal-invite (renderPortalInviteEmail)', () => {
     expect(res.html).toContain('and works for 14 days; after that, request a fresh one');
   });
 
+  // SECURITY (B6): the contact link was `mailto:${supplierReplyTo}` from the
+  // stored address, so text such as "a@b.com?bcc=x@y.z" opened a message
+  // copied to someone the email never names. Only one plain address is
+  // linked (core plainAddressMailtoUrl); anything else falls back to support.
+  it('links Contact the sender only for one plain address, else support', () => {
+    for (const supplierReplyTo of [
+      'branden@l4lnorth.com?bcc=eve@evil.test',
+      'branden@l4lnorth.com,eve@evil.test',
+      'bran\u200Dden@l4lnorth.com',
+      'branden@l4lnorth.\uFF43om',
+    ]) {
+      const res = renderPortalInviteEmail({
+        email: SEED.customerEmail,
+        supplierOrg: SEED.org,
+        customerOrg: SEED.customerOrg,
+        portalUrl: SEED.portalUrl,
+        supplierReplyTo,
+      });
+      expect(res.html, supplierReplyTo).not.toContain('mailto:');
+      expect(res.html, supplierReplyTo).toContain('>Contact the sender</a>');
+    }
+  });
+
   it('stress: long supplier + hostile customer org + no reply-to stay safe', () => {
     const res = renderPortalInviteEmail({
       email: 'exceptionally.long.customer.address@very-long-subdomain.example-buyer-operations.com',
