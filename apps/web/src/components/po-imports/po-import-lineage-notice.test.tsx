@@ -15,7 +15,7 @@ vi.mock('next/link', () => ({
 function ref(over: Partial<PoImportLineageRef> = {}): PoImportLineageRef {
   return {
     id: '90f9fc56-0000-4000-8000-000000000000',
-    fileName: 'PO-CVW-002201.pdf',
+    fileName: 'PO-DEMO-002201.pdf',
     displayName: null,
     createdAt: '2026-07-20T10:00:00Z',
     status: 'approved',
@@ -74,7 +74,7 @@ describe('lineage notice prefers the human name (mig 0333)', () => {
     );
     expect(screen.getByText(/August DC4 Book Order/)).toBeInTheDocument();
     // The whole point of the feature: the camera filename must not be the label.
-    expect(screen.queryByText(/PO-CVW-002201\.pdf/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/PO-DEMO-002201\.pdf/)).not.toBeInTheDocument();
   });
 
   it('falls back to the filename for an unnamed predecessor', () => {
@@ -84,7 +84,7 @@ describe('lineage notice prefers the human name (mig 0333)', () => {
         timeZone={TZ}
       />,
     );
-    expect(screen.getByText(/PO-CVW-002201\.pdf/)).toBeInTheDocument();
+    expect(screen.getByText(/PO-DEMO-002201\.pdf/)).toBeInTheDocument();
   });
 });
 

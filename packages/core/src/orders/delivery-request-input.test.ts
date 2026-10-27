@@ -19,7 +19,7 @@ function order(over: Partial<DeliveryRequestOrderData> = {}): DeliveryRequestOrd
     warehouseName: 'Fresno DC4',
     requesterName: 'Jane Smith',
     requesterLabel: 'Jane Smith',
-    requesterEmail: 'jane@cvwest.org',
+    requesterEmail: 'jane@site1.test',
     requesterProfileEmail: null,
     neededBy: '2026-08-20T17:00:00.000Z',
     notes: 'Back gate please.',
@@ -101,15 +101,15 @@ describe('buildDeliveryRequestInput', () => {
 
   it('falls back to the JOINED profile email when the denormalized column is null (internal self-submits)', () => {
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: null, requesterProfileEmail: 'jane@cvwest.org' }),
+      order({ requesterEmail: null, requesterProfileEmail: 'jane@site1.test' }),
       RECIPIENTS,
     );
-    expect(input.requesterEmail).toBe('jane@cvwest.org');
+    expect(input.requesterEmail).toBe('jane@site1.test');
   });
 
   it('prefers the denormalized on-behalf-of email over the profile email', () => {
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@cvwest.org' }),
+      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@site1.test' }),
       RECIPIENTS,
     );
     expect(input.requesterEmail).toBe('onbehalf@site.org');
@@ -121,21 +121,21 @@ describe('buildDeliveryRequestInput', () => {
     // message reached DC4 with no contact at all, while web named one.
     for (const empty of ['', '   ']) {
       const input = buildDeliveryRequestInput(
-        order({ requesterEmail: empty, requesterProfileEmail: 'jane@cvwest.org' }),
+        order({ requesterEmail: empty, requesterProfileEmail: 'jane@site1.test' }),
         RECIPIENTS,
       );
-      expect(input.requesterEmail).toBe('jane@cvwest.org');
+      expect(input.requesterEmail).toBe('jane@site1.test');
     }
   });
 
   it('THE CONSEQUENCE, in the body: an empty column still yields a requester DC4 can reply to', () => {
     const body = buildDeliveryRequestDraft(
       buildDeliveryRequestInput(
-        order({ requesterEmail: '', requesterProfileEmail: 'jane@cvwest.org' }),
+        order({ requesterEmail: '', requesterProfileEmail: 'jane@site1.test' }),
         RECIPIENTS,
       ),
     ).body;
-    expect(body).toContain('Jane Smith (jane@cvwest.org)');
+    expect(body).toContain('Jane Smith (jane@site1.test)');
   });
 
   it('the same rule governs the NAME, which sits one line away and drifted the same way', () => {

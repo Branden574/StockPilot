@@ -32,7 +32,7 @@ import { loadOrderReturns } from './returns';
 
 const ORG = 'org-1';
 const ORDER = '11111111-1111-1111-1111-111111111111';
-const S_LINE = '5e840bc6-0000-0000-0000-000000000000';
+const S_LINE = '50000085-0000-0000-0000-000000000000';
 
 function rawLine(over: Record<string, unknown> = {}) {
   return {
@@ -48,11 +48,11 @@ function rawLine(over: Record<string, unknown> = {}) {
 
 function rawReturn(over: Record<string, unknown> = {}) {
   return {
-    id: '85d6084b-0000-0000-0000-000000000000',
-    return_number: 'RMA-20260817-EEF074',
+    id: '80000085-0000-0000-0000-000000000000',
+    return_number: 'RMA-20260817-D3F0A1',
     status: 'closed',
     reason_code: 'other',
-    notes: 'Size S New Hire shirt was swapped out for Ladies size M',
+    notes: 'Size S shirt was swapped out for a size M',
     created_at: '2026-08-17T17:10:00Z',
     closed_at: '2026-08-17T17:12:00Z',
     lines: [rawLine()],
@@ -70,11 +70,11 @@ describe('loadOrderReturns — mapping', () => {
     const out = await loadOrderReturns(stub.client, ORG, ORDER);
     expect(out).toEqual([
       {
-        id: '85d6084b-0000-0000-0000-000000000000',
-        returnNumber: 'RMA-20260817-EEF074',
+        id: '80000085-0000-0000-0000-000000000000',
+        returnNumber: 'RMA-20260817-D3F0A1',
         status: 'closed',
         reasonCode: 'other',
-        notes: 'Size S New Hire shirt was swapped out for Ladies size M',
+        notes: 'Size S shirt was swapped out for a size M',
         createdAt: '2026-08-17T17:10:00Z',
         closedAt: '2026-08-17T17:12:00Z',
         lines: [
@@ -239,7 +239,7 @@ describe('loadOrderReturns — the exchange line (returns RX-2, plan 3.6.9)', ()
       'return_overview.select': {
         data: [
           {
-            id: '85d6084b-0000-0000-0000-000000000000',
+            id: '80000085-0000-0000-0000-000000000000',
             status: 'approved',
             kind: 'exchange',
             exchange_status: 'waiting_for_return',
@@ -278,7 +278,7 @@ describe('loadOrderReturns — the exchange line (returns RX-2, plan 3.6.9)', ()
       'return_overview.select': {
         data: [
           {
-            id: '85d6084b-0000-0000-0000-000000000000',
+            id: '80000085-0000-0000-0000-000000000000',
             status: 'cancelled',
             kind: 'exchange',
             exchange_status: 'cancelled',

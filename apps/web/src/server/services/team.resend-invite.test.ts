@@ -20,7 +20,7 @@ function makeStub() {
     'organization_invites.select': {
       data: {
         id: 'invite-1',
-        email: 'theo@l4lnorth.com',
+        email: 'theo@north.example',
         role: 'staff',
         token: 'tokHvwVujKf',
         accepted_at: null,
@@ -30,7 +30,7 @@ function makeStub() {
     },
     'organization_invites.update': { data: null, error: null },
     'user_profiles.select': {
-      data: { full_name: 'Branden Vincent Walker', email: 'branden@l4lnorth.com' },
+      data: { full_name: 'Carsten Hartley Fowler', email: 'carsten@north.example' },
       error: null,
     },
   });
@@ -55,7 +55,7 @@ describe('TeamService.resendInvite — es invite-reminder wiring', () => {
       html: string;
       from?: string;
     };
-    expect(msg.to).toBe('theo@l4lnorth.com');
+    expect(msg.to).toBe('theo@north.example');
     expect(msg.from).toBe('StockPilot <hello@stockpilotusa.com>');
     // Registry subject, byte-equal.
     expect(msg.subject).toBe(
@@ -81,7 +81,7 @@ describe('TeamService.resendInvite — es invite-reminder wiring', () => {
       'organization_invites.select': {
         data: {
           id: 'invite-1',
-          email: 'theo@l4lnorth.com',
+          email: 'theo@north.example',
           role: 'staff',
           token: 'tok',
           accepted_at: '2026-07-01T00:00:00Z',

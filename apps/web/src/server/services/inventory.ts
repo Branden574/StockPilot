@@ -6960,9 +6960,10 @@ export class InventoryService {
 
   /**
    * Remove (write off) a quantity of one item from ONE specific location,
-   * leaving its stock in every OTHER location untouched. THE tool Andrew needed
-   * when he consolidated a rack and reached for archive instead: archive hides
-   * the whole item (all locations); this clears exactly one holding.
+   * leaving its stock in every OTHER location untouched. THE tool a DC4
+   * manager needed when they consolidated a rack and reached for archive
+   * instead: archive hides the whole item (all locations); this clears exactly
+   * one holding.
    *
    * Built entirely on adjustStock — a NEGATIVE delta scoped to `locationId`
    * draws down exactly that holding via the adjust_stock RPC (which decrements
@@ -9494,9 +9495,9 @@ export class InventoryService {
     //
     // This used to take the item's EARLIEST receive_po movement ever, with no
     // regard for the receipt's status, and that produced flatly wrong rows
-    // (owner report 2026-07-22). Science Dimensions Earth & Space Science had
-    // been received on 2026-06-24 against CVW-002202 — a receipt later REVERSED,
-    // on a PO later CANCELLED — and again today against CVW-002201. Its 20
+    // (owner report 2026-07-22). Exploring Earth & Space Science: Level 8 had
+    // been received on 2026-06-24 against DEMO-002202 — a receipt later REVERSED,
+    // on a PO later CANCELLED — and again today against DEMO-002201. Its 20
     // staged units came from today's posted receipt, but the worklist showed the
     // June receipt: wrong PO, wrong receipt number, "4 weeks ago", and a false
     // "27d Stale" badge. Once an item had any receive history, every future
@@ -9877,7 +9878,7 @@ export class InventoryService {
     const receiptMeta = new Map<string, ReceiptMeta>();
 
     // 5b. Some reasons stringify a RECORD'S UUID into the words a human reads:
-    //     pre-0306 pick/cancel rows ('Order pick (order_request b3c7390a-…)',
+    //     pre-0306 pick/cancel rows ('Order pick (order_request a0000060-…)',
     //     written before order_requests.order_number arrived in 0254) and the
     //     return rows the shipped RMA RPCs write to this day ('Return restock
     //     (return …)', 0153/0154/0197). The ledger is append-only so both are

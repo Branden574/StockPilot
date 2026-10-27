@@ -97,7 +97,7 @@ import PoDetailPage from './page';
 function poWithExpected(expectedAt: string | null) {
   return {
     po: {
-      po_number: 'PO-1785251481118',
+      po_number: 'PO-1700000000404',
       status: 'ordered',
       supplier_id: 'sup-1',
       destination_location_id: null,

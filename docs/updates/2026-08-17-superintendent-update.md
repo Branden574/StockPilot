@@ -14,7 +14,7 @@ A plain-language summary of what DC4 staff and site requesters can now do that t
 
 Until now, requesting a delivery meant going to a computer. Staff can now open an order on their phone and tap once to raise the delivery request. The message arrives already filled in — the destination site and address, the date it is needed, and the item list — and it opens in the Outlook app for the requester to review and send.
 
-The warehouse copy goes to the DC4 intake and Andrew is copied automatically, exactly as it works from the website. We confirmed this end to end on real phones: the message opens, the copy arrives, and the ticket is created.
+The warehouse copy goes to the DC4 intake and the DC4 lead is copied automatically, exactly as it works from the website. We confirmed this end to end on real phones: the message opens, the copy arrives, and the ticket is created.
 
 > **To try it** — open any delivery order you submitted, in the StockPilot app, and look for the Delivery Request section.
 

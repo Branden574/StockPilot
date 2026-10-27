@@ -169,7 +169,7 @@ entire walk. No real email was sent, and no real address was ever a recipient.
    because of this.
 4. **Share-link rate budget.** Per-kind caps put the worst case at 17 requests per full share-page
    view against the unchanged 120/hr bucket — roughly 7 full views per hour per link. Compounded by
-   the delivery-time image-proxy fetch above. Fine for DC4 + Andrew today; **any future batch-resend
+   the delivery-time image-proxy fetch above. Fine for DC4 and its lead today; **any future batch-resend
    must re-check this first.**
 5. **`cancel()` TOCTOU** (pre-existing, unchanged): `cancel()` does a fresh pre-read but has no
    write-time guard, so `resolve()` racing it could leave a row cancelled with resolution stamps
@@ -225,7 +225,7 @@ entire walk. No real email was sent, and no real address was ever a recipient.
 
    L4L NEEDS NO ENABLE SQL THIS TIME: org 63c13e64-92a6-4ea4-9936-6a2c26a85b4a
    ("L4L North Region") was already enabled during the 0314 ship and stays on.
-   Andrew needs no new grants — admin defaults already cover read_all/manage,
+   The DC4 lead needs no new grants — admin defaults already cover read_all/manage,
    which is every new surface.
 
 4. Mobile OTA: cd apps/mobile && pnpm release:ota   (never raw `eas update`;

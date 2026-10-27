@@ -155,12 +155,12 @@ vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => e
 import OrderDetailPage from './page';
 
 const ORDER_ID = '11111111-1111-1111-1111-111111111111';
-const S_LINE = '5e840bc6-0000-0000-0000-000000000000';
+const S_LINE = '50000085-0000-0000-0000-000000000000';
 const M_LINE = 'line-m';
 const XL_LINE = 'line-xl';
-const RMA_ID = '85d6084b-0000-0000-0000-000000000000';
-const RMA_NUMBER = 'RMA-20260817-EEF074';
-const RMA_NOTES = 'Size S New Hire shirt was swapped out for Ladies size M';
+const RMA_ID = '80000085-0000-0000-0000-000000000000';
+const RMA_NUMBER = 'RMA-20260817-D3F0A1';
+const RMA_NOTES = 'Size S shirt was swapped out for a size M';
 
 function requestFixture(overrides: Record<string, unknown> = {}) {
   return {
@@ -172,7 +172,7 @@ function requestFixture(overrides: Record<string, unknown> = {}) {
     status: 'completed',
     requester_user_id: 'other-user',
     requester_email: null,
-    requester_name: 'Lillian',
+    requester_name: 'Juniper',
     requester_org_label: null,
     approved_by: null,
     approved_at: '2026-08-17T16:00:00Z',
@@ -242,7 +242,7 @@ function line(id: string, name: string, over: Record<string, unknown> = {}) {
   };
 }
 
-/** SO-000085 as prod holds it: three lines 1/1; only the S line has returned_quantity 1. */
+/** SO-000085 as modelled here: three lines 1/1; only the S line has returned_quantity 1. */
 function so85Lines(sReturned = 1) {
   return [
     line(S_LINE, "Women's Polo S", { returned_quantity: sReturned }),
@@ -257,8 +257,8 @@ function detailFixture(overrides: Record<string, unknown> = {}) {
     lines: so85Lines(0),
     reservations: [],
     warehouseName: 'DC4',
-    requesterDisplay: 'Lillian',
-    requesterName: 'Lillian',
+    requesterDisplay: 'Juniper',
+    requesterName: 'Juniper',
     requesterEmail: null,
     assignedPickerName: null,
     pickSlipStale: false,
@@ -413,7 +413,7 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     expect(strip.querySelector('a[href="#order-returns"]')?.textContent).toBe('See returns');
   });
 
-  // (g) SO-000085: the records say "net 2 with requester" but Lillian holds
+  // (g) SO-000085: the records say "net 2 with requester" but the requester holds
   // three shirts (the S came back and a Medium went out in person, recorded
   // only in the RMA notes). A hover-only caveat leaves the plain figure
   // misleading for anyone who never hovers, so the caveat is PRINTED.

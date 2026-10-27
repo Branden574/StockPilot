@@ -265,7 +265,7 @@ describe('Hold available stock and the needed-by date say the same sentence (one
         needed_by: null,
         order_number: 8,
         fulfillment_type: 'pickup',
-        requester_name: 'Doua Vang',
+        requester_name: 'Lena Hale',
         assigned_delivery_user_id: null,
       },
       error: null,

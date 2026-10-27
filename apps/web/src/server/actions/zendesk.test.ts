@@ -40,8 +40,8 @@ describe('zendesk actions', () => {
   });
   it('saves a valid subdomain', async () => {
     setZendeskSubdomain.mockResolvedValueOnce(undefined);
-    const res = await setZendeskSubdomainAction({ subdomain: 'learn4life' });
+    const res = await setZendeskSubdomainAction({ subdomain: 'sampleorg' });
     expect(res.ok).toBe(true);
-    expect(setZendeskSubdomain).toHaveBeenCalledWith('learn4life');
+    expect(setZendeskSubdomain).toHaveBeenCalledWith('sampleorg');
   });
 });

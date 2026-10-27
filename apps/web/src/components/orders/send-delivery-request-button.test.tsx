@@ -34,7 +34,7 @@ const TEST_ROUTING = {
 
 const baseProps = {
   recipients: TEST_ROUTING,
-  orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+  orderId: '0000000f-0000-4000-8000-000000000001',
   orderNumber: 61,
   warehouseName: 'DC4',
   destination: {
@@ -43,11 +43,11 @@ const baseProps = {
     code: 'CVW-CLO',
     address: { line1: '1 Main St', city: 'Clovis' },
   },
-  requestedFor: 'Doua Vang',
-  requesterEmail: 'doua@example.org',
+  requestedFor: 'Lena Hale',
+  requesterEmail: 'lena@example.org',
   neededBy: '2026-08-20T17:00:00.000Z',
   orgTimezone: 'America/Los_Angeles',
-  notes: 'Front office, ask for Doua',
+  notes: 'Front office, ask for Lena',
   lines: [
     { itemId: 'i1', quantity: 3, name: 'Google Chrome Book', sku: 'SP-BVK31-LH9' },
     { itemId: 'i2', quantity: 1, name: 'Charger', sku: 'SP-CHRG-1' },
@@ -69,7 +69,7 @@ describe('SendDeliveryRequestButton', () => {
 
     expect(actionSpy).toHaveBeenCalledTimes(1);
     expect(actionSpy).toHaveBeenCalledWith({
-      orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
+      orderId: '0000000f-0000-4000-8000-000000000001',
       orderNumber: 61,
       fulfillmentType: 'delivery',
       warehouseName: 'DC4',
@@ -79,11 +79,11 @@ describe('SendDeliveryRequestButton', () => {
         code: 'CVW-CLO',
         address: { line1: '1 Main St', city: 'Clovis' },
       },
-      requestedFor: 'Doua Vang',
-      requesterEmail: 'doua@example.org',
+      requestedFor: 'Lena Hale',
+      requesterEmail: 'lena@example.org',
       neededByLocal: '2026-08-20T17:00:00.000Z',
       orgTimezone: 'America/Los_Angeles',
-      notes: 'Front office, ask for Doua',
+      notes: 'Front office, ask for Lena',
       lines: [
         { itemId: 'i1', quantity: 3 },
         { itemId: 'i2', quantity: 1 },

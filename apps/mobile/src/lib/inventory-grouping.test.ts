@@ -30,15 +30,15 @@ const skuHeader = <T extends GroupableItem>(rows: GroupedRow<T>[]) =>
   rows.find((r) => r.kind === 'sku-header') as Extract<GroupedRow<T>, { kind: 'sku-header' }>;
 
 describe('buildGroupedRows — Model B same-SKU collapse (web/mobile parity)', () => {
-  // The exact bug from the field: Acer Chromebook 511 C737LT, SKU SP-EPOMX-QAN,
+  // The exact bug from the field: Acer Chromebook 511 C737LT, SKU SP-EDEM1-AAA,
   // arrived as 4 placement rows (385/100/25/150) on mobile instead of one.
   it('collapses 4 same-SKU placements into ONE header row summing to 660', () => {
     const rows = buildGroupedRows(
       [
-        item({ id: 'a', sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 385 }),
-        item({ id: 'b', sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 100 }),
-        item({ id: 'c', sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 25 }),
-        item({ id: 'd', sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 150 }),
+        item({ id: 'a', sku: 'SP-EDEM1-AAA', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 385 }),
+        item({ id: 'b', sku: 'SP-EDEM1-AAA', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 100 }),
+        item({ id: 'c', sku: 'SP-EDEM1-AAA', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 25 }),
+        item({ id: 'd', sku: 'SP-EDEM1-AAA', name: 'Acer Chromebook 511 C737LT', quantity_on_hand: 150 }),
       ],
       NONE,
     );
@@ -47,10 +47,10 @@ describe('buildGroupedRows — Model B same-SKU collapse (web/mobile parity)', (
     expect(rows).toHaveLength(1);
     const header = skuHeader(rows);
     expect(header.kind).toBe('sku-header');
-    expect(header.sku).toBe('SP-EPOMX-QAN');
+    expect(header.sku).toBe('SP-EDEM1-AAA');
     expect(header.total).toBe(660);
     expect(header.placementCount).toBe(4);
-    expect(header.key).toBe('sku:SP-EPOMX-QAN');
+    expect(header.key).toBe('sku:SP-EDEM1-AAA');
   });
 
   // REWRITTEN (was: "carries the FIRST placement's reorder point"). That
@@ -62,8 +62,8 @@ describe('buildGroupedRows — Model B same-SKU collapse (web/mobile parity)', (
   it('SUMS the placements\' reorder points, so threshold and quantity share a scale', () => {
     const rows = buildGroupedRows(
       [
-        item({ id: 'a', sku: 'SP-EPOMX-QAN', quantity_on_hand: 385, reorder_point: 40 }),
-        item({ id: 'b', sku: 'SP-EPOMX-QAN', quantity_on_hand: 100, reorder_point: 5 }),
+        item({ id: 'a', sku: 'SP-EDEM1-AAA', quantity_on_hand: 385, reorder_point: 40 }),
+        item({ id: 'b', sku: 'SP-EDEM1-AAA', quantity_on_hand: 100, reorder_point: 5 }),
       ],
       NONE,
     );
@@ -96,10 +96,10 @@ describe('buildGroupedRows — Model B same-SKU collapse (web/mobile parity)', (
   it('rolls up to the WORST status across placements (never masks archived/discontinued)', () => {
     const rows = buildGroupedRows(
       [
-        item({ id: 'a', sku: 'SP-EPOMX-QAN', quantity_on_hand: 385, status: 'active' }),
-        item({ id: 'b', sku: 'SP-EPOMX-QAN', quantity_on_hand: 100, status: 'active' }),
-        item({ id: 'c', sku: 'SP-EPOMX-QAN', quantity_on_hand: 25, status: 'discontinued' }),
-        item({ id: 'd', sku: 'SP-EPOMX-QAN', quantity_on_hand: 150, status: 'archived' }),
+        item({ id: 'a', sku: 'SP-EDEM1-AAA', quantity_on_hand: 385, status: 'active' }),
+        item({ id: 'b', sku: 'SP-EDEM1-AAA', quantity_on_hand: 100, status: 'active' }),
+        item({ id: 'c', sku: 'SP-EDEM1-AAA', quantity_on_hand: 25, status: 'discontinued' }),
+        item({ id: 'd', sku: 'SP-EDEM1-AAA', quantity_on_hand: 150, status: 'archived' }),
       ],
       NONE,
     );
@@ -109,12 +109,12 @@ describe('buildGroupedRows — Model B same-SKU collapse (web/mobile parity)', (
   it('expands to individual placement rows, each keeping its own id + qty + placement label', () => {
     const rows = buildGroupedRows(
       [
-        item({ id: 'a', sku: 'SP-EPOMX-QAN', quantity_on_hand: 385, charter_id: 'c1' }),
-        item({ id: 'b', sku: 'SP-EPOMX-QAN', quantity_on_hand: 275, charter_id: 'c2' }),
+        item({ id: 'a', sku: 'SP-EDEM1-AAA', quantity_on_hand: 385, charter_id: 'c1' }),
+        item({ id: 'b', sku: 'SP-EDEM1-AAA', quantity_on_hand: 275, charter_id: 'c2' }),
       ],
       {
         expandedSizeRuns: new Set(),
-        expandedSkuGroups: new Set(['SP-EPOMX-QAN']),
+        expandedSkuGroups: new Set(['SP-EDEM1-AAA']),
         placementLabelFor: (it) => (it.charter_id === 'c1' ? 'Program A' : 'Program B'),
       },
     );
@@ -224,12 +224,12 @@ describe('buildGroupedRows — enableSizeRuns:false (Books list)', () => {
   });
 
   it('still collapses same-SKU book placements into ONE header with the summed total', () => {
-    // "Into Algebra 1" (sp-8n8lr-8nd) — 3 rows on L4L North Region today.
+    // "Into Algebra 1" (sp-8dem6-ab1) — 3 rows on L4L North Region today.
     const rows = buildGroupedRows(
       [
-        item({ id: 'a', sku: 'sp-8n8lr-8nd', name: 'Into Algebra 1', quantity_on_hand: 4, reorder_point: 2 }),
-        item({ id: 'b', sku: 'sp-8n8lr-8nd', name: 'Into Algebra 1', quantity_on_hand: 6 }),
-        item({ id: 'c', sku: 'sp-8n8lr-8nd', name: 'Into Algebra 1', quantity_on_hand: 2, status: 'discontinued' }),
+        item({ id: 'a', sku: 'sp-8dem6-ab1', name: 'Into Algebra 1', quantity_on_hand: 4, reorder_point: 2 }),
+        item({ id: 'b', sku: 'sp-8dem6-ab1', name: 'Into Algebra 1', quantity_on_hand: 6 }),
+        item({ id: 'c', sku: 'sp-8dem6-ab1', name: 'Into Algebra 1', quantity_on_hand: 2, status: 'discontinued' }),
       ],
       BOOKS,
     );

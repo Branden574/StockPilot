@@ -142,9 +142,9 @@ async function loadPrefFlags(
  * `notifyAudience` map (Task 16) and each recipient's own pref column.
  *
  * NEVER `_notify_recipients()` — that SQL helper is role-hardcoded and
- * shared across features; it cannot see a per-user grant like Andrew's
- * (a viewer granted `read_all` through `user_permission_overrides`), which
- * is exactly the case this function exists to get right.
+ * shared across features; it cannot see a per-user grant like the DC4 lead's
+ * (a viewer granted `read_all` through `user_permission_overrides`), which is
+ * exactly the case this function exists to get right.
  *
  * The override-loading query shape mirrors
  * `apps/web/src/server/actions/permissions.ts:189-258` — role overrides

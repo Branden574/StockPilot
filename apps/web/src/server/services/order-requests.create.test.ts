@@ -291,7 +291,7 @@ describe('create: one call, the request as the database reads it', () => {
         placerUserId: other,
         fulfillmentType: 'delivery',
         deliveryCharterId: SITE,
-        onBehalfOf: { name: ' Doua Vang ', email: ' doua@example.org ' },
+        onBehalfOf: { name: ' Lena Hale ', email: ' lena@example.org ' },
         notes: '  For room 12 ',
         lines: [
           { itemId: ITEM_A, quantity: 5 },
@@ -310,8 +310,8 @@ describe('create: one call, the request as the database reads it', () => {
         warehouse_id: WH,
         fulfillment_type: 'delivery',
         delivery_charter_id: SITE,
-        on_behalf_name: 'Doua Vang',
-        on_behalf_email: 'doua@example.org',
+        on_behalf_name: 'Lena Hale',
+        on_behalf_email: 'lena@example.org',
         notes: 'For room 12',
         needed_by: null,
         lines: [
@@ -389,26 +389,26 @@ describe('create: one call, the request as the database reads it', () => {
         order: {
           ...SUMMARY,
           requester_user_id: null,
-          requester_name: 'Doua Vang',
-          requester_email: 'doua@example.org',
+          requester_name: 'Lena Hale',
+          requester_email: 'lena@example.org',
         },
       },
       error: null,
     });
     const answer = await svc(stub).create({
-      body: body({ onBehalfOf: { name: 'Doua Vang', email: 'doua@example.org' } }),
+      body: body({ onBehalfOf: { name: 'Lena Hale', email: 'lena@example.org' } }),
       surface: 'web',
     });
     expect(answer.order.requestedFor).toEqual({
       self: false,
-      name: 'Doua Vang',
-      email: 'doua@example.org',
+      name: 'Lena Hale',
+      email: 'lena@example.org',
     });
     await flushTail();
     expect(dispatchEvent).toHaveBeenCalledWith(
       ORG,
       'order.created',
-      expect.objectContaining({ requester: 'Doua Vang' }),
+      expect.objectContaining({ requester: 'Lena Hale' }),
     );
   });
 

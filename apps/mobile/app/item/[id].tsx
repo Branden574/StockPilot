@@ -2010,8 +2010,9 @@ export default function ItemDetail() {
                 </Button>
               ) : null}
               {/* Remove-from-rack write-off (2026-07-23): draws down ONE rack,
-                  leaving stock in every other rack alone — the tool Andrew
-                  reached for when he archived a whole book to clear one rack.
+                  leaving stock in every other rack alone — the tool a DC4
+                  manager reached for when they archived a whole book to clear
+                  one rack.
                   Only meaningful on an active item that still holds stock. */}
               {canAdjustStock && item.status !== 'archived' && item.quantity_on_hand > 0 ? (
                 <Button
