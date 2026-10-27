@@ -754,7 +754,7 @@ PGTAP_TESTS=(
   # nothing about an item the writer cannot read. The two-session proofs are
   # scripts/db-concurrency/0413_hide_vs_submit.sh and 0413_exchange_reissue_vs_hide.sh.
   supabase/tests/0413_order_catalog_visibility.test.sql
-  # Order signature images (0403, owner decision O1): the data block, replayed
+  # Order signature images (0414, owner decision O1): the data block, replayed
   # from the recorded statements, copies every stored image to the side table
   # byte for byte BEFORE it nulls the row, and each abort check raises on a
   # planted mismatch with nothing applied; the capture trigger (SECURITY
@@ -762,9 +762,9 @@ PGTAP_TESTS=(
   # signed_at) moves an image confirm_order_signature writes before the row
   # is stored, so no member (a viewer included) reads it, and clears it when
   # resume_fulfillment resets the hand-over. The two-session proofs are
-  # scripts/db-concurrency/0403_capture_race.sh; the lock footprint is
-  # scripts/db-concurrency/0403_migration_lock_footprint.sh.
-  supabase/tests/0403_order_signature_images.test.sql
+  # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
+  # scripts/db-concurrency/0414_migration_lock_footprint.sh.
+  supabase/tests/0414_order_signature_images.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

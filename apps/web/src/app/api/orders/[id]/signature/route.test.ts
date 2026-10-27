@@ -22,7 +22,7 @@ vi.mock('@/lib/export-rate-limit', () => ({
 }));
 
 // The service-only side table (migration 0389), read with the admin client
-// after the gate. It holds the image by default: since 0403 every image lives
+// after the gate. It holds the image by default: since 0414 every image lives
 // there and the order row's column is always null.
 const adminHolder = { client: null as unknown, throws: false };
 vi.mock('@/lib/supabase/admin', () => ({
@@ -53,7 +53,7 @@ function buildCtx(opts: {
   const stub = makeSupabaseStub({
     'order_requests.select': {
       data: {
-        // A value left in the order column must never be served (0403).
+        // A value left in the order column must never be served (0414).
         signature_data_url: opts.signature ?? COLUMN_LEFTOVER,
         assigned_delivery_user_id: opts.assignedDriverId ?? null,
       },
@@ -137,7 +137,7 @@ describe('GET /api/orders/[id]/signature', () => {
     expect(body.signatureDataUrl).toBe(SIGNATURE);
   });
 
-  it('0403: reads the image from order_request_secrets only, and never the order column (not even selected)', async () => {
+  it('0414: reads the image from order_request_secrets only, and never the order column (not even selected)', async () => {
     const SIDE = 'data:image/png;base64,c2lkZQ==';
     sideImage(SIDE);
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
@@ -151,7 +151,7 @@ describe('GET /api/orders/[id]/signature', () => {
     expect(JSON.stringify(none)).not.toContain(COLUMN_LEFTOVER);
   });
 
-  it('0403: the row read selects only what the gate needs', async () => {
+  it('0414: the row read selects only what the gate needs', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select': { data: { assigned_delivery_user_id: null }, error: null },
     });

@@ -30,8 +30,8 @@ const NO_STORE = { 'cache-control': 'private, no-store' } as const;
  *
  * The phone reads it through the alias /api/v1/orders/[id]/signature (the
  * Vercel firewall bypass covers /api/v1*), since migration 0389; it used to
- * select the image straight from the table. Since 0403 the image lives only
- * in order_request_secrets (the order row's column is always null: 0403 moved
+ * select the image straight from the table. Since 0414 the image lives only
+ * in order_request_secrets (the order row's column is always null: 0414 moved
  * every stored image there and its trigger moves every new one), read with
  * the admin client after the gate.
  */

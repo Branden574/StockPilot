@@ -983,7 +983,7 @@ select is(
   -- BEFORE UPDATE OF quantity_requested, item_id when the quantity rises or
   -- the item changes). It sorts after both guards and refuses a hidden item;
   -- place_order_request records that refusal as item_not_orderable.
-  -- Re-pinned by 0403 (the signature image move): plus
+  -- Re-pinned by 0414 (the signature image move): plus
   -- trg_order_requests_signature_image_capture, an UPDATE OF
   -- signature_data_url, signed_at trigger; place_order_request inserts orders
   -- and never updates one, so it never fires for the 0391 writers.
@@ -999,7 +999,7 @@ select is(
   'order_requests:trg_order_requests_zz_replacement_status,'
   'order_requests:trg_zz_order_requests_insert_guard,'
   'order_requests:trg_zz_order_requests_replacement_link_ins,order_requests:trg_zz_order_requests_replacement_link_upd',
-  'Z4: the triggers on order_requests (7, plus 0396''s five for replacements and 0403''s image capture), order_request_lines (1, plus 0396''s replacement guard and 0413''s two visibility gate triggers) and notifications (1) are as pinned, and order_submissions has none');
+  'Z4: the triggers on order_requests (7, plus 0396''s five for replacements and 0414''s image capture), order_request_lines (1, plus 0396''s replacement guard and 0413''s two visibility gate triggers) and notifications (1) are as pinned, and order_submissions has none');
 
 select * from finish();
 rollback;

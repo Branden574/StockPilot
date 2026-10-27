@@ -1,6 +1,8 @@
--- supabase/tests/0403_order_signature_images.test.sql
--- pgTAP proof for migration 0403 (slice C step 4, owner decision O1): the
--- captured signature image leaves the member-readable order row.
+-- supabase/tests/0414_order_signature_images.test.sql
+-- pgTAP proof for migration 0414 (slice C step 4, owner decision O1): the
+-- captured signature image leaves the member-readable order row. The
+-- migration was numbered 0403 until 0413 shipped first; its file is byte for
+-- byte the one reviewed as 0403.
 --
 -- R. The replay: the migration's own lock prelude and data block, read back
 --    from supabase_migrations.schema_migrations, run again on fixtures (R0:
@@ -22,7 +24,7 @@
 --    X0: the fixtures are byte for byte as before.
 -- D. The move: every image lands in the side table byte for byte (an order
 --    with no side row, one whose side row holds link tokens, one whose side
---    row already holds the same image, and (port to 0403) a 0396 replacement
+--    row already holds the same image, and (port to 0414) a 0396 replacement
 --    order, whose guards and notify trigger the move passes untouched), the
 --    rows are null, every other
 --    column (updated_at included) is unchanged, an order without an image
@@ -41,7 +43,8 @@
 --    the frozen bodies keep their md5.
 --
 -- Mutation table (proved for this file as 0393 by sec-orders/mutate-0392.py
--- --db; re-run for 0403 on the migration scratch stack by
+-- --db; re-run when the migration was numbered 0403, byte for byte the file
+-- it is now, on the migration scratch stack by
 -- stockpilot-work/docket-2026-10-24/s1-tools/mutate-0403.py):
 --   I1 the capture trigger without its reset branch          -> C3
 --   I2 the capture trigger leaves the image on the row        -> C1, C2
@@ -52,53 +55,53 @@
 --   I7 the updated_at trigger not enabled again               -> R2 (trigger_state raises; nothing applied)
 --   I8 the image checksum after the null-out dropped          -> X9
 --   I9 the unexpected-error wrapper re-raises every error     -> X10 (review stage)
---   I10 the capture trigger dropped (port to 0403)          -> C1, C2, C3, C6, P2
+--   I10 the capture trigger dropped (port to 0414)          -> C1, C2, C3, C6, P2
 --
 -- Roles: fixtures as the test superuser; attempts through pg_temp.attempt
--- (undone) or pg_temp.call_as (kept). begin/rollback. Namespace 04030000.
+-- (undone) or pg_temp.call_as (kept). begin/rollback. Namespace 04140000.
 
 begin;
 
 select plan(31);
 
-\set orgA   '\'04030000-0000-0000-0000-00000000000a\''
-\set mgr    '\'04030000-0000-0000-0000-0000000000a1\''
-\set req    '\'04030000-0000-0000-0000-0000000000a2\''
-\set vwr    '\'04030000-0000-0000-0000-0000000000a6\''
-\set whA    '\'04030000-0000-0000-0000-0000000000d1\''
-\set itR    '\'04030000-0000-0000-0000-0000000000f1\''
-\set iDone1   '\'04030000-0000-0000-0000-000000000101\''
-\set iDone2   '\'04030000-0000-0000-0000-000000000102\''
-\set iSame    '\'04030000-0000-0000-0000-000000000103\''
-\set iNone    '\'04030000-0000-0000-0000-000000000104\''
-\set iSideOnly '\'04030000-0000-0000-0000-000000000105\''
-\set iRepl   '\'04030000-0000-0000-0000-000000000106\''
-\set rRepl   '\'04030000-0000-0000-0000-000000000401\''
-\set iSign    '\'04030000-0000-0000-0000-000000000201\''
-\set iResume  '\'04030000-0000-0000-0000-000000000202\''
-\set iPhys    '\'04030000-0000-0000-0000-000000000203\''
-\set iSvc     '\'04030000-0000-0000-0000-000000000204\''
-\set lResume  '\'04030000-0000-0000-0000-000000000302\''
+\set orgA   '\'04140000-0000-0000-0000-00000000000a\''
+\set mgr    '\'04140000-0000-0000-0000-0000000000a1\''
+\set req    '\'04140000-0000-0000-0000-0000000000a2\''
+\set vwr    '\'04140000-0000-0000-0000-0000000000a6\''
+\set whA    '\'04140000-0000-0000-0000-0000000000d1\''
+\set itR    '\'04140000-0000-0000-0000-0000000000f1\''
+\set iDone1   '\'04140000-0000-0000-0000-000000000101\''
+\set iDone2   '\'04140000-0000-0000-0000-000000000102\''
+\set iSame    '\'04140000-0000-0000-0000-000000000103\''
+\set iNone    '\'04140000-0000-0000-0000-000000000104\''
+\set iSideOnly '\'04140000-0000-0000-0000-000000000105\''
+\set iRepl   '\'04140000-0000-0000-0000-000000000106\''
+\set rRepl   '\'04140000-0000-0000-0000-000000000401\''
+\set iSign    '\'04140000-0000-0000-0000-000000000201\''
+\set iResume  '\'04140000-0000-0000-0000-000000000202\''
+\set iPhys    '\'04140000-0000-0000-0000-000000000203\''
+\set iSvc     '\'04140000-0000-0000-0000-000000000204\''
+\set lResume  '\'04140000-0000-0000-0000-000000000302\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:mgr, '0403-mgr@test.local', '{}'::jsonb),
-  (:req, '0403-req@test.local', '{}'::jsonb),
-  (:vwr, '0403-vwr@test.local', '{}'::jsonb)
+  (:mgr, '0414-mgr@test.local', '{}'::jsonb),
+  (:req, '0414-req@test.local', '{}'::jsonb),
+  (:vwr, '0414-vwr@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
-insert into public.organizations (id, name, slug) values (:orgA, '0403 Images A', '0403-images-a');
+insert into public.organizations (id, name, slug) values (:orgA, '0414 Images A', '0414-images-a');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :mgr, 'manager', now()),
   (:orgA, :req, 'staff',   now()),
   (:orgA, :vwr, 'viewer',  now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA, :orgA, '0403 Main', 'WH-0403A', 'active');
+  (:whA, :orgA, '0414 Main', 'WH-0414A', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :req, :whA, true),
   (:orgA, :vwr, :whA, true);
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
-  (:itR, :orgA, :whA, '0403-R', 'Images resume', 30, 'active', 'none');
+  (:itR, :orgA, :whA, '0414-R', 'Images resume', 30, 'active', 'none');
 
 create temp table img (n text primary key, v text not null);
 insert into img values
@@ -139,7 +142,7 @@ insert into public.order_requests
 insert into public.order_request_lines
   (id, order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked) values
   (:lResume, :iResume, :itR, 10, 5, null);
--- (Port to 0403.) A replacement order (0396), handed over digitally with its
+-- (Port to 0414.) A replacement order (0396), handed over digitally with its
 -- image still on the row: the shape 0396's triggers (the replacement header
 -- guard, the link guard, the replacement notify trigger) see when the move
 -- nulls its image. Its return is for iDone1 and has been received.
@@ -236,7 +239,7 @@ begin
     if p_prep is not null then
       execute p_prep;
     end if;
-    execute pg_temp.mig('0403', '$c403_move$');
+    execute pg_temp.mig('0414', '$c403_move$');
     raise exception using errcode = 'XX393', message = 'undo';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
@@ -253,7 +256,7 @@ begin
     if p_prep is not null then
       execute p_prep;
     end if;
-    execute pg_temp.mig('0403', '$c403_move$');
+    execute pg_temp.mig('0414', '$c403_move$');
     raise exception using errcode = 'XX393', message = 'undo';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_detail = pg_exception_detail;
@@ -265,13 +268,13 @@ begin
 end $$;
 create function pg_temp.fixture_state() returns text language sql stable as $$
   select md5(coalesce((select string_agg(to_jsonb(o)::text, E'\n' order by o.id)
-                         from public.order_requests o where o.organization_id = '04030000-0000-0000-0000-00000000000a'), ''))
+                         from public.order_requests o where o.organization_id = '04140000-0000-0000-0000-00000000000a'), ''))
          || md5(coalesce((select string_agg(to_jsonb(s)::text, E'\n' order by s.order_request_id)
-                            from public.order_request_secrets s where s.organization_id = '04030000-0000-0000-0000-00000000000a'), ''))
+                            from public.order_request_secrets s where s.organization_id = '04140000-0000-0000-0000-00000000000a'), ''))
 $$;
 
-create schema zz_probe_0403;
-create function zz_probe_0403.side_before() returns trigger language plpgsql as $$
+create schema zz_probe_0414;
+create function zz_probe_0414.side_before() returns trigger language plpgsql as $$
 begin
   if tg_argv[0] = 'alter' and new.signature_data_url is not null then
     new.signature_data_url := new.signature_data_url || 'x';
@@ -280,14 +283,14 @@ begin
   end if;
   return new;
 end $$;
-create function zz_probe_0403.side_after() returns trigger language plpgsql as $$
+create function zz_probe_0414.side_after() returns trigger language plpgsql as $$
 begin
   update public.order_request_secrets
      set signature_data_url = signature_data_url || 'x'
    where order_request_id = tg_argv[0]::uuid;
   return null;
 end $$;
-create function zz_probe_0403.order_before() returns trigger language plpgsql as $$
+create function zz_probe_0414.order_before() returns trigger language plpgsql as $$
 begin
   if tg_argv[0] = 'skip_null_out' and old.signature_data_url is not null and new.signature_data_url is null then
     return null;
@@ -299,7 +302,7 @@ begin
   return new;
 end $$;
 
-create function zz_probe_0403.order_after() returns trigger language plpgsql as $$
+create function zz_probe_0414.order_after() returns trigger language plpgsql as $$
 begin
   if old.signature_data_url is not null and new.signature_data_url is null then
     update public.order_request_secrets set signature_data_url = signature_data_url || 'x' where order_request_id = new.id;
@@ -316,12 +319,12 @@ select o.id, (to_jsonb(o) - 'signature_data_url') as other, to_jsonb(o) as whole
 
 -- ══ R / X ═════════════════════════════════════════════════════════════════
 select is(
-  pg_temp.mig_count('0403', '$c403_lock$')::text || '/' || pg_temp.mig_count('0403', '$c403_move$')::text,
+  pg_temp.mig_count('0414', '$c403_lock$')::text || '/' || pg_temp.mig_count('0414', '$c403_move$')::text,
   '1/1',
-  'R0: the CLI recorded the lock prelude and the data block of 0403 exactly once each (this suite replays that text)');
+  'R0: the CLI recorded the lock prelude and the data block of 0414 exactly once each (this suite replays that text)');
 select is(
   pg_temp.try_move(format($q$do $p$ begin
-                               -- The capture trigger (0403 is applied) would move the image to the side
+                               -- The capture trigger (0414 is applied) would move the image to the side
                                -- table, whose own CHECK raises 23514 first: keep it on the row for this
                                -- planted mismatch (desk check F2; the subtransaction undoes both).
                                alter table public.order_requests disable trigger trg_order_requests_signature_image_capture;
@@ -336,38 +339,38 @@ select is(
   'P0001:order_secrets_images_conflict',
   'X2: a side table already holding a DIFFERENT image for the order: refused before any write');
 select is(
-  pg_temp.try_move('create trigger zz_probe_0403_side before insert or update on public.order_request_secrets
-                      for each row execute function zz_probe_0403.side_before(''alter'')'),
+  pg_temp.try_move('create trigger zz_probe_0414_side before insert or update on public.order_request_secrets
+                      for each row execute function zz_probe_0414.side_before(''alter'')'),
   'P0001:order_secrets_images_copy_mismatch',
   'X3: a side copy that is not byte-identical: raises BEFORE any row is nulled');
 select is(
-  pg_temp.try_move('create trigger zz_probe_0403_side before insert or update on public.order_request_secrets
-                      for each row execute function zz_probe_0403.side_before(''skip'')'),
+  pg_temp.try_move('create trigger zz_probe_0414_side before insert or update on public.order_request_secrets
+                      for each row execute function zz_probe_0414.side_before(''skip'')'),
   'P0001:order_secrets_images_count',
   'X4: a side copy that never lands: rows copied <> images');
 select is(
-  pg_temp.try_move('create trigger zz_probe_0403_order before update on public.order_requests
-                      for each row execute function zz_probe_0403.order_before(''skip_null_out'')'),
+  pg_temp.try_move('create trigger zz_probe_0414_order before update on public.order_requests
+                      for each row execute function zz_probe_0414.order_before(''skip_null_out'')'),
   'P0001:order_secrets_images_count',
   'X5: a row that is not nulled: rows nulled <> images');
 select is(
-  pg_temp.try_move('create trigger zz_probe_0403_order before update on public.order_requests
-                      for each row execute function zz_probe_0403.order_before(''keep'')'),
+  pg_temp.try_move('create trigger zz_probe_0414_order before update on public.order_requests
+                      for each row execute function zz_probe_0414.order_before(''keep'')'),
   'P0001:order_secrets_images_left',
   'X6: an image still on the row after the null-out: raises');
 select is(
-  pg_temp.try_move('create trigger zz_probe_0403_order before update on public.order_requests
-                      for each row execute function zz_probe_0403.order_before(''bump_updated'')'),
+  pg_temp.try_move('create trigger zz_probe_0414_order before update on public.order_requests
+                      for each row execute function zz_probe_0414.order_before(''bump_updated'')'),
   'P0001:order_secrets_images_other_columns_changed',
   'X7: an updated_at re-stamped by the move: raises');
 select is(
-  pg_temp.try_move(format('create trigger zz_probe_0403_after after insert on public.order_request_secrets
-                             for each row execute function zz_probe_0403.side_after(%L)', :iSideOnly)),
+  pg_temp.try_move(format('create trigger zz_probe_0414_after after insert on public.order_request_secrets
+                             for each row execute function zz_probe_0414.side_after(%L)', :iSideOnly)),
   'P0001:order_secrets_images_copy_mismatch',
   'X8: a side image of an order that held none on its row, moved during the copy: raises');
 select matches(
-  pg_temp.try_move_d('create trigger zz_probe_0403_oafter after update on public.order_requests
-                        for each row execute function zz_probe_0403.order_after()'),
+  pg_temp.try_move_d('create trigger zz_probe_0414_oafter after update on public.order_requests
+                        for each row execute function zz_probe_0414.order_after()'),
   '^P0001:order_secrets_images_copy_mismatch:The side table does not hold the \d+ images the rows held',
   'X9: a side image changed after its row was nulled (after the byte check): the image checksum raises');
 -- (The side return token is read first: a subquery on the side table would
@@ -375,10 +378,10 @@ select matches(
 insert into snap values ('iDone2_ret', (select s.return_token::text from public.order_request_secrets s where s.order_request_id = :iDone2));
 select is(
   (select split_part(r, ':', 1) || ':' || split_part(r, ':', 2) || '|'
-          || (r ~ '23514') || '|' || (r ~ 'zz_probe_0403_chk') || '|'
+          || (r ~ '23514') || '|' || (r ~ 'zz_probe_0414_chk') || '|'
           || (r ~ 'data:image' or position((select v from snap where k = 'iDone2_ret') in r) > 0)::text
      from (select pg_temp.try_move_d(
-             'alter table public.order_request_secrets add constraint zz_probe_0403_chk
+             'alter table public.order_request_secrets add constraint zz_probe_0414_chk
                 check (signature_data_url is null or return_token is null) not valid') as r) x),
   'P0001:order_secrets_images_unexpected_error|true|true|false',
   'X10: (review stage) an error the block does not foresee (a NOT VALID check the side row of an order holding a return token breaks when its image lands) aborts with its SQLSTATE and constraint name only: the side row the error would print (its tokens, the image) never reaches the output or the log');
@@ -387,7 +390,7 @@ select is(
   (select v from snap where k = 'fixtures'),
   'X0: after the 10 refused runs every fixture order and side row is byte for byte as before');
 
-select lives_ok(pg_temp.mig('0403', '$c403_lock$'), 'R1a: the lock prelude replays');
+select lives_ok(pg_temp.mig('0414', '$c403_lock$'), 'R1a: the lock prelude replays');
 select is(
   (select string_agg(c.relname || '=' || l.mode, ',' order by c.relname)
      from pg_locks l join pg_class c on c.oid = l.relation
@@ -399,7 +402,7 @@ select is(
                 and c.relname in ('order_requests', 'order_request_secrets') and l.mode = 'AccessExclusiveLock'),
   'order_request_secrets=ExclusiveLock,order_requests=ExclusiveLock|0',
   'R1: the prelude holds EXCLUSIVE on order_requests and order_request_secrets and no ACCESS EXCLUSIVE');
-select lives_ok(pg_temp.mig('0403', '$c403_move$'), 'R2: the data block runs on every fixture shape without raising');
+select lives_ok(pg_temp.mig('0414', '$c403_move$'), 'R2: the data block runs on every fixture shape without raising');
 
 -- ══ D. The move ═══════════════════════════════════════════════════════════
 select is(
@@ -485,7 +488,7 @@ select is(
           || coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a)::text, 'false')
      from pg_proc p where p.oid = to_regprocedure('public.tg_order_requests_signature_image_capture()')),
   '22161ed6caf46236d6e4e93002f448bb|false|{"search_path=public, pg_temp"}|postgres|false|false|false|false',
-  'P1: the capture function is 0403''s body, SECURITY INVOKER, search_path pinned, owned by postgres, executable by nobody (a trigger needs no EXECUTE)');
+  'P1: the capture function is 0414''s body, SECURITY INVOKER, search_path pinned, owned by postgres, executable by nobody (a trigger needs no EXECUTE)');
 select is(
   (select t.tgenabled::text || '|' || (pg_get_triggerdef(t.oid) ~ 'BEFORE UPDATE OF signature_data_url, signed_at ON public\.order_requests FOR EACH ROW')::text
      from pg_trigger t where t.tgrelid = 'public.order_requests'::regclass and t.tgname = 'trg_order_requests_signature_image_capture'),
@@ -493,24 +496,27 @@ select is(
   'P2: the trigger is BEFORE UPDATE OF signature_data_url, signed_at FOR EACH ROW, and enabled');
 select is(
   (select (p.prosrc !~* 'raise')::text from pg_proc p where p.oid = 'public.tg_order_requests_signature_image_capture()'::regprocedure)
-  || '/' || (pg_temp.mig('0403', '$c403_move$') !~* '40001|40p01|serialization_failure|deadlock_detected')::text
-  || '/' || (pg_temp.mig('0403', '$c403_move$') !~* 'raise\s+(notice|info|log|warning|debug)')::text
-  || '/' || (select string_agg(distinct m[1], ',') from regexp_matches(pg_temp.mig('0403', '$c403_move$'), $re$errcode\s*=\s*'([^']+)'$re$, 'g') m),
+  || '/' || (pg_temp.mig('0414', '$c403_move$') !~* '40001|40p01|serialization_failure|deadlock_detected')::text
+  || '/' || (pg_temp.mig('0414', '$c403_move$') !~* 'raise\s+(notice|info|log|warning|debug)')::text
+  || '/' || (select string_agg(distinct m[1], ',') from regexp_matches(pg_temp.mig('0414', '$c403_move$'), $re$errcode\s*=\s*'([^']+)'$re$, 'g') m),
   'true/true/true/P0001',
   'P3: the trigger raises nothing of its own; the data block raises P0001 only (never 40001 or 40P01) and logs nothing');
+-- The two comments are the migration's own text, byte for byte as reviewed
+-- when it was numbered 0403 (renumbered 0414 because 0413 shipped first, its
+-- content unchanged), so they still name it by that number.
 select is(
   (coalesce(obj_description('public.tg_order_requests_signature_image_capture()'::regprocedure, 'pg_proc'), '') ~ '0403')::text || ','
   || (coalesce(col_description('public.order_requests'::regclass,
                  (select a.attnum from pg_attribute a where a.attrelid = 'public.order_requests'::regclass and a.attname = 'signature_data_url')), '')
       ~ '0403')::text,
   'true,true',
-  'P4: the capture function and order_requests.signature_data_url say in their comments what 0403 does');
+  'P4: the capture function and order_requests.signature_data_url say in their comments what this migration does (its reviewed text, which names it 0403)');
 select is(
   (select string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc), E'\n' order by p.oid::regprocedure::text collate "C")
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.proname in ('confirm_order_signature', 'confirm_physical_signature', 'resume_fulfillment', 'reopen_picking')),
-  -- Re-pinned for the port to 0403: 0395 restated confirm_physical_signature
+  -- Re-pinned for the port to 0414: 0395 restated confirm_physical_signature
   -- (was f7a14a46d2c70f635c3da844c786ce67; still writes no image) and
   -- reopen_picking (was 293ce0e76d195bb13105cfd1c067de82; still refuses a
   -- signed order), the values the 0395 suite pins as its new bodies;
