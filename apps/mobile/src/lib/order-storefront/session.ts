@@ -27,6 +27,7 @@ import {
   type StorefrontItem,
 } from '@stockpilot/core';
 
+import { clearOrderCatalogSelection } from '../order-catalog-visibility/selection';
 import {
   storefrontReadFailure,
   type OrderCallScope,
@@ -1077,6 +1078,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       resetScope(false);
       scope = null;
       scopeEpoch = null;
+      // Manage order items (0413, design 8.6): the account's selection, its
+      // review sheet and its kept operation end with the account.
+      clearOrderCatalogSelection();
       publish();
     },
   };

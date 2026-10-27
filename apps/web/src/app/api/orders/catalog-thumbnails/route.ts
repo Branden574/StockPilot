@@ -29,8 +29,8 @@ export const dynamic = 'force-dynamic';
  * ~2-3s — but it no longer blocks first paint.
  *
  * WHICH ITEMS (one shape per caller):
- *   • default: orderable items (active, non-bundle, NOT rentals), the
- *     orders picker's set. Unchanged, request for request.
+ *   • default: orderable items (active, non-bundle, NOT rentals, not hidden
+ *     from ordering), the orders picker's set.
  *   • `rentalsOnly=1`: ONLY rental items, exactly the rows the New rental
  *     page lists (/dashboard/rentals/new: active, is_rental, not deleted,
  *     by name then id, every row up to CATALOG_ROW_CEILING, read in
@@ -125,7 +125,9 @@ export async function GET(req: NextRequest) {
     .or('is_bundle.is.null,is_bundle.eq.false')
     .limit(500);
   if (!includeRentals) {
-    itemsQuery = itemsQuery.eq('is_rental', false);
+    // The orders picker's set: never a rental, and never an item hidden from
+    // new ordering (0413), so no photo URL is signed for one.
+    itemsQuery = itemsQuery.eq('is_rental', false).eq('order_catalog_visible', true);
   }
   const { data: items } = await itemsQuery;
 

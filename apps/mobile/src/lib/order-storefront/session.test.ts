@@ -19,6 +19,7 @@ import {
   type PendingOrderSubmission,
 } from '@stockpilot/core';
 
+import { orderCatalogSelection } from '../order-catalog-visibility/selection';
 import { OrderAnswerForAnotherOrganization, type OrderStorefrontApi } from './api';
 import { checkoutStage } from './checkout';
 import { storefrontOutcome } from './outcome';
@@ -1045,6 +1046,89 @@ describe('the storefront answer is read again before Submit (re-check: approve r
     expect(snap().submission.state.phase).toBe('refused');
     await new Promise((r) => setTimeout(r, 0));
     expect(api.storefront).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Ordering visibility (0413, design 6.5, 8.7; brief 9): an item hidden from
+// Orders while a cart is open. The phone needs no change of its own: the
+// fresh catalog no longer lists it, or the server refuses it with the
+// hidden_from_orders reason. Either way the line is marked, kept, can be
+// lowered or removed but never raised, Submit is blocked until it is
+// removed, and the other lines stay.
+describe('an item hidden from Orders while the cart is open', () => {
+  const both = (): OrderCatalogAnswer => ({
+    ...catalogAnswer(),
+    items: [
+      ...catalogAnswer().items,
+      { id: B, sku: 'BK', name: 'Backpack', categoryId: null, charterId: null, rackLabel: null, quantityOnHand: 10, reservedQuantity: 0, reorderPoint: 0 },
+    ],
+  });
+
+  it('the fresh catalog at checkout no longer lists it: marked, kept, Submit blocked until it is removed', async () => {
+    api.catalog.mockResolvedValueOnce(both());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    session.dispatch({ type: 'add', itemId: B, quantity: 1 });
+    expect(snap().notOrderable.size).toBe(0);
+    // Hidden on the server: the next read leaves it out.
+    api.catalog.mockResolvedValueOnce(catalogAnswer());
+    await session.openCheckout();
+    expect([...snap().notOrderable]).toEqual([B]);
+    expect(snap().cart?.lines).toEqual([
+      { itemId: A, quantity: 2 },
+      { itemId: B, quantity: 1 },
+    ]);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_REMOVE_UNORDERABLE_COPY);
+    expect(session.dispatch({ type: 'inc', itemId: B })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    session.dispatch({ type: 'remove', itemId: B });
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(session.submitBlockedBy(false)).toBeNull();
+  });
+
+  it('a hide that lands after the catalog was read: the server refuses the line (hidden_from_orders), nothing is placed, the rest is kept', async () => {
+    api.catalog.mockResolvedValue(both());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    session.dispatch({ type: 'add', itemId: B, quantity: 1 });
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        status: 400,
+        code: 'validation_error',
+        details: { reason: 'item_not_orderable', settled: true, items: { [B]: 'hidden_from_orders' }, organizationId: ORG },
+      },
+    });
+    await session.submit(false);
+    expect(api.place).toHaveBeenCalledTimes(1);
+    expect(snap().submission.state.phase).toBe('refused');
+    expect(snap().placed).toBeNull();
+    expect([...snap().notOrderable]).toEqual([B]);
+    expect(snap().refusals.get(B)).toBe('hidden_from_orders');
+    expect(snap().cart?.lines).toEqual([
+      { itemId: A, quantity: 2 },
+      { itemId: B, quantity: 1 },
+    ]);
+    expect(session.dispatch({ type: 'inc', itemId: B })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    session.dispatch({ type: 'remove', itemId: B });
+    expect(snap().refusals.size).toBe(0);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+  });
+});
+
+// Ordering visibility (0413, design 8.6): sign-out clears the Manage order
+// items selection from the one place that closes the storefront session, so
+// the review sheet never lists a signed-out account's records.
+describe('closing the session clears the Manage order items selection', () => {
+  it('close() forgets the selection, the review sheet and the kept operation', async () => {
+    const manage = { userId: USER, orgId: ORG, epoch: 1 };
+    orderCatalogSelection.bindScope(manage);
+    orderCatalogSelection.add(manage, [{ id: A, name: 'Planner', identifier: 'PL-1', visible: true }]);
+    orderCatalogSelection.setReviewOpen(manage, true);
+    expect(orderCatalogSelection.forScope(manage).records).toHaveLength(1);
+    await session.open(scope);
+    session.close();
+    expect(orderCatalogSelection.forScope(manage).records).toEqual([]);
+    expect(orderCatalogSelection.getSnapshot()).toMatchObject({ scopeKey: null, reviewOpen: false, pending: null });
   });
 });
 
