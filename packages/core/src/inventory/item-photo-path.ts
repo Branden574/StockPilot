@@ -1,8 +1,8 @@
 /**
  * Object paths in the `item-images` storage bucket, built in ONE place for
  * every writer: the web's presigned uploads (ItemImagesService), the phone's
- * direct uploads (new item, replace photo, scan capture) and the books
- * import's cover rehost.
+ * direct uploads and their thumbnails (lib/item-photo-upload.ts, for new
+ * item, replace photo and scan capture) and the books import's cover rehost.
  *
  * Since migration 0381 the database decides which paths a caller may write,
  * with one anchored parser (public.item_image_path_item_id):
@@ -23,10 +23,21 @@ export function itemPhotoPath(organizationId: string, itemId: string, fileName: 
   return `${organizationId}/items/${itemId}/${fileName}`;
 }
 
-/** `{org}/items/{item}/{uuid}-thumb.webp` — the web uploader's thumbnail,
- *  stored next to its `{uuid}.{ext}` master. */
-export function itemPhotoThumbPath(organizationId: string, itemId: string, uuid: string): string {
-  return itemPhotoPath(organizationId, itemId, `${uuid}-thumb.webp`);
+/** The extensions a stored thumbnail is named with. */
+export type ItemPhotoThumbExt = 'webp' | 'jpg' | 'png';
+
+/** `{org}/items/{item}/{fileBase}-thumb.{ext}` — a photo's thumbnail, stored
+ *  next to its `{fileBase}.{ext}` master (0381 requires a thumbnail in its
+ *  master's item folder). The web uploader's is `{uuid}-thumb.webp`, the
+ *  default; the phone names its by the format it encoded
+ *  (itemPhotoThumbFormat), so the extension says what the bytes are. */
+export function itemPhotoThumbPath(
+  organizationId: string,
+  itemId: string,
+  fileBase: string,
+  ext: ItemPhotoThumbExt = 'webp',
+): string {
+  return itemPhotoPath(organizationId, itemId, `${fileBase}-thumb.${ext}`);
 }
 
 /** `{org}/{item}/cover.{ext}` — the books import's rehosted cover (the one

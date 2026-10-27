@@ -38,11 +38,10 @@ import {
   CART_SUGGESTIONS_LABEL_COPY,
   CART_TITLE_COPY,
   CART_TOTAL_UNITS_LABEL_COPY,
-  cartLineAtMaxCopy,
-  cartLineOverCopy,
+  cartLineView,
   formatWallClock,
   neededByZoneNote,
-  orderItemRefusalCopy,
+  STOREFRONT_LINE_NOT_ORDERABLE_COPY,
 } from '@stockpilot/core';
 
 import { useCart } from '../v2/cart-context';
@@ -89,9 +88,17 @@ interface CartRailProps {
   /** itemId -> why the last send refused it (item_not_orderable), named
    *  under its line from this cart. */
   refusedItems?: ReadonlyMap<string, string>;
+  /**
+   * The lines that can't be ordered from here (core cartNotOrderableMarks):
+   * gone from this catalog (hidden from Orders, archived, out of scope) or
+   * refused by the last send. Such a line is kept and can be lowered or
+   * removed, never raised (ordering visibility, design 6.5).
+   */
+  notOrderable?: ReadonlySet<string>;
 }
 
 const NO_REFUSED_ITEMS: ReadonlyMap<string, string> = new Map();
+const NO_ITEMS: ReadonlySet<string> = new Set();
 
 export function CartRail({
   itemMap,
@@ -103,6 +110,7 @@ export function CartRail({
   onReview,
   orgTimezone,
   refusedItems = NO_REFUSED_ITEMS,
+  notOrderable = NO_ITEMS,
 }: CartRailProps) {
   // `locked`: an order request sent from this cart is not settled; every
   // control waits (the provider also drops any change).
@@ -230,17 +238,29 @@ export function CartRail({
         ) : (
           lines.map((line) => {
             const item = itemMap.get(line.itemId);
+            // A refused line is marked even before the catalog drops it.
+            const refusedReason = refusedItems.get(line.itemId);
+            const unorderable = notOrderable.has(line.itemId) || refusedReason !== undefined;
+            // Core's view, the phone's rule: the item's name (never its id),
+            // and what the line says under it.
+            const view = cartLineView(line, item, unorderable, refusedReason);
             const available = item ? availableOf(item) : Infinity;
-            const atMax = line.quantity >= available;
-            const over = line.quantity > available;
-            const refused = refusedItems.get(line.itemId);
+            // A marked line can be lowered or removed, never raised: its
+            // field tops out at what it holds now.
+            const ceiling = unorderable
+              ? Math.min(line.quantity, Number.isFinite(available) ? available : line.quantity)
+              : Number.isFinite(available)
+                ? available
+                : line.quantity;
+            const atMax = unorderable || line.quantity >= available;
+            const note = view.note;
             return (
               <div className="sf-line" key={line.itemId}>
                 <div className="th">
                   {item ? <SfPhoto item={item} /> : <div className="sf-ph" />}
                 </div>
                 <div style={{ minWidth: 0 }}>
-                  <div className="nm">{item?.name ?? line.itemId}</div>
+                  <div className="nm">{view.title}</div>
                   <div className="sk2">{item?.sku ?? ''}</div>
                   {item && <CharterTag item={item} />}
                 </div>
@@ -249,7 +269,7 @@ export function CartRail({
                     type="button"
                     className="rm"
                     title="Remove"
-                    aria-label={`Remove ${item?.name ?? 'item'} from cart`}
+                    aria-label={`Remove ${item?.name ?? 'this item'} from cart`}
                     disabled={locked}
                     onClick={() => dispatch({ type: 'remove', itemId: line.itemId })}
                   >
@@ -267,7 +287,7 @@ export function CartRail({
                     <QtyField
                       itemId={line.itemId}
                       qty={line.quantity}
-                      available={Number.isFinite(available) ? available : line.quantity}
+                      available={ceiling}
                       onSetQty={onSetQty}
                     />
                     <button
@@ -280,16 +300,17 @@ export function CartRail({
                     </button>
                   </div>
                 </div>
-                {item && (atMax || over) && (
-                  <div className="sf-line-warn">
+                {note && (
+                  <div
+                    className="sf-line-warn"
+                    data-refused={
+                      note.kind === 'refused' || note.kind === 'not_orderable' ? '' : undefined
+                    }
+                  >
                     <AlertTriangle size={12} />
-                    {over ? cartLineOverCopy(available) : cartLineAtMaxCopy(available)}
-                  </div>
-                )}
-                {refused && (
-                  <div className="sf-line-warn" data-refused>
-                    <AlertTriangle size={12} />
-                    {orderItemRefusalCopy(refused, item?.name ?? line.itemId)}
+                    {note.kind === 'not_orderable'
+                      ? STOREFRONT_LINE_NOT_ORDERABLE_COPY
+                      : note.message}
                   </div>
                 )}
               </div>

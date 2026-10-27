@@ -88,6 +88,26 @@ describe('reading the storefront answer', () => {
     expect(parseStorefrontAnswer({ ...STOREFRONT, deliveryRecipients: { to: 'a@b.co' } })).toMatchObject({ deliveryRecipients: null });
   });
 
+  // Ordering visibility (0413, design 8.1): the storefront's Manage order
+  // items entry shows only when the server says exactly true. An answer from
+  // a server without the feature (no key) or a value this build cannot read
+  // is false: hidden, never shown while unknown.
+  it('reads viewer.canManageOrderItems: true only when the server sends exactly true', () => {
+    const viewerOf = (canManageOrderItems: unknown) => {
+      const a = parseStorefrontAnswer({ ...STOREFRONT, viewer: { ...STOREFRONT.viewer, canManageOrderItems } });
+      if (!a.enabled) throw new Error('enabled');
+      return a.viewer;
+    };
+    expect(viewerOf(true).canManageOrderItems).toBe(true);
+    expect(viewerOf(false).canManageOrderItems).toBe(false);
+    expect(viewerOf(undefined).canManageOrderItems).toBe(false);
+    expect(viewerOf('true').canManageOrderItems).toBe(false);
+    expect(viewerOf(1).canManageOrderItems).toBe(false);
+    const old = parseStorefrontAnswer(STOREFRONT);
+    if (!old.enabled) throw new Error('enabled');
+    expect(old.viewer.canManageOrderItems).toBe(false);
+  });
+
   it.each([
     ['no organization', { ...STOREFRONT, organizationId: undefined }],
     ['no viewer', { ...STOREFRONT, viewer: null }],

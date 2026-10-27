@@ -117,10 +117,11 @@ export async function signItemImages(
 /**
  * List-row photo URLs, keyed by the photo's `storage_path`.
  *
- * A photo uploaded on the web already has a ~200 px thumbnail stored next to it
- * (`thumb_path`). This signs THOSE, all in one batched request, and asks
- * Supabase to resize on demand only for the photos that have no thumbnail
- * (mobile uploads, a handful of old rows).
+ * A photo uploaded on the web, or from this app since B31 (item-photo-upload.ts),
+ * has a ~200 px thumbnail stored next to it (`thumb_path`). This signs THOSE,
+ * all in one batched request, and asks Supabase to resize on demand only for
+ * the photos that have no thumbnail (uploads from older app versions, and old
+ * rows the thumbnail backfill has not reached).
  *
  * Why it matters: the lists used to ask for an on-demand 200 x 200 transform of
  * the MASTER for every row. Supabase bills each distinct photo transformed in a
