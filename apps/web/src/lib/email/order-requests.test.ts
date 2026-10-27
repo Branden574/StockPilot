@@ -234,7 +234,7 @@ function wireFullAdmin(
       error: null,
     },
     'user_profiles.select.maybeSingle': {
-      data: { full_name: 'Morgan Diaz', email: opts.approverEmail ?? 'morgan@l4l.org' },
+      data: { full_name: 'Morgan Diaz', email: opts.approverEmail ?? 'morgan@example.org' },
       error: null,
     },
   });
@@ -452,14 +452,14 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
   it('denied: Contact approver links only one plain address', async () => {
     wireFullAdmin();
     const plain = await send('denied', { status: 'denied', approved_by: 'appr-1' });
-    expect(plain.html).toContain('href="mailto:morgan@l4l.org"');
+    expect(plain.html).toContain('href="mailto:morgan@example.org"');
     expect(plain.html).toContain('Contact approver');
 
     for (const approverEmail of [
-      'morgan@l4l.org?bcc=eve@evil.test',
-      'morgan@l4l.org,eve@evil.test',
-      'mor\u200Dgan@l4l.org',
-      'morgan@l4l.\uFF4Frg',
+      'morgan@example.org?bcc=eve@evil.test',
+      'morgan@example.org,eve@evil.test',
+      'mor\u200Dgan@example.org',
+      'morgan@example.\uFF4Frg',
     ]) {
       vi.clearAllMocks();
       wireFullAdmin({ approverEmail });

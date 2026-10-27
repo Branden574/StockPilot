@@ -28,8 +28,8 @@ describe('detailRequesterName', () => {
   });
 
   it('a resolved name always wins (a name the row already held stays)', () => {
-    expect(detailRequesterName(detail({ requester_user_id: null, requester_email: null }, 'Doua Vang'))).toBe(
-      'Doua Vang',
+    expect(detailRequesterName(detail({ requester_user_id: null, requester_email: null }, 'Lena Hale'))).toBe(
+      'Lena Hale',
     );
     expect(detailRequesterName(detail({ requester_user_id: 'u-1', requester_email: null }, 'Jane Doe'))).toBe(
       'Jane Doe',

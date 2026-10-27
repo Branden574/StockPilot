@@ -1157,7 +1157,7 @@ export class MaintenanceRequestsService {
    *  surfaces re-brand through the validating factory at their own seam),
    *  'unset' means the action is HIDDEN, 'invalid' means the stored value
    *  failed the factory and the action is hidden with the reason surfaced
-   *  to admins only. The compiled L4L constants appear ONLY when the
+   *  to admins only. The compiled sample constants appear ONLY when the
    *  `email_routing` column does not exist yet (the code-before-migration
    *  window; see the routing read below).
    *
@@ -1318,14 +1318,13 @@ export class MaintenanceRequestsService {
     // columns (organizations_select), and the TO/CC are printed in the
     // email UI, so they are not secrets.
     //
-    // DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature
-    // behavior while the `email_routing` column does not exist (code
-    // deployed before migration 0337). That window errors the WHOLE select
-    // with Postgres 42703, so the read retries with 'timezone' alone and
-    // records routing as 'fallback' — which `maintenanceRecipientsForRouting`
-    // maps to the compiled L4L constants, byte-identical to what shipped.
-    // Once the column exists this branch is never taken; an unset org is
-    // 'unset' (action hidden) and an invalid value fails CLOSED.
+    // DEPLOY-ORDER SAFETY: this feature must FAIL OPEN while the
+    // `email_routing` column does not exist (code deployed before migration
+    // 0337). That window errors the WHOLE select with Postgres 42703, so the
+    // read retries with 'timezone' alone and records routing as 'fallback' —
+    // which `maintenanceRecipientsForRouting` maps to the compiled sample
+    // constants. Once the column exists this branch is never taken; an unset
+    // org is 'unset' (action hidden) and an invalid value fails CLOSED.
     let orgRow: { timezone?: string | null; email_routing?: unknown } | null = null;
     let routingRead: OrgEmailRoutingReadState;
     const firstTry = await this.db

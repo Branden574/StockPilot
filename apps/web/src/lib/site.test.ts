@@ -10,8 +10,8 @@ import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EM
  */
 describe('DELIVERY_REQUEST_EMAIL', () => {
   it('is the exact approved pair', () => {
-    expect(DELIVERY_REQUEST_EMAIL.to).toBe('dc4@learn4life.org');
-    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(DELIVERY_REQUEST_EMAIL.to).toBe('dc4@sampleorg.test');
+    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('jstone@site1.test');
   });
 
   it('has exactly two recipient keys — no third address sneaks in', () => {
@@ -31,19 +31,19 @@ describe('DELIVERY_REQUEST_EMAIL', () => {
     expect(() => {
       (DELIVERY_REQUEST_EMAIL as unknown as Record<string, string>).cc = 'attacker@evil.test';
     }).toThrow();
-    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('jstone@site1.test');
   });
 });
 
 /**
  * Cosmetic display labels only — never routing truth. These pin the exact
- * tenant-verified (2026-08-01) name strings and confirm the object can't be
+ * compiled name strings (the sample pair's) and confirm the object can't be
  * silently mutated, same posture as `DELIVERY_REQUEST_EMAIL` above.
  */
 describe('DELIVERY_REQUEST_EMAIL_NAMES', () => {
-  it('is the exact tenant-verified display-name pair', () => {
+  it('is the exact compiled display-name pair', () => {
     expect(DELIVERY_REQUEST_EMAIL_NAMES.to).toBe('Fresno Warehouse DC4');
-    expect(DELIVERY_REQUEST_EMAIL_NAMES.cc).toBe('Andrew Rosas');
+    expect(DELIVERY_REQUEST_EMAIL_NAMES.cc).toBe('Jordan Stone');
   });
 
   it('has exactly two keys — no third name sneaks in', () => {
@@ -60,7 +60,7 @@ describe('DELIVERY_REQUEST_EMAIL_NAMES', () => {
     expect(() => {
       (DELIVERY_REQUEST_EMAIL_NAMES as unknown as Record<string, string>).cc = 'Attacker Name';
     }).toThrow();
-    expect(DELIVERY_REQUEST_EMAIL_NAMES.cc).toBe('Andrew Rosas');
+    expect(DELIVERY_REQUEST_EMAIL_NAMES.cc).toBe('Jordan Stone');
   });
 });
 
@@ -74,7 +74,7 @@ describe('DELIVERY_REQUEST_CC_NOTICE', () => {
     // claiming only where the mail is addressed — L4L's screens
     // deliberately lose that one sentence.
     expect(DELIVERY_REQUEST_CC_NOTICE).toBe(
-      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@sampleorg.test. A copy will also be sent to jstone@site1.test.',
     );
   });
 

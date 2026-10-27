@@ -61,7 +61,7 @@ export interface RenderedEsEmail {
   replyTo?: string;
 }
 
-/** "Hi Branden —" / "Hi —" (the archetype's missing-first-name fallback). */
+/** "Hi Carsten —" / "Hi —" (the archetype's missing-first-name fallback). */
 function greeting(firstName: string | null | undefined): string {
   const name = firstName?.trim();
   return name ? `Hi ${escapeHtml(name)} ` : 'Hi ';

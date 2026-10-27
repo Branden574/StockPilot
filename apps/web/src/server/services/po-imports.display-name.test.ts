@@ -169,10 +169,10 @@ describe('createFromUpload — display_name is persisted independently of file_n
 
   it("PRESERVES ordinary punctuation — & ' ( ) # - _ survive intact", async () => {
     const stub = stubFor();
-    const name = "Follett & Sons - Andrew's re-order (DC4) #12_final";
+    const name = "Follett & Sons - Jordan's re-order (DC4) #12_final";
     await svc(stub).createFromUpload({ ...UPLOAD, displayName: name });
     expect(insertedRow(stub).display_name).toBe(
-      "Follett & Sons - Andrew's re-order (DC4) #12_final",
+      "Follett & Sons - Jordan's re-order (DC4) #12_final",
     );
   });
 
@@ -221,14 +221,14 @@ describe('createFromUpload — the name is NOT part of duplicate identity', () =
   it('LINEAGE INTACT: a named re-import after a cancelled PO still stamps reimported_from_id', async () => {
     const stub = stubFor(
       [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
-      [{ id: 'po-1', status: 'cancelled', po_number: 'CVW-002200' }],
+      [{ id: 'po-1', status: 'cancelled', po_number: 'DEMO-002200' }],
     );
     const res = await svc(stub).createFromUpload({ ...UPLOAD, displayName: 'Redo of DC4' });
 
     expect(res.reimportOfCancelled).toEqual({
       predecessorImportId: 'old-import',
       cancelledPoId: 'po-1',
-      cancelledPoNumber: 'CVW-002200',
+      cancelledPoNumber: 'DEMO-002200',
     });
     const row = insertedRow(stub);
     expect(row.reimported_from_id).toBe('old-import');

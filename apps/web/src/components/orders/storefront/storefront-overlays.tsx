@@ -246,7 +246,7 @@ interface ReviewModalProps {
    * The org's delivery-request email routing (per-org, migration 0337),
    * resolved server-side; null = no valid routing, so the success screen
    * renders NO email action. Fail closed by construction: with no
-   * recipients there is nothing to compose against, and the compiled L4L
+   * recipients there is nothing to compose against, and the compiled
    * constants are reachable only through the server's own
    * code-before-migration fallback, never from here.
    */

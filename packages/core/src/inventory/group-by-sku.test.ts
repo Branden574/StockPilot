@@ -10,12 +10,12 @@ const row = (o: Partial<{ id: string; sku: string; name: string; lineQuantity: n
 describe('groupPlacementsBySku', () => {
   it('sums placements of one SKU into a single group total, preserving each placement', () => {
     const groups = groupPlacementsBySku([
-      row({ id: 'a', sku: 'SP-G69UU-05H', lineQuantity: 75 }),
-      row({ id: 'b', sku: 'SP-G69UU-05H', lineQuantity: 100 }),
-      row({ id: 'c', sku: 'SP-G69UU-05H', lineQuantity: 106 }),
+      row({ id: 'a', sku: 'SP-GDEM4-G01', lineQuantity: 75 }),
+      row({ id: 'b', sku: 'SP-GDEM4-G01', lineQuantity: 100 }),
+      row({ id: 'c', sku: 'SP-GDEM4-G01', lineQuantity: 106 }),
     ]);
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.sku).toBe('SP-G69UU-05H');
+    expect(groups[0]!.sku).toBe('SP-GDEM4-G01');
     expect(groups[0]!.total).toBe(281);
     expect(groups[0]!.placements).toHaveLength(3);
   });

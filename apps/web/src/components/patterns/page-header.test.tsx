@@ -94,7 +94,7 @@ describe('PageHeader', () => {
   it('sizes the title per variant: 28 for a page, 32 for the greeting, 26 for a record', () => {
     const { rerender } = render(<PageHeader title="Orders" />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-[28px]');
-    rerender(<PageHeader title="Good afternoon, Branden." variant="greeting" />);
+    rerender(<PageHeader title="Good afternoon, Carsten." variant="greeting" />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-[32px]');
     rerender(<PageHeader title="L4L Insulated Bottle 20 oz" variant="item" />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
@@ -116,7 +116,7 @@ describe('PageHeader', () => {
     expect(actionsRow(container)).toHaveClass('items-end');
     rerender(
       <PageHeader
-        title="Good afternoon, Branden."
+        title="Good afternoon, Carsten."
         variant="greeting"
         actions={<button type="button">Export</button>}
       />,

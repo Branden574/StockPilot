@@ -12,14 +12,14 @@ import { DELETED_REQUESTER_LABEL, isDeletedRequester, resolveRequesterIdentity }
  */
 describe('resolveRequesterIdentity', () => {
   it('the denormalized column wins when it holds a real value', () => {
-    expect(resolveRequesterIdentity('onbehalf@site.org', 'staff@cvwest.org')).toBe(
+    expect(resolveRequesterIdentity('onbehalf@site.org', 'staff@site1.test')).toBe(
       'onbehalf@site.org',
     );
-    expect(resolveRequesterIdentity('Doua Vang', 'Profile Name')).toBe('Doua Vang');
+    expect(resolveRequesterIdentity('Lena Hale', 'Profile Name')).toBe('Lena Hale');
   });
 
   it('falls through to the joined profile when the column is NULL — the internal self-submit majority', () => {
-    expect(resolveRequesterIdentity(null, 'jane@cvsouth.org')).toBe('jane@cvsouth.org');
+    expect(resolveRequesterIdentity(null, 'jane@school.test')).toBe('jane@school.test');
     expect(resolveRequesterIdentity(undefined, 'Jane Doe')).toBe('Jane Doe');
   });
 
@@ -27,8 +27,8 @@ describe('resolveRequesterIdentity', () => {
     // `??` treats '' as present, so the profile value is never consulted and
     // the caller receives a blank. That is the one-character difference that
     // made web and mobile name different requesters for the same order.
-    expect(resolveRequesterIdentity('', 'jane@cvsouth.org')).toBe('jane@cvsouth.org');
-    expect(resolveRequesterIdentity('   ', 'jane@cvsouth.org')).toBe('jane@cvsouth.org');
+    expect(resolveRequesterIdentity('', 'jane@school.test')).toBe('jane@school.test');
+    expect(resolveRequesterIdentity('   ', 'jane@school.test')).toBe('jane@school.test');
     // Stated as the property, so the intent survives a refactor of the above.
     expect(resolveRequesterIdentity('', 'x@y.org')).not.toBe('');
   });
@@ -42,15 +42,15 @@ describe('resolveRequesterIdentity', () => {
   });
 
   it('trims BOTH sides, so a padded value is used without its padding rather than discarded', () => {
-    expect(resolveRequesterIdentity('  Doua Vang  ', null)).toBe('Doua Vang');
-    expect(resolveRequesterIdentity(null, '  jane@cvsouth.org  ')).toBe('jane@cvsouth.org');
+    expect(resolveRequesterIdentity('  Lena Hale  ', null)).toBe('Lena Hale');
+    expect(resolveRequesterIdentity(null, '  jane@school.test  ')).toBe('jane@school.test');
   });
 
   it('ignores non-string junk on either side rather than passing it into an email body', () => {
     // The columns are read off untyped PostgREST rows and cast; a cast is not a
     // guarantee. Nothing here should ever reach a mailbox as "[object Object]".
     const junk = { toString: () => 'nope' } as unknown as string;
-    expect(resolveRequesterIdentity(junk, 'jane@cvsouth.org')).toBe('jane@cvsouth.org');
+    expect(resolveRequesterIdentity(junk, 'jane@school.test')).toBe('jane@school.test');
     expect(resolveRequesterIdentity(junk, junk)).toBeNull();
   });
 });

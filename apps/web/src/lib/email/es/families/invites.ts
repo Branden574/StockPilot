@@ -62,7 +62,7 @@ function firstNameOf(fullName: string): string {
   return fullName.trim().split(/\s+/)[0] ?? fullName.trim();
 }
 
-/** "BW" from "Branden Vincent Walker"; single-token values use their first letter. */
+/** "CF" from "Carsten Hartley Fowler"; single-token values use their first letter. */
 function initialsOf(name: string): string {
   const words = name
     .trim()

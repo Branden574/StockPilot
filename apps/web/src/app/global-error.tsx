@@ -11,7 +11,7 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * Last-resort error boundary. Triggers when even the root layout itself
  * fails to render — in that case Next.js can't reuse <html>/<body> from
  * layout.tsx, so this file owns the whole document. Without it, root
- * layout errors render as a blank/black screen, which is what Andrew
+ * layout errors render as a blank/black screen, which is what a manager
  * was hitting in Chrome on certain sections (Brave masked it because
  * cached client JS recovered, Chrome did not).
  *

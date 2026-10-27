@@ -109,14 +109,14 @@ describe('DestructiveConfirm — critical', () => {
   it('disables confirm until the expectedConfirm string is typed', async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();
-    render(<CriticalHarness onConfirm={onConfirm} expectedConfirm="branden574" />);
+    render(<CriticalHarness onConfirm={onConfirm} expectedConfirm="acme-owner" />);
     const dialog = await screen.findByRole('dialog');
     const confirm = within(dialog).getByRole('button', { name: /Delete organization/i });
     expect(confirm).toBeDisabled();
 
     // Wrong text → still disabled.
     const input = within(dialog).getByLabelText(/Type .* to confirm/i);
-    await user.type(input, 'BRANDEN574'); // case-sensitive mismatch
+    await user.type(input, 'ACME-OWNER'); // case-sensitive mismatch
     expect(confirm).toBeDisabled();
 
     // Click is a no-op while disabled.

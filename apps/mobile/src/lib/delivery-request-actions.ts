@@ -56,17 +56,17 @@ export { shouldConfirmBeforeOpening } from './outlook-transport';
  * Is this Supabase/PostgREST error the MISSING-COLUMN error (Postgres 42703,
  * undefined_column)?
  *
- * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature behavior
- * during the code-before-migration window. An OTA'd binary selecting
+ * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN during the
+ * code-before-migration window. An OTA'd binary selecting
  * `email_routing` against a database where migration 0337 has not landed
  * errors the WHOLE select with 42703 — and ONLY that error may be read as
  * "retry without the column and use the compiled constants" (the screen
  * retries with `'timezone'` alone and records routing as `{ state:
  * 'fallback' }`, which `deliveryRecipientsForRouting` maps to the compiled
- * L4L pair, byte-identical to what shipped before the feature). Once the
- * column exists this predicate is never true; any OTHER error means the org
- * row could not be read at all, and the routing stays 'unset' — the action
- * hides rather than composing mail against recipients nothing validated.
+ * sample pair). Once the column exists this predicate is never true; any
+ * OTHER error means the org row could not be read at all, and the routing
+ * stays 'unset' — the action hides rather than composing mail against
+ * recipients nothing validated.
  * Mirrors web's `getOrgEmailRouting` (cached-org.ts) exactly.
  */
 export function isMissingEmailRoutingColumn(
@@ -236,7 +236,7 @@ export function parseCharterAddress(raw: unknown): DeliveryRequestAddress | null
  *
  * WHERE THE RECIPIENTS COME FROM (per-org email routing, migration 0337).
  * Until 2026-08-16 this module pinned the ONE compiled core value
- * (`DELIVERY_REQUEST_RECIPIENTS` — L4L's mailboxes) here, which was the
+ * (`DELIVERY_REQUEST_RECIPIENTS`, then one tenant's mailboxes) here, which was the
  * multi-tenant leak: every org's phones composed mail to one tenant's live
  * intake. `recipients` is now an explicit parameter, and the only value the
  * screen can hold is one that came out of `deliveryRecipientsForRouting(

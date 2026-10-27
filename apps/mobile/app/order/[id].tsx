@@ -378,7 +378,7 @@ interface OrderHeader {
    * timezone. `{ state: 'unset' }` when the row was never read (pickup /
    * terminal orders) — the gate is already false there. 'fallback' ONLY when
    * the `email_routing` column does not exist yet (pre-migration deploy
-   * window: compiled constants, byte-identical to pre-feature behavior).
+   * window: the compiled sample constants).
    */
   deliveryRouting: OrgEmailRoutingReadState;
   /** Line roll-ups for the backorder progress card. requested = ordered,
@@ -1667,12 +1667,11 @@ export default function OrderDetail() {
       if (orgResFirst.error && isMissingEmailRoutingColumn(orgResFirst.error)) {
         // DEPLOY-ORDER SAFETY: the `email_routing` column does not exist yet
         // (this OTA reached the phone before migration 0337 reached the
-        // database). FAIL OPEN to pre-feature behavior — retry the read
-        // without the column and record 'fallback', which
-        // deliveryRecipientsForRouting maps to the compiled constants,
-        // byte-identical to what shipped before the feature. This is the
-        // ONLY path that ever selects them; the 42703 decision itself lives
-        // in the tested lib (isMissingEmailRoutingColumn).
+        // database). FAIL OPEN — retry the read without the column and
+        // record 'fallback', which deliveryRecipientsForRouting maps to the
+        // compiled sample constants. This is the ONLY path that ever selects
+        // them; the 42703 decision itself lives in the tested lib
+        // (isMissingEmailRoutingColumn).
         const retry = await supabase
           .from('organizations')
           .select('timezone')
@@ -3419,8 +3418,8 @@ export default function OrderDetail() {
 
           {/* The order's returns — number, status, what came back and how it
               was dispositioned, and the NOTES. The notes are where an
-              in-person swap is recorded today (SO-000085: "Size S … swapped
-              out for Ladies size M" — the replacement is on no order line), so
+              in-person swap is recorded today (SO-000085: a size S "swapped
+              out" for a size M — the replacement is on no order line), so
               they must be readable where a human looks at the order. Listed
               for every viewer (RLS decided what came back). There is no native
               returns screen to navigate to, so each RMA renders inline.

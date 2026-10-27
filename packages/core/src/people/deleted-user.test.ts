@@ -66,8 +66,8 @@ describe('personLabel', () => {
 
   it("shows a live person's name, trimmed", () => {
     expect(
-      personLabel({ id: 'u-1', name: '  Marissa Lopez ', column: 'user_id', nullLabel: 'System' }),
-    ).toBe('Marissa Lopez');
+      personLabel({ id: 'u-1', name: '  Rebecca Lowry ', column: 'user_id', nullLabel: 'System' }),
+    ).toBe('Rebecca Lowry');
   });
 
   it('says "Former member" for an id whose profile the reader cannot see, or the given hidden label', () => {
@@ -91,12 +91,12 @@ describe('personLabel', () => {
     expect(
       personLabel({
         id: 'u-1',
-        name: 'Doua',
+        name: 'Lena',
         marks: { user_id: STAMP },
         column: 'user_id',
         nullLabel: 'System',
       }),
-    ).toBe('Doua');
+    ).toBe('Lena');
   });
 
   it('never returns the raw id', () => {

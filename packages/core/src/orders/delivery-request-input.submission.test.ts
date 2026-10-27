@@ -31,7 +31,7 @@ const SITE = {
   id: 'c0c0c0c0-0000-4000-8000-000000000001',
   name: 'CVW Clovis',
   code: 'CVW-CLO',
-  address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
+  address: { line1: '1200 Test Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
 };
 
 function summary(patch: Partial<OrderSummary> = {}): OrderSummary {
@@ -58,8 +58,8 @@ function setup(
   return {
     warehouseName: 'DC4',
     destination: SITE,
-    viewerLabel: 'Branden Vincent-Walker',
-    viewerEmail: 'branden@example.org',
+    viewerLabel: 'Carsten Hartley-Fowler',
+    viewerEmail: 'carsten@example.org',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
     lines: [
@@ -90,8 +90,8 @@ describe('deliveryRequestInputFromSubmission', () => {
       fulfillmentType: 'delivery',
       warehouseName: 'DC4',
       destination: SITE,
-      requestedFor: 'Branden Vincent-Walker',
-      requesterEmail: 'branden@example.org',
+      requestedFor: 'Carsten Hartley-Fowler',
+      requesterEmail: 'carsten@example.org',
       neededByLocal: '2026-10-05T17:00:00.000Z',
       orgTimezone: 'America/Los_Angeles',
       notes: 'Please stage these by Friday.',
@@ -121,7 +121,7 @@ describe('deliveryRequestInputFromSubmission', () => {
     const draft = prepareDeliveryRequest(input).draft;
     expect(draft.subject.toLowerCase()).toContain('pickup');
     expect(draft.body).not.toContain('CVW Clovis');
-    expect(draft.body).not.toContain('1295 Shaw Ave');
+    expect(draft.body).not.toContain('1200 Test Ave');
   });
 
   it('names no site that is not the one the order was placed for', () => {

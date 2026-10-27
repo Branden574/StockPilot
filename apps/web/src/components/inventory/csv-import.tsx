@@ -138,7 +138,7 @@ const SPORTS_SAMPLE = [
     // Leading zeroes are kept: 07 and 7 are different uniforms. Type this
     // column as TEXT in your spreadsheet, or Excel will drop the zero.
     jersey_number: '07',
-    player_name: 'A. Rosas',
+    player_name: 'J. Stone',
     size: 'M',
     size_system: 'ALPHA',
     fit: 'mens',

@@ -106,7 +106,7 @@ function wireAdmin(opts: { unsubscribed?: boolean } = {}): void {
     },
     'charters.select.maybeSingle': { data: { name: 'Manchester', code: 'CVW' }, error: null },
     'user_profiles.select.maybeSingle': {
-      data: { full_name: 'Morgan Diaz', email: 'morgan@l4l.org' },
+      data: { full_name: 'Morgan Diaz', email: 'morgan@example.org' },
       error: null,
     },
   });
