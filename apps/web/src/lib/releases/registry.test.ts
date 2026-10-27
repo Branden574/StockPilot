@@ -13877,6 +13877,14 @@ describe('the ended-session, Group selected page and other web fixes release (en
     expect(repoFile('apps/mobile/src/lib/staging-worklist.ts')).toContain(
       'return canPlace && row.warehouseId !== null;',
     );
+    // A replaced PO import: the phone's own notice gives no date, so the
+    // entry says the dated notice is on the web.
+    const reimport = entry('po-import-reimport-date');
+    expect(reimport.title).toMatch(/^On the web, /);
+    expect(reimport.whatChanged).toMatch(/^On the web, /);
+    const phoneImport = repoFile('apps/mobile/app/po-import/[id].tsx');
+    expect(phoneImport).toContain('Replaced by a later import of this file.');
+    expect(phoneImport).not.toContain('imported again on');
   });
 
   it('rests the words it quotes on the code that shows them', () => {
@@ -13913,6 +13921,14 @@ describe('the ended-session, Group selected page and other web fixes release (en
     );
     expect(proxy).toContain("url.searchParams.set('redirect', `${pathname}${search}`);");
     expect(source('components/auth/sign-in-form.tsx')).toContain('router.replace(redirect);');
+    // An old sign-in page never caught the rejected action, so it showed no
+    // message and stayed as it was.
+    expect(source('components/auth/sign-in-form.tsx')).toContain(
+      'const res = await signInAction(values);',
+    );
+    expect(entry('ended-session-goes-to-sign-in').whyItMatters).toContain(
+      'Pressing Sign in on an old sign-in page left you on that page.',
+    );
     // Place an order.
     expect(STOREFRONT_TITLE_COPY).toBe('Place an order');
     expect(REVIEW_SUBMIT_COPY).toBe('Submit order request');
@@ -14003,6 +14019,26 @@ describe('the ended-session, Group selected page and other web fixes release (en
     expect(source('components/procedures/upload-recovery-toast.tsx')).toContain(
       'toast.warning("Some video uploads didn\'t finish. Re-drop the missing files.");',
     );
+    // Only a session that runs out keeps the procedure's id: a sign-out, here,
+    // in another tab or by a revoke, removes it, so the entry says so and
+    // sends that reader to Procedures.
+    expect(source('components/dashboard/user-menu.tsx')).toContain('purgeInterruptedRuns();');
+    expect(source('components/realtime/session-revocation-listener.tsx')).toContain(
+      'purgeInterruptedRuns();',
+    );
+    expect(source('lib/interrupted-run.ts')).toContain(
+      'export function listenForPurges(): () => void {',
+    );
+    const procedure = entry('new-procedure-upload-ended-session');
+    expect(procedure.title).toContain('If your session runs out while');
+    expect(procedure.whatChanged).toContain(
+      'your session runs out while they upload (it expired, not a sign-out)',
+    );
+    expect(procedure.howItAffectsYou).toContain(
+      'Signing out, in this tab, in another tab of this browser or from another device, removes it',
+    );
+    expect(procedure.whatToDo).toContain('open Procedures and finish the procedure already saved');
+    expect(page('procedures/page.tsx')).toContain('title="Procedures"');
     // Group selected.
     expect(GROUP_COPY.showIt).toBe('Show it');
     expect(INSTANT_MODE_MAX_ROWS).toBe(2000);

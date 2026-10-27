@@ -195,7 +195,10 @@ export const RELEASES: Release[] = [
         // (e84d123d9): middleware.ts:146-150 and :157-161 answered with a 307, which Next
         // 16.4.3's action client turns into "An unexpected response was received from the
         // server." (middleware.test.ts:275-280); "Something went wrong" was the answer of 15
-        // action modules (exceptions.ts:103). Several steps: inventory/item-form.tsx:1532, :1556,
+        // action modules (exceptions.ts:103). The old sign-in page showed neither: its submit
+        // awaits signInAction with no catch (sign-in-form.tsx:51, also before #386), and Next's
+        // action reducer only rejects the promise (server-action-reducer.js:332-335), so the
+        // page stayed as it was. Several steps: inventory/item-form.tsx:1532, :1556,
         // :1566 and :1602. Carts kept: orders/v2/cart-context.tsx:136 and :184-185, used by Place
         // an order (orders-storefront.tsx:241) and New rental (rental-create-form.tsx:517).
         // Other errors as before: action-catch.behaviour.test.ts:104-136. No reason given after
@@ -210,7 +213,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'On the web, when your session has ended, for example because you signed out in another tab or it expired, pressing most buttons that save or load something on a dashboard page now takes you to the sign-in page, with no error message. After you sign in you are back on the page you were on. If you press Sign in on an old sign-in page after you have already signed in from another tab, you now go to the dashboard.',
         whyItMatters:
-          'Before, the button showed an error, such as “Something went wrong” or “An unexpected response was received from the server”, and the page stayed where it was. Nothing could be saved until you reloaded the page and signed in. Pressing Sign in on an old sign-in page showed the second message.',
+          'Before, the button showed an error, such as “Something went wrong” or “An unexpected response was received from the server”, and the page stayed where it was. Nothing could be saved until you reloaded the page and signed in. Pressing Sign in on an old sign-in page left you on that page.',
         howItAffectsYou:
           'A button that saves in one step saved nothing, so repeat it once you are back. A button that saves in several steps, such as Create item with tags or photos on New item, may have saved its first step, so check the page before you repeat it. What you had typed in an open dialog or form is not kept; the cart on Place an order and on New rental is kept in your browser. Other errors, such as a refused save, show as before. After a button press, the sign-in page does not say why you were sent there.',
         whatToDo: 'Sign in again when the page asks, then repeat what you were doing.',
@@ -514,7 +517,11 @@ export const RELEASES: Release[] = [
         audience: { anyPermission: ['items:update'] },
       },
       {
-        // platform: web. From: B26 #396. Checked at 0132fbd25: the notice,
+        // platform: web (the mobile app's own PO import page still says "Replaced by a later
+        // import of this file." and "This file was imported again later", with no date,
+        // apps/mobile/app/po-import/[id].tsx:676 and :706; #396 changed only the web notice), so
+        // the title and whatChanged say "On the web". From: B26 #396. Checked at 0132fbd25: the
+        // notice,
         // components/po-imports/po-import-lineage-notice.tsx:48-54 (only with a later import),
         // :60, :63 and :64-72 (the date in the organization's zone, the time in its hover),
         // pinned by po-import-lineage-notice.test.tsx:100-103; the zone,
@@ -531,9 +538,9 @@ export const RELEASES: Release[] = [
         category: 'improved',
         area: 'PO imports',
         title:
-          "A replaced PO import says the day it was imported again, in your organization's time zone",
+          "On the web, a replaced PO import says the day it was imported again, in your organization's time zone",
         whatChanged:
-          "On a PO import that a later import of the same file replaced, the notice “Replaced by a later import of this file” now says “This file was imported again on” followed by a date, such as Sep 9, 2026. The date is the day in your organization's time zone, and pointing at it shows the date with its time. It used to say how long ago, such as 2 weeks ago.",
+          "On the web, on a PO import that a later import of the same file replaced, the notice “Replaced by a later import of this file” now says “This file was imported again on” followed by a date, such as Sep 9, 2026. The date is the day in your organization's time zone, and pointing at it shows the date with its time. It used to say how long ago, such as 2 weeks ago.",
         whyItMatters:
           'A time such as 2 weeks ago names no day, so it could not be checked against a calendar. The PO imports list already shows its upload dates this way.',
         howItAffectsYou:
@@ -553,7 +560,14 @@ export const RELEASES: Release[] = [
         // account and hour, lib/interrupted-run.ts:68-69, :98 and :221-240; only the id,
         // procedure-form.tsx:56-59; finished videos are recorded one by one, :255-265; a session
         // already ended at Create procedure keeps nothing, :342-349; signing out removes it,
-        // dashboard/user-menu.tsx:221 and interrupted-run.ts:450-453. Before (e84d123d9): an
+        // dashboard/user-menu.tsx:221 and interrupted-run.ts:450-453, in another tab of the
+        // browser too (listenForPurges, :466-476), and so does a revoke of this session from
+        // another device (realtime/session-revocation-listener.tsx:74); the run then writes
+        // nothing more, so New procedure opens empty after signing in (walk 10). Only a session
+        // that runs out by itself keeps it (interrupted-run.ts:38-53), so the entry says "runs
+        // out" and "not a sign-out", and sends a signed-out reader to Procedures
+        // (procedures/page.tsx, a card per procedure, and Edit on its page,
+        // procedures/[id]/page.tsx:82-86). Before (e84d123d9): an
         // error for each video, procedure-form.tsx:221, and no note. Walked: the sign-in with no
         // error and the note kept (walk 14), its removal on sign-out in that tab and another
         // (walks 10 and 16), and the notice on the Edit procedure page opened from its recovery
@@ -566,14 +580,15 @@ export const RELEASES: Release[] = [
         category: 'fixed',
         area: 'Procedures',
         title:
-          "If your session ends while a new procedure's videos upload, signing in takes you to that procedure",
+          "If your session runs out while a new procedure's videos upload, signing in takes you to that procedure",
         whatChanged:
-          "On the web, when you press Create procedure with videos added and your session ends while they upload, you now go to the sign-in page with no error. Sign in again on the same tab within an hour and you are taken to the Edit procedure page for that procedure, with the notice “Some video uploads didn't finish. Re-drop the missing files.” Reloading the page during the upload does the same.",
+          "On the web, when you press Create procedure with videos added and your session runs out while they upload (it expired, not a sign-out), you now go to the sign-in page with no error. Sign in again on the same tab within an hour and you are taken to the Edit procedure page for that procedure, with the notice “Some video uploads didn't finish. Re-drop the missing files.” Reloading the page during the upload does the same.",
         whyItMatters:
           'Before, each remaining video showed “An unexpected response was received from the server”, and a reload showed an empty New procedure form, so filling it in again made a second procedure.',
         howItAffectsYou:
-          "Videos that finished are already on the procedure. The video files themselves are not kept, so drop the missing ones in again. The tab keeps only the procedure's id, for your account, and removes it when you sign out. If your session has already ended when you press Create procedure, nothing is saved and New procedure opens empty after you sign in.",
-        whatToDo: 'Drop the missing video files into that page again.',
+          "Videos that finished are already on the procedure. The video files themselves are not kept, so drop the missing ones in again. The tab keeps only the procedure's id, for your account. Signing out, in this tab, in another tab of this browser or from another device, removes it, and New procedure then opens empty after you sign in: open Procedures and finish the one already saved instead of filling the form in again. If your session has already ended when you press Create procedure, nothing is saved and New procedure opens empty after you sign in.",
+        whatToDo:
+          'Drop the missing video files into that page again. If New procedure opens empty instead, open Procedures and finish the procedure already saved there.',
         audience: { anyPermission: ['categories:manage'], modules: ['procedures'] },
       },
     ],
