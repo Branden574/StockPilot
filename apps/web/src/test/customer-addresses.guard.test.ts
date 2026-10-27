@@ -22,10 +22,14 @@ import { describe, expect, it } from 'vitest';
  * address at one of the customer's mail domains. A file is read as UTF-8 (NUL
  * bytes and all) and, behind a byte-order mark, as UTF-16 too. A path is read
  * one folder or file name at a time, as written and with its extensions taken
- * off one at a time, so a file named <address>.csv is found (in a name, a
- * longer domain cannot be told from an extension, so it is found too). Each
- * line, and each name, is read twice, and an address in either reading is a
- * finding, once per line (or path) and address, so the guard fails closed:
+ * off one at a time, and in a name an address is found whatever follows it
+ * (<address>.csv, <address>-2026.csv, <address>_old.csv, <address>2026.csv,
+ * a folder <address>-backup): a name has no prose to protect, and a suffix in
+ * it cannot be told from a longer domain, so a path fails closed, while in a
+ * file a longer domain (<address>.example, <address>-mail.example) is left
+ * alone. Each line, and each name, is read twice, and an address in either
+ * reading is a finding, once per line (or path) and address, so the guard
+ * fails closed:
  *
  * - As written: in any case, under a subdomain, with the @ and the dots
  *   escaped with backslashes (a regular expression, or one inside a string
@@ -56,10 +60,11 @@ import { describe, expect, it } from 'vitest';
  * named .env* (the two tracked templates hold variable names only, and a test
  * that opens .env files is one rename away from opening a real one), though
  * their paths are read; people's names, which no pattern can tell from words;
- * and an address split across lines of the file, put together at run time
- * from pieces (as the domains below are), broken up by other markup or by
- * spaces, written in words with no brackets, spelled with lookalike letters
- * from another script, or in an encoding not listed above (base64, for one).
+ * an address split across folder levels (a / inside it); and an address split
+ * across lines of the file, put together at run time from pieces (as the
+ * domains below are), broken up by other markup or by spaces, written in
+ * words with no brackets, spelled with lookalike letters from another script,
+ * or in an encoding not listed above (base64, for one).
  * Git history keeps the old content.
  *
  * IF THIS FAILS: replace the address with a synthetic one at a reserved
@@ -122,13 +127,15 @@ const AT = `(?:${AT_SOURCE})`;
 const LOCAL = String.raw`(?:"[A-Za-z0-9._+-]+"|(?<!%(?:25)*[0-9A-Fa-f]?|\\(?:u\{?[0-9A-Fa-f]{0,3}|U[0-9A-Fa-f]{0,7}|x[0-9A-Fa-f]?|[0-7]{1,2})?)[A-Za-z0-9._+-]+)`;
 const LABEL = '[A-Za-z0-9_-]+';
 const DOMAINS = CUSTOMER_DOMAINS.map((d) => d.split('.').map(escapeRe).join(DOT)).join('|');
-// Nothing longer: no further label character (a hyphen only when a letter or
-// digit follows it, so a dash after the address still ends it), and no
-// further dot and label.
+const ADDRESS_SOURCE = `${LOCAL}${AT}(?:${LABEL}${DOT})*(?:${DOMAINS})`;
+// In a file: nothing longer, no further label character (a hyphen only when a
+// letter or digit follows it, so a dash after the address still ends it) and
+// no further dot and label, so prose can name a longer domain. A path has no
+// tail (PATH_ADDRESS below).
 const TAIL = `(?!-?[A-Za-z0-9])(?!${DOT}[A-Za-z0-9-])`;
 
 /** An address at a customer domain or one of its subdomains, as written. */
-const ADDRESS = new RegExp(`${LOCAL}${AT}(?:${LABEL}${DOT})*(?:${DOMAINS})${TAIL}`, 'gi');
+const ADDRESS = new RegExp(`${ADDRESS_SOURCE}${TAIL}`, 'gi');
 
 // Breaks the decoded reading finds an address across. A character that does
 // not show (a soft hyphen, a zero-width space or joiner, a direction mark, a
@@ -149,14 +156,28 @@ const LABEL_CHAR = '[A-Za-z0-9_-]';
 const spread = (domain: string) =>
   [...domain].map((c) => (c === '.' ? DOT : escapeRe(c))).join(GAP);
 
+const DECODED_ADDRESS_SOURCE =
+  `(?:"${CHAR}+"|${CHAR}(?:${SOFT}*${CHAR})*)${GAP}${AT}${GAP}` +
+  `(?:${LABEL_CHAR}(?:${GAP}${LABEL_CHAR})*${GAP}${DOT}${GAP})*` +
+  `(?:${CUSTOMER_DOMAINS.map(spread).join('|')})`;
+
 /** An address at a customer domain or one of its subdomains, in the decoded line. */
 const DECODED_ADDRESS = new RegExp(
-  `(?:"${CHAR}+"|${CHAR}(?:${SOFT}*${CHAR})*)${GAP}${AT}${GAP}` +
-    `(?:${LABEL_CHAR}(?:${GAP}${LABEL_CHAR})*${GAP}${DOT}${GAP})*` +
-    `(?:${CUSTOMER_DOMAINS.map(spread).join('|')})` +
-    `(?!${SOFT}*-?[A-Za-z0-9])(?!${SOFT}*${DOT}${SOFT}*[A-Za-z0-9-])`,
+  `${DECODED_ADDRESS_SOURCE}(?!${SOFT}*-?[A-Za-z0-9])(?!${SOFT}*${DOT}${SOFT}*[A-Za-z0-9-])`,
   'giu',
 );
+
+// In a folder or file name an address is found whatever follows it: a name
+// has no prose to protect, and a suffix in it (-2026, _old, 2026, -backup)
+// cannot be told from a longer domain, so a path fails closed. Same forms,
+// with no tail.
+const PATH_ADDRESS = new RegExp(ADDRESS_SOURCE, 'gi');
+const PATH_DECODED_ADDRESS = new RegExp(DECODED_ADDRESS_SOURCE, 'giu');
+
+/** The patterns one reading of a line, or of a name, is matched with. */
+type Patterns = { written: RegExp; decoded: RegExp };
+const IN_FILE: Patterns = { written: ADDRESS, decoded: DECODED_ADDRESS };
+const IN_PATH: Patterns = { written: PATH_ADDRESS, decoded: PATH_DECODED_ADDRESS };
 
 const AT_ANYWHERE = new RegExp(AT_SOURCE, 'gi');
 const DOT_ANYWHERE = new RegExp(DOT_SOURCE, 'gi');
@@ -310,8 +331,11 @@ const HINT = new RegExp(CUSTOMER_DOMAINS.map((d) => escapeRe(d.split('.')[0]!)).
 /** An address in a file's line (from 1), or in its path (line 0). */
 type Found = { file: string; line: number; sha256: string; domain: string };
 
-/** Every address on each line, as written and decoded, once per line and address. */
-function findIn(file: string, text: string): Found[] {
+/**
+ * Every address on each line, as written and decoded, once per line and
+ * address: with the file patterns, or each name of a path with the path ones.
+ */
+function findIn(file: string, text: string, patterns: Patterns = IN_FILE): Found[] {
   const found: Found[] = [];
   text.split('\n').forEach((content, i) => {
     const decoded = decode(content);
@@ -328,8 +352,8 @@ function findIn(file: string, text: string): Found[] {
         domain: address.slice(address.indexOf('@') + 1),
       });
     };
-    for (const match of content.matchAll(ADDRESS)) add(match[0]);
-    for (const match of decoded.matchAll(DECODED_ADDRESS)) add(match[0]);
+    for (const match of content.matchAll(patterns.written)) add(match[0]);
+    for (const match of decoded.matchAll(patterns.decoded)) add(match[0]);
   });
   return found;
 }
@@ -372,7 +396,9 @@ function findInFile(file: string, bytes: Buffer): Found[] {
 
 /**
  * Each folder and file name in a path, as written and with its extensions
- * taken off one at a time (report.csv.gz, report.csv, report).
+ * taken off one at a time (report.csv.gz, report.csv, report). With no tail
+ * on the path patterns the whole name already finds what a shorter reading
+ * does; the shorter readings stay as a second way in.
  */
 function pathReadings(file: string): string[] {
   return file.split('/').flatMap((name) => {
@@ -384,10 +410,10 @@ function pathReadings(file: string): string[] {
   });
 }
 
-/** Every address in a tracked path itself, once each, as line 0. */
+/** Every address in a tracked path itself, whatever follows it in a name, once each, as line 0. */
 function findInPath(file: string): Found[] {
   const seen = new Set<string>();
-  return findIn(file, pathReadings(file).join('\n')).flatMap((f) => {
+  return findIn(file, pathReadings(file).join('\n'), IN_PATH).flatMap((f) => {
     if (seen.has(f.sha256)) return [];
     seen.add(f.sha256);
     return [{ ...f, line: 0 }];
@@ -746,6 +772,57 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
         const expected = finds.map((address) => `0 ${sha256(address)}`);
         if (found.map((f) => `${f.line} ${f.sha256}`).join(' ') !== expected.join(' ')) {
           missed.push(`${name} (domain ${i + 1}): ${found.length} findings`);
+        }
+      }
+    });
+    expect(missed).toEqual([]);
+  });
+
+  // The integrator's path cases (2026-10-26): a name has no prose to protect,
+  // and a suffix in it cannot be told from a longer domain, so an address in a
+  // name is a finding whatever follows it.
+  it('finds an address in a folder or file name whatever follows it', () => {
+    const missed: string[] = [];
+    const encodedLocal = [...'intake']
+      .map((c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+      .join('');
+    CUSTOMER_DOMAINS.forEach((domain, i) => {
+      const plain = `intake@${domain}`;
+      for (const [spelled, written, readAlone] of [
+        ['@', plain, ['as written', 'decoded']],
+        ['%40', `intake%40${domain}`, ['as written', 'decoded']],
+        // As written a local part never starts inside an escape, so only the
+        // decoded reading finds this one.
+        ['%40 after a %-encoded local part', `${encodedLocal}%40${domain}`, ['decoded']],
+      ] as const) {
+        const paths: [name: string, path: string, finds: string][] = [
+          ['a dash and a year after it', `${written}-2026.csv`, plain],
+          ['a dash and a word after it, in a folder name', `${written}-backup/report.csv`, plain],
+          ['an underscore and a word after it', `${written}_old.csv`, plain],
+          ['digits right after it', `${written}2026.csv`, plain],
+          ['a dash, a version and two extensions after it', `${written}-v2.tar.gz`, plain],
+          ['a word and a dash before it', `report-${written}.csv`, `report-${plain}`],
+          ['a letter right after it', `${written}x.csv`, plain],
+        ];
+        for (const [name, path, finds] of paths) {
+          const found = scanFiles([path], () => Buffer.from('id,total\n1,10\n'));
+          if (found.map((f) => `${f.line} ${f.sha256}`).join(' ') !== `0 ${sha256(finds)}`) {
+            missed.push(`${name}, @ as ${spelled} (domain ${i + 1}): ${found.length} findings`);
+          }
+          // Each reading that can find it finds it on its own, so neither leans
+          // on the other.
+          for (const [reading, pattern, text] of [
+            ['as written', IN_PATH.written, path],
+            ['decoded', IN_PATH.decoded, decode(path)],
+          ] as const) {
+            if (!(readAlone as readonly string[]).includes(reading)) continue;
+            const alone = [...text.matchAll(pattern)].map((m) => sha256(normalise(m[0])));
+            if (alone.join(' ') !== sha256(finds)) {
+              missed.push(
+                `${name}, @ as ${spelled}, read ${reading} alone (domain ${i + 1}): ${alone.length} matches`,
+              );
+            }
+          }
         }
       }
     });
