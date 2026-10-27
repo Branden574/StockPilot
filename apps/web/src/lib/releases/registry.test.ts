@@ -48,6 +48,7 @@ import {
   PERMISSION_META,
   PERMISSIONS,
   PICKUP_COMPLETED_STATUS_LABEL,
+  plainAddressMailtoUrl,
   processLabelFor,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
@@ -76,12 +77,7 @@ import {
   type RestockOptionsLine,
 } from '@stockpilot/core';
 
-import {
-  newOrderFromWarehouseHref,
-  warehouseMailtoUrl,
-  warehouseTelUrl,
-} from '@/components/locations/warehouse-links';
-import { supplierMailtoUrl } from '@/components/suppliers/supplier-mailto';
+import { newOrderFromWarehouseHref, warehouseTelUrl } from '@/components/locations/warehouse-links';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
 import { BUNDLE_DUPLICATE_COMPONENT } from '@/lib/bundles/component-set';
 import {
@@ -12449,10 +12445,12 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
   });
 
   it('says a contact becomes a link only for one plain address or number, as the Suppliers and warehouse pages decide it', () => {
-    expect(supplierMailtoUrl('orders@example.com')).toBe('mailto:orders@example.com');
-    expect(supplierMailtoUrl('a@example.com, b@example.com')).toBeNull();
-    expect(warehouseMailtoUrl('dock@example.com')).toBe('mailto:dock@example.com');
-    expect(warehouseMailtoUrl('a@example.com; b@example.com')).toBeNull();
+    // One rule for every stored address, the Suppliers and warehouse pages
+    // included (plainAddressMailtoUrl in @stockpilot/core).
+    expect(plainAddressMailtoUrl('orders@example.com')).toBe('mailto:orders@example.com');
+    expect(plainAddressMailtoUrl('a@example.com, b@example.com')).toBeNull();
+    expect(plainAddressMailtoUrl('dock@example.com')).toBe('mailto:dock@example.com');
+    expect(plainAddressMailtoUrl('a@example.com; b@example.com')).toBeNull();
     expect(warehouseTelUrl('555-010-0100')).toBe('tel:5550100100');
     expect(warehouseTelUrl('555-010-0100 ext 12')).toBeNull();
     expect(entry('web-contact-links-plain-only').whatChanged).toContain(

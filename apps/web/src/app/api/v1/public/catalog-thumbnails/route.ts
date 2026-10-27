@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -17,16 +19,44 @@ export const dynamic = 'force-dynamic';
  * On success, returns the same `{ urls: Record<itemId, signedUrl> }` map
  * that the staff endpoint returns, so the public picker can reuse the
  * same deferred-thumbnail pattern without any signed-in credentials.
+ *
+ * RATE LIMIT: 120 requests an hour per IP (`public-catalog-thumbnails:ip:<ip>`),
+ * checked before the token is looked up, closed on a limiter outage like every
+ * other anonymous route. The answers below are cached at the CDN per URL, so a
+ * visitor of a real link mostly never reaches this function, while every guess
+ * at a token is a new URL that does. A 429 is no-store, so one address's
+ * refusal is never served to anyone else. There is deliberately no per-token
+ * bucket: anyone holding a link could spend it and blank the photos for every
+ * other visitor of that link.
  */
+const PER_IP_PER_HOUR = 120;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const token = url.searchParams.get('token');
   const warehouseId = url.searchParams.get('warehouseId');
 
   if (!token || !warehouseId) {
+    return NextResponse.json({ error: 'token + warehouseId required' }, { status: 400 });
+  }
+
+  const rl = await checkRateLimit(
+    `public-catalog-thumbnails:ip:${clientIpFromRequest(req)}`,
+    PER_IP_PER_HOUR,
+    ONE_HOUR_MS,
+    'closed',
+  );
+  if (!rl.allowed) {
     return NextResponse.json(
-      { error: 'token + warehouseId required' },
-      { status: 400 },
+      { error: 'rate_limited' },
+      {
+        status: 429,
+        headers: {
+          'Cache-Control': 'no-store',
+          'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        },
+      },
     );
   }
 

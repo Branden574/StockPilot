@@ -464,11 +464,15 @@ export async function syncOrderScheduleEvent(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    await admin
+    const { error } = await admin
       .from('schedule_events')
       .update({ status: outcome })
       .eq('order_request_id', orderId)
       .in('status', ['scheduled', 'in_progress']);
+    // supabase-js answers a failed UPDATE with { error }; it does not throw.
+    // Reported like a throw, or a refused close went unseen and the entry
+    // stayed scheduled on a closed order.
+    if (error) throw new Error(`schedule_events update: ${error.message}`);
   } catch (e) {
     void reportSrvError(e, {
       tag: 'orders.auto-schedule.sync',

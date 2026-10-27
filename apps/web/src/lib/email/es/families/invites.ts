@@ -18,7 +18,7 @@
  * the motion board gains one (flagged in the registry).
  */
 
-import { ROLE_LABELS, type Role } from '@stockpilot/core';
+import { plainAddressMailtoUrl, ROLE_LABELS, type Role } from '@stockpilot/core';
 
 import {
   assertEmailWeight,
@@ -534,9 +534,11 @@ export function renderPortalInviteEmail(params: PortalInviteEmailParams): Render
         kind: 'ext',
         reasonHtml: `You&rsquo;re receiving this because ${supplier} uses StockPilot to run their supplier portal and invited this address. No StockPilot account is required.`,
         urls: {
-          contact: params.supplierReplyTo?.trim()
-            ? `mailto:${escapeHtml(params.supplierReplyTo)}`
-            : urls.support,
+          // One plain address or the support link (core
+          // plainAddressMailtoUrl): the stored address went into the link as
+          // it was, so text such as "a@b.com?bcc=x@y.z" would open a message
+          // copied to someone the email never names.
+          contact: plainAddressMailtoUrl(params.supplierReplyTo) ?? urls.support,
           support: urls.support,
           privacy: urls.privacy,
         },

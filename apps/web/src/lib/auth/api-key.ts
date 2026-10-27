@@ -6,6 +6,7 @@ import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
+import { keepAlive } from '@/server/services/lib/defer';
 
 /**
  * Public-API key auth. External systems send `Authorization: Bearer sk_live_…`.
@@ -121,15 +122,22 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
 
   // Best-effort last-used stamp (fire-and-forget). The trailing .then() is
   // REQUIRED: a supabase-js builder is lazy and never sends the request unless
-  // awaited or `.then`ed (`void builder` alone is a silent no-op).
-  void admin
-    .from('api_keys')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('id', row.id)
-    .then(
-      () => {},
-      () => {},
-    );
+  // awaited or `.then`ed (`void builder` alone is a silent no-op). Kept alive
+  // past the response (lib/defer.ts keepAlive): the API route answers right
+  // after this, and a bare `void` held nothing, so the stamp could be lost
+  // (Promise.resolve: the builder's .then() is typed PromiseLike).
+  keepAlive(
+    Promise.resolve(
+      admin
+        .from('api_keys')
+        .update({ last_used_at: new Date().toISOString() })
+        .eq('id', row.id)
+        .then(
+          () => {},
+          () => {},
+        ),
+    ),
+  );
 
   return { ok: true, ctx: { organizationId: row.organization_id, keyId: row.id, scopes: row.scopes ?? [] } };
 }

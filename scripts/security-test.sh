@@ -1311,6 +1311,46 @@ WEB_TESTS=(
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
 
+  # The catalog photo maps: /api/v1/public/catalog-thumbnails is rate limited
+  # per IP before the link token is looked up, closed on a limiter outage,
+  # with a 429 the CDN never caches; /api/orders/catalog-thumbnails per user
+  # before any read, and it answers only the New rental page's rentalsOnly=1
+  # (the two old shapes that signed every orderable item are refused). The
+  # same two suites pin ordering visibility (0413, step 2b, below): the
+  # legacy public token answers an empty map, a link signs only its eligible
+  # items, and the refused picker set signs no hidden item.
+  src/app/api/v1/public/catalog-thumbnails/route.test.ts
+  src/app/api/orders/catalog-thumbnails/route.test.ts
+
+  # The Security Scan's dependency audit (scripts/dependency-audit): a
+  # critical advisory in a production dependency fails the job unless the
+  # allow-list dismisses it by advisory id and package until its review date,
+  # and only as it was reviewed (at or below the severity the entry records,
+  # and for an untilPatched entry only while no patched version is listed);
+  # unreadable audit output or a malformed allow-list entry fails it closed;
+  # registry text cannot form a runner command; the job holds no secret, no
+  # expression and no install. The file carries the "Security invariant"
+  # marker.
+  src/test/dependency-audit.guard.test.ts
+
+  # The export budget's trip row (security.export_rate_limited, which the
+  # hourly audit-anomaly cron counts to spot sustained export abuse) is
+  # written through insertAuditRowReported: kept alive past the 429 and
+  # reported when lost. A service client that cannot be made never turns the
+  # 429 into a 500. Its suite, src/lib/export-rate-limit.test.ts, is listed
+  # once, with the cross-site cookie checks (docket S14) above.
+
+  # Server code leaves nothing running with `void` that the response can cut
+  # off: the error reporter (security alerts), dispatchEvent (the security
+  # feed to Slack, Teams and webhooks), the audit writers and the realtime
+  # broadcasts keep their own work alive, and every other `void` call is
+  # reviewed. Every module that can run on the server is scanned, Server
+  # Component pages and modules without the 'server-only' marker included;
+  # the few browser-only modules skipped are checked to be imported only from
+  # client code. Client code reports through the isomorphic core reporter,
+  # never the server one, which is server-only and would fail the build.
+  src/server/fire-and-forget.guard.test.ts
+
   # One-click unsubscribe in member emails (B15): a link names one member, one
   # organization and one email kind under an HMAC keyed on UNSUBSCRIBE_SECRET,
   # domain-separated from the address links; a changed part, an unknown kind,
@@ -1336,10 +1376,11 @@ WEB_TESTS=(
   # { expire: 0 } (never 'max' or the global tag). No requester surface offers
   # a hidden item: the storefront loader filters and overlays recent hides, the
   # public link page overlays every render, the legacy public thumbnails answer
-  # an empty map, Frequently ordered and the picker thumbnails filter; Add
-  # items is one atomic database call, and a raise, the portal and the public
-  # form refuse a hidden item; PO-import charter siblings and restore points
-  # keep a hidden choice.
+  # an empty map, Frequently ordered filters and the picker thumbnails' set is
+  # refused outright (both thumbnail suites are listed once, with the catalog
+  # photo maps' rate limits above); Add items is one atomic database call, and
+  # a raise, the portal and the public form refuse a hidden item; PO-import
+  # charter siblings and restore points keep a hidden choice.
   src/server/services/order-catalog-visibility.test.ts
   src/server/actions/order-catalog-visibility.test.ts
   src/app/api/v1/orders/catalog-visibility/route.test.ts
@@ -1347,10 +1388,8 @@ WEB_TESTS=(
   src/server/services/order-requests.edit-lines.test.ts
   src/server/services/portal.pricing-mode.test.ts
   src/app/api/v1/public/order-requests/route.order-visibility.test.ts
-  src/app/api/v1/public/catalog-thumbnails/route.test.ts
   src/server/services/public-catalog.order-visibility.test.ts
   src/app/api/orders/freq/route.test.ts
-  src/app/api/orders/catalog-thumbnails/route.test.ts
   src/server/services/po-imports.charter-decoupling.test.ts
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts
@@ -1407,6 +1446,38 @@ MOBILE_TESTS=(
   src/lib/cache-owner.test.ts
   src/lib/sync.snapshot-removals.test.ts
   src/lib/draft-debouncer.test.ts
+
+  # A sign-out, an account eviction and a pull for another account (where the
+  # fallback sign-outs, a revoked session and an expired refresh token, which
+  # never wipe, all arrive) clear the photo caches (expo-image's memory and
+  # disk caches, and the item-photo links held in memory) with the SQLite
+  # wipe, even when that wipe fails, so the next account on a shared phone
+  # finds no photo the previous one saw. The record of whose cache it is
+  # outlives the wipes that keep the photos (a workspace switch, the
+  # workspace repair, Clear offline cache), is forgotten only after the
+  # photos are gone, and names the new account once a reset has cleared the
+  # old one. A photo clear that failed is recorded beside it as still owed:
+  # that account's own pulls clear the photos again, and do nothing else,
+  # while any other account still resets. A pull that finds no record clears
+  # the photos and trusts none of the rows: its full pull keeps only what it
+  # returns and the counts with this account's unsent work. The count screen
+  # stores a count only for the cache, the account and the workspace it
+  # fetched it for, never into a cache still recorded as another account's,
+  # and fetches it once more when one of them changed while it was loading.
+  # The next account's first sync never joins a pull still out for the
+  # previous one, whose answer is discarded once the account has changed: it
+  # runs after that pull and resets at once. A clear of a line's count,
+  # queued from an emptied count box, follows every rule of an unsent count:
+  # another account's is held for it, never sent under the next account, and
+  # gives way at that account's pull. A stored file's one-hour link
+  # (proof of delivery, purchase order files) is signed again at the tap once
+  # it is about to expire, never opened stale.
+  src/lib/photo-cache-wipe.test.ts
+  src/lib/cache-owner.sqlite.test.ts
+  src/lib/db-clear-keys.wiring.test.ts
+  src/lib/photo-links-wiring.test.ts
+  src/lib/cycle-count-detail-wiring.test.ts
+  src/lib/stored-file-link.test.ts
 
   # S4 review — WHO holds the session is read from the stored session, never
   # from getSession(), which answers "no session" offline once the access token
@@ -1530,6 +1601,11 @@ CORE_TESTS=(
   # payload is pinned against, the words no key may carry, two-state
   # availability, and the tracking sentences.
   src/returns/requester-exchange-types.test.ts
+  # The one mailto rule for stored addresses (web support triage and order
+  # emails, phone Team, Users and Suppliers): one plain ASCII address or no
+  # link, so a link can add no recipient or parameter and opens only the
+  # address the screen shows.
+  src/email/mailto-link.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

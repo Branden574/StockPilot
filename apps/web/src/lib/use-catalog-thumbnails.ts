@@ -1,8 +1,9 @@
 import * as React from 'react';
 
 /**
- * Deferred catalog-thumbnail loader shared by the staff order picker, the
- * public order portal, and the rental create form.
+ * Deferred catalog-thumbnail loader shared by the public order portal and
+ * the rental create form. (The staff orders storefront ships its photos with
+ * its catalog and does not use it.)
  *
  * The picker pages render instantly with placeholders and fetch signed
  * thumbnail URLs after first paint. The old inline effects were ONE-SHOT with
