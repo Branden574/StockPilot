@@ -112,15 +112,25 @@ const STOCK_RPCS: Record<string, string> = {
   // Ungroup (0399): a fresh SKU on each split record, bumping updated_at and
   // changing the SKU every list, search and label shows.
   split_item_sku: 'inventory_items.sku and updated_by on the split records (0399, through _item_grouping_split_apply)',
+  // Ordering visibility (0413): Show or Hide. A derived write (updated_at
+  // kept); its one caller is in ALLOWLIST below, with the reason.
+  set_order_catalog_visibility:
+    'inventory_items.order_catalog_visible and order_catalog_visibility_changed_at only, under stockpilot.derived_write (0413)',
 };
 
 /**
  * Members allowed to write stock WITHOUT invalidating: `file#Member` → why
- * invalidating would be wrong. Empty on purpose — as of 2026-09-22 every
- * writer invalidates. A stale entry (member gone, no longer writes, or now
- * invalidates) fails the suite so the list cannot rot.
+ * invalidating would be wrong. Every other writer invalidates. A stale entry
+ * (member gone, no longer writes, or now invalidates) fails the suite so the
+ * list cannot rot.
  */
-const ALLOWLIST: Record<string, string> = {};
+const ALLOWLIST: Record<string, string> = {
+  // Ordering visibility (0413, design 4.2 step 6). The header's reason for
+  // counting every inventory_items write is that updated_at moves; this is the
+  // writer where it does not (a pgTAP case pins it).
+  'order-catalog-visibility.ts#OrderCatalogVisibilityService.setVisibility':
+    'Writes only order_catalog_visible and its stamp under stockpilot.derived_write, so updated_at (the list\'s sort key and rendered column) does not move, and no Items or Books list renders either column. Expiring the org\'s list cache here would make every member\'s next Items load cold for a change the list does not show (brief 12).',
+};
 
 /**
  * Members that WRITE through a non-literal table name (or call a non-literal

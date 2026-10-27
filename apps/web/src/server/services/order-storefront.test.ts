@@ -40,7 +40,11 @@ vi.mock('@/server/loaders/orders-new-catalog', () => ({
   // test below.
   resolveCatalogScopeKey: (...args: unknown[]) =>
     (resolveScopeKeyMock(...args) as Promise<string>).then((key) => key),
-  loadCatalogItemsCached: catalogCachedMock,
+  // Requester catalogs read through loadOrderableCatalog (0413): the cached
+  // rows without what was hidden since the entry was read. The hide mark is
+  // the caller's (null here: the organization never hid anything).
+  loadOrderableCatalog: catalogCachedMock,
+  catalogLastHideAt: () => null,
   loadChartersForWarehouse: chartersMock,
 }));
 vi.mock('@/server/loaders/orders-kits', () => ({ loadOrderKits: kitsMock }));
@@ -276,6 +280,7 @@ describe('GET storefront', () => {
         email: 'pat@example.org',
         canOrderOnBehalf: false,
         canApproveOrders: false,
+        canManageOrderItems: false,
       },
       kitsEnabled: true,
       orgTimezone: 'America/Los_Angeles',
@@ -343,6 +348,36 @@ describe('GET storefront', () => {
     await expect(
       ctxFor({ role: 'viewer', permissions: ['orders:request', 'orders:approve'] }).service.storefront(),
     ).resolves.toMatchObject({ viewer: { canOrderOnBehalf: true, canApproveOrders: false } });
+  });
+
+  // Manage order items (0413): the effective permission, in an organization
+  // the rollout switch (ORDER_ITEMS_MANAGE_ORGS) has turned on. Always set.
+  it('canManageOrderItems follows the switch and the effective permission', async () => {
+    const answer = async (over: Parameters<typeof ctxFor>[0]) =>
+      ((await ctxFor(over).service.storefront()) as { viewer: { canManageOrderItems?: boolean } })
+        .viewer.canManageOrderItems;
+    const manager = {
+      role: 'manager' as const,
+      permissions: ['orders:request', 'orders:approve', 'orders:manage_catalog_visibility'],
+    };
+
+    // Switch unset: off everywhere, a manager included.
+    expect(await answer(manager)).toBe(false);
+
+    vi.stubEnv('ORDER_ITEMS_MANAGE_ORGS', '*');
+    expect(await answer(manager)).toBe(true);
+    // Denied by StockPilot (no effective permission): false.
+    expect(await answer({ role: 'manager', permissions: ['orders:request'] })).toBe(false);
+    // A staff member allowed by StockPilot: true.
+    expect(
+      await answer({ role: 'staff', permissions: ['orders:request', 'orders:manage_catalog_visibility'] }),
+    ).toBe(true);
+
+    // A list that names this organization, in any case and spacing.
+    vi.stubEnv('ORDER_ITEMS_MANAGE_ORGS', ` other-org , ${ORG.toUpperCase()} `);
+    expect(await answer(manager)).toBe(true);
+    vi.stubEnv('ORDER_ITEMS_MANAGE_ORGS', 'other-org');
+    expect(await answer(manager)).toBe(false);
   });
 
   it('recent requesters that fail to read answer error, and the storefront still answers', async () => {
@@ -435,7 +470,7 @@ describe('the warehouse perimeter (catalog and photos)', () => {
       // Every read downstream gets the stored (lower case) id: the scope key
       // and the kits compare warehouse ids as text.
       expect(resolveScopeKeyMock).toHaveBeenLastCalledWith(ctx, WH, ctx.supabase);
-      expect(catalogCachedMock).toHaveBeenLastCalledWith(ORG, WH, 'ALL');
+      expect(catalogCachedMock).toHaveBeenLastCalledWith(ORG, WH, 'ALL', null);
     }
     expect(chartersMock).toHaveBeenCalledWith(WH);
     expect(kitsMock.mock.calls[0]![1]).toBe(WH);
@@ -484,7 +519,7 @@ describe('the scope key starts with the perimeter; every shared read waits for i
 
     open();
     await expect(answer).resolves.toMatchObject({ warehouseId: WH });
-    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL', null);
   });
 
   it('a refused warehouse whose scope read also failed is the refusal, with no stray rejection', async () => {
@@ -520,7 +555,7 @@ describe('GET catalog', () => {
     const { ctx, service } = ctxFor({ role: 'viewer' });
     const out = await service.catalog(WH);
     expect(resolveScopeKeyMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
-    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL', null);
     expect(out).toEqual({
       organizationId: ORG,
       warehouseId: WH,
@@ -622,7 +657,7 @@ describe('GET catalog/photos', () => {
     const out = await service.photos(WH);
     expect(photoMapMock).toHaveBeenCalledWith(ORG, WH);
     expect(resolveScopeKeyMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
-    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL', null);
     expect(out).toEqual({
       organizationId: ORG,
       warehouseId: WH,

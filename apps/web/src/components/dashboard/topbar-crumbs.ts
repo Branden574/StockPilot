@@ -235,9 +235,14 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   ],
   [/^\/dashboard\/bundles$/, [SECTION_FULFILLMENT, BUNDLES_LIST]],
 
-  // Orders (order requests). The /new and /[id]/print patterns MUST come
-  // before the bare /[^/]+$ detail catch-all.
+  // Orders (order requests). The /new, /manage-items and /[id]/print
+  // patterns MUST come before the bare /[^/]+$ detail catch-all.
   [/^\/dashboard\/orders\/new$/, [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'New', href: null }]],
+  // Manage order items (ordering visibility, migration 0413).
+  [
+    /^\/dashboard\/orders\/manage-items$/,
+    [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'Manage order items', href: null }],
+  ],
   [
     /^\/dashboard\/orders\/[^/]+\/print$/,
     [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'Print', href: null }],

@@ -7,6 +7,10 @@ import { toast } from 'sonner';
 
 import { useStepUp } from '@/components/auth/step-up-modal';
 import { DisableAccountDialog } from '@/components/platform/disable-account-dialog';
+import {
+  OrderItemsAccessDialog,
+  type OrderItemsAccessTarget,
+} from '@/components/platform/order-items-access-dialog';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -103,22 +107,33 @@ function isPartial(res: ActionResult<unknown>): boolean {
  *     UI-invented restriction with a real victim: an account disabled BEFORE
  *     its address was added to STOCKPILOT_PLATFORM_ADMIN_EMAILS would have had
  *     no re-enable path through the console at all.
+ *
+ * "Order items access..." (orders:manage_catalog_visibility, migration 0413)
+ * opens God Admin's Allow / Deny / Follow role default dialog for this member
+ * in this organization. It is offered only when the row carries the member's
+ * current state (`orderItemsAccess`): the save is a compare-and-set against
+ * it, so a row whose state could not be read has nothing honest to send. The
+ * dialog shares this row's step-up prompt.
  */
 export function UserActionsMenu({
   userId,
   email,
   disabledAt,
   protectedAdmin,
+  orderItemsAccess = null,
 }: {
   userId: string;
   email: string | null;
   disabledAt: string | null;
   protectedAdmin: boolean;
+  /** This member's Order items access as the Users tab read it; null when unread. */
+  orderItemsAccess?: OrderItemsAccessTarget | null;
 }) {
   const router = useRouter();
   const { ensure, modal } = useStepUp();
   const [pending, start] = React.useTransition();
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [accessOpen, setAccessOpen] = React.useState(false);
   // NOT derived from `disabledAt` — see the note above. The only gates are the
   // ones the server itself applies (protected admin) or that the confirm dialog
   // physically needs (an email to type). Re-enable has neither, so it is
@@ -218,6 +233,18 @@ export function UserActionsMenu({
     </DropdownMenuItem>
   ) : null;
   const reenableItem = <DropdownMenuItem onSelect={onReenable}>Re-enable account</DropdownMenuItem>;
+  const accessItem = orderItemsAccess ? (
+    <DropdownMenuItem
+      onSelect={(e) => {
+        // As Disable: keep the menu from closing first, so focus moves into
+        // the dialog.
+        e.preventDefault();
+        setAccessOpen(true);
+      }}
+    >
+      Order items access...
+    </DropdownMenuItem>
+  ) : null;
 
   return (
     <>
@@ -229,6 +256,7 @@ export function UserActionsMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onReset}>Send password reset...</DropdownMenuItem>
+          {accessItem}
           {isDisabled ? (
             <>
               {reenableItem}
@@ -252,6 +280,14 @@ export function UserActionsMenu({
           email={email}
           pending={pending}
           onConfirm={onDisable}
+        />
+      )}
+      {orderItemsAccess && (
+        <OrderItemsAccessDialog
+          open={accessOpen}
+          onOpenChange={setAccessOpen}
+          target={orderItemsAccess}
+          ensureStepUp={ensure}
         />
       )}
       {modal}
