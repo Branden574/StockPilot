@@ -68,12 +68,14 @@ describe('GridCard', () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the square: a fixed square media box with the photo absolutely positioned, uncropped', () => {
+  it('keeps the square: a fixed square media box the photo fills edge to edge, with no white bars', () => {
     const { container } = render(card());
     const media = container.querySelector('[data-slot="grid-card-media"]')!;
-    expect(media).toHaveClass('aspect-square', 'relative', 'overflow-hidden', 'bg-white');
+    expect(media).toHaveClass('aspect-square', 'relative', 'overflow-hidden');
+    expect(media).not.toHaveClass('bg-white');
     const img = within(media as HTMLElement).getByRole('img', { name: 'L4L Polo — Men’s' });
-    expect(img).toHaveClass('absolute', 'inset-0', 'h-full', 'w-full', 'object-contain');
+    expect(img).toHaveClass('absolute', 'inset-0', 'h-full', 'w-full', 'object-cover');
+    expect(img).not.toHaveClass('object-contain');
     expect(img).toHaveAttribute('src', 'https://example.test/thumb.webp');
     expect(img).toHaveAttribute('loading', 'lazy');
   });
@@ -107,11 +109,11 @@ describe('GridCard', () => {
     expect(badge).toHaveTextContent('8 sizes');
   });
 
-  it('backs the status and badge slots with the card surface, so an outline pill reads on the white tile in dark mode', () => {
+  it('backs the status and badge slots with the card surface, so an outline pill reads over the photo in dark mode', () => {
     const { container } = render(card());
-    // The tile is white in both themes; an outline pill (Archived,
-    // Discontinued) has no fill of its own, so its ink-3 text needs a backing.
-    expect(container.querySelector('[data-slot="grid-card-media"]')).toHaveClass('bg-white');
+    // The photo fills the tile; an outline pill (Archived, Discontinued) has
+    // no fill of its own, so its ink-3 text needs a backing over any photo.
+    expect(container.querySelector('[data-slot="grid-card-media"]')).not.toHaveClass('bg-white');
     for (const slot of ['grid-card-status', 'grid-card-badge']) {
       const el = container.querySelector(`[data-slot="${slot}"]`)!;
       // flex: the backing is exactly the pill's box (no line-box strut around it).
