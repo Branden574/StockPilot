@@ -154,7 +154,13 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
   };
   const showSection = audience && Object.values(gates).some(Boolean);
   // B23: nobody else will finish this delivery. Said to the approvers who
-  // hand it over (the web panel's `approves` side), with their buttons.
+  // hand it over (the web panel's `approves` side), with their buttons. It
+  // follows this screen's Collect signature button, which every approver is
+  // offered as before B23: the screen does not read the viewer's warehouse
+  // access when it loads, so a staff approver from another warehouse reads it
+  // too, and the sign route (mayHandOverOrder) refuses their hand-over as it
+  // refuses the button. The web panel, which has that access, says it only
+  // to a viewer who may hand the order over (review 2026-10-31).
   const deletedDriverLine =
     approver && st === 'in_transit' && input.driverDeleted === true && gates.digitalSignature
       ? deletedDriverHandOverLine({ offersPhysicalSignature: gates.physicalSignature })

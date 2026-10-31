@@ -1116,9 +1116,12 @@ export default async function OrderDetailPage({
     approverWarehouseAccess && !isAssignedDriver
       ? await approverWarehouseAccess.catch(() => null)
       : null;
+  // The panel hears it too: its deleted-driver line (B23) names the hand-over
+  // buttons, so it is said only to a viewer this rule lets press one.
+  const viewerMayHandOver = handOverAllowed(ctx, request, handOverWarehouseAccess);
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
-    viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
+    viewerMayHandOver,
     mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
     status: request.status,
     signatureTokenColumn: request.signature_token,
@@ -1894,6 +1897,7 @@ export default async function OrderDetailPage({
                   inTransitAt: request.in_transit_at,
                   assignedDeliveryUserId: request.assigned_delivery_user_id,
                 })}
+                viewerMayHandOver={viewerMayHandOver}
                 signatureToken={handOverLink}
                 handOverMfaMessage={
                   handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null

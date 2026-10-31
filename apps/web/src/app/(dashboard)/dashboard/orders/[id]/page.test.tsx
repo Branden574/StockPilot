@@ -707,6 +707,45 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     expect(panelProps()?.driverDeleted).toBe(false);
   });
 
+  // Review (2026-10-31): the panel's deleted-driver line names the hand-over
+  // buttons, so the panel hears who may hand the order over by the link's own
+  // rule (handOverAllowed), never by orders:approve alone.
+  it("B23 review: the panel hears whether the viewer may hand the order over, by the link's rule", async () => {
+    const inTransit = () =>
+      orderGet.mockResolvedValue(
+        detailFixture({
+          request: requestFixture({
+            status: 'in_transit',
+            fulfillment_type: 'delivery',
+            in_transit_at: '2026-10-20T15:04:05.000Z',
+            assigned_delivery_user_id: null,
+            signature_token: DIGEST,
+          }),
+        }),
+      );
+    inTransit();
+    await renderPage();
+    expect(panelProps()?.viewerMayHandOver).toBe(true);
+
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
+    inTransit();
+    await renderPage();
+    expect(panelProps()?.viewerMayHandOver).toBe(false);
+    expect(panelProps()?.signatureToken).toBeNull();
+
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+    inTransit();
+    await renderPage();
+    expect(panelProps()?.viewerMayHandOver).toBe(true);
+    expect(panelProps()?.signatureToken).toBe(RAW);
+
+    getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
+    inTransit();
+    await renderPage();
+    expect(panelProps()?.viewerMayHandOver).toBe(false);
+  });
+
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
     orderGet.mockResolvedValue(
       detailFixture({
