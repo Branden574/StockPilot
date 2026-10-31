@@ -168,6 +168,17 @@ describe('sheets hold the pop-up', () => {
       "visible={isFocused && phase !== 'idle' && !whatsNewOpen && !updatePromptOpen}",
     );
   });
+
+  // What's New opens from a timer and tells the lock only in its effects, so
+  // the pop-up can show in between. The lock is symmetric, as the tour's is:
+  // the sheet steps aside while the pop-up is open or the app restarts, and
+  // keeps `open`, so it comes back after Later or a failed restart.
+  it('What’s New steps aside for the pop-up too, and comes back after it', () => {
+    const whatsNew = flatCode('src/components/onboarding/whats-new.tsx');
+    expect(whatsNew).toContain('const updatePromptOpen = useTourVisible(UPDATE_PROMPT_LOCK_ID);');
+    expect(whatsNew).toContain('visible={open && !updatePromptOpen}');
+    expect(whatsNew).not.toContain('visible={open}');
+  });
 });
 
 describe('the one restart', () => {

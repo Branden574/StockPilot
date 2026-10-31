@@ -28,6 +28,8 @@ import {
   isAnyTourVisible,
   setWhatsNewOpen,
   subscribeTourVisibility,
+  UPDATE_PROMPT_LOCK_ID,
+  useTourVisible,
 } from '@/lib/tour-targets';
 import { useTheme } from '@/lib/use-theme';
 import { rewriteWebPath } from '@/lib/web-path-rewrite';
@@ -74,6 +76,11 @@ export function WhatsNew() {
   const [open, setOpen] = React.useState(false);
   const [reduced, setReduced] = React.useState(false);
   const fade = useAnimatedValue(0);
+  // The phone update pop-up (B44) holds the slot while it is open or the app
+  // is restarting. This sheet decides to open in a timer and says so only in
+  // its effects, so the pop-up can come up in that gap; then the sheet steps
+  // aside, as a tour's does, and comes back when the pop-up is answered.
+  const updatePromptOpen = useTourVisible(UPDATE_PROMPT_LOCK_ID);
 
   React.useEffect(() => {
     if (!uid || shownForUserId === uid) return;
@@ -161,7 +168,7 @@ export function WhatsNew() {
 
   return (
     <Modal
-      visible={open}
+      visible={open && !updatePromptOpen}
       transparent
       statusBarTranslucent
       animationType="none"
