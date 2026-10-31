@@ -98,7 +98,9 @@ export default async function RolesPage() {
     // would show every role at its defaults: a permission the organization
     // took away would read as granted, and an edit would start from there. So
     // a failed read throws to the settings boundary, which offers Try again
-    // (docket S19). The owner still reaches this page while the reads fail.
+    // (docket S19). An answer with no error that is not a list (postgrest-js
+    // resolves an empty body with data null) has failed too. The owner still
+    // reaches this page while the reads fail.
     // Codes only: the PostgREST message can quote request details.
     const failed = (
       [
@@ -106,13 +108,14 @@ export default async function RolesPage() {
         ['user_permission_overrides', uoRes],
         ['organization_members', memRes],
       ] as const
-    ).filter(([, res]) => res.error);
+    ).filter(([, res]) => res.error || !Array.isArray(res.data));
     if (failed.length > 0) {
       console.error(
         '[settings/roles] read failed:',
         failed
           .map(
-            ([table, res]) => `${table} code=${res.error?.code || 'unknown'} status=${res.status}`,
+            ([table, res]) =>
+              `${table} code=${res.error ? res.error.code || 'unknown' : 'unexpected'} status=${res.status}`,
           )
           .join('; '),
       );

@@ -51,12 +51,15 @@ export class PermissionsUnavailableError extends Error {
  * applied (last wins). The SQL twin is public.has_permission() (migration
  * 0207), used by RLS; this is the app-layer gate consulted by `can(ctx, …)`.
  *
- * Only the backup path reaches it: session.ts resolvePermissions and
- * withApiContext call it when get_request_context() gave no usable answer.
- * Normal requests take their overrides from that one round trip instead.
+ * Callers: the backup path, where session.ts resolvePermissions and
+ * withApiContext call it when get_request_context() gave no usable answer
+ * (normal requests take their overrides from that one round trip instead);
+ * and the QuickBooks and Sage Intacct OAuth callbacks, which build their own
+ * principal and gate integrations:manage on this set.
  *
  * FAILS CLOSED for everyone but the owner (docket S19). When either override
- * read fails, this reports it and throws PermissionsUnavailableError: the
+ * read fails (it answers an error, the request throws, or the answer is not a
+ * list of rows), this reports it and throws PermissionsUnavailableError: the
  * request is refused. It used to answer with the role's static defaults,
  * which lifts every revoke the organization set and drops every extra grant
  * for that request, and one fault that fails every override read (a lost
@@ -120,7 +123,10 @@ type OverrideTable = 'role_permission_overrides' | 'user_permission_overrides';
 /** Codes only: the PostgREST message can quote request details. */
 interface FailedRead {
   table: OverrideTable;
-  /** The PostgREST code ('unknown' when it gave none), or 'threw' when the request threw. */
+  /**
+   * The PostgREST code ('unknown' when it gave none), 'unexpected' when the
+   * answer carried no error and no list, or 'threw' when the request threw.
+   */
   code: string;
   /** The HTTP status (0 when the request got no answer), or null when it threw. */
   status: number | null;
@@ -135,17 +141,17 @@ async function readOverrides(
 ): Promise<OverrideRead> {
   try {
     const { data, error, status } = await query();
+    const answered = typeof status === 'number' ? status : null;
     if (error) {
-      return {
-        ok: false,
-        failure: {
-          table,
-          code: error.code || 'unknown',
-          status: typeof status === 'number' ? status : null,
-        },
-      };
+      return { ok: false, failure: { table, code: error.code || 'unknown', status: answered } };
     }
-    return { ok: true, rows: (data ?? []) as PermissionOverride[] };
+    // Only a list is an answer. postgrest-js resolves an empty body with no
+    // error and data null (a 2xx as it came, a 404 rewritten to 204): read as
+    // "no overrides", that handed the role's defaults back.
+    if (!Array.isArray(data)) {
+      return { ok: false, failure: { table, code: 'unexpected', status: answered } };
+    }
+    return { ok: true, rows: data as PermissionOverride[] };
   } catch {
     return { ok: false, failure: { table, code: 'threw', status: null } };
   }
@@ -199,7 +205,9 @@ async function loadOwnerPermissions(
       // in-list-bound: the platform-managed keys (one today)
       .in('permission', [...PLATFORM_MANAGED_PERMISSIONS]);
     if (error) throw error;
-    const rows = ((data ?? []) as PermissionOverride[]).filter((r) =>
+    // An answer that is not a list is no answer: never "no deny rows".
+    if (!Array.isArray(data)) throw new Error('the platform exception read answered no list');
+    const rows = (data as PermissionOverride[]).filter((r) =>
       isPlatformManagedPermission(r.permission),
     );
     return effectivePermissions('owner', [], rows);

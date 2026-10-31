@@ -4,6 +4,8 @@ vi.mock('server-only', () => ({}));
 const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
 
+import { createClient } from '@supabase/supabase-js';
+
 import {
   effectivePermissions,
   PERMISSIONS,
@@ -41,7 +43,8 @@ const SECRET = 'relation secret-detail is not readable';
 const UNAVAILABLE = { name: 'PermissionsUnavailableError', code: 'PERMISSIONS_UNAVAILABLE' };
 
 interface Read {
-  data: Array<{ permission: string; granted: boolean }> | null;
+  /** The rows, or anything else an answer can carry (a test of the list check). */
+  data: Array<{ permission: string; granted: boolean }> | null | Record<string, unknown>;
   error: { message: string; code?: string } | null;
   /** The HTTP status postgrest-js answers with. */
   status?: number;
@@ -355,5 +358,133 @@ describe('loadEffectivePermissions: a refusal is logged every time and reported 
     const perms = await loadEffectivePermissions(client(), ORG, USER, 'owner');
     expect(perms.size).toBe(PERMISSIONS.length - 1);
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An answer with no error that is not a list of rows (docket S19 review).
+ * postgrest-js resolves an empty body with `data: null` and `error: null`: on
+ * a 2xx as it came, and on a 404 with the status rewritten to 204. Read as
+ * "no overrides", either one handed a member their role's defaults back, the
+ * failure this loader exists to refuse, with no line and no report. It is a
+ * failed read like any other. (A 404 carrying `[]` arrives as an ordinary
+ * empty list with status 200, which no check here can tell from "no rows".)
+ * The request-context bundle parser already refuses any override value that is
+ * not a list.
+ */
+describe('loadEffectivePermissions: an answer that is not a list is a failed read', () => {
+  const NOT_A_LIST = [
+    ['an empty 2xx body', { data: null, error: null, status: 200 }],
+    ['an empty 404 body (status rewritten to 204)', { data: null, error: null, status: 204 }],
+    [
+      'a JSON object',
+      { data: { permission: 'stock:adjust', granted: false }, error: null, status: 200 },
+    ],
+  ] as const;
+
+  it.each(NOT_A_LIST)(
+    '%s from the user override read refuses a staff member whose stock:adjust was revoked, never the role defaults',
+    async (_shape, answer) => {
+      expect(ROLE_PERMISSIONS.staff).toContain('stock:adjust');
+      reads.user_permission_overrides = { ...answer };
+      const { perms, error } = await settle('staff');
+      expect(perms).toBeNull();
+      expect(error).toMatchObject(UNAVAILABLE);
+    },
+  );
+
+  it.each(NOT_A_LIST)(
+    '%s from the role override read refuses the same way',
+    async (_shape, answer) => {
+      reads.role_permission_overrides = { ...answer };
+      const { perms, error } = await settle('manager');
+      expect(perms).toBeNull();
+      expect(error).toMatchObject(UNAVAILABLE);
+    },
+  );
+
+  it('is logged and reported like any failed read, with the code "unexpected" and the status', async () => {
+    resetPermissionsReportThrottleForTests();
+    reads.role_permission_overrides = { data: null, error: null, status: 204 };
+    expect((await settle('manager')).error).toMatchObject(UNAVAILABLE);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toEqual({
+      tag: 'auth.permissions.read',
+      organizationId: ORG,
+      extra: {
+        table: 'role_permission_overrides',
+        code: 'unexpected',
+        status: 204,
+        role: 'manager',
+      },
+    });
+    const line = vi.mocked(console.error).mock.calls.map((c) => c.map(String).join(' '));
+    expect(line).toHaveLength(1);
+    expect(line[0]).toContain('role_permission_overrides code=unexpected status=204');
+  });
+
+  it('the owner: an answer that is not a list closes the platform-managed key, like a failed read', async () => {
+    reads.user_permission_overrides = { data: null, error: null, status: 204 };
+    const perms = await loadEffectivePermissions(client(), ORG, USER, 'owner');
+    expect(perms.has(KEY)).toBe(false);
+    expect(perms.has('billing:manage')).toBe(true);
+    expect(perms.size).toBe(PERMISSIONS.length - 1);
+  });
+
+  it('an empty list is still "no overrides": the role defaults, for the owner and everyone else', async () => {
+    reads.role_permission_overrides = { data: [], error: null, status: 200 };
+    reads.user_permission_overrides = { data: [], error: null, status: 200 };
+    expect(await loadEffectivePermissions(client(), ORG, USER, 'staff')).toEqual(
+      effectivePermissions('staff'),
+    );
+    expect(await loadEffectivePermissions(client(), ORG, USER, 'owner')).toEqual(
+      effectivePermissions('owner'),
+    );
+  });
+});
+
+/**
+ * The same answers through a real supabase-js client (its own postgrest-js),
+ * so the shapes above are the library's, not a guess. The fetch is local: no
+ * request leaves the test.
+ */
+describe('loadEffectivePermissions through a real supabase-js client', () => {
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  /** The role read answers no rows; the user read answers `userAnswer()`. */
+  function realClient(userAnswer: () => Response) {
+    return createClient('https://supabase.example.test', 'test-anon-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: async (input: RequestInfo | URL) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          return url.pathname.endsWith('/user_permission_overrides') ? userAnswer() : json([]);
+        },
+      },
+    });
+  }
+
+  it.each([
+    ['a 404 with an empty body', () => new Response('', { status: 404 })],
+    ['a 200 with an empty body', () => new Response('', { status: 200 })],
+  ])('%s is refused, never read as "no overrides"', async (_shape, userAnswer) => {
+    await expect(
+      loadEffectivePermissions(realClient(userAnswer), ORG, USER, 'staff'),
+    ).rejects.toMatchObject(UNAVAILABLE);
+  });
+
+  it('a list answer gives the effective set, the revoke applied', async () => {
+    const perms = await loadEffectivePermissions(
+      realClient(() => json([{ permission: 'stock:adjust', granted: false }])),
+      ORG,
+      USER,
+      'staff',
+    );
+    expect(perms.has('stock:adjust')).toBe(false);
+    expect(perms.has('items:read')).toBe(true);
   });
 });

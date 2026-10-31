@@ -109,17 +109,18 @@ describe('Roles & permissions: a read the editable matrix needs fails', () => {
   /** Stands for the PostgREST message, which can quote request details. */
   const SECRET = 'relation secret-detail is not readable';
 
-  function client(failing: string | null) {
+  const FAILED = { data: null, error: { code: '57014', message: SECRET }, status: 500 };
+
+  function client(failing: string | null, answer: object = FAILED) {
     return {
       from: (table: string) => {
         const q: Record<string, unknown> = {};
         for (const m of ['select', 'eq', 'not']) q[m] = () => q;
         q.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-          Promise.resolve(
-            table === failing
-              ? { data: null, error: { code: '57014', message: SECRET }, status: 500 }
-              : { data: [], error: null, status: 200 },
-          ).then(resolve, reject);
+          Promise.resolve(table === failing ? answer : { data: [], error: null, status: 200 }).then(
+            resolve,
+            reject,
+          );
         return q;
       },
     };
@@ -148,6 +149,28 @@ describe('Roles & permissions: a read the editable matrix needs fails', () => {
       expect(screen.queryByTestId('role-permission-matrix')).toBeNull();
       expect(result.error).toBeInstanceOf(Error);
       expect(String((result.error as Error).message)).not.toContain('secret-detail');
+    },
+  );
+
+  // postgrest-js answers an empty body with no error and no rows (data null; a
+  // 404's status rewritten to 204). That is no answer, not "no overrides": the
+  // matrix would again draw every role at its defaults (docket S19 review).
+  it.each(['role_permission_overrides', 'user_permission_overrides', 'organization_members'])(
+    'an answer from %s that is not a list (an empty body) throws the same way',
+    async (table) => {
+      vi.mocked(createClient).mockResolvedValue(
+        client(table, { data: null, error: null, status: 204 }) as never,
+      );
+      const result = await RolesPage().then(
+        (page) => ({ page, error: null as unknown }),
+        (error: unknown) => ({ page: null, error }),
+      );
+      if (result.page) render(result.page);
+      expect(screen.queryByTestId('role-permission-matrix')).toBeNull();
+      expect(result.error).toBeInstanceOf(Error);
+      expect(vi.mocked(console.error).mock.calls.map((c) => c.map(String).join(' '))).toEqual([
+        expect.stringContaining(`${table} code=unexpected status=204`),
+      ]);
     },
   );
 
