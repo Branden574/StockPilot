@@ -847,6 +847,25 @@ WEB_TESTS=(
   # The book-cover rehost is the one place the server fetches a caller-supplied
   # URL and stores the bytes; these pin the host allowlist and redirect posture.
   src/server/services/books-import.ssrf.test.ts
+  # The inventory export's image fetch (lib/item-image-fetch.ts, shared with the
+  # PDF image prefetch): the project's storage by plain fetch, any other http(s)
+  # URL only through safeFetch with the cover allowlist, anything else refused
+  # before a request, and a refused URL a final skip that is never retried,
+  # while a failed lookup of an allowed host is retried and a lookup still out
+  # when the attempt times out is cut off with it.
+  src/lib/exports/export-images.test.ts
+  # That routing itself, with the real fetch against loopback servers: plain
+  # fetch only for a Storage read on the exact project origin, and it never
+  # follows a redirect (the origin's GoTrue verify answers a bogus token with a
+  # 303 to an allow-listed redirect_to); any other path there, or another
+  # project's host, goes through the guard and is refused.
+  src/lib/item-image-fetch.test.ts
+  # The org logo in branded PDF headers is bytes, never a URL or path that
+  # react-pdf would fetch or read itself: the headers draw only a PNG or JPEG
+  # data: URI, and every route that reads logo_url for a PDF fetches it as
+  # bytes through the guarded image fetch first.
+  src/lib/pdf/branding.test.tsx
+  src/lib/pdf/org-logo-bytes.guard.test.ts
 
   # Authorization gates on server actions and routes.
   # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
