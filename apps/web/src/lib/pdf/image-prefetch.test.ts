@@ -7,13 +7,16 @@
 import sharp from 'sharp';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { cacheKeys, safeFetch } = vi.hoisted(() => ({
+const { cacheKeys, cachedFns, safeFetch } = vi.hoisted(() => ({
   cacheKeys: [] as string[][],
+  // The function each cache key wraps, so a test can see what it would store.
+  cachedFns: new Map<string, (...args: unknown[]) => unknown>(),
   safeFetch: vi.fn(),
 }));
 vi.mock('next/cache', () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown, keyParts: string[]) => {
     cacheKeys.push(keyParts);
+    cachedFns.set(keyParts.join('|'), fn);
     return fn;
   },
 }));
@@ -25,6 +28,7 @@ import {
   pdfImageFetchRoute,
   pdfImageLogLabel,
   prefetchImagesAsDataUris,
+  prefetchPdfLogo,
   PDF_IMAGE_MAX_BYTES,
 } from './image-prefetch';
 
@@ -131,5 +135,78 @@ describe('prefetchImagesAsDataUris', () => {
     expect(cacheKeys).toEqual(
       expect.arrayContaining([['pdf-image-data-uri-v5'], ['pdf-image-data-uri-v6']]),
     );
+  });
+});
+
+/**
+ * SSRF: an organization's logo for a branded PDF header. logo_url is set by an
+ * org owner or admin and the database does not hold it to the logo bucket the
+ * settings action checks, so it is fetched like an item image (storage by
+ * plain fetch, any other host only through safeFetch with the cover
+ * allowlist, anything else refused before a request) and react-pdf is handed
+ * the bytes. Only PNG and JPEG are returned: the formats react-pdf drew from a
+ * logo URL before, so every logo prints as it did.
+ */
+describe('prefetchPdfLogo', () => {
+  const LOGO = `${STORAGE}/storage/v1/object/public/org-logos/org-1/logo-1.png`;
+
+  it('fetches a logo in the project storage with plain fetch and returns its PNG bytes unchanged', async () => {
+    const bytes = await png(4, 4);
+    fetchSpy.mockResolvedValue(response(bytes));
+    const uri = await prefetchPdfLogo(LOGO);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe(LOGO);
+    expect(safeFetch).not.toHaveBeenCalled();
+    expect(uri).toBe(`data:image/png;base64,${bytes.toString('base64')}`);
+  });
+
+  it('returns JPEG bytes unchanged', async () => {
+    const bytes = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toBuffer();
+    fetchSpy.mockResolvedValue(response(bytes, { 'content-type': 'image/jpeg' }));
+    expect(await prefetchPdfLogo(LOGO)).toBe(`data:image/jpeg;base64,${bytes.toString('base64')}`);
+  });
+
+  it('draws no logo, and makes no request, for no value or a value that is not an http(s) URL', async () => {
+    for (const value of [null, undefined, '', '   ']) {
+      expect(await prefetchPdfLogo(value)).toBeNull();
+    }
+    for (const value of ['/var/task/logo.png', 'logo.png', 'file:///etc/hosts']) {
+      expect(await prefetchPdfLogo(value)).toBeNull();
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetch).not.toHaveBeenCalled();
+  });
+
+  it('sends any other host through safeFetch with the cover allowlist; a refusal is no logo', async () => {
+    safeFetch.mockRejectedValue(new Error('host not on allowlist: 169.254.169.254'));
+    const url = 'http://169.254.169.254/latest/meta-data/';
+    expect(await prefetchPdfLogo(url)).toBeNull();
+    expect(safeFetch).toHaveBeenCalledWith(
+      url,
+      expect.objectContaining({ hostAllowlist: COVER_HOST_ALLOWLIST }),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('draws no logo for bytes react-pdf could not draw from a URL before (WebP)', async () => {
+    const webp = await sharp({
+      create: { width: 4, height: 4, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 0 } },
+    })
+      .webp()
+      .toBuffer();
+    fetchSpy.mockResolvedValue(response(webp, { 'content-type': 'image/webp' }));
+    expect(await prefetchPdfLogo(LOGO)).toBeNull();
+  });
+
+  it('a failed fetch is no logo, and the cached function throws so the failure is never stored', async () => {
+    fetchSpy.mockResolvedValue(new Response('unavailable', { status: 503 }));
+    expect(await prefetchPdfLogo(LOGO)).toBeNull();
+    const cached = cachedFns.get('pdf-logo-data-uri-v1');
+    expect(cached).toBeDefined();
+    await expect(cached!(LOGO)).rejects.toThrow();
   });
 });

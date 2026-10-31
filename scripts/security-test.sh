@@ -854,6 +854,12 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # The org logo in branded PDF headers is bytes, never a URL or path that
+  # react-pdf would fetch or read itself: the headers draw only a PNG or JPEG
+  # data: URI, and every route that reads logo_url for a PDF fetches it as
+  # bytes through the guarded image fetch first.
+  src/lib/pdf/branding.test.tsx
+  src/lib/pdf/org-logo-bytes.guard.test.ts
 
   # Authorization gates on server actions and routes.
   # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
