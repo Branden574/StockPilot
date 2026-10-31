@@ -512,9 +512,10 @@ export async function completePasswordResetAction(
     // out and the old password still works.
     const refusal = classifyPasswordUpdateError(error);
     if (refusal?.kind === 'aal') {
-      // The code step above was skipped (the factor list could not be read),
-      // and GoTrue still wants AAL2. Ask for the code, so the form shows its
-      // box; a code sent with this press was never checked, so say that.
+      // GoTrue still wants AAL2, so the code step above did not run (as when
+      // the factor list could not be read). Ask for the code, so the form
+      // shows its box; a code sent with this press was never checked, so say
+      // that.
       return err(
         'forbidden',
         normalizeTotpCode(input.totpCode)

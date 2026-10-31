@@ -56,8 +56,9 @@ export function isBannedUserAuthError(
  * as above: the structured `code` only, never the message.
  *
  *   insufficient_aal          the account has a verified authenticator and the
- *                             session is not AAL2 (the action skipped the code
- *                             step because the factor list could not be read)
+ *                             session is not AAL2 (as when the action skipped
+ *                             the code step because the factor list could not
+ *                             be read)
  *   same_password             the new password is the current one
  *   weak_password             the password rules; with 'pwned' in `reasons`, a
  *                             password found in a known breach
