@@ -1009,12 +1009,12 @@ describe(
  */
 describe('a workspace load that clears the cache pulls the snapshot in full once', SLOW, () => {
   const fullPulls = () => device.requests.filter((p) => p === '/api/v1/mobile/snapshot').length;
-  /** The load's pulls, a chained one too: the first sync joins the pull
-   *  running, the second the one chained after it. */
-  const loadPullsSettle = async () => {
-    await backgroundPullsSettle();
-    await backgroundPullsSettle();
-  };
+  /** Waits for the load's pulls, one chained after another too, without
+   *  asking for a pull that could be forced itself: syncAfterRunning starts
+   *  its pass once the sync running has ended, joining one chained before it.
+   *  (syncNow, asked while a reset pull runs, chains a forced full pull of its
+   *  own, since that pull's wipe has moved the cache generation: sync.ts.) */
+  const loadPullsSettle = () => m.sync.syncAfterRunning();
 
   it('the workspace repair: the account has left its saved workspace', async () => {
     await aSignedInWithAPhoto();
