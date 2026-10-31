@@ -2265,10 +2265,18 @@ export default function OrderDetail() {
   // this once, in the render that shows that order. The dialog keeps its typed
   // reason only while the order still offers its action, by the gate its
   // button reads (deny implies the section and Approve; reopenPicking the
-  // section and the two statuses its buttons name).
+  // section and the two statuses its buttons name). When that read failed
+  // ("Could not load this order", the render's own condition below) there is
+  // no order to ask, so whether it is offered is unknown (null) and the
+  // reason stays, as after no answer; "Order not found." offers nothing.
   function settleFailedReasonDialog(dialog: 'deny' | 'reopen') {
     setFailedReasonDialog(null);
-    const offered = dialog === 'deny' ? managerActions.deny : managerActions.reopenPicking;
+    const offered =
+      !order && loadError !== null
+        ? null
+        : dialog === 'deny'
+          ? managerActions.deny
+          : managerActions.reopenPicking;
     if (keepReasonDialogOpen(false, offered)) return;
     if (dialog === 'deny') dismissDenyModal();
     else dismissReopenModal();

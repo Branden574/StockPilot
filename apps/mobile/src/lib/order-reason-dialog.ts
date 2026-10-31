@@ -13,8 +13,14 @@
  * already said why.
  *
  * `stillOffered` is the condition that shows the action's button, read from
- * the order as the screen shows it after the failure.
+ * the order as the screen shows it after the failure, or null when there is
+ * no order to read it from because reading it again failed ("Could not load
+ * this order"). Unknown keeps the reason, as no answer does (review of B60):
+ * that read fails most often for the same server trouble that failed the
+ * action (a 5xx is an answer, so the order is read again), and the order has
+ * then most likely not moved, so one more tap goes through once the server is
+ * back. If it did move, the server refuses that tap and says why.
  */
-export function keepReasonDialogOpen(succeeded: boolean, stillOffered: boolean): boolean {
-  return !succeeded && stillOffered;
+export function keepReasonDialogOpen(succeeded: boolean, stillOffered: boolean | null): boolean {
+  return !succeeded && stillOffered !== false;
 }

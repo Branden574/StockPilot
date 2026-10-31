@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { parseTsx, readSource } from './__fixtures__/jsx-touch-audit';
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
+import { reloadAfterFailedOrderAction } from './order-action-refusal';
 import { orderManagerActions, type OrderManagerActionsInput } from './order-manager-actions';
 import { keepReasonDialogOpen } from './order-reason-dialog';
 
@@ -28,6 +29,7 @@ describe('keepReasonDialogOpen', () => {
   it('a success closes the dialog, whatever the order offers now', () => {
     expect(keepReasonDialogOpen(true, true)).toBe(false);
     expect(keepReasonDialogOpen(true, false)).toBe(false);
+    expect(keepReasonDialogOpen(true, null)).toBe(false);
   });
 
   it('a failure keeps the typed reason while the order still offers the action', () => {
@@ -38,6 +40,13 @@ describe('keepReasonDialogOpen', () => {
 
   it('a failure closes the dialog once the order no longer offers the action', () => {
     expect(keepReasonDialogOpen(false, false)).toBe(false);
+  });
+
+  // Review of B60 (2026-10-31): the order read again after an answer (a 5xx
+  // is one) can fail too. Nothing is known about the order then, as after no
+  // answer, so the reason stays; the dialog used to close and lose it.
+  it('a failure keeps the typed reason when the order could not be read again', () => {
+    expect(keepReasonDialogOpen(false, null)).toBe(true);
   });
 });
 
@@ -142,14 +151,26 @@ describe("the order screen's reason dialogs after a failure", () => {
     return { run, act, ...r };
   }
 
-  /** The check, run with the screen's own dismiss functions. */
-  function settle(gates: { deny: boolean; reopenPicking: boolean }) {
+  /**
+   * The check, run with the screen's own dismiss functions. `shown` is what
+   * the screen holds after the failure: by default the order read again (or
+   * left as it was), with no read error.
+   */
+  function settle(
+    gates: { deny: boolean; reopenPicking: boolean },
+    shown: { order: unknown; loadError: string | null } = {
+      order: { status: 'pending_approval' },
+      loadError: null,
+    },
+  ) {
     const r = recorder();
     const run = screenFunction<(dialog: 'deny' | 'reopen') => void>(
       SCREEN,
       'settleFailedReasonDialog',
       {
         managerActions: gates,
+        order: shown.order,
+        loadError: shown.loadError,
         keepReasonDialogOpen,
         setFailedReasonDialog: r.set('check'),
         dismissDenyModal: screenFunction(SCREEN, 'dismissDenyModal', {
@@ -231,6 +252,63 @@ describe("the order screen's reason dialogs after a failure", () => {
     const reopen = settle({ deny: false, reopenPicking: true });
     reopen.run('reopen');
     expect(reopen.log).toEqual([['check', null]]);
+  });
+
+  /** The gates with no order on screen: no status, so nothing is offered. */
+  const NO_ORDER_GATES = orderManagerActions({
+    status: undefined,
+    fulfillmentType: undefined,
+    canApproveOrders: true,
+    canAssignDelivery: true,
+    isManagerByRole: true,
+    isAssignedDriver: false,
+    hasAssignedDriver: false,
+    isViewerRole: false,
+    machineOffersReopen: true,
+  });
+
+  // Review of B60 (2026-10-31). A 5xx is an answer, so runAction reads the
+  // order again; when that read fails too (a server or database problem) the
+  // screen holds no order and says "Could not load this order", and no gate is
+  // on. The order has most likely not moved, so the reason stays for one more
+  // tap once the server is back, as before B60. Mutation caught: the check
+  // reading only the gates (the dialog closed and the reason lost).
+  it('the check keeps each dialog, with its reason, when the order could not be read again', () => {
+    expect(reloadAfterFailedOrderAction({ status: 500 })).toBe(true);
+    expect(reloadAfterFailedOrderAction({ status: 504 })).toBe(true);
+    expect(NO_ORDER_GATES.deny).toBe(false);
+    expect(NO_ORDER_GATES.reopenPicking).toBe(false);
+    const unread = {
+      order: null,
+      loadError: 'The server had a problem. Try again in a moment.',
+    };
+    const deny = settle(NO_ORDER_GATES, unread);
+    deny.run('deny');
+    expect(deny.log).toEqual([['check', null]]);
+    const reopen = settle(NO_ORDER_GATES, unread);
+    reopen.run('reopen');
+    expect(reopen.log).toEqual([['check', null]]);
+  });
+
+  // A read that answered with no order ("Order not found.": gone, or no longer
+  // the viewer's to see) is known: nothing can be denied or reopened there.
+  // Mutation caught: every order-less screen treated as unread.
+  it('the check closes each dialog when the order read again is not found', () => {
+    const gone = { order: null, loadError: null };
+    const deny = settle(NO_ORDER_GATES, gone);
+    deny.run('deny');
+    expect(deny.log).toEqual([
+      ['check', null],
+      ['deny open', false],
+      ['deny reason', ''],
+    ]);
+    const reopen = settle(NO_ORDER_GATES, gone);
+    reopen.run('reopen');
+    expect(reopen.log).toEqual([
+      ['check', null],
+      ['reopen open', false],
+      ['reopen reason', ''],
+    ]);
   });
 
   // The check needs the order runAction left on screen (read again after a
