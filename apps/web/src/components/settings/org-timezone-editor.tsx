@@ -126,7 +126,7 @@ function storedZoneView(current: string | null): {
     return {
       shown: raw,
       stored: null,
-      notice: `Your workspace's saved time zone, ${raw}, is not a full time zone name such as America/Chicago, so the Book Order Totals report uses Pacific Time. Choose one and save.`,
+      notice: `Your workspace's saved time zone, ${raw}, is not a full time zone name such as America/Chicago, so Book Order Totals uses Pacific Time. Choose one and save.`,
     };
   }
   // No zone at all: the app and the report both use core's default, Pacific.

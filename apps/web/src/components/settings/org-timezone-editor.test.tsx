@@ -145,7 +145,7 @@ describe('OrgTimezoneEditor', () => {
     expect(trigger()).toHaveTextContent(/^EST5EDT \(UTC−0[45]:00\)/);
     expect(
       screen.getByText(
-        "Your workspace's saved time zone, EST5EDT, is not a full time zone name such as America/Chicago, so the Book Order Totals report uses Pacific Time. Choose one and save.",
+        "Your workspace's saved time zone, EST5EDT, is not a full time zone name such as America/Chicago, so Book Order Totals uses Pacific Time. Choose one and save.",
       ),
     ).toBeInTheDocument();
     // The shown zone is not one the server takes (Settings saves only listed
