@@ -246,9 +246,9 @@ async function notifyAdmins(
  * (an empty list). A creator's notice is optional, and without the overrides
  * the answer is unknown: the role's defaults would tell a manager whose
  * permission an override took away. The owners and admins are told as
- * always; notifyAdmins reads them by role before this. This is deliberately
- * not the request gate's fallback to the role's defaults
- * (loadEffectivePermissions).
+ * always; notifyAdmins reads them by role before this. The request gate
+ * (loadEffectivePermissions) refuses on the same failure (docket S19); here
+ * the notice is optional, so it is skipped rather than failing the run.
  */
 async function creatorsWhoEditTemplates(
   admin: ReturnType<typeof createAdminClient>,

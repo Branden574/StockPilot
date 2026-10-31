@@ -1,18 +1,24 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   MODULE_REGISTRY,
   PERMISSIONS,
+  SHORTFALL_PO_PHONE_REVIEW_COPY,
   type ModuleId,
   type Release,
   type ReleaseViewer,
 } from '@stockpilot/core';
 
+import { formatAuditEvent } from '@/lib/audit/format';
+import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 import {
   unofferedDestinationNote,
   unofferedSupplierNote,
 } from '@/lib/purchase-orders/unoffered-choice';
-import { TAB_LABELS } from '@/lib/purchase-orders/tabs';
+import { OVERDUE_PO_ATTENTION_DETAIL, TAB_LABELS } from '@/lib/purchase-orders/tabs';
 
 import {
   buildReleaseList,
@@ -31,6 +37,16 @@ import { RELEASES } from './registry';
  * stay as they are; only the position pins that list the releases above them
  * moved, each with a note (six in registry.test.ts, one each in the public
  * link and dates fixes files).
+ *
+ * Held as a draft until web build 07ad9db5b89c was live (#374 merged
+ * 2026-10-31 08:04:49Z; built 08:05:15Z, answering by 08:06Z) and walked in
+ * Demo Co on production (08:18Z to 08:33Z, with a read-only check to
+ * 08:44Z). docs/whats-new-small-fixes-8 publishes it at the top, the newest
+ * release: each test that pinned it as a draft is re-pinned with a note, and
+ * the tests marked "Added by docs/whats-new-small-fixes-8" pin what a
+ * published release must hold (when it was published, who it reaches, the
+ * notice and the old phone builds' list) and the code its re-read words rest
+ * on.
  */
 const ID = 'small-fixes-8-2026-10';
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -41,6 +57,20 @@ const everyone: ReleaseViewer = {
   permissions: [...PERMISSIONS],
   enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
 };
+/** A member who holds no permission and no module. */
+const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+
+/** A file in the repository, as written. */
+const REPO = resolve(__dirname, '../../../../..');
+const repoFile = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
+/** A source file under apps/web/src, as written. */
+const source = (rel: string) => repoFile(`apps/web/src/${rel}`);
+/** A dashboard page's source, by its path under app/(dashboard)/dashboard. */
+const page = (rel: string) => source(`app/(dashboard)/dashboard/${rel}`);
+/** A file in the mobile app, as written. */
+const phone = (rel: string) => repoFile(`apps/mobile/${rel}`);
+
+const OVERDUE_VIEW = '/dashboard/purchase-orders?status=overdue';
 
 /** Every string a reader can see in the release. */
 function readerText(r: Release): string[] {
@@ -60,31 +90,54 @@ function readerText(r: Release): string[] {
 }
 
 describe('the small fixes slice 8 release', () => {
-  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+  // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: "is a draft,
+  // so no feed carries it, and preparing it changes nothing a client can
+  // observe": a draft, in no feed, no legacy list and no fingerprint).
+  it('is published after the web deploy, so every feed carries it, and publishing it changes what clients observe', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(
-      ID,
-    );
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(
       registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
     );
   });
 
-  // Renamed by the B44 phone update draft (fix/b44-update-restart-prompt;
-  // was: "is the newest entry, at the top, dated after every other release"):
-  // that draft is dated after this one, at the top, so this one sits directly
-  // below it. Claim kept: dated after every release below it.
-  it('sits directly below the B44 phone update draft, dated after every release below it', () => {
-    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
-    expect(RELEASES[1]?.id).toBe(ID);
-    for (const r of RELEASES.slice(2)) {
+  // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the newest entry, at the top, dated after every other release", with ID at RELEASES[0] and every release from RELEASES[1] dated before it): the export fixes release (#414) is published later, at the top, directly above it, so it moves down by one. Claim kept: dated after every release below it, on a whole minute.
+  it('sits directly below the export fixes release, published later, and is dated after every release below it', () => {
+    // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: every pinned position one place higher): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one.
+    expect(RELEASES[1]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[2]?.id).toBe(ID);
+    for (const r of RELEASES.slice(3)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31): published once #374
+  // had merged (08:04:49Z), its web build answered on production (by 08:06Z)
+  // and the Demo Co walk's read-only check had closed (08:44:54Z); the day it
+  // was published (UTC) is the ceiling. That window holds the draft's
+  // placeholder date, so it is ruled out by name (review of this publish).
+  it('is published as revision 1, not before its web build was live (08:06Z) and walked (to 08:44:54Z), on the day it went live, and no draft is left', () => {
+    // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: no draft): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one, and it is the one draft.
+    const at = Date.parse(release().publishedAt);
+    expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:04:49Z'));
+    expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:06:00Z'));
+    expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:44:54Z'));
+    expect(at).toBeLessThanOrEqual(Date.parse('2026-11-01T00:00:00Z'));
+    // A real time: never the draft's placeholder date (2026-10-31T17:00Z).
+    expect(release().publishedAt).not.toBe('2026-10-31T17:00:00Z');
+    expect(release().revision).toBe(1);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'mobile-app-asks-before-restarting',
+    ]);
   });
 
   it('has a line for each user-visible change, in this order', () => {
@@ -110,7 +163,7 @@ describe('the small fixes slice 8 release', () => {
     // list for this link (it has no Overdue view yet), so "overdue" in the
     // label would be false there; the web still opens the Overdue view.
     expect(entry('po-list-overdue-view').link).toEqual({
-      href: '/dashboard/purchase-orders?status=overdue',
+      href: OVERDUE_VIEW,
       label: 'Open purchase orders',
     });
     for (const id of [
@@ -134,9 +187,11 @@ describe('the small fixes slice 8 release', () => {
     expect(entry('digest-dated-in-workspace-zone').audience).toBeUndefined();
     expect(release().audience).toBeUndefined();
 
-    const published: Release = { ...release(), status: 'published' };
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: a copy of
+    // the release forced to published, as it was a draft): the release itself
+    // is published now.
     const told = (permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
-      visibleReleases([published], {
+      visibleReleases([release()], {
         role: 'staff',
         permissions,
         enabledModules: modules,
@@ -157,6 +212,105 @@ describe('the small fixes slice 8 release', () => {
     expect(told(['purchase_orders:read', 'purchase_orders:manage'], [])).toEqual([
       'digest-dated-in-workspace-zone',
     ]);
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31): every audience names
+  // what its page checks, and the digest line, whose page checks only the
+  // session, has none. Fails if a page's check changes.
+  it('names in each audience the permission and the module its page checks', () => {
+    // The purchase orders list and its Overdue view: the module (the rows are
+    // what the reader may read).
+    expect(page('purchase-orders/page.tsx')).toContain(
+      "const moduleAccess = await checkModuleAccess('purchase_orders');",
+    );
+    // Edit purchase order and Recurring POs: purchase_orders:manage, and the
+    // module on the Recurring page.
+    expect(page('purchase-orders/[id]/edit/page.tsx')).toContain(
+      "if (!can(ctx, 'purchase_orders:manage')) {",
+    );
+    const recurring = page('purchase-orders/recurring/page.tsx');
+    expect(recurring).toContain("const moduleAccess = await checkModuleAccess('purchase_orders');");
+    expect(recurring).toContain("if (!can(ctx, 'purchase_orders:manage')) {");
+    // The team calendar: the module, and schedule:read or schedule:manage.
+    const schedule = page('schedule/page.tsx');
+    expect(schedule).toContain("const moduleAccess = await checkModuleAccess('schedule');");
+    expect(schedule).toContain("if (!can(ctx, 'schedule:read') && !can(ctx, 'schedule:manage')) {");
+    // Notification settings: the session only.
+    const settings = page('settings/notifications/page.tsx');
+    expect(settings).toContain('const session = await requireSession();');
+    expect(settings).not.toMatch(/\bcan\(|assertPermission|assertModuleEnabled|checkModuleAccess/);
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31): the digest line has no
+  // audience, so the release reaches every member.
+  it('reaches every member, and a member with no permission is told only the digest line', () => {
+    const shown = (v: ReleaseViewer) =>
+      visibleReleases(RELEASES, v)
+        .find((r) => r.id === ID)
+        ?.entries.map((e) => e.id);
+    expect(shown(everyone)).toEqual(release().entries.map((e) => e.id));
+    expect(shown(member)).toEqual(['digest-dated-in-workspace-zone']);
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31). An old phone build
+  // shows the title, the summary and the first linked line the reader can
+  // reach as its button; the phone draws the button only when the link opens
+  // one of its own screens (whats-new.tsx).
+  // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the first notice for every member, and an old phone build ...", ID first for the owner with every permission and for a member with no permission, with nothing read or seen): the export fixes release is published later, at the top, and reaches whoever holds the items:export permission, so that owner is told it first and this one once it is read or seen. A member with no permission is not told it. Claim kept: it is the first notice for every member the export fixes release does not reach, and an old phone build shows its title and summary with the same buttons.
+  it('is the first notice for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list', () => {
+    const exportRead = {
+      release_id: 'export-fixes-2026-10',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-10-31T10:40:00Z',
+      read_at: '2026-10-31T10:40:00Z',
+    };
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'export-fixes-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [exportRead], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('export-fixes-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, { 'export-fixes-2026-10': true })[0]).toEqual(
+      {
+        id: ID,
+        date: '2026-10-31',
+        title: release().title,
+        body: release().summary,
+        cta: { href: OVERDUE_VIEW, label: 'Open purchase orders' },
+      },
+    );
+    // Whoever can open the team calendar, and not the purchase orders list.
+    const scheduler: ReleaseViewer = {
+      role: 'staff',
+      permissions: ['schedule:read'],
+      enabledModules: ['schedule'],
+    };
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, {})[0]?.cta).toEqual({
+      href: '/dashboard/schedule',
+      label: 'Open the team calendar',
+    });
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-31',
+      title: release().title,
+      body: release().summary,
+      cta: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+    });
+    // On the phone, Open purchase orders opens its Purchase orders list (the
+    // query dropped: no Overdue view there) and Open the team calendar its
+    // Schedule; notification settings have no screen of their own there, so
+    // a member told only the digest line gets the title and summary alone.
+    expect(phone('src/components/onboarding/whats-new.tsx')).toContain(
+      "const showCta = !!cta && rewriteWebPath(cta.href) !== '/';",
+    );
+    const rewrite = phone('src/lib/web-path-rewrite.ts');
+    expect(rewrite).toContain(
+      "{ re: /\\/dashboard\\/purchase-orders(\\?.*)?$/, to: () => '/purchase-orders' },",
+    );
+    expect(rewrite).toContain("{ re: /\\/dashboard\\/schedule(\\/.*)?$/, to: () => '/schedule' },");
+    expect(rewrite).toContain("{ re: /^\\/dashboard(\\/.*)?$/, to: () => '/' },");
+    expect(rewrite).not.toContain('\\/dashboard\\/settings');
   });
 
   it("uses the screens' own words", () => {
@@ -186,9 +340,23 @@ describe('the small fixes slice 8 release', () => {
     // The run says why; it does not fix the template by itself.
     expect(entry('recurring-run-says-why').whatChanged).toContain('names the template and why');
     // A creator is told only while they hold purchase_orders:manage (the
-    // cron's creatorsWhoEditTemplates, slice 8 review).
+    // cron's creatorsWhoEditTemplates, slice 8 review), and only of a
+    // template whose purchase order could not be saved: the cron's creators
+    // are templatesSkipped's, and the templates whose purchase order could
+    // not be sent, or that had nothing to order, are names alone (review of
+    // this publish; it said "the person who created the template" of every
+    // line).
     expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
-      "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates.",
+      "The notification goes to your organization's owners and admins. For a template whose purchase order could not be saved, it also goes to the person who created the template, if they can still edit templates.",
+    );
+    const cron = source('app/api/cron/recurring-pos/route.ts');
+    expect(cron).toContain('const creators = summary.templatesSkipped.map((s) => s.createdBy);');
+    expect(cron.match(/createdBy/g)).toHaveLength(1);
+    const run = source('server/services/recurring-pos.ts');
+    expect(run).toContain('templatesSendFailed: string[];');
+    expect(run).toContain('templatesWithNothingOrderable: string[];');
+    expect(run).toContain(
+      'templatesSkipped.push({ templateId: tpl.id, name: tpl.name, reason, createdBy: tpl.created_by ?? null });',
     );
     // The past is told as it was: a deleted destination's template DID create
     // purchase orders (the run line says so), so the template line does not
@@ -237,12 +405,161 @@ describe('the small fixes slice 8 release', () => {
     );
   });
 
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31, review of this
+  // publish). The weekly digest and fixes release told whoever can open the
+  // calendar on 2026-10-06 that "Today's mark and each event are now placed by
+  // your own day." This branch places both on the organization's day, the
+  // same for every viewer, so the calendar line is worded as a change from
+  // that note, as the Placed line is.
+  it("words the calendar's days as a change from the weekly digest release's published note", () => {
+    const published = RELEASES.find((r) => r.id === 'weekly-digest-and-fixes-2026-10');
+    expect(published?.status).toBe('published');
+    const calendarToday = published?.entries.find((e) => e.id === 'calendar-today');
+    expect(calendarToday?.whatChanged).toContain(
+      "Today's mark and each event are now placed by your own day.",
+    );
+    // The same readers: whoever can open the calendar.
+    expect(calendarToday?.audience).toEqual(entry('calendar-last-evening-and-zone').audience);
+    expect(entry('calendar-last-evening-and-zone').whatChanged).toContain(
+      "place each event on its date and print its time in your organization's time zone, not your own, and the calendar marks your organization's today.",
+    );
+    // Each event's cell and today come from the organization's zone, on the
+    // server and in the browser alike.
+    const calendar = source('components/schedule/schedule-calendar.tsx');
+    expect(calendar).toContain('const key = orgDayOf(ev.startsAt, timeZone);');
+    expect(calendar).toContain('const isToday = d.ymd === todayYmd;');
+    expect(calendar).not.toContain('useHydrated');
+    expect(page('schedule/page.tsx')).toContain('const today = zonedParts(new Date(), timeZone);');
+  });
+
   // Edit event kept a wall clock and converted it back on every save, so an
   // event at the other occurrence of the repeated hour moved an hour
   // unchanged (production's form too). Told in the calendar line.
   it('says that an unchanged Edit event save no longer moves an event in the hour the clocks go back', () => {
     expect(entry('calendar-last-evening-and-zone').whatChanged).toContain(
       'In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.',
+    );
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31): the words changed
+  // when they were re-read against 919281a1c at publish, each with the code
+  // it rests on.
+  it('rests the words re-read at publish on the code', () => {
+    // A phone shows only the title and the summary, and its own screens did
+    // not change: the forms and the calendar are said to be on the web too.
+    expect(release().summary).toContain(
+      "Also on the web, editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and the team calendar shows events late on its last date.",
+    );
+    // The dashboard's overdue line leads to the Overdue view and no longer
+    // suggests updating the ETA ("Chase your suppliers or update the ETA."):
+    // only a draft can be edited, and no button moves an ordered purchase
+    // order back to a draft.
+    const dashboard = page('page.tsx');
+    expect(dashboard).toContain('detail: OVERDUE_PO_ATTENTION_DETAIL,');
+    expect(dashboard).toContain("href: '/dashboard/purchase-orders?status=overdue',");
+    expect(OVERDUE_PO_ATTENTION_DETAIL).toBe(
+      'Expected receipt date has passed. Chase your suppliers.',
+    );
+    expect(page('purchase-orders/[id]/edit/page.tsx')).toContain(
+      "if ((po as { status?: string }).status !== 'draft') {",
+    );
+    expect(source('server/services/purchase-orders.ts')).toContain(
+      "throw new ServiceError('forbidden', 'Only draft purchase orders can be edited.');",
+    );
+    expect(source('components/po/po-actions.tsx')).not.toContain("setStatus('draft')");
+    expect(entry('po-list-overdue-view').howItAffectsYou).toContain(
+      "The dashboard's line no longer suggests updating the expected date, which can't be changed once a purchase order is ordered.",
+    );
+    // The run's notification, and the audit log's System row for a template
+    // whose purchase order could not be saved.
+    const runs = source('server/services/recurring-pos.ts');
+    expect(runs).toContain(
+      'created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
+    );
+    // Re-pinned in review of this publish (was: "open it in Purchase orders
+    // and send it", the notification's own words): a draft's page has no
+    // Send. Its button is Mark as ordered, the same status change the
+    // auto-send makes, and the phone shows a draft read-only, so the line
+    // names Mark as ordered, on the web.
+    const actions = source('components/po/po-actions.tsx');
+    expect(actions).toContain('<Pencil className="h-4 w-4" /> Edit');
+    expect(actions).toContain('<Send className="h-4 w-4" /> Mark as ordered');
+    expect(actions).toContain('<X className="h-4 w-4" /> Cancel PO');
+    expect(actions).toContain("onClick={() => setStatus('ordered')}");
+    expect(runs).toContain(
+      "await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');",
+    );
+    expect(SHORTFALL_PO_PHONE_REVIEW_COPY).toBe('Review and order this draft on the web.');
+    expect(phone('src/lib/po-draft-review.ts')).toContain(
+      'export const PO_DRAFT_REVIEW_COPY = SHORTFALL_PO_PHONE_REVIEW_COPY;',
+    );
+    expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
+      'If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered.',
+    );
+    expect(entry('recurring-run-says-why').howItAffectsYou).not.toContain('send it');
+    // The template's mode is called Auto-send in its form and its list.
+    const panel = source('components/po/recurring-templates-panel.tsx');
+    expect(panel).toContain('<SelectItem value="send">Auto-send to supplier</SelectItem>');
+    expect(panel).toContain("{tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}");
+    expect(entry('recurring-run-says-why').whatChanged).toContain(
+      'It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.',
+    );
+    expect(runs).toContain("event: 'recurring_po_template.run_skipped',");
+    expect(formatAuditEvent('recurring_po_template.run_skipped')).toBe(
+      'Recurring PO template · Run Skipped',
+    );
+    expect(page('audit/page.tsx')).toContain("if (!can(ctx, 'activity_logs:read')) {");
+    expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
+      'A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.',
+    );
+    // An event's page prints in the organization's zone, as the calendar
+    // does, and New event and Edit event say their zone and refuse a time
+    // the clocks skip, under its field, saving nothing.
+    expect(page('schedule/[id]/page.tsx')).toContain(
+      'subline={formatEventRange(event.startsAt, event.endsAt, event.allDay, timeZone)}',
+    );
+    const form = source('components/schedule/schedule-event-form.tsx');
+    expect(form).toContain('Times are in {zone}.');
+    expect(form).toContain("That start time doesn't exist in ");
+    expect(form).toContain('(the clocks change). Pick another time.');
+    expect(form).toContain('if (!startsAtIso || nextEndError) {');
+    expect(entry('calendar-last-evening-and-zone').whatChanged).toContain(
+      "The calendar and each event's page place each event on its date and print its time in your organization's time zone",
+    );
+    expect(entry('calendar-last-evening-and-zone').howItAffectsYou).toBe(
+      "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
+    );
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31, review of this
+  // publish). Owner question 7 of #374 shipped as its default: an archived
+  // supplier is named under the box and not offered, so Edit purchase order
+  // and the recurring forms open on No supplier and a save that does not
+  // choose one removes it, as two lines say. A later decision keeps an
+  // archived supplier, shown as "Name (archived)"; it is not built. A change
+  // that offers one fails here: reword both lines in place, and tell the
+  // change in its own release.
+  it('rests the archived supplier sentences on the code, so offering an archived supplier forces a rewording', () => {
+    // Named, not offered: only an active supplier is folded into the select.
+    expect(source('server/services/lib/unoffered-choices.ts')).toContain(
+      "else if (row.deleted_at) unoffered.set(id, { name, why: 'archived' });",
+    );
+    expect(page('purchase-orders/[id]/edit/page.tsx')).toContain(
+      'if (unofferedSuppliers) supplierOptions = [...supplierOptions, ...unofferedSuppliers.fold];',
+    );
+    expect(page('purchase-orders/recurring/page.tsx')).toContain('...unofferedSuppliers.fold,');
+    // Both forms open on No supplier for a supplier the select does not offer.
+    expect(source('components/po/po-form.tsx')).toContain(
+      "const openingSupplierId = initialSupplierOffered ? (initial?.supplierId ?? '') : '';",
+    );
+    expect(source('components/po/recurring-templates-panel.tsx')).toContain(
+      "supplierId: supplierOffered ? supplierId : '',",
+    );
+    expect(entry('po-edit-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the draft removes it.",
+    );
+    expect(entry('recurring-template-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the template removes it.",
     );
   });
 });

@@ -191,6 +191,7 @@ import { focusScrollY, initialSignArrival, orderScreenFocus, physicalSignatureTi
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
+import { keepReasonDialogOpen } from '@/lib/order-reason-dialog';
 import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
@@ -613,6 +614,12 @@ export default function OrderDetail() {
   // picking to fix a miscount. Same reason-required pattern as deny.
   const [reopenOpen, setReopenOpen] = React.useState(false);
   const [reopenReason, setReopenReason] = React.useState('');
+  // The reason dialog whose action just failed, until the render that shows
+  // the order as runAction left it: settleFailedReasonDialog then closes it or
+  // keeps its reason (docket B60).
+  const [failedReasonDialog, setFailedReasonDialog] = React.useState<'deny' | 'reopen' | null>(
+    null,
+  );
   // The Deny and Reopen picking dialogs, measured: the room the keyboard
   // leaves them and the height of their buttons' row (one dialog is open at
   // a time), so the reason's body scrolls and the buttons always show.
@@ -1887,14 +1894,14 @@ export default function OrderDetail() {
     return runAction(busyKey, () => transitionOrder(id, body));
   }
 
-  // Single place that dismisses the deny modal WITHOUT submitting — Cancel,
-  // the backdrop press, and Android's hardware back (onRequestClose) all
-  // route here. The typed reason is wiped on every one of those paths so it
-  // can never resurface pre-filled against a later, unrelated order — it's
-  // an audit-logged field. submitDeny below is untouched and does NOT call
-  // this: it already closes the modal and clears the reason on its own
-  // (pre-existing, unrelated to this fix), so this function only covers the
-  // dismiss-without-submit paths that used to leak the typed text.
+  // Single place that closes the deny modal WITHOUT a deny — Cancel, the
+  // backdrop press and Android's hardware back (onRequestClose) route here,
+  // and so does a failed deny the order read again no longer offers
+  // (settleFailedReasonDialog below, docket B60). The typed reason is wiped
+  // on every one of those paths so it can never resurface pre-filled against
+  // a later, unrelated order — it's an audit-logged field. submitDeny below
+  // does NOT call this: it closes the modal and clears the reason on its own
+  // once a deny goes through. (The dismiss paths used to leak the typed text.)
   function dismissDenyModal() {
     setDenyOpen(false);
     setDenyReason('');
@@ -1911,10 +1918,17 @@ export default function OrderDetail() {
     // goes through — act() swallows the error into an Alert rather than
     // rethrowing, so a `false` result means it failed and the reason must
     // stay put for the user to retry instead of vanishing with the modal.
+    // Unless the order no longer offers Deny: after a refusal runAction
+    // reads it again, and once that order is on screen the modal closes,
+    // its reason cleared, when Deny is gone (approved on another phone, say;
+    // settleFailedReasonDialog below, docket B60). A retry would only be
+    // refused again.
     const ok = await act({ action: 'deny', reason }, 'deny');
     if (ok) {
       setDenyOpen(false);
       setDenyReason('');
+    } else {
+      setFailedReasonDialog('deny');
     }
   }
 
@@ -1932,11 +1946,14 @@ export default function OrderDetail() {
       return;
     }
     // Same rationale as submitDeny above: only dismiss + clear once the
-    // reopen actually succeeds, so a failure leaves the typed reason intact.
+    // reopen actually succeeds, so a failure leaves the typed reason intact,
+    // unless the order read again no longer offers Reopen picking.
     const ok = await act({ action: 'reopen_picking', reason }, 'reopen');
     if (ok) {
       setReopenOpen(false);
       setReopenReason('');
+    } else {
+      setFailedReasonDialog('reopen');
     }
   }
 
@@ -2246,6 +2263,31 @@ export default function OrderDetail() {
     isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
+  // After a failed Deny or Reopen picking (docket B60). runAction has said why
+  // and, when the server answered, read the order again; the effect below runs
+  // this once, in the render that shows that order. The dialog keeps its typed
+  // reason only while the order still offers its action, by the gate its
+  // button reads (deny implies the section and Approve; reopenPicking the
+  // section and the two statuses its buttons name). When that read failed
+  // ("Could not load this order", the render's own condition below) there is
+  // no order to ask, so whether it is offered is unknown (null) and the
+  // reason stays, as after no answer; "Order not found." offers nothing.
+  function settleFailedReasonDialog(dialog: 'deny' | 'reopen') {
+    setFailedReasonDialog(null);
+    const offered =
+      !order && loadError !== null
+        ? null
+        : dialog === 'deny'
+          ? managerActions.deny
+          : managerActions.reopenPicking;
+    if (keepReasonDialogOpen(false, offered)) return;
+    if (dialog === 'deny') dismissDenyModal();
+    else dismissReopenModal();
+  }
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the order read again exists only from this render on; the check clears its own request, so it runs once per failure
+    if (failedReasonDialog !== null) settleFailedReasonDialog(failedReasonDialog);
+  });
   // Cancel (L93): core's orderCancelOffer, the web order page's rule. The
   // effective orders:request too: the service asserts it for every cancel.
   // Returns RX-2: a replacement is cancelled only from its RMA, as on the web.

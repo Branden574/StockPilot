@@ -29,6 +29,8 @@ vi.mock('@/components/settings/role-permission-matrix', () => ({
 
 import { ORDER_ITEMS_ROLES_LOCK_NOTE_COPY } from '@stockpilot/core';
 
+import { createClient } from '@/lib/supabase/server';
+
 import RolesPage from './page';
 
 beforeEach(() => {
@@ -92,5 +94,89 @@ describe('Roles & permissions: the platform-managed Manage order items row', () 
     ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read']) };
     render(await RolesPage());
     expect(within(yourRolePanel()).queryByText('Manage order items')).toBeNull();
+  });
+});
+
+/**
+ * Docket S19: the editable matrix draws every role and member from the
+ * organization's override rows. When one of its three reads fails, the page
+ * throws to the settings boundary ("We couldn't load this settings page" with
+ * Try again). It must never draw the matrix without them: every role would sit
+ * at its defaults, so a permission the organization took away would show as
+ * granted. The owner reaches this page even while the reads fail.
+ */
+describe('Roles & permissions: a read the editable matrix needs fails', () => {
+  /** Stands for the PostgREST message, which can quote request details. */
+  const SECRET = 'relation secret-detail is not readable';
+
+  const FAILED = { data: null, error: { code: '57014', message: SECRET }, status: 500 };
+
+  function client(failing: string | null, answer: object = FAILED) {
+    return {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {};
+        for (const m of ['select', 'eq', 'not']) q[m] = () => q;
+        q.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(table === failing ? answer : { data: [], error: null, status: 200 }).then(
+            resolve,
+            reject,
+          );
+        return q;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    ctxHolder.current = { role: 'admin', permissions: new Set(['members:read']) };
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  it.each([
+    ['admin', 'role_permission_overrides'],
+    ['admin', 'user_permission_overrides'],
+    ['admin', 'organization_members'],
+    ['owner', 'role_permission_overrides'],
+  ] as const)(
+    '%s: a failed %s read throws to the settings boundary instead of drawing the matrix',
+    async (role, table) => {
+      ctxHolder.current = { role, permissions: new Set(['members:read']) };
+      vi.mocked(createClient).mockResolvedValue(client(table) as never);
+      const result = await RolesPage().then(
+        (page) => ({ page, error: null as unknown }),
+        (error: unknown) => ({ page: null, error }),
+      );
+      if (result.page) render(result.page);
+      expect(screen.queryByTestId('role-permission-matrix')).toBeNull();
+      expect(result.error).toBeInstanceOf(Error);
+      expect(String((result.error as Error).message)).not.toContain('secret-detail');
+    },
+  );
+
+  // postgrest-js answers an empty body with no error and no rows (data null; a
+  // 404's status rewritten to 204). That is no answer, not "no overrides": the
+  // matrix would again draw every role at its defaults (docket S19 review).
+  it.each(['role_permission_overrides', 'user_permission_overrides', 'organization_members'])(
+    'an answer from %s that is not a list (an empty body) throws the same way',
+    async (table) => {
+      vi.mocked(createClient).mockResolvedValue(
+        client(table, { data: null, error: null, status: 204 }) as never,
+      );
+      const result = await RolesPage().then(
+        (page) => ({ page, error: null as unknown }),
+        (error: unknown) => ({ page: null, error }),
+      );
+      if (result.page) render(result.page);
+      expect(screen.queryByTestId('role-permission-matrix')).toBeNull();
+      expect(result.error).toBeInstanceOf(Error);
+      expect(vi.mocked(console.error).mock.calls.map((c) => c.map(String).join(' '))).toEqual([
+        expect.stringContaining(`${table} code=unexpected status=204`),
+      ]);
+    },
+  );
+
+  it('with every read answered, an admin gets the editable matrix', async () => {
+    vi.mocked(createClient).mockResolvedValue(client(null) as never);
+    render(await RolesPage());
+    expect(screen.getByTestId('role-permission-matrix')).toBeInTheDocument();
   });
 });
