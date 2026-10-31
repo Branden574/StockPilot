@@ -199,18 +199,18 @@ describe('/onboarding', () => {
 
   it('shows an allowlisted admin without a fresh step-up the card and how to get the form, never the form', async () => {
     gate = { ok: false, reason: 'aal2_required' };
-    render(await OnboardingPage());
+    const { container } = render(await OnboardingPage());
 
     expect(
       screen.getByRole('heading', { level: 1, name: 'Invite-only access' }),
     ).toBeInTheDocument();
     expect(screen.getByText(/You're a platform admin\./)).toHaveTextContent(
-      "You're a platform admin. To create a workspace here, sign out and sign in again with your authenticator; the form shows for 15 minutes after that. To set up a customer's workspace, use Platform > Provision.",
+      "You're a platform admin. To create a workspace here, sign out and sign in again with your authenticator; the form shows for 15 minutes after that. After you sign in again, Platform > Provision sets up a customer's workspace.",
     );
-    expect(screen.getByRole('link', { name: 'Platform > Provision' })).toHaveAttribute(
-      'href',
-      '/platform/provision',
-    );
+    // No link into the console: aal2_required also covers an AAL1 session, and
+    // at AAL1 every /platform page answers 404 (requirePlatformAdmin).
+    expect(screen.queryByRole('link', { name: 'Platform > Provision' })).toBeNull();
+    expect(container.querySelector('a[href^="/platform"]')).toBeNull();
     expectNoCreateForm();
   });
 });

@@ -125,8 +125,8 @@ function CreateWorkspaceCard() {
 
 /**
  * `stepUpOwed`: the account's verified email is on the platform-admin
- * allowlist, but its session has no authenticator code from the last 15
- * minutes. Only that person is told they are a platform admin.
+ * allowlist, but its session is at AAL1 or has no authenticator code from the
+ * last 15 minutes. Only that person is told they are a platform admin.
  */
 function InviteOnlyCard({ email, stepUpOwed }: { email: string; stepUpOwed: boolean }) {
   const signedInAs = email.trim();
@@ -150,10 +150,12 @@ function InviteOnlyCard({ email, stepUpOwed }: { email: string; stepUpOwed: bool
         </p>
       </div>
       {stepUpOwed ? (
+        // Plain text, no link: aal2_required also covers an AAL1 session, and
+        // at AAL1 every /platform page answers 404 (requirePlatformAdmin).
         <p className="text-muted-foreground text-[12.5px]">
           You&apos;re a platform admin. To create a workspace here, sign out and sign in again with
-          your authenticator; the form shows for 15 minutes after that. To set up a customer&apos;s
-          workspace, use <ProvisionLink />.
+          your authenticator; the form shows for 15 minutes after that. After you sign in again,
+          Platform &gt; Provision sets up a customer&apos;s workspace.
         </p>
       ) : null}
       <p className="text-muted-foreground text-[12.5px]">
