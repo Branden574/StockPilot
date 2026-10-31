@@ -21,7 +21,7 @@ import {
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { insertAuditRowReported } from '@/server/services/audit';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, ok, storableOrgTimezoneSchema, type ActionResult } from '@stockpilot/core';
 
 const createOrgForSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
@@ -33,7 +33,9 @@ const createOrgForSchema = z.object({
     .max(60)
     .regex(/^[a-z0-9-]+$/, 'lowercase letters, numbers, and dashes only')
     .optional(),
-  timezone: z.string().min(1).max(64).default('America/Los_Angeles'),
+  // The create check onboarding uses (B41): a zone the app and the Book Order
+  // Totals report both use, or the request is refused before the invite.
+  timezone: storableOrgTimezoneSchema('America/Los_Angeles'),
   industry: z.string().trim().max(64).optional().nullable(),
   size: z.string().trim().max(32).optional().nullable(),
 });
