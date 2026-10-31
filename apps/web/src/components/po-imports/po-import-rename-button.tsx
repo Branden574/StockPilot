@@ -98,7 +98,7 @@ export function PoImportRenameButton({
               if (e.key === 'Enter' && !busy) void save();
             }}
             maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
-            placeholder="Example: August DC4 Book Order"
+            placeholder="Example: August Restock Order"
             autoFocus
           />
           {/* A long file name wraps inside the dialog instead of widening it. */}
