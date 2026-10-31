@@ -402,7 +402,7 @@ describe('es registry — shape', () => {
     expect(esEmailById('sched-tmrw').from).toBe('StockPilot <schedule@stockpilotusa.com>');
     expect(esEmailById('digest').from).toBe('StockPilot <digest@stockpilotusa.com>');
     expect(esEmailById('portal-invite').from).toBe(
-      'L4L North Region via StockPilot <portal@stockpilotusa.com>',
+      'Sample Org via StockPilot <portal@stockpilotusa.com>',
     );
     expect(esEmailById('support-ticket').from).toBe(
       'StockPilot Support <tickets@stockpilotusa.com>',

@@ -73,7 +73,7 @@ import {
   type OrderSummary,
 } from '@stockpilot/core';
 
-import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess, roleSeesEveryWarehouse, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
@@ -1333,6 +1333,50 @@ export class OrderRequestsService {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
       .eq('status', 'pending_approval');
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+
+  /**
+   * The pending requests this caller could approve or deny: the Overview's
+   * "N order requests awaiting your approval" (B11). approve() and deny() ask
+   * orders:approve, then write access to the request's warehouse
+   * (requireWarehouseAccess 'write', assertWarehouseAccess's rule), so this
+   * counts by the same two:
+   *   - without orders:approve, or a viewer (the app refuses every write for a
+   *     viewer, whatever their warehouses): none, and nothing is read;
+   *   - an owner, admin or manager (every warehouse by role, so no access is
+   *     read), or a member with the all-warehouses flag: the organization's,
+   *     as pendingCount() counts them;
+   *   - anyone else: those in the warehouses they are assigned to. None when
+   *     they have none, or when their access could not be read (that answer
+   *     lists no warehouse, and approve() then refuses too).
+   * pendingCount() stays the organization's count, for the Insights page and
+   * the daily briefing. getWarehouseAccess is request-cached, so on the
+   * Overview this shares the read the overdue purchase order count makes. The
+   * Orders module and the MFA step-up are the caller's to ask, as for
+   * pendingCount(). A failed count read throws, as pendingCount()'s does.
+   */
+  async approvablePendingCount(): Promise<number> {
+    if (this.ctx.role === 'viewer' || !can(this.ctx, 'orders:approve')) return 0;
+    let warehouseIds: string[] | null = null;
+    if (!roleSeesEveryWarehouse(this.ctx.role)) {
+      const access = await getWarehouseAccess(this.ctx);
+      if (!access.hasAllAccess) {
+        if (access.writableIds.length === 0) return 0;
+        warehouseIds = access.writableIds;
+      }
+    }
+    let query = this.ctx.supabase
+      .from('order_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('status', 'pending_approval');
+    if (warehouseIds) {
+      // in-list-bound: the caller's assigned warehouses (an org's handful of sites)
+      query = query.in('warehouse_id', warehouseIds);
+    }
+    const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
   }

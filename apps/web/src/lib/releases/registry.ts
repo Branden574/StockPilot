@@ -28,6 +28,453 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'export-fixes-2026-10',
+    revision: 1,
+    // The export part of docket C9: #414 (squash 75f5b0fe1, merged 2026-10-31
+    // 09:26Z; web only, no migration and no phone code, so no over-the-air
+    // update). Live in production web build d8c556a672e3 (built 09:26:29Z,
+    // answering by 09:27:52Z). #414 kept its draft only in its PR body, never
+    // here; docs/whats-new-small-fixes-8 publishes it above
+    // small-fixes-8-2026-10, so one web deploy publishes both, at the top, the
+    // newest release, with its words re-read against 75f5b0fe1.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8):
+    //   - the title began "Smaller Excel exports with photos": only an export
+    //     in which rows share a photo is smaller, so it says what changed,
+    //     each photo stored once;
+    //   - the summary says "On the web", as a phone shows only the title and
+    //     the summary and the phone has no export; it names Items and Books
+    //     for the PDFs, and leaves the catalog cards to the long SKU line
+    //     (the draft said "keep catalog cards tidy");
+    //   - the title said long SKUs print whole "in PDFs" and the long SKU
+    //     line "in PDF exports": only the Items and Books export breaks a
+    //     SKU, barcode or ISBN itself (breakIdentifierLines, which only
+    //     lib/pdf/inventory-export-pdf.tsx uses); pick slips, packing slips
+    //     and report PDFs still wrap a SKU their own way, so both name Items
+    //     and Books. The line now says "too long for its space", as a value
+    //     that fits is not broken; "on lines of its own" is now "over two or
+    //     more lines"; and "the two- and three-across book catalogs" are the
+    //     Layout select's own words, Book catalog — two columns and Book
+    //     catalog — three columns (the layouts walked and tested; never "the"
+    //     before Book, which the on-record wording guard reads as the
+    //     recorded quantity's old name). That line links to Items, as the
+    //     other two do, so whoever can export is told it in every
+    //     organization (below);
+    //   - the photo line's why said "a very large file that was slow to
+    //     download and to open" of "a list of copies that share one cover":
+    //     the writer stored a shared photo once per row, so how much larger
+    //     the file was depends on how many rows shared it, and nothing was
+    //     measured (no two Demo Co rows share a photo); it now says the file
+    //     could be much larger than it needed to be. Its "Nothing else in the
+    //     file changes" is gone: a cover address outside the book-cover
+    //     services is now left blank in an export (the guarded fetch, left
+    //     out below), so it says the export is made the same way as before;
+    //   - the sample line names the dialog by its title, Customize export,
+    //     and quotes its message and the loading line it kept showing, as
+    //     export-builder-preview.tsx writes them; it names the dialog's
+    //     button, Export file, which the sample never turns off.
+    //
+    // Every user-visible change in #414 has a line (owner rule 2026-09-25),
+    // except those #414's draft leaves out ("Not announced", and the
+    // integrator's decision on its question 5, under the owner's delegation)
+    // and one the review of this publish found (the third below):
+    //   - the header of the six branded PDFs no longer leaves an empty square
+    //     before the organization's name for a logo it cannot print (WebP,
+    //     AVIF, or one that does not load): the draft's entry 4, dropped
+    //     (question 5), because B48, which converts WebP and AVIF logos for
+    //     PDFs, will announce the logos printing again, which covers the same
+    //     headers;
+    //   - an SVG logo no longer prints (possible only for one uploaded in a
+    //     five-day window in May 2026 and never replaced; S18's kit counts
+    //     them, expected 0);
+    //   - a logo stored at an address outside the project's own storage,
+    //     other than a book-cover service, no longer prints in those six
+    //     headers either, and the organization's name starts at the left
+    //     edge: react-pdf fetched any address itself, and prefetchPdfLogo now
+    //     fetches it like a cover, through the guard (#414's "Not announced"
+    //     says PNG and JPEG logos print as before, which holds for logos in
+    //     the project's storage). Expected for no organization: the uploader
+    //     has always stored the logo bucket's address, and the settings
+    //     action has refused any other since 2026-06-26. S18's kit counts
+    //     logos outside each organization's own folder of that bucket before
+    //     its push (expected 0), and any it finds is fixed with the owner
+    //     before that push;
+    //   - export images are fetched through the SSRF guard, a security fix
+    //     whose only visible effect is that a cover address on a host outside
+    //     the book-cover services is left blank in an Excel or PDF export, as
+    //     it already was on order slips and report PDFs.
+    // Left out as changing nothing on screen: the sample's request schema
+    // and the dialog's hooks warnings; the DEPLOY.md correction is for
+    // whoever sets up a project. The sample line also covers a late failure
+    // of an older sample request, which could leave the loading line on
+    // screen for good and is now ignored. Left out for members who cannot
+    // export (review of this publish): Export on Items and Books and the
+    // bulk bar's Export open the dialog for them too, and the sample answers
+    // them 403, so they now see the failed sample's message where the loading
+    // line stayed before (Export file refuses them, as it did). That message
+    // says the file can still be exported, which is wrong for them, so it is
+    // not a line for them; the dialog's answer to them is a fault for a later
+    // change, not part of this release.
+    //
+    // Walked on production on build d8c556a672e3, 2026-10-31 09:33Z to
+    // 09:53Z, in Demo Co as its admin, passed at 10:10Z: an Excel export of
+    // 30 Items with 22 photos holds 22 images, each in its own row and
+    // matching that row's photo; a long title and a long SKU stay inside
+    // their cards in Book catalog — two columns and three columns and print
+    // whole in the table, with no hyphen added; with the sample request
+    // blocked, the dialog says “Could not load a sample of this export. You
+    // can still export the file.” with Try again, Export file still exports,
+    // and Try again loads the sample once unblocked; an Items PDF prints its
+    // 22 photos. The one write (a Books item with a long title and SKU) was
+    // archived. Not walkable there, so each rests on the code and its tests:
+    // two rows sharing one photo (no two Demo Co rows share one), a cover
+    // address from a book-cover service (none there), an organization logo
+    // (none set) and a pick slip (no order in picking).
+    //
+    // Who is told: whoever can export (items:export, which the export and
+    // its sample both check), every line, each linked to Items, which checks
+    // no permission or module. The long SKU line links to Items, not Books
+    // (review of this publish): its first words cover the Items PDF of every
+    // organization, as the table sizes a SKU, barcode or ISBN column to its
+    // widest value up to 150 pt, which holds about 25 capital letters or 30
+    // digits at the table's 8.5 pt, and breaks a longer value over lines;
+    // a Books link would need the Books module, which the Books page checks
+    // and which is on by default only for the charter school pack, and so
+    // would hide the line from every other organization. Its Book catalog
+    // sentence names layouts the dialog offers only in an export of Books.
+    // A member who cannot export is not told this release at all.
+    status: 'published',
+    title:
+      'Excel exports store each photo once, and long SKUs print whole in PDF exports of Items and Books',
+    summary:
+      'On the web, Excel exports store each photo once, PDF exports of Items and Books print long SKUs and barcodes whole, and the Customize export dialog says when its sample could not load.',
+    publishedAt: '2026-10-31T10:34:00Z',
+    entries: [
+      {
+        // toInventoryXlsx keys each photo by its type and a SHA-256 of its
+        // bytes (workbookImages) and adds it to the workbook once, then places
+        // it on every row that shows it (lib/inventory-export-xlsx.ts).
+        id: 'export-excel-photo-once',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Excel exports store each photo once',
+        whatChanged:
+          'When several rows of an Excel export share one photo, the file now holds that photo once instead of once for every row. Every row still shows its own photo.',
+        whyItMatters:
+          'A photo shared by many rows was stored again for every one of them, so the file could be much larger than it needed to be.',
+        howItAffectsYou:
+          'An Excel export in which rows share photos is smaller, and you export it the same way as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // breakIdentifierLines (lib/pdf/identifier-lines.ts) for the SKU,
+        // barcode and ISBN columns of the table and the catalog's identifier
+        // values; the catalog's card widths come from the page
+        // (lib/pdf/inventory-export-pdf.tsx). A value that fits comes back
+        // unchanged.
+        id: 'export-pdf-long-identifiers',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Long SKUs and barcodes print whole in PDF exports of Items and Books',
+        whatChanged:
+          'In a PDF export of Items or Books, a SKU, barcode or ISBN too long for its space now prints whole over two or more lines, with no hyphen added where a line ends. With Layout set to Book catalog — two columns or Book catalog — three columns, a long title or value also stays inside its own card and clear of the cover.',
+        whyItMatters:
+          'A long SKU could print with a hyphen it does not have, a long run of digits could be cut off at the edge of its column, and in a catalog a long title could run into the next card or over the cover.',
+        howItAffectsYou: 'Values that fit print exactly as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // ExportBuilderPreview's failed state and its Try again, which asks
+        // for the sample again (export-builder-dialog.tsx); Export file is
+        // turned off only while exporting or when the choices are invalid.
+        id: 'export-sample-could-not-load',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The Customize export dialog says when its sample could not load',
+        whatChanged:
+          'The Customize export dialog, reached from Export on Items and Books, shows a sample of your export. If the sample cannot load, the dialog now says “Could not load a sample of this export. You can still export the file.” and offers Try again.',
+        whyItMatters:
+          'Before, a sample that failed to load kept saying “Loading a sample of this export…” with no end.',
+        howItAffectsYou: 'You can still choose Export file while the sample cannot load.',
+        whatToDo: 'If you see the message, choose Try again, or choose Export file as usual.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+    ],
+  },
+  {
+    id: 'small-fixes-8-2026-10',
+    revision: 1,
+    // Small fixes slice 8: #374 (squash 919281a1c, merged 2026-10-31
+    // 08:04:49Z; no migration, web and server only, so no over-the-air
+    // update). Live in production web build 07ad9db5b89c (built 08:05:15Z,
+    // answering by 08:06Z). Held as a draft until that deploy was live and
+    // walked; published by docs/whats-new-small-fixes-8 at the top, the
+    // newest release, with its words re-read against 919281a1c.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8): the summary says
+    // "Also on the web" before the forms and the calendar, as a phone shows
+    // only the title and the summary and its own Purchase orders, Recurring
+    // POs and Schedule screens did not change; the Overdue line says that the
+    // dashboard's line no longer suggests updating the expected date (the
+    // edit page and the save change a draft only); the run line names the
+    // button that orders a draft whose sending failed, Mark as ordered, on
+    // the web (the notification says "send it", but a draft's page has no
+    // Send, the auto-send is the same status change and the phone shows a
+    // draft read-only), calls the template's mode Auto-send, as its form and
+    // list do, says that a template's creator is told only of a template
+    // whose purchase order could not be saved (the cron adds no other
+    // creator), and that such a template is in the audit log (a System row,
+    // Recurring PO template · Run Skipped); the calendar line says an event's
+    // own page prints in the organization's zone too (it printed Pacific
+    // whatever the organization's), that this zone is not your own (it
+    // reverses a published note, below), that the calendar shows every event
+    // that STARTS on a date it shows (an event read outside the grid has no
+    // cell), and that New event and Edit event refuse a time the clocks skip.
+    //
+    // Every user-visible change in the branch has a line (owner rule
+    // 2026-09-25):
+    //   - the purchase orders list's Overdue view (item E), where the
+    //     dashboard's overdue line leads, and that line's shorter advice;
+    //   - Edit purchase order naming a destination or supplier it cannot
+    //     offer, and the save refusing a deleted destination (items A, D, C);
+    //   - recurring templates naming a deleted destination or an archived
+    //     supplier, in Edit, Make recurring and the list (items B, D);
+    //   - the recurring run's notification naming a template it created
+    //     nothing for, and why (item C), and the audit log's row for a
+    //     template whose purchase order could not be saved;
+    //   - the team calendar's last evening, times and today, and an event's
+    //     own page in the organization's zone (item F). The calendar placed
+    //     each event and today's mark on the viewer's own day once drawn in
+    //     the browser (#331), so this reverses the published
+    //     weekly-digest-and-fixes-2026-10 entry calendar-today (2026-10-06:
+    //     "Today's mark and each event are now placed by your own day."), and
+    //     the line is worded as a change from that note ("not your own"), as
+    //     the Placed line is (review of this publish);
+    //   - the weekly digest's dates (item G).
+    //   - the purchase orders list's Placed day, now the organization's in
+    //     both lists (item H), said in the Overdue view's line: the instant
+    //     list printed the viewer's day, a different one for a viewer outside
+    //     the organization's zone in the evening (slice 8 review). This
+    //     reverses the published redesign-web-fixes-2026-10 entry
+    //     web-times-in-your-time-zone (2026-10-20: "the Placed date on
+    //     Purchase orders now shows your own day"), so the line is worded as a
+    //     change from that note ("not your own"); owner question 1 in the PR;
+    //   - New and Edit event taking their times in the organization's zone
+    //     (slice 8 review), in the calendar line; an unchanged Edit event
+    //     save keeping the event's time in the hour the clocks go back (a
+    //     wall clock that happens twice; production's form moved it an hour
+    //     too), in the same line; and a time the clocks skip refused under
+    //     its field (new Date() moved it an hour unseen), in its How it
+    //     affects you;
+    //   - ordering a draft to a deleted location refused, in the Edit
+    //     purchase order line; a send-mode template whose purchase order
+    //     could not be sent named, in the run line.
+    // Left out as labels with no new behaviour (slice 8 review): the audit
+    // log's older recurring template rows now read "Recurring PO template"
+    // (they read "Recurring Po Template"); a supplier the recurring page
+    // could not read is "Supplier unknown" (a failed read only). Left out as
+    // changing nothing for an organization with 1000 locations or fewer: the
+    // location lists read every page, so past 1000 locations a site whose
+    // name sorts after the first 1000 is offered (no count of any
+    // organization's locations was read for this release; if one is past
+    // 1000, tell it in a later release). Left out as changing nothing a reader
+    // sees: the calendar reads fewer old open-ended events (the same events
+    // show).
+    //
+    // Walked on production on build 07ad9db5b89c, 2026-10-31 08:18Z to
+    // 08:33Z, in Demo Co as its admin, with a read-only check to 08:44Z: the
+    // Overdue view from its tab, its Nothing overdue state, Export with no
+    // rows and one warehouse picked in the header (the dashboard's count
+    // agreeing); the Placed day for a viewer in Tokyo and in the folded row
+    // at 390 px, with no hydration error; Edit purchase order on every draft
+    // (no note, Cancel with no prompt); Recurring POs and New template (no
+    // note); the calendar on the organization's month and today, a chip's
+    // time matching its event's page, November's grid to Dec 12, and Times
+    // are in on New event and Edit event; Notification settings. Writes, each
+    // undone: an archived supplier named on a draft's Edit and on Make
+    // recurring (restored), and an event at 8:00 PM on the November grid's
+    // last date drawn in its cell (deleted). No defect. Not walked, so each
+    // rests on the code and its tests: the dashboard's overdue line, the
+    // Overdue view's count line and search (no overdue purchase order there),
+    // a template's list line, archived supplier and destination warning (no
+    // template there), a deleted destination on Edit purchase order and the
+    // refusal to order it (the app cannot set one up there), the recurring
+    // run and its notification, the digest preview's date (no email sent),
+    // Edit event in the hours the clocks change, and an organization outside
+    // Pacific time.
+    //
+    // Owner question 7 of #374 shipped as its default: Edit purchase order
+    // and the recurring forms open on No supplier for an archived one, so a
+    // save that does not choose one removes it, as the two lines say. A later
+    // decision keeps an archived supplier, shown as "Name (archived)"; that is
+    // not built. If it ships, its own release tells it and these two lines
+    // are reworded in place. registry.small-fixes-8.test.ts pins the code the
+    // two lines rest on (an archived supplier named, not offered, and both
+    // forms opening on No supplier), so that change fails it until they are.
+    //
+    // The Overdue line's link is labelled for both platforms: the phone opens
+    // the bare Purchase orders list for any /dashboard/purchase-orders?...
+    // (apps/mobile web-path-rewrite), which has no Overdue view yet.
+    //
+    // Who is told: the Overdue view, whoever can open the purchase orders list
+    // (purchase_orders:read, Purchase orders on), linked to the view; the
+    // purchase order and recurring lines, whoever can edit them
+    // (purchase_orders:manage, Purchase orders on; the Recurring page checks
+    // the same and shows a plan notice to an organization without it); the
+    // calendar line, whoever can open the calendar (schedule:read or
+    // schedule:manage, Schedule on); the digest line, every member (the
+    // notification settings are each member's own). So every member is told:
+    // it is the first notice for each of them until it is read.
+    status: 'published',
+    title: "An Overdue view for purchase orders, named destinations and suppliers, the calendar's last evening and the digest's date",
+    summary:
+      "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Also on the web, editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and the team calendar shows events late on its last date. The Recurring purchase orders notification now names a template that could not create its purchase order, and why. A weekly digest preview is dated the day it was sent.",
+    publishedAt: '2026-10-31T08:59:00Z',
+    entries: [
+      {
+        // PurchaseOrdersService.listOverdue, on overdueCount's own filter; the
+        // tab is ?status=overdue, which the dashboard has linked to since
+        // before #338 while the list fell back to All. The dashboard's line,
+        // OVERDUE_PO_ATTENTION_DETAIL (lib/purchase-orders/tabs.ts), said
+        // "Chase your suppliers or update the ETA."; the edit page opens a
+        // draft only and the save changes a draft only, and a PO import makes
+        // a new one, so an ordered purchase order's expected date can't be
+        // changed.
+        id: 'po-list-overdue-view',
+        category: 'new',
+        area: 'Purchase orders',
+        title: 'The purchase orders list has an Overdue view',
+        whatChanged:
+          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date now shows the day in your organization's time zone, not your own, so everyone sees the same date.",
+        whyItMatters:
+          "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
+        howItAffectsYou:
+          "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders. The dashboard's line no longer suggests updating the expected date, which can't be changed once a purchase order is ordered.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open purchase orders' },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // PoForm `unoffered` and the edit page's reads; the save's refusal is
+        // PurchaseOrdersService.resolveDestinationWarehouseId.
+        id: 'po-edit-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: "Editing a draft purchase order names a destination or supplier you can't pick",
+        whatChanged:
+          "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location, or ordering a draft that goes to one, is refused, naming the location.",
+        whyItMatters:
+          'A draft could be ordered to a destination or a supplier nobody could see on the form.',
+        // Said plainly (slice 8 review): the purchase order save accepts an
+        // archived supplier, but the form cannot offer one, so any save that
+        // does not choose a supplier, even one made to change something else,
+        // removes it. Owner question 7 of #374 shipped as this default (see
+        // the release's comment); a test pins the code this rests on, so a
+        // change that offers an archived supplier rewords this line and the
+        // recurring one in place.
+        howItAffectsYou:
+          "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringTemplatesPanel (Edit, Make recurring, the list) and the
+        // Recurring page's reads.
+        id: 'recurring-template-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'Recurring templates name a deleted destination or an archived supplier',
+        whatChanged:
+          "Editing a recurring purchase order template whose destination was deleted after it was saved showed an empty Destination box, and saving was then refused by a name the form never showed. Editing a template now names a deleted destination or an archived supplier under the box and opens on None or No supplier, and Make recurring names an archived supplier the same way. The list shows an archived supplier by name, and says when a template's destination stops it from creating purchase orders.",
+        whyItMatters:
+          'A template whose destination was deleted showed an empty Destination box, and nothing on the page said where it was ordering to.',
+        howItAffectsYou:
+          "Choose another destination or supplier from the list and save the template. If you save it without choosing, even to change something else, it is saved with none. An archived supplier isn't in the list, so saving the template removes it.",
+        whatToDo:
+          'If a template in the list says it creates no purchase order, edit it and choose another destination.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringPoTemplatesService.runDueTemplates (templatesSkipped) and
+        // the cron's notice: owners and admins, and the template's creator
+        // while they hold purchase_orders:manage (slice 8 review; no creator
+        // is told in a run that could not read their permissions, c005f208b).
+        // The creators are those of templatesSkipped only, the templates
+        // whose purchase order could not be saved (cron notifyAdmins);
+        // templatesSendFailed and templatesWithNothingOrderable hold names
+        // only, so the line tells no other line's creator (review of this
+        // publish). A send-mode template (Auto-send, as its form and list
+        // say) whose purchase order could not be sent: recurringRunNotice
+        // says "Open it in Purchase orders and send it.", but a draft's page
+        // has no Send: its actions are Edit, Mark as ordered and Cancel PO
+        // (po-actions.tsx), the auto-send is the same status change
+        // (updateStatus 'ordered'), and the phone shows a draft read-only
+        // ("Review and order this draft on the web."), so the line names Mark
+        // as ordered, on the web. Rewording the notice is code, outside this
+        // publish. A template whose purchase order could not be saved: a
+        // System row, recurring_po_template.run_skipped, which the audit log
+        // shows as "Recurring PO template · Run Skipped" (lib/audit/format.ts).
+        id: 'recurring-run-says-why',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'A recurring template that cannot create its purchase order says why',
+        whatChanged:
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.",
+        whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
+        howItAffectsYou:
+          "The notification goes to your organization's owners and admins. For a template whose purchase order could not be saved, it also goes to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered. A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // The page read events between the server's (UTC) midnights; the
+        // calendar now gets the organization's zone and today. An event's
+        // page printed Pacific whatever the organization's zone; it prints
+        // the organization's now (formatEventRange). An event read outside
+        // the grid has no cell, so the calendar shows each event that starts
+        // on a date it shows. A time the clocks skip is refused under its
+        // field ("That start time doesn't exist in <zone> (the clocks
+        // change). Pick another time.") and nothing is saved. The calendar
+        // placed each event and today's mark on the viewer's own day (#331),
+        // as the published calendar-today note (2026-10-06) told calendar
+        // readers, so the line says "not your own" (review of this publish).
+        id: 'calendar-last-evening-and-zone',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar shows events late in the day on its last date',
+        whatChanged:
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar and each event's page place each event on its date and print its time in your organization's time zone, not your own, and the calendar marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
+        whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
+        howItAffectsYou:
+          "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        // lib/email/es/families/digest.ts formatted its days with no zone (UTC
+        // on Vercel); the cron and the preview now pass the workspace's.
+        id: 'digest-dated-in-workspace-zone',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'A weekly digest preview is dated the day it was sent',
+        whatChanged:
+          "A weekly inventory digest preview sent in the evening in US time zones, from 5 PM Pacific time (4 PM in winter), was dated the next day, in its subject and its As of date. The digest's dates now follow your workspace's time zone, in the preview and in the Monday email.",
+        whyItMatters: 'The preview named a day that had not started yet where you were.',
+        howItAffectsYou: "The preview and the Monday digest carry your workspace's date.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+    ],
+  },
+  {
     id: 'manage-order-items-and-app-fixes-2026-10',
     revision: 1,
     // Ordering visibility on the web and in the mobile app, two photo fixes on
@@ -6245,7 +6692,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Short lines are caught before an order leaves',
         whatChanged:
-          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
+          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. Black pens: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
         whyItMatters:
           'Mark picking complete could leave a line with nothing picked without saying so, and the order could be out for delivery minutes later with that line still missing.',
         howItAffectsYou:

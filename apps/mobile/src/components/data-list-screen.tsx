@@ -8,6 +8,7 @@ import {
   RefreshControl,
   StyleSheet,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,6 +19,7 @@ import {
 } from '@/components/ui/data-list-state';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
+import { fontScaleKey } from '@/lib/dynamic-type-layout';
 import { goBackFromReturn } from '@/lib/return-path';
 import { useTheme } from '@/lib/use-theme';
 
@@ -97,6 +99,13 @@ export function DataListScreen<T>({
   const goBack = () => goBackFromReturn(router, returnPath);
   const emptyKind = dataListEmptyKind(failed);
   const reloadNote = dataListReloadNote(failed, data.length);
+  // A live text-size change left every row at its old height, its text
+  // clipped, until the screen was opened again (docket B10; the rows fix no
+  // height, the stale measurement is React Native's). The head and the list
+  // remount at a new size so each is measured at it. The top bar keeps its
+  // place: its trailing slot carries the tour, whose state a remount resets.
+  const { fontScale } = useWindowDimensions();
+  const scaleKey = fontScaleKey(fontScale);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -111,7 +120,7 @@ export function DataListScreen<T>({
           </View>
           {trailing}
         </View>
-        <View style={styles.head}>
+        <View key={`head-${scaleKey}`} style={styles.head}>
           <Eyebrow>{eyebrow}</Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             {italic ? (
@@ -130,6 +139,7 @@ export function DataListScreen<T>({
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       ) : (
         <FlatList
+          key={`list-${scaleKey}`}
           data={data}
           keyExtractor={keyExtractor}
           contentContainerStyle={[

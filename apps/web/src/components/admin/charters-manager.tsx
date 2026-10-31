@@ -465,7 +465,7 @@ function CharterDialog({
             <Label htmlFor="charter-name">Name</Label>
             <Input
               id="charter-name"
-              placeholder="Southern California"
+              placeholder={`${termSingular} A`}
               {...register('name', { required: true, maxLength: 120 })}
             />
             {errors.name && <p className="text-destructive text-[12px]">Name is required.</p>}
@@ -475,7 +475,7 @@ function CharterDialog({
               Code
               <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
-            <Input id="charter-code" placeholder="SOCAL" {...register('code', { maxLength: 32 })} />
+            <Input id="charter-code" placeholder="A" {...register('code', { maxLength: 32 })} />
             <p className="text-muted-foreground text-xs">
               Short identifier used in reports and exports.
             </p>

@@ -75,7 +75,7 @@ export function ConsoleFrame({
       <span className="tick br" aria-hidden />
 
       <div className="console-head">
-        <span className="console-org">DC4 Warehouse</span>
+        <span className="console-org">Main Warehouse</span>
         <span className="console-sep" aria-hidden>
           /
         </span>

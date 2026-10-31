@@ -156,6 +156,11 @@ describe('landing fixture — no fabricated claims', () => {
     }
   });
 
+  it('names an invented bill-to charter in the purchase order chapter (S17)', () => {
+    const chapter = STAGES.find((s) => s.key === 'purchase-order')!;
+    expect(chapter.detail).toContain('Its bill-to charter is Charter A —');
+  });
+
   it('formats signed variances explicitly', () => {
     expect(formatSigned(-3)).toBe('-3');
     expect(formatSigned(4)).toBe('+4');

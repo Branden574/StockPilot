@@ -182,7 +182,10 @@ async function mfaFromPolicy(
  * migration, a failed or unrecognised answer, a profile row the caller cannot
  * read (whose "unreadable" status must stay a 5xx, not a silent "active"), and
  * an organization row hidden by row level security (whose MFA policy and comp
- * flag must never be guessed).
+ * flag must never be guessed). The same holds for the permission overrides:
+ * when the legacy loader cannot read a non-owner's, it throws
+ * PermissionsUnavailableError, a 5xx, never the role's defaults and never the
+ * `null` every route answers as 401 (docket S19).
  */
 type ApiBundleResolution =
   /** Use the legacy reads. */

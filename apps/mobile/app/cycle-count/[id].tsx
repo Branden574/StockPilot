@@ -37,6 +37,7 @@ import {
   rememberedCloseGate,
   type CloseGateState,
 } from '@/lib/count-close-gate';
+import { countNotClearedAlert, countNotSavedAlert } from '@/lib/count-save-refusal';
 import { showWriteCta } from '@/lib/cta-gating';
 import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
@@ -62,6 +63,7 @@ import {
   type MobileCountLinkedExceptions,
 } from '@/lib/exceptions-api';
 import { createDraftDebouncer } from '@/lib/draft-debouncer';
+import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
@@ -298,8 +300,8 @@ export default function CycleCountDetail() {
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
   // to be dropped (see draft-debouncer.ts). Created once; the save touches
   // only stable state setters and module functions.
-  const [lineSaver] = React.useState(() =>
-    createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
+  const [lineSaver] = React.useState(() => {
+    const saver = createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
         const num = countFromBox(raw);
         if (num === null) {
@@ -309,7 +311,23 @@ export default function CycleCountDetail() {
           // while the box showed nothing (B4a). Anything else that is not a
           // count (a lone minus sign) saves nothing; Post waits on it.
           if (!isEmptyBox(raw)) return;
-          const cleared = await clearLocalLine(lineId);
+          let cleared: Awaited<ReturnType<typeof clearLocalLine>>;
+          try {
+            cleared = await clearLocalLine(lineId);
+          } catch (e) {
+            // Not cleared and nothing queued: the clear is queued by the same
+            // writer as a count, so it is refused in the same cases, or the
+            // phone's store failed. Said as a refused count is; the box stays
+            // empty over a line that keeps its count, so Post still waits for
+            // it, and Try again clears it again.
+            reportPhoneSaveFailure(e, 'cycle-count.clear');
+            const { title, message } = countNotClearedAlert(e);
+            Alert.alert(title, message, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
+            ]);
+            return;
+          }
           if (cleared) {
             setLines((curr) =>
               curr.map((l) =>
@@ -326,7 +344,23 @@ export default function CycleCountDetail() {
           return;
         }
 
-        await updateLocalLine(lineId, num);
+        try {
+          await updateLocalLine(lineId, num);
+        } catch (e) {
+          // Not saved and not queued: the outbox refused it (no account, or
+          // the workspace still loading) or the phone's store failed. Said
+          // (count-save-refusal.ts); the box keeps the number, so Post still
+          // waits for it, and Try again saves it again. A store failure is
+          // reported to the team (phone-save-report.ts), as it was when it
+          // escaped unhandled.
+          reportPhoneSaveFailure(e, 'cycle-count.save');
+          const { title, message } = countNotSavedAlert(e);
+          Alert.alert(title, message, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
+          ]);
+          return;
+        }
         setLines((curr) =>
           curr.map((l) =>
             // A new local count replaces the server's, so its capture time
@@ -339,8 +373,9 @@ export default function CycleCountDetail() {
         await cycleCountSync.refreshPendingCount();
         void cycleCountSync.forceSync();
       })();
-    }),
-  );
+    });
+    return saver;
+  });
 
   // Resolve the user's org once — needed to scope server fetches.
 

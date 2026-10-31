@@ -76,7 +76,7 @@ describe('mobile PO scan — display-name wiring', () => {
   it('renders a name input before the extract action, with the shared max length', () => {
     expect(src).toMatch(/from '@stockpilot\/core'/);
     expect(src).toContain('maxLength={PO_IMPORT_DISPLAY_NAME_MAX}');
-    expect(src).toContain('Example: August DC4 Book Order');
+    expect(src).toContain('Example: August Restock Order');
     // Separate mode names each PO individually (web parity) — never one base
     // name numbered 1/2/3.
     expect(src).toContain('const perFileNames = frames.length > 1 && separate;');

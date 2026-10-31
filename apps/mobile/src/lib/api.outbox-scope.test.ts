@@ -28,8 +28,16 @@ const state = vi.hoisted(() => ({
   },
 }));
 
+// Keyed: the saved workspace under its own key, and no owner (an older
+// build's), so it is named for whoever is signed in, as it always was. The
+// owner check itself is api.org-header.test.ts's. (This answered every key
+// with the workspace, which now reads as a workspace another account saved.)
 vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: { getItem: vi.fn(async () => state.storedOrg) },
+  default: {
+    getItem: vi.fn(async (key: string) =>
+      key === 'workspace.activeOrgId' ? state.storedOrg : null,
+    ),
+  },
 }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock('./supabase', () => ({

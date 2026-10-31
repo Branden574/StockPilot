@@ -38,8 +38,15 @@ export async function DELETE(
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // details as the other v1 routes send them (never an internal_error's,
+      // S13): the phone tells the MFA gate's refusal (details.reason
+      // aal2_required / mfa_required) from a missing permission by it.
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        {
+          error: e.code,
+          message: e.message,
+          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
+        },
         { status: serviceErrorStatus(e.code) },
       );
     }

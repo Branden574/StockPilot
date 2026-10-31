@@ -532,16 +532,24 @@ describe('every control on the receive screen is a 44pt target with a role and a
       '<Text style={styles.qtyLabel}>{RECEIPT_NOTES_LABEL}</Text>',
       'placeholder="Anything to note about this delivery"',
       'Documents save as soon as you add them — you don&apos;t need to post a receipt to keep an attachment.',
-      "{header?.supplier_name ?? 'No supplier'} · {labelForStatus(header?.status ?? '')}",
+      "{header?.supplier_name ?? 'No supplier'} · {poStatusLabel(header?.status)}",
       "{header?.po_number ?? 'PO'}",
       "Alert.alert( 'No destination', 'Set a destination warehouse on the web first, then come back.', );",
       "Alert.alert('Enter quantities', 'Receive at least one line first.');",
-      "if (s === 'expected_inbound') return 'Expected';",
-      "if (s === 'ordered') return 'Ordered';",
-      "if (s === 'partially_received') return 'Partial';",
     ]) {
       expect(code).toContain(words);
     }
+  });
+
+  // Docket B10: the header's own four-status list printed a received or
+  // cancelled PO's status as stored ("Acme · received"). It names every
+  // status through the shared words (po-status.test.ts), and no screen-local
+  // copy of the list is left to drift.
+  it('the header names the status through the shared words, with no list of its own', () => {
+    const code = flatCode(PO);
+    expect(code).toContain("import { poStatusLabel } from '@/lib/po-status';");
+    expect(code).not.toContain('labelForStatus');
+    expect(code).not.toMatch(/=== 'partially_received'\) return/);
   });
 });
 

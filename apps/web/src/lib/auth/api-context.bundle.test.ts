@@ -23,8 +23,14 @@ vi.mock('@/lib/env', () => ({
 vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
-import { effectivePermissions, type Permission, type PermissionOverride } from '@stockpilot/core';
+import {
+  effectivePermissions,
+  withoutPlatformManaged,
+  type Permission,
+  type PermissionOverride,
+} from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
 
 import { withApiContext } from './api-context';
@@ -57,6 +63,11 @@ const world = {
   rpc: 'answer' as 'answer' | 'error' | 'throw' | 'junk' | 'missing',
   /** A FAILED read of `organizations` — postgrest resolves these, it does not throw. */
   orgReadError: null as { code: string; message: string } | null,
+  /** Legacy path only: one override table answers an error, or its request throws. */
+  overrideRead: null as {
+    table: 'role_permission_overrides' | 'user_permission_overrides';
+    mode: 'error' | 'reject';
+  } | null,
   aal: 'aal2' as 'aal1' | 'aal2',
   verifiedFactor: false,
   calls: [] as string[],
@@ -111,6 +122,30 @@ function table(single: unknown, list: unknown[] = [], error: unknown = null) {
   return q;
 }
 
+/** Stands for the PostgREST message, which can quote request details. */
+const SECRET = 'relation secret-detail is not readable';
+
+/** A query builder whose request throws instead of answering. */
+function rejecting() {
+  const q: Record<string, unknown> = {};
+  const self = () => q;
+  for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
+  q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+    Promise.reject(new TypeError(`fetch failed: ${SECRET}`)).then(resolve, reject);
+  return q;
+}
+
+/** An override table, failing the way `world.overrideRead` says. */
+function overrides(
+  name: 'role_permission_overrides' | 'user_permission_overrides',
+  rows: unknown[],
+) {
+  const fail = world.overrideRead?.table === name ? world.overrideRead.mode : null;
+  if (fail === 'reject') return rejecting();
+  if (fail === 'error') return table(null, [], { code: '503', message: SECRET });
+  return table(null, rows);
+}
+
 function makeClient() {
   const active = () =>
     world.memberships.find((m) => m.organization_id === world.profile.default_organization_id) ??
@@ -157,8 +192,8 @@ function makeClient() {
           null,
           (m?.enabled_modules ?? []).map((module_id) => ({ module_id })),
         );
-      if (name === 'role_permission_overrides') return table(null, m?.role_overrides ?? []);
-      if (name === 'user_permission_overrides') return table(null, m?.user_overrides ?? []);
+      if (name === 'role_permission_overrides') return overrides(name, m?.role_overrides ?? []);
+      if (name === 'user_permission_overrides') return overrides(name, m?.user_overrides ?? []);
       return table(null, []);
     },
     auth: {
@@ -205,6 +240,7 @@ beforeEach(() => {
   world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
   world.rpc = 'answer';
   world.orgReadError = null;
+  world.overrideRead = null;
   world.aal = 'aal2';
   world.verifiedFactor = false;
   world.calls = [];
@@ -694,4 +730,72 @@ describe('the bearer path gets the same treatment', () => {
       await withApiContext(bearer({ 'x-organization-id': 'cccccccc-3333-3333-3333-333333333333' })),
     ).toBeNull();
   });
+});
+
+/**
+ * Docket S19: when the one round trip gives no usable answer, the legacy reads
+ * decide, and a permission set they could not read REFUSES the request. It is
+ * never the role's defaults (every revoke the organization set would be lifted
+ * for that request), and never `null`, which every route answers as 401 and
+ * the phone words as "You do not have access to that." The error escapes as a
+ * 5xx, which the phone words as a retryable server problem.
+ */
+describe('an override read that fails on the legacy path refuses the request (docket S19)', () => {
+  const UNAVAILABLE = { name: 'PermissionsUnavailableError', code: 'PERMISSIONS_UNAVAILABLE' };
+
+  it('bearer: a manager whose role override read errors is refused, never answered null (a 401)', async () => {
+    world.rpc = 'error';
+    world.memberships = [{ organization_id: ORG_A, role: 'manager' }];
+    world.overrideRead = { table: 'role_permission_overrides', mode: 'error' };
+    await expect(withApiContext(bearer())).rejects.toMatchObject(UNAVAILABLE);
+    // The legacy reads got that far: the membership answered first.
+    expect(world.calls).toContain('table:organization_members');
+    expect(world.calls).toContain('table:role_permission_overrides');
+    expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain('secret-detail');
+  });
+
+  it('cookie: a staff member whose user override read throws is refused the same way', async () => {
+    world.rpc = 'throw';
+    world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
+    world.overrideRead = { table: 'user_permission_overrides', mode: 'reject' };
+    await expect(withApiContext(cookie())).rejects.toMatchObject(UNAVAILABLE);
+    expect(world.calls).toContain('table:user_permission_overrides');
+    expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain('secret-detail');
+  });
+
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])(
+    'an owner on the legacy path keeps every key but the platform-managed one (%s)',
+    async (_kind, make) => {
+      world.rpc = 'missing';
+      world.memberships = [{ organization_id: ORG_A, role: 'owner' }];
+      world.overrideRead = { table: 'user_permission_overrides', mode: 'error' };
+      const ctx = await withApiContext(make());
+      expect(ctx?.role).toBe('owner');
+      expect(ctx?.permissions).toEqual(withoutPlatformManaged(effectivePermissions('owner')));
+    },
+  );
+
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])(
+    'the one round trip reads no table, so a failing override table changes nothing there (%s)',
+    async (_kind, make) => {
+      world.memberships = [{ organization_id: ORG_A, role: 'manager', ...REAL_OVERRIDES }];
+      world.overrideRead = { table: 'role_permission_overrides', mode: 'reject' };
+      world.calls = [];
+      const ctx = await withApiContext(make());
+      expect(world.calls.filter((c) => c.startsWith('table:'))).toEqual([]);
+      expect(ctx?.permissions).toEqual(
+        effectivePermissions(
+          'manager',
+          REAL_OVERRIDES.role_overrides,
+          REAL_OVERRIDES.user_overrides,
+        ),
+      );
+    },
+  );
 });

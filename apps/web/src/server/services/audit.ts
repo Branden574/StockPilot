@@ -463,6 +463,12 @@ export type AuditEvent =
   | 'recurring_po_template.updated'
   | 'recurring_po_template.toggled'
   | 'recurring_po_template.deleted'
+  // The daily run created no purchase order for the template: its save was
+  // refused (a destination deleted after the template was saved, one linked
+  // to no warehouse, ...) or failed. `reason` is what the run told the
+  // owners and admins; extra is { name, refusal }. No migration:
+  // audit_logs.event is un-CHECKed text.
+  | 'recurring_po_template.run_skipped'
   /**
    * Maintenance requests (maintenance_requests module). draft_opened records
    * that a prefilled email DRAFT was OPENED and nothing more — StockPilot

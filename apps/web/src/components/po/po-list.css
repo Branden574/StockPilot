@@ -36,8 +36,8 @@
      so no line starts with one, and a long supplier name wraps between
      its words.
    - A part the row has nothing for (data-none: no supplier, a draft's
-     Placed, a Placed day not printed yet) is out of sight, not out of the
-     table, so its cell keeps its column for a screen reader.
+     Placed) is out of sight, not out of the table, so its cell keeps its
+     column for a screen reader.
    - The line count, the total and the chevron are lifted out of the line
      into the right-hand column, centred on the row as the table centred
      them.

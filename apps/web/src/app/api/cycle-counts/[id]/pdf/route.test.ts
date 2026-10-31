@@ -26,9 +26,15 @@ vi.mock('@react-pdf/renderer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@react-pdf/renderer')>();
   return { ...actual, renderToStream: vi.fn(async () => ({}) as never) };
 });
+// The header logo: the sheet must get only what this answers.
+vi.mock('@/lib/pdf/image-prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pdf/image-prefetch')>()),
+  prefetchPdfLogo: vi.fn(async () => null),
+}));
 
 // Imported AFTER the mocks above so the route picks them up.
 import { renderToStream } from '@react-pdf/renderer';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { GET } from './route';
 
 /**
@@ -369,5 +375,61 @@ describe('GET /api/cycle-counts/[id]/pdf — the reference and scope label', () 
     const res = await GET(req(), await paramsFor('cc-1'));
     expect(res.headers.get('content-disposition')).toBe('inline; filename="cycle-count-cc-1.pdf"');
     expect(capturedCycle().countNumber).toBeNull();
+  });
+});
+
+/**
+ * The organization logo in the sheet's header. logo_url is set by an owner or
+ * admin and the database does not hold it to the logo bucket, so the route
+ * resolves it through prefetchPdfLogo (a guarded fetch, bytes back) and the
+ * sheet gets only that answer, never the stored value.
+ */
+describe('GET /api/cycle-counts/[id]/pdf — the header logo', () => {
+  const STORED = 'https://proj.supabase.co/storage/v1/object/public/org-logos/org-1/logo-1.png';
+  const LOGO_BYTES = 'data:image/png;base64,TE9HTw==';
+
+  function ctxWithLogo(logoUrl: string | null) {
+    return {
+      ...ctxWith(new Set<ModuleId>([...DEFAULT_MODULE_IDS])),
+      supabase: makeSupabaseStub({
+        'inventory_items.select': { data: [], error: null },
+        'organizations.select': { data: { name: 'Acme', logo_url: logoUrl }, error: null },
+      }).client,
+    };
+  }
+
+  function capturedOrg(): { name: string; logoUrl: string | null } {
+    const call = vi.mocked(renderToStream).mock.calls[0];
+    return (call?.[0] as unknown as { props: { org: { name: string; logoUrl: string | null } } })
+      .props.org;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: header(), lines: [groupedLine()] }) } as never;
+    });
+    vi.mocked(WarehousesService).mockImplementation(function () {
+      return { list: async () => [] } as never;
+    });
+  });
+
+  it('prints the stored logo from the bytes prefetchPdfLogo answers', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED) as never);
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(LOGO_BYTES);
+    const res = await GET(req(), await paramsFor('cc-1'));
+    expect(res.status).toBe(200);
+    expect(prefetchPdfLogo).toHaveBeenCalledTimes(1);
+    expect(prefetchPdfLogo).toHaveBeenCalledWith(STORED);
+    expect(capturedOrg()).toEqual({ name: 'Acme', logoUrl: LOGO_BYTES });
+  });
+
+  it('prints no logo when prefetchPdfLogo answers none, whatever is stored', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED) as never);
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(null);
+    const res = await GET(req(), await paramsFor('cc-1'));
+    expect(res.status).toBe(200);
+    expect(capturedOrg()).toEqual({ name: 'Acme', logoUrl: null });
   });
 });

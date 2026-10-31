@@ -1,6 +1,6 @@
 import { renderToBuffer } from '@react-pdf/renderer';
 import sharp from 'sharp';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { width } from '@/test/pdf-font-metrics';
 
@@ -391,5 +391,43 @@ describe('Book Order Totals PDF render', () => {
     expect(buf.subarray(0, 5).toString()).toBe('%PDF-');
     const pages = buf.toString('latin1').match(/\/Type \/Page\b/g) ?? [];
     expect(pages.length).toBeGreaterThan(5);
+  });
+
+  // The header's logo is bytes from the route, as in BrandedHeader: given a
+  // URL, react-pdf would fetch it itself, so any value that is not a data: URI
+  // of PNG or JPEG bytes is drawn as no logo.
+  it('draws the logo from a data: URI and never fetches one given as a URL', async () => {
+    const realFetch = globalThis.fetch;
+    const requested: string[] = [];
+    const png = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 40, g: 40, b: 200 } },
+    })
+      .png()
+      .toBuffer();
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      // react-pdf's layout engine loads its wasm from a data: URL.
+      if (url.startsWith('data:')) return realFetch(input, init);
+      requested.push(url);
+      return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } });
+    });
+    try {
+      const noRows = { rows: [], photos: false };
+      const images = (b: Buffer) => b.toString('latin1').includes('/Subtype /Image');
+      const withUrl = await renderToBuffer(
+        BookOrderTotalsPdf(props({ ...noRows, orgLogo: 'http://169.254.169.254/latest/logo.png' })),
+      );
+      expect(requested).toEqual([]);
+      expect(images(withUrl)).toBe(false);
+      const withBytes = await renderToBuffer(
+        BookOrderTotalsPdf(
+          props({ ...noRows, orgLogo: `data:image/png;base64,${png.toString('base64')}` }),
+        ),
+      );
+      expect(images(withBytes)).toBe(true);
+      expect(requested).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
