@@ -3,7 +3,11 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { LEGACY_ACTIVE_ORG_STORAGE_KEY, SAVED_WORKSPACE_STORAGE_KEY } from './workspace-keys';
+import {
+  CACHE_REPAIR_OWED_STORAGE_KEY,
+  LEGACY_ACTIVE_ORG_STORAGE_KEY,
+  SAVED_WORKSPACE_STORAGE_KEY,
+} from './workspace-keys';
 
 /**
  * ONE place holds the saved-workspace keys (recurring pattern #26).
@@ -46,6 +50,10 @@ describe('the saved-workspace keys have one definition', () => {
     ["the older builds' key", LEGACY_ACTIVE_ORG_STORAGE_KEY],
     ['the constant of the one value', 'SAVED_WORKSPACE_STORAGE_KEY'],
     ["the constant of the older builds' key", 'LEGACY_ACTIVE_ORG_STORAGE_KEY'],
+    // Round c10: the record of a cache repair owed (integrator decision
+    // cache_clear_order), read and written through the module too.
+    ['the cache repair owed', CACHE_REPAIR_OWED_STORAGE_KEY],
+    ['the constant of the cache repair owed', 'CACHE_REPAIR_OWED_STORAGE_KEY'],
   ])('%s appears in workspace-keys.ts only', (_what, needle) => {
     // Vacuity control: the sweep must have found the app's sources.
     expect(FILES.some((f) => f.endsWith(path.join('lib', 'api.ts')))).toBe(true);
@@ -65,6 +73,9 @@ describe('the saved-workspace keys have one definition', () => {
     ['use-workspace.ts', /readOlderBuildWorkspaceSince\(AsyncStorage\)/],
     ['use-workspace.ts', /await saveWorkspace\(AsyncStorage, activeOrgId, userId\);/],
     ['use-workspace.ts', /await saveWorkspace\(AsyncStorage, orgId, ownerId\);/],
+    ['use-workspace.ts', /readCacheRepairOwed\(AsyncStorage\)/],
+    ['use-workspace.ts', /await recordCacheRepairOwed\(AsyncStorage\);/],
+    ['use-workspace.ts', /await recordCacheRepairDone\(AsyncStorage\);/],
     ['api.ts', /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), userId\)/],
     ['session-scope.ts', /readSavedWorkspace\(AsyncStorage\)/],
     ['session-scope.ts', /ownSavedWorkspace\(saved, userId \?\? lastSeenUserId\)/],

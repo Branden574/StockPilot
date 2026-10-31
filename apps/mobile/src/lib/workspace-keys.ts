@@ -30,6 +30,10 @@
  * under the previous owner, and a switch with no account known removed the
  * owner, which left a record every account trusted.
  *
+ * AND THE CACHE REPAIR OWED (CACHE_REPAIR_OWED_STORAGE_KEY below): the record
+ * that outlives the signals a workspace load's save erases, until the wipe
+ * they call for has worked.
+ *
  * A leaf module with no imports, so api.ts can use it without the cycle that
  * importing use-workspace would create (use-workspace -> sync -> api).
  */
@@ -135,6 +139,61 @@ export async function saveWorkspace(
   } catch (err) {
     console.warn('[workspace] clearing the older saved workspace key failed', err);
   }
+}
+
+/**
+ * A CACHE REPAIR OWED (docket B10, integrator decision cache_clear_order).
+ *
+ * The workspace load clears the cache when it may hold another workspace's
+ * rows: another account's saved workspace that this account does not choose,
+ * this account's saved workspace once it has left it, an older app's key
+ * beside this build's value (use-workspace.ts resetCache). Every one of those
+ * signals is erased by the load's own save, which runs BEFORE its wipe (a
+ * pull asked for after the wipe must name the workspace chosen): the save
+ * replaces the record and removes the older key (saveWorkspace above). So a
+ * wipe that failed, or one the app was closed before it ran (it waits its
+ * turn in the transaction queue, db.ts withDbTransaction), left nothing to
+ * tell the next load, and the other workspace's rows stayed, its purchase
+ * orders for good: no pull ever sweeps one (sync.ts). A workspace switch
+ * saves and then wipes the same way.
+ *
+ * So the repair is recorded as owed BEFORE the save that erases its signal,
+ * and recorded done only once a wipe has worked; until then every workspace
+ * load clears the cache again before it shows a workspace. The record of a
+ * photo clear still owed works the same way (cache-owner.ts).
+ *
+ * In AsyncStorage, the store of the signals it stands in for, written before
+ * the save as one setItem: the record is exactly as durable as the signal it
+ * outlives. And outside the `workspace.` prefix: the debt is the device's
+ * cache's, not the account's, so the sign-out and eviction that forget the
+ * account's keys leave it (account-eviction.ts accountScopedStorageKeys). Its
+ * value is the time it was recorded; any value at all means a repair is owed.
+ * It never names a workspace or an account.
+ */
+export const CACHE_REPAIR_OWED_STORAGE_KEY = 'sp_cache_repair_owed';
+
+/** Whether a cache repair is owed (see CACHE_REPAIR_OWED_STORAGE_KEY). A
+ *  storage fault is its caller's, as for readSavedWorkspace. */
+export async function readCacheRepairOwed(storage: {
+  getItem(key: string): Promise<string | null>;
+}): Promise<boolean> {
+  return (await storage.getItem(CACHE_REPAIR_OWED_STORAGE_KEY)) !== null;
+}
+
+/** Record a cache repair as owed, before the save that erases its signal.
+ *  Throws when it could not be written: the caller must then not save. */
+export async function recordCacheRepairOwed(storage: {
+  setItem(key: string, value: string): Promise<void>;
+}): Promise<void> {
+  await storage.setItem(CACHE_REPAIR_OWED_STORAGE_KEY, new Date().toISOString());
+}
+
+/** Record the cache repair done: only once a wipe asked for after the save has
+ *  resolved. A removal that fails leaves one more repair for the next load. */
+export async function recordCacheRepairDone(storage: {
+  removeItem(key: string): Promise<void>;
+}): Promise<void> {
+  await storage.removeItem(CACHE_REPAIR_OWED_STORAGE_KEY);
 }
 
 /**

@@ -6,6 +6,7 @@ import { OutboxWorkspaceLoadingError, outboxSendDecision } from './outbox-scope'
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
 import { setActiveOrg, useWorkspace } from './use-workspace';
 import {
+  CACHE_REPAIR_OWED_STORAGE_KEY,
   LEGACY_ACTIVE_ORG_STORAGE_KEY,
   SAVED_WORKSPACE_STORAGE_KEY,
   readSavedWorkspace,
@@ -142,7 +143,10 @@ emitAuth('u1'); // records who is signed in
 
 beforeEach(() => {
   store.clear();
-  storage.setItem.mockClear();
+  // A write a test made fail (or left queued to fail) never reaches the next test.
+  storage.setItem.mockReset().mockImplementation(async (k: string, v: string) => {
+    store.set(k, v);
+  });
   storage.removeItem.mockClear();
   drains.syncNow.mockClear();
   drains.syncAfterRunning.mockClear();
@@ -252,16 +256,22 @@ describe("another account's saved workspace is the one the cache holds", () => {
 });
 
 describe('the workspace and its owner are saved as one value, in one write (integrator decision 3)', () => {
+  // Re-pinned by round c10 (integrator decision cache_clear_order): this load
+  // clears the cache (another account's workspace, not the one chosen), so the
+  // repair owed is recorded first, and recorded done once the wipe has worked.
+  // The saved workspace is still ONE setItem holding both.
   it('the load: one setItem holding both, and the older key cleared', async () => {
     put({ orgId: 'org-b', ownerId: 'u-previous' });
     useWorkspace();
     await settled();
     expect(storage.setItem.mock.calls).toEqual([
+      [CACHE_REPAIR_OWED_STORAGE_KEY, expect.any(String)],
       [SAVED_WORKSPACE_STORAGE_KEY, value('org-a', 'u1')],
     ]);
     expect([...store.keys()]).toEqual([SAVED_WORKSPACE_STORAGE_KEY]);
   });
 
+  // Re-pinned by round c10, as above: a switch clears the cache too.
   it('a switch: one setItem holding both, with the signed-in account as the owner', async () => {
     put({ orgId: 'org-a', ownerId: 'u1' });
     useWorkspace();
@@ -270,6 +280,7 @@ describe('the workspace and its owner are saved as one value, in one write (inte
     storage.setItem.mockClear();
     await setActiveOrg('org-c');
     expect(storage.setItem.mock.calls).toEqual([
+      [CACHE_REPAIR_OWED_STORAGE_KEY, expect.any(String)],
       [SAVED_WORKSPACE_STORAGE_KEY, value('org-c', 'u1')],
     ]);
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-c', ownerId: 'u1' });
@@ -310,9 +321,19 @@ describe('the workspace and its owner are saved as one value, in one write (inte
     useWorkspace();
     await settled();
     const before = published.length;
-    storage.setItem.mockRejectedValueOnce(new Error('database or disk is full'));
+    // The save of the one value fails, whatever is written before it (since
+    // round c10, the repair owed: a failure of that one has its own test).
+    let failed = false;
+    storage.setItem.mockImplementation(async (key: string, item: string) => {
+      if (key === SAVED_WORKSPACE_STORAGE_KEY && !failed) {
+        failed = true;
+        throw new Error('database or disk is full');
+      }
+      store.set(key, item);
+    });
 
     await expect(setActiveOrg('org-c')).rejects.toThrow('database or disk is full');
+    expect(failed).toBe(true);
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
     expect(published.length).toBe(before); // nothing was shown
     expect(shown()).toBe('org-a');
@@ -469,6 +490,276 @@ describe('after a rolled-back phone update: the older key beside this build valu
     expect(drains.syncNow).not.toHaveBeenCalled();
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-b', ownerId: 'u1' });
     expect(store.has(LEGACY_ACTIVE_ORG_STORAGE_KEY)).toBe(false);
+  });
+});
+
+/**
+ * A CACHE REPAIR THAT DID NOT FINISH IS STILL OWED (docket B10, integrator
+ * decision cache_clear_order). Each signal the load repairs for is erased by
+ * the load's own save, which runs before the wipe: another account's record and
+ * this account's record of a workspace it has left are replaced, and the older
+ * app's key is removed (workspace-keys.ts saveWorkspace). So when the wipe
+ * failed (it only warned), or the app was closed while it waited its turn in
+ * the transaction queue (db.ts withDbTransaction), the next load found no
+ * signal and cleared nothing, and the other workspace's rows stayed: its
+ * purchase orders for good, since no pull sweeps them (sync.ts). The repair is
+ * now recorded as owed before the save, and recorded done only once a wipe has
+ * worked.
+ */
+describe('a cache repair that did not finish is still owed', () => {
+  /** The three repairs: the saved state each starts from, and the workspace chosen. */
+  const REPAIR_KINDS: [string, () => void, string][] = [
+    [
+      'after a rolled-back phone update (the older key names another workspace)',
+      () => {
+        store.set(SAVED_WORKSPACE_STORAGE_KEY, value('org-b', 'u1')); // saved before the rollback
+        store.set(LEGACY_ACTIVE_ORG_STORAGE_KEY, 'org-a'); // the older app's load since
+      },
+      'org-b',
+    ],
+    [
+      "another account's saved workspace, not the one this account chooses",
+      () => put({ orgId: 'org-z', ownerId: 'u-previous' }),
+      'org-a',
+    ],
+    [
+      "this account's saved workspace, which it has since left",
+      () => put({ orgId: 'org-z', ownerId: 'u1' }),
+      'org-a',
+    ],
+  ];
+
+  const owed = () => store.has(CACHE_REPAIR_OWED_STORAGE_KEY);
+
+  it.each(REPAIR_KINDS)(
+    '%s: the wipe fails once, the next load clears the cache again, and a wipe that works settles the repair',
+    async (_kind, seed, chosen) => {
+      seed();
+      vi.mocked(deleteOrgData).mockRejectedValueOnce(new Error('database is locked'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        useWorkspace(); // the repair load: its wipe fails
+        await settled();
+        expect(shown()).toBe(chosen);
+        expect(deleteOrgData).toHaveBeenCalledTimes(1);
+        // Its save replaced the signal (the record, or the older key): only
+        // the repair owed is left to tell the next load.
+        expect(savedWorkspaceIn(store)).toEqual({ orgId: chosen, ownerId: 'u1' });
+        expect(store.has(LEGACY_ACTIVE_ORG_STORAGE_KEY)).toBe(false);
+        expect.soft(owed()).toBe(true);
+
+        drains.syncNow.mockClear();
+        useWorkspace(); // the next load: a screen that opens, or the next launch
+        await settled();
+        expect(deleteOrgData).toHaveBeenCalledTimes(2);
+        expect(drains.syncNow.mock.calls).toEqual([[true]]); // then a full pull
+        expect(shown()).toBe(chosen);
+        expect(owed()).toBe(false);
+
+        useWorkspace(); // nothing is owed any more
+        await settled();
+        expect(deleteOrgData).toHaveBeenCalledTimes(2);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it.each(REPAIR_KINDS)(
+    '%s: the app is closed while the wipe waits its turn, and the next launch clears the cache',
+    async (_kind, seed, chosen) => {
+      seed();
+      // The wipe waits behind another transaction (a pull mid-write) and the
+      // app is closed before it runs.
+      vi.mocked(deleteOrgData).mockImplementationOnce(() => new Promise<void>(() => {}));
+      useWorkspace();
+      await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+      expect(savedWorkspaceIn(store)).toEqual({ orgId: chosen, ownerId: 'u1' }); // the signal is gone
+      expect.soft(owed()).toBe(true); // the repair owed is not
+
+      useWorkspace(); // the next launch's load
+      await settled();
+      expect(deleteOrgData).toHaveBeenCalledTimes(2);
+      expect(drains.syncNow).toHaveBeenCalledWith(true);
+      expect(shown()).toBe(chosen);
+      expect(owed()).toBe(false);
+    },
+  );
+
+  // A load abandoned because the account changed while its wipe waited may
+  // not record the repair done, even once that wipe has run: the next
+  // account's load can have recorded a repair of its own meanwhile, which a
+  // wipe asked for before that load's save does not cover. The next load
+  // clears once more instead.
+  it("the account changes while the repair's wipe waits: the abandoned load leaves the repair owed, and the next account's load clears the cache", async () => {
+    put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
+    let wipeDone!: () => void;
+    vi.mocked(deleteOrgData).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          wipeDone = resolve;
+        }),
+    );
+    useWorkspace();
+    await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+    const before = published.length;
+    emitAuth('u2'); // "Use a different account": u1's load is abandoned
+    auth.user = { id: 'u2' };
+    try {
+      wipeDone(); // the wipe runs after all
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(published.length).toBe(before); // the abandoned load shows nothing
+      expect.soft(owed()).toBe(true);
+
+      useWorkspace(); // u2's load
+      await settled();
+      expect(deleteOrgData).toHaveBeenCalledTimes(2);
+      expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u2' });
+      expect(owed()).toBe(false);
+    } finally {
+      emitAuth('u1');
+      auth.user = { id: 'u1' };
+    }
+  });
+
+  // The record is one value for the device. A load records it done only while
+  // its own record is the latest: one made since can stand for a save made
+  // after this load's wipe was asked for (another load that read other
+  // memberships and chose another workspace, say), which that wipe does not
+  // cover. Here the later one's wipe fails, so the repair stays owed.
+  it('two loads repair at once and the later record is not settled: the repair stays owed for the next load', async () => {
+    put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
+    let firstWipeDone!: () => void;
+    vi.mocked(deleteOrgData)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            firstWipeDone = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error('database is locked'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      useWorkspace(); // the first screen: records, saves, and its wipe waits
+      await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+      useWorkspace(); // a second screen: records again, and its wipe fails
+      await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(2));
+      firstWipeDone();
+      await settled();
+      expect(owed()).toBe(true);
+
+      useWorkspace(); // the next load
+      await settled();
+      expect(deleteOrgData).toHaveBeenCalledTimes(3);
+      expect(owed()).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(REPAIR_KINDS)(
+    '%s: the repair is recorded as owed before the save that replaces its signal, and done only after the wipe',
+    async (_kind, seed) => {
+      seed();
+      useWorkspace();
+      await settled();
+      expect(storage.setItem.mock.calls.map(([key]) => key)).toEqual([
+        CACHE_REPAIR_OWED_STORAGE_KEY,
+        SAVED_WORKSPACE_STORAGE_KEY,
+      ]);
+      expect(storage.removeItem.mock.calls.at(-1)).toEqual([CACHE_REPAIR_OWED_STORAGE_KEY]);
+      const wiped = vi.mocked(deleteOrgData).mock.invocationCallOrder[0]!;
+      expect(storage.removeItem.mock.invocationCallOrder.at(-1)).toBeGreaterThan(wiped);
+      expect(owed()).toBe(false);
+    },
+  );
+
+  it('a repair that cannot be recorded keeps its signal: nothing is saved, the wipe still runs, and the next load repairs and saves', async () => {
+    put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
+    // The first write fails if it is the repair owed (storage full), and is
+    // made as usual if it is anything else.
+    storage.setItem.mockImplementationOnce(async (key: string, item: string) => {
+      if (key === CACHE_REPAIR_OWED_STORAGE_KEY) throw new Error('database or disk is full');
+      store.set(key, item);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      useWorkspace();
+      await settled();
+      expect(shown()).toBe('org-a'); // still shown, as when a save fails
+      expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-z', ownerId: 'u1' }); // the signal stays
+      expect(deleteOrgData).toHaveBeenCalledTimes(1);
+
+      useWorkspace();
+      await settled();
+      expect(deleteOrgData).toHaveBeenCalledTimes(2);
+      expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
+      expect(owed()).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // The switch saves, then wipes, the same way (recurring pattern 26: the
+  // sibling of the load's repair): its wipe only warned, and nothing told the
+  // next load that the cache still held the previous workspace's rows.
+  it('a switch whose wipe fails: the next load clears the cache the switch left', async () => {
+    put({ orgId: 'org-a', ownerId: 'u1' });
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-a');
+    vi.mocked(deleteOrgData).mockRejectedValueOnce(new Error('database is locked'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await setActiveOrg('org-c');
+      expect(shown()).toBe('org-c');
+      expect(deleteOrgData).toHaveBeenCalledTimes(1);
+      expect.soft(owed()).toBe(true);
+      drains.syncNow.mockClear();
+
+      useWorkspace(); // the next screen that opens
+      await settled();
+      expect(deleteOrgData).toHaveBeenCalledTimes(2);
+      expect(drains.syncNow.mock.calls).toEqual([[true]]);
+      expect(shown()).toBe('org-c');
+      expect(owed()).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a switch records the repair owed before its save, and done once its wipe has worked', async () => {
+    put({ orgId: 'org-a', ownerId: 'u1' });
+    useWorkspace();
+    await settled();
+    storage.setItem.mockClear();
+    storage.removeItem.mockClear();
+    await setActiveOrg('org-b');
+    expect(storage.setItem.mock.calls.map(([key]) => key)).toEqual([
+      CACHE_REPAIR_OWED_STORAGE_KEY,
+      SAVED_WORKSPACE_STORAGE_KEY,
+    ]);
+    expect(storage.removeItem.mock.calls.at(-1)).toEqual([CACHE_REPAIR_OWED_STORAGE_KEY]);
+    expect(storage.removeItem.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      vi.mocked(deleteOrgData).mock.invocationCallOrder[0]!,
+    );
+    expect(owed()).toBe(false);
+  });
+
+  it('a switch whose repair owed cannot be recorded fails before it saves: the previous workspace stays on screen and in storage', async () => {
+    put({ orgId: 'org-a', ownerId: 'u1' });
+    useWorkspace();
+    await settled();
+    const before = published.length;
+    storage.setItem.mockImplementationOnce(async (key: string, item: string) => {
+      if (key === CACHE_REPAIR_OWED_STORAGE_KEY) throw new Error('database or disk is full');
+      store.set(key, item);
+    });
+    await expect(setActiveOrg('org-c')).rejects.toThrow('database or disk is full');
+    expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(published.length).toBe(before);
+    expect(shown()).toBe('org-a');
   });
 });
 

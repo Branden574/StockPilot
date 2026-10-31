@@ -10,8 +10,11 @@ import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
 import { chooseActiveOrg } from './workspace-choice';
 import {
+  readCacheRepairOwed,
   readOlderBuildWorkspaceSince,
   readSavedWorkspace,
+  recordCacheRepairDone,
+  recordCacheRepairOwed,
   saveWorkspace,
   savedWorkspaceFor,
 } from './workspace-keys';
@@ -193,6 +196,43 @@ supabase.auth.onAuthStateChange((_event, session) => {
 /** Workspace loads running now (see retryWorkspace). */
 let loadsRunning = 0;
 
+/**
+ * Cache repairs recorded as owed by this app since it started, by the
+ * workspace load and the switch (workspace-keys.ts recordCacheRepairOwed).
+ * The record is one value for the whole device, so a flow records it done
+ * only while its own record is still the latest: another made since may stand
+ * for a save that came after this flow's wipe was asked for, which that wipe
+ * does not cover. That flow's own wipe records it done; if it fails, the next
+ * load clears once more.
+ */
+let repairsRecorded = 0;
+
+/** Record a cache repair as owed; the number of this record (see
+ *  repairsRecorded). Counted as the write is asked for, before it lands: a
+ *  removal asked for after that must see it, since AsyncStorage applies the
+ *  two in the order they were asked for. */
+async function recordRepairOwed(): Promise<number> {
+  repairsRecorded += 1;
+  const record = repairsRecorded;
+  await recordCacheRepairOwed(AsyncStorage);
+  return record;
+}
+
+/** Record the cache repair done, after a wipe that worked, when `record` (this
+ *  flow's) is still the latest. A removal that fails leaves one more repair. */
+async function recordRepairDone(record: number): Promise<void> {
+  // Checked and asked for in one step, with no await between.
+  if (record !== repairsRecorded) return;
+  try {
+    await recordCacheRepairDone(AsyncStorage);
+  } catch (err) {
+    console.warn(
+      '[workspace] recording the cache repair done failed; the next load clears again',
+      err,
+    );
+  }
+}
+
 async function hydrate(userId: string): Promise<void> {
   loadsRunning += 1;
   try {
@@ -205,10 +245,12 @@ async function hydrate(userId: string): Promise<void> {
 async function loadWorkspace(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
-  const [memberships, saved, profileDefault] = await Promise.all([
+  const [memberships, saved, profileDefault, repairOwed] = await Promise.all([
     loadOrgs(userId),
     readSavedWorkspace(AsyncStorage),
     loadProfileDefaultOrg(userId),
+    // A cache repair an earlier load or switch could not finish (below).
+    readCacheRepairOwed(AsyncStorage),
   ]);
   // Only this account's own saved workspace (docket B10): the one the request
   // header names (api.ts orgHeader). Another account's, left by a fallback
@@ -277,11 +319,47 @@ async function loadWorkspace(userId: string) {
   // before the rollback. This build then showed its own workspace over that
   // workspace's rows, which its delta pulls, from the older app's cursor,
   // never swept (docket B10 review).
+  //
+  // AND WHEN A REPAIR IS STILL OWED: one that an earlier load or a switch
+  // recorded and whose wipe did not finish (below).
   const othersWorkspace = persisted === null ? saved.orgId : null;
   const resetCache =
+    repairOwed ||
     choice.resetCache ||
     (othersWorkspace !== null && othersWorkspace !== activeOrgId) ||
     (olderBuildSince !== null && olderBuildSince !== activeOrgId);
+  // THE REPAIR IS RECORDED AS OWED BEFORE ANYTHING ERASES ITS SIGNAL (docket
+  // B10, integrator decision cache_clear_order). The save below replaces
+  // another account's record and this account's record of a workspace it has
+  // left, and removes the older app's key (workspace-keys.ts saveWorkspace),
+  // and it runs before the wipe, so that a pull asked for after the wipe names
+  // the workspace chosen. When the wipe then failed (it only warned), or the
+  // app was closed while it waited its turn in the transaction queue, the
+  // next load found no signal and cleared nothing, and the other workspace's
+  // rows stayed: its purchase orders for good, since no pull sweeps them
+  // (sync.ts). Now the record outlives the signal, and goes only once a wipe
+  // has worked. Not recorded (storage failing), nothing is saved either: the
+  // signal itself stays for the next load, as after a failed save.
+  let repairRecord: number | null = null;
+  if (activeOrgId && resetCache) {
+    try {
+      repairRecord = await recordRepairOwed();
+    } catch (err) {
+      console.warn(
+        '[workspace] recording the cache repair failed; the saved workspace stays for the next load',
+        err,
+      );
+    }
+    // As after the reads above: when the account changed, or a switch
+    // started, while the record was written, this load chooses nothing (the
+    // switch's choice stands). The record stays, and the next load clears
+    // once more.
+    if (accountEpoch() !== epochAtStart) return;
+    if (switchesStarted !== switchesAtStart) {
+      publish({ loading: false, orgs });
+      return;
+    }
+  }
   // EVERY LOAD THAT CHOOSES A WORKSPACE LEAVES IT SAVED AS THIS ACCOUNT'S
   // (integrator decision 3). Either it is saved here, with this account as its
   // owner, in one write (a new choice, a workspace saved by an older build
@@ -292,9 +370,14 @@ async function loadWorkspace(userId: string) {
   // with no workspace of its own until that is true (outbox-scope.ts
   // 'workspace-loading'). It is saved again when an older app's key sits
   // beside it: the save removes that key (integrator decision 3), so the
-  // cache is cleared for it once.
+  // cache is cleared for it once. Not when the repair this load owes could
+  // not be recorded (above): the save would erase its only record.
   let savedNow = false;
-  if (activeOrgId && (choice.persist || saved.ownerId !== userId || olderBuildSince !== null)) {
+  if (
+    activeOrgId &&
+    (choice.persist || saved.ownerId !== userId || olderBuildSince !== null) &&
+    (repairRecord !== null || !resetCache)
+  ) {
     try {
       await saveWorkspace(AsyncStorage, activeOrgId, userId);
       savedNow = true;
@@ -313,10 +396,33 @@ async function loadWorkspace(userId: string) {
   if (activeOrgId && resetCache) {
     // The cache may hold another workspace's rows; clear the org-scoped
     // tables (never the outbox) and pull this workspace in full below.
+    let wiped = false;
     try {
       await deleteOrgData();
+      wiped = true;
     } catch (err) {
-      console.warn('[workspace] deleteOrgData on workspace repair failed', err);
+      // Still owed: the record stays, and the next load (any screen that
+      // opens, the next launch) clears the cache again. This workspace is
+      // still shown, as before: hiding it would leave every screen without
+      // one while only the phone's own store is failing.
+      console.warn('[workspace] the cache repair failed; it stays owed for the next load', err);
+    }
+    // Recorded done once this wipe has worked: it was asked for after this
+    // load's save, so every pull that writes after it names the workspace
+    // chosen (an answer asked for before it is discarded: db.ts
+    // cacheGeneration). Only by a load that recorded it itself, while its
+    // record is the latest (repairsRecorded) and its account and the switches
+    // are still the ones it started with: a load of the next account, or a
+    // switch, may have recorded a repair of its own meanwhile, for a save
+    // this wipe does not cover. The record then stays, and the next load
+    // clears once more.
+    if (
+      wiped &&
+      repairRecord !== null &&
+      accountEpoch() === epochAtStart &&
+      switchesStarted === switchesAtStart
+    ) {
+      await recordRepairDone(repairRecord);
     }
   }
   if (savedNow) {
@@ -454,6 +560,14 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   // queued work trusted (integrator decision 3).
   const ownerId = epochUserId;
   if (!ownerId) throw new Error('No signed-in account to save the workspace for.');
+  // The wipe below is owed from the moment the save replaces the workspace
+  // the cache holds, and nothing else would tell the next load that it did
+  // not finish (docket B10, as at the workspace load's repair; recurring
+  // pattern 26). Recorded first; a record that cannot be written is a failed
+  // switch, before anything is saved, wiped or shown. Recorded before the
+  // switch is counted, so the count and the save below stay one step.
+  const repairRecord = await recordRepairOwed();
+  if (epoch !== accountEpoch()) return; // signed out meanwhile: save nothing
   switchesStarted += 1;
   // ONE write, the workspace with its owner. A failed save is a failed switch:
   // it throws here, before anything is wiped or shown, so the previous
@@ -472,12 +586,20 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   // replayed into the new one. It keeps this account's photos and the record
   // that the cache is this account's (cache-owner.ts): the account is the
   // same, and a pull for another account still finds it recorded.
+  let wiped = false;
   try {
     await deleteOrgData();
+    wiped = true;
   } catch (err) {
-    console.warn('[workspace] deleteOrgData on org switch failed', err);
+    // Still owed: the next load clears the cache before it shows a workspace.
+    console.warn('[workspace] deleteOrgData on org switch failed; the next load clears again', err);
   }
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
+  // Recorded done as at the load, while this switch's record is the latest.
+  // Not awaited: nothing may come between the check above and the publish
+  // below (its check and its removal are asked for at once, and it reports
+  // its own failure).
+  if (wiped) void recordRepairDone(repairRecord);
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
   shownEpoch = epoch;
   publish({

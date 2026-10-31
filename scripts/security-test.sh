@@ -1506,6 +1506,10 @@ MOBILE_TESTS=(
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is
   # never sent as this account's organization (docket B10, the 401 burst).
+  # A cache repair (another account's workspace, one the account has left,
+  # an older app's key) is recorded as owed before the save that erases its
+  # signal, and recorded done only after a wipe that worked, so a wipe that
+  # failed or never ran is run again by the next load (the switch too).
   src/lib/workspace-keys.test.ts
   src/lib/api.org-header.test.ts
   src/lib/use-workspace.owner.test.ts

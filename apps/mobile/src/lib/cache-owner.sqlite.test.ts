@@ -8,7 +8,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
 import { savedWorkspaceIn } from './__fixtures__/saved-workspace';
-import { saveWorkspace } from './workspace-keys';
+import {
+  CACHE_REPAIR_OWED_STORAGE_KEY,
+  LEGACY_ACTIVE_ORG_STORAGE_KEY,
+  saveWorkspace,
+} from './workspace-keys';
 
 /**
  * WHOSE PHOTOS: the record of whose cache this is (`cache_user_id`,
@@ -96,6 +100,11 @@ const device = vi.hoisted(() => ({
   dropAfterMemberships: false,
   /** The next cache wipe's SQLite statements fail ("database is locked"). */
   failWipe: false,
+  /** The next transaction never starts: it waits its turn in the queue (behind
+   *  a pull mid-write, say) and the app is closed first. heldBegin says it
+   *  was reached. */
+  holdNextBegin: false,
+  heldBegin: false,
   storage: new Map<string, string>(),
   memberships: {} as Record<string, string[]>,
   /** expo-image's caches: the storage paths of the photos drawn into each. */
@@ -330,6 +339,11 @@ async function launch(): Promise<void> {
       if (device.failWipe && sql.includes('delete from items;')) {
         device.failWipe = false;
         throw new Error('database is locked');
+      }
+      if (device.holdNextBegin && sql === 'BEGIN') {
+        device.holdNextBegin = false;
+        device.heldBegin = true;
+        return new Promise<void>(() => {});
       }
     },
   });
@@ -630,6 +644,8 @@ beforeEach(async () => {
   device.snapshotFails = false;
   device.dropAfterMemberships = false;
   device.failWipe = false;
+  device.holdNextBegin = false;
+  device.heldBegin = false;
   device.storage = new Map();
   device.memberships = { [A]: ['org-1', 'org-2'], [B]: ['org-1'], [C]: ['org-1'] };
   device.memory = new Set();
@@ -1057,6 +1073,106 @@ describe('a workspace load that clears the cache pulls the snapshot in full once
     expect(owner()).toBe(B);
     expect(items()).toEqual([`item-${B}-org-9`]);
   });
+});
+
+/*
+ * A WORKSPACE REPAIR WHOSE WIPE DID NOT FINISH IS STILL OWED (docket B10,
+ * integrator decision cache_clear_order). The load's save replaces the signal
+ * it repairs for (here: the account's record of a workspace it has left, and
+ * an older app's key beside this build's value) before its wipe runs, so a
+ * wipe that failed, or one the app was closed before it ran, left nothing to
+ * tell the next load. A pull never sweeps a purchase order (sync.ts, "POs are
+ * deliberately left alone"), and the phone's PO list reads every cached one
+ * (db-reads.ts listOpenPos), so the other workspace's purchase orders stayed
+ * listed for good. Faked here as in the tests above; db.ts runs on the real
+ * SQLite, and its wipe really rolls back.
+ */
+describe('a workspace repair whose wipe did not finish is still owed', SLOW, () => {
+  const openPos = async () => (await m.reads.listOpenPos()).map((p) => p.id);
+  const po = (id: string, warehouseId: string) => ({
+    id,
+    poNumber: id.toUpperCase(),
+    status: 'ordered',
+    expectedAt: null,
+    warehouseId,
+    lines: [] as unknown[],
+  });
+
+  /** How the cache came to hold another workspace's purchase order, the
+   *  workspace the load chooses, and that purchase order. */
+  const REPAIRS: Record<string, { setUp: () => Promise<void>; chosen: string; otherPo: string }> = {
+    'A has left its saved workspace': {
+      setUp: async () => {
+        // A's pulls of org-1 carry an open purchase order.
+        device.answer = (snap) =>
+          snap.warehouses[0]?.id === 'wh-org-1'
+            ? { ...snap, openPOs: [po('po-org-1', 'wh-org-1')] }
+            : snap;
+        await aSignedInWithAPhoto();
+        expect(await openPos()).toEqual(['po-org-1']);
+        device.memberships[A] = ['org-3']; // A is removed from org-1
+      },
+      chosen: 'org-3',
+      otherPo: 'po-org-1',
+    },
+    'a rolled-back phone update pulled another workspace': {
+      setUp: async () => {
+        await aSignedInWithAPhoto(); // this build saved org-1 as A's
+        // The older app, after the rollback, saved A's other workspace under
+        // its own key, and its pull wrote that workspace's purchase order.
+        device.storage.set(LEGACY_ACTIVE_ORG_STORAGE_KEY, 'org-2');
+        raw
+          .prepare(
+            `insert into purchase_orders (id, po_number, status, warehouse_id, expected_at, last_synced_at)
+             values ('po-org-2', 'PO-ORG-2', 'ordered', 'wh-org-2', null, ?)`,
+          )
+          .run(Date.now());
+        expect(await openPos()).toEqual(['po-org-2']);
+      },
+      chosen: 'org-1',
+      otherPo: 'po-org-2',
+    },
+  };
+
+  it.each(Object.keys(REPAIRS))(
+    "%s: the repair's wipe fails once, and the next workspace load clears the other workspace's purchase order",
+    async (repair) => {
+      const { setUp, chosen, otherPo } = REPAIRS[repair]!;
+      await setUp();
+      device.failWipe = true;
+      await workspaceLoads(chosen); // the repair: its wipe fails and rolls back
+      await backgroundPullsSettle(); // its full pull lands
+      expect(await openPos()).toEqual([otherPo]); // no pull sweeps a purchase order
+
+      await workspaceLoads(chosen); // the next screen that opens
+      await backgroundPullsSettle();
+      expect(await openPos()).toEqual([]);
+      expect(items()).toEqual([`item-${A}-${chosen}`]);
+      expect(device.storage.has(CACHE_REPAIR_OWED_STORAGE_KEY)).toBe(false);
+    },
+  );
+
+  it.each(Object.keys(REPAIRS))(
+    "%s: the app is closed while the repair's wipe waits its turn, and the next launch clears the other workspace's purchase order",
+    async (repair) => {
+      const { setUp, chosen, otherPo } = REPAIRS[repair]!;
+      await setUp();
+      device.holdNextBegin = true;
+      m.ws.useWorkspace(); // a screen opens: the repair load
+      await vi.waitFor(() => expect(device.heldBegin).toBe(true), WAIT);
+      // Its save came first: the signal is gone.
+      expect(savedWorkspaceIn(device.storage)).toEqual({ orgId: chosen, ownerId: A });
+      expect(device.storage.has(LEGACY_ACTIVE_ORG_STORAGE_KEY)).toBe(false);
+      expect(await openPos()).toEqual([otherPo]);
+
+      await relaunch();
+      await workspaceLoads(chosen);
+      await backgroundPullsSettle();
+      expect(await openPos()).toEqual([]);
+      expect(items()).toEqual([`item-${A}-${chosen}`]);
+      expect(device.storage.has(CACHE_REPAIR_OWED_STORAGE_KEY)).toBe(false);
+    },
+  );
 });
 
 /** The two ways an account leaves the device, each run as A once its session

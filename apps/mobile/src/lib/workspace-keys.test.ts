@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { accountScopedStorageKeys } from './account-eviction';
 import {
+  CACHE_REPAIR_OWED_STORAGE_KEY,
   LEGACY_ACTIVE_ORG_STORAGE_KEY,
   SAVED_WORKSPACE_STORAGE_KEY,
   ownSavedWorkspace,
+  readCacheRepairOwed,
   readOlderBuildWorkspaceSince,
   readSavedWorkspace,
+  recordCacheRepairDone,
+  recordCacheRepairOwed,
   saveWorkspace,
   savedWorkspaceFor,
 } from './workspace-keys';
@@ -237,6 +241,53 @@ describe('saveWorkspace: the workspace and its owner in one write', () => {
   });
 });
 
+/**
+ * A CACHE REPAIR OWED (round c10, integrator decision cache_clear_order): the
+ * workspace load's and the switch's record that the cache must still be
+ * cleared, written before the save that erases the repair's own signal and
+ * removed once a wipe has worked (use-workspace.ts runs it).
+ */
+describe('the record of a cache repair owed', () => {
+  it('is read as owed while any value is stored, and as not owed when none is', async () => {
+    await expect(readCacheRepairOwed(memory())).resolves.toBe(false);
+    const recorded = memory();
+    await recordCacheRepairOwed(recorded);
+    await expect(readCacheRepairOwed(recorded)).resolves.toBe(true);
+    // An empty value is a value: a record is never read as nothing.
+    await expect(
+      readCacheRepairOwed(memory({ [CACHE_REPAIR_OWED_STORAGE_KEY]: '' })),
+    ).resolves.toBe(true);
+  });
+
+  it('is recorded in one setItem that names no workspace and no account, and recorded done by removing it', async () => {
+    const storage = memory({ [SAVED_WORKSPACE_STORAGE_KEY]: value('org-a', 'u1') });
+    await recordCacheRepairOwed(storage);
+    expect(storage.setItem.mock.calls).toEqual([
+      [CACHE_REPAIR_OWED_STORAGE_KEY, expect.any(String)],
+    ]);
+    const item = storage.store.get(CACHE_REPAIR_OWED_STORAGE_KEY) ?? '';
+    expect(item).not.toMatch(/org-a|u1/);
+    expect(Number.isNaN(Date.parse(item))).toBe(false); // the time it was recorded
+
+    await recordCacheRepairDone(storage);
+    expect(storage.removeItem.mock.calls).toEqual([[CACHE_REPAIR_OWED_STORAGE_KEY]]);
+    await expect(readCacheRepairOwed(storage)).resolves.toBe(false);
+    // The saved workspace is not touched by either.
+    await expect(readSavedWorkspace(storage)).resolves.toEqual({ orgId: 'org-a', ownerId: 'u1' });
+  });
+
+  it('lets a storage fault through to its caller: a record that failed is not taken as written', async () => {
+    const failing = memory();
+    failing.setItem.mockRejectedValueOnce(new Error('database or disk is full'));
+    await expect(recordCacheRepairOwed(failing)).rejects.toThrow('database or disk is full');
+    await expect(readCacheRepairOwed(failing)).resolves.toBe(false);
+
+    const unreadable = memory();
+    unreadable.getItem.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(readCacheRepairOwed(unreadable)).rejects.toThrow('storage unavailable');
+  });
+});
+
 describe('the keys', () => {
   it('sit under the workspace. prefix, so every sign-out and eviction that forgets the workspace forgets it whole', () => {
     expect(SAVED_WORKSPACE_STORAGE_KEY).toBe('workspace.savedOrg');
@@ -244,5 +295,14 @@ describe('the keys', () => {
     expect(
       accountScopedStorageKeys([SAVED_WORKSPACE_STORAGE_KEY, LEGACY_ACTIVE_ORG_STORAGE_KEY]).sort(),
     ).toEqual([LEGACY_ACTIVE_ORG_STORAGE_KEY, SAVED_WORKSPACE_STORAGE_KEY].sort());
+  });
+
+  // The repair is owed by the device's cache, not by the account: the
+  // sign-out and the eviction forget the account's keys, and a repair owed
+  // must outlive them (one more wipe after a wipe is harmless; a wipe
+  // forgotten is not). Round c10.
+  it('the record of a cache repair owed sits outside it, so no sign-out or eviction forgets it', () => {
+    expect(CACHE_REPAIR_OWED_STORAGE_KEY).toBe('sp_cache_repair_owed');
+    expect(accountScopedStorageKeys([CACHE_REPAIR_OWED_STORAGE_KEY])).toEqual([]);
   });
 });
