@@ -1220,8 +1220,9 @@ describe('the restart record at start', () => {
         runningUpdateId: 'embedded-0',
       },
     );
-    expect(await emergency.c.restartRecordAtStart()).toEqual(record);
+    // The start clears it whether or not anything asks.
     expect(memoryOf(emergency)).toEqual({ v: 1, waiting, restart: null });
+    expect(await emergency.c.restartRecordAtStart()).toEqual(record);
     expect(emergency.spies.reportOnce.mock.calls).toEqual([['emergency-launch', null]]);
 
     // The next open from closed runs the update from before and is no restart;
