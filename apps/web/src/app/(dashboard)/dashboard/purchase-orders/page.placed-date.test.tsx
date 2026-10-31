@@ -204,9 +204,9 @@ describe("the purchase orders list prints Placed as the organization's day", () 
     }
   });
 
-  // The list most organizations get (800 purchase orders or fewer): the page
-  // hands the instant table the organization's zone too. A Los Angeles
-  // organization cannot show it, as its zone is also the default.
+  // The instant table (800 purchase orders or fewer): the page hands it the
+  // organization's zone too. A Los Angeles organization cannot show that, as
+  // its zone is also the default.
   it('an organization in Sydney, in the instant table: Oct 6 as well', async () => {
     listStats.mockResolvedValue(stats(1));
     getOrgRowForRequest.mockResolvedValue({ timezone: 'Australia/Sydney' });
