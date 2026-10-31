@@ -20,6 +20,7 @@ import {
   RESTART_FAILED_MESSAGE,
   RESTART_FAILED_OK,
   RESTART_FAILED_TITLE,
+  RESTART_RECORD_MAX_AGE_MS,
   RESTART_SETTLE_MAX_MS,
   RESTART_WATCHDOG_MS,
   RESTARTING_LABEL,
@@ -1097,5 +1098,150 @@ describe('the memory between launches', () => {
     const h = await started({}, { stored: stored({ restart: { from: 'older-0', at: 1 } }) });
     expect(h.spies.reportOnce).not.toHaveBeenCalled();
     expect(memoryOf(h).restart).toBeNull();
+  });
+});
+
+/**
+ * "Keep me signed in" (B57) signs out at a real close but not at Restart now's
+ * restart. The start clears the record from storage before any screen can
+ * read it, so the controller keeps what the start found.
+ */
+describe('the restart record at start', () => {
+  function stored(memory: Partial<UpdateMemory>): string {
+    return JSON.stringify({ ...EMPTY_MEMORY, ...memory });
+  }
+
+  it('reports the record the start found, after the start has cleared it from storage', async () => {
+    const record = { from: 'older-0', at: Date.now() - 3_000 };
+    const h = await started({}, { stored: stored({ restart: record }) });
+    expect(memoryOf(h).restart).toBeNull();
+    expect(await h.c.restartRecordAtStart()).toEqual(record);
+    // Reading it again gives the same answer, and the answer is a copy.
+    const again = await h.c.restartRecordAtStart();
+    expect(again).toEqual(record);
+    again!.from = 'changed';
+    expect(await h.c.restartRecordAtStart()).toEqual(record);
+  });
+
+  it('a restart that left the same version running is still a restart', async () => {
+    const record = { from: RUNNING, at: Date.now() - 3_000 };
+    const h = await started({}, { stored: stored({ restart: record }) });
+    expect(await h.c.restartRecordAtStart()).toEqual(record);
+    expect(h.spies.reportOnce.mock.calls).toEqual([['restart-no-change', null]]);
+  });
+
+  it('an ordinary open from closed has none', async () => {
+    const empty = await started();
+    expect(await empty.c.restartRecordAtStart()).toBeNull();
+    const withList = await started(WAITING_U1, {
+      stored: stored({ waiting: [{ id: 'u1', from: RUNNING, runtime: 'x', reported: false }] }),
+    });
+    expect(await withList.c.restartRecordAtStart()).toBeNull();
+  });
+
+  it('the record Restart now saves belongs to the next runtime, not this one', async () => {
+    const h = await shown();
+    h.prompts[0]!.onRestartNow();
+    await flush();
+    expect(h.spies.restart).toHaveBeenCalledTimes(1);
+    expect(memoryOf(h).restart).toEqual({ from: RUNNING, at: Date.now() });
+    expect(await h.c.restartRecordAtStart()).toBeNull();
+
+    // The restart: a new runtime on the new update finds it.
+    await advance(2_000);
+    const next = await started({}, { stored: h.stored.text, runningUpdateId: 'u1' });
+    expect(await next.c.restartRecordAtStart()).toEqual({ from: RUNNING, at: Date.now() - 2_000 });
+    expect(memoryOf(next).restart).toBeNull();
+  });
+
+  it('a record older than a minute is from a restart that never came: an ordinary open', async () => {
+    const edge = await started(
+      {},
+      {
+        stored: stored({
+          restart: { from: 'older-0', at: Date.now() - RESTART_RECORD_MAX_AGE_MS },
+        }),
+      },
+    );
+    expect(await edge.c.restartRecordAtStart()).not.toBeNull();
+
+    const old = await started(
+      {},
+      {
+        stored: stored({
+          restart: { from: 'older-0', at: Date.now() - RESTART_RECORD_MAX_AGE_MS - 1 },
+        }),
+      },
+    );
+    expect(await old.c.restartRecordAtStart()).toBeNull();
+    // Cleared all the same.
+    expect(memoryOf(old).restart).toBeNull();
+  });
+
+  it('waits for the memory, and loads it when asked before the start; once', async () => {
+    let finishLoad!: (text: string | null) => void;
+    const loadMemory = vi.fn(
+      () =>
+        new Promise<string | null>((resolve) => {
+          finishLoad = resolve;
+        }),
+    );
+    const h = harness({ loadMemory });
+    let answer: unknown = 'pending';
+    void h.c.restartRecordAtStart().then((r) => {
+      answer = r;
+    });
+    await flush();
+    expect(loadMemory).toHaveBeenCalledTimes(1);
+    expect(answer).toBe('pending');
+    h.c.start();
+    finishLoad(stored({ restart: { from: 'older-0', at: Date.now() } }));
+    await flush();
+    expect(answer).toEqual({ from: 'older-0', at: Date.now() });
+    expect(loadMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('unreadable memory is no record, never a rejection', async () => {
+    const failed = await started({}, { loadMemory: () => Promise.reject(new Error('disk')) });
+    await expect(failed.c.restartRecordAtStart()).resolves.toBeNull();
+    const garbled = await started({}, { stored: '{not json' });
+    await expect(garbled.c.restartRecordAtStart()).resolves.toBeNull();
+  });
+
+  it('an emergency launch after Restart now reads and clears the record too, and keeps the waiting list for the passed-over check', async () => {
+    const record = { from: RUNNING, at: Date.now() - 3_000 };
+    const waiting = [{ id: 'u1', from: RUNNING, runtime: 'earlier', reported: false }];
+    const emergency = await started(
+      {},
+      {
+        stored: stored({ restart: record, waiting }),
+        isEmergencyLaunch: true,
+        isEmbeddedLaunch: true,
+        runningUpdateId: 'embedded-0',
+      },
+    );
+    expect(await emergency.c.restartRecordAtStart()).toEqual(record);
+    expect(memoryOf(emergency)).toEqual({ v: 1, waiting, restart: null });
+    expect(emergency.spies.reportOnce.mock.calls).toEqual([['emergency-launch', null]]);
+
+    // The next open from closed runs the update from before and is no restart;
+    // the update that would not start is still never offered.
+    const next = await started(WAITING_U1, {
+      stored: emergency.stored.text,
+      runtimeToken: 'later',
+    });
+    next.c.setScreen(SCREEN);
+    await advance(60_000);
+    expect(await next.c.restartRecordAtStart()).toBeNull();
+    expect(next.c.getBlocker()).toBe('not-offerable');
+    expect(next.spies.showPrompt).not.toHaveBeenCalled();
+  });
+
+  it('in development or with updates off, an empty memory is left alone', async () => {
+    for (const over of [{ isDev: true }, { isEnabled: false }]) {
+      const h = await started(WAITING_U1, over);
+      expect(await h.c.restartRecordAtStart()).toBeNull();
+      expect(h.spies.saveMemory).not.toHaveBeenCalled();
+    }
   });
 });

@@ -62,6 +62,12 @@ export const RESTART_SETTLE_MAX_MS = 25_000;
 export const RELOAD_SLOW_MS = 15_000;
 /** Still running this long after reloadAsync said it would restart: the restart failed. */
 export const RESTART_WATCHDOG_MS = 15_000;
+/**
+ * A restart takes seconds. A restart record older than this at the next start
+ * is from a restart that never came (the app was closed while it hung), so
+ * that start is an ordinary open from closed (restartRecordAtStart).
+ */
+export const RESTART_RECORD_MAX_AGE_MS = 60_000;
 
 // ── Memory (AsyncStorage) ───────────────────────────────────────────────────
 
@@ -195,11 +201,19 @@ export interface UpdateMemoryEntry {
   reported: boolean;
 }
 
+/** What Restart now saves right before it restarts. */
+export interface RestartRecord {
+  /** The update that was running (Updates.updateId as it was). */
+  from: string | null;
+  /** When it was saved (ms). */
+  at: number;
+}
+
 export interface UpdateMemory {
   v: 1;
   waiting: UpdateMemoryEntry[];
   /** Saved right before Restart now restarts; read and cleared at the next start. */
-  restart: { from: string | null; at: number } | null;
+  restart: RestartRecord | null;
 }
 
 export const EMPTY_MEMORY: UpdateMemory = { v: 1, waiting: [], restart: null };
@@ -471,6 +485,17 @@ export interface UpdatePromptController {
   onLater(): void;
   onRestartNow(): Promise<void>;
   runReturnCheck(): Promise<void>;
+  /**
+   * The record Restart now saved right before it restarted into this
+   * JavaScript runtime. This runtime's first start reads it and clears it from
+   * the memory, before any screen can look, so "Keep me signed in" (B57) asks
+   * here and never reads MEMORY_KEY. Non-null: Restart now restarted the app
+   * into this runtime, in the same visit, whether or not the update changed.
+   * Null: an ordinary open from closed, a record too old to be this start's
+   * (RESTART_RECORD_MAX_AGE_MS), or memory that could not be read. Resolves
+   * once the memory has loaded, loading it if nothing has yet; never rejects.
+   */
+  restartRecordAtStart(): Promise<RestartRecord | null>;
   getPhase(): UpdatePromptPhase;
   getBlocker(): PromptBlocker | null;
   subscribe(fn: () => void): () => void;
@@ -504,6 +529,8 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
 
   let memory: UpdateMemory | null = null;
   let memoryLoad: Promise<void> | null = null;
+  /** The restart record this runtime's start found (restartRecordAtStart). */
+  let restartAtStart: RestartRecord | null = null;
 
   // Timer handles are boxed: a handle may be any value (0 included).
   let settleTimer: { handle: unknown } | null = null;
@@ -845,11 +872,27 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
     evaluate();
   }
 
-  function loadMemory(): void {
+  function loadMemory(): Promise<void> {
     memoryLoad ??= deps
       .loadMemory()
       .then(parseMemory, () => EMPTY_MEMORY)
       .then((loaded) => {
+        // Kept for restartRecordAtStart first: the memory is cleared below.
+        const record = loaded.restart;
+        restartAtStart =
+          record && Math.abs(deps.now() - record.at) <= RESTART_RECORD_MAX_AGE_MS
+            ? { from: record.from, at: record.at }
+            : null;
+        if (never) {
+          // No pop-up in this runtime, but the record is still its own to
+          // clear, or a later open from closed would read as a restart. After
+          // an emergency launch (an update that would not start) the waiting
+          // list stays as it is, for the next launch's passed-over check.
+          if (record) {
+            deps.saveMemory(serializeMemory({ ...loaded, restart: null })).catch(() => {});
+          }
+          return;
+        }
         // Entries from another running update are history: the phone moved on.
         const waiting = loaded.waiting.filter((e) => e.from === running.updateId);
         let changed = waiting.length !== loaded.waiting.length;
@@ -863,6 +906,12 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
         if (changed) persist();
         evaluate();
       });
+    return memoryLoad;
+  }
+
+  function restartRecordAtStart(): Promise<RestartRecord | null> {
+    const read = () => (restartAtStart ? { ...restartAtStart } : null);
+    return loadMemory().then(read, read);
   }
 
   function stop(): void {
@@ -880,6 +929,8 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
     if (never) {
       if (deps.isEmergencyLaunch && !deps.isDev) deps.reportOnce('emergency-launch', null);
       setPhase('never', 'never');
+      // Only to read and clear the restart record (restartRecordAtStart).
+      void loadMemory();
       return stop;
     }
     appState = deps.currentAppState();
@@ -890,7 +941,7 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
       deps.listenAppState(onAppState),
       deps.listenHolds(onHoldsChanged),
     ];
-    loadMemory();
+    void loadMemory();
     evaluate();
     return stop;
   }
@@ -904,6 +955,7 @@ export function createUpdatePromptController(deps: UpdatePromptDeps): UpdateProm
     onLater,
     onRestartNow,
     runReturnCheck,
+    restartRecordAtStart,
     getPhase: () => phase,
     getBlocker: () => blocker,
     subscribe(fn) {

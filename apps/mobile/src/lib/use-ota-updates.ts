@@ -98,6 +98,11 @@ function isTextFieldFocused(): boolean {
   }
 }
 
+/**
+ * The controller for this JavaScript runtime. Besides the host's calls, it
+ * answers whether this runtime was started by Restart now
+ * (updatePrompt.restartRecordAtStart()), for "Keep me signed in" (B57).
+ */
 export const updatePrompt = createUpdatePromptController({
   now: () => Date.now(),
   setTimeout: (fn, ms) => setTimeout(fn, ms),

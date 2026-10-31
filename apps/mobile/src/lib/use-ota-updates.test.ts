@@ -144,6 +144,7 @@ interface OtaModule {
   updatePrompt?: {
     setScreen(screen: Partial<typeof CLEAR_SCREEN>): void;
     getPhase(): string;
+    restartRecordAtStart(): Promise<{ from: string | null; at: number } | null>;
   };
 }
 
@@ -366,6 +367,31 @@ describe('no restart without a tap (B44)', () => {
     expect(l.updates.reloadAsync.mock.calls[0]![0]).toEqual(
       expect.objectContaining({ reloadScreenOptions: expect.any(Object) }),
     );
+  });
+
+  it('the runtime Restart now starts knows it, though its start has cleared the record from storage ("Keep me signed in", B57)', async () => {
+    const MEMORY_KEY = 'stockpilot.update-prompt.v1';
+    const first = await mount({
+      context: nativeContext({ isUpdatePending: true, downloadedManifest: { id: 'U1' } }),
+    });
+    first.mod.updatePrompt!.setScreen(CLEAR_SCREEN);
+    await vi.advanceTimersByTimeAsync(600);
+    promptButtons(first)[1]!.onPress!();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(first.updates.reloadAsync).toHaveBeenCalledTimes(1);
+    const saved = first.storage.get(MEMORY_KEY)!;
+    const record = JSON.parse(saved).restart as { from: string | null; at: number };
+    expect(record.from).toBe('running-1');
+    // This runtime was an ordinary open from closed.
+    expect(await first.mod.updatePrompt!.restartRecordAtStart()).toBeNull();
+    first.host.unmount();
+
+    // The restart: a new JavaScript runtime on the new update, with the
+    // memory Restart now left.
+    const second = await mount({ flags: { updateId: 'u1' }, storage: { [MEMORY_KEY]: saved } });
+    expect(JSON.parse(second.storage.get(MEMORY_KEY)!).restart).toBeNull();
+    expect(await second.mod.updatePrompt!.restartRecordAtStart()).toEqual(record);
+    expect(second.updates.reloadAsync).not.toHaveBeenCalled();
   });
 });
 
