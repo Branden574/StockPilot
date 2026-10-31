@@ -19,10 +19,11 @@
  * request's URL, a console line, a custom record; never a snapshot or a
  * mutation, which is the page itself, often compressed into a binary string
  * that any rewrite would break. The provider has switched replay off since
- * docket S22; this part stays for a tab still running an older bundle. An
- * event with no credential comes back as the same object: product analytics
- * is otherwise untouched. `perf_` events are reduced to route templates first
- * (lib/perf/scrub.ts).
+ * docket S22, so this part runs only if replay is ever switched back on, and
+ * it stays as defence in depth. (A tab still on an older bundle runs that
+ * bundle's own copy of this hook.) An event with no credential comes back as
+ * the same object: product analytics is otherwise untouched. `perf_` events
+ * are reduced to route templates first (lib/perf/scrub.ts).
  *
  * TOTAL and FAIL CLOSED. It never throws (a throwing before_send drops the
  * event or breaks capture for the page), and an event it cannot read is
