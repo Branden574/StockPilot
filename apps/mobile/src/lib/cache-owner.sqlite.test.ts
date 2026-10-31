@@ -1059,17 +1059,23 @@ describe('a workspace load that clears the cache pulls the snapshot in full once
       .run(JSON.stringify({ poId: 'po-1', lineId: 'po-1-l1', quantity: 1 }), B);
     const { api } = await import('./api');
     const callsBefore = vi.mocked(api).mock.calls.length;
+    const receipts = () =>
+      vi
+        .mocked(api)
+        .mock.calls.slice(callsBefore)
+        .filter(([p]) => p === '/api/v1/po/po-1/receive-line');
     device.requests = [];
     await workspaceLoads('org-9');
+    // Sent by the forced full pull's own drain, before anything else is
+    // asked: loadPullsSettle's syncAfterRunning runs a pass of its own, whose
+    // drain would send it too, so waiting for that first could not tell a
+    // forced pull that stopped draining (the load asks for no other pass).
+    await vi.waitFor(() => expect(receipts()).toHaveLength(1), WAIT);
     await loadPullsSettle();
 
     expect(fullPulls()).toBe(1);
-    const receipts = vi
-      .mocked(api)
-      .mock.calls.slice(callsBefore)
-      .filter(([p]) => p === '/api/v1/po/po-1/receive-line');
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]![1]).toMatchObject({ orgId: 'org-9', asUserId: B });
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0]![1]).toMatchObject({ orgId: 'org-9', asUserId: B });
     expect(owner()).toBe(B);
     expect(items()).toEqual([`item-${B}-org-9`]);
   });
