@@ -29,6 +29,10 @@ vi.mock('@/lib/auth/session', () => ({
     ...(h.ctx.permissions ? { permissions: h.ctx.permissions } : {}),
   })),
 }));
+// The organization's zone, for the event's date and times (event-range.ts).
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 // Deterministic org-time words regardless of the test host's zone.
 vi.mock('@/lib/timezone', () => ({
   formatOrgDate: () => 'Tue, Oct 20, 2026',

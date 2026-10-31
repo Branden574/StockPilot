@@ -376,13 +376,16 @@ describe('CycleCountDetail: a box that does not hold a count', () => {
       expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('—');
       fireEvent.blur(input);
 
+      // The line says so as the blur refuses the box, and the saved count
+      // goes back once the refused save returns, a render of its own; so the
+      // box is waited for with the line, never read the moment the line shows.
       await waitFor(() => {
         expect(within(row).getByRole('alert')).toHaveTextContent(NOT_A_NUMBER);
+        expect(input.value).toBe('4');
       });
       expect(toast.error).toHaveBeenCalledWith(NOT_A_NUMBER);
       expect(recordCycleCountLineAction).not.toHaveBeenCalled();
       expect(clearCycleCountLineAction).not.toHaveBeenCalled();
-      expect(input.value).toBe('4');
       expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('-1');
     },
   );
@@ -395,11 +398,12 @@ describe('CycleCountDetail: a box that does not hold a count', () => {
     fireEvent.change(input, { target: { value: '2,5' } });
     fireEvent.blur(input);
 
+    // The emptied box is its own render after the line shows (see above).
     await waitFor(() => {
       expect(within(row).getByRole('alert')).toHaveTextContent(NOT_A_NUMBER);
+      expect(input.value).toBe('');
     });
     expect(recordCycleCountLineAction).not.toHaveBeenCalled();
-    expect(input.value).toBe('');
     expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('—');
   });
 

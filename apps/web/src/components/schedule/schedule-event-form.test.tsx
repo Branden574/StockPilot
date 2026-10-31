@@ -28,6 +28,17 @@ beforeEach(() => {
 
 const WAREHOUSES = [{ id: 'wh-1', name: 'Main' }];
 
+// The form reads and writes its times in the ORGANIZATION's zone (small fixes
+// slice 8), whatever zone the test process runs in (UTC in CI, the developer's
+// own on a laptop). So the other event is given as instants in that zone, not
+// parsed in the process's: 8:30 to 10:00 AM Pacific on Oct 20, around the
+// form's opening 9:00 AM there.
+const ORG_ZONE = 'America/Los_Angeles';
+const MORNING_DELIVERY = {
+  startsAt: '2026-10-20T15:30:00.000Z',
+  endsAt: '2026-10-20T17:00:00.000Z',
+};
+
 describe('ScheduleEventForm', () => {
   it('"All day" is one checkbox that flips the flag sent with the event', async () => {
     const user = userEvent.setup();
@@ -62,12 +73,13 @@ describe('ScheduleEventForm', () => {
         warehouses={WAREHOUSES}
         bundles={[]}
         initialDate="2026-10-20"
+        timeZone={ORG_ZONE}
         conflictCandidates={[
           {
             id: 'ev-1',
             title: 'Morning delivery',
-            startsAt: new Date('2026-10-20T08:30').toISOString(),
-            endsAt: new Date('2026-10-20T10:00').toISOString(),
+            startsAt: MORNING_DELIVERY.startsAt,
+            endsAt: MORNING_DELIVERY.endsAt,
             warehouseId: 'wh-1',
             requesterName: 'Dana',
           },
@@ -91,8 +103,8 @@ describe('ScheduleEventForm', () => {
     const conflict = (n: number) => ({
       id: `ev-${n}`,
       title: `Delivery ${n}`,
-      startsAt: new Date('2026-10-20T08:30').toISOString(),
-      endsAt: new Date('2026-10-20T10:00').toISOString(),
+      startsAt: MORNING_DELIVERY.startsAt,
+      endsAt: MORNING_DELIVERY.endsAt,
       warehouseId: 'wh-1',
       requesterName: 'Dana',
     });
@@ -101,6 +113,7 @@ describe('ScheduleEventForm', () => {
         warehouses={WAREHOUSES}
         bundles={[]}
         initialDate="2026-10-20"
+        timeZone={ORG_ZONE}
         conflictCandidates={[1, 2, 3, 4, 5, 6].map(conflict)}
       />,
     );

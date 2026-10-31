@@ -10,6 +10,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  eventInputFromInstant,
+  eventInstantsFromInputs,
+  nextHalfHourInput,
+} from '@/lib/schedule/event-wall-clock';
 import { formatOrgDateTime } from '@/lib/timezone';
 import {
   Select,
@@ -24,6 +29,8 @@ import {
   deleteScheduleEventAction,
   updateScheduleEventAction,
 } from '@/server/actions/schedule';
+
+import { resolveOrgTimezone } from '@stockpilot/core';
 
 interface Defaults {
   id?: string;
@@ -70,37 +77,28 @@ interface Props {
    * required client-side.
    */
   conflictCandidates?: ConflictCandidate[];
+  /**
+   * The organization's zone (organizations.timezone): the date and time
+   * fields are a wall clock there, the zone the team calendar and an event's
+   * page draw in (lib/schedule/event-wall-clock.ts). Checked again here, so a
+   * zone this browser does not know falls back to the documented default
+   * instead of throwing. The pages pass the organization's.
+   */
+  timeZone?: string;
 }
 
-/**
- * Convert an ISO string ("...Z" or with offset) to the local
- * "YYYY-MM-DDTHH:mm[:ss]" format that <input type="datetime-local">
- * accepts. Seconds are emitted only when non-zero so we don't show
- * ":00" by default — but if an event was scheduled to a second-precise
- * time, we preserve it across edit-save round trips.
- *
- * DST caveat: <input type="datetime-local"> is timezone-naïve. On the
- * spring-forward hour (e.g. 2:30am the day DST starts) the time literally
- * doesn't exist locally. new Date("YYYY-MM-DDT02:30") quietly snaps it
- * forward to 03:30. We accept this — it matches how every other web
- * calendar app behaves, and the org-timezone settings feature would be
- * the right place to fix it properly (out of scope here).
+/*
+ * The date and time fields are a WALL CLOCK in the organization's zone, never
+ * the viewer's (small fixes slice 8 review). They were read and written with
+ * new Date(local), the viewer's zone: a viewer elsewhere who chose "+ Add" on
+ * a calendar date saved an event the calendar drew on the day before or
+ * after, and Edit opened on a time the event's page did not print. A time
+ * that never happens there (the spring-forward hour) is refused with a field
+ * error; new Date() moved it an hour unseen. A field left as it opened saves
+ * the stored instant, so an event in the hour the clocks go back (a wall
+ * clock that happens twice) is not moved by an unchanged save
+ * (eventInstantsFromInputs).
  */
-function isoToLocalInput(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const seconds = d.getSeconds();
-  return seconds === 0 ? base : `${base}:${pad(seconds)}`;
-}
-
-/** Convert a "YYYY-MM-DDTHH:mm[:ss]" local string to a UTC ISO string. */
-function localInputToIso(local: string): string {
-  // The Date() constructor parses local-time format as local time on
-  // the runtime. Then toISOString() emits UTC. That's what the schema
-  // expects (datetime with offset).
-  return new Date(local).toISOString();
-}
 
 /** Clamp datetime-local input to a sane civilian range. */
 const MIN_LOCAL_DATETIME = '1970-01-01T00:00';
@@ -119,26 +117,30 @@ export function ScheduleEventForm({
   defaults,
   initialDate,
   conflictCandidates = [],
+  timeZone,
 }: Props) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
+  const zone = resolveOrgTimezone(timeZone);
+  const ids = React.useId();
+  const zoneNoteId = `${ids}-zone`;
+  const startErrorId = `${ids}-starts-error`;
+  const endErrorId = `${ids}-ends-error`;
 
   // Initial start time: edit → existing, new + initialDate → 9 AM that day,
   // otherwise → next half-hour slot today.
   // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const initialStart = React.useMemo(() => {
-    if (defaults?.startsAt) return isoToLocalInput(defaults.startsAt);
+    if (defaults?.startsAt) return eventInputFromInstant(defaults.startsAt, zone);
     if (initialDate) return `${initialDate}T09:00`;
-    const d = new Date();
-    d.setMinutes(Math.ceil(d.getMinutes() / 30) * 30, 0, 0);
-    return isoToLocalInput(d.toISOString());
-  }, [defaults?.startsAt, initialDate]);
+    return nextHalfHourInput(Date.now(), zone);
+  }, [defaults?.startsAt, initialDate, zone]);
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const initialEnd = React.useMemo(() => {
-    if (defaults?.endsAt) return isoToLocalInput(defaults.endsAt);
+    if (defaults?.endsAt) return eventInputFromInstant(defaults.endsAt, zone);
     return '';
-  }, [defaults?.endsAt]);
+  }, [defaults?.endsAt, zone]);
 
   const [title, setTitle] = React.useState(defaults?.title ?? '');
   const [startsAtLocal, setStartsAtLocal] = React.useState(initialStart);
@@ -167,7 +169,16 @@ export function ScheduleEventForm({
   );
   const [busy, setBusy] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // A start or end that names a time that never happens in the zone.
+  const [startError, setStartError] = React.useState<string | null>(null);
+  const [endError, setEndError] = React.useState<string | null>(null);
+  // The fields a refusal moves focus to (they sit far above Save).
+  const startsRef = React.useRef<HTMLInputElement>(null);
+  const endsRef = React.useRef<HTMLInputElement>(null);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
+  // The event as Edit opened it: a field still showing it saves it as stored.
+  const storedStart = defaults?.startsAt ?? null;
+  const storedEnd = defaults?.endsAt ?? null;
 
   // Overlap warning: any other non-cancelled/non-completed event in the
   // same warehouse whose [start, end] window intersects ours triggers
@@ -177,9 +188,16 @@ export function ScheduleEventForm({
   // running parallel jobs at the same dock).
   const conflicts = React.useMemo(() => {
     if (!warehouseId || !startsAtLocal) return [] as ConflictCandidate[];
-    const myStart = new Date(startsAtLocal).getTime();
+    // The fields are the organization's wall clock, read as the save reads them.
+    const mine = eventInstantsFromInputs({ startsAt: startsAtLocal, endsAt: endsAtLocal }, zone, {
+      startsAt: storedStart,
+      endsAt: storedEnd,
+    });
+    const myStartIso = mine.startsAt;
+    const myStart = myStartIso ? Date.parse(myStartIso) : Number.NaN;
     if (!Number.isFinite(myStart)) return [];
-    const myEnd = endsAtLocal ? new Date(endsAtLocal).getTime() : myStart;
+    const myEndIso = endsAtLocal ? mine.endsAt : myStartIso;
+    const myEnd = myEndIso ? Date.parse(myEndIso) : Number.NaN;
     if (!Number.isFinite(myEnd) || myEnd < myStart) return [];
     return conflictCandidates.filter((c) => {
       if (c.warehouseId !== warehouseId) return false;
@@ -191,13 +209,39 @@ export function ScheduleEventForm({
       // ends exactly when the other starts → no real overlap).
       return cStart < myEnd && myStart < cEnd;
     });
-  }, [conflictCandidates, warehouseId, startsAtLocal, endsAtLocal]);
+  }, [conflictCandidates, warehouseId, startsAtLocal, endsAtLocal, zone, storedStart, storedEnd]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
     if (!warehouseId) {
       toast.error('Pick a warehouse. Events are scoped to warehouse staff.');
+      return;
+    }
+    // Read in the organization's zone, strictly: a time the clocks skip there
+    // is said under its field, and nothing is saved. A field left as it
+    // opened sends the stored instant.
+    const { startsAt: startsAtIso, endsAt: endsAtIso } = eventInstantsFromInputs(
+      { startsAt: startsAtLocal, endsAt: endsAtLocal },
+      zone,
+      { startsAt: storedStart, endsAt: storedEnd },
+    );
+    const nextStartError = startsAtIso
+      ? null
+      : startsAtLocal
+        ? `That start time doesn't exist in ${zone} (the clocks change). Pick another time.`
+        : 'Pick a start date and time.';
+    const nextEndError =
+      endsAtLocal && !endsAtIso
+        ? `That end time doesn't exist in ${zone} (the clocks change). Pick another time.`
+        : null;
+    setStartError(nextStartError);
+    setEndError(nextEndError);
+    if (!startsAtIso || nextEndError) {
+      // Starts and Ends sit far above Save (off screen on a phone by then):
+      // move to the first field refused, which brings it into view; its
+      // message is announced (role="alert").
+      (nextStartError ? startsRef : endsRef).current?.focus();
       return;
     }
     setBusy(true);
@@ -213,8 +257,8 @@ export function ScheduleEventForm({
 
     const payload = {
       title: title.trim(),
-      startsAt: localInputToIso(startsAtLocal),
-      endsAt: endsAtLocal ? localInputToIso(endsAtLocal) : null,
+      startsAt: startsAtIso,
+      endsAt: endsAtIso,
       allDay,
       locationText: locationText.trim() || undefined,
       warehouseId: warehouseId || null,
@@ -282,26 +326,51 @@ export function ScheduleEventForm({
         <div className="space-y-1.5">
           <Label htmlFor="starts">Starts</Label>
           <Input
+            ref={startsRef}
             id="starts"
             type="datetime-local"
             value={startsAtLocal}
-            onChange={(e) => setStartsAtLocal(e.target.value)}
+            onChange={(e) => {
+              setStartsAtLocal(e.target.value);
+              setStartError(null);
+            }}
             min={MIN_LOCAL_DATETIME}
             max={MAX_LOCAL_DATETIME}
             required
+            aria-invalid={startError ? true : undefined}
+            aria-describedby={startError ? `${startErrorId} ${zoneNoteId}` : zoneNoteId}
           />
+          {startError ? (
+            <p id={startErrorId} role="alert" className="text-destructive text-[12px]">
+              {startError}
+            </p>
+          ) : null}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="ends">Ends (optional)</Label>
           <Input
+            ref={endsRef}
             id="ends"
             type="datetime-local"
             value={endsAtLocal}
-            onChange={(e) => setEndsAtLocal(e.target.value)}
+            onChange={(e) => {
+              setEndsAtLocal(e.target.value);
+              setEndError(null);
+            }}
             min={startsAtLocal || MIN_LOCAL_DATETIME}
             max={MAX_LOCAL_DATETIME}
+            aria-invalid={endError ? true : undefined}
+            aria-describedby={endError ? `${endErrorId} ${zoneNoteId}` : zoneNoteId}
           />
+          {endError ? (
+            <p id={endErrorId} role="alert" className="text-destructive text-[12px]">
+              {endError}
+            </p>
+          ) : null}
         </div>
+        <p id={zoneNoteId} className="text-muted-foreground text-[12px] sm:col-span-2">
+          Times are in {zone}.
+        </p>
       </div>
 
       {conflicts.length > 0 ? (
@@ -316,12 +385,16 @@ export function ScheduleEventForm({
                 <span className="font-medium">{c.title}</span>{' '}
                 {/* Full tone: faded on the warning wash it read under 4.5:1. */}
                 <span>
-                  ({formatOrgDateTime(c.startsAt, {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
+                  ({formatOrgDateTime(
+                    c.startsAt,
+                    {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    },
+                    zone,
+                  )}
                   {c.requesterName ? ` · ${c.requesterName}` : ''})
                 </span>
               </li>

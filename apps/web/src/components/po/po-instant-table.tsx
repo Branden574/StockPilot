@@ -17,8 +17,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useHydrated } from '@/lib/use-hydrated';
-import { cn, formatCurrency, formatDateShort } from '@/lib/utils';
+import { poMatchesSearch } from '@/lib/purchase-orders/list-search';
+import { formatOrgDate } from '@/lib/timezone';
+import { cn, formatCurrency } from '@/lib/utils';
 
 import { formatCalendarDate } from '@stockpilot/core';
 
@@ -54,10 +55,10 @@ export interface PoInstantRow {
  * po-list.css under table[data-slot='po-list'], so a row carries no classes
  * for the fold and the wide table no hidden copy. A row tells the rules only
  * what CSS cannot see: `data-none` on a part the fold leaves out (no
- * supplier, a draft's Placed, a Placed day not printed yet), `data-one` on a
- * line count of 1 ("1 line") and, on the table, `--po-total-ch`, the
- * right-hand column's width. The words only the fold shows, "Placed",
- * "Expected", "line" or "lines" and each "·", are generated content there.
+ * supplier, a draft's Placed), `data-one` on a line count of 1 ("1 line")
+ * and, on the table, `--po-total-ch`, the right-hand column's width. The
+ * words only the fold shows, "Placed", "Expected", "line" or "lines" and
+ * each "·", are generated content there.
  *
  * A table, row or cell drawn as a block or a flex box loses its table
  * semantics in Chromium and WebKit, so the table, its row groups, rows,
@@ -80,21 +81,32 @@ const FOLD_LEFT_OUT = { 'data-none': '' } as const;
 export function PoListTable({
   rows,
   supplierNames,
+  timeZone,
   footer,
 }: {
   rows: readonly PoInstantRow[];
   supplierNames: Record<string, string>;
+  /** The organization's zone (organizations.timezone, resolved): the Placed day is its day. */
+  timeZone: string;
   /** Under the rows, inside the card (the server-paged list's pager). */
   footer?: React.ReactNode;
 }) {
-  // Placed is an instant, shown as a day in the VIEWER's zone, which the server
-  // (UTC on Vercel) does not have: an evening order is the next day there, and
-  // hydrating that day threw React error #418. So it is printed once hydrated;
-  // a missing date is a dash at once. The server-paged list printed the
-  // server's day (CONFLICTS D12: a day late for an evening order west of UTC);
-  // it draws this table now, so it waits for the viewer's zone too.
-  const hydrated = useHydrated();
-  const placedDay = (iso: string | null) => (iso && !hydrated ? null : formatDateShort(iso));
+  // Placed is an instant: the day it fell on in the ORGANIZATION's zone, in
+  // both lists (they draw this table) and as every instant in the app prints
+  // (core org-timezone; small fixes slice 8). The server-paged list printed
+  // the server's day (UTC on Vercel; CONFLICTS D12: a day late for an evening
+  // order west of UTC), and #331 had the instant list print the viewer's day
+  // once hydrated, because a day with no fixed zone came out as the server's
+  // and then the viewer's, and React threw error #418. A fixed zone prints the
+  // same text on the server and in the browser, so it needs no hydration gate,
+  // and a viewer outside the organization's zone sees the organization's day.
+  //
+  // formatOrgDate, not Intl directly: the zone was checked by the SERVER's
+  // Intl, and a browser that lacks it would throw during render; formatOrgDate
+  // checks it again here and falls back to the documented default (core's
+  // rule: a stored zone never throws out of a render).
+  const placedDay = (iso: string | null) =>
+    iso ? formatOrgDate(iso, { month: 'short', day: 'numeric' }, timeZone) : '—';
   // Expected is a DAY the buyer picked, stored as that day's UTC midnight
   // (po-form sends new Date('YYYY-MM-DD')). Read in UTC it is the picked day on
   // the server and in every browser, as on the PO's page, its PDF
@@ -145,8 +157,9 @@ export function PoListTable({
             const placedText = placedDay(placed);
             const supplier = supplierName(po.supplier_id);
             // What the fold leaves out: no supplier, and Placed for a draft
-            // or until the viewer's zone is known (like the column). Expected
-            // is always drawn, last.
+            // (never placed: the column's dash). A placed purchase order's
+            // day prints at once, in the organization's zone, so the fold
+            // never waits for it. Expected is always drawn, last.
             const foldsSupplier = supplier !== '—';
             const foldsPlaced = Boolean(placed && placedText);
             return (
@@ -236,11 +249,17 @@ export function PoInstantTable({
   rows,
   supplierNames,
   leading,
+  caption,
+  timeZone,
 }: {
   rows: PoInstantRow[];
   supplierNames: Record<string, string>;
   /** The status tabs, left of the search in the filter row. */
   leading?: React.ReactNode;
+  /** Under the filter row, above the rows: the Overdue view's count line. */
+  caption?: React.ReactNode;
+  /** The organization's zone (organizations.timezone, resolved): the Placed day is its day. */
+  timeZone: string;
 }) {
   const [q, setQ] = React.useState('');
 
@@ -249,15 +268,12 @@ export function PoInstantTable({
     [supplierNames],
   );
 
-  const filtered = React.useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter(
-      (po) =>
-        po.po_number.toLowerCase().includes(needle) ||
-        supplierName(po.supplier_id).toLowerCase().includes(needle),
-    );
-  }, [q, rows, supplierName]);
+  // The list's one search rule (lib/purchase-orders/list-search.ts), which
+  // the server-paged Overdue view and the CSV export apply too.
+  const filtered = React.useMemo(
+    () => (q.trim() ? rows.filter((po) => poMatchesSearch(po, q, supplierName)) : rows),
+    [q, rows, supplierName],
+  );
 
   return (
     <>
@@ -290,6 +306,8 @@ export function PoInstantTable({
         </div>
       </FilterBar>
 
+      {caption}
+
       {filtered.length === 0 ? (
         <StatePanel
           kind="no-match"
@@ -297,7 +315,7 @@ export function PoInstantTable({
           description="Try a different PO number or supplier, or clear the search."
         />
       ) : (
-        <PoListTable rows={filtered} supplierNames={supplierNames} />
+        <PoListTable rows={filtered} supplierNames={supplierNames} timeZone={timeZone} />
       )}
     </>
   );
