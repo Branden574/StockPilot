@@ -229,6 +229,13 @@ describe('PostHog on /signin, through the real SDK', () => {
  * provider's options, and a control with the provider's switch for that
  * feature taken out. The control proves the harness sees the feature at work,
  * so the provider's test cannot pass for want of it.
+ *
+ * They lean on posthog-js internals (read in 1.438.15): a preloaded project
+ * answer applied during init, scripts put in the body while `defaults` is
+ * unset, the extension scripts' names, the logs sent as the page goes away and
+ * one chat per page. If a control fails after an SDK update, the SDK changed:
+ * read its source again before changing a test, and never loosen the
+ * provider's half.
  */
 describe('PostHog when the PostHog project switches a feature on, through the real SDK', () => {
   // Docket S22 (owner decision d.4). A recording is the page itself: its text,
