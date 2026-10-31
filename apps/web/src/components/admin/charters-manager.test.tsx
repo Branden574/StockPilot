@@ -106,6 +106,14 @@ describe('ChartersManager', () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
+  it("suggests a generic name and code in the organization's own word (S17)", async () => {
+    renderManager();
+    fireEvent.click(screen.getByRole('button', { name: 'New region' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Name')).toHaveAttribute('placeholder', 'Region A');
+    expect(within(dialog).getByLabelText(/Code/)).toHaveAttribute('placeholder', 'A');
+  });
+
   it('keeps every dialog field, and its limits and the name rule stop a save', async () => {
     renderManager([NO_ADDRESS]);
     fireEvent.click(screen.getByRole('button', { name: 'New region' }));

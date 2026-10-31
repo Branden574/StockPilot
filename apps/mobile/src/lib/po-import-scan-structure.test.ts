@@ -872,7 +872,7 @@ describe('Scan a PO: its controls have roles, names and 44pt targets', () => {
       '<Display size={28} accessibilityRole="header"> Scan a PO </Display>',
       'Take a photo of a printed purchase order. Up to {MAX_FRAMES} pages — we extract vendor, line items, and totals automatically, then you review and approve right here.',
       '<Text style={styles.nameLabel}>PO name</Text>',
-      'placeholder="Example: August DC4 Book Order"',
+      'placeholder="Example: August Restock Order"',
       'Optional — without one it is listed by its file name.',
       '<Text style={styles.nameLabel}>PO {i + 1} name</Text>',
       'Names are optional. Hold a photo to remove it.',

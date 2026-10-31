@@ -111,6 +111,14 @@ describe('WarehousesManager', () => {
     expect(archive.closest('td')).toBe(cell);
   });
 
+  it("suggests a generic name and code in the organization's own word (S17)", async () => {
+    renderManager();
+    fireEvent.click(screen.getByRole('button', { name: 'New depot' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Name')).toHaveAttribute('placeholder', 'Main depot');
+    expect(within(dialog).getByLabelText('Code')).toHaveAttribute('placeholder', 'MAIN');
+  });
+
   it('hides New in the archived view and offers Restore with its confirm', async () => {
     actions.restore.mockResolvedValue({ ok: false, error: { message: 'Restore refused.' } });
     renderManager('archived');

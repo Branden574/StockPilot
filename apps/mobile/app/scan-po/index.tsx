@@ -569,7 +569,7 @@ export default function ScanPo() {
             <TextInput
               value={names[0] ?? ''}
               onChangeText={(v) => setName(0, v)}
-              placeholder="Example: August DC4 Book Order"
+              placeholder="Example: August Restock Order"
               placeholderTextColor={c.ink3}
               maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
               editable={!busy}
@@ -628,7 +628,7 @@ export default function ScanPo() {
                     <TextInput
                       value={names[i] ?? ''}
                       onChangeText={(v) => setName(i, v)}
-                      placeholder="Example: August DC4 Book Order"
+                      placeholder="Example: August Restock Order"
                       placeholderTextColor={c.ink3}
                       maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
                       editable={!busy}

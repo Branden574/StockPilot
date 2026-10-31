@@ -34,7 +34,7 @@ export default async function VendorMappingsPage() {
       <PageHeader
         title={title}
         titleId="vendor-mappings-title"
-        subline="Map vendor product numbers (e.g. Staples #867474) to your internal items so future PO uploads auto-resolve."
+        subline="Map vendor product numbers (for example, the item number on a supplier's invoice) to your internal items so future PO uploads auto-resolve."
       />
       <VendorMappingsManager
         mappings={

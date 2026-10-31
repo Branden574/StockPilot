@@ -85,7 +85,7 @@ export function StartCycleCountForm({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
-          placeholder="e.g. Quarterly count · DC4 · Q2 2026"
+          placeholder="e.g. Quarterly count · Main warehouse · Q2 2026"
           maxLength={2000}
         />
       </div>
