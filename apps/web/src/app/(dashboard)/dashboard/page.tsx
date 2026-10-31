@@ -21,7 +21,6 @@ import { Button } from '@/components/ui/button';
 import {
   can,
   DASHBOARD_WIDGETS,
-  isManagerOrAbove,
   resolveDashboardWidgets,
   type DashboardLayout,
 } from '@stockpilot/core';
@@ -202,12 +201,14 @@ async function DashboardBody({
   ctx: Awaited<ReturnType<typeof requireOrgContext>>;
   warehouseFilter: string | null;
 }) {
-  const isManagerPlus = isManagerOrAbove(ctx.role);
-  // The "waiting for signature" card links to the orders list filtered to
-  // those orders, a list only someone who approves orders gets
-  // (orders/page.tsx canApprove); anyone else lands on their own requests,
-  // unfiltered, under an org-wide count (desk check F10). So only an approver
-  // sees the card, and only for them is the count read.
+  // The "awaiting your approval" and "waiting for signature" cards link to the
+  // orders list filtered to those orders, a list only someone who approves
+  // orders gets (orders/page.tsx canApprove); anyone else lands on their own
+  // requests, unfiltered, under an org-wide count (desk check F10). Since 0390
+  // approving follows orders:approve alone, an override winning either way, so
+  // the role is no guide: a manager may have it revoked, and a staff member may
+  // be granted it (B11). So only an approver sees either card, and only for
+  // them are the counts read.
   const canApproveOrders = can(ctx, 'orders:approve');
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
@@ -276,10 +277,11 @@ async function DashboardBody({
     CycleCountsService.forCurrentUser().then((svc) =>
       svc.inProgressCount({ warehouseId: warehouseFilter ?? undefined }),
     ),
-    // Manager+ are the only roles allowed to approve order requests; for
-    // everyone else this hero row would point at a page they can't act on,
-    // so we skip the query entirely instead of rendering a dead link.
-    isManagerPlus
+    // Only someone who can approve orders moves a pending request forward
+    // (canApproveOrders above); for everyone else this hero row would point
+    // at a page they can't act on, so we skip the query entirely instead of
+    // rendering a dead link.
+    canApproveOrders
       ? OrderRequestsService.forCurrentUser().then((svc) => svc.pendingCount())
       : Promise.resolve(0),
     canApproveOrders
@@ -450,11 +452,11 @@ async function DashboardBody({
       tone: 'warn',
     });
   }
-  if (isManagerPlus && pendingApprovals > 0) {
+  if (canApproveOrders && pendingApprovals > 0) {
     attentionItems.push({
       id: 'order-approvals',
       title: `${pendingApprovals} order request${pendingApprovals === 1 ? '' : 's'} awaiting your approval`,
-      detail: 'Requests are blocked until a manager moves them forward.',
+      detail: 'Requests are blocked until someone who can approve orders moves them forward.',
       href: '/dashboard/orders?status=pending_approval',
       rank: 3,
       tone: 'warn',
