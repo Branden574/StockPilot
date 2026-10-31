@@ -226,7 +226,13 @@ describe('ScheduleService distributed flag', () => {
 
   describe('the completion audit', () => {
     const eventId = uuid(1, 'e');
-    function completeWith(rpc: { data: null; error: { message: string; code?: string } | null }) {
+    // The row the update saves and returns: the event keeps its kit, quantity
+    // and warehouse, which is what the completion hands out (0415).
+    const savedKit = { bundle_id: 'bundle-1', bundle_quantity: 2, bundle_warehouse_id: 'wh-1' };
+    function completeWith(
+      rpc: { data: null; error: { message: string; code?: string; hint?: string } | null },
+      saved: Record<string, unknown> = savedKit,
+    ) {
       let distReads = 0;
       const stub = makeSupabaseStub({
         'schedule_events.select': {
@@ -250,16 +256,17 @@ describe('ScheduleService distributed flag', () => {
             : { data: null, error: { message: 'boom' } };
         },
         'schedule_events.update': {
-          data: [{ ...events[1], id: eventId, status: 'completed' }],
+          data: [{ ...events[1], id: eventId, status: 'completed', ...saved }],
           error: null,
         },
         'rpc:distribute_bundle': rpc,
       });
       vi.mocked(audit).mockClear();
       return {
-        run: () =>
+        run: (patch: Record<string, unknown> = {}) =>
           new ScheduleService(ctxFor(stub.client)).update(eventId, {
             status: 'completed',
+            ...patch,
           } as never),
         stub,
       };
@@ -305,6 +312,63 @@ describe('ScheduleService distributed flag', () => {
       });
       await run();
       expect(completedExtra()).toEqual({ autoDistributed: true });
+    });
+
+    // The completion hands out what the event was saved with (0415's gate
+    // checks the call against that row). `patch.bundleId ?? before` read a
+    // kit cleared in the same save as unchanged and handed out the old one.
+    it('hands out the kit, quantity and warehouse the event was saved with', async () => {
+      const { run, stub } = completeWith({ data: null, error: null });
+      await run();
+      expect(stub.rpcCalls).toHaveLength(1);
+      expect(stub.rpcCalls[0]?.args).toMatchObject({
+        p_bundle_id: 'bundle-1',
+        p_quantity: 2,
+        p_warehouse_id: 'wh-1',
+        p_schedule_event_id: eventId,
+      });
+    });
+
+    it('hands out nothing when the same save clears the kit', async () => {
+      const { run, stub } = completeWith(
+        { data: null, error: null },
+        { bundle_id: null, bundle_quantity: null, bundle_warehouse_id: null },
+      );
+      await run({ bundleId: null, bundleQuantity: null, bundleWarehouseId: null });
+      expect(stub.rpcCalls).toHaveLength(0);
+      expect(completedExtra()).toEqual({ autoDistributed: false });
+    });
+
+    // 0415: the refusals are codes or the permission hint; the manager reads
+    // a sentence, never the code.
+    it.each([
+      [
+        { message: 'forbidden', code: '42501', hint: 'permission' },
+        'Distributing a kit needs the Distribute bundles permission. Ask an admin if you need it',
+      ],
+      [
+        { message: 'bundle_no_required_components', code: 'P0001' },
+        "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required",
+      ],
+      [
+        { message: 'component_not_in_org', code: '42501' },
+        "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component",
+      ],
+      [
+        { message: 'phantom_not_kit_item', code: 'P0001' },
+        "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle",
+      ],
+      [
+        { message: 'component_is_kit_item', code: 'P0001' },
+        "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component",
+      ],
+    ])('names a %o refusal in words', async (error, sentence) => {
+      const { run } = completeWith({ data: null, error });
+      const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
+      expect(err.code).toBe('conflict');
+      expect(err.message).toBe(
+        `Event marked complete, but bundle distribution failed: ${sentence}. Retry from /dashboard/bundles/bundle-1.`,
+      );
     });
   });
 });

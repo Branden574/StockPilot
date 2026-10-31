@@ -17,7 +17,8 @@
  *   item_holds_stock       (23514)  an item with stock on record, or a
  *                                   holding, is never soft-deleted.
  *   permission             (42501)  a ledger function called without the
- *                                   permission the app checks first.
+ *                                   permission the app checks first
+ *                                   (distribute_bundle since 0415).
  */
 import { PERMISSION_META, type Permission } from '../constants/permissions';
 
@@ -53,14 +54,18 @@ export const ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY =
 export const ITEM_HOLDS_STOCK_COPY =
   'This item still holds stock, so it cannot be deleted. It can be deleted once it has no stock on record and none on any location: adjust its stock to zero or write it off first.';
 
-/** The ledger actions 0395 gates, each with the permission the app asks first. */
+/**
+ * The ledger actions 0395 gates (and distribute_bundle, gated by 0415), each
+ * with the permission the app asks first.
+ */
 export type DbPermissionAction =
   | 'adjust'
   | 'transfer'
   | 'count_post'
   | 'receipt_post'
   | 'receipt_reverse'
-  | 'kit_assemble';
+  | 'kit_assemble'
+  | 'kit_distribute';
 
 const PERMISSION_ACTIONS: Record<DbPermissionAction, { lead: string; permission: Permission }> = {
   adjust: { lead: 'Adjusting stock', permission: 'stock:adjust' },
@@ -69,6 +74,7 @@ const PERMISSION_ACTIONS: Record<DbPermissionAction, { lead: string; permission:
   receipt_post: { lead: 'Receiving stock', permission: 'stock:adjust' },
   receipt_reverse: { lead: 'Reversing a receipt', permission: 'stock:adjust' },
   kit_assemble: { lead: 'Assembling a kit', permission: 'bundles:manage' },
+  kit_distribute: { lead: 'Distributing a kit', permission: 'bundles:distribute' },
 };
 
 /** The permission a gated ledger action needs (the one its service asserts). */

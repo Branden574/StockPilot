@@ -315,6 +315,16 @@ const get = async (
   return { status: res.status, body: (await res.json()) as Record<string, any> };
 };
 
+/** The fixture's retail price and unit cost (99.99, 55.55), or a price or
+ *  cost field by name, anywhere in a response. */
+const PRICE_OR_COST = /99\.99|55\.55|price|cost/i;
+/** A response as the price check reads it: every ISO instant masked first.
+ *  The catalog's generatedAt is the wall clock, so a read at hh:mm:55.55x
+ *  would otherwise look like the 55.55 unit cost (CI, 2026-10-31). */
+const INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g;
+const withoutInstants = (body: unknown): string =>
+  JSON.stringify(body).replace(INSTANT, '<instant>');
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -367,9 +377,34 @@ describe('Security invariant: the phone storefront reads never use the cookie cl
     });
     expect(Object.keys(body.charters)).toEqual([CHARTER_MINE]);
     expect(body.aisles.map((a: { name: string }) => a.name)).toEqual(['Apparel', 'Supplies']);
-    expect(JSON.stringify(body)).not.toMatch(/99\.99|55\.55|price|cost/i);
+    expect(withoutInstants(body)).not.toMatch(PRICE_OR_COST);
     expect(cookieClientMock).not.toHaveBeenCalled();
     expect(modulesForRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('catalog: the price check is not set off by the clock (generatedAt at hh:mm:55.55x)', async () => {
+    // CI on 2026-10-31 failed the check above on a body whose only "55.55" was
+    // generatedAt, 2026-10-31T06:10:55.552Z: the route's wall clock
+    // (order-storefront.ts), not the 55.55 unit cost. The same instant, with
+    // only Date frozen.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T06:10:55.552Z'));
+    try {
+      asCaller('viewer');
+      const { status, body } = await get(GET_CATALOG, `/api/v1/orders/catalog?warehouseId=${WH}`);
+      expect(status).toBe(200);
+      expect(body.generatedAt).toBe('2026-10-31T06:10:55.552Z');
+      expect(withoutInstants(body)).not.toMatch(PRICE_OR_COST);
+      // Only the clock is masked: a price or cost in an item is still caught.
+      const item = body.items[0] as Record<string, unknown>;
+      const planted = (extra: Record<string, unknown>) =>
+        withoutInstants({ ...body, items: [{ ...item, ...extra }] });
+      expect(planted({ unitCost: 55.55 })).toMatch(PRICE_OR_COST);
+      expect(planted({ note: '99.99' })).toMatch(PRICE_OR_COST);
+      expect(planted({ retail_price: 1 })).toMatch(PRICE_OR_COST);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("photos: the caller's scope decides which photos leave the server", async () => {
