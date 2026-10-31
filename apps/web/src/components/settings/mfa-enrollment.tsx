@@ -190,9 +190,10 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
             inputMode="numeric"
             autoComplete="one-time-code"
             placeholder="123456"
-            maxLength={6}
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+            // Digits only, the first six. No maxLength: a browser cuts a pasted
+            // "123 456" at six characters before this runs, leaving five digits.
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             className="font-mono tracking-widest"
           />
         </div>

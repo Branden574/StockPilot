@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -112,6 +113,25 @@ describe('MfaChallengeForm', () => {
     );
     expect(code).toHaveAttribute('autocomplete', 'one-time-code');
     expect(screen.getByRole('button', { name: 'Cancel and sign out' })).toBeInTheDocument();
+  });
+
+  // Docket B50: authenticator apps show the code as "123 456". A maxLength of
+  // 6 cut a pasted copy at six characters, "123 45", before the digits were
+  // kept: five digits, and Verify & continue stayed off.
+  it('a code pasted with a space is sent as six digits', async () => {
+    challengeFactorAction.mockResolvedValue({ ok: true, data: undefined });
+    const user = userEvent.setup();
+    render(<MfaChallengeForm factors={FACTORS} />);
+    const code = screen.getByLabelText('Authentication code');
+
+    await user.click(code);
+    await user.paste('123 456');
+    expect(code).toHaveValue('123456');
+    await user.click(screen.getByRole('button', { name: 'Verify & continue' }));
+
+    await waitFor(() =>
+      expect(challengeFactorAction).toHaveBeenCalledWith({ factorId: 'factor-1', code: '123456' }),
+    );
   });
 
   it('shows the authenticator picker only with more than one factor, and a change clears the code', () => {
