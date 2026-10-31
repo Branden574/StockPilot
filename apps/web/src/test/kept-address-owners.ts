@@ -463,7 +463,6 @@ export function constObjectStringValues(file: string, text: string, name: string
 
 /** The parsing helpers above, for the senders scan in ./kept-address-senders.ts. */
 export {
-  enclosingName as enclosingFunctionName,
   lineOf as nodeLine,
   parse as parseSource,
   propertyName as literalPropertyName,
