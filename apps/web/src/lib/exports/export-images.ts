@@ -2,7 +2,7 @@ import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
 import { fetchItemImage, ItemImageUrlRefusedError } from '@/lib/item-image-fetch';
-import { SsrfBlockedError } from '@/lib/ssrf-guard';
+import { SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
 import { ItemImagesService } from '@/server/services/item-images';
 import type { ServiceContext } from '@/server/services/context';
 import {
@@ -423,10 +423,13 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
   } catch (err) {
     // A URL the fetch route or the SSRF guard refuses (not http(s), a host off
     // the cover allowlist, a private address) is refused the same way every
-    // time: final, never retried, counted as a source we do not read.
-    if (err instanceof ItemImageUrlRefusedError || err instanceof SsrfBlockedError) {
-      return { kind: 'skip', reason: 'unsupported' };
-    }
+    // time: final, never retried, counted as a source we do not read. A failed
+    // lookup of the host (SsrfLookupFailedError, a subclass) is not a refusal:
+    // it falls through and is retried like any other network failure.
+    const refused =
+      err instanceof ItemImageUrlRefusedError ||
+      (err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError));
+    if (refused) return { kind: 'skip', reason: 'unsupported' };
     // Timeout, DNS, reset, abort. Never log — the URL carries a signed token.
     return { kind: 'retry', reason: timedOut ? 'timeout' : 'other', retryAfterMs: null };
   } finally {

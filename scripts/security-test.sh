@@ -850,7 +850,9 @@ WEB_TESTS=(
   # The inventory export's image fetch (lib/item-image-fetch.ts, shared with the
   # PDF image prefetch): the project's storage by plain fetch, any other http(s)
   # URL only through safeFetch with the cover allowlist, anything else refused
-  # before a request, and a refused URL a final skip that is never retried.
+  # before a request, and a refused URL a final skip that is never retried,
+  # while a failed lookup of an allowed host is retried and a lookup still out
+  # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
 
   # Authorization gates on server actions and routes.

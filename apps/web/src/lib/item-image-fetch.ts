@@ -56,7 +56,10 @@ export class ItemImageUrlRefusedError extends Error {
  * Fetch an item image URL by its route. Rejects with ItemImageUrlRefusedError
  * for a URL with no route and with the guard's SsrfBlockedError for a host off
  * the cover allowlist (or one that resolves to a private address); both are
- * final, retrying the same URL is refused the same way.
+ * final, retrying the same URL is refused the same way. A failed lookup of the
+ * host rejects with SsrfLookupFailedError (a subclass), which is not final.
+ * Once `signal` aborts, the call rejects with its reason, even while the host
+ * is still being looked up.
  */
 export async function fetchItemImage(url: string, signal: AbortSignal): Promise<Response> {
   const route = itemImageFetchRoute(url);

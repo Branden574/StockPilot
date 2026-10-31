@@ -12,6 +12,23 @@ vi.mock('@/lib/ssrf-guard', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ssrf-guard')>()),
   safeFetch: (...args: unknown[]) => safeFetchSpy(...args),
 }));
+// Under the real safeFetch: the resolver and the pinned request, so a test can
+// fail a lookup, slow it down, or answer the request, with no network.
+const { lookupMock, undiciFetchMock } = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
+  undiciFetchMock: vi.fn(),
+}));
+vi.mock('node:dns/promises', () => ({
+  lookup: (...args: unknown[]) => lookupMock(...args),
+}));
+vi.mock('undici', () => ({
+  Agent: class {
+    async close() {
+      /* no-op */
+    }
+  },
+  fetch: (...args: unknown[]) => undiciFetchMock(...args),
+}));
 
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: vi.fn().mockImplementation(function () {
@@ -42,6 +59,7 @@ import {
   IMAGE_FETCH_CONCURRENCY,
   IMAGE_FETCH_MAX_ATTEMPTS,
   IMAGE_FETCH_TIMEOUT_MS,
+  IMAGE_FETCH_TOTAL_DEADLINE_MS,
   MAX_EMBEDDED_IMAGE_BYTES,
   MAX_TOTAL_EMBEDDED_IMAGE_BYTES,
   type EmbeddedImage,
@@ -607,6 +625,124 @@ describe('fetchExportImageBytes — where each URL is fetched (SSRF)', () => {
     expect(safeFetchSpy).not.toHaveBeenCalled();
     expect(result.skipped).toBe(1);
     expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  /**
+   * Under the real guard. A failed lookup of an allowed cover host (EAI_AGAIN,
+   * a resolver timeout) is the network, not a refusal: it is retried like any
+   * other network failure, as it was before the guard was in this path. Only
+   * a refusal (a host off the allowlist, a private address) is final.
+   */
+  describe('under the real guard', () => {
+    const PUBLIC = [{ address: '93.184.216.34', family: 4 }];
+
+    beforeEach(async () => {
+      const { safeFetch: realSafeFetch } =
+        await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+      safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    });
+
+    it('retries a cover whose host lookup failed once, and embeds it', async () => {
+      lookupMock
+        .mockRejectedValueOnce(
+          Object.assign(new Error('getaddrinfo EAI_AGAIN covers.openlibrary.org'), {
+            code: 'EAI_AGAIN',
+          }),
+        )
+        .mockResolvedValue(PUBLIC);
+      undiciFetchMock.mockResolvedValue(jpegResponse(1024));
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), {
+        sleep,
+        random: () => 0,
+      });
+      expect(lookupMock).toHaveBeenCalledTimes(2);
+      expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+      // One backoff between the failed attempt and the one that worked.
+      expect(sleep).toHaveBeenCalledTimes(1);
+      expect(result.images.has('a')).toBe(true);
+      expect(result.skipped).toBe(0);
+    });
+
+    it('a lookup that keeps failing is counted as a network failure, never as unsupported', async () => {
+      lookupMock.mockRejectedValue(
+        Object.assign(new Error('getaddrinfo EAI_AGAIN covers.openlibrary.org'), {
+          code: 'EAI_AGAIN',
+        }),
+      );
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), {
+        sleep: async () => {},
+        random: () => 0,
+      });
+      expect(lookupMock).toHaveBeenCalledTimes(IMAGE_FETCH_MAX_ATTEMPTS);
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(result.skippedReasons.other).toBe(1);
+      expect(result.skippedReasons.unsupported).toBe(0);
+    });
+
+    it('still refuses a host off the allowlist once: no lookup, no retry, no sleep', async () => {
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(
+        new Map([['a', 'https://images.example.test/cover.jpg']]),
+        { sleep },
+      );
+      expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+      expect(lookupMock).not.toHaveBeenCalled();
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.skippedReasons.unsupported).toBe(1);
+    });
+
+    it('still refuses an allowed host that resolves to a private address once, without a retry', async () => {
+      lookupMock.mockResolvedValue([{ address: '10.0.0.5', family: 4 }]);
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), { sleep });
+      expect(lookupMock).toHaveBeenCalledTimes(1);
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.skippedReasons.unsupported).toBe(1);
+    });
+
+    /**
+     * The attempt timeout and the call's deadline keep the image phase inside
+     * the route's 60 s. node's lookup takes no signal, so a slow resolver used
+     * to hold each attempt until it answered: 30 s lookups made this call
+     * settle after about 60 s.
+     */
+    it('cuts off a lookup that has not answered at the attempt timeout, and ends inside the deadline', async () => {
+      vi.useFakeTimers();
+      try {
+        lookupMock.mockImplementation(
+          () => new Promise((resolve) => setTimeout(() => resolve(PUBLIC), 30_000)),
+        );
+        undiciFetchMock.mockImplementation(
+          async (_url: unknown, init?: { signal?: AbortSignal }) => {
+            init?.signal?.throwIfAborted();
+            return jpegResponse(1024);
+          },
+        );
+        const startedAt = Date.now();
+        let settledAfter: number | null = null;
+        const pending = fetchExportImageBytes(new Map([['a', COVER]]), { random: () => 0 }).then(
+          (r) => {
+            settledAfter = Date.now() - startedAt;
+            return r;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(IMAGE_FETCH_TOTAL_DEADLINE_MS + IMAGE_FETCH_TIMEOUT_MS);
+        expect(settledAfter).not.toBeNull();
+        expect(settledAfter!).toBeLessThanOrEqual(
+          IMAGE_FETCH_TOTAL_DEADLINE_MS + IMAGE_FETCH_TIMEOUT_MS,
+        );
+        const result = await pending;
+        expect(result.images.size).toBe(0);
+        expect(result.skippedReasons.timeout).toBe(1);
+        // Every attempt was cut off while its lookup was still out.
+        expect(undiciFetchMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 
