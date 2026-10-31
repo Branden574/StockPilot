@@ -184,11 +184,13 @@ describe('the draft sheet', () => {
   it('imports only JS modules, and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     // The redesign (P5.7a) added the shared checkbox mark (P2.5b) and the
-    // shared button tones, both JS modules: still nothing that opens mail.
+    // shared button tones, both JS modules: still nothing that opens mail. B44
+    // added the shared Modal, which holds the phone update pop-up while open.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
         '@/components/ui/checkbox',
+        '@/components/ui/modal',
         '@/components/ui/text',
         '@/components/ui/tones',
         '@/lib/exception-sheet-layout',

@@ -19,7 +19,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -68,6 +67,7 @@ import {
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -269,6 +269,7 @@ import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 
 const BUCKET = 'order-attachments';
 
@@ -498,6 +499,8 @@ export default function OrderDetail() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  // A proof photo or file still uploading: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt(uploading, 'photo');
   /** `percent` is the REAL transported percentage across the batch — floored,
    *  monotonic, held at 99 unless every file genuinely succeeded (see
    *  lib/storage-upload.ts UploadBatchProgress). Never synthesised. */
@@ -2499,8 +2502,8 @@ export default function OrderDetail() {
 
   function addProof() {
     Alert.alert('Add proof of delivery', `Saving as "${KIND_LABELS[kind]}"`, [
-      { text: 'Take photo', onPress: () => void fromCamera() },
-      { text: 'Choose from library', onPress: () => void fromLibrary() },
+      { text: 'Take photo', onPress: () => void whileUpdatePromptHeld(fromCamera) },
+      { text: 'Choose from library', onPress: () => void whileUpdatePromptHeld(fromLibrary) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }

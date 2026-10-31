@@ -2,7 +2,6 @@ import { Search, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -24,6 +23,7 @@ import {
   SHEET_MIN_TAP,
   sheetStyles,
 } from '@/components/book-order-sheet-parts';
+import { Modal } from '@/components/ui/modal';
 import { Body, Mono } from '@/components/ui/text';
 import {
   BOOK_REPORT_CHARTER_SEARCH_OVER,

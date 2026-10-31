@@ -1,7 +1,6 @@
 import { Check, SlidersHorizontal, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,6 +12,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { CheckboxMark } from '@/components/ui/checkbox';
+import { Modal } from '@/components/ui/modal';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';

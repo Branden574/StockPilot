@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -16,6 +15,7 @@ import {
 } from 'react-native';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { Modal } from '@/components/ui/modal';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { buttonTone } from '@/components/ui/tones';
 import { api } from '@/lib/api';

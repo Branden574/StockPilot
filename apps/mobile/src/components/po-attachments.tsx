@@ -26,6 +26,7 @@ import { fileSizeOf, uploadFileToBucket } from '@/lib/storage-upload';
 import { linkToOpen, signerFor, STORED_FILE_LINK_SECONDS } from '@/lib/stored-file-link';
 import { supabase } from '@/lib/supabase';
 import { FONT, RADIUS, SPACE, palette, type Palette, type ThemeMode } from '@/lib/theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 
@@ -115,6 +116,8 @@ export function PoAttachments({ poId }: { poId: string }) {
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // A file still going up: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt(busy, 'attachment');
   /** Real transported percentage for the active upload, or null when idle.
    *  Never synthesised — see lib/storage-upload.ts. Held at 99 until the
    *  metadata row is in too, so the bar can't read done while it isn't. */
@@ -462,9 +465,9 @@ export function PoAttachments({ poId }: { poId: string }) {
 
   function addFile() {
     Alert.alert('Attach a file', 'Add a packing slip, photo, or PDF to this PO.', [
-      { text: 'Take Photo', onPress: () => void takePhoto() },
-      { text: 'Choose from Library', onPress: () => void pickFromLibrary() },
-      { text: 'Choose File (PDF)', onPress: () => void pickDocument() },
+      { text: 'Take Photo', onPress: () => void whileUpdatePromptHeld(takePhoto) },
+      { text: 'Choose from Library', onPress: () => void whileUpdatePromptHeld(pickFromLibrary) },
+      { text: 'Choose File (PDF)', onPress: () => void whileUpdatePromptHeld(pickDocument) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -533,7 +536,7 @@ export function PoAttachments({ poId }: { poId: string }) {
           variant="outline"
           size="sm"
           block
-          onPress={() => void scanDocument()}
+          onPress={() => void whileUpdatePromptHeld(scanDocument)}
           disabled={busy}
           style={styles.scanButton}
           leading={<ScanText size={15} color={c.ink} strokeWidth={1.75} />}

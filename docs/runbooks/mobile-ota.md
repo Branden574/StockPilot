@@ -140,12 +140,17 @@ bundles without the production environment.
    caught `localhost:3000` in a bundle exported for a local walk.)
 
 4. On a phone: a real phone signed in to Demo Co. A simulator build has no
-   channel and never receives production updates. Quit the app completely
-   and open it: it starts on the bundle it has, checks for the update,
-   downloads it and reloads into it a moment later
-   (`apps/mobile/src/lib/use-ota-updates.ts`, once at startup, so it never
-   interrupts work). If that check fails, expo-updates applies the update on
-   the launch after.
+   channel and never receives production updates (to prove update behaviour
+   on a simulator, use the test channel below). Quit the app completely and
+   open it: it opens once, on the version it has, and expo-updates downloads
+   the update in the background. A few seconds later it says "Update ready"
+   (`apps/mobile/src/lib/ota-update-prompt.ts`). Restart now shows one dark
+   restart screen and one launch animation, and Settings then shows the new
+   `#id`. After Later, the next open from closed applies the update with one
+   launch screen. The message waits while the person scans, counts, types,
+   or has a sheet or a draft open. A phone still on a bundle from before this
+   message existed (October 2026) restarts by itself once, the old way, when
+   it loads the update.
 5. `pnpm dlx eas-cli@20.3.0 update:insights <group id> --non-interactive`
    shows launches and crashes as phones pick it up.
 
@@ -185,8 +190,10 @@ non-interactive mode.
 
 Then verify as after a publish: `update:list` shows the republished group
 first, and the manifest's `launchAsset.hash` equals the anchor's recorded
-hash. Phones change over the same way, the next time someone opens the app
-from closed. Before going back across a change to how the app stores unsent
+hash. Phones download the republished group at their next open from closed,
+or at a return to the app at least 30 minutes after the last check. They then
+offer it with "Update ready", and it applies at Restart now or at the next
+open from closed. Before going back across a change to how the app stores unsent
 work (the offline queue and outbox code in `apps/mobile/src/lib`), check that
 the older bundle reads what the newer one wrote.
 
@@ -194,7 +201,11 @@ the older bundle reads what the newer one wrote.
 
 - `eas.json`: the `production` build profile sets `channel: production` and
   `environment: production`; `preview` builds listen on `preview`. Simulator
-  and development builds have no channel.
+  and development builds have no channel. The one exception is the
+  `simulator-ota-test` profile: a simulator build that listens on the
+  `ota-test` channel, only for the simulator proof below. Never add a channel
+  to the plain `simulator` profile, or branch simulator builds would receive
+  updates.
 - The `production` channel points at the `production` branch;
   `pnpm release:ota` publishes there through `--channel production`.
 - `runtimeVersion.policy` is `appVersion` (`app.config.ts`): an update reaches
@@ -202,6 +213,80 @@ the older bundle reads what the newer one wrote.
   published (1.4.0 now). Phones on an older app version keep receiving their
   own version's latest update, so a fix for them must be published from a
   checkout whose `version` matches theirs.
+
+## Prove phone-update behaviour on a simulator (test channel)
+
+How the app downloads, offers and applies an update (the "Update ready"
+message) can be proved on a simulator without touching production. Never
+production:
+
+- Build with the `simulator-ota-test` profile: the `simulator` profile on the
+  `ota-test` channel (and its `ota-test` branch). No store or TestFlight build.
+- Publish every test update with `scripts/release-ota-test.sh`, from
+  `apps/mobile` in the worktree under test:
+
+  ```bash
+  bash scripts/release-ota-test.sh ota-test --message 'Proof U1'
+  ```
+
+  It refuses an empty channel, `production` and `preview`, loads
+  `.env.local` into the shell without printing it (with
+  `--environment production`, eas-cli turns off Expo's own `.env` loading),
+  publishes iOS only, runs the host check from "Verify after publishing"
+  (step 3) on the bundle, and uploads no source maps. If the host check
+  fails, only the test channel received the update: publish a good one there.
+
+- Simulators never send Sentry events. Sign in to Demo Co only and change no
+  data.
+
+Steps:
+
+1. Create the channel once:
+   `pnpm dlx eas-cli@20.3.0 channel:create ota-test --non-interactive`
+   (`channel:view ota-test --non-interactive` shows it when it exists).
+2. Build: `pnpm dlx eas-cli@20.3.0 build --platform ios --profile simulator-ota-test --non-interactive --no-wait --json`,
+   wait for `build:view <id> --json` to say `FINISHED`, download the
+   artifact and unpack the `.app`.
+3. Check the binary: `plutil -p <app>/Expo.plist` shows
+   `EXUpdatesRequestHeaders` with `expo-channel-name` `ota-test`,
+   `EXUpdatesRuntimeVersion` `1.4.0`, `EXUpdatesCheckOnLaunch` `ALWAYS` and
+   `EXUpdatesLaunchWaitMs` `0`, and `strings <app>/main.jsbundle` contains
+   the message "An update for StockPilot is ready. The app will restart to
+   finish installing it."
+4. Install it on a new simulator (dark appearance, so a white frame stands
+   out). Read the expo-updates log in the app's data container
+   (`Library/Application Support/dev.expo.modules.core.logging.expo-updates.txt`)
+   and its database (`Library/Application Support/.expo-internal/expo-v11.db`,
+   read only). Every check must find the lines it expects: a count of 0
+   passes only when the same check also found its positive lines.
+5. The phases, each with a screen recording:
+   - Nothing published yet: the launch logs `startStartup`, `check`,
+     `checkCompleteUnavailable`, `endStartup`; no download, no message.
+   - Publish U1, then quit and open: one launch sequence and no white frame,
+     then "Update ready"; the log shows the download with
+     `isUpdatePending: true` and no `restart`.
+   - Restart now: exactly one `restart`, one dark restart screen, one launch
+     animation, the footer shows U1, and no message after it.
+   - Publish U2, then go to the home screen and back: the return checks and
+     downloads U2, and the message shows; Later; moving between tabs for a
+     minute brings no message; the next return shows it again with no new
+     check (the 30-minute gap).
+   - The message waits for a scan, the new-count screen, a sheet, an alert
+     (never confirm it), the software keyboard, a tour, a photo picker
+     (cancel it) and a focused field with no keyboard, and shows within a few
+     seconds once each is done.
+   - At the largest Dynamic Type size the message is complete and both
+     buttons can be reached; VoiceOver reads the title, the message, Later and
+     Restart now.
+   - Later, then quit and open: one launch sequence, no `restart`, the
+     footer shows U2, and no message.
+   - On an iPad, in the first session: the message is centred, in both
+     orientations, and Return on a hardware keyboard restarts once.
+6. Clean up: delete the test simulators. Keep the profile and the channel for
+   the next proof.
+
+A local release build is not a substitute: it has no channel header, bundles
+with local settings, and Xcode 27's iOS SDK crashes an SDK 57 app at launch.
 
 ## The native-safety rule (build #23 baseline)
 

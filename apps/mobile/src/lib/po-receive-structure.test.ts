@@ -567,7 +567,8 @@ describe('the attachments panel', () => {
       expect(attrText(el, 'disabled', sf)).toBe('busy');
     }
     expect(attrText(els[0]!, 'onPress', sf)).toBe('addFile');
-    expect(attrText(els[1]!, 'onPress', sf)).toBe('() => void scanDocument()');
+    // The scan holds the phone update pop-up until it is done (B44).
+    expect(attrText(els[1]!, 'onPress', sf)).toBe('() => void whileUpdatePromptHeld(scanDocument)');
     // Attach keeps its word beside the spinner while a file uploads.
     expect(code).toContain(
       'leading={ busy ? ( <ActivityIndicator color={c.ink} size="small" /> ) : ( <Plus size={15} color={c.ink} strokeWidth={1.75} /> ) }',
@@ -657,9 +658,10 @@ describe('the attachments panel', () => {
       "{row.file_name ?? 'File'}",
       'Remove',
       "Alert.alert('Attach a file', 'Add a packing slip, photo, or PDF to this PO.', [",
-      "{ text: 'Take Photo', onPress: () => void takePhoto() },",
-      "{ text: 'Choose from Library', onPress: () => void pickFromLibrary() },",
-      "{ text: 'Choose File (PDF)', onPress: () => void pickDocument() },",
+      // Each choice holds the phone update pop-up until its upload is done (B44).
+      "{ text: 'Take Photo', onPress: () => void whileUpdatePromptHeld(takePhoto) },",
+      "{ text: 'Choose from Library', onPress: () => void whileUpdatePromptHeld(pickFromLibrary) },",
+      "{ text: 'Choose File (PDF)', onPress: () => void whileUpdatePromptHeld(pickDocument) },",
       // The card's screen has no pull to refresh, so the refusal no longer
       // offers one (lib/stored-file-link.ts signs the file again at the tap).
       "'Couldn’t open file', 'No download link is available right now. Check your connection and try again.',",

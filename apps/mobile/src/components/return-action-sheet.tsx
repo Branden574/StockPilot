@@ -5,7 +5,6 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -42,6 +41,7 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND, toggleTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';

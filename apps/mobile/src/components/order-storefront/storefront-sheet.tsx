@@ -2,7 +2,6 @@ import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -14,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { STOREFRONT_CLOSE_COPY } from '@stockpilot/core';
 
+import { Modal } from '@/components/ui/modal';
 import { Body } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { MIN_TAP, storefrontLayout } from '@/lib/order-storefront/layout';

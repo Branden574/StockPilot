@@ -3,7 +3,6 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -15,6 +14,7 @@ import { formatHistoryMovement, type ItemHistoryMovement } from '@stockpilot/cor
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import {

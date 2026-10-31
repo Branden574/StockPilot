@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { adjustSendGate, UNCONFIRMED_ADJUST_PREFIX } from './adjust-outbox';
 import { OutboxSessionChangedError } from './outbox-scope';
-import { drainQueue, syncNow } from './sync';
+import { drainQueue, pauseSyncForRestart, syncNow, whenSyncSettled } from './sync';
 import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
@@ -720,5 +720,85 @@ describe('sendOne carries no second copy of the record_count send (SP-099)', () 
     expect(code).not.toMatch(/case 'record_count'/);
     expect(code).not.toMatch(/lines\/\$\{lineId\}\/record/);
     expect(code).toContain("if (action.kind === 'record_count') continue;");
+  });
+});
+
+describe('Restart now pauses the drain (B44)', () => {
+  const RECEIPT_2: Row = {
+    id: 4,
+    kind: 'receive_po_line',
+    idempotencyKey: 'k4',
+    payload: { poId: 'po1', lineId: 'l2', quantity: 1 },
+  };
+
+  /** Lets the pull and the drain run until `done` holds (bounded). */
+  async function until(done: () => boolean) {
+    for (let i = 0; i < 50 && !done(); i += 1) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('stops before the next row: paused while the first of three is in flight, one is sent', async () => {
+    const paused: { resume?: () => void } = {};
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      paused.resume ??= pauseSyncForRestart();
+    });
+    pending([RECEIPT, BUNDLE, RECEIPT_2]);
+    try {
+      expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+      // The rows behind it are left exactly as they were, for the next drain.
+      expect(queueMock.markSending).toHaveBeenCalledTimes(1);
+      expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markOk:1']);
+    } finally {
+      paused.resume?.();
+    }
+  });
+
+  it('whenSyncSettled waits for the sync running now to end', async () => {
+    let answerPull!: () => void;
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (path.startsWith('/api/v1/mobile/snapshot')) {
+        await new Promise<void>((resolve) => {
+          answerPull = resolve;
+        });
+        throw httpError(500, 'internal_error');
+      }
+    });
+    pending([RECEIPT]);
+    const sync = syncNow();
+    let settled = false;
+    const settling = whenSyncSettled().then(() => {
+      settled = true;
+    });
+    await until(() => calls.log.length > 0);
+    expect(calls.log).toEqual(['api:/api/v1/mobile/snapshot']);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+    answerPull();
+    await sync;
+    await settling;
+    expect(settled).toBe(true);
+    // The drain behind the pull had ended too.
+    expect(calls.log).toContain('markOk:1');
+    await expect(whenSyncSettled()).resolves.toBeUndefined();
+  });
+
+  it('syncNow does nothing while paused, and runs again after the resume', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      // An answered pull (even an error) lets the drain behind it run.
+      if (path.startsWith('/api/v1/mobile/snapshot')) throw httpError(500, 'internal_error');
+    });
+    pending([RECEIPT]);
+    const resume = pauseSyncForRestart();
+    try {
+      await syncNow();
+      expect(apiMock.api).not.toHaveBeenCalled();
+      expect(queueMock.listPending).not.toHaveBeenCalled();
+    } finally {
+      resume();
+    }
+    await syncNow();
+    expect(calls.log).toContain('markSending:1');
   });
 });

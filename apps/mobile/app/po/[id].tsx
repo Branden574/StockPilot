@@ -6,7 +6,6 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,6 +19,7 @@ import { dbPermissionRefusedCopy } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
@@ -60,6 +60,7 @@ import {
   type Palette,
   type ThemeMode,
 } from '@/lib/theme';
+import { useHoldUpdatePrompt } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 interface PoLine {
@@ -142,6 +143,14 @@ export default function PoReceiveScreen() {
   const [posting, setPosting] = React.useState(false);
   // The receipt's optional note (L21), sent with Post receipt.
   const [notes, setNotes] = React.useState('');
+  // Quantities or a note typed and not yet posted: the phone update pop-up
+  // waits (B44). The draft holds an empty entry for every line from the
+  // start, so only typed text counts.
+  useHoldUpdatePrompt(
+    Object.values(draft).some((l) => l.received.trim() !== '' || l.rejected.trim() !== '') ||
+      notes.trim() !== '',
+    'receive',
+  );
   // Synchronous re-entry guard: blocks a double-tap from firing a second
   // post before React re-renders the disabled button (each post would
   // otherwise carry its own key = a duplicate receipt = double-counted stock).

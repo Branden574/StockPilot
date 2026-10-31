@@ -28,6 +28,43 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'mobile-app-asks-before-restarting',
+    revision: 1,
+    // B44 (fix/b44-update-restart-prompt; no migration, phone only: one
+    // over-the-air update, runtime 1.4.0). Held as a DRAFT until phones have
+    // the update (update:insights shows iOS launches of its group); the
+    // docs(releases) follow-up that publishes it sets the real publishedAt,
+    // and adds its tests: the title, the entry, and the quoted message equal
+    // to UPDATE_PROMPT_MESSAGE in apps/mobile/src/lib/ota-update-prompt.ts. A
+    // draft at the top, dated after every release (newest first).
+    //
+    // Every "waits" claim is the design: the work routes (scan, count and new
+    // records), the photo and file flows, the keyboard and a focused field,
+    // the draft holds (a note, a pick, a receipt), and every sheet and alert.
+    // No link and no audience: every member with the phone app sees it.
+    status: 'draft',
+    title: 'The mobile app asks before it restarts for an update',
+    summary:
+      'In the mobile app, after the latest update, the app opens once and no longer restarts by itself a moment later. A new update now downloads while you use the app, and a message says when it is ready. The app restarts only when you tap Restart now.',
+    publishedAt: '2026-11-02T17:00:00Z',
+    entries: [
+      {
+        id: 'update-ready-message',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'A message says when an update is ready',
+        whatChanged:
+          'In the mobile app, after the latest update, opening the app shows the launch screen once. Before, the app could open, restart by itself a moment later and show the launch screen again. Now a new update downloads while you use the app. When it is ready, a message says “An update for StockPilot is ready. The app will restart to finish installing it.” with two buttons, Restart now and Later.',
+        whyItMatters:
+          'The second launch screen came with no reason, so it could look like the app had crashed. Now you know when an update is ready, and the app restarts only when you choose.',
+        howItAffectsYou:
+          'Tap Restart now and the app restarts once and opens the new version. Tap Later to carry on: the message comes back the next time you return to the app, and the update finishes by itself the next time you close the app completely and open it again. The message waits while you scan, count, add a photo or a file, or type, while you create an item, a request or an order, while a note, a pick or a receipt is not saved yet, and while another message or sheet is open.',
+        whatToDo:
+          'Close the app completely and open it again to load the latest update. This one time the app may restart by itself once. After that, when the message appears, tap Restart now, or Later if you are busy.',
+      },
+    ],
+  },
+  {
     id: 'small-fixes-8-2026-10',
     revision: 1,
     // fix/small-fixes-8 (no migration, web and server only: no over-the-air

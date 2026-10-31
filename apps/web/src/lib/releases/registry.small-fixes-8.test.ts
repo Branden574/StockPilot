@@ -74,9 +74,14 @@ describe('the small fixes slice 8 release', () => {
     );
   });
 
-  it('is the newest entry, at the top, dated after every other release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    for (const r of RELEASES.slice(1)) {
+  // Renamed by the B44 phone update draft (fix/b44-update-restart-prompt;
+  // was: "is the newest entry, at the top, dated after every other release"):
+  // that draft is dated after this one, at the top, so this one sits directly
+  // below it. Claim kept: dated after every release below it.
+  it('sits directly below the B44 phone update draft, dated after every release below it', () => {
+    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
+    expect(RELEASES[1]?.id).toBe(ID);
+    for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);

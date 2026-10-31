@@ -4,7 +4,6 @@ import * as React from 'react';
 import {
   AccessibilityInfo,
   Animated,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Modal } from '@/components/ui/modal';
 import { Body } from '@/components/ui/text';
 import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';

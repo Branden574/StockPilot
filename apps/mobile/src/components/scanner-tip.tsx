@@ -3,7 +3,6 @@ import {
   AccessibilityInfo,
   Animated,
   Easing,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { FONT, SHADOW, palette, space, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 

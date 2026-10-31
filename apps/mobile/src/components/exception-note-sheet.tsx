@@ -4,7 +4,6 @@ import {
   AccessibilityInfo,
   Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -26,6 +25,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import type { ExceptionSheetConfirm } from '@/lib/exception-confirm-view';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
