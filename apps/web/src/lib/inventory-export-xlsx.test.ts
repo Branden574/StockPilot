@@ -313,6 +313,142 @@ describe('toInventoryXlsx — images', () => {
   });
 });
 
+/**
+ * One embedded file per photo. exceljs writes every wb.addImage() as its own
+ * xl/media file, so adding the picture once per ROW stored a photo that several
+ * rows share (one cover on many copies, one shared signed URL) once per row:
+ * up to MAX_EMBEDDED_IMAGES (2000) copies of a 512 KB picture, about a gigabyte,
+ * while the fetch budget counted it once.
+ */
+describe('toInventoryXlsx — one embedded file per photo', () => {
+  async function solidPng(color: string): Promise<Uint8Array> {
+    const { default: sharp } = await import('sharp');
+    const buf = await sharp({ create: { width: 2, height: 3, channels: 3, background: color } })
+      .png()
+      .toBuffer();
+    return Uint8Array.from(buf);
+  }
+
+  function mediaOf(wb: ExcelJS.Workbook): Array<{ buffer: Buffer }> {
+    return (wb.model as unknown as { media: Array<{ buffer: Buffer }> }).media;
+  }
+
+  /** Which photo each data row shows, read back through the drawing's own links. */
+  function photoByRow(wb: ExcelJS.Workbook, photos: readonly Uint8Array[]): Map<number, number> {
+    const out = new Map<number, number>();
+    for (const img of wb.worksheets[0]!.getImages()) {
+      const medium = wb.getImage(Number(img.imageId)) as unknown as { buffer: Buffer };
+      const which = photos.findIndex(
+        (p) => Buffer.compare(Buffer.from(p), Buffer.from(medium.buffer)) === 0,
+      );
+      out.set(Math.floor(img.range.tl.row), which);
+    }
+    return out;
+  }
+
+  const rowsWithImages = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      makeRow({ id: `i-${i + 1}`, image: { thumbnailUrl: `https://signed.example/${i}.png` } }),
+    );
+
+  it('stores a photo that several rows share ONCE, and still shows it on every row', async () => {
+    const cover = { data: await solidPng('#cc2200'), extension: 'png' as const };
+    const wb = await build({
+      imageMode: 'embedded',
+      rows: rowsWithImages(3),
+      images: new Map([
+        ['i-1', cover],
+        ['i-2', cover],
+        ['i-3', cover],
+      ]),
+    });
+    expect(mediaOf(wb)).toHaveLength(1);
+    expect(wb.worksheets[0]!.getImages()).toHaveLength(3);
+    expect(photoByRow(wb, [cover.data])).toEqual(
+      new Map([
+        [1, 0],
+        [2, 0],
+        [3, 0],
+      ]),
+    );
+  });
+
+  it('stores byte-identical photos fetched from different URLs once', async () => {
+    const bytes = await solidPng('#2266cc');
+    const wb = await build({
+      imageMode: 'embedded',
+      rows: rowsWithImages(2),
+      images: new Map([
+        ['i-1', { data: bytes, extension: 'png' as const }],
+        ['i-2', { data: Uint8Array.from(bytes), extension: 'png' as const }],
+      ]),
+    });
+    expect(mediaOf(wb)).toHaveLength(1);
+    expect(wb.worksheets[0]!.getImages()).toHaveLength(2);
+  });
+
+  it('keeps photos that differ apart', async () => {
+    const red = { data: await solidPng('#cc2200'), extension: 'png' as const };
+    const blue = { data: await solidPng('#2266cc'), extension: 'png' as const };
+    const wb = await build({
+      imageMode: 'embedded',
+      rows: rowsWithImages(2),
+      images: new Map([
+        ['i-1', red],
+        ['i-2', blue],
+      ]),
+    });
+    expect(mediaOf(wb)).toHaveLength(2);
+    expect(photoByRow(wb, [red.data, blue.data])).toEqual(
+      new Map([
+        [1, 0],
+        [2, 1],
+      ]),
+    );
+  });
+
+  // exceljs 4.4.0 reuses a drawing link for an image placed on two rows in a
+  // row by looking it up at the image's id, which is a different link once
+  // shared photos interleave: [A, B, A, C, C, B] showed A on the second C row.
+  // The writer adds every placement of one photo together, so each photo gets
+  // exactly one link and every row shows its own photo.
+  it('shows the right photo on every row when shared photos interleave', async () => {
+    const a = { data: await solidPng('#cc2200'), extension: 'png' as const };
+    const b = { data: await solidPng('#22aa44'), extension: 'png' as const };
+    const c = { data: await solidPng('#2266cc'), extension: 'png' as const };
+    const sequence = [a, b, a, c, c, b];
+    const wb = await build({
+      imageMode: 'embedded',
+      rows: rowsWithImages(sequence.length),
+      images: new Map(sequence.map((img, i) => [`i-${i + 1}`, img])),
+    });
+    expect(mediaOf(wb)).toHaveLength(3);
+    expect(photoByRow(wb, [a.data, b.data, c.data])).toEqual(
+      new Map([
+        [1, 0],
+        [2, 1],
+        [3, 0],
+        [4, 2],
+        [5, 2],
+        [6, 1],
+      ]),
+    );
+  });
+
+  it('keeps a JPEG and a PNG with the same bytes apart (the extension is part of the file)', async () => {
+    const bytes = await solidPng('#777777');
+    const wb = await build({
+      imageMode: 'embedded',
+      rows: rowsWithImages(2),
+      images: new Map([
+        ['i-1', { data: bytes, extension: 'png' as const }],
+        ['i-2', { data: bytes, extension: 'jpeg' as const }],
+      ]),
+    });
+    expect(mediaOf(wb)).toHaveLength(2);
+  });
+});
+
 describe('readImageDimensions', () => {
   it('reads a PNG header', () => {
     expect(readImageDimensions(PNG_1x1)).toEqual({ width: 1, height: 1 });

@@ -847,6 +847,25 @@ WEB_TESTS=(
   # The book-cover rehost is the one place the server fetches a caller-supplied
   # URL and stores the bytes; these pin the host allowlist and redirect posture.
   src/server/services/books-import.ssrf.test.ts
+  # The inventory export's image fetch (lib/item-image-fetch.ts, shared with the
+  # PDF image prefetch): the project's storage by plain fetch, any other http(s)
+  # URL only through safeFetch with the cover allowlist, anything else refused
+  # before a request, and a refused URL a final skip that is never retried,
+  # while a failed lookup of an allowed host is retried and a lookup still out
+  # when the attempt times out is cut off with it.
+  src/lib/exports/export-images.test.ts
+  # That routing itself, with the real fetch against loopback servers: plain
+  # fetch only for a Storage read on the exact project origin, and it never
+  # follows a redirect (the origin's GoTrue verify answers a bogus token with a
+  # 303 to an allow-listed redirect_to); any other path there, or another
+  # project's host, goes through the guard and is refused.
+  src/lib/item-image-fetch.test.ts
+  # The org logo in branded PDF headers is bytes, never a URL or path that
+  # react-pdf would fetch or read itself: the headers draw only a PNG or JPEG
+  # data: URI, and every route that reads logo_url for a PDF fetches it as
+  # bytes through the guarded image fetch first.
+  src/lib/pdf/branding.test.tsx
+  src/lib/pdf/org-logo-bytes.guard.test.ts
 
   # Authorization gates on server actions and routes.
   # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
@@ -1501,6 +1520,22 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # The saved workspace records the account that saved it, and only that
+  # account's requests, queued work and workspace load use it: another
+  # account's, left by a fallback sign-out or a session the server ended, is
+  # never sent as this account's organization (docket B10, the 401 burst).
+  # A cache repair (another account's workspace, one the account has left,
+  # an older app's key) is recorded as owed before the save that erases its
+  # signal, and recorded done only after a wipe that worked, so a wipe that
+  # failed or never ran is run again by the next load (the switch too).
+  src/lib/workspace-keys.test.ts
+  src/lib/api.org-header.test.ts
+  src/lib/use-workspace.owner.test.ts
+  # Every screen that calls fetch itself passes the account of the session
+  # whose token it sends, so the workspace it names is never another
+  # account's, nor dropped when the stored session cannot be read.
+  src/lib/org-header-wiring.test.ts
 
   # Book Order Totals on the phone: an answer for another workspace, warehouse
   # or account (a sign-out, a switch) is dropped, never shown; remembered

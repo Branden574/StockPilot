@@ -17,6 +17,7 @@ import {
   type BookReportRow,
 } from '@stockpilot/core';
 
+import { isEmbeddableImageDataUri } from './branding';
 import { REPORT_CELL_PADDING_PT } from './column-fit';
 import { pdfStyles, PDF_COLORS } from './styles';
 
@@ -98,7 +99,9 @@ export interface BookPdfRow {
 
 export interface BookOrderTotalsPdfProps {
   orgName: string;
-  /** A data: URI fetched by the route, or null (the name alone is shown). */
+  /** A data: URI fetched by the route, or null (the name alone is shown).
+   *  Any other value is drawn as no logo, as in BrandedHeader: react-pdf would
+   *  fetch a URL or read a path itself. */
   orgLogo: string | null;
   generatedAtLocal: string;
   timeZone: string;
@@ -353,7 +356,7 @@ export function BookOrderTotalsPdf(props: BookOrderTotalsPdfProps) {
       >
         <View style={pdfStyles.headerWrap}>
           <View style={pdfStyles.headerLeft}>
-            {props.orgLogo ? (
+            {isEmbeddableImageDataUri(props.orgLogo) ? (
               // eslint-disable-next-line jsx-a11y/alt-text
               <Image src={props.orgLogo} style={pdfStyles.headerLogo} />
             ) : null}

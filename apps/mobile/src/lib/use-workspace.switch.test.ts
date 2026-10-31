@@ -5,6 +5,11 @@ import { setActiveOrg } from './use-workspace';
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform.
 // Everything use-workspace.ts reaches for at runtime is replaced, so the real
 // setActiveOrg runs under node.
+//
+// Re-pinned by docket B10 (integrator decision 3): a switch saves the
+// workspace with the account that chose it, in one value, and refuses with
+// no account known, so this harness now signs u1 in through the auth listener
+// use-workspace.ts registers, and reads the switches' writes from that value.
 
 const store = vi.hoisted(() => new Map<string, string>());
 const storage = vi.hoisted(() => ({
@@ -21,8 +26,12 @@ vi.mock('./auth-context', () => ({ useAuth: vi.fn() }));
 const dbMock = vi.hoisted(() => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./db', () => dbMock);
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
-const syncMock = vi.hoisted(() => ({ syncNow: vi.fn(async () => {}) }));
+const syncMock = vi.hoisted(() => ({
+  syncNow: vi.fn(async () => {}),
+  syncAfterRunning: vi.fn(async () => {}),
+}));
 vi.mock('./sync', () => syncMock);
+vi.mock('./cycle-count-sync', () => ({ cycleCountSync: { forceSync: vi.fn(async () => {}) } }));
 const net = vi.hoisted(() => ({ stallNextWarehouseRead: false }));
 vi.mock('./supabase', () => {
   // loadWarehouses: from('warehouses').select().eq().order() -> { data, error }
@@ -40,13 +49,21 @@ vi.mock('./supabase', () => {
   return {
     supabase: {
       from: () => query,
-      auth: { onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }) },
+      auth: {
+        onAuthStateChange: (cb: (event: string, session: { user: { id: string } }) => void) => {
+          cb('SIGNED_IN', { user: { id: 'u1' } }); // u1 is signed in
+          return { data: { subscription: { unsubscribe: () => {} } } };
+        },
+      },
     },
   };
 });
 
+/** The workspaces the switches saved, in order (the one value: workspace-keys.ts). */
 const orgWrites = () =>
-  storage.setItem.mock.calls.filter(([k]) => k === 'workspace.activeOrgId').map(([, v]) => v);
+  storage.setItem.mock.calls
+    .filter(([k]) => k === 'workspace.savedOrg')
+    .map(([, v]) => (JSON.parse(v) as { orgId: string; ownerId: string }).orgId);
 
 describe('setActiveOrg: one switch at a time, the last choice wins', () => {
   it('a re-tap of the still-highlighted workspace during a switch is applied, not lost', async () => {

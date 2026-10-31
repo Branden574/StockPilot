@@ -31,8 +31,7 @@ import { useAuth } from '@/lib/auth-context';
 import { reviewNotACountMessage } from '@/lib/count-box-words';
 import {
   getCycleCount,
-  outboxAck,
-  updateLocalLine,
+  mirrorRecordedCount,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -236,7 +235,10 @@ export default function AiScanScreen() {
               contentType: 'image/jpeg',
             },
           ],
-          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(await orgHeader(session.user.id)),
+          },
         },
       );
       if (!res.ok) {
@@ -356,7 +358,7 @@ export default function AiScanScreen() {
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${session.access_token}`,
-                ...(await orgHeader()),
+                ...(await orgHeader(session.user.id)),
               },
               body: JSON.stringify({
                 countedQuantity: w.count,
@@ -371,14 +373,13 @@ export default function AiScanScreen() {
           // Mirror into the local SQLite cache so the detail screen reflects
           // the new count without waiting for a sync round-trip.
           //
-          // ═══ AND ACK IT IMMEDIATELY (SP-036) ═══
-          // `updateLocalLine` is the OFFLINE edit path: besides writing
-          // `counted` it sets local_dirty=1 and enqueues a `record_count`
-          // outbox row carrying {cycleCountId, lineId, countedQuantity} —
-          // and NOTHING ELSE. The server has already accepted this exact
-          // count one statement above, so letting that row replay (the
-          // `forceSync()` at the end of this function drains it seconds
-          // later) did two kinds of damage:
+          // ═══ AND QUEUE NOTHING (SP-036) ═══
+          // The server has already accepted this exact count one statement
+          // above. This used to copy it with `updateLocalLine`, the OFFLINE
+          // edit path, which also queues a `record_count` row carrying
+          // {cycleCountId, lineId, countedQuantity} and NOTHING ELSE. Left
+          // to replay (the `forceSync()` at the end of this function drains
+          // it seconds later), that row did two kinds of damage:
           //
           //   1. the replay POSTs this same route WITHOUT aiScanId, and the
           //      route records a missing aiScanId as NULL — wiping the
@@ -390,13 +391,14 @@ export default function AiScanScreen() {
           //      confirm tripped 429s → rows to 'failed' with backoff →
           //      "Sync issue · retrying" and posting blocked by hasPending.
           //
-          // `outboxAck` is exactly the "the server has this" bookkeeping:
-          // it deletes the outbox row and clears local_dirty in ONE
-          // transaction. Nothing is lost by acking — this screen is
-          // online-only by design, so there is no offline edit to preserve,
-          // and the count itself is already durable server-side.
-          const mirrored = await updateLocalLine(w.lineId, w.count);
-          if (mirrored) await outboxAck(mirrored.outboxId);
+          // The row was then deleted straight after it was queued, and
+          // since docket B10 the outbox refuses to queue at all while the
+          // saved workspace is another account's, which reported a count
+          // the server had saved as not saved. `mirrorRecordedCount` writes
+          // the count and supersedes the line's older queued counts in ONE
+          // transaction, and queues nothing, so it needs no workspace. The
+          // account is the one whose session sent the count.
+          await mirrorRecordedCount(w.lineId, w.count, session.user.id);
         } catch (lineErr) {
           console.warn('[cycle-count] line save failed', w.lineId, lineErr);
           failed.push(w.lineId);
@@ -423,7 +425,10 @@ export default function AiScanScreen() {
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan/${scanId}/confirm`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(await orgHeader(session.user.id)),
+          },
         },
       ).catch(() => null);
 

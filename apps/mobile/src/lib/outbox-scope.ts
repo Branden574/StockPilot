@@ -28,6 +28,15 @@
  *     whoever drains it first, as it always has, and is stamped with that
  *     account at its first send so it is never sent under a second one. This
  *     code never writes one (session-scope.ts outboxWriteScope);
+ *   - a row with no organization of its own (a legacy row, or one queued
+ *     before any workspace was saved) is sent under the live account's OWN
+ *     saved workspace (session-scope.ts liveOutboxScope), and HELD, as
+ *     pending, while there is none: nothing saved, another account's, or an
+ *     older build's with no owner (docket B10, integrator decision 3). It
+ *     used to be sent with that null, so api() sent no X-Organization-Id and
+ *     the server applied it in the account's default organization. The
+ *     workspace load saves the account's own workspace and asks both drains
+ *     for a pass (use-workspace.ts), so the hold ends as soon as it is saved;
  *   - with no session at all, nothing is sent.
  *
  * The SQL fragments below are the same rule for queries. `IS` / `IS NOT` are
@@ -51,14 +60,18 @@ export interface LiveScope {
 export type OutboxSendDecision =
   | {
       send: true;
-      /** The organization to send under: the row's own, else the live one. */
-      orgId: string | null;
+      /**
+       * The organization to send under: the row's own, else the live
+       * account's own saved one. Never empty: every queued send names its
+       * workspace (api() sends X-Organization-Id for it).
+       */
+      orgId: string;
       /** The account that must hold the bearer token when the request leaves. */
       userId: string;
       /** The row is missing an owner column and is stamped at this send. */
       adopt: boolean;
     }
-  | { send: false; reason: 'signed-out' | 'other-account' };
+  | { send: false; reason: 'signed-out' | 'other-account' | 'workspace-loading' };
 
 /** Is this row the live user's work (or legacy work anyone may adopt)? */
 export function isOwnedBy(row: OutboxRowOwner, liveUserId: string | null): boolean {
@@ -69,10 +82,16 @@ export function isOwnedBy(row: OutboxRowOwner, liveUserId: string | null): boole
 export function outboxSendDecision(row: OutboxRowOwner, live: LiveScope): OutboxSendDecision {
   if (!live.userId) return { send: false, reason: 'signed-out' };
   if (!isOwnedBy(row, live.userId)) return { send: false, reason: 'other-account' };
-  const rowOrg = row.organizationId ?? null;
+  // An empty id is no workspace: api() names the workspace only for a
+  // non-empty orgId, and would otherwise fall back to the saved one.
+  const rowOrg = row.organizationId || null;
+  const orgId = rowOrg ?? live.orgId;
+  // No workspace of its own, and the live account's own is not saved yet:
+  // HELD (left as it is, pending), never sent without a workspace.
+  if (!orgId) return { send: false, reason: 'workspace-loading' };
   return {
     send: true,
-    orgId: rowOrg ?? live.orgId,
+    orgId,
     userId: live.userId,
     adopt: (row.userId ?? null) === null || rowOrg === null,
   };
@@ -100,16 +119,50 @@ export class OutboxSessionChangedError extends Error {
 }
 
 /**
- * Thrown by enqueue() and updateLocalLine() when no account can be named as
- * the owner of the row (nobody is signed in and nobody has been this run).
- * Refusing is the safe answer: a row queued with no owner is a legacy row,
- * and the next account to sign in would adopt it and send it as its own.
+ * Thrown by enqueue(), updateLocalLine() and clearLocalLine() when no account
+ * can be named as the owner of the row (nobody is signed in and nobody has
+ * been this run). Refusing is the safe answer: a row queued with no owner is
+ * a legacy row, and the next account to sign in would adopt it and send it as
+ * its own.
  */
 export class OutboxOwnerUnknownError extends Error {
   constructor() {
     super('No signed-in account to queue this change for. Sign in and try again.');
     this.name = 'OutboxOwnerUnknownError';
   }
+}
+
+/**
+ * Thrown by enqueue(), updateLocalLine() and clearLocalLine() while the saved
+ * workspace is not one the row's account saved itself (docket B10): ANOTHER
+ * account's (the moment after a different account signs in, before its
+ * workspace load saves its own choice, or longer when that load fails
+ * offline), or an older build's with no owner (until this build's first
+ * workspace load records it: integrator decision 3). The row's workspace
+ * cannot be named then. Queued with none, it would be sent under whichever
+ * workspace this account saves next, after a switch the wrong one (S4a);
+ * queued with the other account's, the server refuses it and the change is
+ * lost, or it lands in a workspace this account did not choose. Nothing is
+ * written. Retryable: the same save works once this account's workspace has
+ * loaded.
+ */
+export class OutboxWorkspaceLoadingError extends Error {
+  constructor() {
+    super('Your workspace is still loading. Try again in a moment.');
+    this.name = 'OutboxWorkspaceLoadingError';
+  }
+}
+
+/**
+ * The sentence a screen shows for a change the outbox refused to queue
+ * (OutboxOwnerUnknownError, OutboxWorkspaceLoadingError), or null for any
+ * other failure, whose own text is not written for people. Either way nothing
+ * was saved.
+ */
+export function outboxRefusalSentence(e: unknown): string | null {
+  return e instanceof OutboxOwnerUnknownError || e instanceof OutboxWorkspaceLoadingError
+    ? e.message
+    : null;
 }
 
 /**

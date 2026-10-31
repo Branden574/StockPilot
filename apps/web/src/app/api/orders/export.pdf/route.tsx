@@ -13,6 +13,7 @@ import {
   parseOrderExportIso,
   resolveOrderExportStatusFilter,
 } from '@/lib/orders/export';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { buildOrdersExportPdfRows, OrdersExportPdf } from '@/lib/pdf/orders-export-pdf';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -83,7 +84,10 @@ export async function GET(request: Request) {
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     const viewLabel = orderExportViewLabel(rawStatus);
     const pdfRows = buildOrdersExportPdfRows(rows);
