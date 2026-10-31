@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { describeNewRackPlacement, findRackNearMatches } from './rack-near-match';
 
 /**
- * The real warehouse from the 2026-07-23 incident (org
- * 63c13e64-92a6-4ea4-9936-6a2c26a85b4a). "100-A" is the lone rack in the 100
- * range; every other rack is a low number with an A/B/C row. The rule is tuned
- * against these actual names, not invented ones.
+ * Rack labels as the warehouse in the 2026-07-23 incident names them (labels
+ * only). "100-A" is the lone rack in the 100 range; every other rack is a low
+ * number with an A/B/C row. The rule is tuned against these actual names, not
+ * invented ones.
  */
 const REAL_LABELS = [
   '1-A', '1-C', '2-A', '2-C', '3-A', '3-C', '4-C',

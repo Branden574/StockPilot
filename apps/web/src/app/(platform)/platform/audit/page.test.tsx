@@ -138,6 +138,45 @@ describe('platform audit', () => {
     expect(within(rows[2]).getAllByText('—').length).toBe(2);
   });
 
+  /**
+   * God Admin's Order items access changes (migration 0413) are written by
+   * platform_set_permission_exception itself with detail {permission, before,
+   * after, target_role}. The row names the action and the change, so a review
+   * can see who was moved from what to what without opening the raw detail.
+   */
+  it('labels an Order items access change and shows what it changed from and to', async () => {
+    h.list.mockResolvedValue([
+      row({
+        id: 'p1',
+        action: 'permission_exception_changed',
+        detail: {
+          permission: 'orders:manage_catalog_visibility',
+          before: 'default',
+          after: 'deny',
+          target_role: 'manager',
+        },
+      }),
+      row({
+        id: 'p2',
+        action: 'permission_exception_changed',
+        detail: { permission: 'orders:manage_catalog_visibility', before: 'odd', after: 1 },
+      }),
+    ]);
+    await renderPage();
+    const region = screen.getByRole('region', { name: 'Platform audit' });
+    const [, first, second] = within(region).getAllByRole('row') as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(within(first).getByText('Order items access changed')).toBeInTheDocument();
+    expect(within(first).getByText('Follow role default → Deny')).toBeInTheDocument();
+    expect(first).toHaveTextContent('ada@acme.test');
+    // A detail this build cannot read prints the label alone, never a guess.
+    expect(within(second).getByText('Order items access changed')).toBeInTheDocument();
+    expect(second).not.toHaveTextContent('→');
+  });
+
   it('keeps the empty words', async () => {
     h.list.mockResolvedValue([]);
     await renderPage();

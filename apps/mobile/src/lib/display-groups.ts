@@ -501,3 +501,82 @@ export function describeGroupingError(e: unknown): { message: string; retrySame:
 export function reviewRecordDetail(r: PhoneGroupingRecord, view: 'items' | 'books'): string {
   return groupingRecordLine(r, view);
 }
+
+// ── The Group review's radio names (redesign Stage 6) ─────────────────────
+// A record already in another group gets two radios, "Move it into this
+// group" and "Leave it out", named for its record (recheck R2-5). Two records
+// with one name that were both in another group were radios with one name,
+// so VoiceOver could not tell them apart (GROUP-REVIEW-RADIO-NAMES).
+
+/** How a record's line joins its parts (core groupingRecordLine). */
+const RECORD_LINE_SEPARATOR = ' · ';
+
+/**
+ * A name as a screen reader says it: letter case, runs of spaces and how an
+ * accented letter is stored make no difference, so "Wireless Mouse",
+ * "Wireless mouse" and "Wireless  Mouse" are one name. The web's rule.
+ */
+function spokenName(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+/**
+ * The two radio names of each record whose row carries "Move it into this
+ * group" and "Leave it out", by record id. Each is core's words for the
+ * record. When other records with these radios have a name a screen reader
+ * says the same way (spokenName), it goes on with the parts of the record's
+ * line (reviewRecordDetail) that are not on all of theirs, in the line's own
+ * words and order, and ends with "record N of M", where it is listed among
+ * them, when two still read the same. A record whose name no other such
+ * record has keeps core's words alone (R2-5). This is the web's
+ * groupChoiceRadioNames (apps/web grouping-radio-names.ts), with the same
+ * rule and words, so the web and the phone say the same.
+ *
+ * `ids` are the records whose rows carry the two radios, in the order listed,
+ * and `records` the review's records. Every name comes from one pass that
+ * builds each record's line once, as keepsSkuRadioLabels does for the
+ * Ungroup review's radios.
+ */
+export function groupChoiceRadioNamesById(
+  ids: readonly string[],
+  records: readonly PhoneGroupingRecord[],
+  view: 'items' | 'books',
+): Map<string, { move: string; leave: string }> {
+  const byId = new Map(records.map((r) => [r.id, r]));
+  const withChoice = [...new Set(ids)].flatMap((id) => byId.get(id) ?? []);
+  const lines = withChoice.map((r) => reviewRecordDetail(r, view).split(RECORD_LINE_SEPARATOR));
+  // The records said the same way, each as its place in the list.
+  const sameName = new Map<string, number[]>();
+  withChoice.forEach((r, i) => {
+    const key = spokenName(r.name);
+    const peers = sameName.get(key);
+    if (peers) peers.push(i);
+    else sameName.set(key, [i]);
+  });
+  // What tells each record apart from the others said the same way: the
+  // parts of its line not on all of theirs (nothing, for a name of its own).
+  const apart: string[][] = [];
+  for (const peers of sameName.values()) {
+    const onEvery = new Set(
+      lines[peers[0]!]!.filter((p) => peers.every((i) => lines[i]!.includes(p))),
+    );
+    for (const i of peers) apart[i] = lines[i]!.filter((p) => !onEvery.has(p));
+  }
+  /** One radio's name for every record: `lead` gives core's words for a name. */
+  const namesFor = (lead: (name: string) => string): string[] => {
+    const said = withChoice.map((r, i) => [lead(r.name), ...apart[i]!].join(', '));
+    const out = [...said];
+    for (const peers of sameName.values()) {
+      const timesSaid = new Map<string, number>();
+      for (const i of peers) timesSaid.set(said[i]!, (timesSaid.get(said[i]!) ?? 0) + 1);
+      peers.forEach((i, at) => {
+        if ((timesSaid.get(said[i]!) ?? 0) > 1)
+          out[i] = `${said[i]}, record ${at + 1} of ${peers.length}`;
+      });
+    }
+    return out;
+  };
+  const move = namesFor(GROUP_COPY.moveOneFor);
+  const leave = namesFor(GROUP_COPY.leaveOutOneFor);
+  return new Map(withChoice.map((r, i) => [r.id, { move: move[i]!, leave: leave[i]! }]));
+}

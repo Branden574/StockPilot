@@ -103,7 +103,11 @@ describe('offline capture time in the count cache (0369, D7)', () => {
   });
 
   it('stores and reads back the capture time of a line counted offline', async () => {
-    await cache.cacheCycleCount(header, [line('l1', '2026-09-24T09:15:00.000Z'), line('l2', null)]);
+    await cache.cacheCycleCount(
+      header,
+      [line('l1', '2026-09-24T09:15:00.000Z'), line('l2', null)],
+      await cache.cacheWriteScope(),
+    );
     const snap = await cache.getCycleCount('cc1');
     const byId = Object.fromEntries((snap?.lines ?? []).map((l) => [l.id, l.offlineCapturedAt]));
     // Mutation: drop the column from the insert or the read, and l1 is null.
@@ -112,7 +116,11 @@ describe('offline capture time in the count cache (0369, D7)', () => {
 
   it('a line with a pending local edit keeps what it had (the server capture is about to be replaced)', async () => {
     await cache.updateLocalLine('l1', 3); // dirty, no capture time
-    await cache.cacheCycleCount(header, [line('l1', '2026-09-24T09:15:00.000Z')]);
+    await cache.cacheCycleCount(
+      header,
+      [line('l1', '2026-09-24T09:15:00.000Z')],
+      await cache.cacheWriteScope(),
+    );
     const snap = await cache.getCycleCount('cc1');
     const l1 = snap?.lines.find((l) => l.id === 'l1');
     expect(l1?.localDirty).toBe(true);

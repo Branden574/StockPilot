@@ -167,7 +167,7 @@ describe('importItemsAction — sports variant columns', () => {
           fit: 'mens',
           color: 'Black/White',
           jersey_number: '07',
-          player_name: 'A. Rosas',
+          player_name: 'J. Stone',
         }),
       ],
     });
@@ -179,7 +179,7 @@ describe('importItemsAction — sports variant columns', () => {
     expect(input.variantWidth).toBe('2E');
     expect(input.variantFit).toBe('mens');
     expect(input.variantColor).toBe('Black/White');
-    expect(input.playerName).toBe('A. Rosas');
+    expect(input.playerName).toBe('J. Stone');
   });
 
   it('keeps a leading-zero jersey number as text (07 is not 7)', async () => {

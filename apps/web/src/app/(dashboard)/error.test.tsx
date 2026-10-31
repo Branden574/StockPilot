@@ -9,7 +9,7 @@ import {
   UNRELATED_KEY,
 } from '@/test/interrupted-run-fixtures';
 
-vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
+vi.mock('@/lib/error-reporter-core', () => ({ reportError: vi.fn(async () => undefined) }));
 // A Next <Link> renders as an <a> marked data-next-link, so the test can tell a
 // plain anchor (a full page load, never prefetched) from a client link.
 vi.mock('next/link', () => ({

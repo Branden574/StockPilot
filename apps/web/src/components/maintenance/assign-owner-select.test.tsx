@@ -22,7 +22,7 @@ import { AssignOwnerSelect } from './assign-owner-select';
 
 const MEMBERS = [
   { userId: 'u-1', name: 'Jane Smith' },
-  { userId: 'u-2', name: 'Andrew Rosas' },
+  { userId: 'u-2', name: 'Jordan Stone' },
 ];
 
 beforeEach(() => vi.clearAllMocks());
@@ -46,7 +46,7 @@ describe('AssignOwnerSelect', () => {
     render(<AssignOwnerSelect requestId="r1" currentOwnerUserId={null} members={MEMBERS} />);
     await user.click(screen.getByRole('combobox'));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByRole('option', { name: 'Andrew Rosas' }));
+    await user.click(within(listbox).getByRole('option', { name: 'Jordan Stone' }));
     expect(assignOwner).toHaveBeenCalledWith('r1', 'u-2');
     expect(refreshMock).toHaveBeenCalled();
   });

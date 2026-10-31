@@ -1,7 +1,7 @@
 # /dashboard/orders/new — root cause of the 5–6s loads + the plan for a truly instant page
 
 **Date:** 2026-07-01 (evening session, after perf fixes 4–6 shipped)
-**Scope:** owner's account (branden574@gmail.com), org L4L North Region
+**Scope:** the owner's account, org L4L North Region
 (`63c13e64-92a6-4ea4-9936-6a2c26a85b4a`), warehouse DC4, 353 catalog items.
 **Bar:** warm loads <500ms to the real storefront shell and <1.5s to the full
 grid; cold loads never show a blank/generic skeleton for more than ~1s.

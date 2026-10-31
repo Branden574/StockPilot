@@ -5,39 +5,41 @@ import { maintenanceEmailRecipients, type MaintenanceEmailRecipients } from './r
 /**
  * Maintenance-request constants.
  *
- * THE RECIPIENTS BELOW ARE L4L'S MAILBOXES, and since 2026-08-16 (per-org
+ * THE RECIPIENTS BELOW ARE A SAMPLE PAIR, and since 2026-08-16 (per-org
  * email routing, migration 0337) they are NOT what the surfaces read. The
- * email builder now takes recipients as INPUT (`MaintenanceEmailInput.
+ * email builder takes recipients as INPUT (`MaintenanceEmailInput.
  * recipients`, constructed only by `maintenanceEmailRecipients` in
  * `./recipients.ts`), and surfaces resolve them from
- * `organizations.email_routing`. These constants keep exactly two roles:
+ * `organizations.email_routing`. Until 2026-10-25 these constants held the
+ * first tenant's real mailboxes (migration 0337 seeded that tenant's org row
+ * with them); they are now addresses on reserved `.test` domains (RFC 6761),
+ * because the repository is public. They keep exactly two roles:
  *
- *  1. THE CODE-BEFORE-MIGRATION FALLBACK. Deploy-order safety is FAIL OPEN
- *     to pre-feature behavior: a reader that finds no `email_routing` column
- *     (Postgres 42703) degrades to these values — the only path that ever
- *     returns them; once the column exists it is never taken. See
- *     `maintenanceRecipientsForRouting` below.
- *  2. THE SEED'S SOURCE OF TRUTH: migration 0337 seeds L4L's org row with
- *     these exact values, so nothing changes for that tenant.
+ *  1. THE CODE-BEFORE-MIGRATION FALLBACK. Deploy-order safety is FAIL OPEN:
+ *     a reader that finds no `email_routing` column (Postgres 42703)
+ *     composes with these values: the only path that ever returns them; once
+ *     the column exists it is never taken, and every database has had it
+ *     since migration 0337. See `maintenanceRecipientsForRouting` below.
+ *  2. ONE VALIDATED PAIR FOR THE TESTS.
  *
- * An unconfigured org gets NEITHER — its email action hides — and an invalid
+ * An unconfigured org gets NEITHER (its email action hides) and an invalid
  * stored value fails CLOSED the same way, never back to these constants.
  *
- * These are REAL addresses: dc4@learn4life.org feeds a live Zendesk email
- * intake and arosas@cvwest.org is a real person. No test, tool, or
- * verification step may ever open a compose window or navigate a mailto
- * against them — string assertions only (plan Global Constraint 2).
+ * A tenant's REAL addresses (its org row) feed a live Zendesk email intake
+ * and a real person's mailbox. No test, tool, or verification step may ever
+ * open a compose window or navigate a mailto against an org's stored
+ * routing: string assertions only (plan Global Constraint 2).
  */
 export const L4L_MAINTENANCE_EMAIL = Object.freeze({
-  to: 'dc4@learn4life.org',
-  cc: 'arosas@cvwest.org',
+  to: 'dc4@sampleorg.test',
+  cc: 'jstone@site1.test',
 } as const);
 
-/** Cosmetic OWA chip names — same values the delivery assistant verified on
- *  the live tenant. Must stay free of RFC 5322 specials (< > , " @ ;). */
+/** Cosmetic OWA chip names, the same sample names as the delivery twin. Must
+ *  stay free of RFC 5322 specials (< > , " @ ;). */
 export const L4L_MAINTENANCE_EMAIL_NAMES = Object.freeze({
   to: 'Fresno Warehouse DC4',
-  cc: 'Andrew Rosas',
+  cc: 'Jordan Stone',
 } as const);
 
 /**
@@ -59,9 +61,9 @@ export const L4L_MAINTENANCE_RECIPIENTS: MaintenanceEmailRecipients = maintenanc
  * sentence claims only where the mail is addressed — no "assigned", no
  * "ticket created", no "notified". The previous fixed notice's "The DC4
  * address creates the maintenance ticket in the email system" sentence was
- * L4L-Zendesk-specific knowledge the platform cannot truthfully claim for an
- * arbitrary org's configured mailbox, so it is gone everywhere, L4L's
- * screens included (deliberate copy change, per-org routing design).
+ * knowledge of one tenant's Zendesk the platform cannot truthfully claim for
+ * an arbitrary org's configured mailbox, so it is gone everywhere, that
+ * tenant's screens included (deliberate copy change, per-org routing design).
  */
 export function maintenanceCcNotice(recipients: { to: string; cc: string }): string {
   return ccNotice(recipients);
@@ -81,16 +83,15 @@ export const MAINTENANCE_CC_NOTICE = maintenanceCcNotice(L4L_MAINTENANCE_EMAIL);
  * with — the same matrix as the delivery twin (`deliveryRecipientsForRouting`),
  * against the maintenance brand:
  *
- *   'fallback' -> the COMPILED constants. DEPLOY-ORDER SAFETY: only the
- *                 missing-column window (42703) produces this state, so
- *                 code-before-migration is byte-identical to pre-feature
- *                 behavior; once the column exists this arm is never taken.
+ *   'fallback' -> the COMPILED sample pair. DEPLOY-ORDER SAFETY: only the
+ *                 missing-column window (42703) produces this state; once
+ *                 the column exists this arm is never taken.
  *   'valid'    -> the stored recipients, re-branded through the factory
  *                 (cannot throw for parser-produced values; belt-and-braces
  *                 catch fails CLOSED).
  *   'unset'    -> null: the email action is HIDDEN for this org.
- *   'invalid'  -> null: FAIL CLOSED. Never the constants — that would
- *                 silently mail another tenant's warehouse.
+ *   'invalid'  -> null: FAIL CLOSED. Never the constants: the org never
+ *                 configured them.
  */
 export function maintenanceRecipientsForRouting(
   read: OrgEmailRoutingReadState,

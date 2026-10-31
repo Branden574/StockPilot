@@ -125,6 +125,8 @@ interface ScanResult {
   sites: Array<{
     file: string;
     line: number;
+    /** The helper calls the select was reached through (outermost last). */
+    via: string[];
     table: string;
     select: string;
     embeds: Array<Record<string, unknown>>;
@@ -230,11 +232,19 @@ describe('PostgREST embeds in web, phone and core', () => {
     ]);
     // The phone's Items tab reaches its select through two helper layers
     // (listRead -> scoped -> .from('inventory_items').select(columns)).
+    // Re-pinned 2026-10-25 (B28): the tab's holdings embed went when its
+    // location filter moved to the primary location, as on the web; its
+    // product family embed is reached through the same two layers. Claim
+    // kept: a select built through helper layers is still scanned.
     const phoneItems = scan.sites.filter(
       (s) =>
         s.file === 'apps/mobile/app/(drawer)/(tabs)/inventory.tsx' && s.table === 'inventory_items',
     );
-    expect(phoneItems.some((s) => s.embeds.some((e) => e.path === 'item_stock_levels'))).toBe(true);
+    expect(
+      phoneItems.some(
+        (s) => s.via.length >= 2 && s.embeds.some((e) => e.path === 'product_group:product_groups'),
+      ),
+    ).toBe(true);
   });
 
   it('every embed between two tables joined by more than one relationship names the one it means', () => {

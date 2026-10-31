@@ -62,11 +62,11 @@ describe('OrderRequestsService.get requester resolution', () => {
   it('resolves name/email from user_profiles for an internal self-submit order (raw columns NULL)', async () => {
     const stub = getStub(
       baseHeader({ requester_user_id: 'user-9' }),
-      { full_name: 'Jane Doe', email: 'jane@cvsouth.org' },
+      { full_name: 'Jane Doe', email: 'jane@school.test' },
     );
     const detail = await svc(stub).get('ord-1');
     expect(detail.requesterName).toBe('Jane Doe');
-    expect(detail.requesterEmail).toBe('jane@cvsouth.org');
+    expect(detail.requesterEmail).toBe('jane@school.test');
     // requesterDisplay stays the resolved name (no org suffix for internal).
     expect(detail.requesterDisplay).toBe('Jane Doe');
   });
@@ -75,16 +75,16 @@ describe('OrderRequestsService.get requester resolution', () => {
     const stub = getStub(
       baseHeader({
         requester_user_id: null,
-        requester_name: 'Doua Vang',
-        requester_email: 'doua@example.org',
+        requester_name: 'Lena Hale',
+        requester_email: 'lena@example.org',
         requester_org_label: 'Clovis',
       }),
     );
     const detail = await svc(stub).get('ord-1');
-    expect(detail.requesterName).toBe('Doua Vang');
-    expect(detail.requesterEmail).toBe('doua@example.org');
+    expect(detail.requesterName).toBe('Lena Hale');
+    expect(detail.requesterEmail).toBe('lena@example.org');
     // requesterDisplay DOES carry the org suffix — name cells must not.
-    expect(detail.requesterDisplay).toBe('Doua Vang · Clovis');
+    expect(detail.requesterDisplay).toBe('Lena Hale · Clovis');
   });
 
   it('free-text column wins over the profile when both are present', async () => {

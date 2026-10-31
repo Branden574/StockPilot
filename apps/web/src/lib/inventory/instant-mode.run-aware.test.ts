@@ -89,12 +89,12 @@ describe('runAwarePages', () => {
 
   it('clusters a SKU family scattered across the sorted set onto one page', () => {
     const rows = [
-      skuRow('l1', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      skuRow('l1', 'Lenovo 300e Yoga Chromebook', 'SP-GDEM4-G01'),
       ...Array.from({ length: 50 }, (_, i) => skuRow(`f${i}`, `Filler ${i}`, `SKU-F${i}`)),
-      skuRow('l2', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      skuRow('l2', 'Lenovo 300e Yoga Chromebook', 'SP-GDEM4-G01'),
       ...Array.from({ length: 50 }, (_, i) => skuRow(`g${i}`, `More ${i}`, `SKU-G${i}`)),
-      skuRow('l3', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
-      skuRow('l4', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      skuRow('l3', 'Lenovo 300e Yoga Chromebook', 'SP-GDEM4-G01'),
+      skuRow('l4', 'Lenovo 300e Yoga Chromebook', 'SP-GDEM4-G01'),
     ];
     const pages = runAwarePages(rows, 30);
     // All four family members land on ONE page, at the first member's rank.

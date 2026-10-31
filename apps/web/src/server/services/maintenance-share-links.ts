@@ -114,8 +114,9 @@ export interface ResolvedMaintenanceShare {
   photos: { filename: string; kind: MaintenanceAttachmentKind }[];
   /** D2/spec §4.2 — present only once the request is resolved. Deliberately
    *  NO resolver name on this anonymous surface (the allow-list posture:
-   *  DC4/Andrew need the evidence and the outcome, not a staff directory —
-   *  the requester's own email is where the resolver's name belongs).
+   *  DC4 and its lead need the evidence and the outcome, not a staff
+   *  directory — the requester's own email is where the resolver's name
+   *  belongs).
    *  `resolvedAtDisplay` is pre-formatted server-side (same recipe as this
    *  page's own `formatSubmittedDate` helper — duplicated intentionally,
    *  not shared, since this is the resolver's projection, not the page's

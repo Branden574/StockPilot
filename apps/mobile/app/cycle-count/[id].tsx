@@ -17,6 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  countFromText,
   exceptionUnrecognizedCopy,
   offlineCaptureAt,
   offlineCaptureLabel,
@@ -37,10 +38,13 @@ import {
   type CloseGateState,
 } from '@/lib/count-close-gate';
 import { showWriteCta } from '@/lib/cta-gating';
+import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
+  cacheWriteScope,
+  clearLocalLine,
   getCycleCount,
   pendingCountFor,
   updateLocalLine,
@@ -95,28 +99,86 @@ const SAVE_DEBOUNCE_MS = 300;
 
 /** Said when the copy of this count saved on the phone cannot be read. */
 const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';
+/** A fetch the phone's cache discarded twice running (cycle-count-cache.ts
+ *  cacheCycleCount): see load and the store in loadOnce. */
+const COUNT_NOT_SAVED_AFTER_A_CHANGE =
+  'This count could not be saved on this phone: the account, the workspace or the offline copy changed while it was loading.';
+/** What one pass of the screen's load answers: 'discarded' when the cache
+ *  discarded the count that pass fetched. */
+type LoadPass = 'discarded' | undefined;
 
-/**
- * The count a box holds, as the line saver reads it: a finite number of zero
- * or more, or null for an empty box and anything else (an emptied box never
- * saves a clear, and a lone minus sign is not a count). The saver and Post
- * both read a box through this one rule, so they cannot disagree.
- */
-function countFromBox(raw: string): number | null {
-  if (raw.trim() === '') return null;
-  const num = Number.parseFloat(raw);
-  return Number.isFinite(num) && num >= 0 ? num : null;
+/** Whether a box holds nothing at all: emptied, or only spaces. */
+function isEmptyBox(raw: string): boolean {
+  return raw.trim() === '';
 }
 
 /**
- * Whether a typed count is still waiting for its save: the line saver writes
- * a box SAVE_DEBOUNCE_MS after the last keystroke and only then queues it,
- * so until then the count is on screen but neither saved nor queued. A box
- * holding no count (emptied, or a lone minus sign) is never saved, so it is
- * not waiting.
+ * The count a box holds, as the line saver reads it: a plain number of zero
+ * or more, or null for an empty box and anything else (core countFromText,
+ * the rule the web count screen and the AI review read a box by too). A lone
+ * minus sign, a second point ("1.2.3") or a comma ("2,5") is not a count, and
+ * is never read as the number before it: parseFloat saved "1.2.3" as 1.2 and
+ * "2,5" as 2. The saver and Post both read a box through this one rule, so
+ * they cannot disagree.
  */
-function hasUnsavedCount(draft: Readonly<Record<string, string>>): boolean {
-  return Object.values(draft).some((raw) => countFromBox(raw) !== null);
+function countFromBox(raw: string): number | null {
+  if (isEmptyBox(raw)) return null;
+  return countFromText(raw);
+}
+
+/**
+ * Whether a box's edit has not finished saving. The line saver writes a box
+ * SAVE_DEBOUNCE_MS after the last keystroke, and its save then waits its turn
+ * among the phone's writes (a snapshot pull or the count's own caching can
+ * hold that queue for a while); a box's draft is dropped only once its own
+ * save has finished (withoutSavedDraft), and by then its outbox row is
+ * queued. So any draft left is a save still waiting or running, and Post
+ * waits for it ("Sync first").
+ *
+ * Every draft counts, whatever the line shows: the line's count on screen is
+ * set only when its save finishes, so it can trail the phone's store. An
+ * emptied box over a line still shown uncounted used to count as nothing to
+ * save, while the count typed in it a moment before was still being written:
+ * that count was then queued and sent after Post had said the line would be
+ * skipped (B4a). A box that holds something that is not a count is never
+ * saved; Post names those first (linesNotACount).
+ */
+function hasUnsavedEdit(draft: Readonly<Record<string, string>>): boolean {
+  return Object.keys(draft).length > 0;
+}
+
+/**
+ * The lines whose box holds something that is not a count of zero or more (a
+ * lone minus sign, a stray point, a second point, a comma: countFromBox). The
+ * saver saves nothing for such a box, so its line keeps the count saved
+ * before, and a post would apply a number the box does not show. Post names
+ * them and waits (B4a).
+ */
+function linesNotACount<L extends { id: string }>(
+  draft: Readonly<Record<string, string>>,
+  lines: readonly L[],
+): L[] {
+  return lines.filter((l) => {
+    const raw = draft[l.id];
+    return raw !== undefined && !isEmptyBox(raw) && countFromBox(raw) === null;
+  });
+}
+
+/**
+ * The drafts once a box's save has finished: its draft goes, so the box
+ * shows what was saved, unless the person typed in the box again while the
+ * save ran. That newer text is waiting for its own save, so it stays on
+ * screen and still counts as unsaved (the box used to flick back to the
+ * older value until the newer save landed).
+ */
+function withoutSavedDraft(
+  draft: Record<string, string>,
+  lineId: string,
+  raw: string,
+): Record<string, string> {
+  if (draft[lineId] !== raw) return draft;
+  const { [lineId]: _saved, ...rest } = draft;
+  return rest;
 }
 
 export default function CycleCountDetail() {
@@ -239,10 +301,30 @@ export default function CycleCountDetail() {
   const [lineSaver] = React.useState(() =>
     createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
-        // An empty box persists no clear; nor does anything that is not a
-        // count of zero or more (countFromBox).
         const num = countFromBox(raw);
-        if (num === null) return;
+        if (num === null) {
+          // An emptied box clears the line's saved count, as the web count
+          // screen does: the line is uncounted again and Post skips it. It
+          // used to keep the count saved before, which Post then applied
+          // while the box showed nothing (B4a). Anything else that is not a
+          // count (a lone minus sign) saves nothing; Post waits on it.
+          if (!isEmptyBox(raw)) return;
+          const cleared = await clearLocalLine(lineId);
+          if (cleared) {
+            setLines((curr) =>
+              curr.map((l) =>
+                l.id === lineId
+                  ? { ...l, counted: null, localDirty: true, offlineCapturedAt: null }
+                  : l,
+              ),
+            );
+          }
+          setDraft((d) => withoutSavedDraft(d, lineId, raw));
+          if (!cleared) return;
+          await cycleCountSync.refreshPendingCount();
+          void cycleCountSync.forceSync();
+          return;
+        }
 
         await updateLocalLine(lineId, num);
         setLines((curr) =>
@@ -252,10 +334,7 @@ export default function CycleCountDetail() {
             l.id === lineId ? { ...l, counted: num, localDirty: true, offlineCapturedAt: null } : l,
           ),
         );
-        setDraft((d) => {
-          const { [lineId]: _drop, ...rest } = d;
-          return rest;
-        });
+        setDraft((d) => withoutSavedDraft(d, lineId, raw));
 
         await cycleCountSync.refreshPendingCount();
         void cycleCountSync.forceSync();
@@ -293,8 +372,9 @@ export default function CycleCountDetail() {
    */
   // NOTE: `loading` starts true and `emptyState`/`readError` start clean, so
   // load() needs no synchronous pre-await resets on mount; the retry buttons
-  // reset those flags themselves before re-invoking load().
-  const load = React.useCallback(async () => {
+  // reset those flags themselves before re-invoking load(). This is one pass
+  // of it: load() below runs a second when the cache discarded the first.
+  const loadOnce = React.useCallback(async (): Promise<LoadPass> => {
     if (!id) return;
 
     // The copy saved on this phone. A read that fails is said, never a
@@ -337,6 +417,10 @@ export default function CycleCountDetail() {
     }
     if (!orgId) return;
 
+    // The cache and the account this fetch is for, noted before it is sent:
+    // an answer that lands after a sign-out, a workspace switch or another
+    // account's sign-in is not stored (cycle-count-cache.ts cacheCycleCount).
+    const fetchedUnder = await cacheWriteScope();
     // Network fetch — populates / refreshes the cache.
     const [{ data: cc, error: ccErr }, { data: lineRows, error: lErr }] = await Promise.all([
       supabase
@@ -462,8 +546,18 @@ export default function CycleCountDetail() {
     // If that write fails the screen must say so: a throw here used to go
     // unhandled (load() is fire-and-forget) and leave an uncached count
     // spinning forever.
+    //
+    // And when the cache DISCARDS it (B18 review of 254fb9c72): a wipe was
+    // asked for while the fetch was out (a workspace switch, the repair, Clear
+    // offline cache, a sign-out, another account's first pull), the account
+    // changed, or the count is not in the active workspace, and the write
+    // answers false (cycle-count-cache.ts). Nothing new was stored, so with no
+    // copy on the phone the screen showed a count with no lines and no word of
+    // why, and with one, that older copy. So this pass stops there and answers
+    // 'discarded', and load() runs one more, under a fresh note, which stores
+    // the count for the same account in the same cache.
     try {
-      await cacheCycleCount(fetchedHeader, fetchedLines);
+      if (!(await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder))) return 'discarded';
       const fresh = await getCycleCount(id);
       if (fresh) hydrateFromSnapshot(fresh);
     } catch (e) {
@@ -484,6 +578,19 @@ export default function CycleCountDetail() {
       setLinked({ kind: 'failed' });
     }
   }, [id, orgId]);
+
+  /** The count's load: one pass, and a second, under a fresh note, when the
+   *  cache discarded what the first fetched (see the store in loadOnce).
+   *  Discarded twice running, the screen says so, with Retry, rather than
+   *  show a copy: what the cache discards belongs to an account, a workspace
+   *  or a cache this screen no longer has, and so does what it read before. */
+  const load = React.useCallback(async () => {
+    if ((await loadOnce()) !== 'discarded') return;
+    if ((await loadOnce()) !== 'discarded') return;
+    setReadError(COUNT_NOT_SAVED_AFTER_A_CHANGE);
+    setEmptyState('read-failed');
+    setLoading(false);
+  }, [loadOnce]);
 
 
   React.useEffect(() => {
@@ -554,12 +661,24 @@ export default function CycleCountDetail() {
       );
       return;
     }
+    // A box holding something that is not a count saves nothing, so its line
+    // keeps the count saved before, and a post would apply a number the box
+    // does not show (B4a). Name them, and post nothing until each box holds a
+    // count or nothing.
+    const notCounts = linesNotACount(draft, lines);
+    if (notCounts.length > 0) {
+      Alert.alert('Check the counts', notACountMessage(notCounts.map((l) => l.itemName)));
+      return;
+    }
     // A count typed a moment ago is still waiting for its save (the pause
-    // after the last keystroke), so it is neither saved nor queued, and a post
-    // sent now could reach the server before it: the count would post without
-    // it, and the queued count would be refused afterwards. Save it at once;
-    // it is an unsynced edit like any other, so posting waits for it.
-    const unsaved = hasUnsavedCount(draft);
+    // after the last keystroke, then its turn among the phone's writes), so
+    // it is neither saved nor queued, and a post sent now could reach the
+    // server before it: the count would post without it, and the queued count
+    // would be refused afterwards. Save what is still waiting at once; it is
+    // an unsynced edit like any other, so posting waits for it. An emptied
+    // box's clear waits the same way, and so does any box whose save is
+    // still running (hasUnsavedEdit).
+    const unsaved = hasUnsavedEdit(draft);
     if (unsaved) lineSaver.flushAll();
     // Only THIS count's unsynced edits block posting it. The engine's global
     // pendingCount includes every kind on the device (a queued PO line, a
@@ -581,8 +700,8 @@ export default function CycleCountDetail() {
       return;
     }
 
-    // Every box that holds a count is saved by now, so a line with no saved
-    // count is one the post skips (an emptied box holds none).
+    // Every box's count, and every emptied box's clear, is saved and synced
+    // by now, so a line with no saved count is one the post skips.
     const uncounted = lines.filter((l) => l.counted === null);
     const proceed = await new Promise<boolean>((resolve) => {
       Alert.alert(

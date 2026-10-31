@@ -5,7 +5,7 @@
   "description": "StockPilot \u2014 internal warehouse + inventory operations platform (invite-only)",
   "packageManager": "pnpm@9.12.3",
   "engines": {
-    "node": ">=20.11.0",
+    "node": "24.x",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
@@ -32,10 +32,10 @@
     "@commitlint/config-conventional": "^19.8.1",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.10",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "supabase": "^2.117.0",
-    "turbo": "^2.10.13",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.3"
   },
   "lint-staged": {

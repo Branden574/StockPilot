@@ -11,8 +11,8 @@ const sessionState = {
   // resolved) — when set, `can(ctx, ...)` reads THIS instead of the static
   // role default. Used to model an admin who's been granted
   // maintenance_requests:configure via the EXISTING per-user override
-  // system (role-permission-matrix.tsx), exactly like Andrew's real grant
-  // path (Task 26's ship checklist).
+  // system (role-permission-matrix.tsx), exactly like the DC4 lead's real
+  // grant path (Task 26's ship checklist).
   permissions: undefined as Set<string> | undefined,
   mfaRequired: false,
   mfaSatisfied: true,
@@ -136,7 +136,7 @@ describe('updateMaintenanceSettingsAction', () => {
       expect(updateSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('allows an admin who HOLDS an explicit per-user configure override (Andrew\'s real grant path — role-permission-matrix.tsx / setUserPermissionOverrideAction, not a parallel mechanism)', async () => {
+    it('allows an admin who HOLDS an explicit per-user configure override (the DC4 lead\'s real grant path — role-permission-matrix.tsx / setUserPermissionOverrideAction, not a parallel mechanism)', async () => {
       sessionState.role = 'admin';
       sessionState.permissions = new Set([
         'maintenance_requests:submit',

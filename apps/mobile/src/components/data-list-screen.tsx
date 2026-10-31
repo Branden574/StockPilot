@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/data-list-state';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
+import { goBackFromReturn } from '@/lib/return-path';
 import { useTheme } from '@/lib/use-theme';
 
 export type { DataListFailure } from '@/components/ui/data-list-state';
@@ -90,17 +91,10 @@ export function DataListScreen<T>({
   // expo-router (drawer screens share a navigator state that doesn't
   // track history the way a stack does). Callers that need a specific
   // back target pass it explicitly via `?return=/path` — same pattern
-  // the web app uses. Fall back to canGoBack/back when no return param
-  // is set, then Home as the ultimate safety net.
+  // the web app uses. goBackFromReturn follows it only when it is a path
+  // inside the app (a link can set it to a website), else back, then Home.
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
-  const goBack = () => {
-    if (typeof returnPath === 'string' && returnPath.length > 0) {
-      router.replace(returnPath as never);
-      return;
-    }
-    if (router.canGoBack()) router.back();
-    else router.replace('/');
-  };
+  const goBack = () => goBackFromReturn(router, returnPath);
   const emptyKind = dataListEmptyKind(failed);
   const reloadNote = dataListReloadNote(failed, data.length);
 

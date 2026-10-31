@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BarcodeDisplay } from './barcode-display';
@@ -146,5 +146,56 @@ describe('BarcodeDisplay: the print window', () => {
     );
     // Nothing in the print rules reads the viewport.
     expect(css).not.toMatch(/device-width|@viewport|zoom/);
+  });
+});
+
+// The dialog at phone width (R1). Its content is a grid whose one implicit
+// column took the width of the label-size select, and a select is as wide as
+// its longest option: at 16 px, the size that keeps iOS from zooming into the
+// field, "Thermal roll · 50 × 80 mm (Phomemo large)" made the select 370 px and
+// the column 410 px in a 340 px dialog at 390 px, so Print showed as a 27 px
+// sliver past the dialog's edge (33 px in WebKit). happy-dom lays nothing out;
+// the lab measured the fix from 320 to 1280 px in Chromium and WebKit. These
+// pin what holds it.
+describe('BarcodeDisplay: the dialog at phone width', () => {
+  async function openDialog() {
+    render(<BarcodeDisplay itemId="item-1" itemName="Wireless Mouse" sku="WM-1" barcode="WM-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Label' }));
+    return screen.findByRole('dialog', { name: 'Print label' });
+  }
+
+  // Mutation caught: the dialog's implicit auto column, which grows to the
+  // widest thing in it.
+  it('keeps one column no wider than the dialog', async () => {
+    const dialog = await openDialog();
+    expect(dialog).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)]');
+  });
+
+  // Mutation caught: dropping min-w-0 from the label or the select (each keeps
+  // its longest option's width), or dropping the 16 px phone text to fit.
+  it('lets the label size shrink into the column and keeps its 16 px phone text', async () => {
+    const dialog = await openDialog();
+    const select = within(dialog).getByLabelText('Label size');
+    expect(select.tagName).toBe('SELECT');
+    expect(select).toHaveClass('min-w-0', 'max-sm:text-base', 'max-sm:h-11', 'text-[13px]', 'h-8');
+    expect(select.closest('label')).toHaveClass('flex', 'min-w-0');
+    // The longest option is still offered whole in the list; a chosen long size
+    // is cut inside the box.
+    expect(
+      within(select).getByRole('option', { name: 'Thermal roll · 50 × 80 mm (Phomemo large)' }),
+    ).toBeInTheDocument();
+  });
+
+  // Mutation caught: dropping overflow-hidden. WebKit counted the cut words
+  // of a long chosen size as overflow of the dialog, which then scrolled
+  // sideways by 36 px at 390 px.
+  it('clips a long chosen size inside the select', async () => {
+    const dialog = await openDialog();
+    const select = within(dialog).getByLabelText('Label size');
+    fireEvent.change(select, { target: { value: 'thermal-50x80' } });
+    expect(select).toHaveValue('thermal-50x80');
+    expect(select).toHaveClass('overflow-hidden');
+    // Its focus ring is a ring drawn outside the box, which the clip leaves whole.
+    expect(select).toHaveClass('focus-visible:ring-2', 'focus-visible:ring-offset-2');
   });
 });

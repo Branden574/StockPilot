@@ -319,7 +319,7 @@ export type AdjustStockInput = z.infer<typeof adjustStockSchema>;
 
 /**
  * Remove (write off) a quantity of ONE item from ONE specific location — the
- * rack-scoped removal Andrew reached for when he tried to archive a
+ * rack-scoped removal a DC4 manager reached for when they tried to archive a
  * consolidated rack. A reason is MANDATORY and free-text (owner ask: review how
  * the reason is captured), trimmed and stored verbatim on the resulting
  * stock_movements row so the item history reads truthfully. The quantity is

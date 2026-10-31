@@ -22,7 +22,7 @@ import {
  * uppercased id). So this test reads the regex out of the newest migration
  * that defines the function and runs every builder's output through it:
  * the web's presigned master and thumbnail, the phone's uploads (base36 and
- * the older hex names), and the books import's cover.
+ * the older hex names) and their thumbnails, and the books import's cover.
  */
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '../../../../supabase/migrations');
 
@@ -80,6 +80,22 @@ describe('item photo paths match the database parser (0381 item_image_path_item_
     expect(accepted(itemPhotoPath(ORG, ITEM, 'a1b2c3d4e5f6.png'))).toBe(true);
   });
 
+  it("accepts the phone's thumbnail names, in each format it encodes (B31)", () => {
+    for (let i = 0; i < 2000; i += 1) {
+      const base = randomPhotoFileBase();
+      for (const ext of ['jpg', 'png'] as const) {
+        const thumb = itemPhotoThumbPath(ORG, ITEM, base, ext);
+        expect(accepted(thumb)).toBe(true);
+        // Beside its master: item_images_insert (0381) requires the thumbnail
+        // in the master's item folder.
+        const master = itemPhotoPath(ORG, ITEM, `${base}.jpg`);
+        expect(thumb.slice(0, thumb.lastIndexOf('/'))).toBe(
+          master.slice(0, master.lastIndexOf('/')),
+        );
+      }
+    }
+  });
+
   it('accepts the books import cover, both of its extensions', () => {
     for (const ext of ['jpg', 'png', 'webp'] as const) {
       expect(accepted(bookCoverPath(ORG, ITEM, ext))).toBe(true);
@@ -89,6 +105,8 @@ describe('item photo paths match the database parser (0381 item_image_path_item_
   it('names the org first and the item second, in both shapes', () => {
     expect(itemPhotoPath(ORG, ITEM, 'x.jpg')).toBe(`${ORG}/items/${ITEM}/x.jpg`);
     expect(itemPhotoThumbPath(ORG, ITEM, 'u')).toBe(`${ORG}/items/${ITEM}/u-thumb.webp`);
+    expect(itemPhotoThumbPath(ORG, ITEM, 'u', 'jpg')).toBe(`${ORG}/items/${ITEM}/u-thumb.jpg`);
+    expect(itemPhotoThumbPath(ORG, ITEM, 'u', 'png')).toBe(`${ORG}/items/${ITEM}/u-thumb.png`);
     expect(bookCoverPath(ORG, ITEM, 'png')).toBe(`${ORG}/${ITEM}/cover.png`);
   });
 

@@ -80,8 +80,8 @@ interface ItemHistoryDialogProps {
  * One inventory_items ROW sharing this SKU, as /api/v1/items/lookup returns it.
  *
  * WHY THIS EXISTS. A history is per ITEM RECORD, and under Model B one SKU is
- * legitimately several records — in the owner's org SKU SP-0WK2L-LY1 is three
- * ("Science Dimensions Earth & Space Science": 46 on hand at rack 37-B, 144 at
+ * legitimately several records — in the owner's org SKU SP-0DEM2-BK1 is three
+ * ("Exploring Earth & Space Science: Level 8": 46 on hand at rack 37-B, 144 at
  * 42-B, and an archived 0 with no rack). The header used to say "Every recorded
  * movement for {name} {sku}", which is false: the owner's incident spans two of
  * those records and each dialog showed half of it with no hint the other half
