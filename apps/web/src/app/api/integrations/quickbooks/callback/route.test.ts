@@ -93,6 +93,10 @@ function userClient(
       data: [{ role: 'admin' }],
       error: null,
     },
+    // Permission overrides, read by the real loader (docket S19). None by
+    // default, so the admin holds integrations:manage at its role default.
+    'role_permission_overrides.select': { data: [], error: null },
+    'user_permission_overrides.select': { data: [], error: null },
     // Account status (0308). Default = ACTIVE. Override to model a disabled
     // account or an unreadable status.
     'user_profiles.select': {
@@ -310,6 +314,73 @@ describe('GET /api/integrations/quickbooks/callback', () => {
     expect(location(res).searchParams.get('error')).toBe('forbidden');
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(putConnectionSecret).not.toHaveBeenCalled();
+  });
+
+  // ── Effective permissions (docket S19) ─────────────────────────────────────
+  // The gate is the member's EFFECTIVE set, the rule beginConnect applies, not
+  // the role's static defaults. org_connections' write rule asks only for the
+  // admin role (0146), so an admin whose integrations:manage was revoked can
+  // write a pending row with a state of their choosing through PostgREST; a
+  // static check here then let them finish the connect, storing the tokens of
+  // an account they control and activating the export.
+  it.each([
+    ['for them (a member override)', 'user_permission_overrides.select'],
+    ['for every admin (a role override)', 'role_permission_overrides.select'],
+  ])(
+    'refuses an admin whose integrations:manage was revoked %s, before exchanging the code or writing any secret',
+    async (_how, table) => {
+      vi.mocked(createClient).mockResolvedValueOnce(
+        userClient({
+          [table]: { data: [{ permission: 'integrations:manage', granted: false }], error: null },
+        }).client as never,
+      );
+
+      const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+      expect(res.status).toBe(302);
+      expect(location(res).searchParams.get('error')).toBe('forbidden');
+      expect(exchangeCode).not.toHaveBeenCalled();
+      expect(putConnectionSecret).not.toHaveBeenCalled();
+      expect(createAdminClient).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses with internal_error (not forbidden) when the permission overrides cannot be read', async () => {
+    // Nothing is authorized without them, but nothing was revoked either: the
+    // transient code, as for an unreadable account status.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'user_permission_overrides.select': {
+          data: null,
+          error: { message: 'db down', code: '57014' },
+        },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+    expect(res.status).toBe(302);
+    expect(location(res).searchParams.get('error')).toBe('internal_error');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(createAdminClient).not.toHaveBeenCalled();
+  });
+
+  it('the owner still finishes the connect when the overrides cannot be read (the lockout escape hatch)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'organization_members.select': { data: [{ role: 'owner' }], error: null },
+        'user_permission_overrides.select': { data: null, error: { message: 'db down' } },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+    expect(location(res).searchParams.get('connected')).toBe('quickbooks');
+    expect(putConnectionSecret).toHaveBeenCalledTimes(1);
   });
 
   it('redirects with error=forbidden when the user is not an accepted member', async () => {

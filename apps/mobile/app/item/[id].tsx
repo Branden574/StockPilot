@@ -155,7 +155,7 @@ import {
   serialSourceLabel,
   validateSerialInput,
 } from '@/lib/serials';
-import { shouldStackItemTabs, shouldStackRow } from '@/lib/dynamic-type-layout';
+import { fontScaleKey, shouldStackItemTabs, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -506,6 +506,15 @@ export default function ItemDetail() {
   // is wider than its segment (docket B10), rather than being cut or shrunk.
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const stackTabs = shouldStackItemTabs(windowWidth, fontScale);
+  // A live text-size change left the hero, Replace and the tab labels laid out
+  // at the old size, cut ('Movem…', 'REPLAC') until a tab changed state or the
+  // item was opened again (docket B60): the stale measurement B10 fixed in the
+  // shared list chrome. Those remount at a new size, with Tap to add photo on
+  // an item with no photo (the same words' type as Replace), so each is
+  // measured at it; none holds state. Nothing else is keyed: the scroll view
+  // would lose its place, the photo would load again, and the tab contents
+  // hold the serials, a movement's note sheet and the count card's retry.
+  const scaleKey = fontScaleKey(fontScale);
   const [item, setItem] = React.useState<Item | null>(null);
   // Ungroup (0399): other records this member can read with the same SKU.
   const [skuSiblings, setSkuSiblings] = React.useState<number | null>(null);
@@ -1720,7 +1729,7 @@ export default function ItemDetail() {
             the SKU in mono over the 26pt name, then category and barcode. The
             SKU and the meta line are information, so they read in the muted
             ink (ink4 held them at 3.2-3.6:1, under AA). */}
-        <View style={styles.hero}>
+        <View key={`hero-${scaleKey}`} style={styles.hero}>
           <Mono size={11.5} tracking={0.12} upper color={c.ink3}>
             — {item.sku}
           </Mono>
@@ -1841,7 +1850,9 @@ export default function ItemDetail() {
                     recyclingKey={`${item.id}-${item.imageUrl}`}
                   />
                 ) : (
-                  <View style={{ alignItems: 'center', gap: 8 }}>
+                  // Keyed like Replace (the same words' type): no image here
+                  // to load again.
+                  <View key={`add-photo-${scaleKey}`} style={{ alignItems: 'center', gap: 8 }}>
                     <Camera size={28} color={c.ink3} strokeWidth={1.4} />
                     <Mono size={11} tracking={0.12} upper color={c.ink3}>
                       Tap to add photo
@@ -1886,6 +1897,7 @@ export default function ItemDetail() {
               // wash), and is a real 44pt frame rather than a 26pt pill with
               // hitSlop.
               <Pressable
+                key={`replace-${scaleKey}`}
                 onPress={openPhotoActions}
                 disabled={photoBusy}
                 accessibilityRole="button"
@@ -1919,6 +1931,7 @@ export default function ItemDetail() {
             recessed track with the chosen tab on the card. Stacked one per
             line when the widest label is wider than its segment. */}
         <View
+          key={`tabs-${scaleKey}`}
           accessibilityRole="tablist"
           style={[
             styles.tabsRow,
