@@ -1,4 +1,13 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import ts from 'typescript';
@@ -25,9 +34,11 @@ import { describe, expect, it } from 'vitest';
  * bookReportItemIdParam). Services stay loud, so an id our own code gets
  * wrong is still reported.
  *
- * HOW IT IS CHECKED. Every page, layout and route under a dynamic segment is
- * parsed (the syntax tree, so comments never count). Each way its handlers
- * read `params` is found: `await params`, `await context.params` and
+ * HOW IT IS CHECKED. Every page, layout, template, parallel-route default and
+ * route file under a dynamic segment is parsed, .ts or .tsx alike (the syntax
+ * tree, so comments never count); one with any other extension fails, as the
+ * sweep could not read it. Each way its handlers read `params` is found:
+ * `await params`, `await context.params` and
  * `await Promise.all([params, ...])`, renames included. The FIRST reference
  * to each binding of a record id segment (resolved by symbol, so a shadowing
  * name elsewhere in the file does not count) must be the argument of an
@@ -129,15 +140,26 @@ function segmentsOf(relPath: string): string[] {
     .filter((s): s is string => s !== undefined);
 }
 
-function walk(dir: string, out: { dirs: string[]; files: string[] }) {
+/** The files Next hands `params`: pages, layouts, templates, parallel-route
+ *  defaults and route handlers. */
+const CONVENTION_FILE = /^(page|layout|template|default|route)\.([^.]+)$/;
+
+/** The extensions the sweep parses. next.config.ts sets no pageExtensions, so
+ *  Next serves .tsx, .ts, .jsx and .js alike: a .ts page is as real as a .tsx
+ *  one, and a .js or .jsx one, which the sweep cannot parse, fails below. */
+const SWEPT_EXTENSIONS = new Set(['tsx', 'ts']);
+
+function walk(dir: string, out: { dirs: string[]; files: string[]; unswept: string[] }) {
   for (const name of readdirSync(dir)) {
     const abs = path.join(dir, name);
     if (statSync(abs).isDirectory()) {
       out.dirs.push(abs);
       walk(abs, out);
-    } else if (/^(page|layout|template|default)\.tsx$|^route\.tsx?$/.test(name)) {
-      out.files.push(abs);
+      continue;
     }
+    const ext = CONVENTION_FILE.exec(name)?.[2];
+    if (ext === undefined) continue;
+    (SWEPT_EXTENSIONS.has(ext) ? out.files : out.unswept).push(abs);
   }
   return out;
 }
@@ -145,7 +167,7 @@ function walk(dir: string, out: { dirs: string[]; files: string[] }) {
 const relApp = (abs: string) => path.relative(APP, abs).split(path.sep).join('/');
 const relSrc = (abs: string) => path.relative(SRC, abs).split(path.sep).join('/');
 
-const tree = walk(APP, { dirs: [], files: [] });
+const tree = walk(APP, { dirs: [], files: [], unswept: [] });
 const dynamicFiles = tree.files.filter((f) => segmentsOf(relApp(f)).length > 0).sort();
 const kindOf = (abs: string): Kind => (/\/route\.tsx?$/.test(abs) ? 'route' : 'page');
 
@@ -530,6 +552,52 @@ describe('a record id in a link is checked before anything is read with it (B63)
     // No stale entries: every classed name is a segment somewhere.
     const stale = [...UUID_SEGMENTS, ...Object.keys(OTHER_SEGMENTS)].filter((n) => !names.has(n));
     expect(stale).toEqual([]);
+  });
+
+  it('the walk reads a .ts page, layout, template or default as it reads a .tsx one', () => {
+    // next.config.ts sets no pageExtensions, so Next serves page.ts as a page.
+    const root = mkdtempSync(path.join(tmpdir(), 'path-ids-walk-'));
+    try {
+      const files = [
+        '[id]/page.ts',
+        '[id]/layout.ts',
+        '[id]/template.ts',
+        '[id]/@panel/default.ts',
+        '[id]/a/route.ts',
+        '[id]/b/page.tsx',
+        '[id]/b/route.tsx',
+        '[id]/c/page.js',
+        '[id]/c/route.jsx',
+        '[id]/page.test.ts',
+        '[id]/loading.tsx',
+        '[id]/actions.ts',
+      ];
+      for (const f of files) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), '');
+      }
+      const out = walk(root, { dirs: [], files: [], unswept: [] });
+      const rel = (abs: string) => path.relative(root, abs).split(path.sep).join('/');
+      expect(out.files.map(rel).sort()).toEqual(
+        [
+          '[id]/page.ts',
+          '[id]/layout.ts',
+          '[id]/template.ts',
+          '[id]/@panel/default.ts',
+          '[id]/a/route.ts',
+          '[id]/b/page.tsx',
+          '[id]/b/route.tsx',
+        ].sort(),
+      );
+      // Next would serve these too, but the sweep cannot parse them.
+      expect(out.unswept.map(rel).sort()).toEqual(['[id]/c/page.js', '[id]/c/route.jsx']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('every page, layout, template, default and route file is one the sweep parses', () => {
+    expect(tree.unswept.map(relApp)).toEqual([]);
   });
 
   it('the sweep is not vacuous', () => {
