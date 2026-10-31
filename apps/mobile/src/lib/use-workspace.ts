@@ -302,11 +302,22 @@ async function loadWorkspace(userId: string) {
     // of each drain that STARTS after this save (sync.ts syncAfterRunning;
     // forceSync waits for a drain already running). The 60 s ticks and every
     // return to the foreground would send them too, up to a minute later.
-    // Asked for once the repair's wipe above is done (the merge with #380):
-    // asked before it, the pass's pull ran beside the wipe, which discarded
-    // the snapshot it fetched, and its check of whose cache this is read the
-    // record before, during or after the wipe.
-    void syncAfterRunning();
+    //
+    // In a load that clears the cache, engine 1's one pass is the forced
+    // full pull asked for below, once the workspace is shown: its drain sends
+    // them (syncNow pulls, then drains), and a forced pull starts after any
+    // sync running. Asked here too, that pass pulled the whole snapshot a
+    // second time behind it (the wipe forgets the delta cursor, and a forced
+    // pull never joins a sync running; docket B10 review).
+    //
+    // Both are asked for only once the repair's wipe above is done (the
+    // merge with #380). Asked before it, a pass read whose cache this is and
+    // the delta cursor with plain reads, which do not wait in the
+    // transaction queue, while the wipe does: its owner check fell before or
+    // after the wipe by timing, and when the wipe waited behind another
+    // queued transaction, the delta it fetched with the old cursor was
+    // discarded (sync.ts pullSnapshot, the cursor check).
+    if (!resetCache) void syncAfterRunning();
     void cycleCountSync.forceSync();
   }
   let warehouses: WarehouseOption[] = [];

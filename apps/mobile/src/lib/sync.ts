@@ -1111,9 +1111,12 @@ export async function syncNow(force = false): Promise<void> {
  * sync already running, and that sync's drain may already have passed a row
  * the caller has just made sendable: a row with no workspace of its own, held
  * until its account's workspace is saved (outbox-scope.ts
- * 'workspace-loading'). The workspace load calls this right after it saves
- * that workspace (use-workspace.ts), so the row goes at once rather than at
- * the next 60 s tick. Joins a sync already asked for behind the running one.
+ * 'workspace-loading'). The workspace load calls this once it has saved
+ * that workspace, so the row goes at once rather than at the next 60 s tick.
+ * A load that also clears the cache asks instead for the forced full pull it
+ * needs anyway, which also starts after a sync running and drains after its
+ * pull (use-workspace.ts). Joins a sync already asked for behind the running
+ * one.
  */
 export function syncAfterRunning(): Promise<void> {
   if (!inFlightSync) return syncNow();

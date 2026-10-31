@@ -998,6 +998,67 @@ describe(
   },
 );
 
+/*
+ * ONE FULL PULL PER CACHE REPAIR (docket B10 review, 2026-10-30). A load that
+ * saves this account's workspace asks each drain for a pass, so that rows held
+ * for want of it go at once. A load that also clears the cache asks for a
+ * forced full pull once its workspace is shown, and that pull's drain sends
+ * them. It asked syncAfterRunning too, once its wipe was done, so the whole
+ * snapshot was pulled twice: the wipe forgets the delta cursor, and a forced
+ * pull never joins a sync running (sync.ts syncNow).
+ */
+describe('a workspace load that clears the cache pulls the snapshot in full once', SLOW, () => {
+  const fullPulls = () => device.requests.filter((p) => p === '/api/v1/mobile/snapshot').length;
+  /** The load's pulls, a chained one too: the first sync joins the pull
+   *  running, the second the one chained after it. */
+  const loadPullsSettle = async () => {
+    await backgroundPullsSettle();
+    await backgroundPullsSettle();
+  };
+
+  it('the workspace repair: the account has left its saved workspace', async () => {
+    await aSignedInWithAPhoto();
+    device.memberships[A] = ['org-3'];
+    device.requests = [];
+    await workspaceLoads('org-3');
+    await loadPullsSettle();
+
+    expect(fullPulls()).toBe(1);
+    expect(items()).toEqual([`item-${A}-org-3`]);
+  });
+
+  it("the next account's sign-in in another organization: one full pull, whose drain sends the change the account queued before its workspace was saved", async () => {
+    await aSignedInWithAPhoto();
+    sessionEndsWithoutWipe(); // keeps A's saved workspace, org-1
+    device.memberships[B] = ['org-9'];
+    await signIn(B, null);
+    // B's own receipt with no workspace of its own, held while the saved
+    // workspace is A's (outbox-scope.ts 'workspace-loading').
+    raw
+      .prepare(
+        `insert into pending_actions
+           (kind, idempotency_key, payload_json, created_at, organization_id, user_id)
+         values ('receive_po_line', 'held-receipt', ?, 1, null, ?)`,
+      )
+      .run(JSON.stringify({ poId: 'po-1', lineId: 'po-1-l1', quantity: 1 }), B);
+    const { api } = await import('./api');
+    const callsBefore = vi.mocked(api).mock.calls.length;
+    device.requests = [];
+    await workspaceLoads('org-9');
+    await loadPullsSettle();
+
+    expect(fullPulls()).toBe(1);
+    const receipts = vi
+      .mocked(api)
+      .mock.calls.slice(callsBefore)
+      .filter(([p]) => p === '/api/v1/po/po-1/receive-line');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]![1]).toMatchObject({ orgId: 'org-9', asUserId: B });
+    expect(owner()).toBe(B);
+    expect(items()).toEqual([`item-${B}-org-9`]);
+  });
+});
+
 /** The two ways an account leaves the device, each run as A once its session
  *  is gone. */
 const ACCOUNT_EXITS: Record<string, () => Promise<unknown>> = {

@@ -27,9 +27,10 @@ import {
  * Integrator decision 3: the workspace and its owner are saved as ONE value
  * in ONE write at both writers, never a workspace without its owner, and a
  * failed save is a failed switch. The load then asks both drains for a pass,
- * so a queued row held for want of this account's workspace goes at once. And
- * today's phones, which hold only the older single key, upgrade through the
- * first workspace load (the last block).
+ * so a queued row held for want of this account's workspace goes at once (in
+ * a load that also clears the cache, engine 1's pass is the forced full pull
+ * it asks for anyway). And today's phones, which hold only the older single
+ * key, upgrade through the first workspace load (the last block).
  *
  * The harness is use-workspace.hydrate.test.ts's: React runs effects at once,
  * and storage, the database and Supabase are faked so the real hydrate and
@@ -370,16 +371,22 @@ describe("a load that saves this account's workspace sends the rows held for it"
     expect(drains.forceSync).not.toHaveBeenCalled();
   });
 
-  // The merge with #380 (SEC-A). A load that also clears the cache (the
-  // repair: the saved workspace is one this account has since left) asks for
-  // the passes once its wipe is done. Asked before it, as at c2946c99f, the
-  // pass's pull ran beside the wipe: the wipe discarded the snapshot it had
-  // fetched, and its check of whose cache this is (cache-owner.ts) read the
-  // record before, during or after the wipe, so a repair inside the next
-  // account's sign-in no longer came before that account's first pull.
-  it('a load that also clears the cache asks for the passes only once its wipe is done', async () => {
+  // The merge with #380 (SEC-A), then the B10 review. A load that also clears
+  // the cache (the repair: here the saved workspace is one this account has
+  // since left) asks for no pass while its wipe runs. Asked before it, as at
+  // c2946c99f, a pass read whose cache this is (cache-owner.ts) and the delta
+  // cursor with plain reads, which do not wait in the transaction queue,
+  // while the wipe does: its owner check fell before or after the wipe by
+  // timing, and when the wipe waited behind another queued transaction, the
+  // delta answer it fetched with the old cursor was discarded (sync.ts, the
+  // cursor check). Its one pass of engine 1 is the forced full pull it asks
+  // for once the workspace is shown, whose drain sends the rows held for
+  // this account's workspace. Until the review it also asked
+  // syncAfterRunning after the wipe: a second full pull of the snapshot
+  // behind the first (the wipe forgets the cursor, and a forced pull never
+  // joins one running).
+  it('a load that also clears the cache asks for nothing while its wipe runs, then for one forced full pull and one count drain', async () => {
     put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
-    vi.mocked(deleteOrgData).mockClear();
     let wipeDone!: () => void;
     vi.mocked(deleteOrgData).mockImplementationOnce(
       () =>
@@ -392,12 +399,14 @@ describe("a load that saves this account's workspace sends the rows held for it"
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' }); // saved first
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(drains.syncAfterRunning).not.toHaveBeenCalled();
+    expect(drains.syncNow).not.toHaveBeenCalled();
     expect(drains.forceSync).not.toHaveBeenCalled();
 
     wipeDone();
     await settled();
     expect(shown()).toBe('org-a');
-    expect(drains.syncAfterRunning).toHaveBeenCalledTimes(1);
+    expect(drains.syncAfterRunning).not.toHaveBeenCalled();
+    expect(drains.syncNow.mock.calls).toEqual([[true]]);
     expect(drains.forceSync).toHaveBeenCalledTimes(1);
   });
 

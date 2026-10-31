@@ -354,8 +354,9 @@ describe('drainQueue — every row is sent under its own org, and only as its ow
     );
   });
 
-  // The workspace load asks for this pass right after it saves the account's
-  // workspace (use-workspace.ts). syncNow() would JOIN a sync already
+  // The workspace load asks for this pass once it has saved the account's
+  // workspace, unless it also clears the cache: its forced full pull then
+  // does the same (use-workspace.ts). syncNow() would JOIN a sync already
   // running, whose drain may already have passed the held row; this one
   // starts after it.
   it('syncAfterRunning: a pass asked for during a running sync starts after it, so the row that sync held goes out', async () => {
