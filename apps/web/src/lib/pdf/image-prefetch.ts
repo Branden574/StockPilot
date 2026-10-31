@@ -4,7 +4,8 @@ import { unstable_cache } from 'next/cache';
 
 import { fetchItemImage, itemImageFetchRoute } from '@/lib/item-image-fetch';
 
-const PER_IMAGE_TIMEOUT_MS = 8_000;
+/** How long one image or logo fetch may take before it is aborted. */
+export const PDF_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
 /** Largest image this helper will read. Checked on Content-Length first,
  *  then on the bytes actually streamed, so a host that omits or lies about
@@ -119,13 +120,14 @@ async function readCappedBody(res: Response, maxBytes: number): Promise<Buffer> 
 
 /**
  * One image's bytes as a data URI, or a throw (see the note on the cached
- * functions). Storage URLs are fetched as before. Any other URL goes through
- * the SSRF-hardened safeFetch with the book-cover host allowlist (pinned IP,
- * every redirect hop re-validated): the legacy custom_fields.thumbnail_url
- * this helper is fed is checked only for type and length where it is stored
- * and is writable by staff, so a bare fetch() of it could reach internal
- * hosts. A host off the allowlist throws, and the row gets its placeholder.
- * The routing lives in lib/item-image-fetch.ts, shared with the export.
+ * functions). A Storage read on the project origin is fetched with plain fetch,
+ * which never follows a redirect. Any other URL goes through the SSRF-hardened
+ * safeFetch with the book-cover host allowlist (pinned IP, every redirect hop
+ * re-validated): the legacy custom_fields.thumbnail_url this helper is fed is
+ * checked only for type and length where it is stored and is writable by
+ * staff, so a bare fetch() of it could reach internal hosts. A host off the
+ * allowlist throws, and the row gets its placeholder. The routing lives in
+ * lib/item-image-fetch.ts, shared with the export.
  */
 async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promise<string> {
   const { body: rawBuf, contentType } = await fetchImageBody(url);
@@ -142,12 +144,12 @@ async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promi
 }
 
 /** One image URL's body (under the byte cap) and declared type, fetched by its
- *  route within PER_IMAGE_TIMEOUT_MS. Throws on any failure. */
+ *  route within PDF_IMAGE_TIMEOUT_MS. Throws on any failure. */
 async function fetchImageBody(url: string): Promise<{ body: Buffer; contentType: string | null }> {
   const route = pdfImageFetchRoute(url);
   if (!route) throw new Error('pdf-image url not fetchable');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), PDF_IMAGE_TIMEOUT_MS);
   try {
     const res = await fetchItemImage(url, controller.signal);
     if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
@@ -313,14 +315,21 @@ const getCachedLogoDataUri = unstable_cache(
  * react-pdf, <Image src> fetched such a value with the global fetch (following
  * redirects) or, for a string that is not an absolute URL, read it as a file
  * on the server. Here it is fetched like an item image
- * (lib/item-image-fetch.ts): the project's storage by plain fetch, any other
- * http(s) URL only from the cover hosts through the SSRF guard, anything else
- * refused before a request. BrandedHeader draws nothing but such a data: URI.
+ * (lib/item-image-fetch.ts): a Storage read on the project origin by plain
+ * fetch that never follows a redirect, any other http(s) URL only from the
+ * cover hosts through the SSRF guard, anything else refused before a request.
+ * It gets PDF_IMAGE_TIMEOUT_MS and the PDF_IMAGE_MAX_BYTES cap. BrandedHeader
+ * draws nothing but such a data: URI.
  *
- * Only PNG and JPEG bytes are returned, unchanged: what react-pdf drew from a
- * logo URL before (it cannot read WebP or AVIF), so every logo prints exactly
- * as it did. Any failure is no logo, never a failed document, and the next
- * document tries again.
+ * Only PNG and JPEG bytes are returned, unchanged, so a PNG or JPEG logo prints
+ * exactly as it did. react-pdf could not read WebP or AVIF, so those never
+ * printed. It did read SVG: an SVG logo, which the uploader accepted only from
+ * 2026-05-05 to 2026-05-09, printed before and prints no logo now, on purpose
+ * (SVG was dropped as a logo format for carrying script, and this keeps
+ * react-pdf's SVG parser off stored bytes). Any failure is no logo, never a
+ * failed document, and the next document tries again. With no logo the header
+ * starts the organization name at the left edge; before, a logo react-pdf
+ * could not draw still left an empty 36 pt square there.
  */
 export async function prefetchPdfLogo(logoUrl: string | null | undefined): Promise<string | null> {
   const url = logoUrl?.trim();
