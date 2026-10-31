@@ -29,68 +29,90 @@ import {
  * its path in the file (`name`, `Class.method`, `object.key`, `outer>inner`;
  * src/test/kept-address-senders.ts says exactly how each fact below is found):
  *   1. SENDING. A function sends when it calls sendEmail(…) under any
- *      receiver, a `.emails.send(…)` member or a fetch to the Resend API, or
- *      a function of the scan that sends: in its own file (by the nearest
- *      declaration of the name, `this.m`, a local class or object), or
- *      imported (a named, default or namespace import, `Class.method` of an
- *      imported class or of an instance made from one, `object.key` of an
- *      imported object), followed through re-exports. So every exported
- *      sender of lib/email counts (sendOrderRequestEmail,
+ *      receiver, `.emails.send(…)` (also on an `emails` taken off the client,
+ *      and by element access) or a fetch to the Resend API, or a function of
+ *      the scan that sends: in its own file (by the nearest declaration of
+ *      the name, `this.m`, a local class or object), or imported (a named,
+ *      default or namespace import, static or dynamic with `import()`,
+ *      `Class.method` of an imported class or of an instance made from one,
+ *      `object.key` of an imported object), followed through re-exports. So
+ *      every exported sender of lib/email counts (sendOrderRequestEmail,
  *      sendRentalOverdueEmail and the rest). packages/core sends no email
  *      (checked below), so a call into it never sends.
  *   2. READING. A function reads a kept address when it names the column, an
  *      alias of it the file can see, or selects it (KEPT_ADDRESSES), the
- *      query followed back through its variables; when a function of its
- *      own file that does not ask hands it the address (it is handed it);
- *      or when it reads a registered alias off a row a call returned to it
- *      (`detail.requesterEmail` of a maintenance detail a loader in another
- *      file returns). A support ticket's address is a column with a common
- *      name (email), so any read of support_tickets counts: any chain with a
- *      select, but an insert's or upsert's whose select names no kept
- *      column, and any call of a function that returns a ticket row or its
- *      address, in its own file or another (`gets it from
- *      listSupportTickets()`).
- *   3. PER FUNCTION. A function that reads a kept address and sends, or hands
- *      the address (or a row holding it) to a function of another file
- *      outside packages/core, calls the answer itself, unless the sender or
- *      function it hands it to calls the answer (the receiving sender asks).
- *      The answer is the function of server/lib/kept-address.ts the call
- *      reaches, imported under any name, through a namespace import or a
- *      re-export; a function of another file, or of its own, that only has
- *      the answer's name does not ask. A hand-off checked by hand is in
- *      REVIEWED_HANDOFFS with the reason. A hand-off into a file of the scan
- *      that reaches no function the scan knows is a finding of its own.
- *   4. ALIASES. Every property that carries a kept address under another
- *      name (an object key whose value is the address, wherever the object
- *      is, but in the arguments of an answer or of a send primitive:
- *      sendEmail, `.emails.send`, fetch) is registered in KEPT_ADDRESSES
- *      with its file and function, and every registered alias is still made
- *      there. A registered alias is then read like the column wherever its
- *      file can be seen (that file, and the files that import it), and off
- *      any row a call returned. A key with the column's own name (the
- *      support mapper's `email`) is no alias: the rows that carry it are
- *      followed by what each function returns (point 2).
- *   5. TABLES IT CANNOT READ. In a file that sends, a select through a
- *      `.from()` whose table the scan cannot read (a variable, an imported
- *      constant), or through a query it cannot trace back to a `.from()` at
- *      all, is a finding unless REVIEWED_DYNAMIC_READS says why it reads no
- *      kept address.
- *   6. NO ANSWER YET. Rentals have none: a borrower without an account has no
+ *      query followed back through the variables it is kept in; when a
+ *      function of its own file hands it the address where that function
+ *      does not ask (it is handed it); or when it reads a registered alias
+ *      off a row a call returned to it (`detail.requesterEmail` of a
+ *      maintenance detail a loader in another file returns). A support
+ *      ticket's address is a column with a common name (email), so any read
+ *      of support_tickets counts: any chain with a select, but an insert's or
+ *      upsert's whose select names no kept column, and any call of a function
+ *      that returns a ticket row or its address, in its own file or another
+ *      (`gets it from listSupportTickets()`).
+ *   3. PER SEND. Every send, and every hand-off of the address (or a row
+ *      holding it) to a function of another file outside packages/core, sits
+ *      in a function that calls the answer, or in a function inside that one,
+ *      within the function that reads it: an answer in one callback, wrapped
+ *      handler or object method does not cover a send in another, and an
+ *      answer inside a callback (`rows.filter((r) => !answer(r))`) does not
+ *      cover a send after it (ask in the loop that sends). A send or
+ *      hand-off is also fine when the function it reaches asks first, in its
+ *      own body. The answer is the function of server/lib/kept-address.ts
+ *      the call reaches, imported under any name, through a namespace import,
+ *      `import()` or a re-export; a function of another file, or of its own,
+ *      that only has the answer's name does not ask. A hand-off checked by
+ *      hand is in REVIEWED_HANDOFFS with the reason.
+ *   4. CALLS IT CANNOT FOLLOW. Where the function does not ask around it, a
+ *      call carrying the address (or a row holding it) is a finding when it
+ *      reaches a file of the scan but no function the scan knows, or a
+ *      callee the scan cannot place at all: a function kept in a variable or
+ *      a parameter, a method of an object it cannot place (a parameter, a
+ *      field, what a factory returned), a global, a query builder's write,
+ *      a store into an array, set or map that is not the function's own. So
+ *      is a row put into an object that outlives the function (`this.row`,
+ *      a parameter's object, one at the file's top level). Not findings: a
+ *      global that only computes a value (PURE_GLOBAL_CALLS in the scan), a
+ *      store into the function's own array, object, set or map, which the
+ *      scan then follows. One checked by hand is in REVIEWED_HANDOFFS.
+ *   5. ALIASES. Every key that carries a kept address under another name (an
+ *      object key wherever the object is, but in the arguments of an answer
+ *      or of a send primitive: sendEmail, `.emails.send`, a fetch to the
+ *      Resend API; `o.key = address`; `this.key = address`) is registered in
+ *      KEPT_ADDRESSES with its file and function, and every registered alias
+ *      is still made there. A computed key the scan cannot read
+ *      (`{ [k]: address }`, `o[k] = address`) is a finding of its own. A
+ *      registered alias is then read like the column wherever its file can be
+ *      seen (that file, and the files that import it), and off any row a call
+ *      returned. A key with the column's own name (the support mapper's
+ *      `email`) is no alias: the rows that carry it are followed by what each
+ *      function returns (point 2).
+ *   6. TABLES IT CANNOT READ. In every module but a 'use client' one (which
+ *      runs in the browser, sends no email, and whose `.select()` calls are
+ *      mostly a text field's), a select through a `.from()` whose table the
+ *      scan cannot read (a variable, an imported constant), or through a
+ *      query it cannot trace back to a `.from()` at all, is a finding unless
+ *      REVIEWED_DYNAMIC_READS says why it reads no kept address: a loader that
+ *      sends nothing can return its rows to a sender in another file.
+ *   7. NO ANSWER YET. Rentals have none: a borrower without an account has no
  *      borrower_user_id either (0131), so nothing in a rental tells a deleted
  *      member from someone who never had an account. A file that reads the
  *      kept rental address and sends it, or hands it on, is listed in
  *      NO_ANSWER_YET until the B23 marker (rentals.borrower_deleted_at)
- *      exists.
- *   7. ONE NAME, TWO FUNCTIONS. Functions of one path in a file (block-scoped
+ *      exists; a call it cannot follow (point 4) is shown even there, unless
+ *      REVIEWED_HANDOFFS lists it.
+ *   8. ONE NAME, TWO FUNCTIONS. Functions of one path in a file (block-scoped
  *      functions of one name) are reported when one of them reads, sends or
  *      asks: a call by that name cannot be told apart.
  * Orders answer from their own marker (order_requests.requester_deleted_at,
  * server/lib/requester-contact.ts) and are not checked here.
  *
- * IF THIS FAILS. Call the answer named in the finding before the send or the
- * hand-off (never a copy of its rule); register a new alias; or, after
- * checking it by hand, list the hand-off, the unread table or the rental
- * sender with the reason.
+ * IF THIS FAILS. Call the answer named in the finding in the function that
+ * sends or hands on (never a copy of its rule); make a call the scan cannot
+ * follow one it can (a named function, method or object function); register
+ * a new alias; or, after checking it by hand, list the hand-off, the call, the
+ * unread table or the rental sender with the reason.
  */
 
 const REPO = path.resolve(__dirname, '../../../../..');
@@ -179,8 +201,18 @@ const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
   },
 ];
 
-/** Hand-offs of a kept address (or a row holding it) to another file, checked by hand. */
+/** Checked by hand: hand-offs of a kept address (or a row holding it) to another file, calls
+ *  the scan cannot follow (callee as written), and rows put where it does not follow them. */
 const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string; why: string }> = [
+  {
+    file: RENTAL_SERVICE,
+    enclosing: 'RentalsService.create',
+    callee: 'this.ctx.supabase.rpc',
+    why:
+      'create_rental (0361), the database function that saves the rental: it writes the typed ' +
+      'address to rentals.borrower_email (the alias p_borrower_email) and its lines and holds, ' +
+      'and sends nothing; the database calls out only for push notifications (0028).',
+  },
   {
     file: 'apps/web/src/app/(platform)/platform/support/page.tsx',
     enclosing: 'PlatformSupportPage',
@@ -200,6 +232,46 @@ const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: stri
     why:
       "Its table is typed 'inventory_items' | 'order_requests' | 'rentals' | 'locations' | " +
       "'charters' | 'warehouses', and it selects only id: no kept address.",
+  },
+  {
+    file: 'apps/web/src/server/services/context.ts',
+    enclosing: 'planLimitBudget>readCount',
+    why:
+      "Its table is 'inventory_items', 'locations' or 'organization_members' (the plan " +
+      'resource), and it reads only a count of ids: no kept address.',
+  },
+  {
+    file: 'apps/web/src/server/services/item-grouping.ts',
+    enclosing: 'ItemGroupingService.previewGroup>named',
+    why: "Its table is typed 'charters' | 'warehouses', and it selects id and name: no kept address.",
+  },
+  {
+    file: 'apps/web/src/server/services/recovery.ts',
+    enclosing: 'RecoveryService.listDeleted',
+    why:
+      'Its table comes from ENTITY_TABLE (inventory_items, categories, locations, suppliers), ' +
+      "and it selects id, name, sku, deleted_at and the deleter's own profile: no kept address.",
+  },
+  {
+    file: 'apps/web/src/server/services/recovery.ts',
+    enclosing: 'RecoveryService.restore',
+    why:
+      'Its table comes from ENTITY_TABLE (inventory_items, categories, locations, suppliers), ' +
+      'and it clears deleted_at and selects only id: no kept address.',
+  },
+  {
+    file: 'apps/web/src/server/services/restore-points.ts',
+    enclosing: 'matchRefMap',
+    why:
+      "Its table is typed 'categories' | 'suppliers' | 'locations', and it selects id and " +
+      'name: no kept address.',
+  },
+  {
+    file: 'apps/web/src/server/services/restore-points.ts',
+    enclosing: 'ensureRefMap',
+    why:
+      "Its table is typed 'categories' | 'suppliers', and it inserts a name and selects only " +
+      'id: no kept address.',
   },
 ];
 
@@ -308,10 +380,22 @@ function senderFindings({ files, units }: Scan): string[] {
   const out: string[] = [];
   const byKey = new Map(units.map((u) => [key(u.file, u.name), u]));
   const sending = sendingUnits(units);
-  const asks = (k: string | null, answer: string) =>
-    k !== null && (byKey.get(k)?.answers.includes(answer) ?? false);
+  /** The unit a call reaches asks first: it calls the answer in its own
+   *  function (not only in a callback inside it), so the answer guards every
+   *  send and hand-off of it. */
+  const asksFirst = (k: string | null, answer: string) => {
+    const t = k === null ? undefined : byKey.get(k);
+    return t?.answerSites.some((a) => a.answer === answer && a.home === t.start) ?? false;
+  };
   const listedSeen = new Set<(typeof NO_ANSWER_YET)[number]>();
   const handoffsSeen = new Set<(typeof REVIEWED_HANDOFFS)[number]>();
+  const reviewedHandoff = (u: SenderUnit, callee: string) => {
+    const r = REVIEWED_HANDOFFS.find(
+      (h) => h.file === u.file && h.enclosing === u.name && h.callee === callee,
+    );
+    if (r) handoffsSeen.add(r);
+    return r !== undefined;
+  };
 
   // Two units with one path (block-scoped functions of one name): calls by
   // that name all resolve to the first, so the guard cannot tell them apart.
@@ -350,19 +434,43 @@ function senderFindings({ files, units }: Scan): string[] {
       const calls = [...u.localCalls, ...u.importCalls];
       const sendsThrough = calls.filter((c) => c.target !== null && sending.has(c.target));
       const unresolved = u.importCalls.filter((c) => c.unresolved && c.carries.includes(table));
+      const unknown = u.unknownCalls.filter((c) => c.carries.includes(table));
       const handoffs = u.importCalls.filter(
         (c) =>
           c.carries.includes(table) && !isCore(c) && !c.unresolved && !sendsThrough.includes(c),
       );
+      // An answer guards the sends and hand-offs in the function it is called
+      // in (and the functions inside that one), not those of another function
+      // of the unit, such as a sibling callback.
+      const guarded = (fns: number[]) =>
+        spec.answer !== null &&
+        u.answerSites.some((a) => a.answer === spec.answer && fns.includes(a.home));
+      const fix = spec.answer === null ? '' : `, or ask ${spec.answer}() first`;
       // A hand-off the scan cannot follow, like any other, is fine once the
-      // unit asks; with no answer for the table (rentals) it is always shown.
-      const lost = (c: CallSite, fix: string) =>
+      // function asks around it; with no answer for the table (rentals) it is
+      // always shown, but for a call reviewed by hand.
+      const lost = (c: CallSite) =>
         `${u.file}:${c.line} ${fn(u)} hands ${what} to ${c.name}() (${c.module}), which reaches ` +
         `no function the scan can follow in ${c.resolved}: make it a function, method or ` +
         `object function the scan reads${fix}`;
+      const cannotPlace = (c: CallSite) =>
+        `${u.file}:${c.line} ${fn(u)} hands ${what} to ${c.name}(), a call the scan cannot ` +
+        'follow to a function it reads: call a function, method or object function the scan ' +
+        `reads${fix}, or check the call by hand and list it in REVIEWED_HANDOFFS`;
+      for (const c of unresolved) if (!guarded(c.fns)) out.push(lost(c));
+      for (const c of unknown) {
+        if (!guarded(c.fns) && !reviewedHandoff(u, c.name)) out.push(cannotPlace(c));
+      }
+      for (const e of u.escapes.filter((x) => x.table === table)) {
+        if (guarded(e.fns) || reviewedHandoff(u, e.target)) continue;
+        out.push(
+          `${u.file}:${e.line} ${fn(u)} puts a row holding ${what} into ${e.target}, which ` +
+            'outlives the function, and the scan does not follow it there: keep the row in a ' +
+            `variable of the function${fix}, or check it by hand and list it in REVIEWED_HANDOFFS`,
+        );
+      }
 
       if (spec.answer === null) {
-        for (const c of unresolved) out.push(lost(c, ''));
         if (u.sends.length === 0 && sendsThrough.length === 0 && handoffs.length === 0) continue;
         const listed = NO_ANSWER_YET.find((l) => l.file === u.file && l.table === table);
         if (listed) listedSeen.add(listed);
@@ -375,29 +483,22 @@ function senderFindings({ files, units }: Scan): string[] {
         continue;
       }
       const answer = spec.answer;
-      if (u.answers.includes(answer)) continue;
       const ask = `without asking ${answer}() in server/lib/kept-address.ts`;
-      for (const c of unresolved) out.push(lost(c, `, or ask ${answer}() first`));
       for (const s of u.sends) {
+        if (guarded(s.fns)) continue;
         out.push(`${u.file}:${s.line} ${fn(u)} ${reads} and sends email (${s.how}) ${ask}`);
       }
       const sentDirectly = new Set(u.sends.map((x) => x.line));
       for (const c of sendsThrough) {
         if (sentDirectly.has(c.line)) continue; // sendEmail itself: reported above
-        if (asks(c.target, answer)) continue; // the receiving sender asks
+        if (guarded(c.fns) || asksFirst(c.target, answer)) continue;
         out.push(
           `${u.file}:${c.line} ${fn(u)} ${reads} and sends email through ${c.name}() ${ask}`,
         );
       }
       for (const c of handoffs) {
-        if (asks(c.target, answer)) continue;
-        const reviewed = REVIEWED_HANDOFFS.find(
-          (r) => r.file === u.file && r.enclosing === u.name && r.callee === c.name,
-        );
-        if (reviewed) {
-          handoffsSeen.add(reviewed);
-          continue;
-        }
+        if (guarded(c.fns) || asksFirst(c.target, answer)) continue;
+        if (reviewedHandoff(u, c.name)) continue;
         out.push(
           `${u.file}:${c.line} ${fn(u)} hands ${what} to ${c.name}() (${c.module}) ${ask}: ` +
             'ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
@@ -436,14 +537,24 @@ function senderFindings({ files, units }: Scan): string[] {
       }
     }
   }
+  // A key the scan cannot read can be no registered alias.
+  for (const u of units) {
+    for (const k of u.unreadableKeys) {
+      const spec = KEPT_ADDRESSES.find((s) => s.table === k.table)!;
+      out.push(
+        `${u.file}:${k.line} ${fn(u)} puts ${spec.table}.${spec.column} under ${k.key}, a key ` +
+          'the scan cannot read: use a fixed key and register it in KEPT_ADDRESSES',
+      );
+    }
+  }
 
-  // Selects of an unread table in a file that sends.
-  const sendingFiles = new Set(
-    units.filter((u) => sending.has(key(u.file, u.name))).map((u) => u.file),
-  );
+  // Selects of a table the scan cannot read, in any module but a 'use client'
+  // one (it runs in the browser, sends no email, and its `.select()` calls
+  // are mostly a text field's).
+  const clientFiles = new Set(files.filter((f) => f.client).map((f) => f.file));
   const dynamicSeen = new Set<(typeof REVIEWED_DYNAMIC_READS)[number]>();
   for (const u of units) {
-    if (!sendingFiles.has(u.file)) continue;
+    if (clientFiles.has(u.file)) continue;
     for (const d of u.dynamicReads) {
       const reviewed = REVIEWED_DYNAMIC_READS.find(
         (r) => r.file === u.file && r.enclosing === u.name,
@@ -451,8 +562,8 @@ function senderFindings({ files, units }: Scan): string[] {
       if (reviewed) dynamicSeen.add(reviewed);
       else {
         out.push(
-          `${u.file}:${d.line} ${fn(u)} selects through ${d.what}, in a file that sends email: ` +
-            'check it reads no kept address and list it in REVIEWED_DYNAMIC_READS',
+          `${u.file}:${d.line} ${fn(u)} selects through ${d.what}: check it reads no kept ` +
+            'address and list it in REVIEWED_DYNAMIC_READS',
         );
       }
     }
@@ -582,6 +693,13 @@ describe('kept-address senders (B23 guard)', () => {
           .select('id, requester_user_id, requester_email_snapshot')
           .eq('id', id)
           .maybeSingle();`;
+    /** The end of a finding for a call that hands a kept address to a callee
+     *  the scan cannot place (unknownCalls), for a table with an answer. */
+    const cannotPlace = (answer: string) =>
+      ', a call the scan cannot follow to a function it reads: call a function, method or ' +
+      `object function the scan reads, or ask ${answer}() first, or check the call by hand and ` +
+      'list it in REVIEWED_HANDOFFS';
+    const CANNOT_PLACE_M = cannotPlace('maintenanceRequesterAccountDeleted');
 
     it(
       '(1) a call of an exported lib/email sender, a .emails.send member, and a hand-off to a sender or a helper in another file',
@@ -708,7 +826,7 @@ describe('kept-address senders (B23 guard)', () => {
         ];
         expect(withPlanted(planted)).toEqual([
           'apps/web/src/server/services/plant-support-update.ts:9 reopenTicket() reads support_tickets.email and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/services/plant-support-const.ts:4 remind() selects through .from(SUPPORT_TABLE), a table the scan cannot read, in a file that sends email: check it reads no kept address and list it in REVIEWED_DYNAMIC_READS',
+          'apps/web/src/server/services/plant-support-const.ts:4 remind() selects through .from(SUPPORT_TABLE), a table the scan cannot read: check it reads no kept address and list it in REVIEWED_DYNAMIC_READS',
         ]);
       },
       TIMEOUT,
@@ -988,6 +1106,8 @@ describe('kept-address senders (B23 guard)', () => {
       '(6) a kept address put into an object in a call that is not a send primitive or an answer',
       () => {
         expect(withPlanted(PLANTS_6)).toEqual([
+          // (8, 2026-10-31): the outbox write is a callee the scan cannot place.
+          `apps/web/src/server/services/plant-alias-arg.ts:11 queueNotice() hands maintenance_requests.requester_email_snapshot to admin.from('notice_outbox').insert()${CANNOT_PLACE_M}`,
           'apps/web/src/server/services/plant-alias-arg.ts:8 reopen() puts maintenance_requests.requester_email_snapshot into recipient: register the alias in KEPT_ADDRESSES so its readers are checked',
         ]);
       },
@@ -999,7 +1119,7 @@ describe('kept-address senders (B23 guard)', () => {
       () => {
         expect(withPlanted(PLANTS_7)).toEqual([
           'apps/web/src/server/services/plant-split-chain.ts:6 remindTicket() reads support_tickets.email and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/services/plant-untraced.ts:4 remindTicket() selects through query, which the scan cannot trace to a .from(), in a file that sends email: check it reads no kept address and list it in REVIEWED_DYNAMIC_READS',
+          'apps/web/src/server/services/plant-untraced.ts:4 remindTicket() selects through query, which the scan cannot trace to a .from(): check it reads no kept address and list it in REVIEWED_DYNAMIC_READS',
         ]);
       },
       TIMEOUT,
@@ -1236,7 +1356,11 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
           'apps/web/src/server/email/plant-own-answer.ts:9 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/email/plant-lookalike-import.ts:10 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/email/plant-lookalike-import.ts:9 remindRequester() hands maintenance_requests.requester_email_snapshot to maintenanceRequesterAccountDeleted() (@/server/lib/plant-lookalike) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          // (8, 2026-10-31): a member of a parameter, and a parameter called as
+          // a function, are callees the scan cannot place.
+          `apps/web/src/server/email/plant-shadowed-answer.ts:9 viaMember() hands maintenance_requests.requester_email_snapshot to rules.maintenanceRequesterAccountDeleted()${CANNOT_PLACE_M}`,
           'apps/web/src/server/email/plant-shadowed-answer.ts:10 viaMember() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          `apps/web/src/server/email/plant-shadowed-answer.ts:22 viaParameter() hands maintenance_requests.requester_email_snapshot to maintenanceRequesterAccountDeleted()${CANNOT_PLACE_M}`,
           'apps/web/src/server/email/plant-shadowed-answer.ts:23 viaParameter() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/email/plant-shadowed-answer.ts:35 viaNested() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
         ]);
@@ -1288,6 +1412,857 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
           },
         ];
         expect(withPlanted(planted)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    // ── Guard clauses 1-8, checked again (round c10, 2026-10-31) ──────────────
+    // Each plant is written the way its clause describes it. CAUGHT: the
+    // helper of 06df95532 already reported it; kept so it stays caught.
+    // MISSED: the helper of 06df95532 reported nothing for it.
+    const C10_READ = `
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, requester_user_id, requester_email_snapshot')
+                  .eq('id', id)
+                  .maybeSingle();`;
+    const C10_NOTICES: Source = {
+      file: 'apps/web/src/server/services/plant-c10-notices.ts',
+      text: `
+              export class NoticeService {
+                static async notifyStatic(to: string) {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                }
+                async notify(to: string) {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                }
+              }
+              export function makeNoticeService() {
+                return new NoticeService();
+              }
+              export const notices = {
+                reopened: async (to: string) => {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                },
+              };`,
+    };
+    const C10_REMINDERS: Source = {
+      file: 'apps/web/src/server/jobs/plant-c10-reminders.ts',
+      text: `
+              export async function queueReminder(job: unknown) {
+                void job;
+              }`,
+    };
+    const C10: Record<string, Source[]> = {
+      'c1 caught': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c1-caught.ts',
+          text: `
+              import * as orderEmails from '@/lib/email/order-requests';
+              import { sendRentalOverdueEmail as remindBorrower } from '@/lib/email/rentals';
+              import { recordReopen } from '@/server/services/plant-c10-audit';
+              export async function viaNamespace(admin: Admin, id: string) {${C10_READ}
+                await orderEmails.sendOrderRequestEmail(data!.requester_email_snapshot! as never);
+              }
+              export async function viaAlias(admin: Admin, id: string) {${C10_READ}
+                await remindBorrower(data!.requester_email_snapshot! as never);
+              }
+              export async function handOffRow(admin: Admin, id: string) {${C10_READ}
+                await recordReopen(data);
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-audit.ts',
+          text: `
+              export async function recordReopen(row: unknown) {
+                void row;
+              }`,
+        },
+      ],
+      'c1 missed': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c1-missed.ts',
+          text: `
+              import { sendEmail } from '@/lib/email/resend';
+              export async function viaDynamicImport(admin: Admin, id: string) {${C10_READ}
+                const { sendOrderRequestEmail } = await import('@/lib/email/order-requests');
+                await sendOrderRequestEmail(data!.requester_email_snapshot! as never);
+              }
+              export async function viaDynamicNamespace(admin: Admin, id: string) {${C10_READ}
+                const orderEmails = await import('@/lib/email/order-requests');
+                await orderEmails.sendOrderRequestEmail(data!.requester_email_snapshot! as never);
+              }
+              export async function viaEmails(admin: Admin, resend: Resend, id: string) {${C10_READ}
+                const { emails } = resend;
+                await emails.send({ to: [data!.requester_email_snapshot!], subject: 'Reopened', html: '' });
+              }
+              export async function viaElements(admin: Admin, resend: Resend, id: string) {${C10_READ}
+                await resend['emails'].send({ to: [data!.requester_email_snapshot!], subject: 'Reopened', html: '' });
+                await resend.emails['send']({ to: [data!.requester_email_snapshot!], subject: 'Again', html: '' });
+              }
+              export async function viaVariable(admin: Admin, id: string) {${C10_READ}
+                const send = sendEmail;
+                await send({ to: [data!.requester_email_snapshot!], subject: 'Reopened', html: '' });
+              }`,
+        },
+      ],
+      'c1 missed 2': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c1-more.ts',
+          text: `
+              export async function viaInlineImport(admin: Admin, id: string) {${C10_READ}
+                await (await import('@/lib/email/order-requests')).sendOrderRequestEmail(data!.requester_email_snapshot! as never);
+              }
+              export async function viaSendEmailElement(admin: Admin, mailer: Mailer, id: string) {${C10_READ}
+                await mailer['sendEmail']({ to: [data!.requester_email_snapshot!], subject: 'Reopened', html: '' });
+              }
+              export async function viaAliasSeenThroughImport(input: { requesterEmail: string }) {
+                const { MaintenanceRequestsService } = await import('@/server/services/maintenance-requests');
+                void MaintenanceRequestsService;
+                await sendEmail({ to: input.requesterEmail, subject: 'Follow-up', html: '' });
+              }`,
+        },
+      ],
+      'c1 control': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c1-control.ts',
+          text: `
+              export async function asksThroughDynamicImport(admin: Admin, id: string) {${C10_READ}
+                const { maintenanceRequesterAccountDeleted } = await import('@/server/lib/kept-address');
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                const { sendOrderRequestEmail } = await import('@/lib/email/order-requests');
+                await sendOrderRequestEmail(data.requester_email_snapshot as never);
+              }`,
+        },
+      ],
+      'c2 caught': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c2-caught.ts',
+          text: `
+              export async function purge(admin: Admin, id: string) {
+                const { data } = await admin.from('support_tickets').delete().eq('id', id).select('email').single();
+                await sendEmail({ to: data.email, subject: 'Removed', html: '' });
+              }
+              export async function refile(admin: Admin, row: Row) {
+                const { data } = await admin.from('support_tickets').upsert(row).select('email').single();
+                await sendEmail({ to: data.email, subject: 'Refiled', html: '' });
+              }
+              export async function file(admin: Admin, row: Row) {
+                const { data } = await admin.from('support_tickets').insert(row).select('id, email').single();
+                await sendEmail({ to: data.email, subject: 'Filed', html: '' });
+              }
+              export async function remind(admin: Admin, table: string, id: string) {
+                const { data } = await admin.from(table).select('email').eq('id', id).single();
+                await sendEmail({ to: data.email, subject: 'Still open', html: '' });
+              }`,
+        },
+      ],
+      'c2 missed': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-ticket-loader.ts',
+          text: `
+              import { SUPPORT_TABLE } from '@/server/services/plant-tables';
+              export async function loadTicket(admin: Admin, id: string) {
+                const { data } = await admin.from(SUPPORT_TABLE).select('*').eq('id', id).single();
+                return data;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c10-ticket-remind.ts',
+          text: `
+              import { loadTicket } from '@/server/services/plant-c10-ticket-loader';
+              export async function remind(admin: Admin, id: string) {
+                const t = await loadTicket(admin, id);
+                await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }`,
+        },
+      ],
+      'c3 missed': [
+        {
+          file: 'apps/web/src/server/actions/plant-c10-c3-wrapped.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export const resolvedAction = withAuth(async (admin: Admin, id: string) => {${C10_READ}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+              });
+              export const reopenedAction = withAuth(async (admin: Admin, id: string) => {${C10_READ}
+                await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+              });`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-c10-c3-callbacks.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function sendBoth(admin: Admin, ids: string[]) {
+                await Promise.all(
+                  ids.map(async (id) => {${C10_READ}
+                    if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                    await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+                  }),
+                );
+                await Promise.all(
+                  ids.map(async (id) => {${C10_READ}
+                    await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+                  }),
+                );
+              }
+              export async function sendFiltered(admin: Admin, rows: Array<{ requester_user_id: string | null; requester_email_snapshot: string | null }>) {
+                const live = rows.filter((r) => !maintenanceRequesterAccountDeleted(r));
+                for (const r of live) await sendEmail({ to: r.requester_email_snapshot, subject: 'Resolved', html: '' });
+              }`,
+        },
+      ],
+      'c3 control': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c3-control.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function sendLater(admin: Admin, id: string) {${C10_READ}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                keepAlive(
+                  (async () => {
+                    await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+                  })(),
+                );
+              }
+              export async function sendEach(admin: Admin, rows: Array<{ requester_user_id: string | null; requester_email_snapshot: string | null }>) {
+                for (const r of rows) {
+                  if (maintenanceRequesterAccountDeleted(r)) continue;
+                  await sendEmail({ to: r.requester_email_snapshot, subject: 'Resolved', html: '' });
+                }
+              }`,
+        },
+      ],
+      'c4 missed': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/services/plant-c10-c4-assign.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              export async function reopen(admin: Admin, id: string) {${C10_READ}
+                const payload: { recipient?: string | null } = {};
+                payload.recipient = data?.requester_email_snapshot ?? null;
+                await queueReminder(payload);
+              }
+              export class ReopenJob {
+                recipient: string | null = null;
+                async load(admin: Admin, id: string) {${C10_READ}
+                  this.recipient = data?.requester_email_snapshot ?? null;
+                }
+              }
+              export async function viaCompound(admin: Admin, id: string) {${C10_READ}
+                let to: string | null = null;
+                to ??= data?.requester_email_snapshot ?? null;
+                await queueReminder(to);
+              }
+              export async function viaAssign(admin: Admin, id: string) {${C10_READ}
+                const copy = {};
+                Object.assign(copy, data);
+                await queueReminder(copy);
+              }`,
+        },
+      ],
+      'c5 caught': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c5-static.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export class Notice {
+                static async send(admin: Admin, id: string) {${C10_READ}
+                  if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                  await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+                }
+                async send(admin: Admin, id: string) {${C10_READ}
+                  await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+                }
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-c10-c5-classes.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              register(
+                class {
+                  async send(admin: Admin, id: string) {${C10_READ}
+                    if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                    await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+                  }
+                },
+              );
+              register(
+                class {
+                  async send(admin: Admin, id: string) {${C10_READ}
+                    await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+                  }
+                },
+              );`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-c10-c5-overload.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function notify(admin: Admin, id: string): Promise<void>;
+              export async function notify(admin: Admin, id: number): Promise<void>;
+              export async function notify(admin: Admin, id: string | number) {${C10_READ}
+                await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+              }
+              export async function notifyResolved(admin: Admin, id: string) {${C10_READ}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+              }`,
+        },
+      ],
+      'c5 missed': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c5-objects.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export const resolvedHandlers = register({
+                async deliver(admin: Admin, id: string) {${C10_READ}
+                  if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                  await sendEmail({ to: data.requester_email_snapshot, subject: 'Resolved', html: '' });
+                },
+              });
+              export const reopenedHandlers = register({
+                async deliver(admin: Admin, id: string) {${C10_READ}
+                  await sendEmail({ to: data?.requester_email_snapshot, subject: 'Reopened', html: '' });
+                },
+              });`,
+        },
+      ],
+      'c6 caught': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c6-caught.ts',
+          text: `
+              export async function reopen(admin: Admin, id: string) {${C10_READ}
+                const { requester_email_snapshot } = data!;
+                await queueNotice({ recipient: requester_email_snapshot });
+                await enqueue({ to: data?.requester_email_snapshot ?? null });
+                return new Notice({ to: data?.requester_email_snapshot ?? null });
+              }
+              async function queueNotice(payload: { recipient: string | null }) {
+                void payload;
+              }
+              async function enqueue(job: { to: string | null }) {
+                void job;
+              }
+              class Notice {
+                constructor(readonly options: { to: string | null }) {}
+              }`,
+        },
+      ],
+      'c6 missed': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c6-missed.ts',
+          text: `
+              export async function viaFetch(admin: Admin, id: string) {${C10_READ}
+                await fetch('https://hooks.example.com/notify', {
+                  method: 'POST',
+                  body: data?.requester_email_snapshot ?? '',
+                });
+              }
+              export async function viaComputedKey(admin: Admin, id: string, field: string) {${C10_READ}
+                await queueNotice({ [field]: data?.requester_email_snapshot ?? null });
+              }
+              async function queueNotice(payload: Record<string, string | null>) {
+                void payload;
+              }`,
+        },
+      ],
+      'c7 caught': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c7-caught.ts',
+          text: `
+              export async function remind(supabase: Admin, id: string) {
+                let q = supabase.from('support_tickets');
+                q = q.select('requester_email_snapshot');
+                const { data } = await q.eq('id', id).single();
+                await sendEmail({ to: data.email, subject: 'Still open', html: '' });
+              }`,
+        },
+      ],
+      'c7 missed': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-untraced-loader.ts',
+          text: `
+              function ticketsOf(admin: Admin) {
+                return admin.from('support_tickets');
+              }
+              export async function loadTicket(admin: Admin, id: string) {
+                const { data } = await ticketsOf(admin).select('*').eq('id', id).single();
+                return data;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c10-untraced-remind.ts',
+          text: `
+              import { loadTicket } from '@/server/services/plant-c10-untraced-loader';
+              export async function remind(admin: Admin, id: string) {
+                const t = await loadTicket(admin, id);
+                await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-run-query.ts',
+          text: `
+              export async function run(q: Query) {
+                const { data } = await q.select('*');
+                return data ?? [];
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c10-run-remind.ts',
+          text: `
+              import { run } from '@/server/services/plant-c10-run-query';
+              export async function remindAll(admin: Admin) {
+                const rows = await run(admin.from('support_tickets'));
+                for (const r of rows) await sendEmail({ to: r.email, subject: 'Still open?', html: '' });
+              }`,
+        },
+      ],
+      'c7 control': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c7-control.ts',
+          text: `
+              export async function history(admin: Admin, itemId: string) {
+                const orders = await fetchAllRows((from: number, to: number) => {
+                  const q = admin.from('purchase_order_items').select('id, unit_cost').eq('item_id', itemId);
+                  return q.range(from, to);
+                });
+                const receipts = await fetchAllRows((from: number, to: number) => {
+                  const q = admin.from('receipt_lines').select('id, unit_cost').eq('item_id', itemId);
+                  return q.range(from, to);
+                });
+                return [...orders, ...receipts].length;
+              }`,
+        },
+      ],
+      'c8 caught': [
+        C10_NOTICES,
+        {
+          file: 'apps/web/src/server/services/plant-c10-default-class.ts',
+          text: `
+              export default class Notice {
+                async notify(to: string) {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                }
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-notice-barrel.ts',
+          text: `
+              export { NoticeService as Notices } from '@/server/services/plant-c10-notices';
+              export * from '@/server/services/plant-c10-notices';`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-instance-export.ts',
+          text: `
+              import { NoticeService } from '@/server/services/plant-c10-notices';
+              export const sharedNotices = new NoticeService();`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-two-notify.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function notify(to: string, row: { requester_user_id: string | null }) {
+                if (maintenanceRequesterAccountDeleted(row)) return;
+                await sendEmail({ to, subject: 'Reopened', html: '' });
+              }
+              export class LoudNotice {
+                async notify(to: string) {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                }
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-c8-caught.ts',
+          text: `
+              import Notice from '@/server/services/plant-c10-default-class';
+              import { Notices, notices } from '@/server/services/plant-c10-notice-barrel';
+              import { sharedNotices } from '@/server/services/plant-c10-instance-export';
+              import { LoudNotice } from '@/server/services/plant-c10-two-notify';
+              export async function viaDefault(admin: Admin, id: string) {${C10_READ}
+                await new Notice().notify(data!.requester_email_snapshot!);
+              }
+              export async function viaRenamed(admin: Admin, id: string) {${C10_READ}
+                await new Notices().notify(data!.requester_email_snapshot!);
+              }
+              export async function viaStatic(admin: Admin, id: string) {${C10_READ}
+                await Notices.notifyStatic(data!.requester_email_snapshot!);
+              }
+              export async function viaObject(admin: Admin, id: string) {${C10_READ}
+                await notices.reopened(data!.requester_email_snapshot!);
+              }
+              export async function viaInstance(admin: Admin, id: string) {${C10_READ}
+                await sharedNotices.notify(data!.requester_email_snapshot!);
+              }
+              export async function viaClassMethod(admin: Admin, id: string) {${C10_READ}
+                await new LoudNotice().notify(data!.requester_email_snapshot!);
+              }`,
+        },
+      ],
+      'c8 missed': [
+        C10_NOTICES,
+        {
+          file: 'apps/web/src/server/services/plant-c10-c8-missed.ts',
+          text: `
+              import type { NoticeService } from '@/server/services/plant-c10-notices';
+              import { makeNoticeService, NoticeService as Notices, notices } from '@/server/services/plant-c10-notices';
+              export async function viaParameter(admin: Admin, svc: NoticeService, id: string) {${C10_READ}
+                await svc.notify(data!.requester_email_snapshot!);
+              }
+              export class ReopenFlow {
+                constructor(private readonly mailer: NoticeService) {}
+                async reopen(admin: Admin, id: string) {${C10_READ}
+                  await this.mailer.notify(data!.requester_email_snapshot!);
+                }
+              }
+              export async function viaFactory(admin: Admin, id: string) {${C10_READ}
+                const svc = makeNoticeService();
+                await svc.notify(data!.requester_email_snapshot!);
+              }
+              export async function viaDestructured(admin: Admin, id: string) {${C10_READ}
+                const { reopened } = notices;
+                await reopened(data!.requester_email_snapshot!);
+              }
+              export async function viaCopy(admin: Admin, id: string) {${C10_READ}
+                const svc = new Notices();
+                const mailer = svc;
+                await mailer.notify(data!.requester_email_snapshot!);
+              }
+              export async function viaCallback(admin: Admin, id: string, notify: (to: string) => Promise<void>) {${C10_READ}
+                await notify(data!.requester_email_snapshot!);
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-open-tickets.ts',
+          text: `
+              export async function loadOpen(admin: Admin) {
+                const out: unknown[] = [];
+                const { data } = await admin.from('support_tickets').select('*').eq('status', 'open');
+                for (const t of data ?? []) out.push(t);
+                return out;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c10-open-remind.ts',
+          text: `
+              import { loadOpen } from '@/server/services/plant-c10-open-tickets';
+              export async function remindOpen(admin: Admin) {
+                for (const t of await loadOpen(admin)) await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }`,
+        },
+      ],
+      'c8 missed 2': [
+        C10_NOTICES,
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/services/plant-c10-c8-more.ts',
+          text: `
+              import { makeNoticeService } from '@/server/services/plant-c10-notices';
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              class Reminder {
+                constructor(readonly row: unknown) {}
+              }
+              export async function viaInstanceOfRow(admin: Admin, id: string) {${C10_READ}
+                await queueReminder(new Reminder(data));
+              }
+              export async function viaFactoryOfRow(admin: Admin, id: string) {${C10_READ}
+                const svc = makeNoticeService(data);
+                await svc.notify(data!.requester_email_snapshot!);
+              }`,
+        },
+      ],
+      'c8 missed 3': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c8-stores.ts',
+          text: `
+              const outbox: unknown[] = [];
+              export async function viaModuleArray(admin: Admin, id: string) {${C10_READ}
+                outbox.push(data);
+              }
+              export class Holder {
+                row: unknown = null;
+                async keep(admin: Admin, id: string) {${C10_READ}
+                  this.row = data;
+                }
+              }
+              export async function viaParameterObject(admin: Admin, id: string, into: { row?: unknown }) {${C10_READ}
+                into.row = data;
+              }
+              export async function viaLocalArray(admin: Admin, id: string) {${C10_READ}
+                const rows: unknown[] = [];
+                rows.push(data);
+                return rows.length;
+              }`,
+        },
+      ],
+      'c8 control': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c8-control.ts',
+          text: `
+              export async function lookupKey(admin: Admin, id: string) {${C10_READ}
+                const key = encodeURIComponent(String(data?.requester_email_snapshot ?? ''));
+                const copy = JSON.stringify({ at: Date.now() });
+                return key.length + copy.length;
+              }`,
+        },
+      ],
+    };
+    const ASK_M =
+      ' without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts';
+    const ASK_S =
+      ' without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts';
+    const HAND_OFF_M = `${ASK_M}: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS`;
+    const ESCAPE_M =
+      ', which outlives the function, and the scan does not follow it there: keep the row in a ' +
+      'variable of the function, or ask maintenanceRequesterAccountDeleted() first, or check it ' +
+      'by hand and list it in REVIEWED_HANDOFFS';
+    const DYNAMIC = ': check it reads no kept address and list it in REVIEWED_DYNAMIC_READS';
+    const REGISTER = ': register the alias in KEPT_ADDRESSES so its readers are checked';
+
+    it(
+      '(c1) caught at 06df95532: a lib/email sender through a namespace import and under another name, and a row handed to a helper in another file',
+      () => {
+        expect(withPlanted(C10['c1 caught']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c1-caught.ts:11 viaNamespace() reads maintenance_requests.requester_email_snapshot and sends email through sendOrderRequestEmail()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-caught.ts:19 viaAlias() reads maintenance_requests.requester_email_snapshot and sends email through remindBorrower()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-caught.ts:27 handOffRow() hands maintenance_requests.requester_email_snapshot to recordReopen() (@/server/services/plant-c10-audit)${HAND_OFF_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c1) missed at 06df95532: a lib/email sender through a dynamic import, emails.send off a destructured emails or by element access, and sendEmail kept in a variable',
+      () => {
+        expect(withPlanted(C10['c1 missed']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:10 viaDynamicImport() reads maintenance_requests.requester_email_snapshot and sends email through sendOrderRequestEmail()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:19 viaDynamicNamespace() reads maintenance_requests.requester_email_snapshot and sends email through sendOrderRequestEmail()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:28 viaEmails() reads maintenance_requests.requester_email_snapshot and sends email (.emails.send)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:36 viaElements() reads maintenance_requests.requester_email_snapshot and sends email (.emails.send)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:37 viaElements() reads maintenance_requests.requester_email_snapshot and sends email (.emails.send)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-missed.ts:46 viaVariable() hands maintenance_requests.requester_email_snapshot to send()${CANNOT_PLACE_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c1) missed at 06df95532: a lib/email sender through (await import(…)).f(), sendEmail by element access, and an alias seen through a dynamic import',
+      () => {
+        expect(withPlanted(C10['c1 missed 2']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c1-more.ts:8 viaInlineImport() reads maintenance_requests.requester_email_snapshot and sends email through sendOrderRequestEmail()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-more.ts:16 viaSendEmailElement() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c1-more.ts:21 viaAliasSeenThroughImport() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c1) the answer and the sender, both through a dynamic import, are followed',
+      () => {
+        expect(withPlanted(C10['c1 control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c2) caught at 06df95532: support selects after delete(), upsert() and insert(), and .from() of a parameter',
+      () => {
+        expect(withPlanted(C10['c2 caught']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c2-caught.ts:4 purge() reads support_tickets.email and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c10-c2-caught.ts:8 refile() reads support_tickets.email and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c10-c2-caught.ts:12 file() reads support_tickets.email and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c10-c2-caught.ts:15 remind() selects through .from(table), a table the scan cannot read${DYNAMIC}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c2) missed at 06df95532: .from() of a table constant in a loader that sends nothing, its rows emailed from another file',
+      () => {
+        expect(withPlanted(C10['c2 missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-ticket-loader.ts:4 loadTicket() selects through .from(SUPPORT_TABLE), a table the scan cannot read${DYNAMIC}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c3) missed at 06df95532: an answer in one function of a unit covered a send in another (two wrapped handlers, two callbacks, an answer only in a filter callback)',
+      () => {
+        expect(withPlanted(C10['c3 missed']!)).toEqual([
+          `apps/web/src/server/actions/plant-c10-c3-wrapped.ts:18 its top level reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c3-callbacks.ts:22 sendBoth() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c3-callbacks.ts:28 sendFiltered() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c3) an answer guards a send in a callback inside its function, and the send after it in a loop',
+      () => {
+        expect(withPlanted(C10['c3 control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c4) missed at 06df95532: an alias made by assigning a property or a class field, and the address carried through ??= and Object.assign',
+      () => {
+        expect(withPlanted(C10['c4 missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c4-assign.ts:11 reopen() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c10-c4-assign.ts:32 viaCompound() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c10-c4-assign.ts:42 viaAssign() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c10-c4-assign.ts:10 reopen() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
+          `apps/web/src/server/services/plant-c10-c4-assign.ts:21 ReopenJob.load() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c5) caught at 06df95532: a static and an instance method of one name, two class expressions, and an overload',
+      () => {
+        expect(withPlanted(C10['c5 caught']!)).toEqual([
+          'apps/web/src/server/email/plant-c10-c5-static.ts:4,13 2 functions are all Notice.send(): the guard cannot tell their calls apart; rename one',
+          'apps/web/src/server/email/plant-c10-c5-classes.ts:5,18 2 functions are all (class).send(): the guard cannot tell their calls apart; rename one',
+          `apps/web/src/server/email/plant-c10-c5-static.ts:19 Notice.send#2() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c5-classes.ts:24 (class).send#2() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c5-overload.ts:11 notify() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c5) missed at 06df95532: methods of one name in two objects handed to a call',
+      () => {
+        expect(withPlanted(C10['c5 missed']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c5-objects.ts:21 its top level reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c6) caught at 06df95532: { recipient } and { to } straight into calls and into new',
+      () => {
+        expect(withPlanted(C10['c6 caught']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c6-caught.ts:9 reopen() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
+          `apps/web/src/server/services/plant-c10-c6-caught.ts:10 reopen() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+          `apps/web/src/server/services/plant-c10-c6-caught.ts:11 reopen() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c6) missed at 06df95532: any fetch silenced the address in its options, and a computed key hid it',
+      () => {
+        expect(withPlanted(C10['c6 missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c6-missed.ts:8 viaFetch() hands maintenance_requests.requester_email_snapshot to fetch()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c6-missed.ts:10 viaFetch() puts maintenance_requests.requester_email_snapshot into body${REGISTER}`,
+          'apps/web/src/server/services/plant-c10-c6-missed.ts:19 viaComputedKey() puts maintenance_requests.requester_email_snapshot under [field], a key the scan cannot read: use a fixed key and register it in KEPT_ADDRESSES',
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      "(c7) caught at 06df95532: the clause's own query split across variables",
+      () => {
+        expect(withPlanted(C10['c7 caught']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c7-caught.ts:6 remind() reads support_tickets.email and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c10-c7-caught.ts:6 remind() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c7) missed at 06df95532: a select the scan cannot trace to a .from(), in files that send nothing, whose rows another file emails',
+      () => {
+        expect(withPlanted(C10['c7 missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-untraced-loader.ts:6 loadTicket() selects through ticketsOf(admin), which the scan cannot trace to a .from()${DYNAMIC}`,
+          `apps/web/src/server/services/plant-c10-run-query.ts:3 run() selects through q, which the scan cannot trace to a .from()${DYNAMIC}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c7) two query variables of one name in two callbacks of a unit keep their own tables',
+      () => {
+        expect(withPlanted(C10['c7 control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c8) caught at 06df95532: Class.method through a default export, a renamed re-export, a static member, an object, an exported instance, and beside a function of its name',
+      () => {
+        expect(withPlanted(C10['c8 caught']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:12 viaDefault() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:20 viaRenamed() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:28 viaStatic() reads maintenance_requests.requester_email_snapshot and sends email through notifyStatic()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:36 viaObject() reads maintenance_requests.requester_email_snapshot and sends email through reopened()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:44 viaInstance() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-caught.ts:52 viaClassMethod() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      "(c8) missed at 06df95532: a callee the scan cannot place fails (a typed parameter, an injected field, a factory's instance, a destructured method, a callback); a copied instance and rows kept in a local array are followed",
+      () => {
+        expect(withPlanted(C10['c8 missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:10 viaParameter() hands maintenance_requests.requester_email_snapshot to svc.notify()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:20 ReopenFlow.reopen() hands maintenance_requests.requester_email_snapshot to this.mailer.notify()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:30 viaFactory() hands maintenance_requests.requester_email_snapshot to svc.notify()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:39 viaDestructured() hands maintenance_requests.requester_email_snapshot to reopened()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:49 viaCopy() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+          `apps/web/src/server/services/plant-c10-c8-missed.ts:57 viaCallback() hands maintenance_requests.requester_email_snapshot to notify()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/jobs/plant-c10-open-remind.ts:4 remindOpen() gets support_tickets.email from loadOpen() and sends email (sendEmail)${ASK_S}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c8) missed at 06df95532: an instance built from a row and handed on, and a method of what a factory handed the row returns (06df95532 reported only the hand-off to the factory)',
+      () => {
+        expect(withPlanted(C10['c8 missed 2']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c8-more.ts:13 viaInstanceOfRow() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c10-c8-more.ts:22 viaFactoryOfRow() hands maintenance_requests.requester_email_snapshot to svc.notify()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-more.ts:21 viaFactoryOfRow() hands maintenance_requests.requester_email_snapshot to makeNoticeService() (@/server/services/plant-c10-notices)${HAND_OFF_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      "(c8) missed at 06df95532: a row stored where the scan does not follow it (a module's array, a class field, a parameter's object) fails; a function's own array stays quiet",
+      () => {
+        expect(withPlanted(C10['c8 missed 3']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c8-stores.ts:9 viaModuleArray() hands maintenance_requests.requester_email_snapshot to outbox.push()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-stores.ts:19 Holder.keep() puts a row holding maintenance_requests.requester_email_snapshot into this.row${ESCAPE_M}`,
+          `apps/web/src/server/services/plant-c10-c8-stores.ts:28 viaParameterObject() puts a row holding maintenance_requests.requester_email_snapshot into into.row${ESCAPE_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c8) a global that only computes a value is no callee the scan must place',
+      () => {
+        expect(withPlanted(C10['c8 control']!)).toEqual([]);
       },
       TIMEOUT,
     );
