@@ -1,9 +1,10 @@
 import { useNetworkState } from 'expo-network';
 import { Check, ChevronDown } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { FONT, RADIUS } from '@/lib/theme';

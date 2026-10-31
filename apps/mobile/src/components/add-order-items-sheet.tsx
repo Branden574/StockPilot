@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +16,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Card, Hair } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import { parseHoldOutcome } from '@/lib/order-hold';

@@ -214,11 +214,13 @@ describe('the revise sheet', () => {
   it('imports no native date picker and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     // The redesign (P5.7a) added the shared button tones (a pure JS module):
-    // still no native date picker and nothing that opens mail.
+    // still no native date picker and nothing that opens mail. B44 added the
+    // shared Modal, which holds the phone update pop-up while it is open.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
         '@/components/needed-by-picker',
+        '@/components/ui/modal',
         '@/components/ui/text',
         '@/components/ui/tones',
         '@/lib/exception-sheet-layout',

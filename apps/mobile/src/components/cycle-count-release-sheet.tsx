@@ -2,7 +2,6 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { Modal } from '@/components/ui/modal';
 import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { FONT, RADIUS, SHADOW, space } from '@/lib/theme';

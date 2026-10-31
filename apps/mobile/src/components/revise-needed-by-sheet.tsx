@@ -4,7 +4,6 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -29,6 +28,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { NeededByPicker } from '@/components/needed-by-picker';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { buttonTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';

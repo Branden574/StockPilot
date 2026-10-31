@@ -1,13 +1,14 @@
 import { StatusBar } from 'expo-status-bar';
 import { X } from 'lucide-react-native';
 import React, { useRef, useState } from 'react';
-import { Alert, Keyboard, Modal, PanResponder, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, Keyboard, PanResponder, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
 import { type SignaturePoint, isValidSignatureDataUrl, pointsToSmoothSvgPath } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';

@@ -845,6 +845,10 @@ export async function drainQueue(): Promise<{
       }
     }
 
+    // Restart now is waiting to restart the app into an update
+    // (pauseSyncForRestart): this row and the rest stay queued, untouched,
+    // for the next drain. A restart cuts a send in flight.
+    if (restartPaused) break;
     // Stamps a legacy row with this account, so it is never sent as another.
     await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
     // When api() handed this row's request to fetch (null: not yet). Before
@@ -1052,6 +1056,35 @@ let afterInFlight: Promise<void> | null = null;
 let inFlightGeneration = 0;
 /** The account epoch the in-flight sync started under (account-epoch.ts). */
 let inFlightEpoch = 0;
+/** Restart now is waiting (pauseSyncForRestart): no sync starts, no row is sent. */
+let restartPaused = false;
+
+/**
+ * Restart now (the phone update pop-up, B44) is about to restart the app: a
+ * restart cancels every request in flight, so no new sync starts and the
+ * drain stops before its next row. Returns the resume, for a restart that
+ * did not happen.
+ */
+export function pauseSyncForRestart(): () => void {
+  restartPaused = true;
+  return () => {
+    restartPaused = false;
+  };
+}
+
+/**
+ * Resolves once the sync running now, and any sync queued behind it (a forced
+ * pull, or syncAfterRunning), have ended.
+ */
+export async function whenSyncSettled(): Promise<void> {
+  while (inFlightSync || forcedAfterInFlight || afterInFlight) {
+    try {
+      await (forcedAfterInFlight ?? afterInFlight ?? inFlightSync);
+    } catch {
+      // syncNow never rejects; a settle must not either.
+    }
+  }
+}
 
 /**
  * Run pull then push. Called on app open + foreground + a 60s timer.
@@ -1061,6 +1094,8 @@ let inFlightEpoch = 0;
  *   pull. Used on an org switch after the local cache has been wiped.
  */
 export async function syncNow(force = false): Promise<void> {
+  // A restart into an update is waiting: the next start of the app syncs.
+  if (restartPaused) return;
   if (inFlightSync) {
     // Join a running sync only when it started against the current cache and
     // for the account signed in now. A forced pull (a workspace switch or

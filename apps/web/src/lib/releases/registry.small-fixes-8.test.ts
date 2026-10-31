@@ -110,10 +110,11 @@ describe('the small fixes slice 8 release', () => {
 
   // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the newest entry, at the top, dated after every other release", with ID at RELEASES[0] and every release from RELEASES[1] dated before it): the export fixes release (#414) is published later, at the top, directly above it, so it moves down by one. Claim kept: dated after every release below it, on a whole minute.
   it('sits directly below the export fixes release, published later, and is dated after every release below it', () => {
-    expect(RELEASES[0]?.id).toBe('export-fixes-2026-10');
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[1]?.id).toBe(ID);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: every pinned position one place higher): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one.
+    expect(RELEASES[1]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[2]?.id).toBe(ID);
+    for (const r of RELEASES.slice(3)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -125,6 +126,7 @@ describe('the small fixes slice 8 release', () => {
   // was published (UTC) is the ceiling. That window holds the draft's
   // placeholder date, so it is ruled out by name (review of this publish).
   it('is published as revision 1, not before its web build was live (08:06Z) and walked (to 08:44:54Z), on the day it went live, and no draft is left', () => {
+    // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: no draft): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one, and it is the one draft.
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:04:49Z'));
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:06:00Z'));
@@ -133,7 +135,9 @@ describe('the small fixes slice 8 release', () => {
     // A real time: never the draft's placeholder date (2026-10-31T17:00Z).
     expect(release().publishedAt).not.toBe('2026-10-31T17:00:00Z');
     expect(release().revision).toBe(1);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'mobile-app-asks-before-restarting',
+    ]);
   });
 
   it('has a line for each user-visible change, in this order', () => {

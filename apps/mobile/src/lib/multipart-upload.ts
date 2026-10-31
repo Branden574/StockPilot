@@ -59,6 +59,8 @@
  */
 import { File as FsFile } from 'expo-file-system';
 
+import { trackWrite } from './update-prompt-holds';
+
 /** One file part. `fileName` and `contentType` land on the wire verbatim —
  *  server routes validate exactly these (e.g. /api/po-imports/scan checks
  *  `f.type` against its allowlist and reports `f.name`). */
@@ -233,10 +235,14 @@ export async function postMultipart(
     readBytes: args.readBytes,
   });
   const doFetch = args.fetchImpl ?? fetch;
-  return doFetch(url, {
-    method: 'POST',
-    headers: { ...args.headers, 'Content-Type': contentType },
-    body,
-    signal: args.signal,
-  });
+  // A write in flight for the phone update's Restart now, which waits for it
+  // (update-prompt-holds.ts).
+  return trackWrite(
+    doFetch(url, {
+      method: 'POST',
+      headers: { ...args.headers, 'Content-Type': contentType },
+      body,
+      signal: args.signal,
+    }),
+  );
 }

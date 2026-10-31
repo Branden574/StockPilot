@@ -10,7 +10,9 @@ import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { WhatsNew } from '@/components/onboarding/whats-new';
+import { UpdatePromptHost } from '@/components/update-prompt-host';
 import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
+import { installAlertHolds } from '@/lib/alert-holds';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -21,7 +23,7 @@ import { initSentry, Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
 import { useAccountGate } from '@/lib/use-account-gate';
 import { useBrandFonts } from '@/lib/use-fonts';
-import { useOtaAutoReload } from '@/lib/use-ota-updates';
+import { useOtaUpdates } from '@/lib/use-ota-updates';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSessionRevocation } from '@/lib/use-session-revocation';
 import { useActivityBeacon } from '@/lib/use-activity-beacon';
@@ -31,6 +33,10 @@ import { useTheme } from '@/lib/use-theme';
 // Initialise crash reporting as early as possible (module load = before the
 // first render). No-op until EXPO_PUBLIC_SENTRY_DSN is set; see src/lib/sentry.ts.
 initSentry();
+
+// Every native alert holds the phone update pop-up until it is answered
+// (alert-holds.ts), from the first alert this JS runtime shows.
+installAlertHolds();
 
 // Flips true exactly once per JS runtime = once per COLD launch. A warm resume
 // from background does NOT reload this module, so the branded splash never
@@ -67,10 +73,10 @@ function useFontGate(): boolean {
 const SPLASH_GROUND = palette('dark').paper;
 
 function RootLayout() {
-  // Apply a freshly-published OTA on this launch (auto check + reload)
-  // instead of the default "applies next launch" — so a published update
-  // lands after one relaunch, not two.
-  useOtaAutoReload();
+  // Phone updates (B44): expo-updates downloads a new update in the
+  // background, and the app asks before it restarts into it ("Update ready",
+  // shown by UpdatePromptHost below). Nothing restarts the app by itself.
+  useOtaUpdates();
 
   // Initialise SQLite + cycle-count sync engine once at app start so any
   // screen that calls getDb() / useSyncStatus() can assume both are
@@ -302,6 +308,13 @@ function RootGate() {
           and cold deep-links into pushed card screens). MFA/lock states early-
           return above, so this only renders in the normal authed shell. */}
       {session && !loading && !mfaRequired && !locked ? <WhatsNew /> : null}
+      {/* The phone update pop-up's eyes on the screen, and the launch-screen
+          overlay while Restart now restarts (update-prompt-host.tsx). Only in
+          the signed-in shell, like What's New: never over sign-in, MFA, the
+          Face ID lock or a disabled account. */}
+      {session && !loading && !mfaRequired && !locked ? (
+        <UpdatePromptHost segments={segments} />
+      ) : null}
     </>
   );
 }

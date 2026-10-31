@@ -32,6 +32,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 
 import { resizeForUpload } from './image-resize';
+import { trackWrite } from './update-prompt-holds';
 
 /**
  * Typed upload failure so a screen can render accurate, per-kind copy
@@ -187,7 +188,9 @@ export async function putSignedPhoto(
       }
     },
   );
-  const upload = task.uploadAsync();
+  // A write in flight for the phone update's Restart now, which waits for it:
+  // a restart drops the upload task (update-prompt-holds.ts).
+  const upload = trackWrite(task.uploadAsync());
   let result: Awaited<typeof upload>;
   if (options.timeoutMs !== undefined) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -248,11 +251,13 @@ export async function uploadSignedPhoto<T extends SignedUploadTicket, R>(
         compress: 0.8,
         format: ImageManipulator.SaveFormat.JPEG,
       });
-      await FileSystem.uploadAsync(thumbUrl, thumb.uri, {
-        httpMethod: 'PUT',
-        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        headers: { 'Content-Type': 'image/jpeg' },
-      });
+      await trackWrite(
+        FileSystem.uploadAsync(thumbUrl, thumb.uri, {
+          httpMethod: 'PUT',
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          headers: { 'Content-Type': 'image/jpeg' },
+        }),
+      );
     } catch {
       // Deliberately swallowed: see above.
     }

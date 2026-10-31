@@ -30,6 +30,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { supabase } from './supabase';
+import { trackWrite } from './update-prompt-holds';
 
 export type StorageUploadResult = { ok: true } | { ok: false; error: string };
 
@@ -74,7 +75,9 @@ export async function uploadFileToBucket(args: {
 
   let result: { status: number } | null | undefined;
   try {
-    result = await task.uploadAsync();
+    // A write in flight for the phone update's Restart now, which waits for
+    // it: a restart drops the upload task (update-prompt-holds.ts).
+    result = await trackWrite(task.uploadAsync());
   } catch (e) {
     return {
       ok: false,
