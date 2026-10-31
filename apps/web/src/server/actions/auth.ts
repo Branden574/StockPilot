@@ -437,7 +437,8 @@ export async function completePasswordResetAction(
   const supabase = await createClient();
 
   // Snapshot the user BEFORE updateUser/signOut so we can attribute the
-  // audit row to a real userId even after the global signOut.
+  // audit row to a real userId even after the global signOut. If this one
+  // read fails, the update's own answer names the account (resetUser below).
   const {
     data: { user: preUser },
   } = await supabase.auth.getUser();
@@ -504,7 +505,9 @@ export async function completePasswordResetAction(
     }
   }
 
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
+  const { data: updated, error } = await supabase.auth.updateUser({
+    password: parsed.data.password,
+  });
   if (error) {
     // GoTrue's refusals of the new password, in plain words (docket B50). Read
     // by GoTrue's code only (auth-error-classify.ts); any other refusal keeps
@@ -547,6 +550,12 @@ export async function completePasswordResetAction(
     return err('internal_error', error.message);
   }
 
+  // The account the new password was set for. A failed first read (a GoTrue
+  // 5xx) leaves preUser null while the rest of the press can still go
+  // through; the update's own answer names the same account, so the revoke
+  // broadcast and the audit row below still go out (docket B50 review).
+  const resetUser = preUser ?? updated?.user ?? null;
+
   // SECURITY: after an email-recovery password update, force a fresh
   // sign-in rather than auto-elevating the recovery session into the
   // dashboard. The recovery link is the only factor that's been verified
@@ -558,18 +567,18 @@ export async function completePasswordResetAction(
   // Evict live devices NOW, not at access-token expiry (≤1h): the whole
   // point of resetting a password is that existing sessions may be in
   // hostile hands. Same broadcast contract as device management.
-  if (preUser) {
-    await broadcastToChannel(`user:${preUser.id}:sessions`, 'revoked', { keepId: null });
+  if (resetUser) {
+    await broadcastToChannel(`user:${resetUser.id}:sessions`, 'revoked', { keepId: null });
   }
 
   // Audit the successful recovery-based reset.
-  if (preUser) {
-    const { organizationId } = await resolveDefaultOrgAndRole(preUser.id);
+  if (resetUser) {
+    const { organizationId } = await resolveDefaultOrgAndRole(resetUser.id);
     await emitAuthAudit({
       event: 'user.password.reset_completed',
-      userId: preUser.id,
+      userId: resetUser.id,
       organizationId,
-      extra: { email: preUser.email ?? null },
+      extra: { email: resetUser.email ?? null },
     });
   }
 

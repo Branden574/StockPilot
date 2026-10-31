@@ -333,6 +333,56 @@ describe('completePasswordResetAction', () => {
     expect(updateUser).toHaveBeenCalledWith({ password: RESET_VALUE });
   });
 
+  // B50 review. The action reads the account once, at the start, to name it in
+  // the revoke broadcast and the audit row. When that one read fails (GoTrue
+  // answers 5xx; auth-js returns no user and an AuthRetryableFetchError) and
+  // the rest of the press goes through, the password changed and every session
+  // ended, but no live device was told and no row was written. The update's
+  // own answer names the same account.
+  it.each([
+    ['an account with no authenticator', false],
+    ['an account with an authenticator, on the press that carries the code', true],
+  ])(
+    'when the first account read fails and the reset goes through, the revoke and the audit row still name the account: %s',
+    async (_label, withAuthenticator) => {
+      getUser.mockResolvedValueOnce({
+        data: { user: null },
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      if (withAuthenticator) {
+        listFactors.mockResolvedValue({
+          data: { totp: [{ id: 'f1', status: 'verified' }] },
+          error: null,
+        });
+        getAuthenticatorAssuranceLevel.mockResolvedValue({
+          data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+        });
+      }
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u2', email: 'reset-user@example.com' } },
+        error: null,
+      });
+
+      const res = await completePasswordResetAction(
+        withAuthenticator ? { ...INPUT, totpCode: '123456' } : INPUT,
+      );
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(verify).toHaveBeenCalledTimes(withAuthenticator ? 1 : 0);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(broadcastToChannel).toHaveBeenCalledWith('user:u2:sessions', 'revoked', {
+        keepId: null,
+      });
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u2',
+          metadata: expect.objectContaining({ entity_id: 'u2', email: 'reset-user@example.com' }),
+        }),
+      );
+    },
+  );
+
   // ── B50: GoTrue's refusals of the new password, in plain words ──────────
   // Read by GoTrue's structured code (auth-error-classify.ts), never by its
   // message. A refusal it does not name keeps today's answer (the test above
