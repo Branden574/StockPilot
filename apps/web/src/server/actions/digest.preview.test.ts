@@ -107,6 +107,28 @@ describe('sendDigestPreviewAction', () => {
   });
 });
 
+describe('sendDigestPreviewAction: its days are the organization\'s (small fixes slice 8)', () => {
+  it('dates the subject, the email and the text in the organization\'s zone, at the one moment the preview was built', async () => {
+    vi.setSystemTime(new Date('2026-10-13T01:00:00.000Z')); // Mon Oct 12, 6 PM in Los Angeles
+    getCachedOrgTimezoneMock.mockResolvedValue('America/Los_Angeles');
+    const { weeklyDigestPreviewSubject, weeklyDigestText } = await import('@/lib/email/es/families/digest');
+
+    await sendDigestPreviewAction();
+
+    const now = (getDigestDataMock.mock.calls[0]![2] as { now: Date }).now;
+    expect(now.toISOString()).toBe('2026-10-13T01:00:00.000Z');
+    expect(weeklyDigestPreviewSubject).toHaveBeenCalledWith(now, 'America/Los_Angeles');
+    expect(renderMock).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ now, timeZone: 'America/Los_Angeles' }),
+    );
+    expect(weeklyDigestText).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ now, timeZone: 'America/Los_Angeles' }),
+    );
+  });
+});
+
 /**
  * B15: the preview carries the Monday email's unsubscribe, a signed one-click
  * link for the caller in the workspace they sent it from, dated with today's
@@ -170,5 +192,37 @@ describe('sendDigestPreviewAction: one-click unsubscribe', () => {
       EMPTY,
       expect.objectContaining({ unsubscribeUrl: SETTINGS }),
     );
+  });
+
+  it("gives the text part the one-click link and the organization's date together", async () => {
+    // Merged with small fixes slice 8: the text part takes the preview's
+    // options plus its moment and zone, so neither the link nor the date is
+    // lost. 6 PM on Oct 12 in Los Angeles is Oct 13 in UTC: the link is
+    // dated the UTC day, the text the organization's.
+    signable.UNSUBSCRIBE_SECRET = PREVIEW_SIGNING_VALUE;
+    getCachedOrgTimezoneMock.mockResolvedValue('America/Los_Angeles');
+    const sentAt = new Date('2026-10-13T01:00:00.000Z');
+    vi.setSystemTime(sentAt);
+    const { weeklyDigestText } = await import('@/lib/email/es/families/digest');
+
+    const res = await sendDigestPreviewAction();
+
+    expect(res.ok).toBe(true);
+    const link = mintMemberUnsubscribeToken(
+      { userId: MEMBER, organizationId: ORG, kind: 'weekly_digest' },
+      sentAt,
+    );
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    for (const rendered of [renderMock, weeklyDigestText]) {
+      expect(rendered).toHaveBeenCalledWith(
+        EMPTY,
+        expect.objectContaining({
+          settingsUrl: SETTINGS,
+          unsubscribeUrl: url,
+          now: sentAt,
+          timeZone: 'America/Los_Angeles',
+        }),
+      );
+    }
   });
 });
