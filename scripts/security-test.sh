@@ -976,10 +976,14 @@ WEB_TESTS=(
   # role, no membership, a portal user, a rewritten profile email, a failed
   # verified-email lookup, a stale step-up); and every insert into
   # organizations and every owner seat in apps/web/src runs after that check
-  # or is a reviewed entry whose callers do. Both files carry the "Security
-  # invariant" marker.
+  # or is a reviewed entry whose callers do. A team invite never creates the
+  # account of an allowlisted address (the token is handed to the inviter, so
+  # it is not proof of the mailbox), and its refusal is the existing-account
+  # answer word for word. All three files carry the "Security invariant"
+  # marker.
   src/server/actions/organization.create-gate.test.ts
   src/server/organization-create-sites.guard.test.ts
+  src/server/actions/team.invite-signup-platform-admin.test.ts
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts

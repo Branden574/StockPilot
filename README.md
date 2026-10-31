@@ -76,6 +76,7 @@ Public `/signup` is off (StockPilot is invite-only), and only a platform admin c
 - **A customer's workspace:** Platform > Provision creates the customer's account, their workspace and their owner seat in one step, and emails them a sign-in link. It needs a verified sign-in email on `STOCKPILOT_PLATFORM_ADMIN_EMAILS` and an authenticator code from the last 15 minutes. An authenticator is set up under Settings > Security, inside a workspace.
 - **A platform admin with no workspace** gets the create form on `/onboarding`, under the same two conditions. Everyone else with no workspace sees the invite-only card there, with Sign out, a link to the ordering portal and Delete my account.
 - **Joining an existing workspace** is an invite from that workspace's Team page.
+- **A platform admin's own account** must exist before its address goes on `STOCKPILOT_PLATFORM_ADMIN_EMAILS`. An invite never creates the account of an address on that list: its link answers as if the account already existed.
 
 ### Locally
 
