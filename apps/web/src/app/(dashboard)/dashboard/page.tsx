@@ -210,6 +210,14 @@ async function DashboardBody({
   // be granted it (B11). So only an approver sees either card, and only for
   // them are the counts read.
   const canApproveOrders = can(ctx, 'orders:approve');
+  // Approving or denying also asks write access to the request's warehouse,
+  // which the app never gives a viewer (assertWarehouseAccess), so neither app
+  // offers a viewer Approve or Deny, even with the grant (the web panel's
+  // `approves`, the phone's orderManagerActions). The approvals card would lead
+  // them nowhere, so it follows this, not canApproveOrders (B11 review). The
+  // signature card is unchanged and keeps canApproveOrders (a viewer who is an
+  // order's assigned driver still hands that order over).
+  const approvesOrders = canApproveOrders && ctx.role !== 'viewer';
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
   // queries total, the second waiting on the first to complete). With
@@ -278,11 +286,14 @@ async function DashboardBody({
       svc.inProgressCount({ warehouseId: warehouseFilter ?? undefined }),
     ),
     // Only someone who can approve orders moves a pending request forward
-    // (canApproveOrders above); for everyone else this hero row would point
+    // (approvesOrders above); for everyone else this hero row would point
     // at a page they can't act on, so we skip the query entirely instead of
-    // rendering a dead link.
-    canApproveOrders
-      ? OrderRequestsService.forCurrentUser().then((svc) => svc.pendingCount())
+    // rendering a dead link. And only the requests they could approve are
+    // counted: a staff approver assigned to some warehouses is refused in the
+    // others (approve() and deny() ask write access to the request's
+    // warehouse), so theirs are counted, not the organization's (B11 review).
+    approvesOrders
+      ? OrderRequestsService.forCurrentUser().then((svc) => svc.approvablePendingCount())
       : Promise.resolve(0),
     canApproveOrders
       ? OrderRequestsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount())
@@ -452,7 +463,7 @@ async function DashboardBody({
       tone: 'warn',
     });
   }
-  if (canApproveOrders && pendingApprovals > 0) {
+  if (approvesOrders && pendingApprovals > 0) {
     attentionItems.push({
       id: 'order-approvals',
       title: `${pendingApprovals} order request${pendingApprovals === 1 ? '' : 's'} awaiting your approval`,
