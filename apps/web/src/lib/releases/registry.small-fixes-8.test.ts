@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MODULE_REGISTRY,
   PERMISSIONS,
+  SHORTFALL_PO_PHONE_REVIEW_COPY,
   type ModuleId,
   type Release,
   type ReleaseViewer,
@@ -118,13 +119,16 @@ describe('the small fixes slice 8 release', () => {
   // Added by docs/whats-new-small-fixes-8 (2026-10-31): published once #374
   // had merged (08:04:49Z), its web build answered on production (by 08:06Z)
   // and the Demo Co walk's read-only check had closed (08:44:54Z); the day it
-  // was published (UTC) is the ceiling.
+  // was published (UTC) is the ceiling. That window holds the draft's
+  // placeholder date, so it is ruled out by name (review of this publish).
   it('is published as revision 1, not before its web build was live (08:06Z) and walked (to 08:44:54Z), on the day it went live, and no draft is left', () => {
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:04:49Z'));
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:06:00Z'));
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T08:44:54Z'));
     expect(at).toBeLessThanOrEqual(Date.parse('2026-11-01T00:00:00Z'));
+    // A real time: never the draft's placeholder date (2026-10-31T17:00Z).
+    expect(release().publishedAt).not.toBe('2026-10-31T17:00:00Z');
     expect(release().revision).toBe(1);
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
   });
@@ -316,9 +320,23 @@ describe('the small fixes slice 8 release', () => {
     // The run says why; it does not fix the template by itself.
     expect(entry('recurring-run-says-why').whatChanged).toContain('names the template and why');
     // A creator is told only while they hold purchase_orders:manage (the
-    // cron's creatorsWhoEditTemplates, slice 8 review).
+    // cron's creatorsWhoEditTemplates, slice 8 review), and only of a
+    // template whose purchase order could not be saved: the cron's creators
+    // are templatesSkipped's, and the templates whose purchase order could
+    // not be sent, or that had nothing to order, are names alone (review of
+    // this publish; it said "the person who created the template" of every
+    // line).
     expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
-      "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates.",
+      "The notification goes to your organization's owners and admins. For a template whose purchase order could not be saved, it also goes to the person who created the template, if they can still edit templates.",
+    );
+    const cron = source('app/api/cron/recurring-pos/route.ts');
+    expect(cron).toContain('const creators = summary.templatesSkipped.map((s) => s.createdBy);');
+    expect(cron.match(/createdBy/g)).toHaveLength(1);
+    const run = source('server/services/recurring-pos.ts');
+    expect(run).toContain('templatesSendFailed: string[];');
+    expect(run).toContain('templatesWithNothingOrderable: string[];');
+    expect(run).toContain(
+      'templatesSkipped.push({ templateId: tpl.id, name: tpl.name, reason, createdBy: tpl.created_by ?? null });',
     );
     // The past is told as it was: a deleted destination's template DID create
     // purchase orders (the run line says so), so the template line does not
@@ -367,6 +385,35 @@ describe('the small fixes slice 8 release', () => {
     );
   });
 
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31, review of this
+  // publish). The weekly digest and fixes release told whoever can open the
+  // calendar on 2026-10-06 that "Today's mark and each event are now placed by
+  // your own day." This branch places both on the organization's day, the
+  // same for every viewer, so the calendar line is worded as a change from
+  // that note, as the Placed line is.
+  it("words the calendar's days as a change from the weekly digest release's published note", () => {
+    const published = RELEASES.find((r) => r.id === 'weekly-digest-and-fixes-2026-10');
+    expect(published?.status).toBe('published');
+    const calendarToday = published?.entries.find((e) => e.id === 'calendar-today');
+    expect(calendarToday?.whatChanged).toContain(
+      "Today's mark and each event are now placed by your own day.",
+    );
+    // The same readers: whoever can open the calendar.
+    expect(calendarToday?.audience).toEqual(entry('calendar-last-evening-and-zone').audience);
+    expect(entry('calendar-last-evening-and-zone').whatChanged).toContain(
+      "place each event on its date and print its time in your organization's time zone, not your own, and the calendar marks your organization's today.",
+    );
+    // Each event's cell and today come from the organization's zone, on the
+    // server and in the browser alike.
+    const calendar = source('components/schedule/schedule-calendar.tsx');
+    expect(calendar).toContain('const key = orgDayOf(ev.startsAt, timeZone);');
+    expect(calendar).toContain('const isToday = d.ymd === todayYmd;');
+    expect(calendar).not.toContain('useHydrated');
+    expect(page('schedule/page.tsx')).toContain(
+      'const today = zonedParts(new Date(), timeZone);',
+    );
+  });
+
   // Edit event kept a wall clock and converted it back on every save, so an
   // event at the other occurrence of the repeated hour moved an hour
   // unchanged (production's form too). Told in the calendar line.
@@ -405,14 +452,37 @@ describe('the small fixes slice 8 release', () => {
     expect(entry('po-list-overdue-view').howItAffectsYou).toContain(
       "The dashboard's line no longer suggests updating the expected date, which can't be changed once a purchase order is ordered.",
     );
-    // The run's notification, in its own words, and the audit log's System
-    // row for a template whose purchase order could not be saved.
+    // The run's notification, and the audit log's System row for a template
+    // whose purchase order could not be saved.
     const runs = source('server/services/recurring-pos.ts');
     expect(runs).toContain(
       'created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
     );
+    // Re-pinned in review of this publish (was: "open it in Purchase orders
+    // and send it", the notification's own words): a draft's page has no
+    // Send. Its button is Mark as ordered, the same status change the
+    // auto-send makes, and the phone shows a draft read-only, so the line
+    // names Mark as ordered, on the web.
+    const actions = source('components/po/po-actions.tsx');
+    expect(actions).toContain('<Pencil className="h-4 w-4" /> Edit');
+    expect(actions).toContain('<Send className="h-4 w-4" /> Mark as ordered');
+    expect(actions).toContain('<X className="h-4 w-4" /> Cancel PO');
+    expect(actions).toContain("onClick={() => setStatus('ordered')}");
+    expect(runs).toContain("await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');");
+    expect(SHORTFALL_PO_PHONE_REVIEW_COPY).toBe('Review and order this draft on the web.');
+    expect(phone('src/lib/po-draft-review.ts')).toContain(
+      'export const PO_DRAFT_REVIEW_COPY = SHORTFALL_PO_PHONE_REVIEW_COPY;',
+    );
     expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
-      'If it says a purchase order could not be sent, open it in Purchase orders and send it.',
+      'If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered.',
+    );
+    expect(entry('recurring-run-says-why').howItAffectsYou).not.toContain('send it');
+    // The template's mode is called Auto-send in its form and its list.
+    const panel = source('components/po/recurring-templates-panel.tsx');
+    expect(panel).toContain('<SelectItem value="send">Auto-send to supplier</SelectItem>');
+    expect(panel).toContain("{tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}");
+    expect(entry('recurring-run-says-why').whatChanged).toContain(
+      'It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.',
     );
     expect(runs).toContain("event: 'recurring_po_template.run_skipped',");
     expect(formatAuditEvent('recurring_po_template.run_skipped')).toBe(
@@ -438,6 +508,38 @@ describe('the small fixes slice 8 release', () => {
     );
     expect(entry('calendar-last-evening-and-zone').howItAffectsYou).toBe(
       "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
+    );
+  });
+
+  // Added by docs/whats-new-small-fixes-8 (2026-10-31, review of this
+  // publish). Owner question 7 of #374 shipped as its default: an archived
+  // supplier is named under the box and not offered, so Edit purchase order
+  // and the recurring forms open on No supplier and a save that does not
+  // choose one removes it, as two lines say. A later decision keeps an
+  // archived supplier, shown as "Name (archived)"; it is not built. A change
+  // that offers one fails here: reword both lines in place, and tell the
+  // change in its own release.
+  it('rests the archived supplier sentences on the code, so offering an archived supplier forces a rewording', () => {
+    // Named, not offered: only an active supplier is folded into the select.
+    expect(source('server/services/lib/unoffered-choices.ts')).toContain(
+      "else if (row.deleted_at) unoffered.set(id, { name, why: 'archived' });",
+    );
+    expect(page('purchase-orders/[id]/edit/page.tsx')).toContain(
+      'if (unofferedSuppliers) supplierOptions = [...supplierOptions, ...unofferedSuppliers.fold];',
+    );
+    expect(page('purchase-orders/recurring/page.tsx')).toContain('...unofferedSuppliers.fold,');
+    // Both forms open on No supplier for a supplier the select does not offer.
+    expect(source('components/po/po-form.tsx')).toContain(
+      "const openingSupplierId = initialSupplierOffered ? (initial?.supplierId ?? '') : '';",
+    );
+    expect(source('components/po/recurring-templates-panel.tsx')).toContain(
+      "supplierId: supplierOffered ? supplierId : '',",
+    );
+    expect(entry('po-edit-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the draft removes it.",
+    );
+    expect(entry('recurring-template-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the template removes it.",
     );
   });
 });

@@ -42,15 +42,20 @@ export const RELEASES: Release[] = [
     // only the title and the summary and its own Purchase orders, Recurring
     // POs and Schedule screens did not change; the Overdue line says that the
     // dashboard's line no longer suggests updating the expected date (the
-    // edit page and the save change a draft only); the run line says where a
-    // purchase order that could not be sent is sent from, in the
-    // notification's own words, and that a template whose purchase order
-    // could not be saved is in the audit log (a System row, Recurring PO
-    // template · Run Skipped); the calendar line says an event's own page
-    // prints in the organization's zone too (it printed Pacific whatever the
-    // organization's), that the calendar shows every event that STARTS on a
-    // date it shows (an event read outside the grid has no cell), and that
-    // New event and Edit event refuse a time the clocks skip.
+    // edit page and the save change a draft only); the run line names the
+    // button that orders a draft whose sending failed, Mark as ordered, on
+    // the web (the notification says "send it", but a draft's page has no
+    // Send, the auto-send is the same status change and the phone shows a
+    // draft read-only), calls the template's mode Auto-send, as its form and
+    // list do, says that a template's creator is told only of a template
+    // whose purchase order could not be saved (the cron adds no other
+    // creator), and that such a template is in the audit log (a System row,
+    // Recurring PO template · Run Skipped); the calendar line says an event's
+    // own page prints in the organization's zone too (it printed Pacific
+    // whatever the organization's), that this zone is not your own (it
+    // reverses a published note, below), that the calendar shows every event
+    // that STARTS on a date it shows (an event read outside the grid has no
+    // cell), and that New event and Edit event refuse a time the clocks skip.
     //
     // Every user-visible change in the branch has a line (owner rule
     // 2026-09-25):
@@ -64,7 +69,13 @@ export const RELEASES: Release[] = [
     //     nothing for, and why (item C), and the audit log's row for a
     //     template whose purchase order could not be saved;
     //   - the team calendar's last evening, times and today, and an event's
-    //     own page in the organization's zone (item F);
+    //     own page in the organization's zone (item F). The calendar placed
+    //     each event and today's mark on the viewer's own day once drawn in
+    //     the browser (#331), so this reverses the published
+    //     weekly-digest-and-fixes-2026-10 entry calendar-today (2026-10-06:
+    //     "Today's mark and each event are now placed by your own day."), and
+    //     the line is worded as a change from that note ("not your own"), as
+    //     the Placed line is (review of this publish);
     //   - the weekly digest's dates (item G).
     //   - the purchase orders list's Placed day, now the organization's in
     //     both lists (item H), said in the Overdue view's line: the instant
@@ -123,7 +134,9 @@ export const RELEASES: Release[] = [
     // save that does not choose one removes it, as the two lines say. A later
     // decision keeps an archived supplier, shown as "Name (archived)"; that is
     // not built. If it ships, its own release tells it and these two lines
-    // are reworded in place.
+    // are reworded in place. registry.small-fixes-8.test.ts pins the code the
+    // two lines rest on (an archived supplier named, not offered, and both
+    // forms opening on No supplier), so that change fails it until they are.
     //
     // The Overdue line's link is labelled for both platforms: the phone opens
     // the bare Purchase orders list for any /dashboard/purchase-orders?...
@@ -182,7 +195,9 @@ export const RELEASES: Release[] = [
         // archived supplier, but the form cannot offer one, so any save that
         // does not choose a supplier, even one made to change something else,
         // removes it. Owner question 7 of #374 shipped as this default (see
-        // the release's comment).
+        // the release's comment); a test pins the code this rests on, so a
+        // change that offers an archived supplier rewords this line and the
+        // recurring one in place.
         howItAffectsYou:
           "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
         whatToDo: 'No action needed.',
@@ -211,20 +226,30 @@ export const RELEASES: Release[] = [
         // the cron's notice: owners and admins, and the template's creator
         // while they hold purchase_orders:manage (slice 8 review; no creator
         // is told in a run that could not read their permissions, c005f208b).
-        // A send-mode template's purchase order that could not be sent:
-        // recurringRunNotice says "Open it in Purchase orders and send it."
-        // A template whose purchase order could not be saved: a System row,
-        // recurring_po_template.run_skipped, which the audit log shows as
-        // "Recurring PO template · Run Skipped" (lib/audit/format.ts).
+        // The creators are those of templatesSkipped only, the templates
+        // whose purchase order could not be saved (cron notifyAdmins);
+        // templatesSendFailed and templatesWithNothingOrderable hold names
+        // only, so the line tells no other line's creator (review of this
+        // publish). A send-mode template (Auto-send, as its form and list
+        // say) whose purchase order could not be sent: recurringRunNotice
+        // says "Open it in Purchase orders and send it.", but a draft's page
+        // has no Send: its actions are Edit, Mark as ordered and Cancel PO
+        // (po-actions.tsx), the auto-send is the same status change
+        // (updateStatus 'ordered'), and the phone shows a draft read-only
+        // ("Review and order this draft on the web."), so the line names Mark
+        // as ordered, on the web. Rewording the notice is code, outside this
+        // publish. A template whose purchase order could not be saved: a
+        // System row, recurring_po_template.run_skipped, which the audit log
+        // shows as "Recurring PO template · Run Skipped" (lib/audit/format.ts).
         id: 'recurring-run-says-why',
         category: 'fixed',
         area: 'Recurring purchase orders',
         title: 'A recurring template that cannot create its purchase order says why',
         whatChanged:
-          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft.",
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.",
         whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
         howItAffectsYou:
-          "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it says a purchase order could not be sent, open it in Purchase orders and send it. A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.",
+          "The notification goes to your organization's owners and admins. For a template whose purchase order could not be saved, it also goes to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered. A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
@@ -237,13 +262,16 @@ export const RELEASES: Release[] = [
         // the grid has no cell, so the calendar shows each event that starts
         // on a date it shows. A time the clocks skip is refused under its
         // field ("That start time doesn't exist in <zone> (the clocks
-        // change). Pick another time.") and nothing is saved.
+        // change). Pick another time.") and nothing is saved. The calendar
+        // placed each event and today's mark on the viewer's own day (#331),
+        // as the published calendar-today note (2026-10-06) told calendar
+        // readers, so the line says "not your own" (review of this publish).
         id: 'calendar-last-evening-and-zone',
         category: 'fixed',
         area: 'Schedule',
         title: 'The team calendar shows events late in the day on its last date',
         whatChanged:
-          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar and each event's page place each event on its date and print its time in your organization's time zone, and the calendar marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar and each event's page place each event on its date and print its time in your organization's time zone, not your own, and the calendar marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
         whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
         howItAffectsYou:
           "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
