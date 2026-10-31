@@ -37,17 +37,24 @@ import {
  *     read off a row the unit holds (`detail.requesterEmail` of a row a call
  *     returned, in any file); a `.from(table)` chain with a select, the chain
  *     followed back through the variables it is kept in, each by its own
- *     declaration (`let q = db.from(t); q = q.select(…)`); a kept address (or
- *     a row holding it) handed to it by a function of the same file that does
- *     not ask around the call (RECEIVED); and a call of a function that
- *     returns a kept address or a row holding it (`gets it from get()`). For
- *     a table read by its chains (its column has a common name), any select
- *     counts but an insert's or upsert's that names no kept column; for every
- *     table, selecting `*`, nothing, or a list the scan cannot read counts.
+ *     declaration (`let q = db.from(t); q = q.select(…)`); a select on another
+ *     table that embeds the table (`support_tickets(…)`, `x:support_tickets!fk(…)`,
+ *     at any depth; for a table read by its column, an embed that selects it
+ *     or `*`); a kept address (or a row holding it) handed to it by a function
+ *     of the same file that does not ask around the call, by a call or by
+ *     passing it as a value (RECEIVED); a call of a function that returns a
+ *     kept address or a row holding it, or such a function passed as a value
+ *     (`gets it from get()`); and a name declared in a unit around it (a
+ *     closure) or at the file's top that holds one, used where the code runs
+ *     rather than in a type (`captures it from f()`).
+ *     For a table read by its chains (its column has a common name), any
+ *     select counts but an insert's or upsert's that names no kept column; for
+ *     every table, selecting `*`, nothing, or a list the scan cannot read
+ *     counts.
  *   - RETURNS: for each table, whether the unit returns its kept address
- *     ('value') or a row holding it ('row'): what its `return`s (or an
- *     arrow's body) carry. Calls of another file's functions use what those
- *     return, so analyzeSenderFiles reads a file again when that changes.
+ *     ('value') or a row holding it ('row'): what its `return`s and `yield`s
+ *     (or an arrow's body) carry. Calls of another file's functions use what
+ *     those return, so analyzeSenderFiles reads a file again when that changes.
  *   - SENDS: sendEmail(…) under any receiver (`x.sendEmail`, `x['sendEmail']`),
  *     `.emails.send(…)` (`x.emails.send`, `x['emails']['send']`, or `emails`
  *     taken off the client) and a fetch to the Resend API.
@@ -59,52 +66,75 @@ import {
  *     static or dynamic: `const { f } = await import('m')`, `const m = await
  *     import('m')`, `(await import('m')).f(…)`; a member of an imported class
  *     or object, or of an instance made from an imported class with
- *     `new X(…)` or `X.factory(…)`, made in place, or another name for one).
- *     A name the file declares again around the call (a parameter, variable,
- *     function or class) is that local one, not the import. An import is
- *     resolved to `Class.member` or `object.key` in the file that declares
- *     it, through re-exports (`export { a as b } from`, `export * from`,
+ *     `new X(…)` or `X.factory(…)`, made in place, in a declaration or an
+ *     assignment, either side of a conditional or `??`, or another name for
+ *     one). A name the file declares again around the call (a parameter,
+ *     variable, function or class) is that local one, not the import. An
+ *     import is resolved to `Class.member` or `object.key` in the file that
+ *     declares it, through re-exports (`export { a as b } from`, `export * from`,
  *     import then export). A call into a file of the scan that reaches no
- *     unit is marked unresolved. `new X(…)` is a call of X's constructor.
+ *     unit is marked unresolved. `new X(…)` is a call of X's constructor. A
+ *     function passed as a value (`defer(notify)`, `rows.map(remind)`,
+ *     `after(this.flush)`, `f.bind(…)`) is a call of it there, carrying what
+ *     the call hands it (FUNCTION VALUES): an array method each element of
+ *     what it is called on, then() on a query its rows, catch() and finally()
+ *     none of it, any other call what it is called on and handed besides. A
+ *     package's function counts only where it is handed elements; an import
+ *     that reaches no function (a constant) is dropped when linked.
  *   - UNKNOWN CALLS: a call carrying a kept address (or a row holding it) to
  *     a callee the scan cannot place at all: a function kept in a variable
  *     or a parameter, a method of an object it cannot place (a parameter, a
  *     field, what an unknown call returned), a global, a query builder's
  *     write, a store into an array, set or map that is not the function's
- *     own. Not one: a send primitive (a send), PURE_GLOBAL_CALLS, a store
- *     into the function's own array, object, set or map (STORE_METHODS), and
- *     `Object.assign` into a variable of the function (the variable then
- *     holds the row).
+ *     own; and a method it cannot place called on something holding one
+ *     (`notice.send()` on an object holding a row), but for a query builder's
+ *     and BUILTIN_METHODS. Not one: a send primitive (a send),
+ *     PURE_GLOBAL_CALLS, a store into the function's own array, object, set
+ *     or map (STORE_METHODS), and `Object.assign` into a variable of the
+ *     function (the variable then holds the row).
  *   - ANSWERS: the answer functions it calls, each with the function the
  *     call sits in: a call that resolves, as above, to the function of that
  *     name the answer file (kept-address.ts) exports, whatever it is called
  *     where it is imported (named, aliased, namespace, dynamic or
  *     re-exported). A function of another file, or of the caller's own file,
- *     that only has the same name is not an answer.
+ *     that only has the same name is not an answer. A unit that only
+ *     captures the address also has the answers of the units around it that
+ *     sit in a function around it.
  *   - ALIAS SITES: a key a kept address itself (not a row that holds it) is
  *     put under: an object key wherever the object is, but in the arguments
  *     of an answer function or of a send primitive (sendEmail, `.emails.send`,
- *     a fetch to the Resend API); `o.key = address`; `this.key = address`. A
- *     computed key is read when it is a literal (`{ ['to']: a }`); otherwise
- *     it is an UNREADABLE KEY (`{ [k]: a }`, `o[k] = a`).
+ *     a fetch to the Resend API); `o.key = address`; `this.key = address`; a
+ *     constructor parameter property (`constructor(private to: string)`); a
+ *     key a select renames the kept column to (`contact:requester_email_snapshot`,
+ *     `recipient:email` where support's rows are). A computed key is read when
+ *     it is a literal (`{ ['to']: a }`); otherwise it is an UNREADABLE KEY
+ *     (`{ [k]: a }`, `o[k] = a`).
  *   - ESCAPES: a row holding a kept address put into an object that outlives
- *     the function (`this.row = r`, `param.row = r`, an object at the file's
- *     top level), where the scan does not follow it.
+ *     the function (`this.row = r`, a constructor parameter property,
+ *     `param.row = r`, an object at the file's top level), where the scan
+ *     does not follow it.
  *   - DYNAMIC READS: a select through a `.from()` whose table the scan cannot
- *     read (a variable, an imported constant), and a `.select(…)` whose chain
- *     cannot be traced back to a `.from()` at all.
- * Carrying is followed through the unit's own variables, assignments (`=`,
- * `??=`, `||=`, `&&=`, `+=`), `for … of` loops and inline array callbacks: a
- * value read off a row, or made from one by a call, `new`, a method, a
- * conditional, `??`, `||`, `+` or a template, carries the address; a read's
- * result, its `data`, an element of it and objects or arrays built from it
- * (an object literal, `o.key = …` and STORE_METHODS on a variable of the
- * function, `Object.assign` into one) carry the row. A call carries what the
- * function it reaches returns (in the file or in another one), what it is
- * called on and handed, and what an inline callback handed to it returns
- * (`ids.map((id) => load(id))`). A unit's parameters carry what a caller in
- * the same file hands them where that caller does not ask around the call; a
- * caller in another file is checked at its own call (a hand-off).
+ *     read (a variable, an imported constant), a `.select(…)` whose chain
+ *     cannot be traced back to a `.from()` at all, and a select list it
+ *     cannot read on a table that can embed a kept one (embeddedFrom). A
+ *     select list is read when it is a literal, a constant of the file, or a
+ *     template of those.
+ * Carrying is followed by declaration (a closure sees what it captures)
+ * through variables, assignments (`=`, `??=`, `||=`, `&&=`, `+=`),
+ * destructuring and `for … of` loops (an element of a list keeps what the
+ * list carries: a row of rows, an address of addresses; `...rest` of a row is
+ * a row) and callbacks (as FUNCTION VALUES above): a value read off a row
+ * (the column, an alias, a renamed key), or made from one by a call, `new`, a
+ * method, a conditional, `??`, `||`, `+` or a template, carries the address;
+ * a read's result, its `data`, an embed's key, an element of it and objects
+ * or arrays built from it (an object literal, `o.key = …` and STORE_METHODS
+ * on a variable of the function, `Object.assign` into one) carry the row. A
+ * call carries what the function it reaches returns (in the file or in
+ * another one), what it is called on and handed, and what a function handed
+ * to it returns (`ids.map((id) => load(id))`, `ids.map(load)`). A unit's
+ * parameters carry what a caller in the same file hands them where that
+ * caller does not ask around the call; a caller in another file is checked
+ * at its own call (a hand-off).
  */
 
 /** One kept address: the table, its column, how a read of it is found, the
@@ -121,6 +151,9 @@ export interface KeptAddressSpec {
    *  file and unit that make it. */
   aliases: Array<{ name: string; file: string; enclosing: string }>;
   answer: string | null;
+  /** The tables a select can embed this one from (a foreign key between
+   *  them): a select list the scan cannot read on one of them may read it. */
+  embeddedFrom?: readonly string[];
 }
 
 export interface SendSite {
@@ -156,6 +189,9 @@ export interface CallSite {
   fns: number[];
   /** Before linking: where an imported call is looked up. */
   ref?: ImportRef;
+  /** A function passed as a value (`rows.map(remind)`), not called by name:
+   *  dropped when the import it names reaches no function (a constant). */
+  value?: boolean;
 }
 
 export interface SenderUnit {
@@ -242,6 +278,11 @@ interface ChainInfo {
   /** Each select's first argument: its text when a literal, '*' when there is
    *  none, null when the scan cannot read it. */
   selectArgs: Array<string | null>;
+  /** Each select's list as far as the scan can read it: `text` the whole
+   *  list (a literal, a constant of the file, or a template of those; '*'
+   *  when there is none) or null; `parts` the literal text it can read in it
+   *  (all of it, or a template's literal parts); `node` the argument. */
+  selects: Array<{ text: string | null; parts: string[]; node: ts.Expression | null }>;
   /** False when the chain could not be followed back to a `.from()`. */
   traced: boolean;
 }
@@ -254,6 +295,12 @@ interface UnitInfo {
   /** Its function's start offset. */
   start: number;
   params: readonly ts.ParameterDeclaration[];
+  /** Its function. */
+  fn: ts.SignatureDeclaration;
+  /** The name it is declared under (a function declaration's, or the
+   *  variable's it is assigned to), so a use of that name can be told from
+   *  another binding of it; null for a member. */
+  nameNode: ts.Identifier | null;
 }
 
 /** A class or object a member call can land on: a unit path prefix here, an
@@ -328,7 +375,9 @@ const PURE_GLOBAL_CALLS: ReadonlySet<string> = new Set([
  *  `new Array`), the variable then holds a row. */
 const STORE_METHODS: ReadonlySet<string> = new Set(['push', 'unshift', 'splice', 'add', 'set']);
 
-const ARRAY_CALLBACK_METHODS = new Set([
+/** Methods that call the function handed to them with each element of what
+ *  they are called on (an array's, a set's or a map's). */
+const ARRAY_CALLBACK_METHODS: ReadonlySet<string> = new Set([
   'map',
   'flatMap',
   'forEach',
@@ -337,6 +386,95 @@ const ARRAY_CALLBACK_METHODS = new Set([
   'findLast',
   'some',
   'every',
+]);
+
+/**
+ * Methods of arrays, strings, promises, sets, maps and objects: what they are
+ * called on stays where it is (or comes back in their result). A call the
+ * scan cannot place on something holding a kept address is reported unless
+ * the method is one of these (unknownCalls).
+ */
+const BUILTIN_METHODS: ReadonlySet<string> = new Set([
+  // Array
+  'at',
+  'concat',
+  'copyWithin',
+  'entries',
+  'every',
+  'fill',
+  'filter',
+  'find',
+  'findIndex',
+  'findLast',
+  'findLastIndex',
+  'flat',
+  'flatMap',
+  'forEach',
+  'includes',
+  'indexOf',
+  'join',
+  'keys',
+  'lastIndexOf',
+  'map',
+  'pop',
+  'push',
+  'reduce',
+  'reduceRight',
+  'reverse',
+  'shift',
+  'slice',
+  'some',
+  'sort',
+  'splice',
+  'toReversed',
+  'toSorted',
+  'toSpliced',
+  'unshift',
+  'values',
+  'with',
+  // String
+  'charAt',
+  'charCodeAt',
+  'codePointAt',
+  'endsWith',
+  'localeCompare',
+  'match',
+  'matchAll',
+  'normalize',
+  'padEnd',
+  'padStart',
+  'repeat',
+  'replace',
+  'replaceAll',
+  'search',
+  'split',
+  'startsWith',
+  'substring',
+  'substr',
+  'toLowerCase',
+  'toUpperCase',
+  'toLocaleLowerCase',
+  'toLocaleUpperCase',
+  'trim',
+  'trimEnd',
+  'trimStart',
+  // Promise
+  'then',
+  'catch',
+  'finally',
+  // Set, Map
+  'add',
+  'clear',
+  'delete',
+  'get',
+  'has',
+  'set',
+  // Object
+  'hasOwnProperty',
+  'toJSON',
+  'toLocaleString',
+  'toString',
+  'valueOf',
 ]);
 
 function unwrapAll(node: ts.Expression): ts.Expression {
@@ -436,8 +574,10 @@ function declaredNames(scope: ts.Node): Set<string> {
   return out;
 }
 
-/** What a function gives back: its expression body, or each `return`'s
- *  expression that is its own (not one of a function inside it). */
+/** What a function gives back: its expression body, or each `return`'s and
+ *  `yield`'s expression that is its own (not one of a function inside it). A
+ *  generator's elements are what it yields, so a loop over what it returns
+ *  gets them. */
 function returnedExpressions(fn: ts.SignatureDeclaration): ts.Expression[] {
   const body = (fn as { body?: ts.Node }).body;
   if (!body) return [];
@@ -445,10 +585,203 @@ function returnedExpressions(fn: ts.SignatureDeclaration): ts.Expression[] {
   const out: ts.Expression[] = [];
   const walk = (n: ts.Node): void => {
     if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
-    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    if ((ts.isReturnStatement(n) || ts.isYieldExpression(n)) && n.expression)
+      out.push(n.expression);
     ts.forEachChild(n, walk);
   };
   ts.forEachChild(body, walk);
+  return out;
+}
+
+/** An identifier read as a value where it stands: not a property's,
+ *  member's or label's name, any part of a type, or an import or export
+ *  specifier. */
+function isValueReference(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (!p) return false;
+  if (ts.isPropertyAccessExpression(p) && p.name === id) return false;
+  if (
+    (ts.isPropertyAssignment(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isGetAccessor(p) ||
+      ts.isSetAccessor(p) ||
+      ts.isPropertySignature(p) ||
+      ts.isMethodSignature(p) ||
+      ts.isEnumMember(p) ||
+      ts.isJsxAttribute(p)) &&
+    p.name === id
+  ) {
+    return false;
+  }
+  if (ts.isBindingElement(p) && p.propertyName === id) return false;
+  if (
+    ts.isImportSpecifier(p) ||
+    ts.isExportSpecifier(p) ||
+    ts.isLabeledStatement(p) ||
+    ts.isBreakOrContinueStatement(p)
+  ) {
+    return false;
+  }
+  return !inType(id);
+}
+
+/** Whether a node is part of a type (`typeof row`, `Row['email']`, `A.B`,
+ *  an interface or an `implements` clause), which reads nothing when the
+ *  code runs. A class's `extends Base` and `f<T>` read Base and f. */
+function inType(n: ts.Node): boolean {
+  for (let a = n.parent; a && !ts.isSourceFile(a); a = a.parent) {
+    if (ts.isExpressionWithTypeArguments(a)) {
+      const h = a.parent;
+      return (
+        ts.isHeritageClause(h) &&
+        (h.token === ts.SyntaxKind.ImplementsKeyword || ts.isInterfaceDeclaration(h.parent))
+      );
+    }
+    if (ts.isTypeNode(a) || ts.isInterfaceDeclaration(a) || ts.isTypeAliasDeclaration(a)) {
+      return true;
+    }
+    if (
+      ts.isStatement(a) ||
+      (ts.isFunctionLike(a) && !ts.isTypeElement(a)) ||
+      ts.isClassElement(a)
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** One item of a PostgREST select list: a column, `*`, or an embedded table
+ *  with its own list (`children`). `alias` is the key the item is put under
+ *  when the list renames it (`alias:name`). */
+interface SelectItem {
+  alias: string | null;
+  name: string;
+  children: SelectItem[] | null;
+}
+
+/** A select list read as supabase-js sends it (whitespace outside double
+ *  quotes dropped): `alias:column::cast`, `alias:table!hint(…)`,
+ *  `...table(…)`, nested to any depth. */
+function parseSelectList(text: string): SelectItem[] {
+  let s = '';
+  let quoted = false;
+  for (const ch of text) {
+    if (ch === '"') quoted = !quoted;
+    if (quoted || !/\s/.test(ch)) s += ch;
+  }
+  const unquote = (x: string) => x.replace(/^"(.*)"$/, '$1');
+  const itemOf = (head: string, children: SelectItem[] | null): SelectItem | null => {
+    let h = head.startsWith('...') ? head.slice(3) : head;
+    let alias: string | null = null;
+    const m = /^([^:]+):(?!:)(.*)$/.exec(h);
+    if (m) {
+      alias = unquote(m[1]!);
+      h = m[2]!.startsWith('...') ? m[2]!.slice(3) : m[2]!;
+    }
+    const name = unquote(h.split(/!|::|->|\./)[0] ?? '');
+    return name === '' && children === null ? null : { alias, name, children };
+  };
+  let i = 0;
+  const list = (): SelectItem[] => {
+    const out: SelectItem[] = [];
+    while (i < s.length && s[i] !== ')') {
+      let head = '';
+      let q = false;
+      while (i < s.length) {
+        const ch = s[i]!;
+        if (ch === '"') q = !q;
+        else if (!q && (ch === ',' || ch === '(' || ch === ')')) break;
+        head += ch;
+        i++;
+      }
+      let children: SelectItem[] | null = null;
+      if (s[i] === '(') {
+        i++;
+        children = list();
+        if (s[i] === ')') i++;
+        // What follows the list (an aggregate's `::cast`) up to the next item.
+        while (i < s.length && s[i] !== ',' && s[i] !== ')') i++;
+      }
+      const item = itemOf(head, children);
+      if (item) out.push(item);
+      if (s[i] === ',') i++;
+    }
+    return out;
+  };
+  const out: SelectItem[] = [];
+  while (i < s.length) {
+    out.push(...list());
+    if (s[i] === ')') i++; // an unmatched ')': read on after it
+  }
+  return out;
+}
+
+/** Every embed of `table` in a select list, at any depth. */
+function embedsOf(items: SelectItem[], table: string, out: SelectItem[] = []): SelectItem[] {
+  for (const it of items) {
+    if (!it.children) continue;
+    if (it.name === table) out.push(it);
+    embedsOf(it.children, table, out);
+  }
+  return out;
+}
+
+/** The keys a list puts `column` under where it renames it, at that level
+ *  (`deep`: at any depth). */
+function renamesOf(items: SelectItem[], column: string, deep = false): string[] {
+  const out: string[] = [];
+  for (const it of items) {
+    if (!it.children && it.alias !== null && it.name === column) out.push(it.alias);
+    if (deep && it.children) out.push(...renamesOf(it.children, column, true));
+  }
+  return out;
+}
+
+/** Whether a level of a select list reads the column: it selects `*` or
+ *  names the column (under any key). */
+const levelReads = (items: SelectItem[], column: string) =>
+  items.some((it) => !it.children && (it.name === '*' || it.name === column));
+
+/** What a chain's selects do with a table's kept address, as far as the scan
+ *  can read them: whether they embed the table and read the address there
+ *  (a read through another table), the keys they put the table's rows under
+ *  (each embed's), and the keys they rename its kept column to, at the level
+ *  of the table's rows. */
+function selectReach(
+  chain: ChainInfo,
+  spec: KeptAddressSpec,
+): {
+  embedReads: boolean;
+  rowKeys: string[];
+  valueKeys: string[];
+  renames: Array<{ key: string; node: ts.Expression | null }>;
+} {
+  const out = {
+    embedReads: false,
+    rowKeys: [] as string[],
+    valueKeys: [] as string[],
+    renames: [] as Array<{ key: string; node: ts.Expression | null }>,
+  };
+  for (const s of chain.selects) {
+    for (const part of s.parts) {
+      const items = parseSelectList(part);
+      const renamed: string[] = chain.table === spec.table ? renamesOf(items, spec.column) : [];
+      for (const e of embedsOf(items, spec.table)) {
+        out.rowKeys.push(e.alias ?? e.name);
+        renamed.push(...renamesOf(e.children!, spec.column));
+        if (
+          chain.table !== spec.table &&
+          (spec.readBy === 'table' || levelReads(e.children!, spec.column))
+        ) {
+          out.embedReads = true;
+        }
+      }
+      out.valueKeys.push(...renamed);
+      for (const key of renamed) out.renames.push({ key, node: s.node });
+    }
+  }
   return out;
 }
 
@@ -507,7 +840,13 @@ function collectUnits(sf: ts.SourceFile) {
   const containers = new Set<string>();
   const seen = new Map<string, number[]>();
 
-  const add = (path: string, scope: string, fn: ts.SignatureDeclaration, at: ts.Node) => {
+  const add = (
+    path: string,
+    scope: string,
+    fn: ts.SignatureDeclaration,
+    at: ts.Node,
+    nameNode: ts.Identifier | null = null,
+  ) => {
     const lines = seen.get(path) ?? [];
     lines.push(nodeLine(sf, at));
     seen.set(path, lines);
@@ -518,6 +857,8 @@ function collectUnits(sf: ts.SourceFile) {
       line: nodeLine(sf, at),
       start: fn.getStart(sf),
       params: fn.parameters,
+      fn,
+      nameNode,
     };
     units.push(u);
     unitOf.set(fn, u);
@@ -554,7 +895,7 @@ function collectUnits(sf: ts.SourceFile) {
   const walk = (n: ts.Node, scope: string): void => {
     if (ts.isFunctionDeclaration(n)) {
       if (!n.body) return; // an overload signature
-      const u = add(join(scope, n.name?.text ?? 'default'), scope, n, n);
+      const u = add(join(scope, n.name?.text ?? 'default'), scope, n, n, n.name ?? null);
       ts.forEachChild(n, (c) => walk(c, u.path));
       return;
     }
@@ -565,7 +906,7 @@ function collectUnits(sf: ts.SourceFile) {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
       const init = unwrapExpression(n.initializer);
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-        const u = add(join(scope, n.name.text), scope, init, n);
+        const u = add(join(scope, n.name.text), scope, init, n, n.name);
         ts.forEachChild(init, (c) => walk(c, u.path));
         return;
       }
@@ -605,6 +946,36 @@ function collectUnits(sf: ts.SourceFile) {
   return { units, unitOf, byPath, classes, containers, duplicates };
 }
 
+/** A select list's text when the scan can read all of it: a literal, a
+ *  constant of the file holding one, or a template made of those. */
+function selectText(sf: ts.SourceFile, arg: ts.Expression): string | null {
+  const a = unwrapExpression(arg);
+  if (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) return a.text;
+  if (ts.isIdentifier(a)) return fromTable(sf, a);
+  if (ts.isTemplateExpression(a)) {
+    let out = a.head.text;
+    for (const span of a.templateSpans) {
+      const v = selectText(sf, span.expression);
+      if (v === null) return null;
+      out += v + span.literal.text;
+    }
+    return out;
+  }
+  return null;
+}
+
+/** A select argument as ChainInfo.selects keeps it. */
+function selectOf(sf: ts.SourceFile, arg: ts.Expression | undefined): ChainInfo['selects'][number] {
+  if (arg === undefined) return { text: '*', parts: ['*'], node: null };
+  const text = selectText(sf, arg);
+  if (text !== null) return { text, parts: [text], node: arg };
+  const a = unwrapExpression(arg);
+  const parts = ts.isTemplateExpression(a)
+    ? [[a.head.text, ...a.templateSpans.map((span) => span.literal.text)].join(',')]
+    : [];
+  return { text: null, parts, node: arg };
+}
+
 /** The `.from(…)` chain a call ends (followed back through a variable when
  *  `originOf` knows the variable's declaration), an untraced chain when it
  *  selects but reaches no `.from()`, or null. */
@@ -615,6 +986,7 @@ function chainOf(
 ): ChainInfo | null {
   const methods: string[] = [];
   const selectArgs: Array<string | null> = [];
+  const selects: ChainInfo['selects'] = [];
   let cur: ts.Expression = call;
   while (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
     const name = cur.expression.name.text;
@@ -628,6 +1000,7 @@ function chainOf(
         tableExpression: squashText(arg.getText(sf)),
         methods: methods.reverse(),
         selectArgs: selectArgs.reverse(),
+        selects: selects.reverse(),
         traced: true,
       };
     }
@@ -643,6 +1016,7 @@ function chainOf(
             ? a.text
             : null,
       );
+      selects.push(selectOf(sf, cur.arguments[0]));
     }
     cur = unwrapAll(cur.expression.expression);
   }
@@ -653,6 +1027,7 @@ function chainOf(
         ...origin,
         methods: [...origin.methods, ...methods.reverse()],
         selectArgs: [...origin.selectArgs, ...selectArgs.reverse()],
+        selects: [...origin.selects, ...selects.reverse()],
       };
     }
   }
@@ -662,6 +1037,7 @@ function chainOf(
     tableExpression: squashText(cur.getText(sf)),
     methods: methods.reverse(),
     selectArgs: selectArgs.reverse(),
+    selects: selects.reverse(),
     traced: false,
   };
 }
@@ -679,9 +1055,14 @@ function endsChain(call: ts.CallExpression): boolean {
   );
 }
 
-/** Whether a chain reads the table's kept address. */
+/** Whether a chain reads the table's kept address: on the table itself, or
+ *  through another table whose select embeds it (`support_tickets(…)`,
+ *  `alias:support_tickets!fk(…)`, `...maintenance_requests(*)`, at any
+ *  depth): for a table read by its chains any embed, for one read by its
+ *  column an embed that selects it or `*`. */
 export function chainReadsKeptAddress(chain: ChainInfo, spec: KeptAddressSpec): boolean {
-  if (chain.table !== spec.table || !chain.methods.includes('select')) return false;
+  if (!chain.methods.includes('select')) return false;
+  if (chain.table !== spec.table) return selectReach(chain, spec).embedReads;
   const everything = chain.selectArgs.some(
     (a) => a === null || a.trim() === '' || /(^|[\s,(])\*/.test(a),
   );
@@ -693,6 +1074,9 @@ export function chainReadsKeptAddress(chain: ChainInfo, spec: KeptAddressSpec): 
   return everything || names;
 }
 
+/** Names that carry the address ('value') or a row holding it ('row'), by
+ *  declaration (CarryContext.declKey): a closure reads the taint of what it
+ *  captures, and two variables of one name in one unit stay apart. */
 interface Taint {
   value: Set<string>;
   row: Set<string>;
@@ -705,11 +1089,20 @@ interface CarryContext {
   aliases: Set<string>;
   /** Every alias of the spec: read off a row the unit holds, one is the address. */
   allAliases: Set<string>;
+  /** Keys a select of this file puts the spec's rows under (its embeds) and
+   *  renames its kept column to: read off a row, a row and the address. */
+  rowKeys: Set<string>;
+  valueKeys: Set<string>;
   /** The answer a call asks (it reaches the answer file's function), or null. */
   answerOf: (call: ts.CallExpression) => string | null;
   /** What the function a call reaches returns for the spec's table. */
   returnOf: (call: ts.CallExpression) => Carry;
+  /** What a function passed as a value returns for the spec's table, or
+   *  undefined when the expression is no function the scan can place. */
+  valueFnReturn: (e: ts.Expression) => Carry | undefined;
   taint: Taint;
+  /** The declaration a name refers to where it stands (its scope and name). */
+  declKey: (id: ts.Identifier) => string;
   originOf: (variable: ts.Identifier) => ChainInfo | null;
 }
 
@@ -722,18 +1115,25 @@ function keyOf(e: ts.PropertyAccessExpression | ts.ElementAccessExpression): str
 function carry(node: ts.Expression, c: CarryContext): Carry {
   const e = unwrapAll(node);
   if (ts.isIdentifier(e)) {
-    if (c.taint.value.has(e.text)) return 'value';
-    return c.taint.row.has(e.text) ? 'row' : null;
+    const k = c.declKey(e);
+    if (c.taint.value.has(k)) return 'value';
+    return c.taint.row.has(k) ? 'row' : null;
   }
   if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
     const key = keyOf(e);
     const inner = carry(e.expression, c);
-    if (key === null) return inner === 'row' ? 'row' : null;
+    // By index, or by a key it cannot read: an element of a list of rows is
+    // a row, of a list of addresses an address.
+    if (key === null) return inner;
     if (c.spec.readBy === 'column' && key === c.spec.column) return 'value';
     if (c.aliases.has(key)) return 'value';
-    if (inner === 'row' && (key === c.spec.column || c.allAliases.has(key))) return 'value';
-    if (inner === 'row' && key === 'data') return 'row';
-    if (ts.isElementAccessExpression(e) && inner === 'row' && /^\d+$/.test(key)) return 'row';
+    if (
+      inner === 'row' &&
+      (key === c.spec.column || c.allAliases.has(key) || c.valueKeys.has(key))
+    ) {
+      return 'value';
+    }
+    if (inner === 'row' && (key === 'data' || c.rowKeys.has(key))) return 'row';
     return null;
   }
   if (ts.isCallExpression(e)) {
@@ -743,7 +1143,7 @@ function carry(node: ts.Expression, c: CarryContext): Carry {
     if (c.answerOf(e) !== null) return null;
     const callee = unwrapExpression(e.expression);
     // What the function returns, what it is called on, what it is handed,
-    // and what an inline callback handed to it returns.
+    // and what a function handed to it returns (inline, or passed as a value).
     let out: Carry = c.returnOf(e);
     if (ts.isPropertyAccessExpression(callee)) out = pick(out, carry(callee.expression, c));
     for (const a of e.arguments) {
@@ -751,7 +1151,8 @@ function carry(node: ts.Expression, c: CarryContext): Carry {
       if (ts.isArrowFunction(x) || ts.isFunctionExpression(x)) {
         for (const r of returnedExpressions(x)) out = pick(out, carry(r, c));
       } else {
-        out = pick(out, carry(a, c));
+        const fn = c.valueFnReturn(a);
+        out = pick(out, fn !== undefined ? fn : carry(a, c));
       }
     }
     return out;
@@ -797,20 +1198,27 @@ function carry(node: ts.Expression, c: CarryContext): Carry {
   return null;
 }
 
-/** Taints the names a binding binds, from what its initializer carries. */
+/** Taints the names a binding binds, from what its initializer carries: an
+ *  element of a list keeps what the list carries (a row of a list of rows,
+ *  an address of a list of addresses), and `...rest` of a row is a row. */
 function bind(name: ts.BindingName, init: Carry, c: CarryContext, out: Taint): void {
   if (ts.isIdentifier(name)) {
-    if (init === 'value') out.value.add(name.text);
-    else if (init === 'row') out.row.add(name.text);
+    const k = c.declKey(name);
+    if (init === 'value') out.value.add(k);
+    else if (init === 'row') out.row.add(k);
     return;
   }
   if (ts.isArrayBindingPattern(name)) {
     for (const el of name.elements) {
-      if (ts.isBindingElement(el)) bind(el.name, init === 'row' ? 'row' : null, c, out);
+      if (ts.isBindingElement(el)) bind(el.name, init, c, out);
     }
     return;
   }
   for (const el of name.elements) {
+    if (el.dotDotDotToken) {
+      bind(el.name, init === 'row' ? 'row' : null, c, out);
+      continue;
+    }
     const key = el.propertyName
       ? literalPropertyName(el.propertyName)
       : ts.isIdentifier(el.name)
@@ -820,8 +1228,12 @@ function bind(name: ts.BindingName, init: Carry, c: CarryContext, out: Taint): v
     if (key !== null) {
       if (c.spec.readBy === 'column' && key === c.spec.column) k = 'value';
       else if (c.aliases.has(key)) k = 'value';
-      else if (init === 'row' && (key === c.spec.column || c.allAliases.has(key))) k = 'value';
-      else if (init === 'row' && key === 'data') k = 'row';
+      else if (
+        init === 'row' &&
+        (key === c.spec.column || c.allAliases.has(key) || c.valueKeys.has(key))
+      ) {
+        k = 'value';
+      } else if (init === 'row' && (key === 'data' || c.rowKeys.has(key))) k = 'row';
     }
     bind(el.name, k, c, out);
   }
@@ -1075,7 +1487,28 @@ function prepareSenderFile(
     return null;
   };
 
-  // Variables made from an import or a local class (`new X(…)`, `X.factory(…)`).
+  /** The unit a name's declaration belongs to (the unit whose function, or
+   *  whose body, declares it; '' for the file), or null for an import or a
+   *  global. */
+  const declUnitOf = (id: ts.Identifier): string | null => {
+    const scope = declaringScope(id, id.text);
+    if (!scope) return null;
+    return unitOf.get(scope)?.path ?? unitAt(scope);
+  };
+  /** The declaration a name refers to where it stands: its scope and name. */
+  const declKeys = new WeakMap<ts.Identifier, string>();
+  const declKey = (id: ts.Identifier): string => {
+    let k = declKeys.get(id);
+    if (k === undefined) {
+      const scope = declaringScope(id, id.text);
+      k = scope ? `${scope.pos}:${scope.end}:${id.text}` : `:${id.text}`;
+      declKeys.set(id, k);
+    }
+    return k;
+  };
+
+  // Variables made from an import or a local class (`new X(…)`, `X.factory(…)`),
+  // by the unit that declares them.
   const instances = new Map<string, Map<string, Owner>>();
   const ownerOfId = (from: string, id: ts.Identifier): Owner | null => {
     for (const s of scopeChain(from)) {
@@ -1112,65 +1545,81 @@ function prepareSenderFile(
     }
     return null;
   };
+  /** What a value assigned to a variable is an instance of: made from a class
+   *  (`new X(…)`, `X.factory(…)`), another name for an instance the file
+   *  knows (`const mailer = svc`), either side of a conditional, `??`, `||`
+   *  or `&&` (`data ? new X(data) : null`), or nothing. */
+  const instanceOf = (from: string, e: ts.Expression): Owner | null => {
+    const x = unwrapAll(e);
+    if (ts.isConditionalExpression(x)) {
+      return instanceOf(from, x.whenTrue) ?? instanceOf(from, x.whenFalse);
+    }
+    if (
+      ts.isBinaryExpression(x) &&
+      (x.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+        x.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        x.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    ) {
+      return instanceOf(from, x.right) ?? instanceOf(from, x.left);
+    }
+    if (ts.isIdentifier(x)) {
+      return (
+        scopeChain(from)
+          .map((s) => instances.get(s)?.get(x.text))
+          .find((o) => o !== undefined) ?? null
+      );
+    }
+    return madeFrom(from, x);
+  };
+  // From a declaration (`const n = …`) or an assignment (`n = …`, `n ??= …`),
+  // kept by the unit that declares the variable, so its own unit and the
+  // ones inside it find it.
   const findInstances = (n: ts.Node) => {
+    let name: ts.Identifier | null = null;
+    let init: ts.Expression | null = null;
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
-      const owner = unitAt(n);
-      const init = unwrapAll(n.initializer);
-      // Made from a class (`new X(…)`, `X.factory(…)`), or another name for
-      // an instance the file already knows (`const mailer = svc`).
-      const o = ts.isIdentifier(init)
-        ? (scopeChain(owner)
-            .map((s) => instances.get(s)?.get(init.text))
-            .find((x) => x !== undefined) ?? null)
-        : madeFrom(owner, init);
-      if (o) {
-        if (!instances.has(owner)) instances.set(owner, new Map());
-        instances.get(owner)!.set(n.name.text, o);
+      name = n.name;
+      init = n.initializer;
+    } else if (isAssignment(n) && ts.isIdentifier(n.left)) {
+      name = n.left;
+      init = n.right;
+    }
+    if (name !== null && init !== null) {
+      const o = instanceOf(unitAt(n), init);
+      const holder = declUnitOf(name);
+      if (o && holder !== null) {
+        if (!instances.has(holder)) instances.set(holder, new Map());
+        instances.get(holder)!.set(name.text, o);
       }
     }
     ts.forEachChild(n, findInstances);
   };
   findInstances(sf);
 
-  /** Where a call lands: a local unit, an import to look up, or nowhere. */
-  const callTarget = (from: string, call: ts.CallExpression | ts.NewExpression): Target | null => {
-    const memberTarget = (o: Owner, member: string, name: string): Target | null => {
-      if ('local' in o) {
-        const p = `${o.local}.${member}`;
-        return byPath.has(p) ? { local: p, name } : null;
-      }
-      if ('pkg' in o) return { pkg: o.pkg, name };
-      const imp = [...imports.values()].find((b) => b.file === o.ref.file);
-      return {
-        ref: { ...o.ref, member },
-        module: imp?.module ?? o.ref.file,
-        name,
-      };
+  const memberTarget = (o: Owner, member: string, name: string): Target | null => {
+    if ('local' in o) {
+      const p = `${o.local}.${member}`;
+      return byPath.has(p) ? { local: p, name } : null;
+    }
+    if ('pkg' in o) return { pkg: o.pkg, name };
+    const imp = [...imports.values()].find((b) => b.file === o.ref.file);
+    return {
+      ref: { ...o.ref, member },
+      module: imp?.module ?? o.ref.file,
+      name,
     };
-    if (ts.isNewExpression(call)) {
-      const o = madeFrom(from, call);
-      return o ? memberTarget(o, 'constructor', 'constructor') : null;
-    }
-    const callee = unwrapExpression(call.expression);
-    if (ts.isIdentifier(callee)) {
-      const imp = importAt(callee);
-      if (imp && !imp.namespace) {
-        return imp.file
-          ? {
-              ref: { file: imp.file, exportName: imp.imported, member: null },
-              module: imp.module,
-              name: callee.text,
-            }
-          : { pkg: imp.module, name: callee.text };
-      }
-      const local = lookup(from, callee.text, (p) => byPath.has(p));
-      return local ? { local, name: callee.text } : null;
-    }
-    if (!ts.isPropertyAccessExpression(callee)) return null;
+  };
+  /** Where a member reached from `at` lands (`this.m`, `ns.f`, `x.m` of a
+   *  class, object or instance the file knows), or nowhere. */
+  const memberTargetOf = (
+    from: string,
+    callee: ts.PropertyAccessExpression,
+    at: ts.Node,
+  ): Target | null => {
     const member = callee.name.text;
     const recv = unwrapAll(callee.expression);
     if (recv.kind === ts.SyntaxKind.ThisKeyword) {
-      const cls = classOf(call);
+      const cls = classOf(at);
       if (!cls) return null;
       const p = `${cls}.${member}`;
       return byPath.has(p) ? { local: p, name: member } : null;
@@ -1190,11 +1639,78 @@ function prepareSenderFile(
     const o = ts.isIdentifier(recv) ? ownerOfId(from, recv) : madeFrom(from, recv);
     return o ? memberTarget(o, member, member) : null;
   };
+  /** Where an imported name lands, or null when it is no import there. */
+  const importTargetOf = (id: ts.Identifier): Target | null => {
+    const imp = importAt(id);
+    if (!imp || imp.namespace) return null;
+    return imp.file
+      ? {
+          ref: { file: imp.file, exportName: imp.imported, member: null },
+          module: imp.module,
+          name: id.text,
+        }
+      : { pkg: imp.module, name: id.text };
+  };
+
+  /** Where a call lands: a local unit, an import to look up, or nowhere. */
+  const callTarget = (from: string, call: ts.CallExpression | ts.NewExpression): Target | null => {
+    if (ts.isNewExpression(call)) {
+      const o = madeFrom(from, call);
+      return o ? memberTarget(o, 'constructor', 'constructor') : null;
+    }
+    const callee = unwrapExpression(call.expression);
+    if (ts.isIdentifier(callee)) {
+      const imp = importTargetOf(callee);
+      if (imp) return imp;
+      const local = lookup(from, callee.text, (p) => byPath.has(p));
+      return local ? { local, name: callee.text } : null;
+    }
+    if (!ts.isPropertyAccessExpression(callee)) return null;
+    return memberTargetOf(from, callee, call);
+  };
   /** callTarget from the unit the call sits in, worked out once per call. */
   const targets = new Map<ts.Node, Target | null>();
   const targetOf = (call: ts.CallExpression | ts.NewExpression): Target | null => {
     if (!targets.has(call)) targets.set(call, callTarget(unitAt(call), call));
     return targets.get(call)!;
+  };
+  /**
+   * A function passed as a value (`defer(notify)`, `rows.map(remind)`,
+   * `after(this.flush)`, `list.forEach(notices.reopened)`, `f.bind(…)`):
+   * where it lands, as for a call of it; null for anything else. A name is
+   * the local function only where that declaration is the one it refers to.
+   */
+  const valueTargets = new Map<ts.Node, Target | null>();
+  const valueTargetOf = (arg: ts.Expression): Target | null => {
+    if (valueTargets.has(arg)) return valueTargets.get(arg)!;
+    let out: Target | null = null;
+    let x = unwrapAll(arg);
+    if (
+      ts.isCallExpression(x) &&
+      ts.isPropertyAccessExpression(unwrapExpression(x.expression)) &&
+      (unwrapExpression(x.expression) as ts.PropertyAccessExpression).name.text === 'bind'
+    ) {
+      x = unwrapAll((unwrapExpression(x.expression) as ts.PropertyAccessExpression).expression);
+    }
+    const from = unitAt(arg);
+    if (ts.isIdentifier(x)) {
+      out = importTargetOf(x);
+      if (!out) {
+        const local = lookup(from, x.text, (p) => byPath.has(p));
+        const u = local === null ? undefined : byPath.get(local);
+        if (
+          local !== null &&
+          u?.nameNode &&
+          declaringScope(u.nameNode, x.text) === declaringScope(x, x.text)
+        ) {
+          out = { local, name: x.text };
+        }
+      }
+    } else if (ts.isPropertyAccessExpression(x)) {
+      out = memberTargetOf(from, x, arg);
+    }
+    valueTargets.set(arg, out);
+    return out;
   };
   /** The parameters of a local unit. */
   const paramsOf = (path: string) => byPath.get(path)?.params ?? [];
@@ -1311,6 +1827,94 @@ function prepareSenderFile(
     return false;
   };
 
+  // What the file's selects put under other keys, by spec: the keys of the
+  // spec's rows they embed (rowKeys) and of its kept column renamed
+  // (valueKeys), and where each rename is made (an alias site to register).
+  // A column whose name is its table's alone is renamed wherever a string
+  // names it; a common name (support's email) only where the table's rows are.
+  const selectKeys = specs.map(() => ({ row: new Set<string>(), value: new Set<string>() }));
+  const renameSites = new Map<ts.Node, Array<{ spec: number; key: string }>>();
+  const addRename = (node: ts.Node, spec: number, key: string) => {
+    selectKeys[spec]!.value.add(key);
+    const list = renameSites.get(node) ?? [];
+    if (!list.some((r) => r.spec === spec && r.key === key)) list.push({ spec, key });
+    renameSites.set(node, list);
+  };
+  const findSelectKeys = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && endsChain(n)) {
+      const chain = chainOf(sf, n, originOf);
+      if (chain) {
+        specs.forEach((spec, i) => {
+          const reach = selectReach(chain, spec);
+          for (const k of reach.rowKeys) selectKeys[i]!.row.add(k);
+          for (const r of reach.renames) {
+            if (spec.readBy === 'table') addRename(r.node ?? n, i, r.key);
+            else selectKeys[i]!.value.add(r.key);
+          }
+        });
+      }
+    }
+    if (
+      ts.isStringLiteral(n) ||
+      ts.isNoSubstitutionTemplateLiteral(n) ||
+      ts.isTemplateHead(n) ||
+      ts.isTemplateMiddle(n) ||
+      ts.isTemplateTail(n)
+    ) {
+      specs.forEach((spec, i) => {
+        if (spec.readBy !== 'column' || !wordIn(n.text, spec.column)) return;
+        for (const key of renamesOf(parseSelectList(n.text), spec.column, true)) {
+          addRename(n, i, key);
+        }
+      });
+    }
+    ts.forEachChild(n, findSelectKeys);
+  };
+  findSelectKeys(sf);
+
+  /** Whether a call hands each element of what it is called on to the
+   *  function passed to it (an array method), or the value (then()). */
+  const handsElements = (call: ts.CallExpression | ts.NewExpression): boolean => {
+    const callee = unwrapExpression(call.expression);
+    if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(callee)) return false;
+    return ARRAY_CALLBACK_METHODS.has(callee.name.text) || callee.name.text === 'then';
+  };
+  /**
+   * What a call hands the parameters of the function passed to it as argument
+   * `k`, by parameter: an array method each element of what it is called on,
+   * catch() and finally() none of it, and any other call, then() included,
+   * what it is called on and handed besides (it may call the function with
+   * any of it): then() on a query hands its rows (`.select(…).then(cb)`).
+   */
+  const handedTo = (
+    call: ts.CallExpression | ts.NewExpression,
+    k: number,
+    c: CarryContext,
+  ): ((j: number) => Carry) => {
+    const callee = unwrapExpression(call.expression);
+    const args = call.arguments ?? [];
+    let all: Carry = null;
+    if (ts.isCallExpression(call) && ts.isPropertyAccessExpression(callee)) {
+      const method = callee.name.text;
+      all = carry(callee.expression, c);
+      if (method === 'then' && endsChain(call)) {
+        // A query's rows, through `.then()` on the query itself.
+        const chain = chainOf(sf, call, originOf);
+        if (chain && chainReadsKeptAddress(chain, c.spec)) all = 'row';
+      }
+      if (ARRAY_CALLBACK_METHODS.has(method)) {
+        const each = all;
+        return () => each;
+      }
+      if (method === 'catch' || method === 'finally') return () => null;
+    }
+    args.forEach((a, m) => {
+      if (m !== k && !isFunctionValue(a)) all = pick(all, carry(a, c));
+    });
+    const handed = all;
+    return () => handed;
+  };
+
   const evaluate = (env: SenderEnv): SenderFile => {
     /** The answer a call asks: the answer file's function of that name it
      *  reaches (in that file itself, or imported however), else null. */
@@ -1379,44 +1983,45 @@ function prepareSenderFile(
       return homes !== undefined && fnsAt(n).some((f) => homes.has(f));
     };
 
-    const contexts = specs.map((spec) => ({
+    /** What each unit of the file returns, by spec (index of `specs`). */
+    const localReturns = new Map<string, Carry[]>();
+    /** What the function a target lands on returns for spec i (undefined:
+     *  no function the scan knows). */
+    const returnOfTarget = (i: number, t: Target | null): Carry | undefined => {
+      if (!t) return undefined;
+      if ('local' in t) return localReturns.get(t.local)?.[i] ?? null;
+      if (!('ref' in t)) return undefined;
+      const id = env.resolveImport(t.ref);
+      return id === null ? undefined : (env.returnsOf(id)?.[specs[i]!.table] ?? null);
+    };
+    const returnOf = (i: number, call: ts.CallExpression): Carry =>
+      returnOfTarget(i, targetOf(call)) ?? null;
+    // One context per spec: taint is kept by declaration, so every unit of
+    // the file shares it (a closure sees what it captures).
+    const contexts: CarryContext[] = specs.map((spec, i) => ({
+      sf,
       spec,
       aliases: new Set(
         spec.aliases.filter((a) => a.file === file || importedFiles.has(a.file)).map((a) => a.name),
       ),
       allAliases: new Set(spec.aliases.map((a) => a.name)),
-      taint: new Map<string, Taint>(),
+      rowKeys: selectKeys[i]!.row,
+      valueKeys: selectKeys[i]!.value,
+      answerOf,
+      returnOf: (call) => returnOf(i, call),
+      valueFnReturn: (e) => returnOfTarget(i, valueTargetOf(e)),
+      taint: { value: new Set<string>(), row: new Set<string>() },
+      declKey,
+      originOf,
     }));
-    /** What each unit of the file returns, by spec (index of `specs`). */
-    const localReturns = new Map<string, Carry[]>();
-    const returnOf = (i: number, call: ts.CallExpression): Carry => {
-      const t = targetOf(call);
-      if (!t) return null;
-      if ('local' in t) return localReturns.get(t.local)?.[i] ?? null;
-      if (!('ref' in t)) return null;
-      const id = env.resolveImport(t.ref);
-      return (id === null ? undefined : env.returnsOf(id)?.[specs[i]!.table]) ?? null;
-    };
-    const ctxFor = (i: number, path: string): CarryContext => {
-      const c = contexts[i]!;
-      let t = c.taint.get(path);
-      if (!t) {
-        t = { value: new Set(), row: new Set() };
-        c.taint.set(path, t);
-      }
-      return {
-        sf,
-        spec: c.spec,
-        aliases: c.aliases,
-        allAliases: c.allAliases,
-        answerOf,
-        returnOf: (call) => returnOf(i, call),
-        taint: t,
-        originOf,
-      };
-    };
     /** Units handed a kept address by a caller of the file that does not ask. */
     const received = new Map<string, Map<string, Set<string>>>();
+    const receive = (target: string, table: string, from: string) => {
+      if (!received.has(target)) received.set(target, new Map());
+      const r = received.get(target)!;
+      if (!r.has(table)) r.set(table, new Set());
+      r.get(table)!.add(from);
+    };
     const returned = (path: string, i: number, got: Carry) => {
       if (!got) return;
       const r = localReturns.get(path) ?? specs.map((): Carry => null);
@@ -1424,13 +2029,10 @@ function prepareSenderFile(
       localReturns.set(path, r);
     };
 
-    // Taint: each unit's own variables, the parameters its callers in this
-    // file hand a kept address, and what each unit returns, to a fixpoint.
+    // Taint: the file's variables, the parameters its callers in this file
+    // hand a kept address, and what each unit returns, to a fixpoint.
     const sizes = () =>
-      contexts.reduce(
-        (n, c) => n + [...c.taint.values()].reduce((m, t) => m + t.value.size + t.row.size, 0),
-        0,
-      ) +
+      contexts.reduce((n, c) => n + c.taint.value.size + c.taint.row.size, 0) +
       [...localReturns.values()].reduce(
         (n, r) => n + r.reduce((m, x) => m + (x === 'value' ? 2 : x === 'row' ? 1 : 0), 0),
         0,
@@ -1440,8 +2042,7 @@ function prepareSenderFile(
       const before = sizes();
       const visit = (n: ts.Node) => {
         const owner = unitAt(n);
-        contexts.forEach((cx, i) => {
-          const c = ctxFor(i, owner);
+        contexts.forEach((c, i) => {
           if (ts.isVariableDeclaration(n) && n.initializer) {
             bind(n.name, carry(n.initializer, c), c, c.taint);
           } else if (isAssignment(n) && ts.isIdentifier(n.left)) {
@@ -1455,31 +2056,37 @@ function prepareSenderFile(
             if (ts.isIdentifier(base) && unitLocal(base, owner) && carry(n.right, c)) {
               bind(base, 'row', c, c.taint);
             }
-          } else if (
-            ts.isForOfStatement(n) &&
-            ts.isVariableDeclarationList(n.initializer) &&
-            n.initializer.declarations[0]
-          ) {
-            bind(
-              n.initializer.declarations[0].name,
-              carry(n.expression, c) === 'row' ? 'row' : null,
-              c,
-              c.taint,
-            );
-          } else if (
-            ts.isCallExpression(n) &&
-            ts.isPropertyAccessExpression(n.expression) &&
-            ARRAY_CALLBACK_METHODS.has(n.expression.name.text) &&
-            carry(n.expression.expression, c) === 'row'
-          ) {
-            // An inline callback over rows gets a row (it is part of this
-            // unit: anonymous callbacks belong to the unit they sit in).
-            const fn = n.arguments[0] ? unwrapExpression(n.arguments[0]) : undefined;
-            const param =
-              fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))
-                ? fn.parameters[0]
-                : undefined;
-            if (param) bind(param.name, 'row', c, c.taint);
+          } else if (ts.isForOfStatement(n)) {
+            // Each element of what it goes over: a row of a list of rows, an
+            // address of a list of addresses.
+            const each = carry(n.expression, c);
+            if (ts.isVariableDeclarationList(n.initializer)) {
+              const d = n.initializer.declarations[0];
+              if (d) bind(d.name, each, c, c.taint);
+            } else if (ts.isIdentifier(n.initializer)) {
+              bind(n.initializer, each, c, c.taint);
+            }
+          }
+          if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+            // A function handed to the call, inline (part of this unit) or
+            // passed as a value (a unit of the file), gets what the call
+            // hands it; a unit so handed the address reads it, unless the
+            // caller asks around the call.
+            (n.arguments ?? []).forEach((a, k) => {
+              const x = unwrapExpression(a);
+              const inline = ts.isArrowFunction(x) || ts.isFunctionExpression(x) ? x : null;
+              const t = inline ? null : valueTargetOf(a);
+              const local = t && 'local' in t ? t.local : null;
+              if (!inline && local === null) return;
+              if (!inline && guardedAt(owner, c.spec.answer, n)) return;
+              const got = handedTo(n, k, c);
+              (inline ? inline.parameters : paramsOf(local!)).forEach((p, j) => {
+                const g = got(j);
+                if (!g) return;
+                bind(p.name, g, c, c.taint);
+                if (local !== null) receive(local, c.spec.table, owner);
+              });
+            });
           }
           // `out.push(row)`, `Object.assign(x, row)`: the variable holds it now.
           if (ts.isCallExpression(n)) {
@@ -1489,12 +2096,13 @@ function prepareSenderFile(
             const into = store ?? assign;
             if (into && handed.some((a) => carry(a, c) !== null)) bind(into, 'row', c, c.taint);
           }
-          // What a unit gives back: an arrow's body, or a `return` of its own.
+          // What a unit gives back: an arrow's body, or a `return` or `yield`
+          // of its own.
           const self = unitOf.get(n);
           if (self && ts.isArrowFunction(n) && !ts.isBlock(n.body)) {
-            returned(self.path, i, carry(n.body, ctxFor(i, self.path)));
+            returned(self.path, i, carry(n.body, c));
           }
-          if (ts.isReturnStatement(n) && n.expression) {
+          if ((ts.isReturnStatement(n) || ts.isYieldExpression(n)) && n.expression) {
             let fn: ts.Node | undefined = n.parent;
             while (fn && !ts.isFunctionLike(fn)) fn = fn.parent;
             const u = fn ? unitOf.get(fn) : undefined;
@@ -1502,7 +2110,7 @@ function prepareSenderFile(
           }
           if (
             (ts.isCallExpression(n) || ts.isNewExpression(n)) &&
-            !guardedAt(owner, cx.spec.answer, n)
+            !guardedAt(owner, c.spec.answer, n)
           ) {
             const t = targetOf(n);
             if (t && 'local' in t) {
@@ -1511,11 +2119,8 @@ function prepareSenderFile(
                 const got = carry(a, c);
                 const p = params[k];
                 if (!got || !p) return;
-                bind(p.name, got, c, ctxFor(i, t.local).taint);
-                if (!received.has(t.local)) received.set(t.local, new Map());
-                const r = received.get(t.local)!;
-                if (!r.has(cx.spec.table)) r.set(cx.spec.table, new Set());
-                r.get(cx.spec.table)!.add(owner);
+                bind(p.name, got, c, c.taint);
+                receive(t.local, c.spec.table, owner);
               });
             }
           }
@@ -1533,9 +2138,8 @@ function prepareSenderFile(
       const u = unit(owner);
       const line = () => nodeLine(sf, n);
 
-      contexts.forEach((cx, i) => {
-        const c = ctxFor(i, owner);
-        const { spec } = cx;
+      contexts.forEach((c, i) => {
+        const { spec } = c;
         if (spec.readBy === 'column') {
           if (
             (ts.isStringLiteral(n) ||
@@ -1556,7 +2160,7 @@ function prepareSenderFile(
             u.reads.push({ table: spec.table, line: line(), how: 'reads the column' });
           } else if (
             key !== null &&
-            (cx.aliases.has(key) || (cx.allAliases.has(key) && carry(n.expression, c) === 'row'))
+            (c.aliases.has(key) || (c.allAliases.has(key) && carry(n.expression, c) === 'row'))
           ) {
             u.reads.push({ table: spec.table, line: line(), how: `reads the alias ${key}` });
           }
@@ -1575,7 +2179,7 @@ function prepareSenderFile(
             carry(decl.initializer, c) === 'row';
           if (key !== null && spec.readBy === 'column' && key === spec.column) {
             u.reads.push({ table: spec.table, line: line(), how: 'destructures the column' });
-          } else if (key !== null && (cx.aliases.has(key) || (cx.allAliases.has(key) && offRow))) {
+          } else if (key !== null && (c.aliases.has(key) || (c.allAliases.has(key) && offRow))) {
             u.reads.push({ table: spec.table, line: line(), how: `destructures the alias ${key}` });
           }
         }
@@ -1591,6 +2195,34 @@ function prepareSenderFile(
             line: line(),
             how: `gets it from ${targetOf(n)!.name}()`,
           });
+        }
+        // `ids.map(loadTicket)`: a function passed as a value that returns it.
+        if ((ts.isCallExpression(n) || ts.isNewExpression(n)) && READ_BY_RETURN.has(spec.readBy)) {
+          for (const a of n.arguments ?? []) {
+            const t = valueTargetOf(a);
+            if (t && c.valueFnReturn(a)) {
+              u.reads.push({ table: spec.table, line: line(), how: `gets it from ${t.name}()` });
+            }
+          }
+        }
+        // A name declared in a unit around this one (a closure), or at the
+        // file's top, that holds the address or a row: the unit reads it.
+        if (ts.isIdentifier(n) && isValueReference(n)) {
+          const k = declKey(n);
+          if (c.taint.value.has(k) || c.taint.row.has(k)) {
+            const from = declUnitOf(n);
+            if (from !== null && from !== owner) {
+              u.reads.push({
+                table: spec.table,
+                line: line(),
+                how: `captures it from ${from ? `${from}()` : 'its top level'}`,
+              });
+            }
+          }
+        }
+        // A select that renames the kept column (`contact:requester_email_snapshot`).
+        for (const r of renameSites.get(n) ?? []) {
+          if (r.spec === i) u.aliasSites.push({ table: spec.table, name: r.key, line: line() });
         }
         // The arguments of a send primitive or of an answer: the address there
         // is sent (the unit is checked for that) or asked about, not renamed.
@@ -1631,7 +2263,7 @@ function prepareSenderFile(
           ts.isShorthandPropertyAssignment(n) &&
           ts.isObjectLiteralExpression(n.parent) &&
           n.name.text !== spec.column &&
-          c.taint.value.has(n.name.text) &&
+          c.taint.value.has(declKey(n.name)) &&
           !safeSink(n.parent)
         ) {
           u.aliasSites.push({ table: spec.table, name: n.name.text, line: line() });
@@ -1671,6 +2303,25 @@ function prepareSenderFile(
             u.aliasSites.push({ table: spec.table, name: key, line: line() });
           }
         }
+        // `constructor(private readonly to: string)`: `this.to = to`, an
+        // alias when it holds the address, a row put on `this` when a row.
+        if (
+          ts.isParameter(n) &&
+          ts.isIdentifier(n.name) &&
+          ts.isParameterPropertyDeclaration(n, n.parent)
+        ) {
+          const got = carry(n.name, c);
+          if (got === 'value' && n.name.text !== spec.column) {
+            u.aliasSites.push({ table: spec.table, name: n.name.text, line: line() });
+          } else if (got === 'row') {
+            u.escapes.push({
+              table: spec.table,
+              target: `this.${n.name.text}`,
+              line: line(),
+              fns: fnsAt(n),
+            });
+          }
+        }
       });
 
       if (ts.isCallExpression(n) && endsChain(n)) {
@@ -1682,6 +2333,30 @@ function prepareSenderFile(
               ? `.from(${chain.tableExpression}), a table the scan cannot read`
               : `${chain.tableExpression}, which the scan cannot trace to a .from()`,
           });
+        } else if (
+          chain &&
+          chain.table !== null &&
+          chain.methods.includes('select') &&
+          chain.selects.some((x) => x.text === null)
+        ) {
+          // A select list it cannot read, on a table that can embed a kept one.
+          const table = chain.table;
+          const embeddable = specs
+            .filter(
+              (x) =>
+                x.table !== table &&
+                (x.embeddedFrom ?? []).includes(table) &&
+                !chainReadsKeptAddress(chain, x),
+            )
+            .map((x) => x.table);
+          if (embeddable.length > 0) {
+            u.dynamicReads.push({
+              line: line(),
+              what:
+                `a select list the scan cannot read on .from(${chain.tableExpression}), ` +
+                `which can embed ${embeddable.join(' and ')}`,
+            });
+          }
         }
       }
       let sendPrimitive = false;
@@ -1702,8 +2377,8 @@ function prepareSenderFile(
       if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
         const fns = fnsAt(n);
         const carries = contexts
-          .filter((_, i) => (n.arguments ?? []).some((a) => carry(a, ctxFor(i, owner)) !== null))
-          .map((cx) => cx.spec.table);
+          .filter((c) => (n.arguments ?? []).some((a) => carry(a, c) !== null))
+          .map((c) => c.spec.table);
         const t = targetOf(n);
         if (t && 'local' in t) {
           u.localCalls.push({
@@ -1739,24 +2414,78 @@ function prepareSenderFile(
             fns,
           });
         } else if (
-          carries.length > 0 &&
           !sendPrimitive &&
           !pureGlobal(n) &&
           !(ts.isCallExpression(n) && (storeInto(n) ?? assignInto(n)))
         ) {
           // A callee the scan cannot place: a function kept in a variable or
           // a parameter, a method of an object it cannot place (one a
-          // parameter, a field or an unknown call holds), a global.
-          const text = squashText(n.expression.getText(sf));
-          u.unknownCalls.push({
-            line: line(),
-            name: `${ts.isNewExpression(n) ? 'new ' : ''}${text.length > 60 ? `${text.slice(0, 57)}...` : text}`,
-            target: null,
-            unresolved: false,
-            carries,
-            fns,
-          });
+          // parameter, a field or an unknown call holds), a global. What the
+          // method is called on goes with the call (`notice.send()` on an
+          // object holding a row), but for a query builder's and a method of
+          // an array, a string, a promise, a set, a map or an object.
+          const callee = unwrapExpression(n.expression);
+          const method =
+            ts.isCallExpression(n) &&
+            (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))
+              ? callee
+              : null;
+          const onHolder =
+            method !== null &&
+            !BUILTIN_METHODS.has(memberOf(method) ?? '') &&
+            chainOf(sf, n as ts.CallExpression, originOf) === null
+              ? contexts
+                  .filter((c) => carry(method.expression, c) !== null)
+                  .map((c) => c.spec.table)
+              : [];
+          const all = [...new Set([...carries, ...onHolder])];
+          if (all.length > 0) {
+            const text = squashText(n.expression.getText(sf));
+            u.unknownCalls.push({
+              line: line(),
+              name: `${ts.isNewExpression(n) ? 'new ' : ''}${text.length > 60 ? `${text.slice(0, 57)}...` : text}`,
+              target: null,
+              unresolved: false,
+              carries: all,
+              fns,
+            });
+          }
         }
+        // A function passed as a value is called by what it is handed to: a
+        // call of it here, carrying what it is handed. A package's function
+        // counts only where it is handed elements (`rows.map(pkg.f)`); an
+        // import that reaches no function is dropped when linked.
+        (n.arguments ?? []).forEach((a, k) => {
+          const vt = valueTargetOf(a);
+          if (!vt || ('pkg' in vt && !handsElements(n))) return;
+          const handed = contexts
+            .filter((c) => {
+              const got = handedTo(n, k, c);
+              return got(0) !== null || got(1) !== null;
+            })
+            .map((c) => c.spec.table);
+          const site = { line: line(), name: vt.name, carries: handed, fns, value: true };
+          if ('local' in vt) {
+            u.localCalls.push({ ...site, target: `${file}#${vt.local}`, unresolved: false });
+          } else if ('ref' in vt) {
+            u.importCalls.push({
+              ...site,
+              module: vt.module,
+              resolved: vt.ref.file,
+              target: null,
+              unresolved: false,
+              ref: vt.ref,
+            });
+          } else {
+            u.importCalls.push({
+              ...site,
+              module: vt.pkg,
+              resolved: null,
+              target: null,
+              unresolved: false,
+            });
+          }
+        });
       }
       ts.forEachChild(n, visit);
     };
@@ -1767,6 +2496,31 @@ function prepareSenderFile(
       for (const [table, from] of tables) {
         const callers = [...from].map((f) => (f ? `${f}()` : 'its top level')).sort();
         u.reads.push({ table, line: u.line, how: `is handed it by ${callers.join(', ')}` });
+      }
+    }
+    // A unit that only captures the address from a function around it (a
+    // closure) is guarded where that function asks around it: the answer
+    // guards what sits in the function it is called in.
+    for (const info of collected.units) {
+      const u = unit(info.path);
+      const around = new Set(fnsAt(info.fn));
+      for (const spec of specs) {
+        if (spec.answer === null) continue;
+        const own = u.reads.filter((r) => r.table === spec.table);
+        if (own.length === 0 || !own.every((r) => r.how.startsWith('captures it from '))) continue;
+        for (const other of units.values()) {
+          if (other === u) continue;
+          for (const a of other.answerSites) {
+            if (
+              a.answer === spec.answer &&
+              a.home !== -1 &&
+              around.has(a.home) &&
+              !u.answerSites.some((x) => x.answer === a.answer && x.home === a.home)
+            ) {
+              u.answerSites.push({ ...a });
+            }
+          }
+        }
       }
     }
     for (const [path, r] of localReturns) {
@@ -1998,5 +2752,10 @@ export function linkSenderFiles(files: SenderFile[]): SenderUnit[] {
       ? { ...c, target, unresolved: false }
       : { ...c, target: null, unresolved: true };
   };
-  return files.flatMap((f) => f.units.map((u) => ({ ...u, importCalls: u.importCalls.map(link) })));
+  // A value passed to a call that reaches no function of its file is no
+  // function (an imported constant): no call of it.
+  const keep = (c: CallSite) => !(c.value && c.unresolved);
+  return files.flatMap((f) =>
+    f.units.map((u) => ({ ...u, importCalls: u.importCalls.map(link).filter(keep) })),
+  );
 }

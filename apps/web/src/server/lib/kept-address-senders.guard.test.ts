@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { blankSqlComments } from '@/test/kept-address-owners';
 import {
   analyzeSenderFiles,
   type CallSite,
@@ -42,17 +43,23 @@ import {
  *   2. READING. A function reads a kept address when it names the column, an
  *      alias of it the file can see, or selects it (KEPT_ADDRESSES), the
  *      query followed back through the variables it is kept in; when a
- *      function of its own file hands it the address where that function
- *      does not ask (it is handed it); when it reads a registered alias off a
- *      row a call returned to it (`detail.requesterEmail` of a maintenance
- *      detail a loader in another file returns); and when it calls a
- *      function, in its file or another, that returns a kept address or a row
- *      holding it (`gets it from get()`, `gets it from listSupportTickets()`),
- *      so a row handed on whole without naming the address is checked where
- *      it is handed on (integrator decision, 2026-10-31). A support ticket's
+ *      select on another table embeds the table (`support_tickets(…)` from
+ *      organizations or user_profiles, at any depth, its rows followed under
+ *      the embed's key); when a function of its own file hands it the
+ *      address where that function does not ask (it is handed it), by a call
+ *      or by passing it as a value (`rows.map(remind)`); when it reads a
+ *      registered alias off a row a call returned to it (`detail.requesterEmail`
+ *      of a maintenance detail a loader in another file returns); when it
+ *      calls a function, in its file or another, that returns a kept address
+ *      or a row holding it, or passes one as a value (`gets it from get()`,
+ *      `gets it from listSupportTickets()`), so a row handed on whole without
+ *      naming the address is checked where it is handed on (integrator
+ *      decision, 2026-10-31); and when it uses a name a function around it,
+ *      or the file's top, holds the address or a row in (`captures it from
+ *      f()`: a closure handed to `defer()` or `after()`). A support ticket's
  *      address is a column with a common name (email), so any read of
- *      support_tickets counts: any chain with a select, but an insert's or
- *      upsert's whose select names no kept column.
+ *      support_tickets counts: any chain with a select, any embed of it, but
+ *      an insert's or upsert's whose select names no kept column.
  *   3. PER SEND. Every send, and every hand-off of the address (or a row
  *      holding it) to a function of another file outside packages/core, sits
  *      in a function that calls the answer, or in a function inside that one,
@@ -61,7 +68,12 @@ import {
  *      answer inside a callback (`rows.filter((r) => !answer(r))`) does not
  *      cover a send after it (ask in the loop that sends). A send or
  *      hand-off is also fine when the function it reaches asks first, in its
- *      own body. The answer is the function of server/lib/kept-address.ts
+ *      own body. A function passed as a value (`defer(notify)`,
+ *      `rows.map(remind)`) is called where it is passed: it sends through it
+ *      and hands it what the call hands it (an array method's elements). A
+ *      closure that only captures the address is guarded by an answer of the
+ *      function around it that sits around the closure. The answer is the
+ *      function of server/lib/kept-address.ts
  *      the call reaches, imported under any name, through a namespace import,
  *      `import()` or a re-export; a function of another file, or of its own,
  *      that only has the answer's name does not ask. A hand-off checked by
@@ -72,16 +84,22 @@ import {
  *      callee the scan cannot place at all: a function kept in a variable or
  *      a parameter, a method of an object it cannot place (a parameter, a
  *      field, what a factory returned), a global, a query builder's write,
- *      a store into an array, set or map that is not the function's own. So
- *      is a row put into an object that outlives the function (`this.row`,
- *      a parameter's object, one at the file's top level). Not findings: a
+ *      a store into an array, set or map that is not the function's own, and
+ *      a method it cannot place called on an object holding the address
+ *      (`notice.send()`; not a query builder's, nor an array's, a string's, a
+ *      promise's, a set's, a map's or an object's own method). So is a row
+ *      put into an object that outlives the function (`this.row`, a
+ *      constructor parameter property, a parameter's object, one at the
+ *      file's top level). Not findings: a
  *      global that only computes a value (PURE_GLOBAL_CALLS in the scan), a
  *      store into the function's own array, object, set or map, which the
  *      scan then follows. One checked by hand is in REVIEWED_HANDOFFS.
  *   5. ALIASES. Every key that carries a kept address under another name (an
  *      object key wherever the object is, but in the arguments of an answer
  *      or of a send primitive: sendEmail, `.emails.send`, a fetch to the
- *      Resend API; `o.key = address`; `this.key = address`) is registered in
+ *      Resend API; `o.key = address`; `this.key = address`; a constructor
+ *      parameter property; a key a select renames the column to,
+ *      `contact:requester_email_snapshot`) is registered in
  *      KEPT_ADDRESSES with its file and function, and every registered alias
  *      is still made there. A computed key the scan cannot read
  *      (`{ [k]: address }`, `o[k] = address`) is a finding of its own. A
@@ -93,17 +111,21 @@ import {
  *   6. TABLES IT CANNOT READ. In every module but a 'use client' one (which
  *      runs in the browser, sends no email, and whose `.select()` calls are
  *      mostly a text field's), a select through a `.from()` whose table the
- *      scan cannot read (a variable, an imported constant), or through a
- *      query it cannot trace back to a `.from()` at all, is a finding unless
+ *      scan cannot read (a variable, an imported constant), through a query
+ *      it cannot trace back to a `.from()` at all, or with a select list it
+ *      cannot read (not a literal, a constant of the file or a template of
+ *      those) on a table that can embed support_tickets (embeddedFrom, pinned
+ *      to the foreign keys in the migrations), is a finding unless
  *      REVIEWED_DYNAMIC_READS says why it reads no kept address: a loader that
  *      sends nothing can return its rows to a sender in another file.
  *   7. NO ANSWER YET. Rentals have none: a borrower without an account has no
  *      borrower_user_id either (0131), so nothing in a rental tells a deleted
- *      member from someone who never had an account. A file that reads the
- *      kept rental address and sends it, or hands it on, is listed in
- *      NO_ANSWER_YET until the B23 marker (rentals.borrower_deleted_at)
- *      exists; a call it cannot follow (point 4) is shown even there, unless
- *      REVIEWED_HANDOFFS lists it.
+ *      member from someone who never had an account. A function that reads
+ *      the kept rental address and sends it, or hands it on, is listed in
+ *      NO_ANSWER_YET by file and function until the B23 marker
+ *      (rentals.borrower_deleted_at) exists, so a new one in a listed file
+ *      still fails; a call it cannot follow (point 4) is shown even there,
+ *      unless REVIEWED_HANDOFFS lists it.
  *   8. ONE NAME, TWO FUNCTIONS. Functions of one path in a file (block-scoped
  *      functions of one name) are reported when one of them reads, sends or
  *      asks: a call by that name cannot be told apart.
@@ -114,7 +136,7 @@ import {
  * sends or hands on (never a copy of its rule); make a call the scan cannot
  * follow one it can (a named function, method or object function); register
  * a new alias; or, after checking it by hand, list the hand-off, the call, the
- * unread table or the rental sender with the reason.
+ * unread table or select list, or the rental sender with the reason.
  */
 
 const REPO = path.resolve(__dirname, '../../../../..');
@@ -165,6 +187,9 @@ const KEPT_ADDRESSES: Array<KeptAddressSpec & { aliasWhy: Record<string, string>
     aliases: [],
     aliasWhy: {},
     answer: 'supportTicketSubmitterAccountDeleted',
+    // Its foreign keys (0173): organization_id and submitted_by. Pinned to
+    // the migrations below.
+    embeddedFrom: ['organizations', 'user_profiles'],
   },
   {
     table: 'rentals',
@@ -183,10 +208,12 @@ const KEPT_ADDRESSES: Array<KeptAddressSpec & { aliasWhy: Record<string, string>
   },
 ];
 
-/** Files that send to, or hand on, a kept address nothing can answer for yet. */
-const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
+/** Functions that send to, or hand on, a kept address nothing can answer for
+ *  yet, each by file and function, so a new one in a listed file still fails. */
+const NO_ANSWER_YET: Array<{ file: string; enclosing: string; table: string; why: string }> = [
   {
     file: RENTAL_EMAILS,
+    enclosing: 'sendRentalEmail',
     table: 'rentals',
     why:
       'The checkout, returned and overdue emails go to borrower_email. Until the B23 marker ' +
@@ -195,17 +222,19 @@ const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
   },
   {
     file: RENTAL_SERVICE,
+    enclosing: 'RentalsService.create',
     table: 'rentals',
     why:
-      'create() reads the address typed into the rental form (input.borrowerEmail), writes it ' +
-      'and the audit row, and sends the checkout email through lib/email/rentals.ts; nobody has ' +
-      'deleted an account between typing the address and the rental being saved.',
+      'It reads the address typed into the rental form (input.borrowerEmail), writes it and the ' +
+      'audit row, and sends the checkout email through lib/email/rentals.ts; nobody has deleted ' +
+      'an account between typing the address and the rental being saved.',
   },
   // The three below get create()'s answer back. create() returns only the new
   // rental's id, but a call carries what it is handed, so the scan counts the
   // address create() hands create_rental as part of what create() returns.
   {
     file: 'apps/web/src/app/api/v1/rentals/route.ts',
+    enclosing: 'POST',
     table: 'rentals',
     why:
       "The phone's checkout route: RentalsService.create sends the checkout email (listed " +
@@ -213,14 +242,15 @@ const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
   },
   {
     file: 'apps/web/src/server/actions/rentals.ts',
+    enclosing: 'createRentalAction',
     table: 'rentals',
     why:
       "The web's checkout action: RentalsService.create sends the checkout email (listed " +
-      "above), and createRentalAction answers the form with create()'s { id }; it sends " +
-      'nothing itself.',
+      "above), and it answers the form with create()'s { id }; it sends nothing itself.",
   },
   {
     file: 'apps/web/src/components/rentals/rental-create-form.tsx',
+    enclosing: 'RentalCreateFormInner>handleSubmit',
     table: 'rentals',
     why:
       'The web checkout form runs in the browser: it calls createRentalAction, whose ' +
@@ -271,7 +301,9 @@ const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string
   },
 ];
 
-/** Selects through a table the scan cannot read, in a file that sends. */
+/** Selects the scan cannot place, checked by hand: through a table it cannot read, through a
+ *  query it cannot trace to a `.from()`, or with a select list it cannot read on a table that can
+ *  embed a kept one (KeptAddressSpec.embeddedFrom). */
 const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: string }> = [
   {
     file: MAINTENANCE_SERVICE,
@@ -319,6 +351,14 @@ const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: stri
     why:
       "Its table is typed 'categories' | 'suppliers', and it inserts a name and selects only " +
       'id: no kept address.',
+  },
+  {
+    file: 'apps/web/src/server/services/member-email-unsubscribe.ts',
+    enclosing: 'unsubscribeMemberEmail',
+    why:
+      'Its user_profiles list is `${DIGEST_OPTIN_COLUMN}, disabled_at`, and DIGEST_OPTIN_COLUMN ' +
+      "is 'email_digest_optin' (notification-preferences.ts): two columns of the profile, no " +
+      'embedded support ticket.',
   },
 ];
 
@@ -473,11 +513,16 @@ function senderFindings({ files, units }: Scan): string[] {
       // what functions return, says so.
       const own = u.reads.filter((r) => r.table === table);
       const GETS = 'gets it from ';
+      const CAPTURES = 'captures it from ';
+      const from = (prefix: string) =>
+        [...new Set(own.map((r) => r.how.slice(prefix.length)))].join(', ');
       const reads = own.every((r) => r.how.startsWith('is handed it by '))
         ? `is handed ${what} by ${own[0]!.how.slice('is handed it by '.length)}`
         : own.every((r) => r.how.startsWith(GETS))
-          ? `gets ${what} from ${[...new Set(own.map((r) => r.how.slice(GETS.length)))].join(', ')}`
-          : `reads ${what}`;
+          ? `gets ${what} from ${from(GETS)}`
+          : own.every((r) => r.how.startsWith(CAPTURES))
+            ? `captures ${what} from ${from(CAPTURES)}`
+            : `reads ${what}`;
       const calls = [...u.localCalls, ...u.importCalls];
       const sendsThrough = calls.filter((c) => c.target !== null && sending.has(c.target));
       const unresolved = u.importCalls.filter((c) => c.unresolved && c.carries.includes(table));
@@ -519,12 +564,14 @@ function senderFindings({ files, units }: Scan): string[] {
 
       if (spec.answer === null) {
         if (u.sends.length === 0 && sendsThrough.length === 0 && handoffs.length === 0) continue;
-        const listed = NO_ANSWER_YET.find((l) => l.file === u.file && l.table === table);
+        const listed = NO_ANSWER_YET.find(
+          (l) => l.file === u.file && l.enclosing === u.name && l.table === table,
+        );
         if (listed) listedSeen.add(listed);
         else {
           out.push(
             `${u.file}:${u.line} ${fn(u)} ${reads} and sends it or hands it on, and nothing ` +
-              'can answer for it yet: list the file in NO_ANSWER_YET with the reason',
+              'can answer for it yet: list the function in NO_ANSWER_YET with the reason',
           );
         }
         continue;
@@ -617,8 +664,12 @@ function senderFindings({ files, units }: Scan): string[] {
   }
 
   for (const l of NO_ANSWER_YET) {
-    if (!listedSeen.has(l))
-      out.push(`NO_ANSWER_YET ${l.file}: it no longer sends or hands on a kept ${l.table} address`);
+    if (!listedSeen.has(l)) {
+      out.push(
+        `NO_ANSWER_YET ${l.file} ${l.enclosing}(): it no longer sends or hands on a kept ` +
+          `${l.table} address`,
+      );
+    }
   }
   for (const r of REVIEWED_HANDOFFS) {
     if (!handoffsSeen.has(r))
@@ -730,6 +781,31 @@ describe('kept-address senders (B23 guard)', () => {
   it('every registered alias says why it is made', () => {
     for (const spec of KEPT_ADDRESSES) {
       for (const a of spec.aliases) expect(spec.aliasWhy[a.enclosing], a.enclosing).toBeTruthy();
+    }
+  });
+
+  it('a table read by its chains lists every table a select can embed it from (its foreign keys in the migrations)', () => {
+    const dir = path.join(REPO, 'supabase/migrations');
+    const statements = readdirSync(dir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .flatMap((f) => blankSqlComments(readFileSync(path.join(dir, f), 'utf8')).split(';'));
+    const TABLE_OF =
+      /^\s*(?:create\s+table|alter\s+table)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:only\s+)?(?:public\.)?(\w+)/i;
+    for (const spec of KEPT_ADDRESSES.filter((s) => s.readBy === 'table')) {
+      const related = new Set<string>();
+      for (const st of statements) {
+        const table = TABLE_OF.exec(st)?.[1]?.toLowerCase();
+        if (!table) continue;
+        const refs = [...st.matchAll(/\breferences\s+(?:public\.)?(\w+)/gi)].map((m) =>
+          m[1]!.toLowerCase(),
+        );
+        // Its own foreign keys, and another table's foreign key to it.
+        if (table === spec.table) for (const r of refs) related.add(r);
+        else if (refs.includes(spec.table)) related.add(table);
+      }
+      related.delete(spec.table);
+      expect([...(spec.embeddedFrom ?? [])].sort(), spec.table).toEqual([...related].sort());
     }
   });
 
@@ -935,7 +1011,7 @@ describe('kept-address senders (B23 guard)', () => {
         ];
         expect(withPlanted(planted)).toEqual([
           'apps/web/src/server/email/plant-alias-maintenance.ts:5 sendFollowUp() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/email/plant-alias-rental.ts:3 sendDueSoon() reads rentals.borrower_email and sends it or hands it on, and nothing can answer for it yet: list the file in NO_ANSWER_YET with the reason',
+          'apps/web/src/server/email/plant-alias-rental.ts:3 sendDueSoon() reads rentals.borrower_email and sends it or hands it on, and nothing can answer for it yet: list the function in NO_ANSWER_YET with the reason',
           'apps/web/src/server/services/plant-new-alias.ts:8 contactFor() puts maintenance_requests.requester_email_snapshot into contact: register the alias in KEPT_ADDRESSES so its readers are checked',
         ]);
       },
@@ -955,11 +1031,11 @@ describe('kept-address senders (B23 guard)', () => {
           // The checkout email the rental service calls is gone with the file.
           `${RENTAL_SERVICE}:306 RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads`,
           `KEPT_ADDRESSES rentals alias borrowerEmail: ${RENTAL_EMAILS} loadRentalContext() no longer makes it`,
-          `NO_ANSWER_YET ${RENTAL_EMAILS}: it no longer sends or hands on a kept rentals address`,
+          `NO_ANSWER_YET ${RENTAL_EMAILS} sendRentalEmail(): it no longer sends or hands on a kept rentals address`,
           // With no checkout email, create() sends nothing, so the action and
           // the form that reach it no longer send either.
-          'NO_ANSWER_YET apps/web/src/server/actions/rentals.ts: it no longer sends or hands on a kept rentals address',
-          'NO_ANSWER_YET apps/web/src/components/rentals/rental-create-form.tsx: it no longer sends or hands on a kept rentals address',
+          'NO_ANSWER_YET apps/web/src/server/actions/rentals.ts createRentalAction(): it no longer sends or hands on a kept rentals address',
+          'NO_ANSWER_YET apps/web/src/components/rentals/rental-create-form.tsx RentalCreateFormInner>handleSubmit(): it no longer sends or hands on a kept rentals address',
         ]);
       },
       TIMEOUT,
@@ -2325,6 +2401,9 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
       '(c6) caught at 06df95532: { recipient } and { to } straight into calls and into new',
       () => {
         expect(withPlanted(C10['c6 caught']!)).toEqual([
+          // (c11): the object holding the address, kept on `this` by a
+          // constructor parameter property.
+          `apps/web/src/server/services/plant-c10-c6-caught.ts:20 Notice.constructor() puts a row holding maintenance_requests.requester_email_snapshot into this.options${ESCAPE_M}`,
           `apps/web/src/server/services/plant-c10-c6-caught.ts:9 reopen() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
           `apps/web/src/server/services/plant-c10-c6-caught.ts:10 reopen() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
           `apps/web/src/server/services/plant-c10-c6-caught.ts:11 reopen() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
@@ -2410,6 +2489,8 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
       '(c8) missed at 06df95532: an instance built from a row and handed on, and a method of what a factory handed the row returns (06df95532 reported only the hand-off to the factory)',
       () => {
         expect(withPlanted(C10['c8 missed 2']!)).toEqual([
+          // (c11): the row, kept on `this` by a constructor parameter property.
+          `apps/web/src/server/services/plant-c10-c8-more.ts:5 Reminder.constructor() puts a row holding maintenance_requests.requester_email_snapshot into this.row${ESCAPE_M}`,
           `apps/web/src/server/services/plant-c10-c8-more.ts:13 viaInstanceOfRow() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
           `apps/web/src/server/services/plant-c10-c8-more.ts:22 viaFactoryOfRow() hands maintenance_requests.requester_email_snapshot to svc.notify()${CANNOT_PLACE_M}`,
           `apps/web/src/server/services/plant-c10-c8-more.ts:21 viaFactoryOfRow() hands maintenance_requests.requester_email_snapshot to makeNoticeService() (@/server/services/plant-c10-notices)${HAND_OFF_M}`,
@@ -2434,6 +2515,608 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
       '(c8) a global that only computes a value is no callee the scan must place',
       () => {
         expect(withPlanted(C10['c8 control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    // ── Round c11 (2026-10-31): the security review of 784ab5775 and the
+    // decisions review ───────────────────────────────────────────────────────
+    // Each MISSED set reported nothing at 784ab5775 (the merge 425fe7cc6 has
+    // the same scan); each control stays quiet.
+    const C11_S_READ = `
+                const { data } = await admin
+                  .from('support_tickets')
+                  .update({ status: 'resolved' })
+                  .eq('id', id)
+                  .select('email, subject, organization_id, submitted_by')
+                  .single();`;
+    const C11_OUTBOX: Source = {
+      file: 'apps/web/src/server/jobs/plant-c11-outbox.ts',
+      text: `
+              export async function enqueueEmail(job: { to: string; template: string }) {
+                await createAdminClient().from('email_outbox').insert(job);
+              }`,
+    };
+    const RENTAL_ACTIONS = 'apps/web/src/server/actions/rentals.ts';
+    const RENTAL_ROUTE = 'apps/web/src/app/api/v1/rentals/route.ts';
+    /** A real file with a new rental sender appended. */
+    const withRentalSender = (file: string, name: string): Source => ({
+      file,
+      text: `${readFileSync(path.join(REPO, file), 'utf8')}
+export async function ${name}(rentalId: string) {
+  const admin = createAdminClient();
+  const { data } = await admin.from('rentals').select('id, borrower_email').eq('id', rentalId).maybeSingle();
+  if (data?.borrower_email) await sendEmail({ to: data.borrower_email, subject: 'Reminder', html: '' });
+}
+`,
+    });
+    const C11: Record<string, Source[]> = {
+      'closures missed': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/email/plant-c11-closure-defer.ts',
+          text: `
+              import { defer } from '@/server/services/lib/defer';
+              export async function resolveAndNotify(admin: Admin, id: string) {${C10_READ}
+                const to = data?.requester_email_snapshot;
+                if (!to) return;
+                const notify = async () => {
+                  await sendEmail({ to, subject: 'Your request is resolved', html: '' });
+                };
+                defer(notify);
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-closure-after.ts',
+          text: `
+              import { after } from 'next/server';
+              export async function resolveTicket(admin: Admin, id: string) {${C11_S_READ}
+                const ticket = data;
+                if (!ticket) return;
+                async function notify() {
+                  await sendEmail({ to: ticket!.email, subject: 'Resolved', html: '' });
+                }
+                after(notify);
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-closure-handoff.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              export async function remindLater(admin: Admin, id: string) {${C10_READ}
+                const to = data?.requester_email_snapshot ?? null;
+                const queue = async () => {
+                  await queueReminder(to);
+                };
+                return queue;
+              }`,
+        },
+      ],
+      'closures control': [
+        {
+          file: 'apps/web/src/server/email/plant-c11-closure-asks.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              import { defer } from '@/server/services/lib/defer';
+              export async function resolveAndNotify(admin: Admin, id: string) {${C10_READ}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                const to = data.requester_email_snapshot;
+                const notify = async () => {
+                  await sendEmail({ to, subject: 'Your request is resolved', html: '' });
+                };
+                defer(notify);
+              }`,
+        },
+        {
+          // A closure that names the row only in its types reads nothing.
+          file: 'apps/web/src/server/services/plant-c11-closure-type.ts',
+          text: `
+              export async function ticketMailer(admin: Admin, id: string) {
+                const { data: ticket } = await admin.from('support_tickets').select('email, subject').eq('id', id).single();
+                const subject = 'Ticket ' + id;
+                async function notifyOps(extra: typeof ticket, field: keyof NonNullable<typeof ticket>) {
+                  await sendEmail({ to: 'ops@example.com', subject, html: String(field) });
+                }
+                return notifyOps;
+              }`,
+        },
+      ],
+      'function values missed': [
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-map-sender.ts',
+          text: `
+              async function remindSubmitter(t: { email: string; subject: string }) {
+                await sendEmail({ to: t.email, subject: 'Still open: ' + t.subject, html: '' });
+              }
+              export async function remindOpen(admin: Admin) {
+                const { data } = await admin.from('support_tickets').select('email, subject').eq('status', 'open');
+                await Promise.all((data ?? []).map(remindSubmitter));
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-c11-reminder-mail.ts',
+          text: `
+              export async function sendReminder(to: string | null) {
+                if (to) await sendEmail({ to, subject: 'Reminder', html: '' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-map-import.ts',
+          text: `
+              import { sendReminder } from '@/server/email/plant-c11-reminder-mail';
+              export async function remindOpenRequests(admin: Admin) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, requester_user_id, requester_email_snapshot')
+                  .eq('status', 'open');
+                const recipients = (data ?? []).map((r) => r.requester_email_snapshot);
+                await Promise.all(recipients.map(sendReminder));
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-load-many.ts',
+          text: `
+              import { stringify } from 'csv-stringify/sync';
+              async function loadTicket(admin: Admin, id: string) {
+                const { data } = await admin.from('support_tickets').select('*').eq('id', id).single();
+                return data;
+              }
+              export async function remindMany(admin: Admin, ids: string[]) {
+                const tickets = await Promise.all(ids.map(loadTicket.bind(null, admin)));
+                for (const t of tickets) await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }
+              export async function exportOpen(admin: Admin) {
+                const { data } = await admin.from('support_tickets').select('email').eq('status', 'open');
+                return (data ?? []).map(stringify);
+              }`,
+        },
+      ],
+      'receivers missed': [
+        {
+          file: 'apps/web/src/server/services/plant-c11-notice-ticket.ts',
+          text: `
+              class ResolvedNotice {
+                constructor(private readonly ticket: { email: string; subject: string }) {}
+                async send() {
+                  await sendEmail({ to: this.ticket.email, subject: 'Resolved: ' + this.ticket.subject, html: '' });
+                }
+              }
+              export async function resolveTicket(admin: Admin, id: string) {${C11_S_READ}
+                const notice = data ? new ResolvedNotice(data) : null;
+                await notice?.send();
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-c11-notice-to.ts',
+          text: `
+              class ResolvedNotice {
+                constructor(private readonly to: string) {}
+                async send() {
+                  await sendEmail({ to: this.to, subject: 'Resolved', html: '' });
+                }
+              }
+              export async function resolveRequest(admin: Admin, id: string) {${C10_READ}
+                let notice: ResolvedNotice | null = null;
+                if (data?.requester_email_snapshot) notice = new ResolvedNotice(data.requester_email_snapshot);
+                await notice?.send();
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-wrapped-row.ts',
+          text: `
+              function wrap(row: unknown) {
+                return { row, send: async () => undefined };
+              }
+              export async function resolveRequest(admin: Admin, id: string) {${C10_READ}
+                const notice = wrap(data);
+                await notice.send();
+              }`,
+        },
+      ],
+      'iteration missed': [
+        C11_OUTBOX,
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-address-lists.ts',
+          text: `
+              import { enqueueEmail } from '@/server/jobs/plant-c11-outbox';
+              export async function remindOpenRequests(admin: Admin) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, requester_user_id, requester_email_snapshot')
+                  .eq('status', 'open');
+                const recipients = (data ?? []).map((r) => r.requester_email_snapshot);
+                for (const to of recipients) {
+                  if (to) await enqueueEmail({ to, template: 'maintenance-reminder' });
+                }
+              }
+              export async function remindFirst(admin: Admin, ids: string[]) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, requester_user_id, requester_email_snapshot')
+                  .in('id', ids);
+                const [to] = (data ?? []).map((r) => r.requester_email_snapshot).filter(Boolean);
+                if (to) await enqueueEmail({ to, template: 'maintenance-reminder' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-by-index.ts',
+          text: `
+              import { enqueueEmail } from '@/server/jobs/plant-c11-outbox';
+              export async function remindFirstByIndex(admin: Admin) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, requester_user_id, requester_email_snapshot')
+                  .eq('status', 'open');
+                const recipients = (data ?? []).map((r) => r.requester_email_snapshot);
+                await enqueueEmail({ to: recipients[0] ?? '', template: 'maintenance-reminder' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-then.ts',
+          text: `
+              import { listSupportTickets } from '@/server/services/support-tickets';
+              import { enqueueEmail } from '@/server/jobs/plant-c11-outbox';
+              export async function remindOpen() {
+                await listSupportTickets({ status: 'open' }).then((tickets) =>
+                  Promise.all(tickets.map((t) => enqueueEmail({ to: t.email, template: 'ticket-reminder' }))),
+                );
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-ticket-pages.ts',
+          text: `
+              export async function* openTickets(admin: Admin) {
+                for (let from = 0; ; from += 100) {
+                  const { data } = await admin
+                    .from('support_tickets')
+                    .select('id, email, subject')
+                    .eq('status', 'open')
+                    .range(from, from + 99);
+                  if (!data || data.length === 0) return;
+                  for (const t of data) yield t;
+                }
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-generator.ts',
+          text: `
+              import { openTickets } from '@/server/services/plant-c11-ticket-pages';
+              export async function remindAll(admin: Admin) {
+                for await (const t of openTickets(admin)) {
+                  await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+                }
+              }`,
+        },
+      ],
+      'select embeds missed': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-org-tickets.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              export async function remindOrgTickets(admin: Admin, orgId: string) {
+                const { data } = await admin.from('organizations').select('id, support_tickets (email, status)').eq('id', orgId).single();
+                for (const t of data?.support_tickets ?? []) await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }
+              export async function queueMemberTickets(admin: Admin, userId: string) {
+                const { data: profile } = await admin
+                  .from('user_profiles')
+                  .select('id, tickets:support_tickets!submitted_by(email, status)')
+                  .eq('id', userId)
+                  .single();
+                for (const t of profile?.tickets ?? []) await queueReminder({ to: t.email });
+              }
+              export async function remindWithColumns(admin: Admin, orgId: string, columns: string) {
+                const { data } = await admin.from('organizations').select(columns).eq('id', orgId).single();
+                await sendEmail({ to: 'support@example.com', subject: 'Open tickets', html: JSON.stringify(data) });
+              }
+              export async function queueItemRequests(admin: Admin, itemId: string) {
+                const { data } = await admin.from('inventory_items').select('id, maintenance_requests(*)').eq('id', itemId).single();
+                await queueReminder(data);
+              }`,
+        },
+      ],
+      'select embeds control': [
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-org-no-tickets.ts',
+          text: `
+              const ORG_COLUMNS = 'id, name';
+              export async function notifyOrg(admin: Admin, orgId: string) {
+                const { data } = await admin.from('organizations').select(\`\${ORG_COLUMNS}, slug\`).eq('id', orgId).single();
+                await sendEmail({ to: 'support@example.com', subject: data?.name ?? '', html: '' });
+              }`,
+        },
+      ],
+      'select renames missed': [
+        {
+          file: 'apps/web/src/server/jobs/plant-c11-rename-queue.ts',
+          text: `
+              export async function queueReminder(job: { to: string | null }) {
+                void job;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-rename.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c11-rename-queue';
+              export async function remindRequester(admin: Admin, id: string) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, contact:requester_email_snapshot')
+                  .eq('id', id)
+                  .maybeSingle();
+                await queueReminder({ to: data?.contact ?? null });
+              }
+              export async function remindViaHook(admin: Admin, id: string) {
+                const { data } = await admin
+                  .from('maintenance_requests')
+                  .select('id, contact:requester_email_snapshot::text')
+                  .eq('id', id)
+                  .maybeSingle();
+                await fetch('https://hooks.example.com/notify', { method: 'POST', body: data?.contact ?? '' });
+              }
+              export async function remindSubmitter(admin: Admin, id: string) {
+                const { data } = await admin.from('support_tickets').select('id, recipient:email').eq('id', id).single();
+                await queueReminder({ to: data?.recipient ?? null });
+              }`,
+        },
+      ],
+      'select renames control': [
+        {
+          file: 'apps/web/src/server/services/plant-c11-rename-control.ts',
+          text: `
+              export async function listTitles(admin: Admin) {
+                const { data } = await admin.from('maintenance_requests').select('id, label:subject');
+                return (data ?? []).map((r) => r.label);
+              }`,
+        },
+      ],
+      'more carrying missed': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/services/plant-c11-more.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              let lastTicket: { email: string } | null = null;
+              export async function queueRest(admin: Admin, id: string) {${C10_READ}
+                const { id: requestId, ...rest } = data ?? { id: '' };
+                await queueReminder(rest);
+                return requestId;
+              }
+              export async function remindViaThen(admin: Admin) {
+                await admin.from('support_tickets').select('email').eq('status', 'open').then(({ data }) => queueReminder(data));
+              }
+              export async function remindEach(admin: Admin) {
+                const { data } = await admin.from('support_tickets').select('email').eq('status', 'open');
+                withEach(data ?? [], (t) => queueReminder({ to: t.email }));
+              }
+              function withEach<T>(rows: T[], fn: (row: T) => unknown) {
+                return rows.length ? fn : null;
+              }
+              export async function loadLast(admin: Admin, id: string) {${C11_S_READ}
+                lastTicket = data;
+              }
+              export async function remindLast() {
+                if (lastTicket) await sendEmail({ to: lastTicket.email, subject: 'Still open?', html: '' });
+              }`,
+        },
+      ],
+      'shadowed function name': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/services/plant-c11-shadow.ts',
+          text: `
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              function tickets() {
+                return [];
+              }
+              export async function queueCopy(admin: Admin) {
+                const { data: tickets } = await admin.from('support_tickets').select('email');
+                const copy = structuredClone(tickets);
+                await queueReminder(copy);
+              }`,
+        },
+      ],
+      'carrying control': [
+        C10_REMINDERS,
+        {
+          file: 'apps/web/src/server/services/plant-c11-subjects.ts',
+          text: `
+              export const SUPPORT_SUBJECT = 'Support';`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c11-control.ts',
+          text: `
+              import { listSupportTickets } from '@/server/services/support-tickets';
+              import { queueReminder } from '@/server/jobs/plant-c10-reminders';
+              import { SUPPORT_SUBJECT } from '@/server/services/plant-c11-subjects';
+              function isOpen(t: { status: string }) {
+                return t.status === 'open';
+              }
+              function record(subject: string, rows: unknown[]) {
+                return [subject, rows.length];
+              }
+              export async function countOpen(admin: Admin) {
+                let q = admin.from('support_tickets').select('*');
+                q = q.eq('status', 'open');
+                const { data } = await q.limit(10);
+                const subjects = (data ?? []).slice(0, 2).map((t) => t.subject);
+                record(SUPPORT_SUBJECT, data ?? []);
+                return [subjects.length, (data ?? []).filter(isOpen).length];
+              }
+              export async function reportFailure() {
+                await listSupportTickets({ status: 'open' }).catch((e) => queueReminder({ error: String(e) }));
+              }`,
+        },
+      ],
+      'rental senders in listed files missed': [
+        withRentalSender(RENTAL_ACTIONS, 'emailBorrowerAgainAction'),
+        withRentalSender(RENTAL_ROUTE, 'emailBorrowerAgain'),
+      ],
+    };
+    const ASK_S_FIX = ', or ask supportTicketSubmitterAccountDeleted() first';
+    const ESCAPE_S =
+      ', which outlives the function, and the scan does not follow it there: keep the row in a ' +
+      `variable of the function${ASK_S_FIX}, or check it by hand and list it in REVIEWED_HANDOFFS`;
+    const HAND_OFF_S = `${ASK_S}: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS`;
+
+    it(
+      '(c11) missed at 784ab5775: a named closure that captures the address, handed to defer(), after() or returned',
+      () => {
+        expect(withPlanted(C11['closures missed']!)).toEqual([
+          `apps/web/src/server/email/plant-c11-closure-defer.ts:14 resolveAndNotify() reads maintenance_requests.requester_email_snapshot and sends email through notify()${ASK_M}`,
+          `apps/web/src/server/email/plant-c11-closure-defer.ts:12 resolveAndNotify>notify() captures maintenance_requests.requester_email_snapshot from resolveAndNotify() and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/services/plant-c11-closure-after.ts:15 resolveTicket() reads support_tickets.email and sends email through notify()${ASK_S}`,
+          `apps/web/src/server/services/plant-c11-closure-after.ts:13 resolveTicket>notify() captures support_tickets.email from resolveTicket() and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c11-closure-handoff.ts:11 remindLater>queue() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) a closure deferred after the function asks is guarded by that answer; a closure that names the row only in its types reads nothing',
+      () => {
+        expect(withPlanted(C11['closures control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: a sender handed to map() by reference, in the same file and in another',
+      () => {
+        expect(withPlanted(C11['function values missed']!)).toEqual([
+          `apps/web/src/server/jobs/plant-c11-map-sender.ts:3 remindSubmitter() is handed support_tickets.email by remindOpen() and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/jobs/plant-c11-map-sender.ts:7 remindOpen() reads support_tickets.email and sends email through remindSubmitter()${ASK_S}`,
+          `apps/web/src/server/jobs/plant-c11-map-import.ts:9 remindOpenRequests() reads maintenance_requests.requester_email_snapshot and sends email through sendReminder()${ASK_M}`,
+          `apps/web/src/server/jobs/plant-c11-load-many.ts:9 remindMany() gets support_tickets.email from loadTicket() and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/jobs/plant-c11-load-many.ts:13 exportOpen() hands support_tickets.email to stringify() (csv-stringify/sync)${HAND_OFF_S}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: an instance made in a conditional or an assignment, a constructor parameter property, and a method of an object holding the row',
+      () => {
+        expect(withPlanted(C11['receivers missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c11-notice-ticket.ts:3 ResolvedNotice.constructor() puts a row holding support_tickets.email into this.ticket${ESCAPE_S}`,
+          `apps/web/src/server/services/plant-c11-notice-ticket.ts:16 resolveTicket() reads support_tickets.email and sends email through send()${ASK_S}`,
+          `apps/web/src/server/email/plant-c11-notice-to.ts:16 resolveRequest() reads maintenance_requests.requester_email_snapshot and sends email through send()${ASK_M}`,
+          `apps/web/src/server/services/plant-c11-wrapped-row.ts:12 resolveRequest() hands maintenance_requests.requester_email_snapshot to notice.send()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/email/plant-c11-notice-to.ts:3 ResolvedNotice.constructor() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: a list of addresses looped over or destructured, rows handled in then(), and rows a generator yields',
+      () => {
+        expect(withPlanted(C11['iteration missed']!)).toEqual([
+          `apps/web/src/server/jobs/plant-c11-address-lists.ts:10 remindOpenRequests() hands maintenance_requests.requester_email_snapshot to enqueueEmail() (@/server/jobs/plant-c11-outbox)${HAND_OFF_M}`,
+          `apps/web/src/server/jobs/plant-c11-address-lists.ts:19 remindFirst() hands maintenance_requests.requester_email_snapshot to enqueueEmail() (@/server/jobs/plant-c11-outbox)${HAND_OFF_M}`,
+          `apps/web/src/server/jobs/plant-c11-by-index.ts:9 remindFirstByIndex() hands maintenance_requests.requester_email_snapshot to enqueueEmail() (@/server/jobs/plant-c11-outbox)${HAND_OFF_M}`,
+          `apps/web/src/server/jobs/plant-c11-then.ts:6 remindOpen() hands support_tickets.email to enqueueEmail() (@/server/jobs/plant-c11-outbox)${HAND_OFF_S}`,
+          `apps/web/src/server/jobs/plant-c11-generator.ts:5 remindAll() gets support_tickets.email from openTickets() and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/jobs/plant-c11-address-lists.ts:10 remindOpenRequests() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+          `apps/web/src/server/jobs/plant-c11-address-lists.ts:19 remindFirst() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+          `apps/web/src/server/jobs/plant-c11-by-index.ts:9 remindFirstByIndex() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+          `apps/web/src/server/jobs/plant-c11-then.ts:6 remindOpen() puts support_tickets.email into to${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: support tickets embedded in an organizations or user_profiles select, and a select list the scan cannot read on organizations',
+      () => {
+        expect(withPlanted(C11['select embeds missed']!)).toEqual([
+          `apps/web/src/server/jobs/plant-c11-org-tickets.ts:5 remindOrgTickets() reads support_tickets.email and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/jobs/plant-c11-org-tickets.ts:13 queueMemberTickets() hands support_tickets.email to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_S}`,
+          `apps/web/src/server/jobs/plant-c11-org-tickets.ts:21 queueItemRequests() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/jobs/plant-c11-org-tickets.ts:13 queueMemberTickets() puts support_tickets.email into to${REGISTER}`,
+          `apps/web/src/server/jobs/plant-c11-org-tickets.ts:16 remindWithColumns() selects through a select list the scan cannot read on .from('organizations'), which can embed support_tickets${DYNAMIC}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) an organizations select that embeds no ticket, through a template of a constant, is no read',
+      () => {
+        expect(withPlanted(C11['select embeds control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: a kept column renamed in the select, handed to another file, a fetch and an outbox',
+      () => {
+        expect(withPlanted(C11['select renames missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c11-rename.ts:9 remindRequester() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c11-rename-queue)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:17 remindViaHook() hands maintenance_requests.requester_email_snapshot to fetch()${CANNOT_PLACE_M}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:21 remindSubmitter() hands support_tickets.email to queueReminder() (@/server/jobs/plant-c11-rename-queue)${HAND_OFF_S}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:6 remindRequester() puts maintenance_requests.requester_email_snapshot into contact${REGISTER}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:9 remindRequester() puts maintenance_requests.requester_email_snapshot into to${REGISTER}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:14 remindViaHook() puts maintenance_requests.requester_email_snapshot into contact${REGISTER}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:17 remindViaHook() puts maintenance_requests.requester_email_snapshot into body${REGISTER}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:20 remindSubmitter() puts support_tickets.email into recipient${REGISTER}`,
+          `apps/web/src/server/services/plant-c11-rename.ts:21 remindSubmitter() puts support_tickets.email into to${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) renaming a column that is no kept address is no alias',
+      () => {
+        expect(withPlanted(C11['select renames control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: a row taken apart with ...rest, then() on a query, a callback another call hands the rows, and a row kept in a module variable',
+      () => {
+        expect(withPlanted(C11['more carrying missed']!)).toEqual([
+          `apps/web/src/server/services/plant-c11-more.ts:11 queueRest() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
+          `apps/web/src/server/services/plant-c11-more.ts:15 remindViaThen() hands support_tickets.email to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_S}`,
+          `apps/web/src/server/services/plant-c11-more.ts:19 remindEach() hands support_tickets.email to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_S}`,
+          `apps/web/src/server/services/plant-c11-more.ts:34 remindLast() captures support_tickets.email from its top level and sends email (sendEmail)${ASK_S}`,
+          `apps/web/src/server/services/plant-c11-more.ts:19 remindEach() puts support_tickets.email into to${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) a variable named like a function of the file is that variable, not the function (still caught at 784ab5775)',
+      () => {
+        expect(withPlanted(C11['shadowed function name']!)).toEqual([
+          `apps/web/src/server/services/plant-c11-shadow.ts:9 queueCopy() hands support_tickets.email to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_S}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) a query builder and the methods of arrays called on rows, a constant passed beside rows, and a catch() callback carry nothing to report',
+      () => {
+        expect(withPlanted(C11['carrying control']!)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c11) missed at 784ab5775: a new rental sender in a file NO_ANSWER_YET lists for another function',
+      () => {
+        const at = (file: string) =>
+          readFileSync(path.join(REPO, file), 'utf8').split('\n').length + 1;
+        expect(withPlanted(C11['rental senders in listed files missed']!)).toEqual([
+          `${RENTAL_ACTIONS}:${at(RENTAL_ACTIONS)} emailBorrowerAgainAction() reads rentals.borrower_email and sends it or hands it on, and nothing can answer for it yet: list the function in NO_ANSWER_YET with the reason`,
+          `${RENTAL_ROUTE}:${at(RENTAL_ROUTE)} emailBorrowerAgain() reads rentals.borrower_email and sends it or hands it on, and nothing can answer for it yet: list the function in NO_ANSWER_YET with the reason`,
+        ]);
       },
       TIMEOUT,
     );
