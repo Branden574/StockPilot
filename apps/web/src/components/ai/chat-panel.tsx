@@ -31,7 +31,7 @@ const DEFAULT_SUGGESTIONS = [
   'Show me total inventory value.',
   'Who adjusted stock today?',
   'List warehouses we operate.',
-  'Find Hydrapeak water bottles.',
+  'Find water bottles.',
 ];
 
 /**

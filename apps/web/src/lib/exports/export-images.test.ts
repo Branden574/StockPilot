@@ -1,8 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const primaryImagesForServerDecoding = vi.fn();
 const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
+// The SSRF guard stays real (its SsrfBlockedError, and the real safeFetch for
+// the refused-host test); only safeFetch is observable, so no test here can
+// open a network connection.
+const { safeFetchSpy } = vi.hoisted(() => ({ safeFetchSpy: vi.fn() }));
+vi.mock('@/lib/ssrf-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ssrf-guard')>()),
+  safeFetch: (...args: unknown[]) => safeFetchSpy(...args),
+}));
+// Under the real safeFetch: the resolver and the pinned request, so a test can
+// fail a lookup, slow it down, or answer the request, with no network.
+const { lookupMock, undiciFetchMock } = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
+  undiciFetchMock: vi.fn(),
+}));
+vi.mock('node:dns/promises', () => ({
+  lookup: (...args: unknown[]) => lookupMock(...args),
+}));
+vi.mock('undici', () => ({
+  Agent: class {
+    async close() {
+      /* no-op */
+    }
+  },
+  fetch: (...args: unknown[]) => undiciFetchMock(...args),
+}));
 
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: vi.fn().mockImplementation(function () {
@@ -12,9 +38,15 @@ vi.mock('@/server/services/item-images', () => ({
 
 import { ItemImagesService } from '@/server/services/item-images';
 
+import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
 import { readImageDimensions } from '@/lib/inventory-export-xlsx';
 
-import { inFilters, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import {
+  inFilters,
+  makeServiceContext,
+  makeSupabaseStub,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import {
   attachExportImages,
@@ -27,6 +59,7 @@ import {
   IMAGE_FETCH_CONCURRENCY,
   IMAGE_FETCH_MAX_ATTEMPTS,
   IMAGE_FETCH_TIMEOUT_MS,
+  IMAGE_FETCH_TOTAL_DEADLINE_MS,
   MAX_EMBEDDED_IMAGE_BYTES,
   MAX_TOTAL_EMBEDDED_IMAGE_BYTES,
   type EmbeddedImage,
@@ -258,7 +291,10 @@ describe('countRowsWithImages', () => {
       },
       'inventory_items.select': { data: [], error: null },
     });
-    const n = await countRowsWithImages(makeServiceContext(stub.client) as never, ids.slice(0, 100));
+    const n = await countRowsWithImages(
+      makeServiceContext(stub.client) as never,
+      ids.slice(0, 100),
+    );
     expect(pages).toBe(2);
     expect(n).toBe(100);
   });
@@ -267,7 +303,9 @@ describe('countRowsWithImages', () => {
     let calls = 0;
     const stub = makeSupabaseStub({
       'item_images.select': () =>
-        ++calls === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
+        ++calls === 2
+          ? { data: null, error: { message: 'fetch failed' } }
+          : { data: [], error: null },
       'inventory_items.select': { data: [], error: null },
     });
     await expect(
@@ -510,6 +548,243 @@ describe('fetchExportImageBytes — per-request URL cache', () => {
   });
 });
 
+/**
+ * Where the export fetches an image from. Its URLs are the project's own
+ * signed storage URLs, plus the legacy custom_fields.thumbnail_url the ISBN
+ * importer writes for book covers, which is checked only for type and length
+ * where it is stored and which staff can edit. The default fetcher used to be
+ * the bare global fetch for all of them, so anyone who could edit an item and
+ * export could make the server request any address, internal ones included
+ * (and follow its redirects).
+ */
+describe('fetchExportImageBytes — where each URL is fetched (SSRF)', () => {
+  const STORAGE = 'https://proj.supabase.co';
+  const SIGNED = `${STORAGE}/storage/v1/object/sign/item-images/org/item/thumb.webp?token=t`;
+  const COVER = 'https://covers.openlibrary.org/b/id/1-M.jpg';
+  const fetchSpy = vi.fn();
+  let previousSupabaseUrl: string | undefined;
+
+  beforeEach(() => {
+    previousSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = STORAGE;
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (previousSupabaseUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = previousSupabaseUrl;
+  });
+
+  it('fetches a signed URL of the project storage with plain fetch', async () => {
+    fetchSpy.mockResolvedValue(jpegResponse(1024));
+    const result = await fetchExportImageBytes(new Map([['a', SIGNED]]));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe(SIGNED);
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+    expect(result.images.has('a')).toBe(true);
+  });
+
+  it('sends a legacy cover URL through safeFetch with the cover allowlist, never plain fetch', async () => {
+    safeFetchSpy.mockResolvedValue(jpegResponse(1024));
+    const result = await fetchExportImageBytes(new Map([['a', COVER]]));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(safeFetchSpy).toHaveBeenCalledWith(
+      COVER,
+      expect.objectContaining({
+        hostAllowlist: COVER_HOST_ALLOWLIST,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(result.images.has('a')).toBe(true);
+  });
+
+  it('never requests an internal address: the guard refuses it once, it is not retried, the cell stays blank', async () => {
+    const { safeFetch: realSafeFetch } =
+      await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+    // The real guard: a host off the allowlist is refused before any lookup.
+    safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    const sleep = vi.fn(async () => {});
+    const result = await fetchExportImageBytes(
+      new Map([['a', 'http://169.254.169.254/latest/meta-data/']]),
+      { sleep },
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  it('refuses a URL that is not http(s) without any request', async () => {
+    const result = await fetchExportImageBytes(new Map([['a', 'file:///etc/passwd']]), {
+      sleep: async () => {},
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).not.toHaveBeenCalled();
+    expect(result.skipped).toBe(1);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  /**
+   * The project origin also serves GoTrue, whose /auth/v1/verify answers a
+   * bogus token with a 303 to an allow-listed redirect_to. Plain fetch is for
+   * Storage reads only, and never follows a redirect; the real-fetch proof is
+   * in lib/item-image-fetch.test.ts.
+   */
+  it('sends a project path that is not a Storage read through the guard: refused once, never plain fetch', async () => {
+    const { safeFetch: realSafeFetch } =
+      await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+    safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    const sleep = vi.fn(async () => {});
+    const verify = `${STORAGE}/auth/v1/verify?type=signup&token=bogus&redirect_to=https%3A%2F%2Fpreview.example.test%2Fauth%2Fcallback`;
+    const result = await fetchExportImageBytes(new Map([['a', verify]]), { sleep });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(lookupMock).not.toHaveBeenCalled();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  it('never follows a redirect from Storage: one request, a final unsupported skip, no retry', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, {
+        status: 303,
+        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+      }),
+    );
+    const sleep = vi.fn(async () => {});
+    const result = await fetchExportImageBytes(new Map([['a', SIGNED]]), { sleep });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(SIGNED, expect.objectContaining({ redirect: 'manual' }));
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skippedReasons.unsupported).toBe(1);
+    expect(result.skippedReasons.other).toBe(0);
+  });
+
+  /**
+   * Under the real guard. A failed lookup of an allowed cover host (EAI_AGAIN,
+   * a resolver timeout) is the network, not a refusal: it is retried like any
+   * other network failure, as it was before the guard was in this path. Only
+   * a refusal (a host off the allowlist, a private address) is final.
+   */
+  describe('under the real guard', () => {
+    const PUBLIC = [{ address: '93.184.216.34', family: 4 }];
+
+    beforeEach(async () => {
+      const { safeFetch: realSafeFetch } =
+        await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+      safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    });
+
+    it('retries a cover whose host lookup failed once, and embeds it', async () => {
+      lookupMock
+        .mockRejectedValueOnce(
+          Object.assign(new Error('getaddrinfo EAI_AGAIN covers.openlibrary.org'), {
+            code: 'EAI_AGAIN',
+          }),
+        )
+        .mockResolvedValue(PUBLIC);
+      undiciFetchMock.mockResolvedValue(jpegResponse(1024));
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), {
+        sleep,
+        random: () => 0,
+      });
+      expect(lookupMock).toHaveBeenCalledTimes(2);
+      expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+      // One backoff between the failed attempt and the one that worked.
+      expect(sleep).toHaveBeenCalledTimes(1);
+      expect(result.images.has('a')).toBe(true);
+      expect(result.skipped).toBe(0);
+    });
+
+    it('a lookup that keeps failing is counted as a network failure, never as unsupported', async () => {
+      lookupMock.mockRejectedValue(
+        Object.assign(new Error('getaddrinfo EAI_AGAIN covers.openlibrary.org'), {
+          code: 'EAI_AGAIN',
+        }),
+      );
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), {
+        sleep: async () => {},
+        random: () => 0,
+      });
+      expect(lookupMock).toHaveBeenCalledTimes(IMAGE_FETCH_MAX_ATTEMPTS);
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(result.skippedReasons.other).toBe(1);
+      expect(result.skippedReasons.unsupported).toBe(0);
+    });
+
+    it('still refuses a host off the allowlist once: no lookup, no retry, no sleep', async () => {
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(
+        new Map([['a', 'https://images.example.test/cover.jpg']]),
+        { sleep },
+      );
+      expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+      expect(lookupMock).not.toHaveBeenCalled();
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.skippedReasons.unsupported).toBe(1);
+    });
+
+    it('still refuses an allowed host that resolves to a private address once, without a retry', async () => {
+      lookupMock.mockResolvedValue([{ address: '10.0.0.5', family: 4 }]);
+      const sleep = vi.fn(async () => {});
+      const result = await fetchExportImageBytes(new Map([['a', COVER]]), { sleep });
+      expect(lookupMock).toHaveBeenCalledTimes(1);
+      expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.skippedReasons.unsupported).toBe(1);
+    });
+
+    /**
+     * The attempt timeout and the call's deadline keep the image phase inside
+     * the route's 60 s. node's lookup takes no signal, so a slow resolver used
+     * to hold each attempt until it answered: 30 s lookups made this call
+     * settle after about 60 s.
+     */
+    it('cuts off a lookup that has not answered at the attempt timeout, and ends inside the deadline', async () => {
+      vi.useFakeTimers();
+      try {
+        lookupMock.mockImplementation(
+          () => new Promise((resolve) => setTimeout(() => resolve(PUBLIC), 30_000)),
+        );
+        undiciFetchMock.mockImplementation(
+          async (_url: unknown, init?: { signal?: AbortSignal }) => {
+            init?.signal?.throwIfAborted();
+            return jpegResponse(1024);
+          },
+        );
+        const startedAt = Date.now();
+        let settledAfter: number | null = null;
+        const pending = fetchExportImageBytes(new Map([['a', COVER]]), { random: () => 0 }).then(
+          (r) => {
+            settledAfter = Date.now() - startedAt;
+            return r;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(IMAGE_FETCH_TOTAL_DEADLINE_MS + IMAGE_FETCH_TIMEOUT_MS);
+        expect(settledAfter).not.toBeNull();
+        expect(settledAfter!).toBeLessThanOrEqual(
+          IMAGE_FETCH_TOTAL_DEADLINE_MS + IMAGE_FETCH_TIMEOUT_MS,
+        );
+        const result = await pending;
+        expect(result.images.size).toBe(0);
+        expect(result.skippedReasons.timeout).toBe(1);
+        // Every attempt was cut off while its lookup was still out.
+        expect(undiciFetchMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+});
+
 describe('fetchExportImageBytes — coverage gaps (Minor, fix wave)', () => {
   it('aborts a hung fetch once IMAGE_FETCH_TIMEOUT_MS elapses', async () => {
     vi.useFakeTimers();
@@ -523,10 +798,9 @@ describe('fetchExportImageBytes — coverage gaps (Minor, fix wave)', () => {
             // Never resolves on its own — simulates a hung connection.
           }),
       );
-      const pending = fetchExportImageBytes(
-        new Map([['a', 'https://signed.example/a.jpg']]),
-        { fetchImpl: fetchImpl as unknown as typeof fetch },
-      );
+      const pending = fetchExportImageBytes(new Map([['a', 'https://signed.example/a.jpg']]), {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
       // Every attempt hangs, so each one is cut off by the per-attempt
       // timer, then backed off, then retried — up to IMAGE_FETCH_MAX_ATTEMPTS.
       for (let i = 0; i < IMAGE_FETCH_MAX_ATTEMPTS; i++) {
@@ -912,7 +1186,9 @@ describe('fetchExportImageBytes — shared adaptive rate gate', () => {
     const rest = startedAt.slice(IMAGE_FETCH_CONCURRENCY);
     expect(rest.length).toBe(13 - IMAGE_FETCH_CONCURRENCY); // 12 entries + 1 retry
     for (const s of rest) {
-      expect(s.at, `${s.url} started at ${s.at}`).toBeGreaterThanOrEqual(IMAGE_FETCH_BACKOFF_BASE_MS);
+      expect(s.at, `${s.url} started at ${s.at}`).toBeGreaterThanOrEqual(
+        IMAGE_FETCH_BACKOFF_BASE_MS,
+      );
     }
     const siblings = rest.filter((s) => !s.url.endsWith('/0.jpg'));
     expect(siblings.length).toBeGreaterThan(0);
@@ -1135,7 +1411,9 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
   });
 
   it('octet-stream bytes with no recognisable magic are unsupported, not guessed', async () => {
-    const fetchImpl = vi.fn(async () => bytesResponse(new Uint8Array(64), 'application/octet-stream'));
+    const fetchImpl = vi.fn(async () =>
+      bytesResponse(new Uint8Array(64), 'application/octet-stream'),
+    );
     const decodeWebp = vi.fn(async () => null);
     const { skipped, skippedReasons } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.bin']]),

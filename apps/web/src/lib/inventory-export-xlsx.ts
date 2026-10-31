@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import ExcelJS from 'exceljs';
 
 import { escapeForSpreadsheet } from './csv';
@@ -118,6 +120,36 @@ function columnWidthFor(field: InventoryExportField, heading: string): number {
   return Math.min(Math.max(heading.length + 4, 14), 44);
 }
 
+/**
+ * One workbook image per distinct photo. exceljs writes every wb.addImage()
+ * as its own xl/media file, so adding the picture once per ROW stored a photo
+ * that several rows share once per row: up to MAX_EMBEDDED_IMAGES copies of a
+ * 512 KB picture, about a gigabyte, while the fetch budget counted it once.
+ * Photos are keyed by extension and a SHA-256 of their bytes, which covers the
+ * same fetched object on several rows and two URLs that serve the same bytes;
+ * each distinct object is hashed once.
+ */
+function workbookImages(wb: ExcelJS.Workbook): (image: EmbeddedImage) => number {
+  const keyByObject = new Map<EmbeddedImage, string>();
+  const idByKey = new Map<string, number>();
+  return (image) => {
+    let key = keyByObject.get(image);
+    if (key === undefined) {
+      key = `${image.extension}:${createHash('sha256').update(image.data).digest('hex')}`;
+      keyByObject.set(image, key);
+    }
+    let id = idByKey.get(key);
+    if (id === undefined) {
+      id = wb.addImage({
+        buffer: Buffer.from(image.data) as unknown as ExcelJS.Buffer,
+        extension: image.extension,
+      });
+      idByKey.set(key, id);
+    }
+    return id;
+  };
+}
+
 /** Fit (w, h) inside the box, preserving aspect. */
 function fitBox(
   intrinsic: { width: number; height: number } | null,
@@ -175,9 +207,17 @@ export async function toInventoryXlsx(input: InventoryXlsxInput): Promise<Buffer
   ws.columns = plan.map((p) => ({
     header: p.heading,
     key: `c${plan.indexOf(p)}`,
-    width:
-      p.kind === 'picture' ? imageSpec.columnWidthChars : columnWidthFor(p.field, p.heading),
+    width: p.kind === 'picture' ? imageSpec.columnWidthChars : columnWidthFor(p.field, p.heading),
   }));
+
+  const pictureIndex = plan.findIndex((p) => p.kind === 'picture');
+  const imageIdFor = workbookImages(wb);
+  // Every picture on the sheet, placed after the rows are written (see below).
+  const placements: Array<{
+    imageId: number;
+    row: number;
+    size: { width: number; height: number };
+  }> = [];
 
   for (const row of input.rows) {
     const excelRow = ws.addRow(
@@ -227,21 +267,31 @@ export async function toInventoryXlsx(input: InventoryXlsxInput): Promise<Buffer
     if (embedsPictures) {
       excelRow.height = imageSpec.rowHeightPt;
       const image = input.images?.get(row.id);
-      const pictureIndex = plan.findIndex((p) => p.kind === 'picture');
       if (image && pictureIndex >= 0) {
-        const id = wb.addImage({
-          buffer: Buffer.from(image.data) as unknown as ExcelJS.Buffer,
-          extension: image.extension,
-        });
-        const size = fitBox(readImageDimensions(image.data), imageSpec.boxPx);
-        ws.addImage(id, {
+        placements.push({
+          imageId: imageIdFor(image),
           // exceljs anchors are zero-based; the header occupies row 0.
-          tl: { col: pictureIndex, row: excelRow.number - 1 },
-          ext: size,
-          editAs: 'oneCell',
+          row: excelRow.number - 1,
+          size: fitBox(readImageDimensions(image.data), imageSpec.boxPx),
         });
       }
     }
+  }
+
+  // Every placement of one photo goes in together, photos in the order they
+  // were first seen. exceljs 4.4.0 links a placement that repeats the previous
+  // placement's image to the drawing link it finds at the IMAGE's id, which is
+  // another photo's link once shared photos interleave: rows [A, B, A, C, C, B]
+  // showed A on the second C row. Grouped, each photo gets exactly one link
+  // and every row shows its own photo. The sort is stable, so rows keep their
+  // order within a photo.
+  placements.sort((a, b) => a.imageId - b.imageId);
+  for (const placement of placements) {
+    ws.addImage(placement.imageId, {
+      tl: { col: pictureIndex, row: placement.row },
+      ext: placement.size,
+      editAs: 'oneCell',
+    });
   }
 
   const head = ws.getRow(1);

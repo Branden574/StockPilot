@@ -6513,7 +6513,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Short lines are caught before an order leaves',
         whatChanged:
-          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
+          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. Black pens: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
         whyItMatters:
           'Mark picking complete could leave a line with nothing picked without saying so, and the order could be out for delivery minutes later with that line still missing.',
         howItAffectsYou:

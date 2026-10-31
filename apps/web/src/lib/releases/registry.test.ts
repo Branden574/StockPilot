@@ -1470,7 +1470,7 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
       expect(text, label).toContain(label);
     }
     expect(COMPLETION_CONFIRM_LABEL).toBe('Complete picking');
-    const so100 = describeShortPickLines([{ itemName: 'L4L - Pen Black & Rose Gold', batch: 0, owed: 60 }])!;
+    const so100 = describeShortPickLines([{ itemName: 'Black pens', batch: 0, owed: 60 }])!;
     expect(text).toContain(so100.slice(0, so100.indexOf(' It will be owed')));
     // The server stays permissive: a confirm, never a refusal.
     expect(text).toContain('You can still go ahead: what was not picked is owed at hand-over, as before.');

@@ -75,6 +75,14 @@ vi.mock('@/lib/exports/export-images', async (importOriginal) => {
   };
 });
 
+// The header logo: the route must hand the document only what this answers.
+vi.mock('@/lib/pdf/image-prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pdf/image-prefetch')>()),
+  prefetchPdfLogo: vi.fn(async () => null),
+}));
+
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
+
 import { POST } from './route';
 
 function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer') {
@@ -598,5 +606,44 @@ describe('POST /api/inventory/export — images are fetched once, as bytes, and 
     expect(text).toContain(
       '2 of 3 images could not be fetched and were left blank. Re-run the export to retry.',
     );
+  });
+});
+
+// The org logo is set by an owner or admin, and the database does not hold it
+// to the logo bucket. Handed to react-pdf as a URL, the server fetched it (and
+// followed its redirects), or read it as a file path. The route now fetches it
+// through prefetchPdfLogo (the guarded image fetch) and the document gets bytes.
+describe('POST /api/inventory/export — the PDF header logo is bytes, never the stored value', () => {
+  const STORED = 'http://169.254.169.254/latest/meta-data/';
+
+  function ctxWithLogo(logoUrl: string | null) {
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: { name: 'Demo Co', logo_url: logoUrl }, error: null },
+    });
+    return { ...buildCtx('admin'), supabase: stub.client as never };
+  }
+
+  it('resolves the stored logo through prefetchPdfLogo and hands the document only its bytes', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED));
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce('data:image/png;base64,TE9HTw==');
+    await POST(buildRequest({ format: 'pdf', scope: 'all', itemType: 'book', fields: ['name'] }));
+    expect(prefetchPdfLogo).toHaveBeenCalledTimes(1);
+    expect(prefetchPdfLogo).toHaveBeenCalledWith(STORED);
+    expect(capturedElement!.props.orgLogoUrl).toBe('data:image/png;base64,TE9HTw==');
+    expect(JSON.stringify(capturedElement!.props)).not.toContain('169.254.169.254');
+  });
+
+  it('prints no logo when the fetch gives none', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED));
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(null);
+    await POST(buildRequest({ format: 'pdf', scope: 'all', itemType: 'book', fields: ['name'] }));
+    expect(capturedElement!.props.orgLogoUrl).toBeNull();
+  });
+
+  it('fetches no logo for a CSV or Excel export', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED));
+    await POST(buildRequest({ format: 'csv', scope: 'all', itemType: 'book', fields: ['name'] }));
+    await POST(buildRequest({ format: 'xlsx', scope: 'all', itemType: 'book', fields: ['name'] }));
+    expect(prefetchPdfLogo).not.toHaveBeenCalled();
   });
 });

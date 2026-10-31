@@ -94,6 +94,8 @@ describe('ChatPanel', () => {
       screen.getByRole('heading', { level: 2, name: 'Ask your inventory anything' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: "What's below reorder right now?" })).toBeEnabled();
+    // Every organization sees these chips, so they name no real brand (S17).
+    expect(screen.getByRole('button', { name: 'Find water bottles.' })).toBeEnabled();
     // The AI tour's third step targets this accessible name.
     expect(screen.getByLabelText('Ask the inventory assistant').tagName).toBe('TEXTAREA');
     expect(screen.getByRole('button', { name: 'Attach a file with ISBNs' })).toBeInTheDocument();

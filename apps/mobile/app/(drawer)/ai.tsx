@@ -35,8 +35,8 @@ export default function AIAssistantScreen() {
   }
 
   const examples = [
-    'What\'s low at L4L North Region right now?',
-    'Draft a PO for the books category from Ingram.',
+    'What\'s low at our main warehouse right now?',
+    'Draft POs for items that are running low.',
     'How many Chromebooks did we receive this month?',
     'Which suppliers have the longest lead times?',
   ];
