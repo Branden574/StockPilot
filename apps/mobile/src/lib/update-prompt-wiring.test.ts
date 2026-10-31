@@ -4,7 +4,11 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { LAUNCH_SCREEN_GROUND } from './ota-update-prompt';
+import {
+  LAUNCH_SCREEN_GROUND,
+  UPDATE_PROMPT_LATER,
+  UPDATE_PROMPT_RESTART,
+} from './ota-update-prompt';
 
 /**
  * The phone update pop-up's wiring across the app (B44), read with the
@@ -498,5 +502,68 @@ describe('writes in flight are counted, and the drains stop for a restart', () =
     expect(counts).toContain('if (this.inFlight || this.restartPaused) return;');
     // outbox-scope.test.ts pins the loop itself.
     expect(counts).toContain('for (const row of send)');
+  });
+});
+
+/**
+ * The runbook's simulator proof (docs/runbooks/mobile-ota.md, "Prove
+ * phone-update behaviour on a simulator") expects what iOS's own alert does
+ * with these two buttons. Later is the alert's cancel action, so Escape on a
+ * hardware keyboard chooses it. Restart now is its preferred action, the bold
+ * one, yet the simulator proof of 2026-10-31 found that on iOS 27 Return does
+ * not choose it. So the iPad check restarts with a tap and says Return does
+ * nothing there, instead of making a restart by Return a pass condition that
+ * every later proof would fail. When either button changes, the first test
+ * fails: rewrite the iPad check with it.
+ */
+describe('the runbook’s simulator proof expects what iOS’s alert does', () => {
+  const RUNBOOK = path.resolve(MOBILE_ROOT, '../../docs/runbooks/mobile-ota.md');
+  const HEADING = '## Prove phone-update behaviour on a simulator (test channel)';
+
+  /** The proof section's lines, from its heading to the next heading of its level. */
+  function proofLines(): string[] {
+    const lines = readFileSync(RUNBOOK, 'utf8').split('\n');
+    const start = lines.indexOf(HEADING);
+    expect(start, HEADING).toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > start && l.startsWith('## '));
+    return lines.slice(start, end === -1 ? undefined : end);
+  }
+
+  const flat = (lines: string[]) => lines.join(' ').replace(/\s+/g, ' ').trim();
+
+  it('Later is the alert’s cancel action and Restart now its preferred one', () => {
+    expect(squeeze(flatCode('src/lib/use-ota-updates.ts'))).toContain(
+      squeeze(
+        "Alert.alert(UPDATE_PROMPT_TITLE, UPDATE_PROMPT_MESSAGE, [ { text: UPDATE_PROMPT_LATER, style: 'cancel', onPress: onLater }, { text: UPDATE_PROMPT_RESTART, isPreferred: true, onPress: onRestartNow }, ]);",
+      ),
+    );
+  });
+
+  // Mutation caught: the iPad check counting on Return to restart again, or
+  // dropping the tap, Escape, or the warning that Return does nothing.
+  it('so the iPad check restarts with a tap, Escape chooses Later, and Return is never a pass condition', () => {
+    const lines = proofLines();
+    const first = lines.findIndex((l) => /^\s*- On an iPad\b/.test(l));
+    expect(first, 'the iPad check').toBeGreaterThan(-1);
+    const bullet = [lines[first]!];
+    for (const l of lines.slice(first + 1)) {
+      if (!l.trim() || /^\s*(?:- |\d+\. )/.test(l)) break;
+      bullet.push(l);
+    }
+    const ipad = flat(bullet);
+    expect(ipad).toContain('the message is centred, in both orientations');
+    expect(ipad).toContain(`tapping ${UPDATE_PROMPT_RESTART} restarts once`);
+    expect(ipad).toMatch(new RegExp(`Escape chooses ${UPDATE_PROMPT_LATER}\\b`));
+    expect(ipad).toContain(`Return does not choose ${UPDATE_PROMPT_RESTART}`);
+
+    // Every clause of the proof that names the Return key says it does not
+    // restart, so no step expects it to.
+    const returns = flat(lines)
+      .split(/[.;:] /)
+      .filter((clause) => /\bReturn\b/.test(clause));
+    expect(returns.length).toBeGreaterThan(0);
+    for (const clause of returns) {
+      expect(clause).toContain(`Return does not choose ${UPDATE_PROMPT_RESTART}`);
+    }
   });
 });

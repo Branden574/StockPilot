@@ -281,7 +281,10 @@ Steps:
    - Later, then quit and open: one launch sequence, no `restart`, the
      footer shows U2, and no message.
    - On an iPad, in the first session: the message is centred, in both
-     orientations, and Return on a hardware keyboard restarts once.
+     orientations, and tapping Restart now restarts once. With a hardware
+     keyboard, Escape chooses Later. On iOS 27 Return does not choose Restart
+     now, although Restart now is the alert's preferred action: that is how
+     iOS's own alert behaves, not a failure.
 6. Clean up: delete the test simulators. Keep the profile and the channel for
    the next proof.
 
