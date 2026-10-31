@@ -136,6 +136,10 @@ describe('ResetCompleteForm: the authenticator code (B50)', () => {
     const box = await codeBox();
     await waitFor(() => expect(box).toHaveFocus());
     expect(box).toHaveAccessibleDescription(expect.stringContaining(ASK));
+    // The number pad on a phone, and the browser's offer to fill in the code,
+    // as the sign-in code box has (mfa-challenge-form.test.tsx).
+    expect(box).toHaveAttribute('inputmode', 'numeric');
+    expect(box).toHaveAttribute('autocomplete', 'one-time-code');
     expect(screen.getByRole('link', { name: 'Contact support' })).toHaveAttribute(
       'href',
       '/support',
@@ -325,6 +329,51 @@ describe('ResetCompleteForm: the authenticator code (B50)', () => {
     expect(await screen.findByRole('button', { name: 'Update password' })).toBeEnabled();
     expect(h.replace).not.toHaveBeenCalled();
   });
+
+  // Each request clears the last message before it leaves. The ask is the
+  // box's description, not an error, so nothing else clears it: a message
+  // from the press before would stay under the new box, next to the ask.
+  it.each([
+    {
+      first: 'a request that got no answer',
+      answerFirst: () => {
+        h.complete.mockRejectedValueOnce(new Error('fetch failed'));
+      },
+      message: 'Could not reach the server. Try again.',
+    },
+    {
+      first: 'too many attempts',
+      answerFirst: () => {
+        h.complete.mockResolvedValueOnce({
+          ok: false,
+          error: {
+            code: 'rate_limited',
+            message: 'Too many attempts. Try again in a few minutes.',
+          },
+        });
+      },
+      message: 'Too many attempts. Try again in a few minutes.',
+    },
+  ])(
+    'after $first, the ask for the code leaves no old message under the box',
+    async ({ answerFirst, message }) => {
+      answerFirst();
+      h.complete.mockResolvedValueOnce(asked());
+      const user = userEvent.setup();
+      render(<ResetCompleteForm />);
+
+      await fillPasswords(user);
+      await press(user);
+      expect(await screen.findByRole('alert')).toHaveTextContent(message);
+
+      await press(user);
+      const box = await codeBox();
+      expect(box).toHaveAccessibleDescription(expect.stringContaining(ASK));
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText(message)).toBeNull();
+      expect(h.complete).toHaveBeenCalledTimes(2);
+    },
+  );
 
   // Built the way lot-trace-search.test.tsx builds it: a Server Action that
   // redirected rejects with the redirect the router is already following.
