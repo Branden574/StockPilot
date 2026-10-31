@@ -1378,11 +1378,15 @@ WEB_TESTS=(
   # (S16 review): the Actions logs of this public repository are public, and
   # the deploy hook printed the prewarm route's answer (every warmed
   # organization's ids, counts and any failed read's text). It reads every
-  # run: block and the shell scripts they run, one command at a time, and
-  # counts a secret in a header, -u, data, a URL or a variable mapped or
-  # assigned from one. Such a curl must send every answer to /dev/null and
-  # print no headers, trace or URL. The file carries the "Security
-  # invariant" marker.
+  # run: block and local action, and the scripts, package scripts and pnpm or
+  # turbo fan-outs they run, one command at a time. It counts a secret in a
+  # header, -u, data, a URL, an expression (secrets, env., inputs., steps.
+  # outputs) or a variable mapped, assigned or named like one. Such a curl
+  # must send every answer to /dev/null (one -o per URL, --globoff for a URL
+  # it cannot see whole), print no headers, trace or URL, and use only
+  # options curl's manual lists. What it cannot read (node, python, make,
+  # xargs, an action passed a secret) fails until it is read by hand. The
+  # file carries the "Security invariant" marker.
   src/test/workflow-secret-curl.guard.test.ts
 
   # The export budget's trip row (security.export_rate_limited, which the
