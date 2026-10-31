@@ -836,6 +836,11 @@ WEB_TESTS=(
   # The book-cover rehost is the one place the server fetches a caller-supplied
   # URL and stores the bytes; these pin the host allowlist and redirect posture.
   src/server/services/books-import.ssrf.test.ts
+  # The inventory export's image fetch (lib/item-image-fetch.ts, shared with the
+  # PDF image prefetch): the project's storage by plain fetch, any other http(s)
+  # URL only through safeFetch with the cover allowlist, anything else refused
+  # before a request, and a refused URL a final skip that is never retried.
+  src/lib/exports/export-images.test.ts
 
   # Authorization gates on server actions and routes.
   # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
