@@ -38,7 +38,19 @@ describe('hydrate() saves the workspace it chooses', () => {
   });
 
   it('clears the org-scoped cache and pulls in full only when told to', () => {
-    expect(hydrate).toMatch(/if \(activeOrgId && choice\.resetCache\) \{\s*\/\/[^\n]*\n[^\n]*\n\s*try \{\s*await deleteOrgData\(\);/);
-    expect(hydrate).toMatch(/if \(activeOrgId && choice\.resetCache\) \{\s*void syncNow\(true\)/);
+    // Re-pinned by the docket B10 review (was `choice.resetCache` at each
+    // site): the cache is also cleared when another account's saved
+    // workspace, which the choice does not count, is not the one chosen
+    // (use-workspace.owner.test.ts and cache-owner.sqlite.test.ts run it).
+    expect(hydrate).toContain('const othersWorkspace = persisted === null ? saved.orgId : null;');
+    expect(hydrate).toMatch(
+      /const resetCache =\s*choice\.resetCache \|\| \(othersWorkspace !== null && othersWorkspace !== activeOrgId\);/,
+    );
+    // Every site reads the combined rule, never the choice's alone.
+    expect(hydrate.match(/choice\.resetCache/g)).toHaveLength(1);
+    expect(hydrate).toMatch(
+      /if \(activeOrgId && resetCache\) \{\s*\/\/[^\n]*\n[^\n]*\n\s*try \{\s*await deleteOrgData\(\);/,
+    );
+    expect(hydrate).toMatch(/if \(activeOrgId && resetCache\) \{\s*void syncNow\(true\)/);
   });
 });

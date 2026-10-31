@@ -692,17 +692,25 @@ describe('a wipe that keeps the photos keeps the record of whose they are', SLOW
 
   // The repair can run inside the next account's OWN sign-in: a fallback
   // sign-out keeps the saved workspace, and it is not B's. B's load does not
-  // take it as B's (workspace-keys.ts savedWorkspaceFor), so with two
-  // memberships and no default it cannot tell which workspace the server was
-  // answering for, and clears the cache (workspace-choice.ts resetCache). A
-  // record re-stamped to the live account at that wipe would hand B A's
-  // photos.
-  it.each(['online', 'offline'] as const)(
-    "the repair run by the next account's own sign-in, before its first pull: that pull (%s) still clears the previous account's photos",
-    async (mode) => {
+  // take it as B's (workspace-keys.ts savedWorkspaceFor), but the cache holds
+  // A's pull of it, so a load that chooses another workspace clears the cache
+  // (use-workspace.ts resetCache): B in another organization only, or B with
+  // two memberships and no default, whose load also cannot tell which
+  // workspace the server was answering for (workspace-choice.ts). A record
+  // re-stamped to the live account at that wipe would hand B A's photos.
+  // (With one membership these pass where the load does not repair too,
+  // since B's own pull then resets: they guard the repair, not its running.)
+  it.each([
+    ['online', 'another organization only', ['org-9']],
+    ['offline', 'another organization only', ['org-9']],
+    ['online', 'two organizations and no default', ['org-9', 'org-8']],
+    ['offline', 'two organizations and no default', ['org-9', 'org-8']],
+  ] as const)(
+    "the repair run by the next account's own sign-in, before its first pull: that pull (%s, B in %s) still clears the previous account's photos",
+    async (mode, _memberships, bMemberships) => {
       await aSignedInWithAPhoto();
       sessionEndsWithoutWipe(); // keeps A's saved workspace, org-1
-      device.memberships[B] = ['org-9', 'org-8'];
+      device.memberships[B] = [...bMemberships];
       await signIn(B, null); // B's own load, below, saves B's workspace
       device.dropAfterMemberships = mode === 'offline';
       await workspaceLoads('org-9'); // resetCache: deleteOrgData, then a forced pull
@@ -922,6 +930,73 @@ describe("a session that ends while the previous account's pull is still out", S
     await expectKept(PHOTO_A);
   });
 });
+
+/*
+ * THE NEXT ACCOUNT'S OWN WORKSPACE LOAD, IN ANOTHER ORGANIZATION (docket B10
+ * review, 2026-10-30). A session that ends without a wipe keeps A's saved
+ * workspace, and the cache holds A's pull of it. B's load does not take A's
+ * saved workspace as B's choice, and with B in another organization only it
+ * used to clear nothing (the choice, told nothing was saved, took the cache to
+ * be B's one workspace): B's workspace was shown over A's rows, warehouses and
+ * the item a scan finds, until B's own reset, which waits for a pull of A's
+ * still out (syncNow) and clears the photos before the rows
+ * (photo-cache-wipe.ts). Before B10 the load repaired here, as it does now.
+ */
+describe(
+  "the next account's own workspace load in another organization clears the previous account's rows before it shows B's workspace",
+  SLOW,
+  () => {
+    /** What B's screens read from the phone when B's workspace is shown: the
+     *  Items list, an item a scan finds, and the warehouse pickers. */
+    async function bReadsNothingOfA(): Promise<void> {
+      expect(items()).toEqual([]);
+      expect(await m.reads.getItemById(`item-${A}-org-1`)).toBeNull();
+      expect((await m.reads.listWarehouses()).map((w) => w.id)).toEqual([]);
+    }
+
+    it("while A's pull is still out", async () => {
+      await aSignedInWithAPhoto();
+      const { held, aSync } = await aPullIsOut();
+      sessionEndsWithoutWipe(); // keeps A's saved workspace, org-1
+      device.memberships[B] = ['org-9'];
+      await signIn(B, null); // B's own load, below, saves B's workspace
+      const bFirst = m.sync.syncNow(); // B's first sync waits for A's pull
+      await workspaceLoads('org-9');
+
+      await bReadsNothingOfA();
+
+      held.release(); // A's answer arrives, and is discarded
+      await Promise.all([aSync, bFirst]);
+      await backgroundPullsSettle();
+      expect(owner()).toBe(B);
+      expect(items()).toEqual([`item-${B}-org-9`]);
+      expect(await m.reads.getItemById(A_ONLY_ITEM.id)).toBeNull();
+      await expectForgotten(PHOTO_A);
+    });
+
+    it("while B's reset is still clearing A's photos, and the app is closed before it finishes", async () => {
+      await aSignedInWithAPhoto();
+      sessionEndsWithoutWipe();
+      device.memberships[B] = ['org-9'];
+      await signIn(B, null);
+      device.holdDiskClear = true;
+      void m.sync.syncNow(); // B's first sync: the reset, photos first
+      await vi.waitFor(() => expect(image.clearDiskCache).toHaveBeenCalledTimes(1), WAIT);
+      await workspaceLoads('org-9');
+
+      await bReadsNothingOfA();
+
+      // The repair's wipe kept the record of whose cache it is: the next launch
+      // still resets for B, and clears A's photos.
+      await relaunch();
+      expect.soft(owner()).toBe(A);
+      await m.sync.syncNow();
+      expect(device.disk.has(PHOTO_A)).toBe(false);
+      expect(owner()).toBe(B);
+      expect(items()).toEqual([`item-${B}-org-9`]);
+    });
+  },
+);
 
 /** The two ways an account leaves the device, each run as A once its session
  *  is gone. */

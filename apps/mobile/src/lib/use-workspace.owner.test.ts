@@ -143,8 +143,14 @@ beforeEach(() => {
   store.clear();
   storage.setItem.mockClear();
   storage.removeItem.mockClear();
+  drains.syncNow.mockClear();
   drains.syncAfterRunning.mockClear();
   drains.forceSync.mockClear();
+  // A wipe a test holds and never sees asked for must not hold the next
+  // test's switch (each test that holds one sets it again).
+  vi.mocked(deleteOrgData)
+    .mockReset()
+    .mockImplementation(async () => {});
 });
 
 describe("the workspace load uses only this account's saved workspace", () => {
@@ -180,6 +186,67 @@ describe("the workspace load uses only this account's saved workspace", () => {
     await settled();
     expect(shown()).toBe('org-a');
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
+  });
+});
+
+/**
+ * WHICH WORKSPACE THE CACHE HOLDS is not the same question as which workspace
+ * this account chooses (docket B10 review, 2026-10-30). Another account's saved
+ * workspace is not this account's choice, but the cache was pulled for it: that
+ * account's requests named it until this account signed in. Told nothing was
+ * saved, the choice took the cache to be the workspace the server answers this
+ * account for with no header (its default, or its one membership), so a load
+ * that chose another workspace cleared nothing. The workspace was shown over
+ * the previous account's rows, and stayed so until this account's own pull
+ * reset them (cache-owner.ts), which waits behind a pull of the previous
+ * account's still out, and clears the photos before the rows. Before B10 the
+ * saved workspace was the cache's whoever saved it, and the load repaired.
+ */
+describe("another account's saved workspace is the one the cache holds", () => {
+  it.each([
+    ['in an organization this account is not in', 'org-z'],
+    ['in one this account is also in, but does not choose', 'org-b'],
+  ])(
+    "another account's saved workspace %s: the load clears the cache before it shows its own choice, and pulls that in full",
+    async (_where, previous) => {
+      put({ orgId: previous, ownerId: 'u-previous' });
+      let wipeDone!: () => void;
+      vi.mocked(deleteOrgData).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            wipeDone = resolve;
+          }),
+      );
+      useWorkspace(); // u1 signs in after the other account: its workspace load
+      await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(published.at(-1)?.loading).toBe(true); // nothing shown over the old rows
+
+      wipeDone();
+      await settled();
+      expect(shown()).toBe('org-a'); // u1's default
+      expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
+      expect(deleteOrgData).toHaveBeenCalledTimes(1);
+      expect(drains.syncNow).toHaveBeenCalledWith(true);
+    },
+  );
+
+  it("another account's saved workspace that this account chooses too: nothing is cleared (the account change is the cache owner reset's)", async () => {
+    put({ orgId: 'org-a', ownerId: 'u-previous' }); // org-a is u1's default
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-a');
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(drains.syncNow).not.toHaveBeenCalled();
+  });
+
+  it("an older build's saved workspace (no owner) that this account chooses: nothing is cleared, as before", async () => {
+    put({ orgId: 'org-b', ownerId: null });
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-b');
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(drains.syncNow).not.toHaveBeenCalled();
   });
 });
 

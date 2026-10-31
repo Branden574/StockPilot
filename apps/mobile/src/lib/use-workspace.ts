@@ -245,6 +245,23 @@ async function loadWorkspace(userId: string) {
   }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
+  // WHICH WORKSPACE THE CACHE HOLDS is not the same question as which one this
+  // account chooses. Another account's saved workspace (persisted is null for
+  // it) is not this account's choice, but the cache was pulled for it: that
+  // account's requests named it until this account signed in. The choice,
+  // told that nothing was saved, takes the cache to be the workspace the
+  // server answers this account for with no header (its default, or its one
+  // membership). So when this account chose another workspace, nothing was
+  // cleared, and it was shown over the previous account's rows until this
+  // account's own pull reset them (cache-owner.ts), a reset that waits for a
+  // pull of the previous account's still out and clears the photos before
+  // the rows (docket B10 review). Before B10 the saved workspace was the
+  // cache's whoever saved it, and this load repaired. The cache is now kept
+  // only when the other account's workspace and the one the server answers
+  // this account for are both the one chosen.
+  const othersWorkspace = persisted === null ? saved.orgId : null;
+  const resetCache =
+    choice.resetCache || (othersWorkspace !== null && othersWorkspace !== activeOrgId);
   // EVERY LOAD THAT CHOOSES A WORKSPACE LEAVES IT SAVED AS THIS ACCOUNT'S
   // (integrator decision 3). Either it is saved here, with this account as its
   // owner, in one write (a new choice, a workspace saved by an older build
@@ -271,7 +288,7 @@ async function loadWorkspace(userId: string) {
   // this load can be the NEXT account's sign-in, with the previous account's
   // photos still on the device, and its pull must still find that account
   // recorded to clear them.
-  if (activeOrgId && choice.resetCache) {
+  if (activeOrgId && resetCache) {
     // The cache may hold another workspace's rows; clear the org-scoped
     // tables (never the outbox) and pull this workspace in full below.
     try {
@@ -317,7 +334,7 @@ async function loadWorkspace(userId: string) {
     // A switch started during the warehouse read: same as above. A cache wipe
     // made here may have discarded the switch's own pull, so ask for another.
     publish({ loading: false, orgs });
-    if (activeOrgId && choice.resetCache) void syncNow(true).then(() => refreshEnabledModules());
+    if (activeOrgId && resetCache) void syncNow(true).then(() => refreshEnabledModules());
     return;
   }
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
@@ -333,7 +350,7 @@ async function loadWorkspace(userId: string) {
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
-  if (activeOrgId && choice.resetCache) {
+  if (activeOrgId && resetCache) {
     void syncNow(true).then(() => refreshEnabledModules());
   }
 }
