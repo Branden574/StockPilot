@@ -90,6 +90,8 @@ vi.mock('@/server/services/movements', () => ({ getItemTrends: vi.fn(async () =>
 
 import RentalItemsPage from './page';
 
+import { requireOrgContext } from '@/lib/auth/session';
+
 function rentalItem(id: string) {
   return { id, name: `Canopy ${id}`, sku: id, quantity_on_hand: 5, is_rental: true };
 }
@@ -138,6 +140,23 @@ describe('Rentals items: the Table / Grid choice comes from its own cookie', () 
     // Its search box asks for this same set (rentals of every type); without
     // it a typed SKU or name found nothing on this page.
     expect(props.rentalsOnly).toBe(true);
+  });
+
+  // B42: the bulk bar draws Cycle count only when the page passes
+  // canStartCount, and this page passes none, even to a manager who can start
+  // counts elsewhere: rental equipment is never counted (0369 D8), so a count
+  // started here would count nothing. The table's default (false) is pinned
+  // in inventory-table.selection.test.tsx.
+  it('even for a manager who can start counts, the table gets no canStartCount', async () => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'manager',
+      permissions: new Set(['items:create', 'cycle_counts:assign', 'stock:adjust']),
+    } as never);
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.canStartCount ?? false).toBe(false);
   });
 });
 
