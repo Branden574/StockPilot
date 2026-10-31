@@ -201,6 +201,42 @@ describe('zendeskConnector: a requester who deleted their account after the even
     expect(createTicket).not.toHaveBeenCalled();
   });
 
+  it('a read that throws sends nothing and tries again later (fail closed)', async () => {
+    const { deps: d, reads } = depsWith(() => {
+      throw new TypeError('fetch failed');
+    });
+    const r = await zendeskConnector.handleOutboxEvent(
+      evt('order.problem', { orderRequestId: 'o1', reason: 'x', ...PERSON }),
+      conn,
+      secrets,
+      d,
+    );
+    expect(reads).toHaveLength(1);
+    expect(r).toMatchObject({ ok: false, retryable: true });
+    expect(createTicket).not.toHaveBeenCalled();
+  });
+
+  it('a payload that names a requester but no order sends the ticket without them, and reads nothing', async () => {
+    createTicket.mockResolvedValueOnce(11);
+    const { deps: d, reads } = depsWith(() => ({
+      data: { requester_deleted_at: null },
+      error: null,
+    }));
+    const r = await zendeskConnector.handleOutboxEvent(
+      evt('order.problem', { reason: 'x', ...PERSON }),
+      conn,
+      secrets,
+      d,
+    );
+    expect(r).toMatchObject({ ok: true, externalId: '11' });
+    expect(reads).toHaveLength(0);
+    expect(createTicket).toHaveBeenCalledOnce();
+    expect(sentTicket().requesterEmail).toBeUndefined();
+    expect(sentTicket().requesterName).toBeUndefined();
+    expect(JSON.stringify(sentTicket())).not.toContain('requester@example.com');
+    expect(JSON.stringify(sentTicket())).not.toContain('Test Requester');
+  });
+
   it('a payload that names no requester is sent without a read', async () => {
     createTicket.mockResolvedValueOnce(10);
     const { deps: d, reads } = depsWith(() => ({ data: null, error: { message: 'unused' } }));
