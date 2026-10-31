@@ -320,15 +320,15 @@ function senderFindings({ files, units }: Scan): string[] {
         (c) =>
           c.carries.includes(table) && !isCore(c) && !c.unresolved && !sendsThrough.includes(c),
       );
-      for (const c of unresolved) {
-        out.push(
-          `${u.file}:${c.line} ${fn(u)} hands ${what} to ${c.name}() (${c.module}), which reaches ` +
-            `no function the scan can follow in ${c.resolved}: make it a function, method or ` +
-            'object function the scan reads, or ask first',
-        );
-      }
+      // A hand-off the scan cannot follow, like any other, is fine once the
+      // unit asks; with no answer for the table (rentals) it is always shown.
+      const lost = (c: CallSite, fix: string) =>
+        `${u.file}:${c.line} ${fn(u)} hands ${what} to ${c.name}() (${c.module}), which reaches ` +
+        `no function the scan can follow in ${c.resolved}: make it a function, method or ` +
+        `object function the scan reads${fix}`;
 
       if (spec.answer === null) {
+        for (const c of unresolved) out.push(lost(c, ''));
         if (u.sends.length === 0 && sendsThrough.length === 0 && handoffs.length === 0) continue;
         const listed = NO_ANSWER_YET.find((l) => l.file === u.file && l.table === table);
         if (listed) listedSeen.add(listed);
@@ -343,6 +343,7 @@ function senderFindings({ files, units }: Scan): string[] {
       const answer = spec.answer;
       if (u.answers.includes(answer)) continue;
       const ask = `without asking ${answer}() in server/lib/kept-address.ts`;
+      for (const c of unresolved) out.push(lost(c, `, or ask ${answer}() first`));
       for (const s of u.sends) {
         out.push(`${u.file}:${s.line} ${fn(u)} ${reads} and sends email (${s.how}) ${ask}`);
       }
@@ -734,7 +735,7 @@ describe('kept-address senders (B23 guard)', () => {
         ];
         expect(withPlanted(planted)).toEqual([
           // The checkout email the rental service calls is gone with the file.
-          `${RENTAL_SERVICE}:306 RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads, or ask first`,
+          `${RENTAL_SERVICE}:306 RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads`,
           `KEPT_ADDRESSES rentals alias borrowerEmail: ${RENTAL_EMAILS} loadRentalContext() no longer makes it`,
           `NO_ANSWER_YET ${RENTAL_EMAILS}: it no longer sends or hands on a kept rentals address`,
         ]);
@@ -952,6 +953,27 @@ describe('kept-address senders (B23 guard)', () => {
     );
 
     it(
+      '(8) a hand-off the scan cannot follow is fine once the function asks',
+      () => {
+        const planted: Source[] = [
+          PLANTS_8.find((p) => p.file === 'apps/web/src/server/email/plant-obj.ts')!,
+          {
+            file: 'apps/web/src/server/services/plant-asks-first.ts',
+            text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              import { helpers } from '@/server/email/plant-obj';
+              export async function reopen(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await helpers.remind(data.requester_email_snapshot!);
+              }`,
+          },
+        ];
+        expect(withPlanted(planted)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
       '(8) Class.method across classes, re-exports, and a call that reaches no function',
       () => {
         expect(withPlanted(PLANTS_8)).toEqual([
@@ -960,7 +982,7 @@ describe('kept-address senders (B23 guard)', () => {
           'apps/web/src/server/services/plant-via-barrel.ts:12 tell() is handed maintenance_requests.requester_email_snapshot by reopen() and sends email through notifyOwner() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/services/plant-via-barrel.ts:13 tell() is handed maintenance_requests.requester_email_snapshot by reopen() and sends email through notifyAgain() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/services/plant-unresolved.ts:9 reopen() reads maintenance_requests.requester_email_snapshot and sends email through tell() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/services/plant-unresolved.ts:13 tell() hands maintenance_requests.requester_email_snapshot to remind() (@/server/email/plant-obj), which reaches no function the scan can follow in apps/web/src/server/email/plant-obj.ts: make it a function, method or object function the scan reads, or ask first',
+          'apps/web/src/server/services/plant-unresolved.ts:13 tell() hands maintenance_requests.requester_email_snapshot to remind() (@/server/email/plant-obj), which reaches no function the scan can follow in apps/web/src/server/email/plant-obj.ts: make it a function, method or object function the scan reads, or ask maintenanceRequesterAccountDeleted() first',
           'apps/web/src/server/services/plant-unresolved.ts:12 tell() is handed maintenance_requests.requester_email_snapshot by reopen() and sends email through reopened() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
         ]);
       },
