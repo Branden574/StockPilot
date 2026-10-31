@@ -4,6 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { PoImportsService, type PoImportLineRow } from '@/server/services/po-imports';
 
@@ -82,6 +83,10 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
+    // A malformed id is a 400 before anything is read or spent (B63).
+    const { id } = await params;
+    const invalidId = invalidPathIdResponse(id, 'That PO import id is not valid.');
+    if (invalidId) return invalidId;
     // Gate on purchase_orders:MANAGE — the floor for the whole po_imports
     // surface (module registry, the imports list/detail pages, and every
     // PoImportsService read all require :manage; staff/viewer hold :read but
@@ -97,8 +102,6 @@ export async function GET(
     // (a refused caller must not spend it or trip the abuse alert).
     const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
-
-    const { id } = await params;
 
     // get() returns ALL line types (no line_type filter) — exactly what a
     // recordkeeping export needs. It throws 'not_found' for an id outside the

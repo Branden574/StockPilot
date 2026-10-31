@@ -9,6 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
 import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -30,6 +31,9 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
+    // A malformed id is a 400 before anything is read or spent (B63).
+    const invalidId = invalidPathIdResponse(id, 'That cycle count id is not valid.');
+    if (invalidId) return invalidId;
     // Cycle-count PDFs reveal counted qtys, variance, and notes that
     // can include WIP context (count notes often record discrepancies
     // before any adjustment is made). Restrict to the same permission

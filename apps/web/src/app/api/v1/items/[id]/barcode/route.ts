@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isUuid } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
@@ -32,6 +34,8 @@ export async function GET(
 
     const ctx = await withApiContext(req);
     if (!ctx) return new NextResponse('unauthenticated', { status: 401 });
+    // A malformed id is a 400 before anything is read with it (B63).
+    if (!isUuid(id)) return new NextResponse('That item id is not valid.', { status: 400 });
     const svc = new InventoryService(ctx);
     const item = await svc.get(id);
 

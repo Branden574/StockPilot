@@ -159,4 +159,25 @@ describe('GET /api/v1/orders/[id]', () => {
     get.mockRejectedValueOnce(new ServiceError('not_found', 'No such order.'));
     expect((await GET(req(), { params })).status).toBe(404);
   });
+
+  // B63: the id went straight to the order read, whose uuid filter made
+  // PostgREST answer with an error: a 500 for a mistyped or cut-off id.
+  it('a malformed id is 400 validation_error, and the order is never read', async () => {
+    for (const id of ['not-a-uuid', ORDER.slice(0, -1), '-'.repeat(36)]) {
+      vi.mocked(withApiContext).mockResolvedValueOnce({
+        userId: 'u1',
+        organizationId: 'o1',
+      } as never);
+      const res = await GET(new NextRequest(`http://localhost/api/v1/orders/${id}`), {
+        params: Promise.resolve({ id }),
+      });
+      expect([id, res.status]).toEqual([id, 400]);
+      expect(await res.json()).toEqual({
+        error: 'validation_error',
+        message: 'That order id is not valid.',
+      });
+    }
+    expect(OrderRequestsService).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+  });
 });
