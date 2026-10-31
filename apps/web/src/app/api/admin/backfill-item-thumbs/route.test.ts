@@ -10,6 +10,9 @@ vi.mock('@/lib/env', () => envHolder);
 
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
+
+import { reportError } from '@/lib/error-reporter';
 
 import { GET, POST } from './route';
 
@@ -465,5 +468,69 @@ describe('POST /api/admin/backfill-item-thumbs: without ids', () => {
     const body = await (await call('?limit=1')).json();
     expect(body).toMatchObject({ processed: 1, created: 1, remaining: 1 });
     expect(body.results).toEqual([{ id: ROW_A, outcome: 'created', thumbPath: THUMB_A }]);
+  });
+});
+
+/** A client whose every item_images read answers `message` as its error. */
+function failingReads(message: string) {
+  const answer = { data: null, error: { message, code: '42501' }, count: null };
+  const chain: object = new Proxy(
+    {},
+    {
+      get: (_target, prop) =>
+        prop === 'then'
+          ? (ok: (v: typeof answer) => unknown) => Promise.resolve(answer).then(ok)
+          : () => chain,
+    },
+  );
+  return { from: () => chain, storage: { from: () => ({}) } };
+}
+
+// S16: a failed read used to answer the database's own text and report
+// nothing; the run's last catch answered the error's own text. The per-row
+// results above keep theirs: they are the secret holder's diagnosis.
+describe('POST /api/admin/backfill-item-thumbs: a failure of the run itself', () => {
+  beforeEach(() => {
+    vi.mocked(reportError).mockClear();
+  });
+
+  it.each([
+    ['the candidate read', ''],
+    ['the read of the rows asked for', `?ids=${ROW_A}`],
+  ])(
+    'a failed %s answers the fixed sentence, never the database text, and is reported',
+    async (_label, query) => {
+      adminHolder.client = failingReads('permission denied for table item_images');
+      const res = await call(query);
+      expect(res.status).toBe(500);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({
+        error: 'internal_error',
+        message: 'Something went wrong. Please try again.',
+      });
+      expect(text).not.toContain('item_images');
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((reported as Error).message).toBe('permission denied for table item_images');
+      expect(context).toMatchObject({ tag: 'admin.backfill-item-thumbs' });
+    },
+  );
+
+  it("a run that throws answers the fixed sentence, never the error's own text, and is reported", async () => {
+    const err = new TypeError("Cannot read properties of undefined (reading 'select')");
+    adminHolder.client = {
+      from: () => {
+        throw err;
+      },
+    };
+    const res = await call('');
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('Cannot read');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'admin.backfill-item-thumbs' });
   });
 });

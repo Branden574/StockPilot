@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { createSnapshot } from '@/server/services/restore-points';
 import type { ServiceContext } from '@/server/services/context';
@@ -67,11 +68,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ eligible: eligible.length, snapshotted });
   } catch (err) {
-    void reportError(err, { tag: 'cron.restore-points' });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.restore-points');
   }
 }
 

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -11,6 +13,7 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 import { POST } from './route';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/server/services/cycle-counts', () => ({ CycleCountsService: vi.fn() }));
 
@@ -124,6 +127,58 @@ describe('POST /api/v1/cycle-counts/[id]/post', () => {
     const { req, params } = buildRequest();
     const res = await POST(req, params);
     expect(res.status).toBe(409);
+  });
+
+  // S16: this branch used to answer the error's own text, and reported nothing.
+  it('an unexpected error answers the fixed sentence, never its own text, and is reported', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const err = new Error('permission denied for function post_cycle_count');
+    mockPost(async () => {
+      throw err;
+    });
+    const { req, params } = buildRequest();
+    const res = await POST(req, params);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('post_cycle_count');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.cycle_counts.post',
+      organizationId: 'org-1',
+    });
+  });
+
+  // assertSessionAccess refuses with a ForbiddenError (not a ServiceError).
+  it('a warehouse refusal is 403 with its words; an unreadable access check is a 503', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    mockPost(async () => {
+      throw new ForbiddenError('User does not have write access to warehouse w-1.');
+    });
+    const a = buildRequest();
+    const refused = await POST(a.req, a.params);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({
+      error: 'forbidden',
+      message: 'User does not have write access to warehouse w-1.',
+    });
+
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    mockPost(async () => {
+      throw new ForbiddenError('User does not have write access to warehouse w-1.', {
+        accessUnreadable: true,
+      });
+    });
+    const b = buildRequest();
+    const unread = await POST(b.req, b.params);
+    expect(unread.status).toBe(503);
+    expect(unread.headers.get('Retry-After')).toBe('5');
+    expect(await unread.json()).toEqual({
+      error: 'check_failed',
+      message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+    });
   });
 
   it('rate limits per user', async () => {

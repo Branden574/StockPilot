@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -45,9 +46,8 @@ export async function POST(
             : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'cycle_counts.ai_scan.confirm', {
+      organizationId: ctx.organizationId,
+    });
   }
 }

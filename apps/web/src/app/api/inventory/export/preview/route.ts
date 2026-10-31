@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { countRowsWithImages } from '@/lib/exports/export-images';
@@ -10,6 +9,7 @@ import {
   buildInventoryExportSourceRows,
   type InventoryExportFilters,
 } from '@/lib/inventory-export';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
 
@@ -116,10 +116,6 @@ export async function POST(request: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    void reportError(e, { tag: 'inventory.export.preview' });
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : String(e) },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'inventory.export.preview');
   }
 }

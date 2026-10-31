@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   parseAutoDeleteArchivedSettings,
   purgeExpiredArchivedItems,
@@ -120,14 +121,7 @@ export async function GET(req: Request) {
     console.info('[cron.auto-delete-archived]', JSON.stringify(summary));
     return NextResponse.json(summary);
   } catch (err) {
-    void reportError(err, { tag: 'cron.auto-delete-archived' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Archived-item cleanup failed',
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.auto-delete-archived');
   }
 }
 

@@ -5,6 +5,7 @@ import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
   ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
@@ -284,12 +285,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e) {
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: e instanceof Error ? e.message : 'Unknown error',
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'api.v1.account.delete', {
+      organizationId: ctx.organizationId,
+    });
   }
 }

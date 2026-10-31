@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
@@ -87,9 +88,13 @@ export async function POST(
                 : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    // The warehouse gate's refusal (assertWarehouseAccess, a ForbiddenError)
+    // is a 403: the phone shows it and does not queue it. As a 500 the phone
+    // queued it and the outbox sent it again every minute, each send reported
+    // as an error. Access that could not be read is a 503, sent again;
+    // anything else is the fixed sentence, and reported (S16).
+    return forbiddenOrInternalResponse(e, 'api.v1.bundles.distribute', {
+      organizationId: ctx.organizationId,
+    });
   }
 }

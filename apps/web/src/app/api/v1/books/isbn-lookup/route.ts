@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { lookupIsbn, normalizeIsbn } from '@/lib/books/lookup';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,14 +75,15 @@ export async function GET(req: NextRequest) {
       metadata: meta,
     });
   } catch (e) {
-    return NextResponse.json(
-      {
-        isbn: normalized,
-        existingItem: null,
-        metadata: null,
-        error: e instanceof Error ? e.message : 'lookup_failed',
-      },
-      { status: 200 },
-    );
+    // Still a 200 with no metadata: the phone offers a blank add card. The
+    // failure's own text (a failed request's address among it) is reported,
+    // never answered (S16).
+    return internalErrorResponse(e, 'api.v1.books.isbn_lookup', {
+      organizationId: ctx.organizationId,
+      status: 200,
+      code: 'lookup_failed',
+      body: { isbn: normalized, existingItem: null, metadata: null },
+      level: 'warning',
+    });
   }
 }

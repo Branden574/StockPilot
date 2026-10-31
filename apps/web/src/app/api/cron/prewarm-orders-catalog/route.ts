@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   prewarmInventoryList,
   type InventoryListPrewarmResult,
@@ -137,10 +138,9 @@ export async function GET(req: Request) {
         .order('updated_at', { ascending: false })
         .limit(ORG_SWEEP_CAP);
       if (orgError) {
-        return NextResponse.json(
-          { error: `org enumeration failed: ${orgError.message}` },
-          { status: 500 },
-        );
+        return internalErrorResponse(new Error(orgError.message), 'cron.prewarm-orders-catalog', {
+          extra: { step: 'org_enumeration' },
+        });
       }
       sweepOrgIds = planOrgSweep({
         knownHotOrgIds: KNOWN_HOT_ORG_IDS,
@@ -163,10 +163,9 @@ export async function GET(req: Request) {
       .in('organization_id', [...KNOWN_HOT_ORG_IDS])
       .neq('status', 'archived');
     if (error) {
-      return NextResponse.json(
-        { error: `warehouse query failed: ${error.message}` },
-        { status: 500 },
-      );
+      return internalErrorResponse(new Error(error.message), 'cron.prewarm-orders-catalog', {
+        extra: { step: 'warehouses' },
+      });
     }
 
     const pairs = (warehouseRows ?? []) as Array<{
@@ -282,9 +281,7 @@ export async function GET(req: Request) {
       },
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'prewarm failed' },
-      { status: 500 },
-    );
+    // Reported now (it never was), never answered (S16).
+    return internalErrorResponse(err, 'cron.prewarm-orders-catalog');
   }
 }

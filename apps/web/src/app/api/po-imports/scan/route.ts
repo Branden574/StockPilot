@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { internalErrorResponse, unreadableRequestResponse } from '@/server/lib/api-error-response';
 import { PoImportsService } from '@/server/services/po-imports';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
@@ -170,11 +171,8 @@ export async function POST(req: Request) {
   let form: FormData;
   try {
     form = await req.formData();
-  } catch (e) {
-    return NextResponse.json(
-      { error: 'invalid_form', message: (e as Error).message },
-      { status: 400 },
-    );
+  } catch {
+    return unreadableRequestResponse('invalid_form');
   }
 
   const fileEntries = form.getAll('file').filter((v): v is File => v instanceof File);
@@ -346,17 +344,10 @@ export async function POST(req: Request) {
         { status: serviceErrorStatus(e.code) },
       );
     }
-    void reportError(e, {
-      tag: 'po-imports.scan',
+    // Storage, the vision call or a database write: reported, never answered.
+    return internalErrorResponse(e, 'po-imports.scan', {
       organizationId: ctx.organizationId,
       userIdHash: ctx.userId,
     });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: e instanceof Error ? e.message : 'Scan failed.',
-      },
-      { status: 500 },
-    );
   }
 }

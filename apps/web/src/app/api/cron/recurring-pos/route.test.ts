@@ -496,3 +496,29 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     });
   });
 });
+
+// S16: the run's last catch used to answer the error's own text.
+describe('GET /api/cron/recurring-pos — a run that fails', () => {
+  it("answers the fixed sentence, never the error's own text, and is reported with the cron's tag", async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new TypeError("Cannot read properties of undefined (reading 'select')");
+    adminHolder.client = {
+      from: () => {
+        throw err;
+      },
+    };
+    const res = await GET(
+      new Request('https://test.local/api/cron/recurring-pos', {
+        headers: { authorization: 'Bearer test-cron-secret' },
+      }),
+    );
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('Cannot read');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'cron.recurring-pos' });
+  });
+});

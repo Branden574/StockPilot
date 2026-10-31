@@ -4,7 +4,6 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import {
@@ -30,6 +29,7 @@ import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { buildExportPdfRows, InventoryExportPdf } from '@/lib/pdf/inventory-export-pdf';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
 
@@ -300,12 +300,6 @@ export async function POST(request: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    void reportError(e, { tag: 'inventory.export' });
-    // Surface the actual message (not just an opaque "internal_error") so a
-    // failed export is diagnosable from the toast instead of silently generic.
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : String(e) },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'inventory.export');
   }
 }

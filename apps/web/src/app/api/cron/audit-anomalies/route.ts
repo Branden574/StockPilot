@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   detectExportAbuse,
   detectFailedLoginBursts,
@@ -178,10 +179,6 @@ export async function GET(req: Request) {
       },
     });
   } catch (err) {
-    void reportError(err, { tag: 'cron.audit-anomaly' });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.audit-anomaly');
   }
 }

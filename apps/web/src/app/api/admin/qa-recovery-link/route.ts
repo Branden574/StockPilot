@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 /**
  * QA-only: mint a password-recovery /auth/confirm URL for the DEMO
@@ -47,7 +48,10 @@ export async function POST(req: NextRequest) {
   });
   const hashedToken = data?.properties?.hashed_token;
   if (error || !hashedToken) {
-    return NextResponse.json({ error: error?.message ?? 'no token' }, { status: 500 });
+    return internalErrorResponse(
+      error ?? new Error('generateLink answered no hashed token'),
+      'admin.qa-recovery-link',
+    );
   }
   return NextResponse.json({
     confirmUrl: `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`,

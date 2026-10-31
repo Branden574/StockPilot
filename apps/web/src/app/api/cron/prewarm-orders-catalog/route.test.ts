@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reportError } from '@/lib/error-reporter';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { KNOWN_HOT_ORG_IDS } from './org-sweep';
 
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/env', () => ({
   env: {
     CRON_SECRET: 'test-cron-secret',
@@ -252,6 +254,17 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     expect(res.status).toBe(500);
     expect(prewarmInventorySpy).not.toHaveBeenCalled();
+    // S16: the database's text is reported (it never was), never answered.
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('db down');
+    expect(reportError).toHaveBeenCalledWith(expect.objectContaining({ message: 'db down' }), {
+      tag: 'cron.prewarm-orders-catalog',
+      extra: { step: 'org_enumeration' },
+    });
   });
 
   it('discloses cap truncation when more active orgs exist than the cap', async () => {

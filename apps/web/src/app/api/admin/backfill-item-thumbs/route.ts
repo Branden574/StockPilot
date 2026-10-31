@@ -7,6 +7,7 @@ import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature'
 import { makeItemPhotoThumbnail } from '@/lib/item-photo-thumbnail';
 import { isValidStoragePath, itemImageAnyPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -292,7 +293,9 @@ export async function POST(req: Request) {
         // in-list-bound: at most MAX_LIMIT (60) ids; parseIds refuses more.
         .in('id', ids);
       if (error) {
-        return NextResponse.json({ error: `row read failed: ${error.message}` }, { status: 500 });
+        return internalErrorResponse(new Error(error.message), 'admin.backfill-item-thumbs', {
+          extra: { step: 'row_read' },
+        });
       }
       rows = (data ?? []) as CandidateRow[];
       // Every id asked for is answered: one that matches no row says so.
@@ -309,10 +312,9 @@ export async function POST(req: Request) {
         .order('id', { ascending: true })
         .limit(limit);
       if (error) {
-        return NextResponse.json(
-          { error: `candidate query failed: ${error.message}` },
-          { status: 500 },
-        );
+        return internalErrorResponse(new Error(error.message), 'admin.backfill-item-thumbs', {
+          extra: { step: 'candidates' },
+        });
       }
       rows = (data ?? []) as CandidateRow[];
     }
@@ -356,9 +358,8 @@ export async function POST(req: Request) {
       remaining: remaining ?? null,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'backfill failed' },
-      { status: 500 },
-    );
+    // The run's own failures are reported, never answered (S16). A row's
+    // failure stays in its result: the secret holder reads it to fix the row.
+    return internalErrorResponse(err, 'admin.backfill-item-thumbs');
   }
 }

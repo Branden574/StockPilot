@@ -1479,8 +1479,14 @@ export class CycleCountsService {
     if (hasNullWh) {
       const access = await getWarehouseAccess(this.ctx);
       if (!access.hasAllAccess) {
+        // `accessUnreadable` as assertWarehouseAccess sets it: when the
+        // caller's own access read failed, a staff member with every
+        // warehouse (0280) reads as not having it. The count routes answer
+        // that 503 (sent again) instead of 403, which the phone's outbox
+        // treats as final and parks the count in Unsent work (S16 review).
         throw new ForbiddenError(
           'You cannot modify a count that includes items with no warehouse.',
+          { accessUnreadable: access.unreadable === true },
         );
       }
     }
