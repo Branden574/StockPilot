@@ -6,7 +6,7 @@ import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
-import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
+import { readSavedWorkspace, savedWorkspaceFor } from './workspace-keys';
 
 /**
  * Resolve the API base URL once at module load. We deliberately fall
@@ -135,15 +135,21 @@ interface ApiOptions {
 // it is ALWAYS guaranteed to settle.
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-async function authHeader(asUserId?: string): Promise<Record<string, string>> {
+/** The bearer header, and the account it belongs to (null: no session). */
+async function authHeader(
+  asUserId?: string,
+): Promise<{ headers: Record<string, string>; userId: string | null }> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
   if (asUserId !== undefined && session?.user?.id !== asUserId) {
     throw new OutboxSessionChangedError();
   }
-  if (!session) return {};
-  return { Authorization: `Bearer ${session.access_token}` };
+  if (!session) return { headers: {}, userId: null };
+  return {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+    userId: session.user?.id ?? null,
+  };
 }
 
 /**
@@ -151,23 +157,39 @@ async function authHeader(asUserId?: string): Promise<Record<string, string>> {
  * or `postMultipart` directly (multipart uploads, streaming chat) instead of
  * `api()`. Without it the server falls back to the user's DEFAULT org, so a
  * multi-org user's AI-scan counts, PO scans and chat questions resolved
- * against the wrong workspace. The key is the ONE constant use-workspace.ts
- * writes (workspace-keys.ts, a leaf, so there is no cycle through
+ * against the wrong workspace. The keys are the ones use-workspace.ts writes
+ * (workspace-keys.ts, a leaf, so there is no cycle through
  * use-workspace → sync → api). Every raw call site is pinned to spread this by
  * org-header-wiring.test.ts.
+ *
+ * Only the given account's own saved workspace is named (savedWorkspaceFor):
+ * another account's left on the device was refused with a 401 on every
+ * request until this account's workspace load replaced it (docket B10).
+ *
+ * `userId` is REQUIRED: the account of the session whose access token the
+ * request sends (api() passes the one its bearer came from; a raw call site
+ * passes `session.user.id` from the session it takes `access_token` from).
+ * orgHeader never reads a session itself. It did, from the stored session,
+ * when a raw site passed nothing (the security review of the first fix): an
+ * unreadable stored session named no workspace, so a PO scan, an AI count
+ * photo or a chat question landed in the default organization while the
+ * screen showed another, and a stored session of another account named that
+ * account's workspace beside this token.
  */
-export async function orgHeader(): Promise<Record<string, string>> {
-  const orgId = await AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY);
+export async function orgHeader(userId: string | null): Promise<Record<string, string>> {
+  const orgId = savedWorkspaceFor(await readSavedWorkspace(AsyncStorage), userId);
   return orgId ? { 'X-Organization-Id': orgId } : {};
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   // Scope every request to the active workspace org. The server (withApiContext)
-  // validates membership and 401s on a bad value.
+  // validates membership and 401s on a bad value. The saved workspace is named
+  // only for the account whose bearer this is (orgHeader).
+  const auth = await authHeader(opts.asUserId);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(await authHeader(opts.asUserId)),
-    ...(opts.orgId ? { 'X-Organization-Id': opts.orgId } : await orgHeader()),
+    ...auth.headers,
+    ...(opts.orgId ? { 'X-Organization-Id': opts.orgId } : await orgHeader(auth.userId)),
   };
 
   // Internal timeout, composed with any caller-supplied signal. Either firing

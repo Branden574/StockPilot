@@ -15012,9 +15012,9 @@ describe('the Manage order items, photos and mobile app fixes release (manage-or
       "r = r.in('primary_location_id', f.locationIds);",
     );
     // An emptied count box clears the line; the AI shelf scan review keeps a typed decimal.
-    expect(phone('app/cycle-count/[id].tsx')).toContain(
-      'const cleared = await clearLocalLine(lineId);',
-    );
+    // (The clear is awaited inside a try once a refused clear is said on screen,
+    // so `cleared` is declared before it: docket B10.)
+    expect(phone('app/cycle-count/[id].tsx')).toContain('cleared = await clearLocalLine(lineId);');
     expect(phone('app/cycle-count/[id].tsx')).toContain(
       "Alert.alert('Check the counts', notACountMessage(notCounts.map((l) => l.itemName)));",
     );

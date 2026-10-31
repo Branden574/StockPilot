@@ -1502,6 +1502,22 @@ MOBILE_TESTS=(
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
 
+  # The saved workspace records the account that saved it, and only that
+  # account's requests, queued work and workspace load use it: another
+  # account's, left by a fallback sign-out or a session the server ended, is
+  # never sent as this account's organization (docket B10, the 401 burst).
+  # A cache repair (another account's workspace, one the account has left,
+  # an older app's key) is recorded as owed before the save that erases its
+  # signal, and recorded done only after a wipe that worked, so a wipe that
+  # failed or never ran is run again by the next load (the switch too).
+  src/lib/workspace-keys.test.ts
+  src/lib/api.org-header.test.ts
+  src/lib/use-workspace.owner.test.ts
+  # Every screen that calls fetch itself passes the account of the session
+  # whose token it sends, so the workspace it names is never another
+  # account's, nor dropped when the stored session cannot be read.
+  src/lib/org-header-wiring.test.ts
+
   # Book Order Totals on the phone: an answer for another workspace, warehouse
   # or account (a sign-out, a switch) is dropped, never shown; remembered
   # answers are keyed by account, workspace, every filter and the page, and
