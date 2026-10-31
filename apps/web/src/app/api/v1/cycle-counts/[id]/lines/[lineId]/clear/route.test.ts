@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -11,6 +13,7 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 import { POST } from './route';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/server/services/cycle-counts', () => ({ CycleCountsService: vi.fn() }));
 
@@ -162,5 +165,58 @@ describe('POST /api/v1/cycle-counts/[id]/lines/[lineId]/clear', () => {
     const res = await POST(req, params);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: string }).error).toBe('internal_error');
+  });
+
+  // S16: this branch used to answer the error's own text, and reported nothing.
+  it('an unexpected error answers the fixed sentence, never its own text, and is reported', async () => {
+    const err = new Error('relation "cycle_count_lines" does not exist');
+    mockClear(async () => {
+      throw err;
+    });
+    const { req, params } = request();
+    const res = await POST(req, params);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('cycle_count_lines');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.cycle_counts.clear',
+      organizationId: 'org-1',
+    });
+  });
+
+  // assertSessionAccess refuses with a ForbiddenError (not a ServiceError):
+  // it was a 500, which the phone's drain sends again for ever.
+  it('a warehouse refusal is 403 with its words, which the phone treats as final', async () => {
+    mockClear(async () => {
+      throw new ForbiddenError('You cannot modify a count that includes items with no warehouse.');
+    });
+    const { req, params } = request();
+    const res = await POST(req, params);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: 'You cannot modify a count that includes items with no warehouse.',
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a warehouse access check that could not be read is a 503 the phone sends again', async () => {
+    mockClear(async () => {
+      throw new ForbiddenError('User does not have write access to warehouse w-1.', {
+        accessUnreadable: true,
+      });
+    });
+    const { req, params } = request();
+    const res = await POST(req, params);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('5');
+    expect(await res.json()).toEqual({
+      error: 'check_failed',
+      message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+    });
   });
 });

@@ -20,6 +20,7 @@ vi.mock('@/server/services/item-images', () => ({
 }));
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { GET } from './route';
@@ -60,6 +61,38 @@ describe('GET /api/orders/freq', () => {
   it('a failed reservations read is a 500, never "nothing reserved"', async () => {
     ctxWith({ 'stock_reservations.select': { data: null, error: { message: 'fetch failed' } } });
     expect((await GET(req())).status).toBe(500);
+  });
+
+  // S16: the ranking read's failure used to answer Postgres's own text, and
+  // reported nothing.
+  it('a failed ranking read answers the fixed sentence, never the database text, and is reported', async () => {
+    ctxWith({
+      'rpc:order_request_top_skus_for_warehouse': {
+        data: null,
+        error: {
+          message: 'permission denied for function order_request_top_skus_for_warehouse',
+          code: '42501',
+        },
+      },
+    });
+    const res = await GET(req());
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('order_request_top_skus');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toBe(
+      'permission denied for function order_request_top_skus_for_warehouse',
+    );
+    expect(context).toEqual({
+      tag: 'orders.freq',
+      organizationId: 'org-1',
+      extra: { code: '42501' },
+    });
   });
 
   it('a failed items read is a 500, never an empty strip', async () => {

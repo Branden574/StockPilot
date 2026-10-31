@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { ServiceError } from '@/server/services/context';
+
 import { normalizeIsbn } from './lookup';
 
 /**
@@ -129,8 +131,12 @@ export async function extractIsbnsFromFile(
 ): Promise<ExtractFromFileResult> {
   const kind = detectFileKind(filename, mimeType);
   if (!kind) {
-    throw new Error(
-      `Unsupported file type. Accepted: PDF, Word (.docx), Excel (.xlsx/.xls), CSV, TXT.`,
+    // A ServiceError: the one sentence written for the person, which the
+    // extract-isbns route answers as it is (every other failure there is a
+    // library's text, answered with a fixed sentence and reported).
+    throw new ServiceError(
+      'validation_error',
+      'Unsupported file type. Accepted: PDF, Word (.docx), Excel (.xlsx/.xls), CSV, TXT.',
     );
   }
   const text = await fileToText(buffer, kind);

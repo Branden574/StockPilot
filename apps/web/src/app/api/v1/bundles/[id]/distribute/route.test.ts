@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -10,6 +11,7 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 import { POST } from './route';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/server/services/bundles', () => ({ BundlesService: vi.fn() }));
 vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
 // The real service's warehouse gate, for the 0365 refusal case below.
@@ -86,6 +88,33 @@ describe('POST /api/v1/bundles/[id]/distribute — idempotency key (0347)', () =
     const res = await POST(request({ quantity: 1, warehouseId: WH, idempotencyKey: KEY }), params);
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: 'conflict' });
+  });
+
+  // S16: this branch used to answer the error's own text, and reported nothing.
+  // Still a 500, which the phone's outbox sends again.
+  it('an unexpected error answers the fixed sentence, never its own text, and is reported', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const err = new Error(
+      'duplicate key value violates unique constraint "bundle_distributions_pkey"',
+    );
+    const distribute = vi.fn(async () => {
+      throw err;
+    });
+    vi.mocked(BundlesService).mockImplementationOnce(function () {
+      return { distribute } as unknown as InstanceType<typeof BundlesService>;
+    });
+    const res = await POST(request({ quantity: 1, warehouseId: WH, idempotencyKey: KEY }), params);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('bundle_distributions');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.bundles.distribute',
+      organizationId: 'org-1',
+    });
   });
 });
 

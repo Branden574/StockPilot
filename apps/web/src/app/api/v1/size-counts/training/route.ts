@@ -4,6 +4,7 @@ import { TRAINING_NEGATIVE_LABEL, trainingSizeLabelSchema } from '@stockpilot/co
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { unreadableRequestResponse } from '@/server/lib/api-error-response';
 import { SizeCountsService } from '@/server/services/size-counts';
 import { sizeCountError } from '../route';
 
@@ -85,11 +86,8 @@ export async function POST(req: NextRequest) {
     }
     mimeType = file.type.startsWith('image/') ? file.type : 'image/jpeg';
     imageBytes = await file.arrayBuffer();
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'invalid_body' },
-      { status: 400 },
-    );
+  } catch {
+    return unreadableRequestResponse();
   }
 
   try {

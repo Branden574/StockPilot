@@ -1018,6 +1018,15 @@ WEB_TESTS=(
   # details (the new-rack question rides them). The file carries the
   # "Security invariant" marker.
   src/server/actions/duplicate-item.test.ts
+  # S16: no API route answers an unexpected error's own text. The caller gets
+  # a fixed sentence with the route's status and code, and the error goes to
+  # reportError with the route's tag (server/lib/api-error-response.ts, whose
+  # suite pins that answer). The guard reads every module under app/api and
+  # every response helper, and lists each line that still reads an error's
+  # message or stack with why it never reaches a caller. The guard carries
+  # the "Security invariant" marker.
+  src/app/api/no-raw-error-text.guard.test.ts
+  src/server/lib/api-error-response.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts

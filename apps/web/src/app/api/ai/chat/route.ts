@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { can } from '@/lib/auth/permissions';
+import { unreadableRequestResponse } from '@/server/lib/api-error-response';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 import { runStreamedStockWrites } from '@/server/services/lib/inventory-list-cache';
 import { reportError } from '@/lib/error-reporter';
@@ -164,14 +165,9 @@ export async function POST(req: Request) {
   let payload: z.infer<typeof bodySchema>;
   try {
     payload = bodySchema.parse(await req.json());
-  } catch (err) {
-    return NextResponse.json(
-      {
-        error: 'validation_error',
-        message: err instanceof Error ? err.message : 'Invalid payload',
-      },
-      { status: 400 },
-    );
+  } catch {
+    // Never the parser's text: a ZodError's message is its issue list as JSON.
+    return unreadableRequestResponse('validation_error');
   }
 
   // Resolve session + history up front, before streaming starts.

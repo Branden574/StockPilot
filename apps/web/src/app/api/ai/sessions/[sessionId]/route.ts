@@ -6,7 +6,7 @@ import {
   getSession,
   listMessages,
 } from '@/lib/ai/sessions';
-import { reportError } from '@/lib/error-reporter';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,11 +34,7 @@ export async function GET(
     const messages = await listMessages(ctx, sessionId);
     return NextResponse.json({ ok: true, session, messages });
   } catch (err) {
-    void reportError(err, { tag: 'ai.sessions.get', organizationId: ctx.organizationId });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Load failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'ai.sessions.get', { organizationId: ctx.organizationId });
   }
 }
 
@@ -65,10 +61,6 @@ export async function DELETE(
     }
     return NextResponse.json({ ok: true });
   } catch (err) {
-    void reportError(err, { tag: 'ai.sessions.delete', organizationId: ctx.organizationId });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Delete failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'ai.sessions.delete', { organizationId: ctx.organizationId });
   }
 }

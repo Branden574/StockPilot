@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   parseAutoReorderSettings,
   type AutoReorderSettings,
@@ -106,11 +107,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ orgsProcessed, posCreated, posSent, candidates: candidates.length });
   } catch (err) {
-    void reportError(err, { tag: 'cron.auto-reorder' });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Auto-reorder failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.auto-reorder');
   }
 }
 

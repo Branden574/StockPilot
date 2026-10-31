@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { extractIsbnsFromFile } from '@/lib/books/isbn-extract';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,18 +81,17 @@ export async function POST(req: Request) {
       empty: result.empty,
       filename: file.name,
     });
-  } catch (err) {
-    void reportError(err, {
-      tag: 'books.extract-isbns',
+  } catch (e) {
+    // The parser's own sentence (an unsupported file type) as it is.
+    if (e instanceof ServiceError && e.code !== 'internal_error') {
+      return NextResponse.json({ error: e.code, message: e.message }, { status: 400 });
+    }
+    // A PDF, Word or Excel library's text: reported, never answered (S16).
+    return internalErrorResponse(e, 'books.extract-isbns', {
       organizationId: ctx.organizationId,
       extra: { filename: file.name, size: file.size },
+      status: 400,
+      message: 'Could not read this file. Try a different file.',
     });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Could not parse this file.',
-      },
-      { status: 400 },
-    );
   }
 }

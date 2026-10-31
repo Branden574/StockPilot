@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
 export const runtime = 'nodejs';
@@ -95,17 +96,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ ok: true, finalized, reopened, skipped, failed });
   } catch (err) {
-    void reportError(err, { tag: 'cron.reap-stuck-shipments' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Reap run failed',
-        finalized,
-        reopened,
-        skipped,
-        failed,
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.reap-stuck-shipments', {
+      body: { finalized, reopened, skipped, failed },
+    });
   }
 }

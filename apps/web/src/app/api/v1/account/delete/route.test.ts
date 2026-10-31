@@ -626,4 +626,27 @@ describe('POST /api/v1/account/delete', () => {
     expect(res.status).toBe(500);
     expect(revokeAllSessionsForUser).toHaveBeenCalledWith(USER_ID);
   });
+
+  // S16: the last catch used to answer the error's own text (here a failed
+  // request names the auth server's address) and reported nothing.
+  it('an unexpected error answers the fixed sentence, never its own text, and is reported', async () => {
+    const err = new TypeError('fetch failed: https://project.example.test/auth/v1/admin/users');
+    deleteUser.mockRejectedValueOnce(err);
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('fetch failed');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.account.delete',
+      organizationId: 'org-1',
+    });
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
 });

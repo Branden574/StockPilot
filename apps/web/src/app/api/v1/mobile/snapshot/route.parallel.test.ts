@@ -883,18 +883,19 @@ describe('an error in one read behaves as before', () => {
       const res = await GET(request(`?since=${SINCE}`));
 
       expect(res.status).toBe(500);
-      // fetchAllRows turns the items error into a thrown ServiceError, whose
-      // message is the generic one; the route has always sent that one.
-      const detail =
-        tag === 'items' ? 'An internal error occurred. Please try again.' : `boom-${tag}`;
-      expect(await res.text()).toBe(
-        JSON.stringify({ error: 'internal_error', query: tag, detail }),
-      );
+      // S16: the answer names the read and nothing else. It used to carry the
+      // database's own text in `detail`; that text goes to the report only.
+      expect(await res.text()).toBe(JSON.stringify({ error: 'internal_error', query: tag }));
       expect(reportError).toHaveBeenCalledTimes(1);
       expect(vi.mocked(reportError).mock.calls[0]?.[1]).toMatchObject({
         tag: `mobile.snapshot.${tag}`,
         organizationId: 'org-1',
       });
+      // fetchAllRows turns the items error into a thrown ServiceError, whose
+      // message is the generic one.
+      expect((vi.mocked(reportError).mock.calls[0]?.[0] as Error).message).toBe(
+        tag === 'items' ? 'An internal error occurred. Please try again.' : `boom-${tag}`,
+      );
     });
   }
 
@@ -947,9 +948,9 @@ describe('an error in one read behaves as before', () => {
   it('an items page that throws is reported as the items read, as before', async () => {
     mockContext(respondFor({ items: { reject: new Error('page 1 threw') } }));
     const res = await GET(request(`?since=${SINCE}`));
-    expect(await res.text()).toBe(
-      JSON.stringify({ error: 'internal_error', query: 'items', detail: 'page 1 threw' }),
-    );
+    // S16: its text is reported, never answered.
+    expect(await res.text()).toBe(JSON.stringify({ error: 'internal_error', query: 'items' }));
+    expect((vi.mocked(reportError).mock.calls[0]?.[0] as Error).message).toBe('page 1 threw');
   });
 
   it('a failed removal read still OMITS its field on an otherwise good pull', async () => {
