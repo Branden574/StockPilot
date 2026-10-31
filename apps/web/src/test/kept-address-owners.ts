@@ -22,10 +22,9 @@ import ts from 'typescript';
  * Comments are blanked first (positions kept, so line numbers hold); string
  * and function bodies are read as written.
  *
- * Also for `src/server/lib/kept-address-senders.guard.test.ts` and the
- * guard's note checks: findFromChains (every `.from(…)` chain with the
- * methods called on it, so a read or a delete can be placed) and codeMentions
- * (a column named in code, comments left out).
+ * Also findFromChains (every `.from(…)` chain with the methods called on it,
+ * so a delete can be placed) for the guard's gap-note checks, and the parsing
+ * helpers the senders scan (./kept-address-senders.ts) reuses.
  *
  * Parsed with the TypeScript compiler, so a call split over several lines is
  * still one call.
@@ -435,34 +434,6 @@ export function findFromChains(file: string, text: string): FromChain[] {
   return out;
 }
 
-/**
- * The lines of one source file whose code (a string, a template, a name; not
- * a comment) holds `word`, such as a column named in a select list or read
- * off a row.
- */
-export function codeMentions(file: string, text: string, word: string): number[] {
-  if (!text.includes(word)) return [];
-  const sf = parse(file, text);
-  const lines = new Set<number>();
-  const visit = (n: ts.Node) => {
-    if (
-      (ts.isStringLiteral(n) ||
-        ts.isNoSubstitutionTemplateLiteral(n) ||
-        ts.isTemplateHead(n) ||
-        ts.isTemplateMiddle(n) ||
-        ts.isTemplateTail(n) ||
-        ts.isIdentifier(n) ||
-        ts.isPrivateIdentifier(n)) &&
-      n.text.includes(word)
-    ) {
-      lines.add(lineOf(sf, n));
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return [...lines].sort((a, b) => a - b);
-}
-
 /** The string values of `const NAME = { key: 'value', … }` in one file, or
  *  null when it is not an object literal of string literals. */
 export function constObjectStringValues(file: string, text: string, name: string): string[] | null {
@@ -489,6 +460,17 @@ export function constObjectStringValues(file: string, text: string, name: string
   visit(sf);
   return found === 1 ? values : null;
 }
+
+/** The parsing helpers above, for the senders scan in ./kept-address-senders.ts. */
+export {
+  enclosingName as enclosingFunctionName,
+  lineOf as nodeLine,
+  parse as parseSource,
+  propertyName as literalPropertyName,
+  squash as squashText,
+  tableOf as fromTable,
+  unwrap as unwrapExpression,
+};
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
