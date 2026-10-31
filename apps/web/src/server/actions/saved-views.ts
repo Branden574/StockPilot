@@ -56,8 +56,9 @@ export async function deleteSavedViewAction(id: string, scope: SavedViewScope) {
 /**
  * Owner-only: flip a saved view's is_shared flag. Non-owners can't see
  * the toggle UI; the action also delegates to a service method that
- * scopes the update by user_id, so an attempted call from a non-owner
- * silently no-ops at the DB level.
+ * scopes the update by user_id and proves a row changed, so a call from a
+ * non-owner (or on a view that is gone) changes nothing and returns
+ * not_found instead of reading as success (B23).
  */
 export async function toggleSavedViewShareAction(
   id: string,

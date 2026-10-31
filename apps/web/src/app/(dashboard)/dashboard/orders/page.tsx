@@ -2,7 +2,12 @@ import type { Metadata } from 'next';
 import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { formatOrderNumber, ORDER_ITEMS_MANAGE_BUTTON_COPY, RETURNS_COPY } from '@stockpilot/core';
+import {
+  deliveryDriverLabel,
+  formatOrderNumber,
+  ORDER_ITEMS_MANAGE_BUTTON_COPY,
+  RETURNS_COPY,
+} from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Orders' };
 
@@ -368,8 +373,15 @@ export default async function OrdersPage({
                     <PersonName name={r.assignedPickerName} />
                   </TableCell>
                   <TableCell>
+                    {/* B23: a delivery that went out and names no driver
+                        reads "Deleted user" (the driver deleted their account). */}
                     <PersonName
-                      name={r.fulfillmentType === 'delivery' ? r.assignedDeliveryUserName : null}
+                      name={deliveryDriverLabel({
+                        fulfillmentType: r.fulfillmentType,
+                        inTransitAt: r.inTransitAt,
+                        assignedDeliveryUserId: r.assignedDeliveryUserId,
+                        driverName: r.assignedDeliveryUserName,
+                      })}
                     />
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">

@@ -64,6 +64,7 @@ import {
 } from '@/server/actions/order-requests';
 import {
   availableOrderActions,
+  deletedDriverHandOverLine,
   derivePickingStatus,
   describeDepartureRisk,
   isManagerOrAbove,
@@ -104,6 +105,15 @@ interface Props {
   hasRequesterNote: boolean;
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
+  /** B23: the delivery went out and its driver deleted their account (core
+   *  isDeliveryDriverDeleted, from the order's own columns). In transit, an
+   *  approver who may hand it over reads who is left to do it. Omitted: false. */
+  driverDeleted?: boolean;
+  /** May this viewer hand the order over: the page's handOverAllowed, the
+   *  rule the Collect signature link and the sign route apply (below manager
+   *  rank, write access to the order's warehouse too). Only the
+   *  deleted-driver line reads it. Omitted: false. */
+  viewerMayHandOver?: boolean;
   signatureToken: string | null;
   /** Set when the Collect signature link is held back because the viewer
    *  owes an MFA step-up (migration 0389, desk check F2): the button stays
@@ -259,6 +269,8 @@ export function ManagerActionsPanel({
   hasRequesterNote,
   fulfillmentType,
   assignedDeliveryUserId,
+  driverDeleted = false,
+  viewerMayHandOver = false,
   signatureToken,
   handOverMfaMessage = null,
   hasSignature,
@@ -1047,6 +1059,28 @@ export function ManagerActionsPanel({
               once, in the replacement banner (core's replacementDriverLine:
               an early-released delivery not yet returned, never to the
               requester), never repeated here. */}
+
+        {/* B23: the driver deleted their account on the way (0393 cleared
+              the driver). Nobody else will finish this delivery, so the
+              approver reads who is left and with which buttons. The line
+              sends them to Collect signature, so it is said only to a viewer
+              who may hand this order over (an approver from another
+              warehouse is not) while that button is enabled: a link, or the
+              MFA step-up it explains (review 2026-10-31). */}
+        {status === 'in_transit' &&
+          driverDeleted &&
+          approves &&
+          viewerMayHandOver &&
+          (signatureToken !== null || handOverMfaMessage !== null) && (
+            <span
+              className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+              role="status"
+              data-testid="deleted-driver-line"
+            >
+              <Truck className="h-3.5 w-3.5 shrink-0" />
+              {deletedDriverHandOverLine({ offersPhysicalSignature })}
+            </span>
+          )}
 
         {(status === 'staged_for_pickup' || status === 'in_transit') &&
           (approves || isDriverHere) && (

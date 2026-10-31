@@ -15,6 +15,10 @@ import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { SITE_URL, SUPPORT_EMAIL } from '@/lib/site';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  supportTicketOwner,
+  supportTicketSubmitterAccountDeleted,
+} from '@/server/lib/kept-address';
 import { keepAlive } from '@/server/services/lib/defer';
 
 /**
@@ -64,6 +68,12 @@ export interface CreateSupportTicketInput {
   message: string;
   pageUrl?: string | null;
   userAgent?: string | null;
+  /**
+   * A ticket a member files in the app names both; a public one names
+   * neither. Half a pair is refused (supportTicketOwner, server/lib/
+   * kept-address.ts): the resolved notice reads "an organization and nobody"
+   * as a member who deleted their account.
+   */
   organizationId?: string | null;
   submittedBy?: string | null;
   /**
@@ -95,13 +105,15 @@ function mapRow(r: Record<string, unknown>): SupportTicketRow {
   };
 }
 
-export async function createSupportTicket(input: CreateSupportTicketInput): Promise<{ id: string }> {
+export async function createSupportTicket(
+  input: CreateSupportTicketInput,
+): Promise<{ id: string }> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('support_tickets')
     .insert({
-      organization_id: input.organizationId ?? null,
-      submitted_by: input.submittedBy ?? null,
+      // Both or neither, or this throws before anything is written.
+      ...supportTicketOwner(input),
       name: input.name?.trim() || null,
       email: input.email.trim().toLowerCase(),
       category: input.category,
@@ -283,9 +295,7 @@ export async function listMyTickets(opts: {
  * callers must already be behind a platform-admin gate. Best-effort: missing
  * objects are simply absent from the result, never thrown.
  */
-export async function createAttachmentSignedUrls(
-  paths: string[],
-): Promise<Record<string, string>> {
+export async function createAttachmentSignedUrls(paths: string[]): Promise<Record<string, string>> {
   if (paths.length === 0) return {};
   const admin = createAdminClient();
   const { data, error } = await admin.storage
@@ -312,7 +322,7 @@ export async function updateSupportTicket(
   // re-save while already resolved must not resend it).
   const { data: before, error: readErr } = await admin
     .from('support_tickets')
-    .select('status, email, name, subject')
+    .select('status, email, name, subject, organization_id, submitted_by')
     .eq('id', id)
     .maybeSingle();
   if (readErr) throw new Error(`support_tickets read: ${readErr.message}`);
@@ -332,8 +342,22 @@ export async function updateSupportTicket(
 
   // Owner decision 2026-07-20: the support-resolved concept is LIVE.
   // Fires only on the open/in_progress -> resolved crossing; best-effort.
-  const b = before as { status: TicketStatus; email: string; name: string | null; subject: string };
-  if (patch.status === 'resolved' && b.status !== 'resolved' && b.status !== 'closed') {
+  const b = before as {
+    status: TicketStatus;
+    email: string;
+    name: string | null;
+    subject: string;
+    organization_id: string | null;
+    submitted_by: string | null;
+  };
+  // B23: never to the kept address of a member who deleted their account
+  // (A3); server/lib/kept-address.ts says how that is known.
+  if (
+    patch.status === 'resolved' &&
+    b.status !== 'resolved' &&
+    b.status !== 'closed' &&
+    !supportTicketSubmitterAccountDeleted(b)
+  ) {
     // Kept alive past the response, like the two emails above.
     keepAlive(
       sendResolvedNotice(id, b).catch((e) =>

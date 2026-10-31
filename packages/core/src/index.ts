@@ -81,6 +81,7 @@ export * from './orders/delivery-request';
 export * from './orders/delivery-request-input';
 export * from './people/deleted-user';
 export * from './orders/requester-identity';
+export * from './orders/delivery-driver';
 export * from './orders/order-returns-view';
 export * from './returns/returns-copy';
 export * from './returns/exchange-status';

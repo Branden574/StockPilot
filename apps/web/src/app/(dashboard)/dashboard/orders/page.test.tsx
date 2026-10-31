@@ -1,7 +1,7 @@
 import { render, within } from '@testing-library/react';
 import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DELETED_REQUESTER_LABEL } from '@stockpilot/core';
+import { DELETED_REQUESTER_LABEL, DELETED_USER_LABEL } from '@stockpilot/core';
 
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
@@ -489,6 +489,36 @@ describe('Orders page: the table keeps every column', () => {
     expect(cells[7]).toHaveTextContent('—');
     expect(cells[8]).toHaveTextContent('—');
     expect(view.queryByText('Should Not Show')).toBeNull();
+  });
+
+  // B23: 0393 clears the driver of an order whose driver deleted their
+  // account. A delivery that went out names nobody afterwards, and the cell
+  // used to read "—" as if nobody had ever been put on it.
+  it('says "Deleted user" for the driver of a delivery that went out and names no driver', async () => {
+    m.list.mockResolvedValue([
+      row({
+        status: 'in_transit',
+        fulfillmentType: 'delivery',
+        inTransitAt: '2026-10-20T15:04:05.000Z',
+        assignedDeliveryUserId: null,
+        assignedDeliveryUserName: null,
+      }),
+      row({
+        status: 'staged_for_delivery',
+        fulfillmentType: 'delivery',
+        inTransitAt: null,
+        assignedDeliveryUserId: null,
+        assignedDeliveryUserName: null,
+      }),
+    ]);
+    const view = await renderPage({ status: 'all_active' });
+    const [gone, unassigned] = view
+      .getAllByRole('row')
+      .slice(1)
+      .map((tr) => within(tr).getAllByRole('cell')[8]!);
+    expect(gone).toHaveTextContent(DELETED_USER_LABEL);
+    expect(unassigned).toHaveTextContent('—');
+    expect(unassigned).not.toHaveTextContent(DELETED_USER_LABEL);
   });
 
   it('a completed pickup reads Handed over, and the org’s own status words and colours reach the rows', async () => {

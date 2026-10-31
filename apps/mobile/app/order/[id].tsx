@@ -235,6 +235,7 @@ import {
   formatOrderNumber,
   derivePickingStatus,
   HOLD_AVAILABLE_STOCK_LABEL,
+  isDeliveryDriverDeleted,
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
@@ -348,6 +349,9 @@ interface OrderHeader {
   signedAt: string | null;
   createdAt: string | null;
   assignedDeliveryUserId: string | null;
+  /** When the order went out (in_transit_at), null until then. B23: with no
+   *  driver on a delivery that went out, the driver deleted their account. */
+  inTransitAt: string | null;
   /** The locked-in picker (null when unclaimed). Drives the picker chip. */
   assignedPickerId: string | null;
   /** Resolved display name of the assigned picker, when readable. */
@@ -1418,7 +1422,7 @@ export default function OrderDetail() {
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          requester_deleted_at, signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
-         needed_by, notes, delivery_charter_id, replacement_for_return_id,
+         in_transit_at, needed_by, notes, delivery_charter_id, replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          picker:user_profiles!assigned_picker_id (full_name, email)`,
@@ -1739,6 +1743,7 @@ export default function OrderDetail() {
         signedAt: (r.signed_at as string | null) ?? null,
         createdAt: (r.created_at as string | null) ?? null,
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
+        inTransitAt: (r.in_transit_at as string | null) ?? null,
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
@@ -2238,6 +2243,11 @@ export default function OrderDetail() {
     isManagerByRole: isManager,
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    driverDeleted: isDeliveryDriverDeleted({
+      fulfillmentType: ft,
+      inTransitAt: order?.inTransitAt,
+      assignedDeliveryUserId: order?.assignedDeliveryUserId,
+    }),
     machineOffersClosePartial,
     machineOffersReopen: canReopenPicking,
     isViewerRole: role === 'viewer',
@@ -3239,6 +3249,14 @@ export default function OrderDetail() {
                     ),
                   )
                 : null}
+              {/* B23: the driver deleted their account on the way; the
+                  approver reads who is left to hand it over (the web
+                  panel's words). */}
+              {managerActions.deletedDriverLine ? (
+                <Body size={12.5} color={c.ink3} accessibilityRole="text">
+                  {managerActions.deletedDriverLine}
+                </Body>
+              ) : null}
               {managerActions.digitalSignature
                 ? actionBtn('Collect signature', 'sig', () =>
                     confirmDeparture('signature', collectSignature),
