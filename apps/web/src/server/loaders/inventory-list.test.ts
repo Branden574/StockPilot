@@ -850,6 +850,10 @@ describe('canUseSharedInventoryCaches (the org-shared cache gate)', () => {
 describe('loadInventoryLookups', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The locations are read page by page through fetchAllRows, as
+    // LocationsService.list reads them (inventory-list.lookups-paged.test.ts
+    // runs the real paging past 1000 rows); one page here.
+    fetchAllRowsInvokesBuildPage();
   });
 
   const categoryRows = [
