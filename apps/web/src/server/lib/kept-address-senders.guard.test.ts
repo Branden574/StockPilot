@@ -43,14 +43,16 @@ import {
  *      alias of it the file can see, or selects it (KEPT_ADDRESSES), the
  *      query followed back through the variables it is kept in; when a
  *      function of its own file hands it the address where that function
- *      does not ask (it is handed it); or when it reads a registered alias
- *      off a row a call returned to it (`detail.requesterEmail` of a
- *      maintenance detail a loader in another file returns). A support
- *      ticket's address is a column with a common name (email), so any read
- *      of support_tickets counts: any chain with a select, but an insert's or
- *      upsert's whose select names no kept column, and any call of a function
- *      that returns a ticket row or its address, in its own file or another
- *      (`gets it from listSupportTickets()`).
+ *      does not ask (it is handed it); when it reads a registered alias off a
+ *      row a call returned to it (`detail.requesterEmail` of a maintenance
+ *      detail a loader in another file returns); and when it calls a
+ *      function, in its file or another, that returns a kept address or a row
+ *      holding it (`gets it from get()`, `gets it from listSupportTickets()`),
+ *      so a row handed on whole without naming the address is checked where
+ *      it is handed on (integrator decision, 2026-10-31). A support ticket's
+ *      address is a column with a common name (email), so any read of
+ *      support_tickets counts: any chain with a select, but an insert's or
+ *      upsert's whose select names no kept column.
  *   3. PER SEND. Every send, and every hand-off of the address (or a row
  *      holding it) to a function of another file outside packages/core, sits
  *      in a function that calls the answer, or in a function inside that one,
@@ -199,11 +201,56 @@ const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
       'and the audit row, and sends the checkout email through lib/email/rentals.ts; nobody has ' +
       'deleted an account between typing the address and the rental being saved.',
   },
+  // The three below get create()'s answer back. create() returns only the new
+  // rental's id, but a call carries what it is handed, so the scan counts the
+  // address create() hands create_rental as part of what create() returns.
+  {
+    file: 'apps/web/src/app/api/v1/rentals/route.ts',
+    table: 'rentals',
+    why:
+      "The phone's checkout route: RentalsService.create sends the checkout email (listed " +
+      "above), and the route answers with create()'s { id } as JSON; it sends nothing itself.",
+  },
+  {
+    file: 'apps/web/src/server/actions/rentals.ts',
+    table: 'rentals',
+    why:
+      "The web's checkout action: RentalsService.create sends the checkout email (listed " +
+      "above), and createRentalAction answers the form with create()'s { id }; it sends " +
+      'nothing itself.',
+  },
+  {
+    file: 'apps/web/src/components/rentals/rental-create-form.tsx',
+    table: 'rentals',
+    why:
+      'The web checkout form runs in the browser: it calls createRentalAction, whose ' +
+      'RentalsService.create sends the checkout email (listed above), and reads the new ' +
+      "rental's id from the answer; it sends nothing itself.",
+  },
 ];
 
 /** Checked by hand: hand-offs of a kept address (or a row holding it) to another file, calls
  *  the scan cannot follow (callee as written), and rows put where it does not follow them. */
 const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string; why: string }> = [
+  // The phone's two maintenance request routes (counted since a call of a
+  // function that returns a maintenance row is a read, 2026-10-31).
+  {
+    file: 'apps/web/src/app/api/v1/maintenance-requests/[id]/route.ts',
+    enclosing: 'GET',
+    callee: 'json',
+    why:
+      "The phone's request detail: it hands MaintenanceRequestsService.get's detail (its " +
+      'requesterEmail, which the request page shows too) and the Outlook draft text to ' +
+      "NextResponse.json for the signed-in member's app, and sends no email.",
+  },
+  {
+    file: 'apps/web/src/app/api/v1/maintenance-requests/route.ts',
+    enclosing: 'GET',
+    callee: 'json',
+    why:
+      "The phone's request list: it hands the rows MaintenanceRequestsService.list returns to " +
+      "NextResponse.json for the signed-in member's app, and sends no email.",
+  },
   {
     file: RENTAL_SERVICE,
     enclosing: 'RentalsService.create',
@@ -909,6 +956,10 @@ describe('kept-address senders (B23 guard)', () => {
           `${RENTAL_SERVICE}:306 RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads`,
           `KEPT_ADDRESSES rentals alias borrowerEmail: ${RENTAL_EMAILS} loadRentalContext() no longer makes it`,
           `NO_ANSWER_YET ${RENTAL_EMAILS}: it no longer sends or hands on a kept rentals address`,
+          // With no checkout email, create() sends nothing, so the action and
+          // the form that reach it no longer send either.
+          'NO_ANSWER_YET apps/web/src/server/actions/rentals.ts: it no longer sends or hands on a kept rentals address',
+          'NO_ANSWER_YET apps/web/src/components/rentals/rental-create-form.tsx: it no longer sends or hands on a kept rentals address',
         ]);
       },
       TIMEOUT,
@@ -1634,6 +1685,26 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
               }`,
         },
       ],
+      'c4 read by return': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-follow-up.ts',
+          text: `
+              export async function sendFollowUp(detail: { requesterEmail: string | null }) {
+                await sendEmail({ to: detail.requesterEmail ?? '', subject: 'Follow-up', html: '' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/services/plant-c10-c4-detail.ts',
+          text: `
+              import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
+              import { sendFollowUp } from '@/server/email/plant-c10-follow-up';
+              export async function followUp(id: string) {
+                const svc = await MaintenanceRequestsService.forCurrentUser();
+                const detail = await svc.get(id);
+                await sendFollowUp(detail);
+              }`,
+        },
+      ],
       'c4 missed': [
         C10_REMINDERS,
         {
@@ -2121,6 +2192,16 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
           `apps/web/src/server/services/plant-c10-c4-assign.ts:42 viaAssign() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
           `apps/web/src/server/services/plant-c10-c4-assign.ts:10 reopen() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
           `apps/web/src/server/services/plant-c10-c4-assign.ts:21 ReopenJob.load() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(read by return, integrator decision 2026-10-31) missed at 06df95532: a maintenance detail handed whole to a sender that cannot see the alias',
+      () => {
+        expect(withPlanted(C10['c4 read by return']!)).toEqual([
+          `apps/web/src/server/services/plant-c10-c4-detail.ts:7 followUp() gets maintenance_requests.requester_email_snapshot from get() and sends email through sendFollowUp()${ASK_M}`,
         ]);
       },
       TIMEOUT,

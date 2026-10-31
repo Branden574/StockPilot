@@ -39,9 +39,8 @@ import {
  *     followed back through the variables it is kept in, each by its own
  *     declaration (`let q = db.from(t); q = q.select(…)`); a kept address (or
  *     a row holding it) handed to it by a function of the same file that does
- *     not ask around the call (RECEIVED); and, for a table read by its
- *     chains (READ_BY_RETURN), a call of a function that returns its kept
- *     address or a row holding it (`gets it from listSupportTickets()`). For
+ *     not ask around the call (RECEIVED); and a call of a function that
+ *     returns a kept address or a row holding it (`gets it from get()`). For
  *     a table read by its chains (its column has a common name), any select
  *     counts but an insert's or upsert's that names no kept column; for every
  *     table, selecting `*`, nothing, or a list the scan cannot read counts.
@@ -899,9 +898,12 @@ interface SenderEnv {
   returnsOf: (id: string) => Record<string, 'value' | 'row'> | undefined;
 }
 
-/** For a table read by its chains (readBy 'table'), a call of a function
- *  that returns its kept address or a row holding it is a read of it. */
-const READ_BY_RETURN: ReadonlySet<KeptAddressSpec['readBy']> = new Set(['table']);
+/** A call of a function that returns a table's kept address, or a row holding
+ *  it, is a read of it: for a table read by its chains (readBy 'table', whose
+ *  column has a common name) and for one whose column has a name of its own
+ *  (readBy 'column'), so a row handed on whole without naming the address is
+ *  checked where it is handed on (integrator decision, 2026-10-31). */
+const READ_BY_RETURN: ReadonlySet<KeptAddressSpec['readBy']> = new Set(['table', 'column']);
 
 /** How many times one file's facts are worked out again before the scan gives up. */
 const MAX_ROUNDS = 50;
