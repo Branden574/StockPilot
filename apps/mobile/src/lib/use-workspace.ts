@@ -336,10 +336,12 @@ async function loadWorkspace(userId: string) {
   // the workspace chosen. When the wipe then failed (it only warned), or the
   // app was closed while it waited its turn in the transaction queue, the
   // next load found no signal and cleared nothing, and the other workspace's
-  // rows stayed: its purchase orders for good, since no pull sweeps them
-  // (sync.ts). Now the record outlives the signal, and goes only once a wipe
-  // has worked. Not recorded (storage failing), nothing is saved either: the
-  // signal itself stays for the next load, as after a failed save.
+  // rows stayed: its purchase orders for good, since no pull sweeps them, and
+  // after an app closed before the wipe its items and kits too, since the
+  // pulls that followed were deltas from that workspace's cursor, which never
+  // sweep (sync.ts). Now the record outlives the signal, and goes only once a
+  // wipe has worked. Not recorded (storage failing), nothing is saved either:
+  // the signal itself stays for the next load, as after a failed save.
   let repairRecord: number | null = null;
   if (activeOrgId && resetCache) {
     try {

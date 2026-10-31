@@ -1088,10 +1088,12 @@ describe('a workspace load that clears the cache pulls the snapshot in full once
  * an older app's key beside this build's value) before its wipe runs, so a
  * wipe that failed, or one the app was closed before it ran, left nothing to
  * tell the next load. A pull never sweeps a purchase order (sync.ts, "POs are
- * deliberately left alone"), and the phone's PO list reads every cached one
- * (db-reads.ts listOpenPos), so the other workspace's purchase orders stayed
- * listed for good. Faked here as in the tests above; db.ts runs on the real
- * SQLite, and its wipe really rolls back.
+ * deliberately left alone"), so the other workspace's purchase orders stayed
+ * in the cache for good (read here with db-reads.ts listOpenPos, which has no
+ * workspace filter; no screen calls it today). After an app closed before the
+ * wipe, its items stayed too: the next launch pulled a delta from that
+ * workspace's cursor, and a delta never sweeps an item. Faked here as in the
+ * tests above; db.ts runs on the real SQLite, and its wipe really rolls back.
  */
 describe('a workspace repair whose wipe did not finish is still owed', SLOW, () => {
   const openPos = async () => (await m.reads.listOpenPos()).map((p) => p.id);
