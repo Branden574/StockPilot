@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Lock, RotateCcw } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 
 import {
   FULLY_GRANTABLE_PERMISSIONS,
+  ORDER_ITEMS_ROLES_LOCK_NOTE_COPY,
   PERMISSION_GROUP_ORDER,
   PERMISSION_META,
   PERMISSIONS,
@@ -26,6 +27,8 @@ import {
   ROLES,
   effectivePermissions,
   hasPermission,
+  isPlatformManagedPermission,
+  orderCatalogAccessSourceCopy,
   type Permission,
   type Role,
 } from '@stockpilot/core';
@@ -151,6 +154,9 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
 
   // ── Role cell toggle ─────────────────────────────────────────────────────
   function toggleRole(role: EditableRole, perm: Permission) {
+    // Platform-managed (0413): read-only here; the action and the database
+    // refuse it too. The box is disabled, so this is the second line.
+    if (isPlatformManagedPermission(perm)) return;
     const key = rk(role, perm);
     if (busy.has(key)) return; // one save per cell at a time
     const def = hasPermission(role, perm);
@@ -187,6 +193,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
 
   // ── User cell toggle ─────────────────────────────────────────────────────
   function toggleUser(member: MemberLite, perm: Permission) {
+    if (isPlatformManagedPermission(perm)) return;
     const key = uk(member.userId, perm);
     if (busy.has(key)) return; // one save per cell at a time
     // Baseline = the member's ROLE-effective permission (role defaults + role overrides).
@@ -326,49 +333,61 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
               {groups.map((g) => (
                 <React.Fragment key={g.group}>
                   <GroupRow label={g.group} span={1 + ROLES.length} />
-                  {g.permissions.map((p) => (
-                    <tr key={p.id} className={ROW}>
-                      <th
-                        scope="row"
-                        className={cn(ROW_HEAD, 'sticky left-0 z-10')}
-                        title={`${p.description}\n(${p.id})`}
-                      >
-                        <div className="text-foreground">{p.label}</div>
-                        <div className="text-muted-foreground mt-0.5 text-[11.5px]">
-                          {p.description}
-                        </div>
-                      </th>
-                      {/* Owner: always on, disabled. */}
-                      <td className={CELL}>
-                        <Check
-                          className="text-ink-4 mx-auto h-4 w-4"
-                          aria-label="Owner always has this"
-                        />
-                      </td>
-                      {EDITABLE_ROLES.map((role) => {
-                        const key = rk(role, p.id);
-                        const def = hasPermission(role, p.id);
-                        const eff = roleMap.has(key) ? roleMap.get(key)! : def;
-                        // "Changed from default" — a persisted row that matches
-                        // the default (after a toggle back) is NOT a change.
-                        const overridden = roleMap.has(key) && roleMap.get(key) !== def;
-                        const isRollingOutGrant =
-                          eff && !def && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
-                        return (
-                          <td key={role} className={CELL}>
-                            <Cell
-                              checked={eff}
-                              overridden={overridden}
-                              rollingOut={isRollingOutGrant}
-                              busy={busy.has(key)}
-                              label={`${ROLE_DEFINITIONS[role].name} — ${p.label}`}
-                              onToggle={() => toggleRole(role, p.id)}
-                            />
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                  {g.permissions.map((p) => {
+                    // Platform-managed (0413): role rows never apply to it
+                    // (core and has_permission ignore them, the database
+                    // refuses them), so every box shows the role default,
+                    // read-only, and the owner holds it only by default.
+                    const locked = isPlatformManagedPermission(p.id);
+                    return (
+                      <tr key={p.id} className={ROW}>
+                        <th
+                          scope="row"
+                          className={cn(ROW_HEAD, 'sticky left-0 z-10')}
+                          title={`${p.description}\n(${p.id})`}
+                        >
+                          <div className="text-foreground">{p.label}</div>
+                          <div className="text-muted-foreground mt-0.5 text-[11.5px]">
+                            {p.description}
+                          </div>
+                          {locked ? <LockNote /> : null}
+                        </th>
+                        {/* Owner: always on, disabled. */}
+                        <td className={CELL}>
+                          <Check
+                            className="text-ink-4 mx-auto h-4 w-4"
+                            aria-label={
+                              locked ? 'Owner has this by default' : 'Owner always has this'
+                            }
+                          />
+                        </td>
+                        {EDITABLE_ROLES.map((role) => {
+                          const key = rk(role, p.id);
+                          const def = hasPermission(role, p.id);
+                          const eff = !locked && roleMap.has(key) ? roleMap.get(key)! : def;
+                          // "Changed from default" — a persisted row that matches
+                          // the default (after a toggle back) is NOT a change.
+                          const overridden =
+                            !locked && roleMap.has(key) && roleMap.get(key) !== def;
+                          const isRollingOutGrant =
+                            eff && !def && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
+                          return (
+                            <td key={role} className={CELL}>
+                              <Cell
+                                checked={eff}
+                                overridden={overridden}
+                                rollingOut={isRollingOutGrant}
+                                busy={busy.has(key)}
+                                locked={locked}
+                                label={`${ROLE_DEFINITIONS[role].name} — ${p.label}`}
+                                onToggle={() => toggleRole(role, p.id)}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </React.Fragment>
               ))}
             </tbody>
@@ -431,6 +450,10 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                           const overridden = userMap.has(key) && userMap.get(key) !== base;
                           const isRollingOutGrant =
                             eff && !base && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
+                          // Platform-managed (0413): the member's own row is
+                          // StockPilot's exception, shown here read-only.
+                          const locked = isPlatformManagedPermission(p.id);
+                          const exception = locked && userMap.has(key) ? userMap.get(key)! : null;
                           return (
                             <tr key={p.id} className={ROW}>
                               <th
@@ -439,6 +462,14 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                                 title={`${p.description}\n(${p.id})`}
                               >
                                 <div className="text-foreground">{p.label}</div>
+                                {exception !== null ? (
+                                  <div className="text-ink-2 mt-0.5 text-[11.5px]">
+                                    {orderCatalogAccessSourceCopy(
+                                      exception ? 'allowed_by_stockpilot' : 'denied_by_stockpilot',
+                                    )}
+                                  </div>
+                                ) : null}
+                                {locked ? <LockNote /> : null}
                               </th>
                               <td className={CELL}>
                                 <Cell
@@ -446,6 +477,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                                   overridden={overridden}
                                   rollingOut={isRollingOutGrant}
                                   busy={busy.has(key)}
+                                  locked={locked}
                                   label={`${selectedMember.name} — ${p.label}`}
                                   onToggle={() => toggleUser(selectedMember, p.id)}
                                 />
@@ -502,16 +534,28 @@ function GroupRow({ label, span }: { label: string; span: number }) {
   );
 }
 
+/** The read-only note under a platform-managed permission (0413). */
+function LockNote() {
+  return (
+    <div className="text-muted-foreground mt-0.5 flex items-start gap-1 text-[11.5px]">
+      <Lock aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
+      <span>{ORDER_ITEMS_ROLES_LOCK_NOTE_COPY}</span>
+    </div>
+  );
+}
+
 /**
  * One permission box. While its save is out the box stays where it is (so a
  * keyboard user keeps focus on it and Space cannot fire a second save) and a
- * spinner covers it; a refused save puts the old value back.
+ * spinner covers it; a refused save puts the old value back. A `locked` box
+ * (a platform-managed permission) is shown and never saves.
  */
 function Cell({
   checked,
   overridden,
   rollingOut,
   busy,
+  locked = false,
   label,
   onToggle,
 }: {
@@ -519,6 +563,7 @@ function Cell({
   overridden: boolean;
   rollingOut: boolean;
   busy: boolean;
+  locked?: boolean;
   label: string;
   onToggle: () => void;
 }) {
@@ -527,9 +572,11 @@ function Cell({
       <Checkbox
         checked={checked}
         label={label}
+        disabled={locked}
+        title={locked ? ORDER_ITEMS_ROLES_LOCK_NOTE_COPY : undefined}
         aria-busy={busy || undefined}
         onCheckedChange={() => {
-          if (!busy) onToggle();
+          if (!busy && !locked) onToggle();
         }}
         className={cn(busy && 'cursor-progress [&>span]:opacity-0')}
       />

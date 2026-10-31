@@ -28,6 +28,7 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   disconnect as disconnectConnection,
   getConnections,
+  integrationsMfaSentence,
   isForbiddenError,
   saveAccountMapping,
   type ConnectionView,
@@ -148,10 +149,15 @@ export default function IntegrationsScreen() {
       Alert.alert('Mapping saved', 'The QuickBooks account mapping was updated.');
       await load();
     } catch (e) {
+      // The MFA gate's refusal keeps the screen and says what to do
+      // (integrationsMfaSentence); a refusal of access is the Access denied state.
       if (isForbiddenError(e)) {
         setForbidden(true);
       } else {
-        Alert.alert('Could not save', e instanceof Error ? e.message : 'Unknown error');
+        Alert.alert(
+          'Could not save',
+          integrationsMfaSentence(e) ?? (e instanceof Error ? e.message : 'Unknown error'),
+        );
       }
     } finally {
       setSaving(false);
@@ -175,7 +181,10 @@ export default function IntegrationsScreen() {
               if (isForbiddenError(e)) {
                 setForbidden(true);
               } else {
-                Alert.alert('Could not disconnect', e instanceof Error ? e.message : 'Unknown error');
+                Alert.alert(
+                  'Could not disconnect',
+                  integrationsMfaSentence(e) ?? (e instanceof Error ? e.message : 'Unknown error'),
+                );
               }
             }
           },

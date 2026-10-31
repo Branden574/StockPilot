@@ -31,8 +31,6 @@ import {
   formatPlacementLabel,
   getCrateColor,
   holdingsContradictRack,
-  itemPhotoPath,
-  randomPhotoFileBase,
   readDisplayStorage,
   resolvePlacement,
   type ItemElsewhere,
@@ -55,6 +53,7 @@ import { signItemImage } from '@/lib/image-cache';
 import { departureConfirmButtons } from '@/lib/order-departure';
 import { resizeForUpload } from '@/lib/image-resize';
 import { SCAN_ADJUST_REASON, submitItemAdjust } from '@/lib/item-adjust';
+import { uploadItemPhoto } from '@/lib/item-photo-upload';
 import {
   elsewhereRow,
   elsewhereUnavailableNote,
@@ -177,17 +176,6 @@ function looksLikeIsbn(raw: string): boolean {
 function formatCurrency(n: number): string {
   return `$${n.toFixed(2)}`;
 }
-
-/** Maps a file extension to an image MIME type for storage uploads. */
-function mimeForExt(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-  if (e === 'png') return 'image/png';
-  if (e === 'heic') return 'image/heic';
-  if (e === 'webp') return 'image/webp';
-  return `image/${e}`;
-}
-
 
 export default function Scan() {
   const router = useRouter();
@@ -889,21 +877,12 @@ export default function Scan() {
     setBusy(true);
     try {
       const asset = result.assets[0];
-      // Resize on-device so the bucket only stores list-friendly sizes
-      // (~400 KB JPEGs instead of multi-megapixel phone photos).
-      const resized = await resizeForUpload(asset.uri);
-      // The one path builder every writer uses; the database (0381) refuses
-      // any other shape (packages/core item-photo-path.test.ts pins it).
-      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
-
-      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
-      // in React Native/Expo, which is why captured photos never showed
-      // up. See item/new.tsx mimeForExt note.
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const { error: upErr } = await supabase.storage
-        .from('item-images')
-        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) throw new Error(upErr.message);
+      // The photo, resized on the device (~400 KB JPEGs instead of
+      // multi-megapixel phone photos), and its thumbnail beside it, so lists
+      // never need the full photo (lib/item-photo-upload.ts builds both paths).
+      const upload = await uploadItemPhoto({ supabase, orgId, itemId, uri: asset.uri });
+      if (!upload.ok) throw new Error(upload.error);
+      const path = upload.path;
 
       const { data: existing } = await supabase
         .from('item_images')
@@ -917,6 +896,7 @@ export default function Scan() {
         organization_id: orgId,
         item_id: itemId,
         storage_path: path,
+        thumb_path: upload.thumbPath,
         is_primary: isFirst,
       });
       if (insErr) throw new Error(insErr.message);

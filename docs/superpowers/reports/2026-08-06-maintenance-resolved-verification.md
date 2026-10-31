@@ -47,7 +47,7 @@ Two further layers held throughout:
   `walk.manager@test.local`) — no real address was ever a recipient.
 - `window.open` was patched via `context.addInitScript`, i.e. **before any document script ran**,
   in every browser context. Final tally across every page of the walk: **0 calls**. No compose
-  window was ever opened, and `dc4@learn4life.org` / `arosas@cvwest.org` were never contacted.
+  window was ever opened, and `dc4@sampleorg.test` / `jstone@site1.test` were never contacted.
 
 ---
 
@@ -171,7 +171,7 @@ Swept case-insensitively over `apps/web/src`, `apps/mobile/src`, `apps/mobile/ap
 | `Ticket created` | 32 | yes |
 | `Request submitted to Zendesk` | 19 | yes |
 | `DC4 notified` | 22 | yes |
-| `Andrew notified` | 23 | yes |
+| `Jordan notified` | 23 | yes |
 | `Ticket assigned` | 24 | yes |
 | `Ticket closed` (new) | 19 | yes |
 | `Ticket resolved` (new) | 21 | yes |
@@ -435,7 +435,7 @@ remaining gap in the program.
 
 - Any real email send; the "Open in Outlook", mailto, and default-mail-app paths (`window.open`
   was patched shut and never invoked).
-- `dc4@learn4life.org` / `arosas@cvwest.org` — never contacted in any form.
+- `dc4@sampleorg.test` / `jstone@site1.test` — never contacted in any form.
 - Any remote database: no `--linked`, no `db push`, no OTA.
 
 ### Session artifacts (scratchpad only — nothing committed)
@@ -468,7 +468,7 @@ Every minor recorded against Tasks 1-10 in `.superpowers/sdd/progress.md`, with 
 | 13 | Screen-wiring gap (1) — `[id].tsx:298` `refreshKey` dep has zero coverage (T10) | **Accepted, structural — and now the mobile hand-test debt is the mitigation.** Not even a lint warning. |
 | 14 | Screen-wiring gap (2) — `toggleNotesOpen`'s `ensureMembersLoaded()` uncovered (T10) | **Accepted, structural.** Silent degradation to the fallback author label. |
 | 15 | Screen-wiring gap (3) — `addResolvePhotos` cap arithmetic can double-count mid-staging (T10) | **Accepted.** Worst case is a spurious "Too many photos"; no data loss. |
-| 16 | Share-page rate budget: per-kind caps make worst case 17 req/view → ~7 full views/hr/link (T3/T6) | **Accepted and carried.** Compounded by the T6 discovery that Gmail/Outlook image proxies fetch embedded images at **delivery** time, burning up to 4 of the 120/hr bucket per email. Fine for DC4 + Andrew; **any future batch-resend must re-check this first.** |
+| 16 | Share-page rate budget: per-kind caps make worst case 17 req/view → ~7 full views/hr/link (T3/T6) | **Accepted and carried.** Compounded by the T6 discovery that Gmail/Outlook image proxies fetch embedded images at **delivery** time, burning up to 4 of the 120/hr bucket per email. Fine for DC4 and its lead; **any future batch-resend must re-check this first.** |
 | 17 | **NEW this task — `Co-Authored-By` trailers on 2 commits** | **Owed pre-PR (controller decision).** See the sweep above and ship-checklist step 0. |
 | 18 | **NEW this task — populated `RESEND_API_KEY` in the local `.env.local`** | **Owed to the owner.** Not a code defect, but a live send key sitting in the local dev env is a standing footgun for exactly this kind of walk. Recommend blanking it locally. Also re-flags the still-stale local `SUPABASE_SERVICE_ROLE_KEY`. |
 

@@ -82,7 +82,7 @@ const SITE: StorefrontCharter = {
   id: 'c0c0c0c0-0000-4000-8000-000000000001',
   name: 'CVW Clovis',
   code: 'CVW-CLO',
-  address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
+  address: { line1: '1200 Test Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
 };
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -102,8 +102,8 @@ function renderBoth(sub: Submission) {
     [POLO.id, POLO],
     [PLANNER.id, PLANNER],
   ]);
-  const viewerLabel = 'Branden Vincent-Walker';
-  const viewerEmail = 'branden@example.org';
+  const viewerLabel = 'Carsten Hartley-Fowler';
+  const viewerEmail = 'carsten@example.org';
   const destination = sub.method === 'delivery' ? SITE : null;
   const order = { id: 'b3f1c2d4-1111-4222-8333-444455556666', orderNumber: 49 };
   const unitCount = sub.lines.reduce((s, l) => s + l.quantity, 0);
@@ -274,8 +274,8 @@ describe("the overlay reads the PLACED order, not the cart", () => {
           warehouseName: 'DC4',
           method: 'delivery',
           deliverTo: SITE.name,
-          requestedFor: 'Branden',
-          requesterEmail: 'branden@example.org',
+          requestedFor: 'Carsten',
+          requesterEmail: 'carsten@example.org',
           orgTimezone: 'America/Los_Angeles',
         }}
         neededBy="2026-10-05T03:00"
@@ -283,8 +283,8 @@ describe("the overlay reads the PLACED order, not the cart", () => {
         deliveryRecipients={ROUTING}
         submitting={false}
         submitted={{ order: summary, replay: false, viaWithdraw: false }}
-        viewerLabel="Branden"
-        viewerEmail="branden@example.org"
+        viewerLabel="Carsten"
+        viewerEmail="carsten@example.org"
         onClose={vi.fn()}
         onConfirm={vi.fn()}
         onViewOrder={vi.fn()}
@@ -382,7 +382,7 @@ describe('the success email is the message the page sent before PO-2', () => {
   it.each(cases)('%s', (_label, sub) => {
     const { web, recipients } = renderBoth(sub);
     const before = corePrepare({
-      ...inputBeforePo2(sub, 'Branden Vincent-Walker', 'branden@example.org'),
+      ...inputBeforePo2(sub, 'Carsten Hartley-Fowler', 'carsten@example.org'),
       recipients,
     });
     const now = corePrepare({ ...web.input, recipients });

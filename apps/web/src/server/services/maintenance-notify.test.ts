@@ -100,14 +100,14 @@ beforeEach(() => {
 });
 
 describe('resolveMaintenanceAudience — permission resolution (never _notify_recipients)', () => {
-  it('permission test 10 (the Andrew case): a VIEWER granted read_all via user_permission_overrides IS included; a staff member with no grants is NOT', async () => {
+  it('permission test 10 (the DC4-lead case): a VIEWER granted read_all via user_permission_overrides IS included; a staff member with no grants is NOT', async () => {
     buildAdmin({
       members: [
-        { user_id: 'andrew', role: 'viewer' },
+        { user_id: 'jordan', role: 'viewer' },
         { user_id: 'staff-1', role: 'staff' },
       ],
-      userOverrides: [{ user_id: 'andrew', permission: 'maintenance_requests:read_all', granted: true }],
-      notifyAudience: { andrew: 'all', 'staff-1': 'all' },
+      userOverrides: [{ user_id: 'jordan', permission: 'maintenance_requests:read_all', granted: true }],
+      notifyAudience: { jordan: 'all', 'staff-1': 'all' },
     });
 
     const result = await resolveMaintenanceAudience({
@@ -116,7 +116,7 @@ describe('resolveMaintenanceAudience — permission resolution (never _notify_re
       actorUserId: 'someone-else',
     });
 
-    expect(result).toEqual(['andrew']);
+    expect(result).toEqual(['jordan']);
   });
 
   it('excludes the actor from their own new_request fan-out even though they are otherwise fully eligible', async () => {
@@ -580,7 +580,8 @@ describe('§20 sweep — no false-confirmation language anywhere in this module\
     expect(/\bsent\b/i.test(src)).toBe(false);
     expect(/ticket created/i.test(src)).toBe(false);
     expect(/notified dc4/i.test(src)).toBe(false);
-    expect(/andrew notified/i.test(src)).toBe(false);
+    // A named person notified, whatever the name (case-sensitive: `<Name> notified`).
+    expect(/\b[A-Z][a-z]+ notified\b/.test(src)).toBe(false);
     expect(/ticket assigned/i.test(src)).toBe(false);
     expect(/email sent/i.test(src)).toBe(false);
     // Maintenance Resolved (GC 4) — this surface's own new forbidden

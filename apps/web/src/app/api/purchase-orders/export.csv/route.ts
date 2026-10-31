@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { poMatchesSearch } from '@/lib/purchase-orders/list-search';
 import { isPoTab, statusesForTab } from '@/lib/purchase-orders/tabs';
 
 import { withApiContext } from '@/lib/auth/api-context';
@@ -67,8 +68,13 @@ export async function GET(request: Request) {
     const poSvc = new PurchaseOrdersService(ctx);
     const supplierSvc = new SuppliersService(ctx);
 
+    // The Overdue view (?status=overdue, small fixes slice 8) exports what it
+    // lists: the dashboard count's own filter (listOverdue), for the same
+    // warehouse. Until 2026-10-11 the export knew only the status tabs.
     const [rawPos, suppliers] = await Promise.all([
-      poSvc.list({ warehouseId: warehouseFilter }),
+      tab === 'overdue'
+        ? poSvc.listOverdue({ warehouseId: warehouseFilter }).then((overdue) => overdue.rows)
+        : poSvc.list({ warehouseId: warehouseFilter }),
       supplierSvc.listForLookups(),
     ]);
     const pos = rawPos as unknown as PoRow[];
@@ -78,15 +84,14 @@ export async function GET(request: Request) {
     // Same tab → status mapping as the list page (shared lib, not a local
     // copy — a drifting copy shipped 'All exports cancelled' after the page
     // made All = non-cancelled, owner request 2026-07-16). 'all' now excludes
-    // cancelled in BOTH the view and the export.
+    // cancelled in BOTH the view and the export. The search is the list's
+    // (lib/purchase-orders/list-search.ts): a supplier the list does not name
+    // reads "—" there, as it does on the list.
     const statuses = isPoTab(tab) ? statusesForTab(tab) : statusesForTab('all');
+    const listName = (id: string | null) => (id ? (supplierMap.get(id) ?? '—') : '—');
     const filtered = pos.filter((p) => {
       if (statuses && !statuses.includes(p.status)) return false;
-      if (!q) return true;
-      return (
-        p.po_number.toLowerCase().includes(q) ||
-        supplierName(p.supplier_id).toLowerCase().includes(q)
-      );
+      return poMatchesSearch(p, q, listName);
     });
 
     const rows = filtered.map((p) => ({

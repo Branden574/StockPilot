@@ -112,7 +112,7 @@ export interface DeliveryRequestOrderData {
  *
  * `recipients` is a PARAMETER rather than a constant read from
  * `./delivery-request-recipients`, for the same reason
- * `buildDeliveryRequestDraft` takes one: `dc4@learn4life.org` is one customer's
+ * `buildDeliveryRequestDraft` takes one: a warehouse intake is one customer's
  * mailbox and a shared package must not hard-wire every org's warehouse mail to
  * it. The literal still has exactly one home, so the surfaces cannot drift.
  */

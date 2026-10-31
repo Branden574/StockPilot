@@ -27,6 +27,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -35,12 +36,15 @@ import { usePerfUseful } from '@/components/perf/perf-useful';
 
 import {
   CART_TITLE_COPY,
+  cartNotOrderableMarks,
   kitNotEnoughCopy,
   mintOrderSubmissionKey,
   orderSubmissionLocked,
   orderUnconfirmedCopy,
   orderRefusalCopy,
+  ORDER_ITEMS_MANAGE_BUTTON_COPY,
   pendingOrderSubmissionOf,
+  raisesNotOrderable,
   refuseAddWhileLocked,
   ORDER_UNCONFIRMED_BODY_COPY,
   ORDER_WITHDRAWN_COPY,
@@ -48,6 +52,7 @@ import {
   STOREFRONT_DELIVER_TO_COPY,
   STOREFRONT_DELIVERY_SITE_COPY,
   STOREFRONT_FOR_COPY,
+  STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   STOREFRONT_MYSELF_COPY,
   STOREFRONT_NO_DELIVERY_SITES_COPY,
   STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY,
@@ -134,17 +139,55 @@ import { toFreqEntries, useStreamed } from './frequently-ordered';
 import './storefront.css';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { Button } from '@/components/ui/button';
 import { CheckboxGlyph } from '@/components/ui/checkbox';
 import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
+import { setOrderingTabWarehouse } from '@/lib/orders/ordering-tab-signal';
 
 const GRID_PREVIEW = 4;
 const NO_REFUSED_ITEMS: ReadonlyMap<string, string> = new Map();
 const LIST_PREVIEW = 6;
+/**
+ * The catalog is re-read (router.refresh) on focus, on a return to the tab and
+ * when the review opens, once it is older than this, and at most once in this
+ * long (ordering visibility, design 7.2 item 9): a hidden item leaves an open
+ * page without polling. The submission gate decides every order regardless.
+ */
+const CATALOG_STALE_MS = 60_000;
+/** Where Manage order items lives (ordering visibility, design 8.1). */
+const MANAGE_ORDER_ITEMS_HREF = '/dashboard/orders/manage-items';
 
 /** Resolved catalog payload streamed in behind the page frame. */
 export interface StorefrontCatalogData {
   items: CatalogItem[];
   aisles: AisleSummary[];
+  /**
+   * Names this server render's payload (0413 review fix round, F4). A soft
+   * navigation back within staleTimes.dynamic restores the SAME payload from
+   * the router cache and remounts the page; the staleness clock then starts
+   * when this tab first got the payload, not at the remount.
+   */
+  servedId?: string;
+}
+
+/**
+ * When this tab first got each catalog payload (servedId -> browser clock
+ * ms). Module state, so it outlives a remount; bounded. Both ends are the
+ * browser's own clock, so a server clock that disagrees changes nothing.
+ */
+const catalogFirstSeen = new Map<string, number>();
+const CATALOG_FIRST_SEEN_MAX = 50;
+
+/** The time the staleness clock starts for a payload seen `now`. */
+function catalogClockStart(servedId: string | undefined, now: number): number {
+  if (!servedId) return now;
+  const seen = catalogFirstSeen.get(servedId);
+  if (seen !== undefined) return seen;
+  catalogFirstSeen.set(servedId, now);
+  while (catalogFirstSeen.size > CATALOG_FIRST_SEEN_MAX) {
+    catalogFirstSeen.delete(catalogFirstSeen.keys().next().value as string);
+  }
+  return now;
 }
 
 export interface OrdersStorefrontProps {
@@ -210,6 +253,14 @@ export interface OrdersStorefrontProps {
    * approve gate), computed by the server page.
    */
   canApproveOrders: boolean;
+  /**
+   * Whether to offer Manage order items in the header (ordering visibility,
+   * design 8.1): the Orders module, the rollout switch and the effective
+   * orders:manage_catalog_visibility, computed by the server page
+   * (canManageOrderItems). Absent means hidden. The management page and its
+   * action check it again on every call.
+   */
+  canManageOrderItems?: boolean;
 }
 
 type ReviewStage = null | 'review' | 'success';
@@ -313,9 +364,14 @@ function StorefrontShell({
   viewerUserId,
   organizationId,
   canApproveOrders,
+  canManageOrderItems = false,
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch, hydrated, locked, setLocked } = useCart();
+
+  // The warehouse this tab shows, for the realtime listener: a Show or Hide
+  // in another warehouse does not re-render this page (review F1).
+  React.useEffect(() => setOrderingTabWarehouse(warehouseId), [warehouseId]);
 
   const [openPop, setOpenPop] = React.useState<null | 'wh' | 'person' | 'site'>(null);
   const [pendingName, setPendingName] = React.useState('');
@@ -384,7 +440,16 @@ function StorefrontShell({
           title={STOREFRONT_TITLE_COPY}
           subline="Browse available inventory, add items to your cart, and submit for approval."
           tour={<PageTour tour={ORDER_CREATE_TOUR} />}
-          actions={<FlowIndicator stage={flowStage} />}
+          actions={
+            <>
+              {canManageOrderItems ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={MANAGE_ORDER_ITEMS_HREF}>{ORDER_ITEMS_MANAGE_BUTTON_COPY}</Link>
+                </Button>
+              ) : null}
+              <FlowIndicator stage={flowStage} />
+            </>
+          }
         />
 
         {/* ---------- Order setup bar ---------- */}
@@ -848,7 +913,7 @@ function StorefrontCatalog({
   canApproveOrders,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
-  const { items, aisles } = React.use(catalogPromise);
+  const { items, aisles, servedId } = React.use(catalogPromise);
   // Performance marker (lib/perf/marks.ts). AFTER use(), so it is part of the
   // render that has the catalog: this component only mounts (and the marker's
   // mount effect only runs) once the payload has arrived and the grid replaces
@@ -862,6 +927,70 @@ function StorefrontCatalog({
     () => new Map(items.map((it) => [it.id, it])),
     [items],
   );
+
+  // ═══ STALE LINES (ordering visibility, design 6.5) ═══
+  //
+  // A cart line whose item this catalog no longer lists (hidden from Orders,
+  // archived, out of scope) or that the last send refused is marked, the rule
+  // the phone's session applies (core cartNotOrderableMarks). It is kept, can
+  // be lowered or removed but never raised, and Submit waits until it is
+  // edited: nothing is dropped and no partial order is sent.
+  const sub = submission.state;
+  // Items an item_not_orderable refusal named, marked in the cart by name.
+  const refusedItems = React.useMemo<ReadonlyMap<string, string>>(
+    () =>
+      sub.phase === 'refused' && sub.reason === 'item_not_orderable'
+        ? new Map(Object.entries(sub.details.items ?? {}))
+        : NO_REFUSED_ITEMS,
+    [sub],
+  );
+  const marks = React.useMemo(
+    () => cartNotOrderableMarks(state, itemMap, refusedItems),
+    [state, itemMap, refusedItems],
+  );
+  const notOrderableRef = React.useRef(marks.notOrderable);
+  const cartRef = React.useRef(state);
+  React.useEffect(() => {
+    notOrderableRef.current = marks.notOrderable;
+    cartRef.current = state;
+  }, [marks.notOrderable, state]);
+
+  // ═══ A CATALOG OLDER THAN A MINUTE IS RE-READ ON RETURN (design 7.2 item 9) ═══
+  //
+  // On focus, on a return to the tab and when the review opens. One refresh
+  // at a time and at most one a minute; never a poll. router.refresh() runs
+  // as a transition, so the page keeps showing while the new catalog streams
+  // in. A new catalog (a refresh, a warehouse switch) starts the clock again;
+  // the SAME payload restored by the router cache on a soft navigation back
+  // keeps the time this tab first got it, and is re-read at once on mount
+  // when that is over a minute ago (review F4).
+  const catalogAtRef = React.useRef(0);
+  const lastStaleRefreshRef = React.useRef(0);
+  React.useEffect(() => {
+    catalogAtRef.current = catalogClockStart(servedId, Date.now());
+  }, [items, servedId]);
+  const refreshIfStale = React.useCallback(() => {
+    const now = Date.now();
+    if (now - catalogAtRef.current < CATALOG_STALE_MS) return;
+    if (now - lastStaleRefreshRef.current < CATALOG_STALE_MS) return;
+    lastStaleRefreshRef.current = now;
+    router.refresh();
+  }, [router]);
+  // Once on mount, after the clock above is set (effects run in order).
+  React.useEffect(() => {
+    refreshIfStale();
+  }, [refreshIfStale]);
+  React.useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshIfStale();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', refreshIfStale);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', refreshIfStale);
+    };
+  }, [refreshIfStale]);
 
   // ═══ "Start an order from Items" one-shot prefill ═══
   //
@@ -988,6 +1117,11 @@ function StorefrontCatalog({
     (itemId: string) => {
       const item = itemMap.get(itemId);
       if (!item) return;
+      // A marked line is never raised (design 6.5).
+      if (notOrderableRef.current.has(itemId)) {
+        toast.error(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+        return;
+      }
       const avail = availableOf(item);
       const qty = linesRef.current.find((l) => l.itemId === itemId)?.quantity ?? 0;
       if (avail <= 0 || qty >= avail) return;
@@ -1002,7 +1136,15 @@ function StorefrontCatalog({
   // Typed quantities arrive pre-clamped by QtyField (0..available);
   // set-qty at ≤0 removes the line.
   const handleSetQty = React.useCallback(
-    (itemId: string, quantity: number) => dispatch({ type: 'set-qty', itemId, quantity }),
+    (itemId: string, quantity: number) => {
+      const action = { type: 'set-qty' as const, itemId, quantity };
+      // Lowering a marked line is fine; raising it is not (design 6.5).
+      if (raisesNotOrderable(action, cartRef.current, notOrderableRef.current)) {
+        toast.error(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+        return;
+      }
+      dispatch(action);
+    },
     [dispatch],
   );
   const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
@@ -1045,7 +1187,17 @@ function StorefrontCatalog({
         return;
       }
       if (plan.changes.length > 0) {
-        dispatch({ type: 'apply-kit', bundleId: kit.bundleId, changes: plan.changes });
+        const action = {
+          type: 'apply-kit' as const,
+          bundleId: kit.bundleId,
+          changes: plan.changes,
+        };
+        // A kit never adds to a marked line (design 6.5).
+        if (raisesNotOrderable(action, cartRef.current, notOrderableRef.current)) {
+          toast.error(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+          return;
+        }
+        dispatch(action);
       }
     },
     [itemMap, dispatch],
@@ -1130,9 +1282,10 @@ function StorefrontCatalog({
       setPreflightError(SUBMIT_ON_BEHALF_INCOMPLETE_COPY);
       return;
     }
-    // The last send refused some of these items (item_not_orderable): they
-    // are marked in the cart, and the order waits until they are removed.
-    if (lines.some((l) => refusedItems.has(l.itemId))) {
+    // Lines this catalog no longer lists, or that the last send refused
+    // (item_not_orderable): they are marked in the cart, and the order waits
+    // until they are removed (design 6.5).
+    if (lines.some((l) => marks.notOrderable.has(l.itemId))) {
       setPreflightError(SUBMIT_REMOVE_UNORDERABLE_COPY);
       return;
     }
@@ -1199,7 +1352,6 @@ function StorefrontCatalog({
   }
 
   /* --- what the submission says --- */
-  const sub = submission.state;
   const itemName = React.useCallback(
     (id: string) => itemMap.get(id)?.name ?? null,
     [itemMap],
@@ -1228,11 +1380,6 @@ function StorefrontCatalog({
       ? orderRefusalCopy(sub.reason, sub.details, wordsCtx)
       : null);
   const noticeText = sub.phase === 'withdrawn' && outcomeUnread ? ORDER_WITHDRAWN_COPY : null;
-  // Items an item_not_orderable refusal named, marked in the cart by name.
-  const refusedItems: ReadonlyMap<string, string> =
-    sub.phase === 'refused' && sub.reason === 'item_not_orderable'
-      ? new Map(Object.entries(sub.details.items ?? {}))
-      : NO_REFUSED_ITEMS;
 
   /* --- small helpers --- */
   const toggleAvailability = (status: ItemStatus) => {
@@ -1578,9 +1725,13 @@ function StorefrontCatalog({
             onAdd={handleAdd}
             onDec={handleDec}
             onSetQty={handleSetQty}
-            onReview={() => setReviewStage('review')}
+            onReview={() => {
+              refreshIfStale();
+              setReviewStage('review');
+            }}
             orgTimezone={orgTimezone}
             refusedItems={refusedItems}
+            notOrderable={marks.notOrderable}
           />
         </div>
       </div>

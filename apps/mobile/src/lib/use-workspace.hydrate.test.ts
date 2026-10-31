@@ -39,7 +39,11 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
-vi.mock('./sync', () => ({ syncNow: vi.fn(async () => {}) }));
+vi.mock('./sync', () => ({
+  syncNow: vi.fn(async () => {}),
+  syncAfterRunning: vi.fn(async () => {}),
+}));
+vi.mock('./cycle-count-sync', () => ({ cycleCountSync: { forceSync: vi.fn(async () => {}) } }));
 
 // The membership read can be held open to overlap a switch.
 const gate = vi.hoisted(() => ({
@@ -119,11 +123,30 @@ const settled = async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
 };
 
+// Re-pinned by docket B10 (integrator decision 3; these read and wrote the
+// older single key, 'workspace.activeOrgId'): the saved workspace is one
+// value, the workspace and the account that chose it, under
+// 'workspace.savedOrg' (workspace-keys.ts).
+const SAVED = 'workspace.savedOrg';
+/** Save a workspace as this build does: with the account that chose it. */
+const saveAs = (orgId: string, ownerId = 'u1') =>
+  store.set(SAVED, JSON.stringify({ orgId, ownerId }));
+/** Nothing saved (a fresh sign-in, an eviction). */
+const forget = () => {
+  store.delete(SAVED);
+  store.delete('workspace.activeOrgId');
+};
+/** The workspace saved now, as every request and queued row reads it. */
+const savedOrg = () => {
+  const value = store.get(SAVED);
+  return value ? (JSON.parse(value) as { orgId: string }).orgId : undefined;
+};
+
 emitAuth('u1'); // the first auth event only records who is signed in
 
 describe('hydrate and workspace switches agree on the workspace', () => {
   it('a switch made while hydrate reads memberships stands: the screen shows the switched workspace', async () => {
-    store.set('workspace.activeOrgId', 'org-a');
+    saveAs('org-a');
     useWorkspace(); // first mount
     await settled();
     expect(published.at(-1)?.activeOrgId).toBe('org-a');
@@ -133,34 +156,34 @@ describe('hydrate and workspace switches agree on the workspace', () => {
     const release = holdMemberships();
     useWorkspace();
     await setActiveOrg('org-b');
-    expect(store.get('workspace.activeOrgId')).toBe('org-b');
+    expect(savedOrg()).toBe('org-b');
     release();
     await settled();
 
     // The screen and every request (the stored workspace) agree on B.
     expect(published.at(-1)?.activeOrgId).toBe('org-b');
-    expect(store.get('workspace.activeOrgId')).toBe('org-b');
+    expect(savedOrg()).toBe('org-b');
     // And tapping A really switches back.
     await setActiveOrg('org-a');
-    expect(store.get('workspace.activeOrgId')).toBe('org-a');
+    expect(savedOrg()).toBe('org-a');
     expect(published.at(-1)?.activeOrgId).toBe('org-a');
   });
 
   it('with nothing saved yet, a switch during the reads is not overwritten by the default', async () => {
-    store.delete('workspace.activeOrgId'); // fresh sign-in; the profile default is org-a
+    forget(); // fresh sign-in; the profile default is org-a
     const release = holdMemberships();
     useWorkspace();
-    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith(SAVED));
     await setActiveOrg('org-b');
     release();
     await settled();
-    expect(store.get('workspace.activeOrgId')).toBe('org-b');
+    expect(savedOrg()).toBe('org-b');
     expect(published.at(-1)?.activeOrgId).toBe('org-b');
   });
 
   it('a switch made while hydrate reads warehouses stands as well', async () => {
     await setActiveOrg('org-a'); // start from A, whatever the previous test left
-    store.set('workspace.activeOrgId', 'org-a');
+    saveAs('org-a');
     let release!: () => void;
     gate.nextWarehouses = new Promise<void>((resolve) => {
       release = resolve;
@@ -172,7 +195,7 @@ describe('hydrate and workspace switches agree on the workspace', () => {
     release();
     await settled();
     expect(published.at(-1)?.activeOrgId).toBe('org-b');
-    expect(store.get('workspace.activeOrgId')).toBe('org-b');
+    expect(savedOrg()).toBe('org-b');
   });
 
   it('an older hydrate that finishes clears loading even while a newer one hangs', async () => {
@@ -188,21 +211,21 @@ describe('hydrate and workspace switches agree on the workspace', () => {
   });
 
   it('an eviction during a hydrate does not save a workspace back', async () => {
-    store.set('workspace.activeOrgId', 'org-b'); // a valid saved choice, read at the start
+    saveAs('org-b'); // a valid saved choice, read at the start
     const release = holdMemberships();
     useWorkspace();
-    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith(SAVED));
     // Account eviction clears the account-scoped keys while the reads are out.
-    store.delete('workspace.activeOrgId');
+    forget();
     storage.setItem.mockClear();
     release();
     await settled();
-    expect(storage.setItem.mock.calls.filter(([k]) => k === 'workspace.activeOrgId')).toEqual([]);
-    expect(store.has('workspace.activeOrgId')).toBe(false);
+    expect(storage.setItem.mock.calls.filter(([k]) => k === SAVED)).toEqual([]);
+    expect(store.has(SAVED)).toBe(false);
   });
 
   it('a failed save still shows the workspace and clears loading', async () => {
-    store.delete('workspace.activeOrgId');
+    forget();
     storage.setItem.mockImplementationOnce(async () => {
       throw new Error('database or disk is full');
     });
@@ -216,7 +239,7 @@ describe('hydrate and workspace switches agree on the workspace', () => {
 
   it('a token refresh (same user) does not cancel a load', async () => {
     await setActiveOrg('org-b');
-    store.set('workspace.activeOrgId', 'org-b');
+    saveAs('org-b');
     const release = holdMemberships();
     useWorkspace();
     emitAuth('u1'); // TOKEN_REFRESHED: a new session object, the same user
@@ -228,10 +251,10 @@ describe('hydrate and workspace switches agree on the workspace', () => {
 
 describe('workspace work for an account that is gone saves and shows nothing', () => {
   it('a load in flight across an account eviction saves no workspace back', async () => {
-    store.delete('workspace.activeOrgId'); // nothing saved yet: the load would save the default
+    forget(); // nothing saved yet: the load would save the default
     const release = holdMemberships();
     useWorkspace();
-    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith(SAVED));
     endAccountEpoch(); // the eviction's clearAccountStorage, before it removes the keys
     storage.setItem.mockClear();
     const before = published.length;
@@ -243,14 +266,14 @@ describe('workspace work for an account that is gone saves and shows nothing', (
 
   it("the previous user's load landing after the next user's saves and shows nothing", async () => {
     auth.user = { id: 'u1' };
-    store.delete('workspace.activeOrgId');
+    forget();
     // u1's load waits on its membership read.
     let releaseU1!: () => void;
     gate.memberships = new Promise<void>((resolve) => {
       releaseU1 = resolve;
     });
     useWorkspace();
-    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith(SAVED));
     gate.memberships = Promise.resolve();
     // u1 signs out and u2 signs in; u2's load runs to the end.
     emitAuth(null);
@@ -258,12 +281,12 @@ describe('workspace work for an account that is gone saves and shows nothing', (
     auth.user = { id: 'u2' };
     useWorkspace();
     await settled();
-    expect(store.get('workspace.activeOrgId')).toBe('org-c');
+    expect(savedOrg()).toBe('org-c');
     expect(published.at(-1)?.activeOrgId).toBe('org-c');
     // Now u1's stale load lands.
     releaseU1();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(store.get('workspace.activeOrgId')).toBe('org-c');
+    expect(savedOrg()).toBe('org-c');
     expect(published.at(-1)?.activeOrgId).toBe('org-c');
     emitAuth(null);
     emitAuth('u1');
@@ -283,7 +306,7 @@ describe('workspace work for an account that is gone saves and shows nothing', (
     storage.setItem.mockClear();
     releaseSlow();
     await Promise.all([slow, queued]);
-    expect(storage.setItem.mock.calls.filter(([k]) => k === 'workspace.activeOrgId')).toEqual([]);
+    expect(storage.setItem.mock.calls.filter(([k]) => k === SAVED)).toEqual([]);
     emitAuth('u1');
   });
 });
@@ -296,7 +319,7 @@ describe('workspace work for an account that is gone saves and shows nothing', (
 describe('a failed membership read is not "a member of nothing"', () => {
   it('keeps the workspace on screen, with its memberships, and saves nothing', async () => {
     await setActiveOrg('org-b');
-    store.set('workspace.activeOrgId', 'org-b');
+    saveAs('org-b');
     useWorkspace();
     await settled();
     expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', loading: false });

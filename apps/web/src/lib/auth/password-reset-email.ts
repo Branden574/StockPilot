@@ -37,17 +37,25 @@ export async function sendPasswordResetEmail(email: string): Promise<boolean> {
         redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
       },
     });
-    // Email OUR /auth/confirm URL carrying the hashed token — NOT the
+    // Email OUR /auth/confirm URL carrying the hashed token — NEVER the
     // action_link. action_link runs through Supabase's /auth/v1/verify,
-    // which hands the session back in the URL FRAGMENT; the server-side
-    // /auth/callback never sees it and bounced users to /signin.
-    // /auth/confirm verifies the hash server-side (verifyOtp) and lands
-    // the user on /reset/complete with cookies set.
+    // which hands the session back in the URL FRAGMENT: the server-side
+    // /auth/callback never sees it, and the browser client refuses it
+    // (PKCE-only, lib/supabase/client.test.ts), so the person lands on
+    // /signin with a spent link, not signed in, and with live tokens in the
+    // address bar. /auth/confirm verifies the hash server-side (verifyOtp)
+    // and lands the user on /reset/complete with cookies set.
+    if (linkError) return false; // no account for this address, among others
     const hashedToken = data?.properties?.hashed_token;
-    const resetUrl = hashedToken
-      ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`
-      : (data?.properties?.action_link ?? null);
-    if (linkError || !resetUrl) return false;
+    if (!hashedToken) {
+      // GoTrue minted a link without its hashed token: every reset is broken
+      // until that is fixed, so say so where operators look, and send nothing.
+      void reportError(new Error('generateLink(recovery) returned no hashed_token'), {
+        tag: 'auth.password_reset_no_hashed_token',
+      });
+      return false;
+    }
+    const resetUrl = `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`;
 
     // Render via the es security family (redesign, 2026-07). Only the
     // message (html/text/subject/from) changed — the minting above is

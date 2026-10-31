@@ -43,12 +43,10 @@ import {
   DISPLAY_GROUP_FALLBACK_NAME,
   formatCycleCountNumber,
   isCountableItem,
-  itemPhotoPath,
   formatOrderNumber,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   legacyOrderRefId,
-  randomPhotoFileBase,
   randomRequestUuid,
   readDisplayStorage,
   reasonWithoutRefLabel,
@@ -87,8 +85,8 @@ import { isOfflineState } from '@/lib/exceptions-api';
 import { canOpenCountScreen } from '@/lib/verification-api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
-import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
+import { uploadItemPhoto } from '@/lib/item-photo-upload';
 import { ADJUST_STOCK_KIND, describeQueuedChanges } from '@/lib/adjust-outbox';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
@@ -157,7 +155,7 @@ import {
   serialSourceLabel,
   validateSerialInput,
 } from '@/lib/serials';
-import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { fontScaleKey, shouldStackItemTabs, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -498,21 +496,25 @@ async function resolveReceiptPoNumbers(
   return map;
 }
 
-function mimeForExt(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-  if (e === 'png') return 'image/png';
-  if (e === 'heic') return 'image/heic';
-  if (e === 'webp') return 'image/webp';
-  return `image/${e}`;
-}
-
 export default function ItemDetail() {
   const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
   const { c } = useTheme();
   const { orgId } = useOrg();
   const { role } = useRole();
+  // The three tabs stack, one per line, when Movements at the user's text size
+  // is wider than its segment (docket B10), rather than being cut or shrunk.
+  const { width: windowWidth, fontScale } = useWindowDimensions();
+  const stackTabs = shouldStackItemTabs(windowWidth, fontScale);
+  // A live text-size change left the hero, Replace and the tab labels laid out
+  // at the old size, cut ('Movem…', 'REPLAC') until a tab changed state or the
+  // item was opened again (docket B60): the stale measurement B10 fixed in the
+  // shared list chrome. Those remount at a new size, with Tap to add photo on
+  // an item with no photo (the same words' type as Replace), so each is
+  // measured at it; none holds state. Nothing else is keyed: the scroll view
+  // would lose its place, the photo would load again, and the tab contents
+  // hold the serials, a movement's note sheet and the count card's retry.
+  const scaleKey = fontScaleKey(fontScale);
   const [item, setItem] = React.useState<Item | null>(null);
   // Ungroup (0399): other records this member can read with the same SKU.
   const [skuSiblings, setSkuSiblings] = React.useState<number | null>(null);
@@ -1634,22 +1636,15 @@ export default function ItemDetail() {
     const itemId = item.id;
     setPhotoBusy(true);
     try {
-      // Resize on-device so the bucket only stores list-friendly sizes
-      // (~400 KB JPEGs instead of multi-megapixel phone photos).
-      const resized = await resizeForUpload(uri);
-      // The one path builder every writer uses; the database (0381) refuses
-      // any other shape (packages/core item-photo-path.test.ts pins it).
-      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
-      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
-      // to Supabase Storage in RN/Expo, so use arrayBuffer().
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const { error: upErr } = await supabase.storage
-        .from('item-images')
-        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) {
-        Alert.alert('Upload failed', upErr.message);
+      // The photo, resized on the device (~400 KB JPEGs instead of
+      // multi-megapixel phone photos), and its thumbnail beside it, so lists
+      // never need the full photo (lib/item-photo-upload.ts builds both paths).
+      const upload = await uploadItemPhoto({ supabase, orgId, itemId, uri });
+      if (!upload.ok) {
+        Alert.alert('Upload failed', upload.error);
         return;
       }
+      const path = upload.path;
       // SP-078 — this block USED to remove the old storage objects and delete
       // every item_images row for the item BEFORE inserting the new row, with
       // neither destructive result checked and no compensation if the insert
@@ -1664,6 +1659,7 @@ export default function ItemDetail() {
         orgId,
         itemId,
         newPath: path,
+        newThumbPath: upload.thumbPath,
       });
       if (!outcome.ok) {
         Alert.alert('Save failed', outcome.error);
@@ -1733,7 +1729,7 @@ export default function ItemDetail() {
             the SKU in mono over the 26pt name, then category and barcode. The
             SKU and the meta line are information, so they read in the muted
             ink (ink4 held them at 3.2-3.6:1, under AA). */}
-        <View style={styles.hero}>
+        <View key={`hero-${scaleKey}`} style={styles.hero}>
           <Mono size={11.5} tracking={0.12} upper color={c.ink3}>
             — {item.sku}
           </Mono>
@@ -1854,7 +1850,9 @@ export default function ItemDetail() {
                     recyclingKey={`${item.id}-${item.imageUrl}`}
                   />
                 ) : (
-                  <View style={{ alignItems: 'center', gap: 8 }}>
+                  // Keyed like Replace (the same words' type): no image here
+                  // to load again.
+                  <View key={`add-photo-${scaleKey}`} style={{ alignItems: 'center', gap: 8 }}>
                     <Camera size={28} color={c.ink3} strokeWidth={1.4} />
                     <Mono size={11} tracking={0.12} upper color={c.ink3}>
                       Tap to add photo
@@ -1899,6 +1897,7 @@ export default function ItemDetail() {
               // wash), and is a real 44pt frame rather than a 26pt pill with
               // hitSlop.
               <Pressable
+                key={`replace-${scaleKey}`}
                 onPress={openPhotoActions}
                 disabled={photoBusy}
                 accessibilityRole="button"
@@ -1929,24 +1928,33 @@ export default function ItemDetail() {
         </View>
 
         {/* Tab bar: the reference's segmented switch (DESIGN-SPEC 6.5), a
-            recessed track with the chosen tab on the card. */}
+            recessed track with the chosen tab on the card. Stacked one per
+            line when the widest label is wider than its segment. */}
         <View
+          key={`tabs-${scaleKey}`}
           accessibilityRole="tablist"
-          style={[styles.tabsRow, { backgroundColor: c.sunk, borderColor: c.hair }]}
+          style={[
+            styles.tabsRow,
+            stackTabs ? styles.tabsStacked : null,
+            { backgroundColor: c.sunk, borderColor: c.hair },
+          ]}
         >
           <TabButton
             label="Overview"
             active={tab === 'overview'}
+            stacked={stackTabs}
             onPress={() => setTab('overview')}
           />
           <TabButton
             label="Movements"
             active={tab === 'movements'}
+            stacked={stackTabs}
             onPress={() => setTab('movements')}
           />
           <TabButton
             label="Activity"
             active={tab === 'activity'}
+            stacked={stackTabs}
             onPress={() => setTab('activity')}
           />
         </View>
@@ -2027,8 +2035,9 @@ export default function ItemDetail() {
                 </Button>
               ) : null}
               {/* Remove-from-rack write-off (2026-07-23): draws down ONE rack,
-                  leaving stock in every other rack alone — the tool Andrew
-                  reached for when he archived a whole book to clear one rack.
+                  leaving stock in every other rack alone — the tool a DC4
+                  manager reached for when they archived a whole book to clear
+                  one rack.
                   Only meaningful on an active item that still holds stock. */}
               {canAdjustStock && item.status !== 'archived' && item.quantity_on_hand > 0 ? (
                 <Button
@@ -2467,10 +2476,13 @@ export default function ItemDetail() {
 function TabButton({
   label,
   active,
+  stacked,
   onPress,
 }: {
   label: string;
   active: boolean;
+  /** One tab per line: the tab takes the track's width, not a third of it. */
+  stacked: boolean;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -2486,6 +2498,7 @@ function TabButton({
       accessibilityState={{ selected: active }}
       style={({ pressed }) => [
         styles.tab,
+        stacked ? styles.tabStacked : null,
         {
           borderColor: active ? c.ink3 : 'transparent',
           backgroundColor: active ? c.card : 'transparent',
@@ -2497,15 +2510,14 @@ function TabButton({
           inside a word — uncapped, Movements breaks mid-word at 2x. The
           control ceiling is the segmented-control policy from lib/theme.
           The segmented track takes about 23pt from each column, so at the
-          larger sizes on a narrow screen a label can still outgrow its
-          segment: iOS shrinks it to fit (down to TAB_MIN_FONT_SCALE) instead
-          of cutting Movements to "Moveme…". */}
+          larger sizes on a narrow screen Movements can still outgrow its
+          segment: the screen then stacks the tabs (shouldStackItemTabs), so
+          the label is never cut to "Moveme…" nor shrunk below the size the
+          user chose. */}
       <Body
         size={13}
         numberOfLines={1}
         maxFontSizeMultiplier={TAB_CAP}
-        adjustsFontSizeToFit
-        minimumFontScale={TAB_MIN_FONT_SCALE}
         color={active ? c.ink : c.ink3}
         style={{ fontFamily: active ? FONT.displaySemi : FONT.display }}
       >
@@ -2515,18 +2527,14 @@ function TabButton({
   );
 }
 
-/** The tab labels are segmented-control chrome: 13pt against the control ceiling. */
-const TAB_CAP = capTo(13, TYPE_CEILING.control);
-
 /**
- * How far a tab label may shrink to fit its segment rather than be cut. Each
- * segment is (screen - 56) / 3 - 18pt wide: 70pt on a 320pt zoomed screen.
- * Movements in Inter Tight semibold advances about 117.3pt at the 22pt cap,
- * so 0.6 (70.4pt) would sit on the edge there; 0.55 (64.5pt) fits with room.
- * iOS takes the largest scale that fits, so the floor is reached only when
- * nothing larger fits.
+ * The tab labels are segmented-control chrome: 13pt against the control
+ * ceiling. Each segment is (screen - 56) / 3 - 18pt wide, 70pt on a 320pt
+ * zoomed screen, and Movements in Inter Tight semibold advances about 117.3pt
+ * at the 22pt cap: past the width it needs, the tabs stack
+ * (shouldStackItemTabs in lib/dynamic-type-layout).
  */
-const TAB_MIN_FONT_SCALE = 0.55;
+const TAB_CAP = capTo(13, TYPE_CEILING.control);
 
 /**
  * One quick-adjust step (−5 / −1 / +1 / +5): the reference's stepper button,
@@ -4268,6 +4276,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     marginHorizontal: 20,
   },
+  // The tabs one per line (shouldStackItemTabs): the gap and padding stay.
+  tabsStacked: {
+    flexDirection: 'column',
+  },
   // A 44pt target that grows with its label (minHeight, never height).
   tab: {
     flex: 1,
@@ -4279,6 +4291,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // A stacked tab is as tall as its label and as wide as the track: flex: 1
+  // in a column would share out a height the track does not have.
+  tabStacked: {
+    flex: 0,
   },
   quickAdjust: {
     flexDirection: 'row',

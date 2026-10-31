@@ -2,8 +2,20 @@ import { BookOpen } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
+import { safeHexColor } from '@stockpilot/core';
+
 /** Slate, the colour a procedure without a category has always drawn. */
 export const PROCEDURE_FALLBACK_COLOR = '#475569';
+
+/**
+ * A procedure category's stored colour to draw: the `#rrggbb` form the app
+ * writes, else slate. The column is plain text an admin can also write
+ * through the Data API, and a style value reaches the server HTML as given,
+ * so anything else is never drawn (docket T14).
+ */
+export function procedureCategoryColor(color: string | null | undefined): string {
+  return safeHexColor(color) ?? PROCEDURE_FALLBACK_COLOR;
+}
 
 /**
  * The no-video (or failed-thumbnail) media of a procedure card: a flat, quiet
@@ -19,7 +31,7 @@ export function ProcedureFallbackBand({
   color: string | null | undefined;
   className?: string;
 }) {
-  const tone = color ?? PROCEDURE_FALLBACK_COLOR;
+  const tone = procedureCategoryColor(color);
   return (
     <span
       aria-hidden
@@ -57,7 +69,7 @@ export function ProcedureCategoryPill({
       <span
         aria-hidden
         className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: color ?? PROCEDURE_FALLBACK_COLOR }}
+        style={{ backgroundColor: procedureCategoryColor(color) }}
       />
       <span className="min-w-0 truncate">{name}</span>
     </span>

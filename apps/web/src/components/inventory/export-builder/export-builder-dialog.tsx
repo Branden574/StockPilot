@@ -25,6 +25,7 @@ import {
 import {
   downloadInventoryExport,
   fetchExportPreview,
+  type ExportPreviewRequest,
   type ExportPreviewResponse,
   type ExportStage,
   type InventoryExportRequest,
@@ -78,7 +79,8 @@ const FORMATS: Array<{
   {
     value: 'xlsx',
     label: 'Excel',
-    description: 'Editable spreadsheet with filters, formatting, column widths, and optional images.',
+    description:
+      'Editable spreadsheet with filters, formatting, column widths, and optional images.',
   },
   {
     value: 'csv',
@@ -86,6 +88,11 @@ const FORMATS: Array<{
     description: 'Simple data file for imports, databases, and spreadsheet applications.',
   },
 ];
+
+/** What a preview answer is filed under: the request's JSON and the attempt. */
+function previewKeyOf(attempt: number, requestJson: string): string {
+  return `${attempt}:${requestJson}`;
+}
 
 export interface ExportBuilderDialogProps {
   open: boolean;
@@ -136,7 +143,28 @@ export function ExportBuilderDialog({
   const [state, setState] = React.useState<ExportBuilderState>(() =>
     initialExportBuilderState(itemTypeKind),
   );
-  const [preview, setPreview] = React.useState<ExportPreviewResponse | null>(null);
+  // The preview request as it is sent. Its JSON keys the fetch below: the call
+  // sites build a new `filters` object (and ids array) on every render, so the
+  // fetch follows their VALUES, never their identity.
+  const previewRequestJson = JSON.stringify({
+    scope,
+    itemType,
+    ...(scope === 'selected' ? { ids: selectedIds ?? [] } : {}),
+    ...(scope === 'filtered' ? { filters } : {}),
+  } satisfies ExportPreviewRequest);
+  // Bumped by Try again after a failed preview.
+  const [previewAttempt, setPreviewAttempt] = React.useState(0);
+  // The last answer, tagged with the request (and attempt) it answers. Only an
+  // answer to the CURRENT request counts; anything else reads as loading.
+  // `preview: null` is a failed request.
+  const [previewAnswer, setPreviewAnswer] = React.useState<{
+    key: string;
+    preview: ExportPreviewResponse | null;
+  } | null>(null);
+  const currentAnswer =
+    previewAnswer?.key === previewKeyOf(previewAttempt, previewRequestJson) ? previewAnswer : null;
+  const preview = currentAnswer?.preview ?? null;
+  const previewFailed = currentAnswer !== null && currentAnswer.preview === null;
   const [busy, setBusy] = React.useState(false);
   const [stage, setStage] = React.useState<ExportStage | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -188,31 +216,19 @@ export function ExportBuilderDialog({
   // or their order re-renders instantly with zero requests.
   React.useEffect(() => {
     if (!open) return;
+    const key = previewKeyOf(previewAttempt, previewRequestJson);
     const controller = new AbortController();
-    // Personal presets live in this browser's storage: read them again on
-    // every open, so a preset saved in another tab is offered.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-read browser storage on open
-    setPresets(presetsFor(itemTypeKind));
-    fetchExportPreview(
-      {
-        scope,
-        itemType,
-        ...(scope === 'selected' ? { ids: selectedIds ?? [] } : {}),
-        ...(scope === 'filtered' ? { filters } : {}),
-      },
-      controller.signal,
-    )
-      .then(setPreview)
+    fetchExportPreview(JSON.parse(previewRequestJson) as ExportPreviewRequest, controller.signal)
+      .then((answer) => setPreviewAnswer({ key, preview: answer }))
       .catch(() => {
-        // A failed preview must never block an export — the dialog just shows
-        // the on-screen count and no readiness panel.
-        setPreview(null);
+        // Superseded by a newer request, or the dialog closed: nothing failed.
+        if (controller.signal.aborted) return;
+        // A failed preview must never block an export: the preview says the
+        // sample could not load and offers Try again; the on-screen count stays.
+        setPreviewAnswer({ key, preview: null });
       });
     return () => controller.abort();
-    // filters is a new object each render at the call site; serialise it so the
-    // effect keys off its VALUE, not its identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the serialised filters and ids (above)
-  }, [open, scope, itemType, itemTypeKind, JSON.stringify(filters), JSON.stringify(selectedIds)]);
+  }, [open, previewAttempt, previewRequestJson]);
 
   // Load the org's shared presets once per open. Any failure — table not
   // migrated yet (available:false), permission refusal, network — leaves
@@ -276,7 +292,9 @@ export function ExportBuilderDialog({
     });
   };
 
-  const applySharedPreset = (preset: SharedExportPresetDto & { config: SharedExportPresetConfig }) => {
+  const applySharedPreset = (
+    preset: SharedExportPresetDto & { config: SharedExportPresetConfig },
+  ) => {
     const cfg = preset.config;
     setState((s) => {
       const merged: ExportBuilderState = {
@@ -300,8 +318,7 @@ export function ExportBuilderDialog({
   };
 
   const activePreset = presets.find((p) => p.id === state.presetId) ?? null;
-  const activeSharedPreset =
-    sharedPresets.find((p) => `shared-${p.id}` === state.presetId) ?? null;
+  const activeSharedPreset = sharedPresets.find((p) => `shared-${p.id}` === state.presetId) ?? null;
 
   async function saveSharedPreset() {
     if (saveBusy) return;
@@ -321,9 +338,7 @@ export function ExportBuilderDialog({
         setSaveError(res.error.message);
         return;
       }
-      setShared((prev) =>
-        [...(prev ?? []), res.data].sort((a, b) => a.name.localeCompare(b.name)),
-      );
+      setShared((prev) => [...(prev ?? []), res.data].sort((a, b) => a.name.localeCompare(b.name)));
       setState((s) => ({ ...s, presetId: `shared-${res.data.id}` }));
       setSaveFormOpen(false);
       setSaveName('');
@@ -397,7 +412,10 @@ export function ExportBuilderDialog({
 
   const stageLabel =
     stage === 'preparing'
-      ? `Preparing ${rowCount ?? ''} ${itemTypeKind === 'book' ? 'books' : 'items'}…`.replace('  ', ' ')
+      ? `Preparing ${rowCount ?? ''} ${itemTypeKind === 'book' ? 'books' : 'items'}…`.replace(
+          '  ',
+          ' ',
+        )
       : stage === 'downloading'
         ? 'Downloading…'
         : null;
@@ -408,6 +426,13 @@ export function ExportBuilderDialog({
         className="flex max-h-[92vh] w-[min(1180px,96vw)] max-w-[min(1180px,96vw)] flex-col gap-4 overflow-y-auto"
         onOpenAutoFocus={() => {
           triggerElRef.current = document.activeElement as HTMLElement | null;
+          // Each time the dialog opens: personal presets live in this
+          // browser's storage, so read them again (a preset saved in another
+          // tab is offered), and start from a fresh sample rather than the
+          // answer, or failure, of an earlier open. The open event, not an
+          // effect: no render that is then corrected.
+          setPresets(presetsFor(itemTypeKind));
+          setPreviewAnswer(null);
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
@@ -543,7 +568,7 @@ export function ExportBuilderDialog({
                     void saveSharedPreset();
                   }
                 }}
-                className="h-8 w-[220px] max-w-full rounded-md border border-[var(--ed-line-strong)] bg-card px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                className="bg-card focus-visible:ring-ring h-8 w-[220px] max-w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
               />
             </label>
             <Button
@@ -651,7 +676,7 @@ export function ExportBuilderDialog({
                           }),
                         )
                       }
-                      className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                      className="bg-card focus-visible:ring-ring h-8 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
                     >
                       <option value="small">Small</option>
                       <option value="medium">Medium</option>
@@ -674,7 +699,7 @@ export function ExportBuilderDialog({
                             }),
                           )
                         }
-                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                        className="bg-card focus-visible:ring-ring h-8 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
                       >
                         <option value="letter">Letter</option>
                         <option value="legal">Legal</option>
@@ -694,7 +719,7 @@ export function ExportBuilderDialog({
                             }),
                           )
                         }
-                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                        className="bg-card focus-visible:ring-ring h-8 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
                       >
                         <option value="auto">Auto</option>
                         <option value="portrait">Portrait</option>
@@ -711,14 +736,12 @@ export function ExportBuilderDialog({
                             setOptions(s, {
                               pdf: {
                                 density: e.target.value as
-                                  | 'compact'
-                                  | 'comfortable'
-                                  | 'image-friendly',
+                                  'compact' | 'comfortable' | 'image-friendly',
                               },
                             }),
                           )
                         }
-                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                        className="bg-card focus-visible:ring-ring h-8 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
                       >
                         <option value="compact">Compact</option>
                         <option value="comfortable">Comfortable</option>
@@ -749,7 +772,7 @@ export function ExportBuilderDialog({
                               }),
                             );
                           }}
-                          className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
+                          className="bg-card focus-visible:ring-ring h-8 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 max-sm:h-11 max-sm:text-base"
                         >
                           <option value="table">Table</option>
                           <option value="catalog-1">Book catalog — single column</option>
@@ -814,6 +837,8 @@ export function ExportBuilderDialog({
               state={state}
               itemTypeKind={itemTypeKind}
               preview={preview}
+              failed={previewFailed}
+              onRetry={() => setPreviewAttempt((n) => n + 1)}
               rowCount={rowCount}
             />
           </div>
@@ -836,9 +861,7 @@ export function ExportBuilderDialog({
         {stageLabel ? (
           <p role="status" aria-live="polite" className="text-muted-foreground text-[13px]">
             {stageLabel}
-            {state.fieldKeys.includes('image')
-              ? ' Cover images make this slower.'
-              : ''}
+            {state.fieldKeys.includes('image') ? ' Cover images make this slower.' : ''}
           </p>
         ) : null}
 

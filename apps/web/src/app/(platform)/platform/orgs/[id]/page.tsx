@@ -33,12 +33,22 @@ import {
   getOrgBillingState,
   getOrgInventory,
   getOrgMembers,
+  getOrgMembersOrderItemsAccess,
   getOrgOrders,
   getOrgOverview,
+  type PlatformMemberOrderItemsAccess,
   type PlatformOrgMember,
 } from '@/server/services/platform/orgs';
 
-import { resolveOrgTimezone } from '@stockpilot/core';
+import type { OrderItemsAccessTarget } from '@/components/platform/order-items-access-dialog';
+
+import {
+  ORDER_ITEMS_ACCESS_DISABLED_COPY,
+  ORDER_ITEMS_ACCESS_MODULE_OFF_COPY,
+  orderCatalogAccessChipCopy,
+  orderCatalogAccessSourceCopy,
+  resolveOrgTimezone,
+} from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
@@ -294,6 +304,9 @@ async function UsersTab({
 }) {
   const result = await getOrgMembers(orgId, { search, page });
   const { members, total, pageSize, pageCount } = result;
+  // Order items access (0413) for exactly these members: one batched read,
+  // null when it failed (the column then says so; nothing else is affected).
+  const orderItemsAccess = await getOrgMembersOrderItemsAccess(orgId, members);
   const first = members.length === 0 ? 0 : (result.page - 1) * pageSize + 1;
   const last = (result.page - 1) * pageSize + members.length;
 
@@ -340,8 +353,10 @@ async function UsersTab({
         />
       ) : (
         <MembersTable
+          orgId={orgId}
           members={members}
           activityAvailable={result.activityAvailable !== false}
+          orderItemsAccess={orderItemsAccess}
           timeZone={timeZone}
         />
       )}
@@ -456,6 +471,80 @@ function LastActiveCell({
 }
 
 /**
+ * One Order items cell (orders:manage_catalog_visibility, migration 0413): the
+ * effective-access chip and where it comes from (Role default, Allowed by
+ * StockPilot, Denied by StockPilot), both from the core preview the dialog
+ * uses. When an allowed capability cannot be used yet (a disabled account,
+ * the Orders module off) the chip says Not allowed and its title says why.
+ *
+ * Renderings that must never look alike:
+ *   unavailable  the read failed for this page: a dash, and a note above the
+ *                table. Never "Role default": a deny that is not shown is the
+ *                one mistake this column must not make.
+ *   unknown      no entry for this member (no user id, a role this build does
+ *                not know): a dash, and the row's menu offers no dialog.
+ */
+function OrderItemsAccessCell({
+  access,
+  available,
+}: {
+  access: PlatformMemberOrderItemsAccess | undefined;
+  available: boolean;
+}) {
+  if (!available || !access) {
+    return (
+      <span
+        data-testid="order-items-access-cell"
+        className="text-muted-foreground"
+        title={available ? undefined : 'Order items access could not be loaded for this page.'}
+      >
+        —
+      </span>
+    );
+  }
+  const { preview } = access;
+  const why = preview.capability
+    ? preview.blockers.map((b) =>
+        b === 'account_disabled'
+          ? ORDER_ITEMS_ACCESS_DISABLED_COPY
+          : ORDER_ITEMS_ACCESS_MODULE_OFF_COPY,
+      )
+    : [];
+  return (
+    <div data-testid="order-items-access-cell" className="flex flex-col items-start gap-0.5">
+      <Badge
+        variant={preview.effective ? 'success' : 'secondary'}
+        title={why.length > 0 ? why.join(' ') : undefined}
+      >
+        {orderCatalogAccessChipCopy(preview.effective)}
+      </Badge>
+      <span className="text-muted-foreground text-[12px]">
+        {orderCatalogAccessSourceCopy(preview.source)}
+      </span>
+    </div>
+  );
+}
+
+/** What a row's Order items access dialog starts from: plain data for the client. */
+function orderItemsAccessTarget(
+  orgId: string,
+  member: PlatformOrgMember,
+  access: PlatformMemberOrderItemsAccess | undefined,
+): OrderItemsAccessTarget | null {
+  if (!access || !member.userId) return null;
+  return {
+    organizationId: orgId,
+    userId: member.userId,
+    name: member.fullName ?? member.email ?? 'This member',
+    role: access.role,
+    disabled: access.disabled,
+    exception: access.exception,
+    ordersModuleEnabled: access.ordersModuleEnabled,
+    canRequestOrders: access.canRequestOrders,
+  };
+}
+
+/**
  * A date column's header tooltip: whose zone its dates are in. The console's
  * pages render on the server, so a date with no zone named was the server's
  * (UTC) day (B9).
@@ -472,12 +561,17 @@ function orgZoneNote(timeZone: string | null): string {
 const ACTIONS_CELL = 'bg-card sticky right-0 max-lg:border-l max-lg:border-border';
 
 function MembersTable({
+  orgId,
   members,
   activityAvailable,
+  orderItemsAccess,
   timeZone,
 }: {
+  orgId: string;
   members: PlatformOrgMember[];
   activityAvailable: boolean;
+  /** Per member; null when the read failed for this page. */
+  orderItemsAccess: Map<string, PlatformMemberOrderItemsAccess> | null;
   timeZone: string | null;
 }) {
   // One clock read per render, so every row on the page ages from the same instant.
@@ -493,10 +587,16 @@ function MembersTable({
           Activity could not be loaded for this page. Members, status and actions are unaffected.
         </p>
       ) : null}
+      {orderItemsAccess === null ? (
+        <p className="text-warning text-[12.5px]">
+          Order items access could not be loaded for this page. Reload to see or change it. Members,
+          status and the other actions are unaffected.
+        </p>
+      ) : null}
       {/* The Actions column is the only way to disable or re-enable an
           account, so it is never clipped: the card scrolls sideways on a
           narrow screen, and the column stays pinned to its right edge. */}
-      <PlatformTable label="Members" minWidth={760}>
+      <PlatformTable label="Members" minWidth={880}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>User</TableHead>
@@ -506,6 +606,9 @@ function MembersTable({
               title={`An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization. ${zoneNote}`}
             >
               Last active
+            </TableHead>
+            <TableHead title="Manage order items: whether they can choose which items and books appear in Place an Order. Change it from the row's actions.">
+              Order items
             </TableHead>
             <TableHead className={cn(ACTIONS_CELL, 'text-right')}>Actions</TableHead>
           </TableRow>
@@ -541,6 +644,12 @@ function MembersTable({
                   timeZone={timeZone}
                 />
               </TableCell>
+              <TableCell className="text-[12.5px]">
+                <OrderItemsAccessCell
+                  access={m.userId ? orderItemsAccess?.get(m.userId) : undefined}
+                  available={orderItemsAccess !== null}
+                />
+              </TableCell>
               <TableCell className={cn(ACTIONS_CELL, 'group-hover:bg-muted text-right')}>
                 {m.userId ? (
                   <UserActionsMenu
@@ -574,6 +683,11 @@ function MembersTable({
                     // The allowlist itself never crosses to the client — only
                     // this boolean does.
                     protectedAdmin={isPlatformAdmin(m.email)}
+                    orderItemsAccess={orderItemsAccessTarget(
+                      orgId,
+                      m,
+                      m.userId ? orderItemsAccess?.get(m.userId) : undefined,
+                    )}
                   />
                 ) : (
                   <span className="text-muted-foreground text-[12px]">—</span>

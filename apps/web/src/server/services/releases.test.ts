@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId, Permission, Release } from '@stockpilot/core';
+import { ROLE_PERMISSIONS, type ModuleId, type Permission, type Release } from '@stockpilot/core';
 
 /**
  * The releases service decides WHICH release text a reader gets and WHOSE state
@@ -72,7 +72,7 @@ vi.mock('@/lib/releases/registry', () => ({
 const reportError = vi.fn(async (..._a: unknown[]) => {});
 vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
 
-import { getReleaseFor, listReleasesFor, recordReleaseState } from './releases';
+import { getReleaseFor, listReleasesFor, recordReleaseState, releaseViewerFor } from './releases';
 
 const db = {
   stateRows: [] as Array<Record<string, unknown>>,
@@ -295,5 +295,34 @@ describe('recordReleaseState', () => {
     db.stateError = { message: 'boom' };
     expect(await recordReleaseState(buildCtx(), { action: 'read_all' })).toEqual({ ok: false });
     expect(db.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('releaseViewerFor', () => {
+  // A context with no effective set (a cron, a test) reads at its role's
+  // defaults, but never with a platform-managed key: whether StockPilot denied
+  // it is per member, so the role alone cannot prove it (docket S19).
+  it('a context with no effective set never holds a platform-managed key', () => {
+    const KEY: Permission = 'orders:manage_catalog_visibility';
+    expect(ROLE_PERMISSIONS.manager).toContain(KEY);
+    const { organizationId, userId, supabase, enabledModules, mfaRequired, mfaSatisfied } =
+      buildCtx();
+    const viewer = releaseViewerFor({
+      organizationId,
+      userId,
+      role: 'manager',
+      supabase,
+      enabledModules,
+      mfaRequired,
+      mfaSatisfied,
+    });
+    expect([...viewer.permissions]).not.toContain(KEY);
+    expect([...viewer.permissions].sort()).toEqual(
+      ROLE_PERMISSIONS.manager.filter((p) => p !== KEY).sort(),
+    );
+  });
+
+  it('a real context reads with its own effective set', () => {
+    expect([...releaseViewerFor(buildCtx(['items:read'])).permissions]).toEqual(['items:read']);
   });
 });

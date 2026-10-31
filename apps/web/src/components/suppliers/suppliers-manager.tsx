@@ -6,6 +6,8 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -35,8 +37,6 @@ import {
   restoreSupplierAction,
   updateSupplierAction,
 } from '@/server/actions/suppliers';
-
-import { supplierMailtoUrl } from './supplier-mailto';
 
 interface SupplierRow {
   id: string;
@@ -162,8 +162,8 @@ export function SuppliersManager({
             <TableBody>
               {initial.map((row) => {
                 // A link only for one plain address; any other stored text is
-                // shown as it is, never as a link (supplierMailtoUrl).
-                const mailto = supplierMailtoUrl(row.email);
+                // shown as it is, never as a link (core plainAddressMailtoUrl).
+                const mailto = plainAddressMailtoUrl(row.email);
                 return (
                   <TableRow key={row.id}>
                     <TableCell className="text-foreground font-medium">{row.name}</TableCell>

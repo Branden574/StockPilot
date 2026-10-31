@@ -45,7 +45,7 @@ describe('poImportDisplayNameSchema', () => {
   });
 
   it("PRESERVES the punctuation real import names use: - _ & ' ( ) # . , /", () => {
-    const name = "Follett & Sons - Andrew's re-order (DC4) #12_final v1.2, a/b";
+    const name = "Follett & Sons - Jordan's re-order (DC4) #12_final v1.2, a/b";
     expect(poImportDisplayNameSchema.parse(name)).toBe(name);
   });
 
@@ -143,7 +143,7 @@ describe('stripUnsafeDisplayNameChars — the SUGGESTION-side counterpart', () =
   });
 
   it('leaves ordinary text — punctuation, accents, spaces — completely alone', () => {
-    const name = "Follett & Sons - Andrew's re-order (DC4) #12_final v1.2, a/b";
+    const name = "Follett & Sons - Jordan's re-order (DC4) #12_final v1.2, a/b";
     expect(stripUnsafeDisplayNameChars(name)).toBe(name);
     expect(stripUnsafeDisplayNameChars('Août — DC4 ✓')).toBe('Août — DC4 ✓');
   });

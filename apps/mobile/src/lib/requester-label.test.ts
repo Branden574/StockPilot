@@ -31,7 +31,7 @@ describe('resolveRequesterLabel', () => {
   });
 
   it('an on-behalf or public-link order shows its own name or email', () => {
-    expect(resolveRequesterLabel({ ...base, requesterName: 'Doua Vang' })).toBe('Doua Vang');
+    expect(resolveRequesterLabel({ ...base, requesterName: 'Lena Hale' })).toBe('Lena Hale');
     expect(resolveRequesterLabel({ ...base, requesterEmail: 'a@site.org' })).toBe('a@site.org');
   });
 

@@ -7,12 +7,14 @@ import { ItemHistoryDialog } from './item-history-dialog';
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
-// The rows below are the OWNER'S REAL PROD LEDGER for SKU SP-0WK2L-LY1 (org
-// 63c13e64-…), shaped exactly as InventoryService.itemMovementHistory() returns
-// them. The incident these tests protect: nobody could tell from any screen who
-// added 10 units, who took 10 back, or which of the receive_po rows had been
-// reversed — the staging list showed an em dash for everything that did not
-// arrive on a PO, and the controller had to rebuild the story in SQL.
+// The rows below model the owner's 2026-07-22 report for one SKU, shaped
+// exactly as InventoryService.itemMovementHistory() returns them. The people,
+// ids, item, notes, receipt and PO numbers are synthetic; the times and
+// quantities keep the incident's shape. The incident these tests protect:
+// nobody could tell from any screen who added 10 units, who took 10 back, or
+// which of the receive_po rows had been reversed — the staging list showed an
+// em dash for everything that did not arrive on a PO, and the controller had
+// to rebuild the story in SQL.
 // ---------------------------------------------------------------------------
 
 function movement(over: Partial<ItemHistoryMovement>): ItemHistoryMovement {
@@ -39,7 +41,7 @@ function movement(over: Partial<ItemHistoryMovement>): ItemHistoryMovement {
   };
 }
 
-/** 2026-07-22 17:56 UTC — the posted receipt on PO CVW-002201. */
+/** 2026-07-22 17:56 UTC — the posted receipt on PO DEMO-002201. */
 const POSTED_RECEIPT = movement({
   id: 'mv-posted',
   at: '2026-07-22T17:56:00.525Z',
@@ -47,13 +49,13 @@ const POSTED_RECEIPT = movement({
   quantityChange: 20,
   previousQuantity: 34,
   newQuantity: 54,
-  actorName: 'Andrew Rosas',
+  actorName: 'Jordan Stone',
   toLocationName: 'Staging',
-  // reason was the machine string 'PO CVW-002201' → the service already
+  // reason was the machine string 'PO DEMO-002201' → the service already
   // dropped it, so `note` is null here.
-  receiptNumber: 'R-20260722-175600-e56648',
+  receiptNumber: 'R-20260722-175600-0a0a01',
   receiptStatus: 'posted',
-  poNumber: 'CVW-002201',
+  poNumber: 'DEMO-002201',
   poStatus: 'received',
 });
 
@@ -65,17 +67,17 @@ const REVERSED_RECEIPT = movement({
   quantityChange: 20,
   previousQuantity: 0,
   newQuantity: 20,
-  actorName: 'Andrew Rosas',
+  actorName: 'Jordan Stone',
   toLocationName: 'Staging',
-  receiptNumber: 'R-20260722-162027-e33333',
+  receiptNumber: 'R-20260722-162027-0d0d04',
   receiptStatus: 'reversed',
-  poNumber: 'CVW-002201',
+  poNumber: 'DEMO-002201',
   poStatus: 'cancelled',
   reversalReason: 'wrong input',
   reversal: {
     role: 'reversed',
     counterpartMovementId: 'mv-the-reversal',
-    counterpartReceiptNumber: 'R-20260722-162027-e33333-REV',
+    counterpartReceiptNumber: 'R-20260722-162027-0d0d04-REV',
   },
 });
 
@@ -88,16 +90,16 @@ const THE_REVERSAL = movement({
   quantityChange: -20,
   previousQuantity: 20,
   newQuantity: 0,
-  actorName: 'Andrew Rosas',
-  receiptNumber: 'R-20260722-162027-e33333-REV',
+  actorName: 'Jordan Stone',
+  receiptNumber: 'R-20260722-162027-0d0d04-REV',
   receiptStatus: 'reversal',
-  poNumber: 'CVW-002201',
+  poNumber: 'DEMO-002201',
   poStatus: 'cancelled',
   reversalReason: 'wrong input',
   reversal: {
     role: 'reversal',
     counterpartMovementId: 'mv-received-then-reversed',
-    counterpartReceiptNumber: 'R-20260722-162027-e33333',
+    counterpartReceiptNumber: 'R-20260722-162027-0d0d04',
   },
 });
 
@@ -109,8 +111,8 @@ const MANUAL_ADD = movement({
   quantityChange: 10,
   previousQuantity: 134,
   newQuantity: 144,
-  actorName: 'Peter Pete',
-  note: 'Adding new stock into inventory.',
+  actorName: 'Pat Tester',
+  note: 'Added new stock to the shelf.',
 });
 
 const MANUAL_REMOVE = movement({
@@ -120,8 +122,8 @@ const MANUAL_REMOVE = movement({
   quantityChange: -10,
   previousQuantity: 144,
   newQuantity: 134,
-  actorName: 'Andrew Rosas',
-  note: 'incorrectly moved inventory',
+  actorName: 'Jordan Stone',
+  note: 'moved to the wrong rack',
 });
 
 /** 2026-07-06 order pick. movement_type='transfer' but with a REAL -5 delta —
@@ -134,7 +136,7 @@ const ORDER_PICK = movement({
   quantityChange: -5,
   previousQuantity: 139,
   newQuantity: 134,
-  actorName: 'Daniel Hernandez',
+  actorName: 'Devon Keller',
   note: 'Order pick',
 });
 
@@ -147,7 +149,7 @@ const DUPLICATE_INITIAL = movement({
   quantityChange: 49,
   previousQuantity: 0,
   newQuantity: 49,
-  actorName: 'Andrew Rosas',
+  actorName: 'Jordan Stone',
   toLocationName: 'DC4',
 });
 
@@ -172,15 +174,15 @@ const CANCELLED_PICK_RESTOCK = movement({
   quantityChange: 3,
   previousQuantity: 47,
   newQuantity: 50,
-  actorName: 'Peter Pete',
+  actorName: 'Pat Tester',
   note: 'Order cancelled',
 });
 
 function page(rows: ItemHistoryMovement[], over: Partial<ItemHistoryPage> = {}): ItemHistoryPage {
   return {
     itemId: 'item-1',
-    itemName: 'Science Dimensions Earth & Space Science',
-    itemSku: 'SP-0WK2L-LY1',
+    itemName: 'Exploring Earth & Space Science: Level 8',
+    itemSku: 'SP-0DEM2-BK1',
     rows,
     total: rows.length,
     limit: 50,
@@ -190,14 +192,14 @@ function page(rows: ItemHistoryMovement[], over: Partial<ItemHistoryPage> = {}):
   };
 }
 
-/** The three real inventory_items rows that share SKU SP-0WK2L-LY1 in the
- *  owner's org, as /api/v1/items/lookup?code=SP-0WK2L-LY1 answers them. The
+/** Three inventory_items rows that share SKU SP-0DEM2-BK1, as the owner's
+ *  org had them, as /api/v1/items/lookup?code=SP-0DEM2-BK1 answers them. The
  *  owner's incident spans the first two; the dialog used to show one of them
  *  under a header claiming it was showing everything. */
 const SKU_RECORDS = [
-  { id: 'item-1', sku: 'SP-0WK2L-LY1', placementLabel: '42-B', quantityOnHand: 144 },
-  { id: 'item-sibling-37b', sku: 'SP-0WK2L-LY1', placementLabel: '37-B', quantityOnHand: 46 },
-  { id: 'item-sibling-archived', sku: 'SP-0WK2L-LY1', placementLabel: null, quantityOnHand: 0 },
+  { id: 'item-1', sku: 'SP-0DEM2-BK1', placementLabel: '42-B', quantityOnHand: 144 },
+  { id: 'item-sibling-37b', sku: 'SP-0DEM2-BK1', placementLabel: '37-B', quantityOnHand: 46 },
+  { id: 'item-sibling-archived', sku: 'SP-0DEM2-BK1', placementLabel: null, quantityOnHand: 0 },
 ];
 
 /**
@@ -240,8 +242,8 @@ function renderDialog() {
   return render(
     <ItemHistoryDialog
       itemId="item-1"
-      itemName="Science Dimensions Earth & Space Science"
-      itemSku="SP-0WK2L-LY1"
+      itemName="Exploring Earth & Space Science: Level 8"
+      itemSku="SP-0DEM2-BK1"
       trigger={<button type="button">History</button>}
     />,
   );
@@ -275,12 +277,12 @@ describe('ItemHistoryDialog', () => {
     expect(within(row).getByText('Stock received')).toBeInTheDocument();
     expect(within(row).getByText('+20')).toBeInTheDocument();
     expect(within(row).getByText('34 -> 54 on hand')).toBeInTheDocument();
-    expect(within(row).getByText('Andrew Rosas')).toBeInTheDocument();
+    expect(within(row).getByText('Jordan Stone')).toBeInTheDocument();
     expect(within(row).getByText('-> Staging')).toBeInTheDocument();
     // The PO status is stated even though the receipt posted cleanly — the
     // owner's real case has stock received against a PO later cancelled.
     expect(
-      within(row).getByText('Receipt R-20260722-175600-e56648 - PO CVW-002201 (received)'),
+      within(row).getByText('Receipt R-20260722-175600-0a0a01 - PO DEMO-002201 (received)'),
     ).toBeInTheDocument();
     // Rule 4: the raw ISO instant is carried on <time>; the visible absolute
     // date comes from <LocalDateTime>, i.e. the VIEWER's timezone.
@@ -298,12 +300,12 @@ describe('ItemHistoryDialog', () => {
 
     const reversal = await screen.findByTestId('history-row-mv-the-reversal');
     expect(
-      within(reversal).getByText('Reverses R-20260722-162027-e33333: wrong input'),
+      within(reversal).getByText('Reverses R-20260722-162027-0d0d04: wrong input'),
     ).toBeInTheDocument();
 
     const original = screen.getByTestId('history-row-mv-received-then-reversed');
     expect(
-      within(original).getByText('Reversed later by R-20260722-162027-e33333-REV: wrong input'),
+      within(original).getByText('Reversed later by R-20260722-162027-0d0d04-REV: wrong input'),
     ).toBeInTheDocument();
 
     // Jumping from one half highlights the other, so 20 in and 20 out are
@@ -324,9 +326,9 @@ describe('ItemHistoryDialog', () => {
     for (const token of ['receipt_line', 'receipt_reversal', 'duplicate_initial_count']) {
       expect(screen.queryByText(new RegExp(token))).not.toBeInTheDocument();
     }
-    // The bare 'PO CVW-002201' reason must not come back as quoted prose; the
+    // The bare 'PO DEMO-002201' reason must not come back as quoted prose; the
     // PO belongs in the structured source line only.
-    expect(screen.queryByText('“PO CVW-002201”')).not.toBeInTheDocument();
+    expect(screen.queryByText('“PO DEMO-002201”')).not.toBeInTheDocument();
     // The opening count still renders, with its destination, minus the token.
     const initial = screen.getByTestId('history-row-mv-duplicate-initial');
     expect(within(initial).getByText('Opening count')).toBeInTheDocument();
@@ -342,14 +344,14 @@ describe('ItemHistoryDialog', () => {
     const add = await screen.findByTestId('history-row-mv-manual-add');
     expect(within(add).getByText('Stock added')).toBeInTheDocument();
     expect(within(add).getByText('+10')).toBeInTheDocument();
-    expect(within(add).getByText('Peter Pete')).toBeInTheDocument();
-    expect(within(add).getByText('“Adding new stock into inventory.”')).toBeInTheDocument();
+    expect(within(add).getByText('Pat Tester')).toBeInTheDocument();
+    expect(within(add).getByText('“Added new stock to the shelf.”')).toBeInTheDocument();
 
     const remove = screen.getByTestId('history-row-mv-manual-remove');
     expect(within(remove).getByText('Stock removed')).toBeInTheDocument();
     expect(within(remove).getByText('-10')).toBeInTheDocument();
-    expect(within(remove).getByText('Andrew Rosas')).toBeInTheDocument();
-    expect(within(remove).getByText('“incorrectly moved inventory”')).toBeInTheDocument();
+    expect(within(remove).getByText('Jordan Stone')).toBeInTheDocument();
+    expect(within(remove).getByText('“moved to the wrong rack”')).toBeInTheDocument();
   });
 
   it('shows the units on an order pick even though its movement_type is transfer', async () => {
@@ -406,7 +408,7 @@ describe('ItemHistoryDialog', () => {
   // D2, REWRITTEN — not weakened, and the reason matters.
   //
   // The history is per ITEM RECORD. Under Model B one SKU is legitimately
-  // several records; in the owner's org SP-0WK2L-LY1 is three. The original
+  // several records; in the owner's org SP-0DEM2-BK1 is three. The original
   // header claimed "Every recorded movement for {name} {sku}", which is false
   // wherever a SKU has more than one record — and the owner's own incident
   // spans two of them.
@@ -432,7 +434,7 @@ describe('ItemHistoryDialog', () => {
     const description = await screen.findByText(/One item record/);
     // The original false claim, verbatim.
     expect(description.textContent).not.toMatch(
-      /Every recorded movement for\s+Science Dimensions Earth & Space Science\s+SP-0WK2L-LY1/,
+      /Every recorded movement for\s+Exploring Earth & Space Science: Level 8\s+SP-0DEM2-BK1/,
     );
     // And no descriptor, because none of them is reliably true.
     expect(description).not.toHaveTextContent('no rack recorded');
@@ -498,7 +500,7 @@ describe('ItemHistoryDialog', () => {
     );
     // One row, not two: a repeated receipt reads as stock arriving twice.
     expect(screen.getAllByTestId('history-row-mv-manual-add')).toHaveLength(1);
-    expect(screen.getAllByText('“Adding new stock into inventory.”')).toHaveLength(1);
+    expect(screen.getAllByText('“Added new stock to the shelf.”')).toHaveLength(1);
   });
 
   it('explains a refusal instead of showing an empty history', async () => {

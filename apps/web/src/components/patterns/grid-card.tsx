@@ -14,8 +14,9 @@ import { PatternPhoto } from './photo';
  * selection, scope, sort, filters, totals or page membership.
  *
  * MEDIA: a fixed square (`aspect-square`) with the photo absolutely
- * positioned and `object-contain` on a white tile, so photos are never cropped
- * and a tall photo can never stretch its card (the reference's defect). No
+ * positioned and `object-cover`, so the photo fills its square edge to edge
+ * with no white bars (as Place an Order's cards do since #412) and a tall
+ * photo can never stretch its card (the reference's defect). No
  * photo, or a photo that fails, shows the hatch. Pass the small rendition the
  * row already carries (`imageSrc`), never a master; or pass `media` to use
  * the caller's own image element.
@@ -117,9 +118,9 @@ export function GridCard({
     >
       <div
         data-slot="grid-card-media"
-        className="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b bg-white"
+        className="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b"
       >
-        {media ?? <PatternPhoto src={imageSrc} alt={imageAlt} fit="contain" />}
+        {media ?? <PatternPhoto src={imageSrc} alt={imageAlt} fit="cover" />}
         {checkbox != null ? (
           <div
             data-slot="grid-card-checkbox"

@@ -16,8 +16,8 @@ import { readPoImportUploaders } from './po-import-uploaders';
  */
 
 const NAMES: Record<string, { full_name: string | null; email: string | null }> = {
-  [uuid(1)]: { full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' },
-  [uuid(2)]: { full_name: null, email: 'crystal@cvwest.org' },
+  [uuid(1)]: { full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' },
+  [uuid(2)]: { full_name: null, email: 'robin@site1.test' },
 };
 
 /** A user_profiles "server" that returns the NAMES rows asked for. */
@@ -40,8 +40,8 @@ describe('readPoImportUploaders', () => {
     expect(client.calls).toHaveLength(1);
     expect(client.calls[0]!.table).toBe('user_profiles');
     expect(client.calls[0]!.select).toBe('id, full_name, email');
-    expect(poImportUploaderLabel(profiles, uuid(1))).toBe('Marissa Lopez');
-    expect(poImportUploaderLabel(profiles, uuid(2))).toBe('crystal@cvwest.org');
+    expect(poImportUploaderLabel(profiles, uuid(1))).toBe('Rebecca Lowry');
+    expect(poImportUploaderLabel(profiles, uuid(2))).toBe('robin@site1.test');
     expect(poImportUploaderLabel(profiles, uuid(3))).toBe('Former member');
   });
 

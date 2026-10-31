@@ -15,7 +15,7 @@ import type { PoImportLineRow } from '@/server/services/po-imports';
 
 const ITEM: PreviewItem = {
   id: 'item-lenovo',
-  sku: 'SP-G69UU-05H',
+  sku: 'SP-GDEM4-G01',
   name: 'Lenovo 300e',
   quantityOnHand: 100, // this placement's own qty
 };
@@ -27,7 +27,7 @@ function line(id: string, overrides: Partial<PoImportLineRow> = {}): PoImportLin
     description: 'Student Supplies - Chromebook 511',
     qty_ordered_original: 100,
     uom_original: 'ea',
-    line_total: 46995,
+    line_total: 24990,
     item_id: 'item-lenovo',
     line_type: 'inventory',
     vendor_item_number: null,
@@ -37,7 +37,7 @@ function line(id: string, overrides: Partial<PoImportLineRow> = {}): PoImportLin
 
 describe('StockImpactPreview — honest display (no guessed placement)', () => {
   // SKU total across all placements is 281; this line adds 100 → 381.
-  const skuTotalBySku = new Map<string, number>([['SP-G69UU-05H', 281]]);
+  const skuTotalBySku = new Map<string, number>([['SP-GDEM4-G01', 281]]);
 
   it('shows the worded "+100 units" adding column and the 281 → 381 SKU total', () => {
     render(

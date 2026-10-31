@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { redactTokens, redactTokensDeep } from './redact-urls';
+import { redactCredentialUrls, redactTokens, redactTokensDeep } from './redact-urls';
 
 /**
  * Security wave E, MED-1. These assert the PROPERTY — "no live credential
@@ -151,5 +151,86 @@ describe('redactTokensDeep', () => {
     expect(out.count).toBe(3);
     expect(out.ok).toBe(false);
     expect(out.nothing).toBeNull();
+  });
+});
+
+/**
+ * Analytics (docket B39 review): PostHog records the page's URL on every event,
+ * and /signin can carry a credential in its query (the invite page's Sign in
+ * link is /signin?redirect=/invite/<token>) or its fragment (a session a link
+ * Supabase verified itself hands back). This redaction changes only the
+ * credential and keeps every other character, so product analytics keeps its
+ * URLs.
+ */
+describe('redactCredentialUrls', () => {
+  const APP = 'https://app.example.test';
+
+  it('redacts a share token in a query value and keeps the rest of the URL as it was', () => {
+    expect(redactCredentialUrls(`${APP}/signin?redirect=/invite/${SHARE_TOKEN}`)).toBe(
+      `${APP}/signin?redirect=/invite/[redacted]`,
+    );
+    const encoded = redactCredentialUrls(
+      `${APP}/signin/mfa?redirect=%2Finvite%2F${SHARE_TOKEN}&remember=1`,
+    );
+    expect(encoded).not.toContain(SHARE_TOKEN);
+    expect(encoded).toMatch(/^https:\/\/app\.example\.test\/signin\/mfa\?redirect=%2Finvite%2F/);
+    expect(encoded).toMatch(/&remember=1$/);
+  });
+
+  it('redacts a share token inside a nested return path', () => {
+    const nested = encodeURIComponent(
+      `/signin?redirect=${encodeURIComponent(`/invite/${SHARE_TOKEN}`)}`,
+    );
+    expect(redactCredentialUrls(`${APP}/signin/mfa?redirect=${nested}`)).not.toContain(SHARE_TOKEN);
+  });
+
+  it('redacts a share token in the path, as a referrer from a share page carries it', () => {
+    expect(redactCredentialUrls(`${APP}/invite/${SHARE_TOKEN}`)).toBe(`${APP}/invite/[redacted]`);
+    expect(redactCredentialUrls(`${APP}/orders/sign/${SHARE_TOKEN}?step=2`)).toBe(
+      `${APP}/orders/sign/[redacted]?step=2`,
+    );
+  });
+
+  it("redacts a session's tokens in the fragment and keeps the failure in the query", () => {
+    const out = redactCredentialUrls(
+      `${APP}/signin?error=auth_callback_failed#access_token=header.payload.signature&expires_in=3600&refresh_token=r1&token_type=bearer&type=recovery`,
+    );
+    expect(out).toBe(
+      `${APP}/signin?error=auth_callback_failed#access_token=[redacted]&expires_in=3600&refresh_token=[redacted]&token_type=bearer&type=recovery`,
+    );
+  });
+
+  it('redacts a signed-URL token, a token_hash and a bare JWT', () => {
+    const signed = redactCredentialUrls(
+      `https://project.example.invalid/storage/v1/object/sign/b/p.jpg?token=${SIGNED_URL_JWT}`,
+    );
+    expect(signed).not.toContain(SIGNED_URL_JWT);
+    expect(signed).toContain('/storage/v1/object/sign/b/p.jpg?token=');
+    expect(
+      redactCredentialUrls(`${APP}/auth/confirm?token_hash=placeholder-hash&type=recovery`),
+    ).toBe(`${APP}/auth/confirm?token_hash=[redacted]&type=recovery`);
+    expect(redactCredentialUrls(`bearer ${SIGNED_URL_JWT}`)).not.toContain(SIGNED_URL_JWT);
+  });
+
+  it('leaves every string with no credential exactly as it was', () => {
+    for (const value of [
+      '',
+      `${APP}/dashboard/inventory/3f2c1a9e-7b4d-4c1e-9a2f-0d5e6f7a8b9c?q=acme&tab=2#notes`,
+      `${APP}/signin?redirect=%2Fdashboard`,
+      `${APP}/signin?error=auth_callback_failed#error=unusable_link`,
+      '/r/track',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      'checked in and/or out',
+      '$pageview',
+    ]) {
+      expect(redactCredentialUrls(value)).toBe(value);
+    }
+  });
+
+  it('is idempotent', () => {
+    const once = redactCredentialUrls(
+      `${APP}/signin?redirect=/invite/${SHARE_TOKEN}#refresh_token=r1`,
+    );
+    expect(redactCredentialUrls(once)).toBe(once);
   });
 });

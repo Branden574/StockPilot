@@ -38,7 +38,16 @@ vi.mock('@react-pdf/renderer', async (importOriginal) => {
   return { ...actual, renderToStream: vi.fn(actual.renderToStream) };
 });
 
+// The header logo: the document must get only what this answers.
+vi.mock('@/lib/pdf/image-prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pdf/image-prefetch')>()),
+  prefetchPdfLogo: vi.fn(async () => null),
+}));
+
 import { renderToStream } from '@react-pdf/renderer';
+import sharp from 'sharp';
+
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 
 import { GET } from './route';
 
@@ -97,6 +106,7 @@ function renderedDocProps(): {
   title: string;
   subtitle: string;
   orgName: string;
+  orgLogoUrl: string | null;
   footerNote?: string;
   rows: Array<Record<string, string>>;
 } {
@@ -271,5 +281,60 @@ describe('GET /api/orders/export.pdf', () => {
 
     const res = await GET(buildRequest());
     expect(res.status).toBe(403);
+  });
+});
+
+/**
+ * The organization logo in the header. logo_url is set by an owner or admin
+ * and the database does not hold it to the logo bucket, so the route resolves
+ * it through prefetchPdfLogo (a guarded fetch, bytes back) and the document
+ * gets only that answer. Rendered for real: the logo is the only image here.
+ */
+describe('GET /api/orders/export.pdf — the header logo', () => {
+  const STORED = 'https://proj.supabase.co/storage/v1/object/public/org-logos/org-1/logo-1.png';
+
+  function ctxWithLogo() {
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: { name: 'Demo Co', logo_url: STORED }, error: null },
+    });
+    return { ...buildCtx('manager'), supabase: stub.client as never };
+  }
+
+  async function pngDataUri(): Promise<string> {
+    const png = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 200, g: 30, b: 30 } },
+    })
+      .png()
+      .toBuffer();
+    return `data:image/png;base64,${png.toString('base64')}`;
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('prints the stored logo from the bytes prefetchPdfLogo answers', async () => {
+    const logo = await pngDataUri();
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctxWithLogo());
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(logo);
+    stubExportRows([SAMPLE_ROW]);
+
+    const res = await GET(buildRequest());
+
+    expect(res.status).toBe(200);
+    expect(prefetchPdfLogo).toHaveBeenCalledTimes(1);
+    expect(prefetchPdfLogo).toHaveBeenCalledWith(STORED);
+    expect(renderedDocProps().orgLogoUrl).toBe(logo);
+    expect((await bodyBytes(res)).toString('latin1')).toContain('/Subtype /Image');
+  });
+
+  it('prints no logo when prefetchPdfLogo answers none, whatever is stored', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctxWithLogo());
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(null);
+    stubExportRows([SAMPLE_ROW]);
+
+    const res = await GET(buildRequest());
+
+    expect(res.status).toBe(200);
+    expect(renderedDocProps().orgLogoUrl).toBeNull();
+    expect((await bodyBytes(res)).toString('latin1')).not.toContain('/Subtype /Image');
   });
 });

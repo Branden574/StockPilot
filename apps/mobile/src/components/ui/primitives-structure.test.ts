@@ -350,3 +350,39 @@ describe('DataListScreen keeps loading, empty, failed and offline apart', () => 
     expect(attrText(els[0]!, 'data', sf)).toBe('data');
   });
 });
+
+/**
+ * A live text-size change remounts the list chrome's head and rows (docket
+ * B10). The notifications list kept every row at its old height, text
+ * clipped, until the screen was opened again (simulator walk 2026-10-05).
+ * Nothing in the rows fixes a height; a remount measures afresh, so the head
+ * and the list are keyed on the text size (fontScaleKey,
+ * dynamic-type-layout.test.ts). The top bar is not keyed: its trailing slot
+ * carries the tour, whose state a remount would reset.
+ */
+describe('DataListScreen measures its head and rows again at a new text size', () => {
+  const file = 'src/components/data-list-screen.tsx';
+  const src = readSource(at(file)).replace(/\s+/g, ' ');
+
+  it('reads the live text size and turns it into a key', () => {
+    expect(src).toMatch(/import \{[^}]*\buseWindowDimensions\b[^}]*\} from 'react-native';/);
+    expect(src).toContain("import { fontScaleKey } from '@/lib/dynamic-type-layout';");
+    expect(src).toContain('const { fontScale } = useWindowDimensions();');
+    expect(src).toContain('const scaleKey = fontScaleKey(fontScale);');
+  });
+
+  it('the list and the head are keyed on it; the top bar is not', () => {
+    const { sf: listSf, els: lists } = elements(file, (el, s) => tagOf(el, s) === 'FlatList');
+    expect(lists).toHaveLength(1);
+    expect(attrText(lists[0]!, 'key', listSf)).toBe('`list-${scaleKey}`');
+    const { sf, els: heads } = elements(
+      file,
+      (el, s) => attrText(el, 'style', s) === 'styles.head',
+    );
+    expect(heads).toHaveLength(1);
+    expect(attrText(heads[0]!, 'key', sf)).toBe('`head-${scaleKey}`');
+    const { els: bars } = elements(file, (el, s) => attrText(el, 'style', s) === 'styles.topbar');
+    expect(bars).toHaveLength(1);
+    expect(attrText(bars[0]!, 'key', sf)).toBeUndefined();
+  });
+});

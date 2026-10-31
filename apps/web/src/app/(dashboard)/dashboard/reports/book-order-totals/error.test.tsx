@@ -9,7 +9,7 @@ import { BOOK_REPORT_LOAD_ERROR } from '@stockpilot/core';
 // zeros or an empty table that would read as "no orders".
 
 const reported = vi.hoisted(() => ({ calls: [] as unknown[][] }));
-vi.mock('@/lib/error-reporter', () => ({
+vi.mock('@/lib/error-reporter-core', () => ({
   reportError: vi.fn(async (...args: unknown[]) => {
     reported.calls.push(args);
   }),

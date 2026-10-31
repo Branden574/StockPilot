@@ -37,10 +37,18 @@ function distributeBody(): string {
 describe('bundles/[id].tsx distribute() — idempotency wiring (0347)', () => {
   it('mints ONE key before the first attempt and sends it on the direct request', () => {
     const body = distributeBody();
-    const mint = body.indexOf('newIdempotencyKey()');
+    // Re-pinned by docket B10 (was `newIdempotencyKey()` inline): the key is
+    // minted through distributeKeyFor, which keeps it for the next try of the
+    // same request when the server was not reached and the queue refused
+    // (bundle-distribute-attempt.test.ts runs distribute()).
+    const mint = body.indexOf(
+      'keptKey.current = distributeKeyFor(keptKey.current, signature, newIdempotencyKey);',
+    );
+    const key = body.indexOf('const idempotencyKey = keptKey.current.key;');
     const call = body.indexOf("api(`/api/v1/bundles/${bundle.id}/distribute`");
     expect(mint, 'key must be minted').toBeGreaterThan(-1);
-    expect(call, 'direct api() call must exist').toBeGreaterThan(mint);
+    expect(key, 'the attempt must send the minted key').toBeGreaterThan(mint);
+    expect(call, 'direct api() call must exist').toBeGreaterThan(key);
     // The key is in the direct body — the SAME value the outbox will replay.
     const directBody = body.slice(call, body.indexOf('});', call));
     expect(directBody).toMatch(/idempotencyKey/);

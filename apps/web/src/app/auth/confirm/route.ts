@@ -70,6 +70,18 @@ function failureRedirect(origin: string, type: string | null): NextResponse {
   return NextResponse.redirect(`${origin}${dest}`, 303);
 }
 
+/**
+ * A post from another site, refused before verifyOtp. The same pages as a
+ * failed link, with a value of its own that they answer with no words
+ * (lib/auth/auth-page-notices.ts): the link was neither expired nor used, and
+ * the expired-link note, with its advice on getting a new link, would be words
+ * the other site chose to put on the card.
+ */
+function refusedRedirect(origin: string, type: string | null): NextResponse {
+  const dest = type === 'recovery' ? '/reset?error=link_refused' : '/signin?error=link_refused';
+  return NextResponse.redirect(`${origin}${dest}`, 303);
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
@@ -240,10 +252,11 @@ export async function POST(request: NextRequest) {
   // this browser into that account. The page GET renders posts to itself, so
   // its form is always same-origin; its Origin is `null` by the page's own
   // no-referrer policy, so only Sec-Fetch-Site can say where a post came from
-  // (lib/auth/cross-site-request.ts). Refused with the answer an unusable link
-  // gets, before verifyOtp, so the token is not spent.
+  // (lib/auth/cross-site-request.ts). Refused before verifyOtp, so the token is
+  // not spent, to the page an unusable link of its type lands on, which says
+  // nothing for it (refusedRedirect).
   if (fetchSiteIsElsewhere(request)) {
-    return type === 'email_change' ? emailChangeExpiredPage() : failureRedirect(origin, type);
+    return type === 'email_change' ? emailChangeExpiredPage() : refusedRedirect(origin, type);
   }
 
   // A post with NO Sec-Fetch-Site is verified, unlike an API write (decided

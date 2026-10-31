@@ -617,3 +617,104 @@ describe('telling the requester', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0413 ordering visibility: raising the quantity of an item hidden from new
+// ordering is new demand, so it is refused (named from the caller's own read);
+// lowering is never checked. The database gate refuses the raise too
+// (order_item_hidden), and that refusal reads the same, never "internal".
+// ---------------------------------------------------------------------------
+describe('updateLineQuantity and an item hidden from new ordering', () => {
+  function hiddenStub(opts: { visible: boolean; writeError?: Record<string, unknown> | null }) {
+    return makeSupabaseStub({
+      'order_requests.select': { data: OPEN_HEADER, error: null },
+      'order_request_lines.select.maybeSingle': { data: CLEAN_LINE, error: null },
+      'order_request_lines.select': {
+        data: [{ id: 'line-1', item_id: 'item-1', quantity_requested: 10 }],
+        error: null,
+      },
+      'order_request_lines.update': opts.writeError
+        ? { data: null, error: opts.writeError as never }
+        : { data: { id: 'line-1' }, error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'inventory_items.select': {
+        data: { id: 'item-1', name: 'Widget', order_catalog_visible: opts.visible },
+        error: null,
+      },
+    });
+  }
+
+  it('a raise of a hidden item is refused by name, before any write', async () => {
+    const stub = hiddenStub({ visible: false });
+    await expect(svc(stub).updateLineQuantity('order-1', 'line-1', 12)).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Widget is no longer available for new orders.',
+      details: { reason: 'hidden_from_orders', itemId: 'item-1' },
+    });
+    expect(stub.chainsAll.get('order_request_lines.update')).toBeUndefined();
+  });
+
+  it('the raise pre-check reads order_catalog_visible', async () => {
+    const stub = hiddenStub({ visible: true });
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 12);
+    const selects = (stub.chainArgsAll.get('inventory_items.select') ?? []).map((a) => String(a[0]?.[0]));
+    expect(selects.some((s) => s.includes('order_catalog_visible'))).toBe(true);
+  });
+
+  it('lowering a hidden item is allowed (existing demand only shrinks)', async () => {
+    const stub = hiddenStub({ visible: false });
+    const res = await svc(stub).updateLineQuantity('order-1', 'line-1', 4);
+    expect(res.quantity).toBe(4);
+    expect(stub.chainsAll.get('order_request_lines.update')?.length).toBe(1);
+  });
+
+  it('a hide that lands between the read and the write: the gate refusal reads the same', async () => {
+    const stub = hiddenStub({
+      visible: true,
+      writeError: {
+        message: 'This item is no longer available for new orders.',
+        code: 'P0001',
+        hint: 'order_item_hidden',
+        details: 'item-1',
+      },
+    });
+    await expect(svc(stub).updateLineQuantity('order-1', 'line-1', 12)).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Widget is no longer available for new orders.',
+      details: { reason: 'hidden_from_orders', itemId: 'item-1' },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0413 review fix round (D1 #2): one ceiling for a line, 10,000 units
+// (ORDER_MAX_UNITS_PER_LINE, the New order cap). Add items' database write
+// refuses a resulting line above it; a raise here is the same new demand, so
+// it is refused before any write. Lowering a line that is already above the
+// ceiling (older orders) stays allowed: existing demand may always shrink.
+// ---------------------------------------------------------------------------
+describe('updateLineQuantity and the 10,000-unit line ceiling', () => {
+  it('a raise to exactly 10,000 is written', async () => {
+    const stub = stubFor();
+    const res = await svc(stub).updateLineQuantity('order-1', 'line-1', 10_000);
+    expect(res.quantity).toBe(10_000);
+    expect(stub.chainArgs.get('order_request_lines.update')?.[0]?.[0]).toMatchObject({
+      quantity_requested: 10_000,
+    });
+  });
+
+  it('a raise to 10,001 is refused in words, before any write', async () => {
+    const stub = stubFor();
+    await expect(svc(stub).updateLineQuantity('order-1', 'line-1', 10_001)).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'A line can have at most 10,000 units.',
+    });
+    expect(stub.chainsAll.get('order_request_lines.update')).toBeUndefined();
+  });
+
+  it('lowering a line already above the ceiling is still allowed', async () => {
+    const stub = stubFor({ line: { ...CLEAN_LINE, quantity_requested: 20_000 } });
+    const res = await svc(stub).updateLineQuantity('order-1', 'line-1', 15_000);
+    expect(res.quantity).toBe(15_000);
+  });
+});

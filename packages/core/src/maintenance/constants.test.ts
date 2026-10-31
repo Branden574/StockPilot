@@ -23,8 +23,8 @@ import {
  */
 describe('maintenance recipient constants', () => {
   it('pins the exact addresses (LITERALS — Global Constraint 19)', () => {
-    expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@learn4life.org');
-    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@sampleorg.test');
+    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('jstone@site1.test');
     expect(Object.isFrozen(L4L_MAINTENANCE_EMAIL)).toBe(true);
   });
 
@@ -45,7 +45,7 @@ describe('maintenance recipient constants', () => {
     expect(() => {
       (L4L_MAINTENANCE_EMAIL as unknown as Record<string, string>).cc = 'attacker@evil.test';
     }).toThrow();
-    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(L4L_MAINTENANCE_EMAIL.cc).toBe('jstone@site1.test');
   });
 
   it('display names are free of RFC 5322 specials', () => {
@@ -55,9 +55,9 @@ describe('maintenance recipient constants', () => {
     expect(Object.isFrozen(L4L_MAINTENANCE_EMAIL_NAMES)).toBe(true);
   });
 
-  it('pins the exact tenant-verified display-name pair', () => {
+  it('pins the exact compiled display-name pair', () => {
     expect(L4L_MAINTENANCE_EMAIL_NAMES.to).toBe('Fresno Warehouse DC4');
-    expect(L4L_MAINTENANCE_EMAIL_NAMES.cc).toBe('Andrew Rosas');
+    expect(L4L_MAINTENANCE_EMAIL_NAMES.cc).toBe('Jordan Stone');
   });
 
   it('display names never contain an address — names and addresses stay separate constants', () => {
@@ -69,7 +69,7 @@ describe('maintenance recipient constants', () => {
     expect(() => {
       (L4L_MAINTENANCE_EMAIL_NAMES as unknown as Record<string, string>).cc = 'Someone Else';
     }).toThrow();
-    expect(L4L_MAINTENANCE_EMAIL_NAMES.cc).toBe('Andrew Rosas');
+    expect(L4L_MAINTENANCE_EMAIL_NAMES.cc).toBe('Jordan Stone');
   });
 
   it('CC notice promises only what StockPilot can observe', () => {
@@ -81,7 +81,7 @@ describe('maintenance recipient constants', () => {
     // only where the mail is addressed — L4L's screens deliberately lose
     // that one sentence.
     expect(MAINTENANCE_CC_NOTICE).toBe(
-      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@sampleorg.test. A copy will also be sent to jstone@site1.test.',
     );
     for (const banned of ['assigned', 'Ticket created', 'notified', 'ticket']) {
       expect(MAINTENANCE_CC_NOTICE).not.toContain(banned);
@@ -115,9 +115,9 @@ describe('maintenance recipient constants', () => {
     expect(notice).toBe(
       'This request will be emailed to intake@other-tenant.invalid. A copy will also be sent to copy@other-tenant.invalid.',
     );
-    // A notice hand-wired to the constants would name L4L here.
-    expect(notice).not.toContain('learn4life');
-    expect(notice).not.toContain('cvwest');
+    // A notice hand-wired to the constants would name the compiled pair here.
+    expect(notice).not.toContain('sampleorg');
+    expect(notice).not.toContain('site1');
   });
 });
 
@@ -148,7 +148,6 @@ describe('status labels — the ONLY five states (Maintenance Resolved spec §1.
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
       'Ticket assigned',
       'Email sent',
       'Ticket closed',
@@ -160,6 +159,8 @@ describe('status labels — the ONLY five states (Maintenance Resolved spec §1.
     ]) {
       expect(all).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(all).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('has exactly five states — no sixth status sneaks in', () => {

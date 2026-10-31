@@ -1313,8 +1313,9 @@ const DATASET_ID_BATCH_CONCURRENCY = 20;
  * canUseSharedInventoryCaches). Queries mirror the pages' live-branch
  * services exactly:
  *   categories → CategoriesService.list()            (not deleted, name ASC)
- *   locations  → LocationsService.list({sitesOnly})   (not deleted, name ASC,
- *                isSiteLocation filter — same shared predicate)
+ *   locations  → LocationsService.list({sitesOnly})   (not deleted, every
+ *                page by name then id, isSiteLocation filter — same shared
+ *                predicate)
  *   suppliers  → SuppliersService.list() behind the module gate
  *                (module off → [] fail-closed, see loadSuppliersIfEnabled)
  *   tags       → TagsService.list()                   (name ASC)
@@ -1328,21 +1329,36 @@ export async function loadInventoryLookups(organizationId: string): Promise<Inve
   return cached(organizationId);
 }
 
+/** A location as the lookups read it: enough to pick out the sites. */
+type LocationLookupRow = { id: string; name: string; type: string | null; kind: string | null };
+
 async function loadInventoryLookupsUncached(organizationId: string): Promise<InventoryListLookups> {
   const admin = createAdminClient();
-  const [categoriesRes, locationsRes, suppliers, tagsRes, chartersRes] = await Promise.all([
+  const [categoriesRes, locationRows, suppliers, tagsRes, chartersRes] = await Promise.all([
     admin
       .from('categories')
       .select('id, name, color')
       .eq('organization_id', organizationId)
       .is('deleted_at', null)
       .order('name', { ascending: true }),
-    admin
-      .from('locations')
-      .select('id, name, type, kind')
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .order('name', { ascending: true }),
+    // Every page, as LocationsService.list reads it (small fixes slice 8):
+    // the sites are picked out of every location kind below, so one read
+    // capped at 1000 rows lost each site whose name sorts past them. A failed
+    // page throws, so a partial list is never cached.
+    fetchAllRows<LocationLookupRow>(
+      (from, to) =>
+        admin
+          .from('locations')
+          .select('id, name, type, kind')
+          .eq('organization_id', organizationId)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: LocationLookupRow[] | null;
+          error: { message: string } | null;
+        }>,
+    ),
     loadSuppliersIfEnabled(admin, organizationId),
     admin
       .from('tags')
@@ -1361,9 +1377,6 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
   if (categoriesRes.error) {
     throw new Error(`inventory-list categories query failed: ${categoriesRes.error.message}`);
   }
-  if (locationsRes.error) {
-    throw new Error(`inventory-list locations query failed: ${locationsRes.error.message}`);
-  }
   if (tagsRes.error) throw new Error(`inventory-list tags query failed: ${tagsRes.error.message}`);
   if (chartersRes.error) {
     throw new Error(`inventory-list charters query failed: ${chartersRes.error.message}`);
@@ -1375,9 +1388,9 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
       name: c.name as string,
       color: (c.color as string | null) ?? null,
     })),
-    locations: (locationsRes.data ?? [])
-      .filter((l) => isSiteLocation(l as { type: string | null; kind: string | null }))
-      .map((l) => ({ id: l.id as string, name: l.name as string })),
+    locations: locationRows
+      .filter((l) => isSiteLocation(l))
+      .map((l) => ({ id: l.id, name: l.name })),
     suppliers,
     tags: (tagsRes.data ?? []).map((t) => ({
       id: t.id as string,

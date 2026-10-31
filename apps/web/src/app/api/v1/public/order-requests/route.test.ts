@@ -110,11 +110,12 @@ function wireHappyAdmin() {
       ],
       error: null,
     },
-    'order_requests.insert.single': {
+    // The header, the track token's side row and the lines: one transaction
+    // (0413 review fix round), answering the header row.
+    'rpc:insert_order_request_with_lines': {
       data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
       error: null,
     },
-    'order_request_lines.insert': { data: null, error: null },
     'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
   });
   adminHolder.client = stub.client;
@@ -228,7 +229,9 @@ describe('POST /api/v1/public/order-requests — rate limiting', () => {
 
 // Migration 0389: the request's own track token is written to the
 // service-only order_request_secrets, never to the order row every member
-// reads, inside the same rollback path as the lines.
+// reads. Since the 0413 review fix round it goes in inside the same one
+// transaction as the header and the lines (insert_order_request_with_lines),
+// so a failure anywhere leaves no header behind and nothing to delete.
 describe('POST /api/v1/public/order-requests — the track token lives in order_request_secrets (0389)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -239,7 +242,7 @@ describe('POST /api/v1/public/order-requests — the track token lives in order_
     }));
   });
 
-  it('writes the token to a side row for the new order, not to the order row, and links it in trackUrl', async () => {
+  it('hands the token to the one write for the side row, not the order row, and links it in trackUrl', async () => {
     const stub = wireHappyAdmin();
     const res = await POST(buildRequest(validBody()));
     expect(res.status).toBe(200);
@@ -247,14 +250,33 @@ describe('POST /api/v1/public/order-requests — the track token lives in order_
     const t = new URL(`https://x${json.trackUrl}`).searchParams.get('t');
     expect(t).toMatch(/^[0-9a-f]{64}$/);
 
-    const orderInsert = stub.chainArgsAll.get('order_requests.insert')?.[0]?.[0]?.[0] as Record<string, unknown>;
-    expect(orderInsert).not.toHaveProperty('public_track_token');
-    const sideInsert = stub.chainArgsAll.get('order_request_secrets.insert')?.[0]?.[0]?.[0] as Record<string, unknown>;
-    expect(sideInsert).toEqual({ order_request_id: 'req-1', organization_id: 'org-1', public_track_token: t });
+    const writes = stub.rpcCalls.filter((c) => c.name === 'insert_order_request_with_lines');
+    expect(writes).toHaveLength(1);
+    const args = writes[0]!.args as {
+      p_header: Record<string, unknown>;
+      p_lines: Array<Record<string, unknown>>;
+      p_track_token: string;
+    };
+    expect(args.p_header).not.toHaveProperty('public_track_token');
+    expect(args.p_header).toMatchObject({
+      organization_id: 'org-1',
+      warehouse_id: WAREHOUSE_ID,
+      status: 'pending_confirmation',
+      source: 'public_link',
+      requester_user_id: null,
+      requester_email: 'jane@school.edu',
+    });
+    expect(args.p_track_token).toBe(t);
+    expect(args.p_lines).toEqual([
+      { item_id: ITEM_ID, quantity_requested: 3, unit_cost_at_request: 8.5, notes: null },
+    ]);
+    // No client write of an order row, side row or line.
+    expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('order_request_secrets.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('order_request_lines.insert')).toBeUndefined();
   });
 
-  it('a failed side-row write deletes the order and answers 500, before any line is written', async () => {
-    // The happy-path wiring, with the side-row insert failing.
+  it('a refused one write answers 500, reported, with nothing to delete and no email', async () => {
     const s2 = makeSupabaseStub({
       'organizations.select.maybeSingle': { data: { id: 'org-1' }, error: null },
       'organization_modules.select.maybeSingle': { data: { module_id: 'public_requests' }, error: null },
@@ -266,20 +288,18 @@ describe('POST /api/v1/public/order-requests — the track token lives in order_
         data: [{ id: ITEM_ID, warehouse_id: WAREHOUSE_ID, unit_cost: 8.5, item_type: 'book', status: 'active', deleted_at: null }],
         error: null,
       },
-      'order_requests.insert.single': { data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID }, error: null },
-      'order_request_secrets.insert': { data: null, error: { message: 'insert failed' } },
-      'order_request_lines.insert': { data: null, error: null },
+      // e.g. the side row's write failing: the database rolls the header back.
+      'rpc:insert_order_request_with_lines': { data: null, error: { message: 'insert failed', code: 'XX000' } },
       'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
     });
     adminHolder.client = s2.client;
     const res = await POST(buildRequest(validBody()));
     expect(res.status).toBe(500);
-    expect(s2.chainArgsAll.get('order_requests.delete')?.[0]).toContainEqual(['id', 'req-1']);
-    expect(s2.chainsAll.get('order_request_lines.insert')).toBeUndefined();
+    expect(s2.chainsAll.get('order_requests.delete')).toBeUndefined();
     expect(sendOrderRequestEmailMock).not.toHaveBeenCalled();
     expect(reportErrorMock).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'public.order-requests.secret-insert' }),
+      expect.objectContaining({ tag: 'public.order-requests.insert' }),
     );
   });
 });

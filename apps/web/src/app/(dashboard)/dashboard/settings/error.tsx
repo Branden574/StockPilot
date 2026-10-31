@@ -13,7 +13,9 @@ import {
   SettingsPage,
 } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
-import { reportError } from '@/lib/error-reporter';
+// The isomorphic reporter: this module is in a browser bundle, and
+// @/lib/error-reporter is server-only (see error-reporter-core.ts).
+import { reportError } from '@/lib/error-reporter-core';
 
 /**
  * A settings page could not be read.

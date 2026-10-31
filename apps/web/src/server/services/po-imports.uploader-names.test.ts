@@ -56,8 +56,8 @@ describe('PoImportsService.uploaderProfiles', () => {
     const stub = makeSupabaseStub({
       'user_profiles.select': {
         data: [
-          { id: uuid(1), full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' },
-          { id: uuid(2), full_name: null, email: 'crystal@cvwest.org' },
+          { id: uuid(1), full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' },
+          { id: uuid(2), full_name: null, email: 'robin@site1.test' },
         ],
         error: null,
       },
@@ -66,8 +66,8 @@ describe('PoImportsService.uploaderProfiles', () => {
     expect(stub.chainArgsAll.get('user_profiles.select')?.[0]?.[0]).toEqual([
       'id, full_name, email',
     ]);
-    expect(poImportUploaderLabel(profiles, uuid(1))).toBe('Marissa Lopez');
-    expect(poImportUploaderLabel(profiles, uuid(2))).toBe('crystal@cvwest.org');
+    expect(poImportUploaderLabel(profiles, uuid(1))).toBe('Rebecca Lowry');
+    expect(poImportUploaderLabel(profiles, uuid(2))).toBe('robin@site1.test');
     // Not returned under RLS: no longer shares the org.
     expect(poImportUploaderLabel(profiles, uuid(3))).toBe('Former member');
     expect(reportError).not.toHaveBeenCalled();

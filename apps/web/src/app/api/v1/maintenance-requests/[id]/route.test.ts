@@ -146,7 +146,7 @@ beforeEach(() => {
     },
     emailRouting: {
       state: 'valid',
-      recipients: { to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org' },
+      recipients: { to: 'dc4@sampleorg.test', cc: 'jstone@site1.test' },
     },
   }));
   signedViewUrls.mockResolvedValue([
@@ -219,7 +219,7 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
       ...DETAIL,
       status: 'resolved',
       resolvedAt: '2026-08-05T18:00:00.000Z',
-      resolvedByName: 'Andrew Rosas',
+      resolvedByName: 'Jordan Stone',
       resolutionNote: 'Replaced the shutoff valve and confirmed no further leaking.',
     });
     signedViewUrls.mockResolvedValueOnce([
@@ -236,7 +236,7 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     const body = await res.json();
     expect(body.request.resolvedAt).toBe('2026-08-05T18:00:00.000Z');
-    expect(body.request.resolvedByName).toBe('Andrew Rosas');
+    expect(body.request.resolvedByName).toBe('Jordan Stone');
     expect(body.request.resolutionNote).toBe('Replaced the shutoff valve and confirmed no further leaking.');
     expect(body.photos[0].kind).toBe('resolution');
   });

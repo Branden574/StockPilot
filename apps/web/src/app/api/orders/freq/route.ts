@@ -72,7 +72,10 @@ export async function GET(req: NextRequest) {
       .is('deleted_at', null)
       .eq('status', 'active')
       // Rentals are a separate inventory class and never orderable.
-      .eq('is_rental', false),
+      .eq('is_rental', false)
+      // Hidden from new ordering (0413): never offered, by any ordering
+      // endpoint.
+      .eq('order_catalog_visible', true),
     ctx.supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -127,8 +130,15 @@ export async function GET(req: NextRequest) {
   // need. Prefers stored thumb_path, falls back to transformed master,
   // falls back to bulk-import custom_fields.thumbnail_url. unstable_cache
   // layer means the second request is near-instant.
+  //
+  // Signed only for the items this answer returns: an item hidden from
+  // ordering (or archived since the RPC) gets no photo URL.
+  const returnedIds = itemIds.filter((id) => items.some((i) => i.id === id));
   const imagesSvc = new ItemImagesService(ctx);
-  const imageUrlByItem = await imagesSvc.primaryImagesForBrowserDisplay(itemIds, 200);
+  const imageUrlByItem =
+    returnedIds.length > 0
+      ? await imagesSvc.primaryImagesForBrowserDisplay(returnedIds, 200)
+      : new Map<string, string>();
 
   // Preserve the RPC's count-desc ordering by walking `top` (not items).
   // Items dropped along the way (archived between RPC + select) just

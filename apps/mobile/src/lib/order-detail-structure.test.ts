@@ -421,7 +421,11 @@ describe('order screen: words, roles and states survive the restyle', () => {
 
   it('a proof tile opens as a named button; delete is a named 44pt button, managers only, off offline', () => {
     const { sf, all } = treeOf(FILES.order);
-    const open = all.filter((n) => attrText(n.el, 'onPress', sf) === '() => openAttachment(a)');
+    // openAttachment signs an expiring link again before it opens it
+    // (lib/stored-file-link.ts), so the tile starts it with `void`.
+    const open = all.filter(
+      (n) => attrText(n.el, 'onPress', sf) === '() => void openAttachment(a)',
+    );
     expect(open).toHaveLength(1);
     expect(attrText(open[0]!.el, 'accessibilityRole', sf)).toBe('button');
     expect(attrText(open[0]!.el, 'accessibilityLabel', sf)).toBe("KIND_LABELS[a.kind] ?? 'Other'");

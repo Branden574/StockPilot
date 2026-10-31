@@ -15,7 +15,8 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
   CATALOG_ROW_CEILING: 10_000,
   resolveCatalogScopeKey: vi.fn(),
-  loadCatalogItemsCached: vi.fn(),
+  loadOrderableCatalog: vi.fn(),
+  catalogLastHideAt: () => null,
   loadChartersForWarehouse: vi.fn(),
 }));
 vi.mock('@/server/loaders/orders-kits', () => ({ loadOrderKits: vi.fn() }));

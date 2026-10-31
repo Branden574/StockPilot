@@ -1,4 +1,4 @@
-import { formatOrderNumber } from '@stockpilot/core';
+import { formatOrderNumber, plainAddressMailtoUrl } from '@stockpilot/core';
 import 'server-only';
 
 import {
@@ -968,6 +968,11 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'denied': {
+      // Contact approver links only one plain address (core
+      // plainAddressMailtoUrl): the stored address went into the link as it
+      // was, so text such as "a@b.com?bcc=x@y.z" would open a message copied
+      // to someone the email never names. Anything else drops the link.
+      const approverMailto = plainAddressMailtoUrl(a.summary.approverEmail);
       const prose = `${hi(v.firstName, true)}your request didn’t clear approval this time. Nothing was reserved or shipped. The reason is below, unedited, with two ways forward.`;
       return {
         rows: [
@@ -1003,8 +1008,8 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
             : []),
           ...(showGrid ? [section(PAD_BLOCK, orderGrid(a, v))] : []),
           ctaSection(v.def.cta, a.trackUrl, {
-            secondary: a.summary.approverEmail
-              ? { label: v.def.cta2 ?? 'Contact approver', href: `mailto:${a.summary.approverEmail}` }
+            secondary: approverMailto
+              ? { label: v.def.cta2 ?? 'Contact approver', href: approverMailto }
               : undefined,
             noteHtml:
               'Revising keeps your line items — adjust quantities and resubmit in about a minute.',

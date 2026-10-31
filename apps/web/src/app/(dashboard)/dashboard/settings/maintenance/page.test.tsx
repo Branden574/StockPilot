@@ -109,7 +109,7 @@ describe('configure gate (C2 — mutation self-check 1: admin without the grant 
     expect(screen.getByTestId('maintenance-settings-panel')).toBeInTheDocument();
   });
 
-  it('an admin WITH an explicit configure override (the real Andrew grant path, in reverse) also loads the page', async () => {
+  it('an admin WITH an explicit configure override (the real DC4-lead grant path, in reverse) also loads the page', async () => {
     setCtx('admin', [
       'maintenance_requests:submit',
       'maintenance_requests:read_all',
@@ -164,7 +164,7 @@ describe('settings load', () => {
     memberRowsResult.current = {
       data: [
         { user_id: 'u-1', user: { full_name: 'Jane Smith', email: 'jane@example.com' } },
-        { user_id: 'u-2', user: { full_name: undefined, email: 'andrew@example.com' } },
+        { user_id: 'u-2', user: { full_name: undefined, email: 'jordan@example.com' } },
       ],
     };
     render(await MaintenanceSettingsPage());
@@ -173,7 +173,7 @@ describe('settings load', () => {
     };
     expect(props.members).toEqual([
       { userId: 'u-1', name: 'Jane Smith' },
-      { userId: 'u-2', name: 'andrew@example.com' },
+      { userId: 'u-2', name: 'jordan@example.com' },
     ]);
   });
 });

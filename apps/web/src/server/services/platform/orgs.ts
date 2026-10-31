@@ -2,8 +2,18 @@ import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { PermissionExceptionsService } from '@/server/services/platform/permission-exceptions';
 
-import { resolveEffectivePlan, type EffectivePlan } from '@stockpilot/core';
+import {
+  memberCanRequestOrders,
+  orderCatalogAccessPreview,
+  resolveEffectivePlan,
+  ROLES,
+  type EffectivePlan,
+  type OrderCatalogAccessPreview,
+  type PermissionExceptionState,
+  type Role,
+} from '@stockpilot/core';
 
 /**
  * Cross-org READ services for the Platform Super-Admin Console.
@@ -736,6 +746,90 @@ export async function getOrgMembers(
     search,
     activityAvailable,
   };
+}
+
+/**
+ * One member's Order items access (orders:manage_catalog_visibility, migration
+ * 0413) as the Users tab shows it and its dialog starts from.
+ */
+export interface PlatformMemberOrderItemsAccess {
+  role: Role;
+  /** StockPilot's exception for them: no row, allow or deny. */
+  exception: PermissionExceptionState;
+  disabled: boolean;
+  /** The organization's Orders module (the ACCESS rule, comp included). */
+  ordersModuleEnabled: boolean;
+  /** Their effective orders:request (only the phone entry depends on it). */
+  canRequestOrders: boolean;
+  /** The column's chip and source line, from the same core function the
+   *  dialog's live preview uses. */
+  preview: OrderCatalogAccessPreview;
+}
+
+const ROLE_SET: ReadonlySet<string> = new Set(ROLES);
+
+/**
+ * Order items access for ONE page of the Users tab: one batched read
+ * (PermissionExceptionsService.listForMembers: the members' rows for the key
+ * and for orders:request, the organization's orders:request role rows and
+ * the Orders module), so no member costs a call of their own.
+ *
+ * Returns null when the read failed, and NEVER throws, for the reason
+ * fetchMemberActivity gives: this is a column on the only surface that can
+ * disable an account, and (platform) has no error boundary. The column then
+ * says it could not be loaded; it never guesses "Role default". Members with
+ * no user id or a role this build does not know are left out (no cell, no
+ * dialog), never given a made-up default.
+ */
+export async function getOrgMembersOrderItemsAccess(
+  orgId: string,
+  members: readonly PlatformOrgMember[],
+): Promise<Map<string, PlatformMemberOrderItemsAccess> | null> {
+  const known = members.filter(
+    (m): m is PlatformOrgMember & { userId: string; role: Role } =>
+      typeof m.userId === 'string' && m.userId.length > 0 && ROLE_SET.has(m.role),
+  );
+  const out = new Map<string, PlatformMemberOrderItemsAccess>();
+  if (known.length === 0) return out;
+
+  try {
+    const read = await PermissionExceptionsService.listForMembers(
+      orgId,
+      known.map((m) => m.userId),
+    );
+    for (const m of known) {
+      const entry = read.members[m.userId];
+      if (!entry) continue;
+      const disabled = Boolean(m.disabledAt);
+      const canRequestOrders = memberCanRequestOrders({
+        role: m.role,
+        roleOverride: read.ordersRequestRoleOverrides[m.role],
+        userOverride: entry.ordersRequestOverride,
+      });
+      out.set(m.userId, {
+        role: m.role,
+        exception: entry.exception,
+        disabled,
+        ordersModuleEnabled: read.ordersModuleEnabled,
+        canRequestOrders,
+        preview: orderCatalogAccessPreview({
+          role: m.role,
+          exception: entry.exception,
+          disabled,
+          ordersModuleEnabled: read.ordersModuleEnabled,
+          canRequestOrders,
+        }),
+      });
+    }
+    return out;
+  } catch (err) {
+    await reportError(err instanceof Error ? err : new Error(String(err)), {
+      tag: 'platform.member-order-items-access',
+      level: 'warning',
+      extra: { orgId, requested: known.length },
+    });
+    return null;
+  }
 }
 
 export interface PlatformOrgOrder {

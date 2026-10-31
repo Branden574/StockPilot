@@ -49,19 +49,51 @@ describe('assigned_to round-trips through the cache (SP-003)', () => {
 });
 
 describe('one live outbox row per line (SP-021)', () => {
+  // Re-pinned by the docket B10 review: the two supersede statements moved,
+  // unchanged, into supersedeQueuedCounts, which mirrorRecordedCount (the AI
+  // shelf scan's copy of a count the server recorded) runs too, so the rule
+  // is written once. outbox-owner.sqlite.test.ts runs both on a real SQLite.
   it('a line edit (a count, or a clear of it) supersedes earlier pending/failed rows for the same line inside the transaction', () => {
     // updateLocalLine and clearLocalLine both write through queueLineEdit
     // (session-scope.test.ts pins the delegation).
-    const fn = cache.slice(cache.indexOf('async function queueLineEdit('), cache.indexOf('export async function pendingCountFor'));
-    expect(fn.indexOf('await withDbTransaction(db, async () => {')).toBeGreaterThan(-1);
-    const del = fn.indexOf('delete from pending_actions');
+    const fn = cache.slice(
+      cache.indexOf('async function queueLineEdit('),
+      cache.indexOf('async function supersedeQueuedCounts'),
+    );
+    const tx = fn.indexOf('await withDbTransaction(db, async () => {');
+    const sup = fn.indexOf('await supersedeQueuedCounts(db, lineId, scope.userId, now);');
     const ins = fn.indexOf('insert into pending_actions');
-    expect(del, 'supersede delete missing').toBeGreaterThan(-1);
-    expect(ins).toBeGreaterThan(del);
-    const delStmt = fn.slice(del, ins);
+    expect(tx).toBeGreaterThan(-1);
+    expect(sup, 'supersede call missing').toBeGreaterThan(tx);
+    expect(ins).toBeGreaterThan(sup);
+    const helper = cache.slice(
+      cache.indexOf('async function supersedeQueuedCounts'),
+      cache.indexOf('export async function mirrorRecordedCount'),
+    );
+    const delStmt = helper.slice(helper.indexOf('delete from pending_actions'));
     expect(delStmt).toMatch(/kind = 'record_count'/);
     expect(delStmt).toMatch(/status in \('pending','failed'\)/); // never a row in flight
     expect(delStmt).toMatch(/json_extract\(payload_json, '\$\.lineId'\) = \?/);
+  });
+
+  it('mirrorRecordedCount supersedes with the same statements in its transaction, and queues no row', () => {
+    const fn = cache.slice(
+      cache.indexOf('export async function mirrorRecordedCount'),
+      cache.indexOf('export async function pendingCountFor'),
+    );
+    expect(fn).toMatch(
+      /await withDbTransaction\(db, async \(\) => \{\s*await supersedeQueuedCounts\(db, lineId, userId, now\);/,
+    );
+    expect(fn).not.toMatch(/insert into pending_actions/);
+  });
+
+  it('the supersede statements run only inside those two transactions', () => {
+    // A plain write outside a transaction can land inside another flow's
+    // and be undone by its ROLLBACK (db.transaction-queue.test.ts).
+    expect(cache.match(/supersedeQueuedCounts\(/g)).toHaveLength(3); // the declaration + 2 calls
+    expect(
+      cache.match(/await supersedeQueuedCounts\(db, lineId, (scope\.userId|userId), now\);/g),
+    ).toHaveLength(2);
   });
 
   it('the drain sends only the newest row per line and acks the superseded ones', () => {

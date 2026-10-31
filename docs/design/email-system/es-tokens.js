@@ -36,9 +36,9 @@ const SERIF = '"Tinos", Georgia, serif';
 
 // ── Sample world (fictional, consistent across all mockups) ──
 const W = {
-  user:{name:'Branden', email:'branden574@gmail.com'},
-  inviter:{name:'Branden Vincent Walker', first:'Branden', email:'branden@l4lnorth.com', initials:'BW'},
-  invitee:{name:'Theo', full:'Theo Marsh', email:'theo@l4lnorth.com'},
+  user:{name:'Carsten', email:'owner@example.com'},
+  inviter:{name:'Carsten Hartley Fowler', first:'Carsten', email:'carsten@north.example', initials:'CF'},
+  invitee:{name:'Theo', full:'Theo Marsh', email:'theo@north.example'},
   org:'L4L North Region', orgKind:'Regional roastery · 3 locations', members:7, seats:3, role:'Operator',
   roleBlurb:'can scan, receive, count, and place purchase orders',
   wh:'DCIV — Fresno', dest:'CVW — Manchester',
@@ -94,7 +94,7 @@ const EMAILS = [
  flag:'Current copy claims alerts can be managed in preferences — no such preference exists. Copy removed here; adding a real control is a product/security decision.'},
 {id:'team-invite', fam:'invites', name:'Team Invite', st:'live', cat:'ess', tag:'Workspace Invite', badge:['warn','Pending · expires in 7 days'],
  trig:'Admin invites a member to a workspace', to:'Invitee (may be new to StockPilot)', from:'StockPilot <hello@stockpilotusa.com>', reply:'Not monitored',
- subj:'You\u2019re invited to join L4L North Region on StockPilot', pre:'Branden added you as an Operator. Accept within 7 days to keep the seat.',
+ subj:'You\u2019re invited to join L4L North Region on StockPilot', pre:'Carsten added you as an Operator. Accept within 7 days to keep the seat.',
  cta:'Accept invitation', cta2:'What is StockPilot?', motion:'None · static workspace card', foot:'ess'},
 {id:'invite-reminder', fam:'invites', name:'Invite Reminder', st:'live', cat:'ess', tag:'Workspace Invite', badge:['warn','Reminder · still pending'],
  trig:'Invite unaccepted after 4 days', to:'Invitee', from:'StockPilot <hello@stockpilotusa.com>', reply:'Not monitored',

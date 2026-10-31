@@ -287,10 +287,10 @@ function addStub(status: string, rpc: Rpc, log: string[] = []) {
   return makeSupabaseStub({
     'order_requests.select': { data: header(status), error: null },
     'inventory_items.select': { data: [ITEM], error: null },
-    'order_request_lines.select': { data: [], error: null },
-    'order_request_lines.insert': () => {
+    // Add items is one call since 0413 (add_order_request_lines).
+    'rpc:add_order_request_lines': () => {
       log.push('line insert');
-      return { data: null, error: null };
+      return { data: { orderId: ORDER, added: ['item-1'], merged: [] }, error: null };
     },
     'rpc:hold_order_stock': typeof rpc === 'function'
       ? rpc
@@ -310,7 +310,9 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
       const res = await svc(stub).addLines(ORDER, [{ itemId: 'item-1', quantity: 3 }]);
       expect(res).toEqual({ added: 1, merged: 0, pickSlipStale: false, hold: { ok: true, ...HELD } });
       expect(log).toEqual(['line insert', 'hold']);
-      expect(stub.rpcCalls).toEqual([{ name: 'hold_order_stock', args: { p_order_id: ORDER } }]);
+      expect(stub.rpcCalls.filter((c) => c.name !== 'add_order_request_lines')).toEqual([
+        { name: 'hold_order_stock', args: { p_order_id: ORDER } },
+      ]);
       const held = vi.mocked(audit).mock.calls.map((c) => c[0]).find((p) => p.event === 'order.stock_held');
       expect(held?.after).toEqual({ trigger: 'lines_added', ...HELD_AFTER });
     },
@@ -322,7 +324,7 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
       const stub = addStub(status, { data: HELD, error: null });
       const res = await svc(stub).addLines(ORDER, [{ itemId: 'item-1', quantity: 3 }]);
       expect(res.hold).toBeNull();
-      expect(stub.rpcCalls).toEqual([]);
+      expect(stub.rpcCalls.filter((c) => c.name === 'hold_order_stock')).toEqual([]);
     },
   );
 
@@ -332,7 +334,7 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
       { itemId: 'item-1', quantity: 3 },
     ]);
     expect(res).toEqual({ added: 1, merged: 0, pickSlipStale: false, hold: null });
-    expect(stub.rpcCalls).toEqual([]);
+    expect(stub.rpcCalls.filter((c) => c.name === 'hold_order_stock')).toEqual([]);
   });
 
   it('a hold failure never undoes the add: it is returned, and reported', async () => {
@@ -382,7 +384,7 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
     ]);
     expect(res.added).toBe(1);
     expect(res.hold).toEqual({ ok: false, reason: 'forbidden', message: HOLD_NO_WAREHOUSE_ACCESS_COPY });
-    expect(stub.rpcCalls).toEqual([]);
+    expect(stub.rpcCalls.filter((c) => c.name === 'hold_order_stock')).toEqual([]);
     expect(reportError).toHaveBeenCalledTimes(1);
   });
 
@@ -397,7 +399,7 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
       reason: 'forbidden',
       message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
     });
-    expect(stub.rpcCalls).toEqual([]);
+    expect(stub.rpcCalls.filter((c) => c.name === 'hold_order_stock')).toEqual([]);
   });
 
   it('the top-up uses the header it already read: one order read, no second one for the warehouse', async () => {

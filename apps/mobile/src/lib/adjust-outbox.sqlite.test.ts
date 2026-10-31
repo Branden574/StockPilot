@@ -39,11 +39,18 @@ vi.mock('./supabase', () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }) } },
   readDeviceAuthSession: async () => ({ present: live.userId !== null, userId: live.userId }),
 }));
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: {
-    getItem: async (key: string) => (key === 'workspace.activeOrgId' ? live.orgId : null),
-  },
-}));
+// The saved workspace as this build saves it: the live account's own, one
+// value with its owner (workspace-keys.ts; docket B10 re-pin, was the older
+// single key, which no longer stamps a queued row).
+vi.mock('@react-native-async-storage/async-storage', async () => {
+  const { storedWorkspaceItem } = await import('./__fixtures__/saved-workspace');
+  return {
+    default: {
+      getItem: async (key: string) =>
+        storedWorkspaceItem(key, { orgId: live.orgId, ownerId: live.userId }),
+    },
+  };
+});
 
 type Queue = typeof import('./queue');
 type Db = typeof import('./db');

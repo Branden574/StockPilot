@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
@@ -11,7 +12,7 @@ import { putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { exchangeCode } from '@/server/connectors/sage-intacct/oauth';
 
-import { hasPermission, type Role } from '@stockpilot/core';
+import type { Permission, Role } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -110,7 +111,11 @@ export async function GET(req: Request) {
       return redirectWithError('module_disabled');
     }
 
-    // 2b. The user must hold integrations:manage in this org.
+    // 2b. The user must hold integrations:manage in this org: their EFFECTIVE
+    //     set, as the QuickBooks callback and beginConnect check it (docket
+    //     S19). Never the role's static defaults: an admin whose
+    //     integrations:manage was revoked can write a pending row and its state
+    //     themselves (org_connections' write rule asks only for the admin role).
     const { data: member } = await supabase
       .from('organization_members')
       .select('role')
@@ -119,9 +124,16 @@ export async function GET(req: Request) {
       .not('accepted_at', 'is', null)
       .maybeSingle();
     const role = (member as { role: Role } | null)?.role;
-    if (!role || !hasPermission(role, 'integrations:manage')) {
-      return redirectWithError('forbidden');
+    if (!role) return redirectWithError('forbidden');
+    let permissions: Set<Permission>;
+    try {
+      permissions = await loadEffectivePermissions(supabase, organizationId, user.id, role);
+    } catch {
+      // Unreadable overrides: nothing authorized, and no revoke either. The
+      // loader logs and reports it.
+      return redirectWithError('internal_error');
     }
+    if (!permissions.has('integrations:manage')) return redirectWithError('forbidden');
 
     // 3. Exchange the auth code for tokens (+ company id when present).
     const tokens = await exchangeCode(code);

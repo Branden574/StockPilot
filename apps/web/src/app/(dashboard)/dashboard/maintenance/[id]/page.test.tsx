@@ -175,8 +175,8 @@ beforeEach(() => {
   listTimelineEvents.mockResolvedValue([]);
   // The real emailInput() returns { content, emailRouting } since per-org
   // email routing (migration 0337); routing resolves 'valid' with the
-  // compiled pair — the state the L4L seed produces — so every existing pin
-  // stays on pre-feature behavior.
+  // compiled sample pair, standing in for a configured org's stored routing,
+  // so every existing pin stays on pre-feature behavior.
   emailInput.mockImplementation(async (_id: string, opts: { shareUrl: string | null }) => ({
     content: {
       requestNumber: 'MR-2026-000042',
@@ -202,10 +202,10 @@ beforeEach(() => {
     emailRouting: {
       state: 'valid',
       recipients: {
-        to: 'dc4@learn4life.org',
-        cc: 'arosas@cvwest.org',
+        to: 'dc4@sampleorg.test',
+        cc: 'jstone@site1.test',
         toName: 'Fresno Warehouse DC4',
-        ccName: 'Andrew Rosas',
+        ccName: 'Jordan Stone',
       },
     },
   }));
@@ -282,7 +282,7 @@ describe('internal notes gating (brief §5/§23 — manage-only, never a request
       buildCtx({
         userId: 'mgr-1',
         permissions: ['maintenance_requests:manage'],
-        membersData: [{ user_id: 'mgr-1', user: { id: 'mgr-1', full_name: 'Andrew Rosas', email: 'andrew@l4l.org' } }],
+        membersData: [{ user_id: 'mgr-1', user: { id: 'mgr-1', full_name: 'Jordan Stone', email: 'jordan@example.org' } }],
       }) as never,
     );
     get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
@@ -413,7 +413,6 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -446,6 +445,8 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('a cancelled request shows "Request cancelled", never "Request archived"', async () => {
@@ -900,7 +901,6 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -940,6 +940,8 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 

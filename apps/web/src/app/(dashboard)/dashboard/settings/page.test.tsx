@@ -107,7 +107,7 @@ describe('Maintenance requests hub tile', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
-  it("is visible to an admin who holds an explicit configure override (Andrew's real grant path, in reverse)", async () => {
+  it("is visible to an admin who holds an explicit configure override (the DC4 lead's real grant path, in reverse)", async () => {
     setCtx('admin', [
       'maintenance_requests:submit',
       'maintenance_requests:read_all',

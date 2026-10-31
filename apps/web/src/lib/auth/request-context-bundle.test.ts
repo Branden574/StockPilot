@@ -7,6 +7,7 @@ import {
   heldMembership,
   holdMembership,
   modulesFromMembership,
+  orderCatalogLastHideAtOf,
   orgRowFromMembership,
   parseRequestContextBundle,
 } from './request-context-bundle';
@@ -44,6 +45,7 @@ const good = () => ({
         dashboard_layout: null,
         order_status_config: null,
         all_modules_comp: false,
+        order_catalog_last_hide_at: null,
       },
       role_overrides: [{ permission: 'items:delete', granted: false }],
       user_overrides: [{ permission: 'items:delete', granted: true }],
@@ -143,10 +145,31 @@ describe('parseRequestContextBundle', () => {
     ['an organization with NO all_modules_comp key', (b: ReturnType<typeof good>) => delete (b.memberships[0]!.organization as Record<string, unknown>).all_modules_comp],
     ['an all_modules_comp that is not a boolean', (b: ReturnType<typeof good>) => ((b.memberships[0]!.organization as Record<string, unknown>).all_modules_comp = 'true')],
     ['a profile with NO disabled_at key', (b: ReturnType<typeof good>) => delete (b.profile as Record<string, unknown>).disabled_at],
+    // 0413: a catalog load decides from the hide mark whether to look for
+    // recently hidden items, so a mark it cannot read is not "never hidden".
+    ['a hide mark that is a number', (b: ReturnType<typeof good>) => ((b.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at = 1_761_500_000)],
+    ['a hide mark that is not a timestamp', (b: ReturnType<typeof good>) => ((b.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at = 'yesterday')],
+    ['a hide mark that is an object', (b: ReturnType<typeof good>) => ((b.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at = {})],
   ])('refuses %s', (_name, mutate) => {
     const b = good();
     mutate(b);
     expect(parseRequestContextBundle(b, USER)).toBeNull();
+  });
+
+  it('carries the ordering-visibility hide mark (0413): a timestamp, null for never, unknown when absent', () => {
+    expect(parseRequestContextBundle(good(), USER)!.memberships[0]!.organization?.order_catalog_last_hide_at).toBeNull();
+    const hid = good();
+    (hid.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at =
+      '2026-10-26T18:04:05.123456+00:00';
+    expect(parseRequestContextBundle(hid, USER)!.memberships[0]!.organization?.order_catalog_last_hide_at).toBe(
+      '2026-10-26T18:04:05.123456+00:00',
+    );
+    // A database before 0413 has no key at all: unknown, not "never hidden".
+    const older = good();
+    delete (older.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at;
+    const m = parseRequestContextBundle(older, USER)!.memberships[0]!;
+    expect(m.organization).not.toBeNull();
+    expect(m.organization?.order_catalog_last_hide_at).toBeUndefined();
   });
 
   it('refuses anything that is not an object', () => {
@@ -215,8 +238,20 @@ describe('orgRowFromMembership / modulesFromMembership', () => {
       dashboard_layout: null,
       order_status_config: null,
       all_modules_comp: false,
+      order_catalog_last_hide_at: null,
     });
     expect([...modulesFromMembership(m)!].sort()).toEqual(['books', 'orders']);
+  });
+
+  it('orderCatalogLastHideAtOf: the mark, null for never, undefined whenever it is not known', () => {
+    const hid = good();
+    (hid.memberships[0]!.organization as Record<string, unknown>).order_catalog_last_hide_at = '2026-10-26T18:04:05Z';
+    expect(orderCatalogLastHideAtOf(parseRequestContextBundle(hid, USER)!.memberships[0]!)).toBe('2026-10-26T18:04:05Z');
+    expect(orderCatalogLastHideAtOf(parseRequestContextBundle(good(), USER)!.memberships[0]!)).toBeNull();
+    const hidden = good();
+    (hidden.memberships[0] as Record<string, unknown>).organization = null;
+    expect(orderCatalogLastHideAtOf(parseRequestContextBundle(hidden, USER)!.memberships[0]!)).toBeUndefined();
+    expect(orderCatalogLastHideAtOf(null)).toBeUndefined();
   });
 
   it('a comped organization gets every non-core module, through the one rule', () => {
