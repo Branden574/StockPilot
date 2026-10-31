@@ -628,6 +628,45 @@ describe('fetchExportImageBytes — where each URL is fetched (SSRF)', () => {
   });
 
   /**
+   * The project origin also serves GoTrue, whose /auth/v1/verify answers a
+   * bogus token with a 303 to an allow-listed redirect_to. Plain fetch is for
+   * Storage reads only, and never follows a redirect; the real-fetch proof is
+   * in lib/item-image-fetch.test.ts.
+   */
+  it('sends a project path that is not a Storage read through the guard: refused once, never plain fetch', async () => {
+    const { safeFetch: realSafeFetch } =
+      await vi.importActual<typeof import('@/lib/ssrf-guard')>('@/lib/ssrf-guard');
+    safeFetchSpy.mockImplementation((url: string, init: never) => realSafeFetch(url, init));
+    const sleep = vi.fn(async () => {});
+    const verify = `${STORAGE}/auth/v1/verify?type=signup&token=bogus&redirect_to=https%3A%2F%2Fpreview.example.test%2Fauth%2Fcallback`;
+    const result = await fetchExportImageBytes(new Map([['a', verify]]), { sleep });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(safeFetchSpy).toHaveBeenCalledTimes(1);
+    expect(lookupMock).not.toHaveBeenCalled();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skippedReasons.unsupported).toBe(1);
+  });
+
+  it('never follows a redirect from Storage: one request, a final unsupported skip, no retry', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, {
+        status: 303,
+        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+      }),
+    );
+    const sleep = vi.fn(async () => {});
+    const result = await fetchExportImageBytes(new Map([['a', SIGNED]]), { sleep });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(SIGNED, expect.objectContaining({ redirect: 'manual' }));
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.images.size).toBe(0);
+    expect(result.skippedReasons.unsupported).toBe(1);
+    expect(result.skippedReasons.other).toBe(0);
+  });
+
+  /**
    * Under the real guard. A failed lookup of an allowed cover host (EAI_AGAIN,
    * a resolver timeout) is the network, not a refusal: it is retried like any
    * other network failure, as it was before the guard was in this path. Only

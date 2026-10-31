@@ -101,8 +101,9 @@ export interface FetchExportImageBytesResult {
 }
 
 export interface FetchExportImageBytesOptions {
-  /** Test seam. Production uses fetchItemImage: plain fetch for the project's
-   *  storage, safeFetch with the cover allowlist for any other URL. */
+  /** Test seam. Production uses fetchItemImage: plain fetch, never following a
+   *  redirect, for a Storage read on the project origin, safeFetch with the
+   *  cover allowlist for any other URL. */
   fetchImpl?: typeof fetch;
   /** Width the WebP decoder fits into (square box). Default 200. */
   targetWidth?: number;
@@ -422,10 +423,11 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
     return { kind: 'skip', reason: 'unsupported' };
   } catch (err) {
     // A URL the fetch route or the SSRF guard refuses (not http(s), a host off
-    // the cover allowlist, a private address) is refused the same way every
-    // time: final, never retried, counted as a source we do not read. A failed
-    // lookup of the host (SsrfLookupFailedError, a subclass) is not a refusal:
-    // it falls through and is retried like any other network failure.
+    // the cover allowlist, a private address, a Storage answer that redirects)
+    // is refused the same way every time: final, never retried, counted as a
+    // source we do not read. A failed lookup of the host
+    // (SsrfLookupFailedError, a subclass) is not a refusal: it falls through
+    // and is retried like any other network failure.
     const refused =
       err instanceof ItemImageUrlRefusedError ||
       (err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError));

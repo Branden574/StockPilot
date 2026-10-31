@@ -854,6 +854,12 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # That routing itself, with the real fetch against loopback servers: plain
+  # fetch only for a Storage read on the exact project origin, and it never
+  # follows a redirect (the origin's GoTrue verify answers a bogus token with a
+  # 303 to an allow-listed redirect_to); any other path there, or another
+  # project's host, goes through the guard and is refused.
+  src/lib/item-image-fetch.test.ts
   # The org logo in branded PDF headers is bytes, never a URL or path that
   # react-pdf would fetch or read itself: the headers draw only a PNG or JPEG
   # data: URI, and every route that reads logo_url for a PDF fetches it as
