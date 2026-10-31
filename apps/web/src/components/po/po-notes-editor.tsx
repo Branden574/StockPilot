@@ -16,6 +16,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updatePoNotesAction } from '@/server/actions/purchase-orders';
 
 const NOTES_MAX = 2000;
@@ -46,8 +48,17 @@ export function PoNotesEditor({
 
   async function save() {
     setBusy(true);
-    const res = await updatePoNotesAction(poId, value);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof updatePoNotesAction>>;
+    try {
+      res = await updatePoNotesAction(poId, value);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('save the notes'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

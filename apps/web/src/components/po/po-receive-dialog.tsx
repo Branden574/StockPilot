@@ -21,6 +21,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn, formatNumber } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { postReceiptAction } from '@/server/actions/receiving';
 
 import {
@@ -274,37 +276,48 @@ export function PoReceiveDialog({
     }
 
     setSubmitting(true);
-    const res = await postReceiptAction({
-      purchaseOrderId: poId,
-      warehouseId,
-      lines: submittable.map(({ line, entry }) => ({
-        poLineId: line.id,
-        qtyReceived: entry.received,
-        qtyAccepted: entry.accepted,
-        qtyRejected: entry.rejected,
-        notes: entry.notes || undefined,
-        lots:
-          line.trackingType === 'lot' && entry.accepted > 0
-            ? entry.lots.map((l) => ({
-                lotNumber: l.lotNumber.trim(),
-                expirationDate: l.expirationDate || null,
-                qtyBase: Number(l.qtyBase),
-              }))
-            : undefined,
-        // Blanks are filtered out, so a serial_optional line with an untouched
-        // grid sends an empty array (a legitimate pure-quantity receipt) and a
-        // partially filled grid sends only the tags that were actually
-        // scanned. For 'serial' the filter is a no-op — validation above
-        // already rejected any blank.
-        serials:
-          wantsSerials(line.trackingType) && entry.accepted > 0
-            ? entry.serials.map((s) => s.trim()).filter((s) => s.length > 0)
-            : undefined,
-      })),
-      notes: notes || undefined,
-      idempotencyKey,
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof postReceiptAction>>;
+    try {
+      res = await postReceiptAction({
+        purchaseOrderId: poId,
+        warehouseId,
+        lines: submittable.map(({ line, entry }) => ({
+          poLineId: line.id,
+          qtyReceived: entry.received,
+          qtyAccepted: entry.accepted,
+          qtyRejected: entry.rejected,
+          notes: entry.notes || undefined,
+          lots:
+            line.trackingType === 'lot' && entry.accepted > 0
+              ? entry.lots.map((l) => ({
+                  lotNumber: l.lotNumber.trim(),
+                  expirationDate: l.expirationDate || null,
+                  qtyBase: Number(l.qtyBase),
+                }))
+              : undefined,
+          // Blanks are filtered out, so a serial_optional line with an untouched
+          // grid sends an empty array (a legitimate pure-quantity receipt) and a
+          // partially filled grid sends only the tags that were actually
+          // scanned. For 'serial' the filter is a no-op — validation above
+          // already rejected any blank.
+          serials:
+            wantsSerials(line.trackingType) && entry.accepted > 0
+              ? entry.serials.map((s) => s.trim()).filter((s) => s.length > 0)
+              : undefined,
+        })),
+        notes: notes || undefined,
+        idempotencyKey,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The same Post sends the same idempotency key, so a receipt that did
+      // land is answered again, never posted twice.
+      fail(requestFailedMessage('post the receipt'));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!res.ok) {
       fail(res.error.message);
       return;

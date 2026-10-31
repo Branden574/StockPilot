@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { recurringPoSeedHref, storeRecurringPoSeed } from '@/lib/purchase-orders/recurring-seed';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { seedRecurringTemplateFromPoAction } from '@/server/actions/recurring-pos';
 
 interface Props {
@@ -25,8 +27,17 @@ export function MakeRecurringButton({ poId }: Props) {
 
   async function handle() {
     setBusy(true);
-    const res = await seedRecurringTemplateFromPoAction(poId);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof seedRecurringTemplateFromPoAction>>;
+    try {
+      res = await seedRecurringTemplateFromPoAction(poId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('open the recurring template'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

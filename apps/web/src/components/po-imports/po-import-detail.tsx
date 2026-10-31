@@ -35,6 +35,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   approvePoImportAction,
   cancelPoImportAction,
@@ -50,7 +52,6 @@ import {
 
 import { MappingConfirmation } from '@/components/po-imports/mapping-confirmation';
 
-import { isControlFlow } from '@/lib/control-flow';
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
 import { BLOCKING_LINE_RESULTS, LINE_RESULT_LABELS, type LineResult } from '@stockpilot/core';
@@ -304,8 +305,17 @@ export function PoImportDetail({
 
   async function reparse() {
     setBusy(true);
-    const r = await parsePoImportAction(header.id);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof parsePoImportAction>>;
+    try {
+      r = await parsePoImportAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('parse the import again'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) toast.error(r.error.message);
     else {
       toast.success('Import re-parsed.');
@@ -314,8 +324,17 @@ export function PoImportDetail({
   }
   async function confirmCancel() {
     setBusy(true);
-    const r = await cancelPoImportAction(header.id);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof cancelPoImportAction>>;
+    try {
+      r = await cancelPoImportAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('cancel the import'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

@@ -37,6 +37,8 @@ import { chunkInFilterValues, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-fil
 import { cn } from '@/lib/utils';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { formatCurrency } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 
 import type { SizeRunGroup } from './size-run-receive-grid';
@@ -960,8 +962,17 @@ export function PoForm({
 
     if (poId) {
       // Edit mode
-      const res = await updatePoAction(poId, payload);
-      setSubmitting(false);
+      let res: Awaited<ReturnType<typeof updatePoAction>>;
+      try {
+        res = await updatePoAction(poId, payload);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage('save the purchase order'));
+        return;
+      } finally {
+        setSubmitting(false);
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;
@@ -971,8 +982,17 @@ export function PoForm({
       router.push(`/dashboard/purchase-orders/${poId}`);
     } else {
       // Create mode
-      const res = await createPoAction(payload);
-      setSubmitting(false);
+      let res: Awaited<ReturnType<typeof createPoAction>>;
+      try {
+        res = await createPoAction(payload);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestUnconfirmedMessage('the purchase order was created', 'Purchase orders'));
+        return;
+      } finally {
+        setSubmitting(false);
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;

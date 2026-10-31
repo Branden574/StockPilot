@@ -21,6 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { confirmPoImportMappingsAction } from '@/server/actions/po-imports';
 
 import type { PoImportLineRow } from '@/server/services/po-imports';
@@ -74,11 +76,20 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
 
   async function submit() {
     setBusy(true);
-    const r = await confirmPoImportMappingsAction({
-      poImportId,
-      decisions: Object.fromEntries(flagged.map((l) => [l.id, choices[l.id]!])),
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof confirmPoImportMappingsAction>>;
+    try {
+      r = await confirmPoImportMappingsAction({
+        poImportId,
+        decisions: Object.fromEntries(flagged.map((l) => [l.id, choices[l.id]!])),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('confirm the mappings'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

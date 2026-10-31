@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { capture } from '@/lib/analytics';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updatePoStatusAction } from '@/server/actions/purchase-orders';
 
 /**
@@ -35,8 +37,17 @@ export function PoActions({
 
   async function setStatus(next: 'draft' | 'ordered' | 'cancelled') {
     setBusy(next);
-    const res = await updatePoStatusAction(poId, next);
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof updatePoStatusAction>>;
+    try {
+      res = await updatePoStatusAction(poId, next);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(`mark the purchase order as ${next}`));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

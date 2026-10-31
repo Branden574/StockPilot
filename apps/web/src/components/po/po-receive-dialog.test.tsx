@@ -24,7 +24,9 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setDefaultLocale } from '@/test/hydration';
+import { offline } from '@/test/rejected-request';
 
 import { PoReceiveDialog } from './po-receive-dialog';
 import type { SizeRunGroup } from './size-run-receive-grid';
@@ -333,6 +335,33 @@ describe('PoReceiveDialog — a failed post must be visible INSIDE the dialog', 
 
     resolveSecond?.({ ok: true, data: { receiptNumber: 'RC-9' } });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+// B40: Post receipt set `submitting`, awaited the action with no catch and
+// cleared it only when it answered. A post that got no answer (offline, a
+// server error, a deploy) left the button spinning with no message. The same
+// Post sends the same idempotency key, so posting again cannot receive twice.
+describe('PoReceiveDialog when the post gets no answer', () => {
+  it('says the receipt was not posted, in the dialog, keeps the entries and posts again with the same key', async () => {
+    postReceiptAction.mockRejectedValueOnce(offline());
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await user.click(screen.getByRole('button', { name: /^all$/i }));
+    await user.click(screen.getByRole('button', { name: /post receipt/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      requestFailedMessage('post the receipt'),
+    );
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(5);
+    const again = screen.getByRole('button', { name: /post receipt/i });
+    expect(again).toBeEnabled();
+
+    await user.click(again);
+    await waitFor(() => expect(postReceiptAction).toHaveBeenCalledTimes(2));
+    const [first, second] = postReceiptAction.mock.calls.map(
+      (c) => (c[0] as { idempotencyKey: string }).idempotencyKey,
+    );
+    expect(second).toBe(first);
   });
 });
 

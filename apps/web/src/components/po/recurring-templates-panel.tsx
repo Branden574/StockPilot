@@ -20,6 +20,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   createRecurringTemplateAction,
   deleteRecurringTemplateAction,
@@ -346,8 +348,17 @@ export function RecurringTemplatesPanel({
   async function toggleEnabled(tpl: RecurringTemplateRow) {
     setToggling(tpl.id);
     const next = !tpl.enabled;
-    const res = await setRecurringTemplateEnabledAction(tpl.id, next);
-    setToggling(null);
+    let res: Awaited<ReturnType<typeof setRecurringTemplateEnabledAction>>;
+    try {
+      res = await setRecurringTemplateEnabledAction(tpl.id, next);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(next ? 'turn the template on' : 'turn the template off'));
+      return;
+    } finally {
+      setToggling(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -360,8 +371,19 @@ export function RecurringTemplatesPanel({
 
   async function deleteTemplate(id: string) {
     setDeleting(id);
-    const res = await deleteRecurringTemplateAction(id);
-    setDeleting(null);
+    let res: Awaited<ReturnType<typeof deleteRecurringTemplateAction>>;
+    try {
+      res = await deleteRecurringTemplateAction(id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage('delete the template');
+      setDeleteError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setDeleting(null);
+    }
     if (!res.ok) {
       setDeleteError(res.error.message);
       toast.error(res.error.message);
@@ -414,10 +436,28 @@ export function RecurringTemplatesPanel({
 
     setSubmitting(true);
     const isEdit = formMode !== null && formMode !== 'new';
-    const res = isEdit
-      ? await updateRecurringTemplateAction(formMode!, input)
-      : await createRecurringTemplateAction(input);
-    setSubmitting(false);
+    let res:
+      | Awaited<ReturnType<typeof updateRecurringTemplateAction>>
+      | Awaited<ReturnType<typeof createRecurringTemplateAction>>;
+    try {
+      res = isEdit
+        ? await updateRecurringTemplateAction(formMode!, input)
+        : await createRecurringTemplateAction(input);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy). The form stays open
+      // with everything typed; a create may have been saved, so it says to
+      // look first.
+      toast.error(
+        isEdit
+          ? requestFailedMessage('save the template')
+          : requestUnconfirmedMessage('the template was created', 'the recurring templates'),
+      );
+      return;
+    } finally {
+      setSubmitting(false);
+    }
 
     if (!res.ok) {
       toast.error(res.error.message);

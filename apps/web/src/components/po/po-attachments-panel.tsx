@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import { addPoAttachmentAction, deletePoAttachmentAction } from '@/server/actions/po-attachments';
 import type { PoAttachment } from '@/server/services/po-attachments';
@@ -43,36 +45,51 @@ export function PoFileActions({
     setBusy(true);
     const supabase = createClient();
     let uploaded = 0;
-    for (const file of Array.from(files)) {
-      if (file.size > MAX_BYTES) {
-        toast.error(`${file.name} is too large (max 15 MB).`);
-        continue;
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > MAX_BYTES) {
+          toast.error(`${file.name} is too large (max 15 MB).`);
+          continue;
+        }
+        const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const path = `${organizationId}/${purchaseOrderId}/${crypto.randomUUID()}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from(BUCKET)
+          .upload(path, file, { contentType: file.type || undefined, upsert: false });
+        if (upErr) {
+          toast.error(`Upload failed: ${upErr.message}`);
+          continue;
+        }
+        let r: Awaited<ReturnType<typeof addPoAttachmentAction>>;
+        try {
+          r = await addPoAttachmentAction({
+            purchaseOrderId,
+            storagePath: path,
+            fileName: file.name,
+            contentType: file.type || null,
+            sizeBytes: file.size,
+          });
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+          // No answer (offline, a server error, a deploy): the file is stored,
+          // but whether it was attached is unknown, so it is left in place.
+          toast.error(requestUnconfirmedMessage(`${file.name} was attached`, "the PO's files"));
+          continue;
+        }
+        if (!r.ok) {
+          toast.error(r.error.message);
+          await supabase.storage.from(BUCKET).remove([path]); // roll back the orphan
+          continue;
+        }
+        uploaded += 1;
       }
-      const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const path = `${organizationId}/${purchaseOrderId}/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { contentType: file.type || undefined, upsert: false });
-      if (upErr) {
-        toast.error(`Upload failed: ${upErr.message}`);
-        continue;
-      }
-      const r = await addPoAttachmentAction({
-        purchaseOrderId,
-        storagePath: path,
-        fileName: file.name,
-        contentType: file.type || null,
-        sizeBytes: file.size,
-      });
-      if (!r.ok) {
-        toast.error(r.error.message);
-        await supabase.storage.from(BUCKET).remove([path]); // roll back the orphan
-        continue;
-      }
-      uploaded += 1;
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
     if (inputRef.current) inputRef.current.value = '';
+    // Read the page again only after an attach that answered: a refresh with
+    // no connection becomes a full page load (the browser's offline page).
     if (uploaded > 0) {
       toast.success(`Added ${uploaded} file${uploaded === 1 ? '' : 's'}.`);
       router.refresh();
@@ -127,8 +144,17 @@ export function PoAttachmentsList({
 
   async function onDelete(id: string) {
     setDeletingId(id);
-    const r = await deletePoAttachmentAction({ attachmentId: id, purchaseOrderId });
-    setDeletingId(null);
+    let r: Awaited<ReturnType<typeof deletePoAttachmentAction>>;
+    try {
+      r = await deletePoAttachmentAction({ attachmentId: id, purchaseOrderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('delete the file'));
+      return;
+    } finally {
+      setDeletingId(null);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

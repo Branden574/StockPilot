@@ -28,6 +28,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { reverseReceiptAction } from '@/server/actions/receiving';
 
 import type { ReceiptLineRow, ReceiptRow } from '@/server/services/receiving';
@@ -135,8 +137,17 @@ function ReceiptEntry({
       return;
     }
     setBusy(true);
-    const r = await reverseReceiptAction({ receiptId: receipt.id, reason: reason.trim() });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof reverseReceiptAction>>;
+    try {
+      r = await reverseReceiptAction({ receiptId: receipt.id, reason: reason.trim() });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage('reverse the receipt'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

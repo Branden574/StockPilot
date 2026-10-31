@@ -8,7 +8,9 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
 import { prettifyFileNameForDisplay } from '@/lib/po-imports/display-name';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   parsePoImportAction,
   presignPoUploadAction,
@@ -144,6 +146,13 @@ export function PoUploadForm() {
         toast.error(parsed.error.message);
       }
       router.push(`/dashboard/purchase-orders/imports/${recorded.data.id}`);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy, a dropped upload). The
+      // same file sent again is safe: the upload is recorded by its checksum,
+      // so a file that did land opens its existing import.
+      toast.error(requestFailedMessage('upload the file'));
     } finally {
       setSubmitting(false);
     }
