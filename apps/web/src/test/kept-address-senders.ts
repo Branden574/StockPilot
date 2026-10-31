@@ -28,8 +28,12 @@ import {
  *   - SENDS: its calls that send directly: sendEmail(…) under any receiver,
  *     a `.emails.send(…)` member call, and a fetch to the Resend API.
  *   - its calls of functions of the same file (by name, and `this.name(…)`)
- *     and of imported functions (named and namespace imports), each with the
- *     tables whose kept address, or a row holding it, an argument carries;
+ *     and of imported ones: a named or namespace import, and a member of an
+ *     import, of an instance made from one (`svc.method(…)` after
+ *     `svc = new Service(…)` or `await Service.forCurrentUser()`) or of one
+ *     made in place, looked up by name in the file the import resolves to;
+ *     each with the tables whose kept address, or a row holding it, an
+ *     argument carries;
  *   - the answer functions it calls (by name);
  *   - ALIAS SITES: an object key whose value is a kept address (the address
  *     itself, not a row that holds it), outside every call's arguments;
@@ -511,6 +515,37 @@ export function analyzeSenderFile(
     if (sizes() === before) break;
   }
 
+  // Variables holding something made from an import: `new Service(…)`, or
+  // the result of one of its members (`await Service.forCurrentUser()`).
+  const instances = new Map<string, ImportBinding>();
+  const madeFrom = (e: ts.Expression): ImportBinding | null => {
+    const x = unwrapAll(e);
+    const base = ts.isNewExpression(x)
+      ? unwrapAll(x.expression)
+      : ts.isCallExpression(x) && ts.isPropertyAccessExpression(unwrapExpression(x.expression))
+        ? unwrapAll((unwrapExpression(x.expression) as ts.PropertyAccessExpression).expression)
+        : null;
+    if (!base || !ts.isIdentifier(base)) return null;
+    const imp = imports.get(base.text);
+    return imp && !imp.typeOnly ? imp : null;
+  };
+  const findInstances = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const imp = madeFrom(n.initializer);
+      if (imp) instances.set(n.name.text, imp);
+    }
+    ts.forEachChild(n, findInstances);
+  };
+  findInstances(sf);
+  const memberOwner = (recv: ts.Expression): ImportBinding | null => {
+    if (ts.isIdentifier(recv)) {
+      const imp = imports.get(recv.text);
+      if (imp && !imp.typeOnly) return imp;
+      return instances.get(recv.text) ?? null;
+    }
+    return madeFrom(recv);
+  };
+
   // What each function reads, sends, calls, asks and passes on.
   const visit = (n: ts.Node) => {
     const owner = enclosingFunctionName(n);
@@ -631,21 +666,24 @@ export function analyzeSenderFile(
           u.localCalls.push({ line: line(), name: callee.text, carries });
         }
       } else if (ts.isPropertyAccessExpression(callee)) {
-        const recv = unwrapExpression(callee.expression);
+        const recv = unwrapAll(callee.expression);
+        // A member of something imported: a namespace (ns.f), an imported
+        // class or object (Service.forCurrentUser, api.post), an instance
+        // made from one (svc.method), or one made in place
+        // (new Service(ctx).method). The method is looked up by name in the
+        // file the import resolves to.
+        const owner = memberOwner(recv);
         if (recv.kind === ts.SyntaxKind.ThisKeyword) {
           u.localCalls.push({ line: line(), name: callee.name.text, carries });
-        } else if (ts.isIdentifier(recv)) {
-          const imp = imports.get(recv.text);
-          if (imp && imp.namespace && !imp.typeOnly) {
-            u.importCalls.push({
-              line: line(),
-              name: callee.name.text,
-              module: imp.module,
-              resolved: resolveModule(file, imp.module),
-              imported: callee.name.text,
-              carries,
-            });
-          }
+        } else if (owner) {
+          u.importCalls.push({
+            line: line(),
+            name: callee.name.text,
+            module: owner.module,
+            resolved: resolveModule(file, owner.module),
+            imported: callee.name.text,
+            carries,
+          });
         }
       }
     }

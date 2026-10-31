@@ -511,6 +511,41 @@ describe('kept-address senders (B23 guard)', () => {
     );
 
     it(
+      '(1) a sender reached through an instance of an imported class, made either way',
+      () => {
+        const planted: Source[] = [
+          {
+            file: 'apps/web/src/server/services/plant-notices.ts',
+            text: `
+              export class NoticeService {
+                static async forCurrentUser() {
+                  return new NoticeService();
+                }
+                async notify(to: string) {
+                  await sendEmail({ to, subject: 'Reopened', html: '' });
+                }
+              }`,
+          },
+          {
+            file: 'apps/web/src/server/services/plant-instance.ts',
+            text: `
+              import { NoticeService } from '@/server/services/plant-notices';
+              export async function reopen(admin: Admin, id: string) {${READ_MAINTENANCE}
+                const svc = await NoticeService.forCurrentUser();
+                await svc.notify(data!.requester_email_snapshot!);
+                await new NoticeService().notify(data!.requester_email_snapshot!);
+              }`,
+          },
+        ];
+        expect(withPlanted(planted)).toEqual([
+          'apps/web/src/server/services/plant-instance.ts:10 reopen() reads maintenance_requests.requester_email_snapshot and sends email through notify() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/plant-instance.ts:11 reopen() reads maintenance_requests.requester_email_snapshot and sends email through notify() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
       '(2) a support read through update().select(), and a select through a table constant the scan cannot read',
       () => {
         const planted: Source[] = [
