@@ -50,6 +50,9 @@ describe('MfaEnrollment', () => {
     await user.click(code);
     await user.paste('123 456');
     expect(code).toHaveValue('123456');
+    // Without a maxLength, the box itself keeps six digits and no more.
+    await user.paste('7');
+    expect(code).toHaveValue('123456');
     await user.type(screen.getByLabelText(/^Step 3/), TYPED_VALUE);
     await user.click(screen.getByRole('button', { name: 'Verify & enable' }));
 

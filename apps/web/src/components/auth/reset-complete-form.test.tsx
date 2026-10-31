@@ -195,6 +195,9 @@ describe('ResetCompleteForm: the authenticator code (B50)', () => {
     await user.click(box);
     await user.paste('123 456');
     expect(box).toHaveValue('123456');
+    // Without a maxLength, the box itself keeps six digits and no more.
+    await user.paste('7');
+    expect(box).toHaveValue('123456');
 
     await press(user);
     await waitFor(() => expect(h.complete).toHaveBeenCalledTimes(2));
