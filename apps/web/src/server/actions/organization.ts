@@ -3,13 +3,14 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { requireSession } from '@/lib/auth/session';
+import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ORG_TIMEZONE_OPTIONS } from '@/lib/timezone-options';
-import { audit } from '@/server/services/audit';
+import { audit, insertAuditRowReported } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
+import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { slugify } from '@/lib/utils';
 
 import {
@@ -21,16 +22,38 @@ import {
 } from '@stockpilot/core';
 
 /**
- * Bootstraps a new organization. Uses the admin (service-role) client because:
+ * Bootstraps a new organization, owned by the caller. PLATFORM ADMINS ONLY
+ * (owner decision b.9, docket S20), with the same gate as Platform > Provision:
+ * `checkPlatformAdmin({ requireStepUp: true })`, the VERIFIED sign-in email on
+ * the STOCKPILOT_PLATFORM_ADMIN_EMAILS allowlist plus an authenticator code from
+ * the last 15 minutes. It used to check only that the caller was signed in, and
+ * a Server Action is a public POST endpoint, so any account (a member of any
+ * workspace included) could create workspaces without the /onboarding form.
+ * The gate runs first, before the input is read or the service-role client is
+ * made, and outside any try: it redirects a signed-out caller to sign-in.
+ *
+ * Uses the admin (service-role) client because:
  *   - The current user can't be an org member of an org that doesn't exist yet,
  *     so RLS would reject the INSERT.
  *   - We bind the membership to `session.userId` taken from the validated
  *     server session, NOT from any client input — so this remains safe.
+ *
+ * Every workspace made here is recorded twice, once the owner membership
+ * exists (never for an organization rolled back): in the new organization's
+ * own audit log, and on Platform > Audit as "Provisioned org".
  */
 export async function createOrganizationAction(
   input: CreateOrganizationInput,
 ): Promise<ActionResult<{ organizationId: string; slug: string }>> {
-  const session = await requireSession();
+  const gate = await checkPlatformAdmin({ requireStepUp: true });
+  if (!gate.ok) {
+    return gate.reason === 'aal2_required'
+      ? err('forbidden', 'Re-authenticate with MFA to create a workspace.', {
+          reason: 'aal2_required',
+        })
+      : err('forbidden', 'Not authorized.');
+  }
+  const session = gate.session;
 
   const parsed = createOrganizationSchema.safeParse(input);
   if (!parsed.success) {
@@ -96,6 +119,24 @@ export async function createOrganizationAction(
     organization_id: orgId,
     name: 'Main Warehouse',
     type: 'warehouse',
+  });
+
+  // 5) Audit, awaited: the new organization's own row (the event Provision
+  //    writes, with via 'onboarding'), then the platform console's
+  //    org_provisioned. Neither writer throws; a lost row is reported.
+  await insertAuditRowReported({
+    organization_id: orgId,
+    user_id: session.userId,
+    event: 'organization.provisioned_by_platform_admin',
+    metadata: { entity_type: 'organization', entity_id: orgId, via: 'onboarding' },
+  });
+  await recordPlatformAudit({
+    actorUserId: session.userId,
+    actorEmail: session.email,
+    action: 'org_provisioned',
+    targetOrganizationId: orgId,
+    targetUserId: session.userId,
+    detail: { via: 'onboarding', slug: orgSlug },
   });
 
   revalidatePath('/dashboard');
