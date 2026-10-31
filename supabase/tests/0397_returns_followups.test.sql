@@ -737,9 +737,9 @@ select is(
 select is(
   (select coalesce(string_agg(x.sig, ','), '')
      from (values
-       -- Re-pinned by 0405 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an
+       -- Re-pinned by 0416 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an
        -- approver who may not write to the order's warehouse before the body changes
-       -- anything (0405 R3: removing that block gives this body exactly); for everyone else
+       -- anything (0416 R3: removing that block gives this body exactly); for everyone else
        -- the body is unchanged. The RMA cancel and the rest-close call it only after the
        -- RMA's own write check on the original order's warehouse, where the replacement is
        -- placed and the header guard keeps it.

@@ -5,7 +5,7 @@ import { orderCancelOffer } from './order-cancel';
 /**
  * L85 / L93: who is offered Cancel on an order, on the web and the phone.
  * The service's rule (svc.cancel): someone who approves orders may cancel any
- * open order in a warehouse they may write to (security slice E, 0405: the
+ * open order in a warehouse they may write to (security slice E, 0416: the
  * database asks it too); the person who placed it, only while it waits for
  * approval, wherever it is.
  */
@@ -47,7 +47,7 @@ describe('orderCancelOffer', () => {
     }
   });
 
-  // Security slice E (0405): an approver's cancel asks write access to the
+  // Security slice E (0416): an approver's cancel asks write access to the
   // order's warehouse, in the service and in cancel_order_request itself.
   // Mutation caught: the warehouse input ignored (an approver outside the
   // warehouse offered Cancel order, refused after the tap).

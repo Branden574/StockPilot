@@ -5,7 +5,7 @@ import type { OrderRequestStatus } from '@/server/services/order-requests';
 import { actionsPanelOffersReads, DOWNSTREAM_PACKING_STATUSES } from './actions-panel-reads';
 
 /**
- * Security slice E review (0405): the order page shows an approver outside
+ * Security slice E review (0416): the order page shows an approver outside
  * the order's warehouse the actions panel only where it carries a read
  * (Print pick slip at picking complete; from the packing slips on Print
  * customer slip and View signature), never where it would be an empty card

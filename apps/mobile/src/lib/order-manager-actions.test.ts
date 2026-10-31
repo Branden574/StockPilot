@@ -145,8 +145,8 @@ describe('orderManagerActions: Physical signature is a manager by role or the dr
   });
 });
 
-// Security slice E (0405): every approval-class action asks write access to
-// the order's warehouse (the six order functions since 0405; the pick slip,
+// Security slice E (0416): every approval-class action asks write access to
+// the order's warehouse (the six order functions since 0416; the pick slip,
 // packing slips, staging, delivery and the hand-over link before), so an
 // approver outside it is offered none of them; the assigned driver's own steps
 // ask no warehouse. Mutation caught: writesOrderWarehouse dropped from

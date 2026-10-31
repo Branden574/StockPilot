@@ -130,7 +130,7 @@ interface Props {
    *  sections render. False = staff driver assigned to this delivery
    *  who sees the panel ONLY for in-transit actions; they shouldn't
    *  see Approve / Deny / Reassign / Internal-Notes. Since security slice E
-   *  (0405) the order page passes it only for an approver who may write to
+   *  (0416) the order page passes it only for an approver who may write to
    *  this order's warehouse (approverWritesHere): every step it gates asks
    *  that in the service and the database, so an approver outside the
    *  warehouse is offered none of them. */

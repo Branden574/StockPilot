@@ -9,7 +9,7 @@ import {
 } from './order-warehouse-scope';
 
 /**
- * Security slice E (migration 0405): the phone's order screen reads the
+ * Security slice E (migration 0416): the phone's order screen reads the
  * viewer's warehouses with the order and offers an approver outside the
  * order's warehouse none of an approver's controls (and a picker there no
  * Claim or Release), as the web order page does. Each case names the

@@ -1,7 +1,7 @@
 /**
  * Who is offered Cancel on an order, on the web order page and the phone order
  * screen (L85, L93). The rule is the service's (OrderRequestsService.cancel)
- * and, since security slice E (migration 0405), cancel_order_request's own:
+ * and, since security slice E (migration 0416), cancel_order_request's own:
  *   - nobody without orders:request: the service asserts it before any rule,
  *     for approvers too (desk check F3);
  *   - someone who approves orders (orders:approve) may cancel any open order

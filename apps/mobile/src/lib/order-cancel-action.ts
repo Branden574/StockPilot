@@ -4,7 +4,7 @@ import { orderCancelOffer } from '@stockpilot/core';
  * Cancel on the phone's order screen (L93). WHO is offered it is core's
  * orderCancelOffer, the web order page's rule and the service's: someone who
  * approves orders at every open status in a warehouse they may write to
- * (security slice E, 0405: cancel_order_request asks it too), the person who
+ * (security slice E, 0416: cancel_order_request asks it too), the person who
  * placed it only while it waits for approval, and nobody without
  * orders:request, which the service asserts for every cancel (desk check F3).
  * The confirm carries the web's optional reason (Alert.prompt's text field),

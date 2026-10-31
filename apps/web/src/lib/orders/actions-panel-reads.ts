@@ -1,7 +1,7 @@
 /**
  * The order page's actions panel READS: what it offers that changes nothing.
  *
- * Security slice E (migration 0405) offers an approver outside the order's
+ * Security slice E (migration 0416) offers an approver outside the order's
  * warehouse none of the panel's steps, because every step asks write access
  * to that warehouse. The panel's reads ask none:
  *   - Print pick slip (pick-slip.pdf) and Print customer slip

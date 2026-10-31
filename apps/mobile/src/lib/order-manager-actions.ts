@@ -28,8 +28,8 @@ export interface OrderManagerActionsInput {
   /** The viewer may write to the ORDER's warehouse (order-warehouse-scope.ts
    *  orderWarehouseAccess `writes`): every warehouse for an owner, admin or
    *  manager, the assigned ones for staff, none for a viewer. Security slice
-   *  E (0405): every approval-class action here asks it (the six order
-   *  functions since 0405; the pick slip, packing slips, staging, delivery and
+   *  E (0416): every approval-class action here asks it (the six order
+   *  functions since 0416; the pick slip, packing slips, staging, delivery and
    *  the hand-over link before), so an approver outside the order's warehouse
    *  is offered none of them. An assigned driver's own steps do not ask it. */
   writesOrderWarehouse: boolean;

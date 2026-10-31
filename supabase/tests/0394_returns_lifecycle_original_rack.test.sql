@@ -1737,18 +1737,18 @@ select is(
        ('public.has_permission(uuid,text)',                           'cc0accdad7e2fdf4f88aa82aa887e85f'),
        ('public.user_can_access_inventory(uuid,uuid,uuid,text)',      '8a214b77e32a052ca3bf07a2be39a8ae'),
        ('public.is_org_member(uuid)',                                 '76492a6556e9f6a7c33d942aa9726f9f'),
-       -- Re-pinned by 0405 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an
+       -- Re-pinned by 0416 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an
        -- approver who may not write to the order's warehouse before the body changes
-       -- anything (0405 R2: removing that block gives this body exactly); for everyone else
+       -- anything (0416 R2: removing that block gives this body exactly); for everyone else
        -- the body is unchanged. The replacement issuer calls it only after asking write
        -- access to the original order's warehouse itself, where it places the replacement.
        ('public.approve_partial(uuid)',                               '897c53295f88b0bac7dcc03edd07211f'),
        -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester's
        -- window and the restock link (0395 R1); the linked restocks are 'return'
        -- movements, which the pick reads ('transfer', quantity < 0) never match.
-       -- Re-pinned by 0405 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an
+       -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an
        -- approver's cancel outside the order's warehouses and counts an order with no
-       -- requester account as nobody's own (0405 R6: removing both gives this body
+       -- requester account as nobody's own (0416 R6: removing both gives this body
        -- exactly); the cancel and its restocks are unchanged. Every RMA cancel of a
        -- replacement runs as an approver who passed the RMA's own write check on the
        -- original order's warehouse, where the replacement is placed and the header guard
@@ -1759,14 +1759,14 @@ select is(
        -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements
        -- carry the order (0395 R2); they put stock back (quantity > 0), which the
        -- pick reads never match, and the reopened rule still reads the reason.
-       -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an
+       -- Re-pinned by 0416 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an
        -- approver who may not write to the order's warehouse before the body changes
-       -- anything (0405 R5: removing that block gives this body exactly); for everyone else
+       -- anything (0416 R5: removing that block gives this body exactly); for everyone else
        -- the body is unchanged. No RMA function calls it.
        ('public.reopen_picking(uuid,text)',                           'b62fbb68ee0d0eb44a9e641921a757e5'),
-       -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an
+       -- Re-pinned by 0416 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an
        -- approver who may not write to the order's warehouse before the body changes
-       -- anything (0405 R4: removing that block gives this body exactly); for everyone else
+       -- anything (0416 R4: removing that block gives this body exactly); for everyone else
        -- the body is unchanged. No RMA function calls it.
        ('public.resume_fulfillment(uuid)',                            'ce593a9203c41c1a7311b1af27d4cbd3'),
        ('public.order_items_orderable(uuid,uuid[])',                  'b4df95d74e32850923a430769f96f246')

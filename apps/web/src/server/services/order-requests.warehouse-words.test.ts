@@ -293,7 +293,7 @@ describe('Hold available stock and the needed-by date say the same sentence (one
 });
 
 /**
- * Security slice E (0405): the six order functions an approver calls refuse a
+ * Security slice E (0416): the six order functions an approver calls refuse a
  * caller outside the order's warehouse themselves (42501 forbidden, hint
  * warehouse_write). The service asks the same first, so the function's answer
  * reaches it only when the two disagree for a moment: an assignment removed
@@ -303,7 +303,7 @@ describe('Hold available stock and the needed-by date say the same sentence (one
  * orders:approve" or "You can only cancel your own requests" (what each
  * method's `includes('forbidden')` arm says).
  */
-describe("the functions' own warehouse refusal (slice E, 0405) is the one sentence", () => {
+describe("the functions' own warehouse refusal (slice E, 0416) is the one sentence", () => {
   const OUTSIDE = {
     data: null,
     error: { code: '42501', message: 'forbidden', hint: 'warehouse_write' },

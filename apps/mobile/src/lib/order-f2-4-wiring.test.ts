@@ -138,7 +138,7 @@ function bodyOf(src: string, file: string, name: string): string {
 
 describe('the order screen: the needed-by card and Change', () => {
   // Mutation caught: Change for a non-approver, a closed order, or Orders off,
-  // or (security slice E, 0405) outside the order's warehouse.
+  // or (security slice E, 0416) outside the order's warehouse.
   it('Change is offered by the tested gate: orders:approve in the effective set, in the order’s warehouse, on an open order where Orders is on', () => {
     expect(screen).toMatch(
       /const canChangeNeededBy =\s*order !== null &&\s*canOfferNeededByChange\(\{\s*status: order\.status,\s*role,\s*canApproveOrders: rpApprove && writesHere,\s*ordersModuleEnabled: enabledModules\.has\('orders'\),?\s*\}\);/,

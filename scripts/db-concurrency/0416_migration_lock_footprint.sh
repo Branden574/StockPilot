@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0405 (security slice E). The file restates six
+# Lock footprint of migration 0416 (security slice E). The file restates six
 # order functions and their comments and nothing else. What it locks:
 #
 #   - public.order_requests, AccessShareLock, released at once. Checking a
@@ -54,15 +54,15 @@
 #       and ends with 55P03.
 #
 # The migration sessions roll back, except check 7's control, which commits
-# the file itself: the stack already has 0405, so no body or comment text
-# changes. Runs against a LOCAL stack only, with 0405 applied (running the
+# the file itself: the stack already has 0416, so no body or comment text
+# changes. Runs against a LOCAL stack only, with 0416 applied (running the
 # file again is the same statements; CONTAINER as in
-# 0405_cancel_scope_race.sh, default the dev stack's supabase_db_stockpilot;
+# 0416_cancel_scope_race.sh, default the dev stack's supabase_db_stockpilot;
 # the migration scratch stack is supabase_db_spmig). Fixtures live under the
-# 04052222-... namespace and are removed at the start, at the end and by the
+# 04162222-... namespace and are removed at the start, at the end and by the
 # EXIT trap. Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0405_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0416_migration_lock_footprint.sh
 
 set -uo pipefail
 
@@ -73,11 +73,11 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MIG="${MIG:-$(ls "$REPO"/supabase/migrations/*_order_functions_warehouse_scope.sql 2>/dev/null | head -n 1)}"
 TMP="$(mktemp -d)"
 
-ORG='04052222-0000-0000-0000-00000000000a'
-MGR='04052222-0000-0000-0000-0000000000a1'
-WH='04052222-0000-0000-0000-0000000000c1'
-IT='04052222-0000-0000-0000-0000000000c3'
-O1='04052222-0000-0000-0000-0000000000d1'
+ORG='04162222-0000-0000-0000-00000000000a'
+MGR='04162222-0000-0000-0000-0000000000a1'
+WH='04162222-0000-0000-0000-0000000000c1'
+IT='04162222-0000-0000-0000-0000000000c3'
+O1='04162222-0000-0000-0000-0000000000d1'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -192,7 +192,7 @@ trap 'exit 129' HUP
 
 [ -n "$MIG" ] && [ -f "$MIG" ] || { echo "missing supabase/migrations/*_order_functions_warehouse_scope.sql"; exit 1; }
 if [ "$(q "select count(*) from pg_proc where proname = 'cancel_order_request' and prosrc like '%Slice E: an approver''s cancel asks write access%'")" != "1" ]; then
-  echo "0405 is not applied on this stack"; exit 1
+  echo "0416 is not applied on this stack"; exit 1
 fi
 if grep -qiE '^[[:space:]]*(begin|commit|rollback|start transaction)[[:space:]]*;' "$MIG"; then
   echo "the file has its own transaction control: this script wraps it in one"; exit 1
@@ -200,12 +200,12 @@ fi
 cleanup || exit 1
 
 if ! "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0405-fp-mgr@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0405 Footprint Org', '0405-footprint');
+insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0416-fp-mgr@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0416 Footprint Org', '0416-footprint');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$MGR', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0405 FP Main', 'WH-0405-FP', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0416 FP Main', 'WH-0416-FP', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$IT', '$ORG', '$WH', 'FP item', 'SKU-0405-FP', 100, 'active');
+  ('$IT', '$ORG', '$WH', 'FP item', 'SKU-0416-FP', 100, 'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
   values ('$O1', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'pickup');
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values ('$O1', '$IT', 2);
@@ -243,7 +243,7 @@ push_file() { # push_file <application_name> <out>
 
 # ═══ 1 and 2. The file alone ══════════════════════════════════════════════
 echo "== 1-2. the file in one transaction, rolled back"
-if run_file 0405-fp-alone "$TMP/alone.out"; then ok "1: the file ran"; else bad "1: the file failed: $(cat "$TMP/alone.out")"; fi
+if run_file 0416-fp-alone "$TMP/alone.out"; then ok "1: the file ran"; else bad "1: the file failed: $(cat "$TMP/alone.out")"; fi
 check "1a: no table lock outside the catalogs is still held at the end (order_requests' AccessShareLock is released at once; checks 5 and 8 see it)" "$(grep '^tables=' "$TMP/alone.out")" "tables=none"
 check "1b: object locks: COMMENT's ShareUpdateExclusiveLock on the six functions, nothing else" "$(grep '^objects=' "$TMP/alone.out")" "objects=6/6"
 below "2: the file runs fast" "$(grep '^ms=' "$TMP/alone.out" | cut -d= -f2)" 250
@@ -251,7 +251,7 @@ below "2: the file runs fast" "$(grep '^ms=' "$TMP/alone.out" | cut -d= -f2)" 25
 # ═══ 3. A call in flight ══════════════════════════════════════════════════
 echo "== 3. the file while a manager's cancel waits on its order row"
 ( "${PSQL[@]}" > "$TMP/holder.out" 2>&1 <<SQL
-set application_name to '0405-fp-holder';
+set application_name to '0416-fp-holder';
 begin;
 select 'H=' || id from public.order_requests where id = '$O1' for update;
 select pg_sleep(3);
@@ -259,9 +259,9 @@ rollback;
 SQL
 ) &
 PH=$!
-wait_event 0405-fp-holder PgSleep || bad "3: the holder never reached its pg_sleep"
+wait_event 0416-fp-holder PgSleep || bad "3: the holder never reached its pg_sleep"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/call.out" 2>&1 <<SQL
-set application_name to '0405-fp-call';
+set application_name to '0416-fp-call';
 begin;
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
@@ -271,9 +271,9 @@ rollback;
 SQL
 ) &
 PA=$!
-if wait_locked 0405-fp-call; then ok "3: the cancel waits on the order row"; else bad "3: the cancel never waited on the row"; fi
-if run_file 0405-fp-file "$TMP/file.out"; then ok "3: the file ran while the cancel was in flight"; else bad "3: the file failed: $(cat "$TMP/file.out")"; fi
-check "3: the cancel was still waiting when the file finished" "$(waiting_on_lock 0405-fp-call)" "1"
+if wait_locked 0416-fp-call; then ok "3: the cancel waits on the order row"; else bad "3: the cancel never waited on the row"; fi
+if run_file 0416-fp-file "$TMP/file.out"; then ok "3: the file ran while the cancel was in flight"; else bad "3: the file failed: $(cat "$TMP/file.out")"; fi
+check "3: the cancel was still waiting when the file finished" "$(waiting_on_lock 0416-fp-call)" "1"
 below "3: the file finished under its lock_timeout" "$(grep '^ms=' "$TMP/file.out" | cut -d= -f2)" 900
 check "3: no lock on a table outside the catalogs" "$(grep '^tables=' "$TMP/file.out")" "tables=none"
 wait "$PH"; wait "$PA"
@@ -287,12 +287,12 @@ check "4: none in any session's output" "$(cat "$TMP"/*.out | grep -cE '55P03|40
 # ═══ 5. The one table the file waits for ══════════════════════════════════
 echo "== 5. ACCESS EXCLUSIVE held on public.order_requests: the file, run as the push runs it"
 before="$(row_versions)"
-hold 0405-fp-ae-holder "lock table public.order_requests in access exclusive mode;" 4 "$TMP/ae-holder.log" &
+hold 0416-fp-ae-holder "lock table public.order_requests in access exclusive mode;" 4 "$TMP/ae-holder.log" &
 PH=$!
-wait_event 0405-fp-ae-holder PgSleep || bad "5: the holder never got its lock: $(cat "$TMP/ae-holder.log")"
-observe_wait 0405-fp-ae-file 'CREATE OR REPLACE FUNCTION public\.approve_order_request\(' "$TMP/ae-observed.log" &
+wait_event 0416-fp-ae-holder PgSleep || bad "5: the holder never got its lock: $(cat "$TMP/ae-holder.log")"
+observe_wait 0416-fp-ae-file 'CREATE OR REPLACE FUNCTION public\.approve_order_request\(' "$TMP/ae-observed.log" &
 PO=$!
-t0=$(now_ms); push_file 0405-fp-ae-file "$TMP/ae-file.x55"; rc=$?; t1=$(now_ms)
+t0=$(now_ms); push_file 0416-fp-ae-file "$TMP/ae-file.x55"; rc=$?; t1=$(now_ms)
 wait "$PO"; wait "$PH"
 check "5: it waits on an AccessShareLock on order_requests, and nothing else" "$(grep '^waits=' "$TMP/ae-observed.log")" "waits=relation:order_requests:AccessShareLock"
 check "5: in approve_order_request's statement, the first body" "$(grep '^statement=' "$TMP/ae-observed.log")" "statement=1"
@@ -307,34 +307,34 @@ OTHERS_WHERE="c.relkind in ('r', 'p') and n.nspname in ('public', 'ledger') and 
 OTHERS="$(q "select string_agg(format('%I.%I', n.nspname, c.relname), ', ' order by n.nspname, c.relname)
                from pg_class c join pg_namespace n on n.oid = c.relnamespace where $OTHERS_WHERE")"
 NOTHERS="$(q "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where $OTHERS_WHERE")"
-hold 0405-fp-others-holder "lock table $OTHERS in access exclusive mode;" 3 "$TMP/others-holder.log" &
+hold 0416-fp-others-holder "lock table $OTHERS in access exclusive mode;" 3 "$TMP/others-holder.log" &
 PH=$!
-if wait_event 0405-fp-others-holder PgSleep; then
+if wait_event 0416-fp-others-holder PgSleep; then
   ok "6: another session holds ACCESS EXCLUSIVE on $NOTHERS tables"
 else
   bad "6: the holder never got its locks: $(cat "$TMP/others-holder.log")"
 fi
-if run_file 0405-fp-others "$TMP/others.log"; then ok "6: the file ran"; else bad "6: the file failed: $(cat "$TMP/others.log")"; fi
+if run_file 0416-fp-others "$TMP/others.log"; then ok "6: the file ran"; else bad "6: the file failed: $(cat "$TMP/others.log")"; fi
 below "6: under its lock_timeout" "$(grep '^ms=' "$TMP/others.log" | cut -d= -f2)" 900
-check "6: the holder still held them when the file finished" "$(q "select count(*) from pg_stat_activity where application_name = '0405-fp-others-holder' and wait_event = 'PgSleep'")" "1"
+check "6: the holder still held them when the file finished" "$(q "select count(*) from pg_stat_activity where application_name = '0416-fp-others-holder' and wait_event = 'PgSleep'")" "1"
 wait "$PH"
 
 # ═══ 7. A file that fails applies nothing ═════════════════════════════════
 echo "== 7. COMMENT's lock on cancel_order_request held elsewhere: the file, run as the push runs it"
 before="$(row_versions)"
-hold 0405-fp-late-holder "comment on function public.cancel_order_request(uuid, text) is 'held by the 0405 footprint check';" 4 "$TMP/late-holder.log" &
+hold 0416-fp-late-holder "comment on function public.cancel_order_request(uuid, text) is 'held by the 0416 footprint check';" 4 "$TMP/late-holder.log" &
 PH=$!
-wait_event 0405-fp-late-holder PgSleep || bad "7: the holder never got its lock: $(cat "$TMP/late-holder.log")"
-observe_wait 0405-fp-late-file 'comment on function public\.cancel_order_request\(' "$TMP/late-observed.log" &
+wait_event 0416-fp-late-holder PgSleep || bad "7: the holder never got its lock: $(cat "$TMP/late-holder.log")"
+observe_wait 0416-fp-late-file 'comment on function public\.cancel_order_request\(' "$TMP/late-observed.log" &
 PO=$!
-push_file 0405-fp-late-file "$TMP/late-file.x55"; rc=$?
+push_file 0416-fp-late-file "$TMP/late-file.x55"; rc=$?
 wait "$PO"; wait "$PH"
 check "7: it reached the last statement, cancel_order_request's comment" "$(grep '^statement=' "$TMP/late-observed.log")" "statement=1"
 check "7: there it waits on that function's ShareUpdateExclusiveLock" "$(grep '^waits=' "$TMP/late-observed.log")" "waits=object:-:ShareUpdateExclusiveLock"
 check "7: the file ends with 55P03 (psql exit 3)" "$rc:$(grep -c '55P03' "$TMP/late-file.x55")" "3:1"
 check "7: nothing kept: the six bodies and five comments it wrote are rolled back" "$(changed_rows "$before" "$(row_versions)")" "0"
 echo "== 7. control: the same file committed with nothing held (the stack has it already: the same text)"
-if push_file 0405-fp-control "$TMP/control.log"; then ok "7: control: the file committed"; else bad "7: control: the file failed: $(cat "$TMP/control.log")"; fi
+if push_file 0416-fp-control "$TMP/control.log"; then ok "7: control: the file committed"; else bad "7: control: the file failed: $(cat "$TMP/control.log")"; fi
 check "7: control: all twelve row versions rewritten (the witness sees a kept statement)" "$(changed_rows "$before" "$(row_versions)")" "12"
 
 # ═══ 8. Once per session ══════════════════════════════════════════════════
@@ -342,19 +342,19 @@ echo "== 8. a session that compiled the first body takes no second lock; a fresh
 FIRST_END="$(awk '/^\$function\$;$/ { print NR; exit }' "$MIG")"
 APART="$(awk '/^CREATE OR REPLACE FUNCTION public\.approve_partial\(/ { p = 1 } p { print } p && /^\$function\$;$/ { exit }' "$MIG")"
 if [ -z "$FIRST_END" ] || [ -z "$APART" ]; then bad "8: could not find the first body's end or approve_partial in the file"; fi
-( { echo "set application_name to '0405-fp-warm';"; echo "begin;"; head -n "$FIRST_END" "$MIG"
+( { echo "set application_name to '0416-fp-warm';"; echo "begin;"; head -n "$FIRST_END" "$MIG"
     echo "select 'F1=done';"; echo "select pg_sleep(1.5);"; tail -n +"$((FIRST_END + 1))" "$MIG"
     echo "select 'F2=done';"
-    echo "select 'H-held=' || count(*) from pg_stat_activity where application_name = '0405-fp-warm-holder' and wait_event = 'PgSleep';"
+    echo "select 'H-held=' || count(*) from pg_stat_activity where application_name = '0416-fp-warm-holder' and wait_event = 'PgSleep';"
     echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/warm.log" 2>&1 ) &
 PW=$!
-wait_event 0405-fp-warm PgSleep || bad "8: the warm session never reached its pause"
+wait_event 0416-fp-warm PgSleep || bad "8: the warm session never reached its pause"
 check "8: between bodies the warm session keeps no lock on order_requests" \
-  "$(q "select count(*) from pg_locks l join pg_stat_activity a on a.pid = l.pid where a.application_name = '0405-fp-warm' and l.locktype = 'relation' and l.relation = 'public.order_requests'::regclass")" "0"
-hold 0405-fp-warm-holder "lock table public.order_requests in access exclusive mode;" 3 "$TMP/warm-holder.log" &
+  "$(q "select count(*) from pg_locks l join pg_stat_activity a on a.pid = l.pid where a.application_name = '0416-fp-warm' and l.locktype = 'relation' and l.relation = 'public.order_requests'::regclass")" "0"
+hold 0416-fp-warm-holder "lock table public.order_requests in access exclusive mode;" 3 "$TMP/warm-holder.log" &
 PH=$!
-wait_event 0405-fp-warm-holder PgSleep || bad "8: ACCESS EXCLUSIVE was not granted while the warm session was open: $(cat "$TMP/warm-holder.log")"
-( { echo "set application_name to '0405-fp-cold';"; echo "set lock_timeout = '900ms';"; echo "begin;"; echo "$APART"; echo "select 'G=done';"; echo "rollback;"; } \
+wait_event 0416-fp-warm-holder PgSleep || bad "8: ACCESS EXCLUSIVE was not granted while the warm session was open: $(cat "$TMP/warm-holder.log")"
+( { echo "set application_name to '0416-fp-cold';"; echo "set lock_timeout = '900ms';"; echo "begin;"; echo "$APART"; echo "select 'G=done';"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/cold.x55" 2>&1 ) &
 PC=$!
 wait "$PW"; wait "$PC"; wait "$PH"

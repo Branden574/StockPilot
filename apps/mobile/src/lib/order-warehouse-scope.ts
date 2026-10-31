@@ -1,9 +1,9 @@
 /**
  * Which of an order's warehouses the viewer works in, on the phone's order
- * screen (security slice E, migration 0405).
+ * screen (security slice E, migration 0416).
  *
  * An approver acts on an order only in a warehouse they may write to: the six
- * order functions ask it since 0405 (approve, approve partial, close, resume,
+ * order functions ask it since 0416 (approve, approve partial, close, resume,
  * reopen, an approver's cancel), the service asks it first, and hold, the
  * needed-by date, the pick slip, picking, staging and delivery asked it
  * before. The screen used to offer a staff approver of warehouse A Approve,

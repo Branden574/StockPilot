@@ -728,7 +728,7 @@ function isWarehouseAccessUnreadable(e: unknown): boolean {
 }
 
 /**
- * Security slice E (0405): approve_order_request, approve_partial,
+ * Security slice E (0416): approve_order_request, approve_partial,
  * close_partial, resume_fulfillment, reopen_picking and an approver's
  * cancel_order_request refuse a caller without write access to the order's
  * warehouse themselves (42501 forbidden, hint warehouse_write). The service
@@ -3134,7 +3134,7 @@ export class OrderRequestsService {
       // review): a staff member who approves orders in warehouse A could
       // cancel a warehouse B order from the order page, releasing its holds
       // or restocking its picked batch, on the page where every other action
-      // already refused. Since security slice E (0405) cancel_order_request
+      // already refused. Since security slice E (0416) cancel_order_request
       // asks the same itself, on the order row it locks (so an order read
       // here as the approver's own pending request that was approved before
       // the call is refused there: orderWarehouseRefusal below). Owners,
@@ -3182,7 +3182,7 @@ export class OrderRequestsService {
       // Returns RX-2: the cancel guard on a replacement, by its hint.
       const refusal = replacementRefusal(error);
       if (refusal) throw refusal;
-      // Slice E (0405): an approver's cancel outside their warehouses. Also
+      // Slice E (0416): an approver's cancel outside their warehouses. Also
       // the race the requester branch above leaves: their own order read as
       // pending (no warehouse asked) and approved before this call, which the
       // function now decides on the row it locks.
@@ -3278,7 +3278,7 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
       // 0390: the database asks orders:approve alone, as assertPermission did.
-      // Slice E (0405): the function's own warehouse refusal, before the
+      // Slice E (0416): the function's own warehouse refusal, before the
       // 'forbidden' arm below reads it as a missing permission.
       const outside = orderWarehouseRefusal(error);
       if (outside) throw outside;
@@ -3813,7 +3813,7 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
       // 0390: the database asks orders:approve alone, as assertPermission did.
-      // Slice E (0405): the function's own warehouse refusal, before the
+      // Slice E (0416): the function's own warehouse refusal, before the
       // 'forbidden' arm below reads it as a missing permission.
       const outside = orderWarehouseRefusal(error);
       if (outside) throw outside;
@@ -4061,7 +4061,7 @@ export class OrderRequestsService {
           'validation_error',
           'No stock is available yet to fulfill the backordered items. Top up the short items first.',
         );
-      // Slice E (0405): the function's own warehouse refusal, before the
+      // Slice E (0416): the function's own warehouse refusal, before the
       // 'forbidden' arm below reads it as a missing permission.
       const outside = orderWarehouseRefusal(error);
       if (outside) throw outside;
@@ -4124,7 +4124,7 @@ export class OrderRequestsService {
           'conflict',
           "This order has been signed for and can't be reopened.",
         );
-      // Slice E (0405): the function's own warehouse refusal, before the
+      // Slice E (0416): the function's own warehouse refusal, before the
       // 'forbidden' arm below reads it as a missing permission.
       const outside = orderWarehouseRefusal(error);
       if (outside) throw outside;
@@ -4180,7 +4180,7 @@ export class OrderRequestsService {
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
-      // Slice E (0405): the function's own warehouse refusal, before the
+      // Slice E (0416): the function's own warehouse refusal, before the
       // 'forbidden' arm below reads it as a missing permission.
       const outside = orderWarehouseRefusal(error);
       if (outside) throw outside;

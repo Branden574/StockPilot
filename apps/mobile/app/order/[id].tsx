@@ -412,7 +412,7 @@ interface OrderHeader {
   /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
    *  the driver's line); null for an ordinary order or when unread. */
   replacement: MobileOrderReplacement | null;
-  /** Security slice E (0405): the viewer's warehouses, read with this order
+  /** Security slice E (0416): the viewer's warehouses, read with this order
    *  for an approver below manager rank, or a picker at a picking status
    *  (lib/order-warehouse-scope.ts). Null: not read (nothing it decides). */
   warehouseScope: OrderWarehouseScope | null;
@@ -900,7 +900,7 @@ export default function OrderDetail() {
   // Returns RX-2: an exchange replacement's items come from its RMA; they are
   // changed or cancelled only there ("Change or cancel in RMA-…").
   const isReplacementOrder = Boolean(order?.replacementForReturnId);
-  // SECURITY SLICE E (0405): what the viewer may do to THIS order by its
+  // SECURITY SLICE E (0416): what the viewer may do to THIS order by its
   // warehouse, from the scope read with it (lib/order-warehouse-scope.ts):
   // every warehouse for an owner, admin or manager; the assigned ones for
   // anyone else; never write for a viewer. An approver outside the order's
@@ -1512,7 +1512,7 @@ export default function OrderDetail() {
       })
         ? readOrgTimeZone(supabase, orgId)
         : null;
-    // Security slice E (0405): the viewer's warehouses, started beside the
+    // Security slice E (0416): the viewer's warehouses, started beside the
     // lines read (no serial round trip), for an approver below manager rank
     // (their controls ask write access to the order's warehouse at every
     // status) or a picker at a picking status (Claim and Release ask it).

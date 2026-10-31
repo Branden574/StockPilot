@@ -765,7 +765,7 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
-  # Approver warehouse scope (0405, security slice E): approve_order_request,
+  # Approver warehouse scope (0416, security slice E): approve_order_request,
   # approve_partial, close_partial, resume_fulfillment and reopen_picking
   # refuse a caller without write access to the order's warehouse
   # (user_can_access_warehouse 'write', the order update policy's term;
@@ -778,9 +778,9 @@ PGTAP_TESTS=(
   # order, so only an approver cancels it. Every restated body is
   # production's with its added blocks removed, and taking each block out
   # lets the refused call through. The two-session proofs are
-  # scripts/db-concurrency/0405_cancel_scope_race.sh; the lock footprint is
-  # scripts/db-concurrency/0405_migration_lock_footprint.sh.
-  supabase/tests/0405_order_functions_warehouse_scope.test.sql
+  # scripts/db-concurrency/0416_cancel_scope_race.sh; the lock footprint is
+  # scripts/db-concurrency/0416_migration_lock_footprint.sh.
+  supabase/tests/0416_order_functions_warehouse_scope.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

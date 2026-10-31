@@ -505,7 +505,7 @@ describe('the order screen', () => {
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {
-    // Re-pinned by security slice E (0405): an approver's line edits also ask
+    // Re-pinned by security slice E (0416): an approver's line edits also ask
     // the order's warehouse (linesInScope); the replacement rule is unchanged.
     expect(screen).toContain(
       'const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder && linesInScope;',

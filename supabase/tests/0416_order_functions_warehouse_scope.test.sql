@@ -1,10 +1,18 @@
--- supabase/tests/0405_order_functions_warehouse_scope.test.sql
--- pgTAP proof for migration 0405 (security slice E): the six order functions
+-- supabase/tests/0416_order_functions_warehouse_scope.test.sql
+-- pgTAP proof for migration 0416 (security slice E): the six order functions
 -- that asked orders:approve alone now ask write access to the order's
 -- warehouse too (cancel: on the approver's path only), and cancel no longer
 -- lets anyone cancel a pending order that has no requester account. Written
--- to fail against the pre-0405 head (0401) in every section but P, G and the
--- fixture checks; the M-section shows it on the live bodies.
+-- to fail against the head before it (0401 when it was written, 0414 at the
+-- renumber) in every section but P, G and the fixture checks; the M-section
+-- shows it on the live bodies.
+--
+-- Written and reviewed as 0405, renumbered 0416 on 2026-10-31 (0413, 0414
+-- and 0415 ship first). The migration moved byte for byte, so its text still
+-- says 0405: its header line, the lock footprint script's old path in a
+-- comment (now scripts/db-concurrency/0416_migration_lock_footprint.sh) and
+-- the six function comments. No check here reads that number: P2 is keyed on
+-- the words of the rule, and R1-R6 strip the blocks tagged "Slice E".
 --
 -- Personas (one org, plus a second org and a signed-in nobody):
 --   own    owner                 adm    admin
@@ -46,72 +54,72 @@
 --
 -- Two sessions (a cancel waiting on an order that another session approves
 -- under its lock) need two connections: scripts/db-concurrency/
--- 0405_cancel_scope_race.sh.
+-- 0416_cancel_scope_race.sh.
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt (always undone), which switches role and claims with
 -- set_config inside a subtransaction (the 0387 helpers), so the pgTAP
 -- bookkeeping never runs as an API role. begin/rollback: nothing leaks.
--- Namespace 04050000.
+-- Namespace 04160000.
 
 begin;
 
 select plan(36);
 
-\set orgA    '\'04050000-0000-0000-0000-00000000000a\''
-\set orgZ    '\'04050000-0000-0000-0000-00000000000b\''
-\set own     '\'04050000-0000-0000-0000-0000000000a0\''
-\set adm     '\'04050000-0000-0000-0000-0000000000a1\''
-\set mgr     '\'04050000-0000-0000-0000-0000000000a2\''
-\set mgrNo   '\'04050000-0000-0000-0000-0000000000a3\''
-\set stfAp   '\'04050000-0000-0000-0000-0000000000a4\''
-\set stfAB   '\'04050000-0000-0000-0000-0000000000a5\''
-\set vwrAp   '\'04050000-0000-0000-0000-0000000000a6\''
-\set req     '\'04050000-0000-0000-0000-0000000000a7\''
-\set stf     '\'04050000-0000-0000-0000-0000000000a8\''
-\set vwr     '\'04050000-0000-0000-0000-0000000000a9\''
-\set outZ    '\'04050000-0000-0000-0000-0000000000b1\''
-\set nobody  '\'04050000-0000-0000-0000-0000000000c1\''
-\set whA     '\'04050000-0000-0000-0000-0000000000d1\''
-\set whB     '\'04050000-0000-0000-0000-0000000000d2\''
-\set whZ     '\'04050000-0000-0000-0000-0000000000d3\''
-\set itA     '\'04050000-0000-0000-0000-0000000000e1\''
-\set itB     '\'04050000-0000-0000-0000-0000000000e2\''
-\set oApA    '\'04050000-0000-0000-0000-000000000101\''
-\set oApB    '\'04050000-0000-0000-0000-000000000102\''
-\set oBkA    '\'04050000-0000-0000-0000-000000000103\''
-\set oBkB    '\'04050000-0000-0000-0000-000000000104\''
-\set oPcA    '\'04050000-0000-0000-0000-000000000105\''
-\set oPcB    '\'04050000-0000-0000-0000-000000000106\''
-\set oAppA   '\'04050000-0000-0000-0000-000000000107\''
-\set oAppB   '\'04050000-0000-0000-0000-000000000108\''
-\set oOwnPB  '\'04050000-0000-0000-0000-000000000109\''
-\set oOwnAB  '\'04050000-0000-0000-0000-00000000010a\''
-\set oOwnAA  '\'04050000-0000-0000-0000-00000000010b\''
-\set oNulA   '\'04050000-0000-0000-0000-00000000010c\''
-\set oNulB   '\'04050000-0000-0000-0000-00000000010d\''
-\set oDelA   '\'04050000-0000-0000-0000-00000000010e\''
-\set oPc0B   '\'04050000-0000-0000-0000-00000000010f\''
+\set orgA    '\'04160000-0000-0000-0000-00000000000a\''
+\set orgZ    '\'04160000-0000-0000-0000-00000000000b\''
+\set own     '\'04160000-0000-0000-0000-0000000000a0\''
+\set adm     '\'04160000-0000-0000-0000-0000000000a1\''
+\set mgr     '\'04160000-0000-0000-0000-0000000000a2\''
+\set mgrNo   '\'04160000-0000-0000-0000-0000000000a3\''
+\set stfAp   '\'04160000-0000-0000-0000-0000000000a4\''
+\set stfAB   '\'04160000-0000-0000-0000-0000000000a5\''
+\set vwrAp   '\'04160000-0000-0000-0000-0000000000a6\''
+\set req     '\'04160000-0000-0000-0000-0000000000a7\''
+\set stf     '\'04160000-0000-0000-0000-0000000000a8\''
+\set vwr     '\'04160000-0000-0000-0000-0000000000a9\''
+\set outZ    '\'04160000-0000-0000-0000-0000000000b1\''
+\set nobody  '\'04160000-0000-0000-0000-0000000000c1\''
+\set whA     '\'04160000-0000-0000-0000-0000000000d1\''
+\set whB     '\'04160000-0000-0000-0000-0000000000d2\''
+\set whZ     '\'04160000-0000-0000-0000-0000000000d3\''
+\set itA     '\'04160000-0000-0000-0000-0000000000e1\''
+\set itB     '\'04160000-0000-0000-0000-0000000000e2\''
+\set oApA    '\'04160000-0000-0000-0000-000000000101\''
+\set oApB    '\'04160000-0000-0000-0000-000000000102\''
+\set oBkA    '\'04160000-0000-0000-0000-000000000103\''
+\set oBkB    '\'04160000-0000-0000-0000-000000000104\''
+\set oPcA    '\'04160000-0000-0000-0000-000000000105\''
+\set oPcB    '\'04160000-0000-0000-0000-000000000106\''
+\set oAppA   '\'04160000-0000-0000-0000-000000000107\''
+\set oAppB   '\'04160000-0000-0000-0000-000000000108\''
+\set oOwnPB  '\'04160000-0000-0000-0000-000000000109\''
+\set oOwnAB  '\'04160000-0000-0000-0000-00000000010a\''
+\set oOwnAA  '\'04160000-0000-0000-0000-00000000010b\''
+\set oNulA   '\'04160000-0000-0000-0000-00000000010c\''
+\set oNulB   '\'04160000-0000-0000-0000-00000000010d\''
+\set oDelA   '\'04160000-0000-0000-0000-00000000010e\''
+\set oPc0B   '\'04160000-0000-0000-0000-00000000010f\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,    '0405-own@test.local',    '{}'::jsonb),
-  (:adm,    '0405-adm@test.local',    '{}'::jsonb),
-  (:mgr,    '0405-mgr@test.local',    '{}'::jsonb),
-  (:mgrNo,  '0405-mgrno@test.local',  '{}'::jsonb),
-  (:stfAp,  '0405-stfap@test.local',  '{}'::jsonb),
-  (:stfAB,  '0405-stfab@test.local',  '{}'::jsonb),
-  (:vwrAp,  '0405-vwrap@test.local',  '{}'::jsonb),
-  (:req,    '0405-req@test.local',    '{}'::jsonb),
-  (:stf,    '0405-stf@test.local',    '{}'::jsonb),
-  (:vwr,    '0405-vwr@test.local',    '{}'::jsonb),
-  (:outZ,   '0405-outz@test.local',   '{}'::jsonb),
-  (:nobody, '0405-nobody@test.local', '{}'::jsonb)
+  (:own,    '0416-own@test.local',    '{}'::jsonb),
+  (:adm,    '0416-adm@test.local',    '{}'::jsonb),
+  (:mgr,    '0416-mgr@test.local',    '{}'::jsonb),
+  (:mgrNo,  '0416-mgrno@test.local',  '{}'::jsonb),
+  (:stfAp,  '0416-stfap@test.local',  '{}'::jsonb),
+  (:stfAB,  '0416-stfab@test.local',  '{}'::jsonb),
+  (:vwrAp,  '0416-vwrap@test.local',  '{}'::jsonb),
+  (:req,    '0416-req@test.local',    '{}'::jsonb),
+  (:stf,    '0416-stf@test.local',    '{}'::jsonb),
+  (:vwr,    '0416-vwr@test.local',    '{}'::jsonb),
+  (:outZ,   '0416-outz@test.local',   '{}'::jsonb),
+  (:nobody, '0416-nobody@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them).
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0405 Scope A', '0405-scope-a'),
-  (:orgZ, '0405 Scope Z', '0405-scope-z');
+  (:orgA, '0416 Scope A', '0416-scope-a'),
+  (:orgZ, '0416 Scope Z', '0416-scope-z');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,   'owner',   now()),
   (:orgA, :adm,   'admin',   now()),
@@ -125,9 +133,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :vwr,   'viewer',  now()),
   (:orgZ, :outZ,  'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA, :orgA, '0405 Main',  'WH-0405A', 'active'),
-  (:whB, :orgA, '0405 Annex', 'WH-0405B', 'active'),
-  (:whZ, :orgZ, '0405 Zed',   'WH-0405Z', 'active');
+  (:whA, :orgA, '0416 Main',  'WH-0416A', 'active'),
+  (:whB, :orgA, '0416 Annex', 'WH-0416B', 'active'),
+  (:whZ, :orgZ, '0416 Zed',   'WH-0416Z', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stfAp, :whA, true),
   (:orgA, :stfAB, :whA, true),
@@ -149,8 +157,8 @@ select public.ensure_warehouse_placement_locations(:whB) as "ensB" \gset
 -- Opening stock lands in each warehouse's Unplaced bucket (tg_seed_initial_level).
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
-  (:itA, :orgA, :whA, '0405-A', 'Main item',  100, 'active', 'none'),
-  (:itB, :orgA, :whB, '0405-B', 'Annex item',  50, 'active', 'none');
+  (:itA, :orgA, :whA, '0416-A', 'Main item',  100, 'active', 'none'),
+  (:itB, :orgA, :whB, '0416-B', 'Annex item',  50, 'active', 'none');
 
 -- Orders at their status, inserted by the superuser (the insert guard holds
 -- API roles only; the transition trigger fires on UPDATE only). oNul* came
@@ -171,8 +179,8 @@ insert into public.order_requests
   (:oOwnPB, :orgA, :whB, 'pending_approval',  'internal',    :stfAp, null,        null,                null,  'pickup', null, null),
   (:oOwnAB, :orgA, :whB, 'approved',          'internal',    :stfAp, null,        null,                null,  'pickup', :mgr, now()),
   (:oOwnAA, :orgA, :whA, 'approved',          'internal',    :stfAp, null,        null,                null,  'pickup', :mgr, now()),
-  (:oNulA,  :orgA, :whA, 'pending_approval',  'public_link', null,   'Pat Buyer', 'pat@0405.test',     null,  'pickup', null, null),
-  (:oNulB,  :orgA, :whB, 'pending_approval',  'public_link', null,   'Pat Buyer', 'pat@0405.test',     null,  'pickup', null, null),
+  (:oNulA,  :orgA, :whA, 'pending_approval',  'public_link', null,   'Pat Buyer', 'pat@0416.test',     null,  'pickup', null, null),
+  (:oNulB,  :orgA, :whB, 'pending_approval',  'public_link', null,   'Pat Buyer', 'pat@0416.test',     null,  'pickup', null, null),
   (:oDelA,  :orgA, :whA, 'pending_approval',  'internal',    null,   'Lee Gone',  null,                now(), 'pickup', null, null);
 
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked) values
@@ -221,11 +229,11 @@ begin
     if p_check is not null then
       execute p_check into v_seen;
     end if;
-    raise exception using errcode = 'XX405', message = 'undo';
+    raise exception using errcode = 'XX416', message = 'undo';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
   end;
-  if v_state = 'XX405' then
+  if v_state = 'XX416' then
     return 'ok:' || v_n::text || coalesce(':' || v_seen, '');
   end if;
   return v_state || ':' || pg_temp.hint(v_hint) || ':' || v_msg;
@@ -276,7 +284,7 @@ create function pg_temp.perm(p_who text, p_perm text) returns text language plpg
 declare v boolean;
 begin
   perform set_config('request.jwt.claim.sub', (select p.id::text from persona p where p.who = p_who), true);
-  v := public.has_permission('04050000-0000-0000-0000-00000000000a', p_perm);
+  v := public.has_permission('04160000-0000-0000-0000-00000000000a', p_perm);
   perform set_config('request.jwt.claim.sub', '', true);
   return p_who || '=' || v::text;
 end $$;
@@ -299,17 +307,17 @@ create function pg_temp.state() returns text language sql stable as $$
                                 || coalesce(o.approved_by::text, '') || coalesce(o.completed_at::text, '')
                                 || coalesce(o.pick_slip_generated_by::text, '') || coalesce(o.picking_completed_at::text, '')
                                 || coalesce(o.denied_reason, ''), ',' order by o.id))
-            from public.order_requests o where o.organization_id = '04050000-0000-0000-0000-00000000000a')
+            from public.order_requests o where o.organization_id = '04160000-0000-0000-0000-00000000000a')
       || '|' || (select md5(string_agg(l.id::text || coalesce(l.quantity_picked::text, '-') || l.quantity_requested::text
                                        || l.quantity_fulfilled::text, ',' order by l.id))
                    from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id
-                  where o.organization_id = '04050000-0000-0000-0000-00000000000a')
-      || '|' || (select count(*) from public.stock_movements m where m.organization_id = '04050000-0000-0000-0000-00000000000a')
-      || '|' || (select count(*) from public.stock_reservations r where r.organization_id = '04050000-0000-0000-0000-00000000000a')
-      || '|' || (select count(*) from public.notifications n where n.organization_id = '04050000-0000-0000-0000-00000000000a')
+                  where o.organization_id = '04160000-0000-0000-0000-00000000000a')
+      || '|' || (select count(*) from public.stock_movements m where m.organization_id = '04160000-0000-0000-0000-00000000000a')
+      || '|' || (select count(*) from public.stock_reservations r where r.organization_id = '04160000-0000-0000-0000-00000000000a')
+      || '|' || (select count(*) from public.notifications n where n.organization_id = '04160000-0000-0000-0000-00000000000a')
       || '|' || (select md5(string_agg(i.id::text || i.quantity_on_hand::text, ',' order by i.id))
-                   from public.inventory_items i where i.organization_id = '04050000-0000-0000-0000-00000000000a')
-      || '|' || (select coalesce(sum(l.quantity), 0)::text from public.item_stock_levels l where l.organization_id = '04050000-0000-0000-0000-00000000000a')
+                   from public.inventory_items i where i.organization_id = '04160000-0000-0000-0000-00000000000a')
+      || '|' || (select coalesce(sum(l.quantity), 0)::text from public.item_stock_levels l where l.organization_id = '04160000-0000-0000-0000-00000000000a')
       || '|' || (select md5(string_agg(p.oid::text || md5(p.prosrc), ',' order by p.oid))
                    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
@@ -542,7 +550,7 @@ select is(
   'mgr=ok:1:picking_in_progress, adm=ok:1:picking_in_progress, own=ok:1:picking_in_progress, '
   'mgrNo=42501:-:forbidden, outZ=42501:-:forbidden / '
   'stfAp=42501:warehouse_write:forbidden, mgr=ok:1:picking_in_progress',
-  'W9: reopen_picking on warehouse B''s picked order: the same matrix, answered by the function''s own term first (before 0405 the scoped approver met only ledger.adjust_stock''s location check, 0365, with no hint); and on a warehouse B order with nothing picked, where no stock moves and that check never runs');
+  'W9: reopen_picking on warehouse B''s picked order: the same matrix, answered by the function''s own term first (before 0416 the scoped approver met only ledger.adjust_stock''s location check, 0365, with no hint); and on a warehouse B order with nothing picked, where no stock moves and that check never runs');
 select is(
   pg_temp.each(array['stfAp', 'vwrAp'], format($q$select public.reopen_picking(%L, 'Miscount')$q$, :oPcA),
                format('select status from public.order_requests where id = %L', :oPcA)),

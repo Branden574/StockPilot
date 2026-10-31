@@ -551,7 +551,7 @@ describe('orders/[id]: Cancel request (L85)', () => {
   });
 });
 
-// SECURITY SLICE E (migration 0405): an approver acts on an order only in a
+// SECURITY SLICE E (migration 0416): an approver acts on an order only in a
 // warehouse they may write to; the database and the service both ask it. The
 // page used to offer an approver outside the order's warehouse Approve, Deny,
 // Cancel, the notes, the line controls and Add items, each refused after the
@@ -920,7 +920,7 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     expect(sideReads()).toBe(0);
   });
 
-  // Since security slice E (0405) an approver outside the order's warehouse
+  // Since security slice E (0416) an approver outside the order's warehouse
   // sees the actions panel at staged for pickup only for its reads (Print
   // customer slip; slice E review), with no step, no link and no Print
   // warehouse slip; the raw token is still never read for them.

@@ -7054,7 +7054,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(e.whyItMatters).toContain('only a backordered order');
     expect(e.whyItMatters).toContain('someone who does not approve orders was offered Cancel request on their own order');
     // An approver in the order's warehouse, the people the entry speaks of
-    // (security slice E, 0405: an approver's cancel asks write access to it).
+    // (security slice E, 0416: an approver's cancel asks write access to it).
     const open = { isOwnRequest: true, canRequest: true, canWriteOrderWarehouse: true };
     for (const status of ['approved', 'pending_approval', 'staged_for_pickup', 'backordered']) {
       expect(orderCancelOffer({ status, canApprove: true, ...open }), status).toBe('approver');

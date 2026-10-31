@@ -79,7 +79,7 @@ describe('phoneOrderCancel', () => {
     ).toBeNull();
   });
 
-  // Security slice E (0405): an approver's cancel asks write access to the
+  // Security slice E (0416): an approver's cancel asks write access to the
   // order's warehouse (the service and cancel_order_request), so an approver
   // outside it is offered nothing on someone else's order, and keeps the
   // requester's Cancel request on their own pending one. Mutation caught: the

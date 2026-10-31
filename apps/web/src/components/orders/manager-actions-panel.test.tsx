@@ -1051,7 +1051,7 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
   });
 });
 
-// Security slice E review (0405): an approver outside the order's warehouse
+// Security slice E review (0416): an approver outside the order's warehouse
 // keeps the panel's READS (the page shows them the panel from picking
 // complete on with canApprove false): Print pick slip, Print customer slip
 // and View signature ask no warehouse. Print warehouse slip's QR hands the

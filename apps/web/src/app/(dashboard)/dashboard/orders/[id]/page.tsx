@@ -266,7 +266,7 @@ export default async function OrderDetailPage({
   const replacement = detail.replacement ?? null;
   const isReplacement = Boolean(request.replacement_for_return_id);
 
-  // SECURITY SLICE E (migration 0405): an approver acts on an order only in a
+  // SECURITY SLICE E (migration 0416): an approver acts on an order only in a
   // warehouse they may write to. Every approval function asks it in the
   // database and the service asks it first, so an approver outside this
   // order's warehouse is offered none of an approver's controls (the actions
@@ -1379,7 +1379,7 @@ export default async function OrderDetailPage({
             )}
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
-                order in a warehouse they write to (slice E, 0405); and
+                order in a warehouse they write to (slice E, 0416); and
                 every cancel needs orders:request (desk check F3). core's
                 orderCancelOffer is that rule, shared with the phone.
                 Returns RX-2: a replacement is cancelled only from its RMA. */}
