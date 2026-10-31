@@ -377,14 +377,14 @@ describe("a load that saves this account's workspace sends the rows held for it"
   // c2946c99f, a pass read whose cache this is (cache-owner.ts) and the delta
   // cursor with plain reads, which do not wait in the transaction queue,
   // while the wipe does: its owner check fell before or after the wipe by
-  // timing, and when the wipe waited behind another queued transaction, the
-  // delta answer it fetched with the old cursor was discarded (sync.ts, the
-  // cursor check). Its one pass of engine 1 is the forced full pull it asks
-  // for once the workspace is shown, whose drain sends the rows held for
-  // this account's workspace. Until the review it also asked
-  // syncAfterRunning after the wipe: a second full pull of the snapshot
-  // behind the first (the wipe forgets the cursor, and a forced pull never
-  // joins one running).
+  // timing, and the delta answer it fetched with the old cursor could be
+  // discarded (sync.ts, the cursor check), for one when the wipe waited
+  // behind another queued transaction. Its one pass of engine 1 is the
+  // forced full pull it asks for once the workspace is shown, whose drain
+  // sends the rows held for this account's workspace. Until the review it
+  // also asked syncAfterRunning after the wipe: a second full pull of the
+  // snapshot behind the first (the wipe forgets the cursor, and a forced
+  // pull never joins one running).
   it('a load that also clears the cache asks for nothing while its wipe runs, then for one forced full pull and one count drain', async () => {
     put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
     let wipeDone!: () => void;

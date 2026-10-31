@@ -336,9 +336,9 @@ async function loadWorkspace(userId: string) {
     // merge with #380). Asked before it, a pass read whose cache this is and
     // the delta cursor with plain reads, which do not wait in the
     // transaction queue, while the wipe does: its owner check fell before or
-    // after the wipe by timing, and when the wipe waited behind another
-    // queued transaction, the delta it fetched with the old cursor was
-    // discarded (sync.ts pullSnapshot, the cursor check).
+    // after the wipe by timing, and the delta it fetched with the old cursor
+    // could be discarded (sync.ts pullSnapshot, the cursor check), for one
+    // when the wipe waited behind another queued transaction.
     if (!resetCache) void syncAfterRunning();
     void cycleCountSync.forceSync();
   }
