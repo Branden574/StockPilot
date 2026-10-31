@@ -1685,6 +1685,50 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
               }`,
         },
       ],
+      'c3 missed 2': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c3-helper.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function remindBoth(admin: Admin, ids: string[]) {
+                await Promise.all(
+                  ids.map(async (id) => {${C10_READ}
+                    if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                    await tell(data.requester_email_snapshot);
+                  }),
+                );
+                await Promise.all(
+                  ids.map(async (id) => {${C10_READ}
+                    await tell(data?.requester_email_snapshot ?? null);
+                  }),
+                );
+              }
+              async function tell(to: string | null) {
+                await sendEmail({ to, subject: 'Reminder', html: '' });
+              }`,
+        },
+      ],
+      'c3 missed 3': [
+        {
+          file: 'apps/web/src/server/email/plant-c10-c3-filtered.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              type Row = { requester_user_id: string | null; requester_email_snapshot: string | null };
+              export async function sendResolvedTo(rows: Row[]) {
+                const live = rows.filter((r) => !maintenanceRequesterAccountDeleted(r));
+                for (const r of rows) await sendEmail({ to: r.requester_email_snapshot, subject: 'Resolved', html: '' });
+                return live.length;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/jobs/plant-c10-c3-caller.ts',
+          text: `
+              import { sendResolvedTo } from '@/server/email/plant-c10-c3-filtered';
+              export async function resolveOne(admin: Admin, id: string) {${C10_READ}
+                if (data) await sendResolvedTo([data]);
+              }`,
+        },
+      ],
       'c4 read by return': [
         {
           file: 'apps/web/src/server/email/plant-c10-follow-up.ts',
@@ -1731,6 +1775,20 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
                 const copy = {};
                 Object.assign(copy, data);
                 await queueReminder(copy);
+              }`,
+        },
+      ],
+      'c4 missed 2': [
+        {
+          file: 'apps/web/src/server/services/plant-c10-c4-key.ts',
+          text: `
+              export async function viaAssignedKey(admin: Admin, id: string, field: string) {${C10_READ}
+                const payload: Record<string, string | null> = {};
+                payload[field] = data?.requester_email_snapshot ?? null;
+                await queueNotice(payload);
+              }
+              async function queueNotice(payload: Record<string, string | null>) {
+                void payload;
               }`,
         },
       ],
@@ -2176,6 +2234,28 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
     );
 
     it(
+      '(c3) missed at 06df95532: an answer in one callback let the other hand the address to a local helper that sends',
+      () => {
+        expect(withPlanted(C10['c3 missed 2']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c3-helper.ts:22 remindBoth() reads maintenance_requests.requester_email_snapshot and sends email through tell()${ASK_M}`,
+          `apps/web/src/server/email/plant-c10-c3-helper.ts:27 tell() is handed maintenance_requests.requester_email_snapshot by remindBoth() and sends email (sendEmail)${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c3) missed at 06df95532: a sender in another file that asks only in a filter callback counted as asking first',
+      () => {
+        expect(withPlanted(C10['c3 missed 3']!)).toEqual([
+          `apps/web/src/server/email/plant-c10-c3-filtered.ts:6 sendResolvedTo() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail)${ASK_M}`,
+          `apps/web/src/server/jobs/plant-c10-c3-caller.ts:9 resolveOne() reads maintenance_requests.requester_email_snapshot and sends email through sendResolvedTo()${ASK_M}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
       '(c3) an answer guards a send in a callback inside its function, and the send after it in a loop',
       () => {
         expect(withPlanted(C10['c3 control']!)).toEqual([]);
@@ -2192,6 +2272,16 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
           `apps/web/src/server/services/plant-c10-c4-assign.ts:42 viaAssign() hands maintenance_requests.requester_email_snapshot to queueReminder() (@/server/jobs/plant-c10-reminders)${HAND_OFF_M}`,
           `apps/web/src/server/services/plant-c10-c4-assign.ts:10 reopen() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
           `apps/web/src/server/services/plant-c10-c4-assign.ts:21 ReopenJob.load() puts maintenance_requests.requester_email_snapshot into recipient${REGISTER}`,
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(c4) missed at 06df95532: an address assigned under a key the scan cannot read',
+      () => {
+        expect(withPlanted(C10['c4 missed 2']!)).toEqual([
+          'apps/web/src/server/services/plant-c10-c4-key.ts:9 viaAssignedKey() puts maintenance_requests.requester_email_snapshot under payload[field], a key the scan cannot read: use a fixed key and register it in KEPT_ADDRESSES',
         ]);
       },
       TIMEOUT,
