@@ -32,9 +32,13 @@ interface QueryableClient {
  *     revoke;
  *   - never a redirect(): the /api routes share this loader, and a redirect
  *     there is a NEXT_REDIRECT 500 (recurring pattern #23).
- * Escaping produces a 5xx, which the phone words as "The server had a
- * problem. Try again in a moment." and keeps its last good permission set,
- * and which the web error boundaries render as a retryable error.
+ * Escaping produces a 5xx, which the web error boundaries render as a
+ * retryable error. On the phone a read's 5xx says "The server had a problem.
+ * Try again in a moment." and keeps its last good permission set; a stock
+ * adjustment refused this way reads as not confirmed instead, because that
+ * route takes no idempotency key and the phone never re-sends one after a
+ * 5xx (item-adjust.ts, adjust-outbox.ts): the worker checks the item and
+ * enters it again.
  */
 export class PermissionsUnavailableError extends Error {
   readonly code = 'PERMISSIONS_UNAVAILABLE';
