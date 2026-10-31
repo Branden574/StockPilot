@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   ROLE_PERMISSIONS,
+  withoutPlatformManaged,
   type ClientRelease,
   type ClientReleaseList,
   type Permission,
@@ -41,8 +42,12 @@ export function releaseViewerFor(ctx: ServiceContext): ReleaseViewer {
   return {
     role: ctx.role,
     // Synthetic contexts (cron, tests) omit the effective set; the static role
-    // defaults are the documented fallback (see ServiceContext.permissions).
-    permissions: ctx.permissions ?? new Set<Permission>(ROLE_PERMISSIONS[ctx.role]),
+    // defaults are the documented fallback (see ServiceContext.permissions),
+    // without the platform-managed keys: whether StockPilot denied one is per
+    // member, so the role alone never proves it (core withoutPlatformManaged).
+    // Real request contexts always carry the set (docket S19).
+    permissions:
+      ctx.permissions ?? withoutPlatformManaged(new Set<Permission>(ROLE_PERMISSIONS[ctx.role])),
     enabledModules: ctx.enabledModules ?? new Set(),
   };
 }

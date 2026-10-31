@@ -1412,6 +1412,129 @@ describe('Dynamic Type policy unchanged', () => {
   });
 });
 
+/**
+ * A live text-size change remounts the item screen's hero, the words of its
+ * photo tile (Replace, or Tap to add photo on an item with no photo) and its
+ * tab track (docket B60). With an item open, the simulator walk of 2026-10-31
+ * saw the tab labels cut ('Over…', 'Movem…', 'Acti…'), the name's descender,
+ * 'REPLAC' and, at the accessibility sizes, the SKU and category lines
+ * clipped, until a tab changed state or the item was opened again. It is the
+ * stale measurement B10 fixed in the shared list chrome (fontScaleKey,
+ * primitives-structure.test.ts); since B10 no tab label shrinks to fit, so a
+ * stale segment cuts it. Tap to add photo is the same Mono as Replace (11pt,
+ * the same tracking, upper case, uncapped), in the same tile.
+ */
+describe("the item screen measures its header, its photo tile's words and its tabs again at a new text size", () => {
+  const inScreen = (sf: ts.SourceFile) => functionNamed(sf, 'ItemDetail');
+
+  it('turns the text size the tabs already read into a key', () => {
+    expect(flat(codeOnly(sourceOf(ITEM)))).toMatch(
+      /import \{[^}]*\bfontScaleKey\b[^}]*\} from '@\/lib\/dynamic-type-layout';/,
+    );
+    const screen = flat(codeOnly(inScreen(treeOf(ITEM)).getText(treeOf(ITEM))));
+    expect(screen).toContain('const { width: windowWidth, fontScale } = useWindowDimensions();');
+    expect(screen).toContain('const scaleKey = fontScaleKey(fontScale);');
+  });
+
+  // Mutations caught: any of the three keys dropped, or the chip's key moved
+  // to the photo above it.
+  it('the hero, Replace and the tab track are keyed on it', () => {
+    const one = (match: (el: JsxNode, sf: ts.SourceFile) => boolean) => {
+      const found = elements(ITEM, match, inScreen);
+      expect(found).toHaveLength(1);
+      return attrText(found[0]!.el, 'key', found[0]!.sf);
+    };
+    expect(one((el, sf) => attrText(el, 'style', sf) === 'styles.hero')).toBe('`hero-${scaleKey}`');
+    expect(one((el, sf) => attrText(el, 'accessibilityLabel', sf) === 'Replace photo')).toBe(
+      '`replace-${scaleKey}`',
+    );
+    expect(one((el, sf) => attrText(el, 'accessibilityRole', sf) === 'tablist')).toBe(
+      '`tabs-${scaleKey}`',
+    );
+  });
+
+  // Review of B60 (2026-10-31): on an item with no photo the tile shows Tap to
+  // add photo, the same Mono as Replace, which the walk saw cut ('REPLAC').
+  // Its View holds only the camera icon and those words: no image to load
+  // again. Mutations caught: the key dropped, or moved up to the tile (the
+  // photo would load again on every text-size change).
+  it("with no photo, the tile's Tap to add photo is keyed on it too", () => {
+    const words = elements(
+      ITEM,
+      (el, sf) =>
+        tagOf(el, sf) === 'View' &&
+        jsxChildren(el).some(
+          (ch) => tagOf(ch, sf) === 'Mono' && textOf(ch, sf) === 'Tap to add photo',
+        ),
+      inScreen,
+    );
+    expect(words).toHaveLength(1);
+    expect(attrText(words[0]!.el, 'key', words[0]!.sf), where(words[0]!)).toBe(
+      '`add-photo-${scaleKey}`',
+    );
+    expect(jsxChildren(words[0]!.el).map((ch) => tagOf(ch, words[0]!.sf))).toEqual([
+      'Camera',
+      'Mono',
+    ]);
+  });
+
+  // A remount resets whatever a subtree holds. These four hold words, badges
+  // and buttons whose state lives in ItemDetail; the scroll view (its place,
+  // pull to refresh), the photo (it would load again), the tab contents (the
+  // serials, a movement's note sheet, the count card's retry) and the sheets
+  // keep theirs. Mutations caught: the key moved to the ScrollView, the photo
+  // or a tab's contents, or a stateful element moved into a keyed subtree.
+  it('nothing keyed on it holds state a remount would lose', () => {
+    const keyed = elements(
+      ITEM,
+      (el, sf) => (attrText(el, 'key', sf) ?? '').includes('scaleKey'),
+      inScreen,
+    );
+    expect(keyed.map((k) => attrText(k.el, 'key', k.sf))).toEqual([
+      '`hero-${scaleKey}`',
+      '`add-photo-${scaleKey}`',
+      '`replace-${scaleKey}`',
+      '`tabs-${scaleKey}`',
+    ]);
+    const stateless = new Set([
+      'View',
+      'Mono',
+      'Display',
+      'Body',
+      'Pill',
+      'Button',
+      'ActivityIndicator',
+      'RotateCcw',
+      'Pressable',
+      'Camera',
+      'TabButton',
+    ]);
+    for (const k of keyed) {
+      walkJsx(k.el, (el) => {
+        expect(stateless.has(tagOf(el, k.sf)), `${where(k)} holds <${tagOf(el, k.sf)}>`).toBe(true);
+      });
+    }
+    // TabButton and the shared parts it and the hero draw keep no state.
+    const hooks = /\b(useState|useReducer|useRef|useEffect|useLayoutEffect)\b/;
+    expect(functionNamed(treeOf(ITEM), 'TabButton').getText(treeOf(ITEM))).not.toMatch(hooks);
+    for (const part of ['button', 'pill', 'text']) {
+      expect(sourceOf(`src/components/ui/${part}.tsx`), part).not.toMatch(hooks);
+    }
+    for (const tag of ['ScrollView', 'CachedImage']) {
+      const found = elements(ITEM, (el, sf) => tagOf(el, sf) === tag, inScreen);
+      expect(found.length, tag).toBeGreaterThan(0);
+      for (const f of found) expect(attrText(f.el, 'key', f.sf), where(f)).toBeUndefined();
+    }
+    const roots = elements(
+      ITEM,
+      (el, sf) => /^\[\s*styles\.root,/.test(attrText(el, 'style', sf) ?? ''),
+      inScreen,
+    );
+    expect(roots.length).toBeGreaterThan(0);
+    for (const r of roots) expect(attrText(r.el, 'key', r.sf), where(r)).toBeUndefined();
+  });
+});
+
 // ── The web path still lands on the item screen ──────────────────────────
 
 describe('the inventory deep-link shim lands on this screen', () => {
