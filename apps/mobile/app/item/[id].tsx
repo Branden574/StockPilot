@@ -509,10 +509,11 @@ export default function ItemDetail() {
   // A live text-size change left the hero, Replace and the tab labels laid out
   // at the old size, cut ('Movem…', 'REPLAC') until a tab changed state or the
   // item was opened again (docket B60): the stale measurement B10 fixed in the
-  // shared list chrome. Those three remount at a new size, so each is measured
-  // at it; none holds state. Nothing else is keyed: the scroll view would lose
-  // its place, the photo would load again, and the tab contents hold the
-  // serials, a movement's note sheet and the count card's retry.
+  // shared list chrome. Those remount at a new size, with Tap to add photo on
+  // an item with no photo (the same words' type as Replace), so each is
+  // measured at it; none holds state. Nothing else is keyed: the scroll view
+  // would lose its place, the photo would load again, and the tab contents
+  // hold the serials, a movement's note sheet and the count card's retry.
   const scaleKey = fontScaleKey(fontScale);
   const [item, setItem] = React.useState<Item | null>(null);
   // Ungroup (0399): other records this member can read with the same SKU.
@@ -1849,7 +1850,9 @@ export default function ItemDetail() {
                     recyclingKey={`${item.id}-${item.imageUrl}`}
                   />
                 ) : (
-                  <View style={{ alignItems: 'center', gap: 8 }}>
+                  // Keyed like Replace (the same words' type): no image here
+                  // to load again.
+                  <View key={`add-photo-${scaleKey}`} style={{ alignItems: 'center', gap: 8 }}>
                     <Camera size={28} color={c.ink3} strokeWidth={1.4} />
                     <Mono size={11} tracking={0.12} upper color={c.ink3}>
                       Tap to add photo

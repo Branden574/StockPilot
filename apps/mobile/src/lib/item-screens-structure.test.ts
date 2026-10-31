@@ -1413,16 +1413,18 @@ describe('Dynamic Type policy unchanged', () => {
 });
 
 /**
- * A live text-size change remounts the item screen's hero, its Replace chip
- * and its tab track (docket B60). With an item open, the simulator walk of
- * 2026-10-31 saw the tab labels cut ('Over…', 'Movem…', 'Acti…'), the name's
- * descender, 'REPLAC' and, at the accessibility sizes, the SKU and category
- * lines clipped, until a tab changed state or the item was opened again. It is
- * the stale measurement B10 fixed in the shared list chrome (fontScaleKey,
+ * A live text-size change remounts the item screen's hero, the words of its
+ * photo tile (Replace, or Tap to add photo on an item with no photo) and its
+ * tab track (docket B60). With an item open, the simulator walk of 2026-10-31
+ * saw the tab labels cut ('Over…', 'Movem…', 'Acti…'), the name's descender,
+ * 'REPLAC' and, at the accessibility sizes, the SKU and category lines
+ * clipped, until a tab changed state or the item was opened again. It is the
+ * stale measurement B10 fixed in the shared list chrome (fontScaleKey,
  * primitives-structure.test.ts); since B10 no tab label shrinks to fit, so a
- * stale segment cuts it.
+ * stale segment cuts it. Tap to add photo is the same Mono as Replace (11pt,
+ * the same tracking, upper case, uncapped), in the same tile.
  */
-describe('the item screen measures its header, Replace and tabs again at a new text size', () => {
+describe("the item screen measures its header, its photo tile's words and its tabs again at a new text size", () => {
   const inScreen = (sf: ts.SourceFile) => functionNamed(sf, 'ItemDetail');
 
   it('turns the text size the tabs already read into a key', () => {
@@ -1451,7 +1453,32 @@ describe('the item screen measures its header, Replace and tabs again at a new t
     );
   });
 
-  // A remount resets whatever a subtree holds. These three hold words, badges
+  // Review of B60 (2026-10-31): on an item with no photo the tile shows Tap to
+  // add photo, the same Mono as Replace, which the walk saw cut ('REPLAC').
+  // Its View holds only the camera icon and those words: no image to load
+  // again. Mutations caught: the key dropped, or moved up to the tile (the
+  // photo would load again on every text-size change).
+  it("with no photo, the tile's Tap to add photo is keyed on it too", () => {
+    const words = elements(
+      ITEM,
+      (el, sf) =>
+        tagOf(el, sf) === 'View' &&
+        jsxChildren(el).some(
+          (ch) => tagOf(ch, sf) === 'Mono' && textOf(ch, sf) === 'Tap to add photo',
+        ),
+      inScreen,
+    );
+    expect(words).toHaveLength(1);
+    expect(attrText(words[0]!.el, 'key', words[0]!.sf), where(words[0]!)).toBe(
+      '`add-photo-${scaleKey}`',
+    );
+    expect(jsxChildren(words[0]!.el).map((ch) => tagOf(ch, words[0]!.sf))).toEqual([
+      'Camera',
+      'Mono',
+    ]);
+  });
+
+  // A remount resets whatever a subtree holds. These four hold words, badges
   // and buttons whose state lives in ItemDetail; the scroll view (its place,
   // pull to refresh), the photo (it would load again), the tab contents (the
   // serials, a movement's note sheet, the count card's retry) and the sheets
@@ -1465,6 +1492,7 @@ describe('the item screen measures its header, Replace and tabs again at a new t
     );
     expect(keyed.map((k) => attrText(k.el, 'key', k.sf))).toEqual([
       '`hero-${scaleKey}`',
+      '`add-photo-${scaleKey}`',
       '`replace-${scaleKey}`',
       '`tabs-${scaleKey}`',
     ]);
