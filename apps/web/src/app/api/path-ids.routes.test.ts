@@ -12,6 +12,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     the id (nine of these read params before they authenticated);
  *   - before the id is used, the shared export budget is spent or the AI
  *     limiter is counted, and before a permission check that follows the 401.
+ *     Each row is tried as the owner and as a member who holds no permission.
+ *     The four routes that check a permission themselves (`permission`) must
+ *     also refuse that member a well-formed id, so their 400 is the id check
+ *     answering first, not a missing permission check.
  * The phone's order mutations keep their per-user limiter ahead of the check,
  * as the submission routes do (`limiterFirst`).
  *
@@ -81,6 +85,10 @@ interface Row {
   headers?: Record<string, string>;
   /** The per-user limiter runs before the check, by design. */
   limiterFirst?: boolean;
+  /** The permission the route itself checks after the 401. A member without
+   *  it is refused a well-formed id with 403, and still gets the 400 for a
+   *  malformed one. */
+  permission?: string;
 }
 
 const order = (
@@ -146,6 +154,7 @@ const UNCHECKED: Row[] = [
     bad: 'id',
     path: (p) => `/api/purchase-orders/${p.id}/pdf`,
     json: PO,
+    permission: 'purchase_orders:read',
   },
   {
     name: 'purchase order attachments zip (purchase-orders/[id]/attachments.zip)',
@@ -155,6 +164,7 @@ const UNCHECKED: Row[] = [
     bad: 'id',
     path: (p) => `/api/purchase-orders/${p.id}/attachments.zip`,
     json: PO,
+    permission: 'purchase_orders:read',
   },
   {
     name: 'PO import CSV (po-imports/[id]/export.csv)',
@@ -164,6 +174,7 @@ const UNCHECKED: Row[] = [
     bad: 'id',
     path: (p) => `/api/po-imports/${p.id}/export.csv`,
     json: PO_IMPORT,
+    permission: 'purchase_orders:manage',
   },
   {
     name: 'cycle count PDF (cycle-counts/[id]/pdf)',
@@ -173,6 +184,7 @@ const UNCHECKED: Row[] = [
     bad: 'id',
     path: (p) => `/api/cycle-counts/${p.id}/pdf`,
     json: CYCLE_COUNT,
+    permission: 'cycle_counts:read or stock:adjust',
   },
   {
     name: 'AI shelf scan (cycle-counts/[id]/ai-scan)',
@@ -418,9 +430,21 @@ const untouchableClient = new Proxy(
   },
 );
 
-function signIn() {
+type Member = Parameters<typeof makeServiceContext>[1];
+
+/** The owner holds every permission. */
+const OWNER: Member = { role: 'owner' };
+/** A member who holds no permission at all: every permission check refuses
+ *  them. */
+const NO_PERMISSIONS: Member = { role: 'viewer', permissions: new Set<string>() };
+const MEMBERS = [
+  ['the owner', OWNER],
+  ['a member with no permission', NO_PERMISSIONS],
+] as const;
+
+function signIn(member: Member = OWNER) {
   vi.mocked(withApiContext).mockResolvedValue(
-    makeServiceContext(untouchableClient, { role: 'owner' }) as never,
+    makeServiceContext(untouchableClient, member) as never,
   );
 }
 
@@ -451,6 +475,13 @@ describe('a malformed record id in an API path answers 400 before anything is re
     // The signature alias re-exports the same handler: 18 files plus the alias.
     expect(files(UNCHECKED).size).toBe(19);
     expect(files(LOOSE).size).toBe(14);
+    // The routes that check a permission themselves, after the 401.
+    expect([...files(ALL.filter((r) => r.permission !== undefined))]).toEqual([
+      'purchase-orders/[id]/pdf',
+      'purchase-orders/[id]/attachments.zip',
+      'po-imports/[id]/export.csv',
+      'cycle-counts/[id]/pdf',
+    ]);
   });
 
   it.each(ALL.map((r) => [r.name, r] as const))(
@@ -463,11 +494,11 @@ describe('a malformed record id in an API path answers 400 before anything is re
     },
   );
 
-  it.each(ALL.map((r) => [r.name, r] as const))(
-    '%s: signed in, a malformed id is 400 with nothing read, spent or reported',
-    async (_n, row) => {
+  it.each(ALL.flatMap((r) => MEMBERS.map(([who, member]) => [r.name, who, r, member] as const)))(
+    '%s: signed in as %s, a malformed id is 400 with nothing read, spent or reported',
+    async (_n, _who, row, member) => {
       for (const bad of MALFORMED) {
-        signIn();
+        signIn(member);
         vi.mocked(checkRateLimit).mockClear();
         const res = await call(row, { ...row.params, [row.bad]: bad });
         expect([bad, res.status]).toEqual([bad, 400]);
@@ -484,6 +515,21 @@ describe('a malformed record id in an API path answers 400 before anything is re
         expect(reportError).not.toHaveBeenCalled();
         if (!row.limiterFirst) expect(checkRateLimit).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each(
+    ALL.filter((r) => r.permission !== undefined).map((r) => [r.name, r.permission, r] as const),
+  )(
+    '%s: a member without %s is refused a well-formed id, so its 400 above comes first',
+    async (_n, _permission, row) => {
+      signIn(NO_PERMISSIONS);
+      const res = await call(row, row.params);
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toBe('forbidden');
+      expect(clientReads).toEqual([]);
+      expect(exportRateLimited).not.toHaveBeenCalled();
+      expect(reportError).not.toHaveBeenCalled();
     },
   );
 });
