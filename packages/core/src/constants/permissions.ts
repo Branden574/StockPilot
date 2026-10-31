@@ -397,9 +397,13 @@ export function effectivePermissions(
  * any org member through), OR the write-path RLS has been migrated to
  * has_permission(). Granting anything NOT in this set still passes the app
  * gate but the row-level write may be blocked by has_org_role until its RLS is
- * migrated (P3). REVOKES are always fully effective (the app gate is checked
- * before the DB write), regardless of this set. The matrix UI uses this to
- * warn admins which grants are "rolling out".
+ * migrated (P3). A REVOKE always takes effect at the app gate, which is
+ * checked before the DB write, regardless of this set: an override set the app
+ * cannot read refuses the request instead of falling back to the role's
+ * defaults (docket S19). The database enforces a revoke only where the path
+ * asks has_permission() without a role floor beside it: a has_org_role() OR
+ * term admits that role whatever its overrides say. The matrix UI uses this
+ * set to warn admins which grants are "rolling out".
  */
 export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
   // Reads — RLS allows any active org member; app gate is the only restriction.

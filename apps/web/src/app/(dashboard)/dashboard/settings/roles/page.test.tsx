@@ -29,6 +29,8 @@ vi.mock('@/components/settings/role-permission-matrix', () => ({
 
 import { ORDER_ITEMS_ROLES_LOCK_NOTE_COPY } from '@stockpilot/core';
 
+import { createClient } from '@/lib/supabase/server';
+
 import RolesPage from './page';
 
 beforeEach(() => {
@@ -92,5 +94,66 @@ describe('Roles & permissions: the platform-managed Manage order items row', () 
     ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read']) };
     render(await RolesPage());
     expect(within(yourRolePanel()).queryByText('Manage order items')).toBeNull();
+  });
+});
+
+/**
+ * Docket S19: the editable matrix draws every role and member from the
+ * organization's override rows. When one of its three reads fails, the page
+ * throws to the settings boundary ("We couldn't load this settings page" with
+ * Try again). It must never draw the matrix without them: every role would sit
+ * at its defaults, so a permission the organization took away would show as
+ * granted. The owner reaches this page even while the reads fail.
+ */
+describe('Roles & permissions: a read the editable matrix needs fails', () => {
+  /** Stands for the PostgREST message, which can quote request details. */
+  const SECRET = 'relation secret-detail is not readable';
+
+  function client(failing: string | null) {
+    return {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {};
+        for (const m of ['select', 'eq', 'not']) q[m] = () => q;
+        q.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(
+            table === failing
+              ? { data: null, error: { code: '57014', message: SECRET }, status: 500 }
+              : { data: [], error: null, status: 200 },
+          ).then(resolve, reject);
+        return q;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    ctxHolder.current = { role: 'admin', permissions: new Set(['members:read']) };
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  it.each([
+    ['admin', 'role_permission_overrides'],
+    ['admin', 'user_permission_overrides'],
+    ['admin', 'organization_members'],
+    ['owner', 'role_permission_overrides'],
+  ] as const)(
+    '%s: a failed %s read throws to the settings boundary instead of drawing the matrix',
+    async (role, table) => {
+      ctxHolder.current = { role, permissions: new Set(['members:read']) };
+      vi.mocked(createClient).mockResolvedValue(client(table) as never);
+      const result = await RolesPage().then(
+        (page) => ({ page, error: null as unknown }),
+        (error: unknown) => ({ page: null, error }),
+      );
+      if (result.page) render(result.page);
+      expect(screen.queryByTestId('role-permission-matrix')).toBeNull();
+      expect(result.error).toBeInstanceOf(Error);
+      expect(String((result.error as Error).message)).not.toContain('secret-detail');
+    },
+  );
+
+  it('with every read answered, an admin gets the editable matrix', async () => {
+    vi.mocked(createClient).mockResolvedValue(client(null) as never);
+    render(await RolesPage());
+    expect(screen.getByTestId('role-permission-matrix')).toBeInTheDocument();
   });
 });
