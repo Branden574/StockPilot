@@ -20,9 +20,11 @@ import { isSharePath } from '@/lib/share-paths';
  * request PostHog makes sends that URL as its Referer.
  *
  * NEVER A RECORDING: session replay is off in the code (docket S22), so the
- * replay switch in the PostHog project cannot turn it on. Whatever the init
- * below leaves unset, that project decides, with no review and no test to see
- * it; posthog-init.guard.test.ts keeps this the one init, with the switch in it.
+ * replay switch in the PostHog project cannot turn it on; nor can that project
+ * turn on what sends the page's address past before_send, its chat and its
+ * console log capture (docket S28). Whatever the init below leaves unset, the
+ * project decides, with no review and no test to see it;
+ * posthog-init.guard.test.ts keeps this the one init, with these in it.
  *
  * THIS IS LIVE: `NEXT_PUBLIC_POSTHOG_KEY` is set for production and preview
  * (verified 2026-09-18), so the guard below is what stands between those
@@ -82,6 +84,14 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         // it alone. The SDK records only when the project's replay switch is
         // on AND this is false, so with it true that switch cannot turn it on.
         disable_session_recording: true,
+        // Nor let the project turn on what sends the page's address past
+        // before_send (docket S28): Conversations, its chat, posts it with a
+        // new ticket, and console log capture, its Logs product, stamps it on
+        // every record after the logs hook has run. No client option refuses
+        // the project's console capture, so the hook drops every record, before
+        // the address is added.
+        disable_conversations: true,
+        logs: { beforeSend: () => null },
         // Nor send the page's address as a Referer. A beacon or a script tag
         // goes by the page's referrer policy, which for a same-origin request
         // such as /ingest is the full address, query and all (next.config.ts),

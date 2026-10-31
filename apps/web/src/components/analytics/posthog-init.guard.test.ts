@@ -26,6 +26,18 @@ import { describe, expect, it } from 'vitest';
  *       provider's call that holds the pin. A second init would run without
  *       it, and so would posthog-js/react, whose provider inits from props.
  *
+ * Docket S28 adds two more the project can switch on by itself that send the
+ * page address without passing before_send: console log capture (PostHog's
+ * Logs) stamps each record with it after the logs hook has run, and
+ * Conversations (its chat) posts it with a new ticket.
+ *
+ *   (d) disable_conversations is held as (a) holds the replay switch.
+ *   (e) The same options pass logs.beforeSend as a function that returns
+ *       null: a record is dropped before it is built, so before it gets the
+ *       address. No client option can refuse the project's console capture.
+ *   (f) Nothing names set_config, which would replace any of these options
+ *       while the page runs (logs among them, hook and all).
+ *
  * It reads the source through the AST, so comments never count.
  */
 
@@ -118,6 +130,49 @@ function providerInitOptions(found: Found): ts.ObjectLiteralExpression | undefin
   return accessName(call.expression) === 'init' && options && ts.isObjectLiteralExpression(options)
     ? options
     : undefined;
+}
+
+/** The options objects the provider passes to `<x>.init(key, options)`. */
+function providerInits(files: readonly ScanFile[]): ts.ObjectLiteralExpression[] {
+  return findAll(
+    files.filter((file) => file.path === PROVIDER),
+    ts.isCallExpression,
+  ).flatMap((call) => providerInitOptions(call) ?? []);
+}
+
+/** The value of the one property an object literal names `name`, with no spread beside it. */
+function propertyValue(
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.Expression | undefined {
+  if (object.properties.some(ts.isSpreadAssignment)) return undefined;
+  const matches = object.properties.filter(
+    (property): property is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(property) &&
+      (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) &&
+      property.name.text === name,
+  );
+  return matches.length === 1 ? matches[0]?.initializer : undefined;
+}
+
+/**
+ * Whether init options pass `logs: { beforeSend }` as a function that returns
+ * the literal null and does nothing else: `() => null` or `() => { return null; }`.
+ */
+function dropsEveryLog(options: ts.ObjectLiteralExpression): boolean {
+  const logs = propertyValue(options, 'logs');
+  const hook =
+    logs && ts.isObjectLiteralExpression(logs) ? propertyValue(logs, 'beforeSend') : undefined;
+  if (!hook || !(ts.isArrowFunction(hook) || ts.isFunctionExpression(hook))) return false;
+  const { body } = hook;
+  if (!ts.isBlock(body)) return body.kind === ts.SyntaxKind.NullKeyword;
+  const [only, ...rest] = body.statements;
+  return (
+    rest.length === 0 &&
+    !!only &&
+    ts.isReturnStatement(only) &&
+    only.expression?.kind === ts.SyntaxKind.NullKeyword
+  );
 }
 
 /**
@@ -245,58 +300,109 @@ const file = (relative: string, ...lines: string[]): ScanFile => ({
   text: lines.join('\n'),
 });
 
-const providerWith = (replay: string, extra = ''): ScanFile =>
+/** The provider's three pins, as its init options hold them. */
+const PINS =
+  'disable_session_recording: true, disable_conversations: true, logs: { beforeSend: () => null }';
+
+/** A planted provider whose one init passes these options (line 5). */
+const providerWith = (options: string): ScanFile =>
   file(
     'components/analytics/posthog-provider.tsx',
     `'use client';`,
     `export function PostHogProvider({ apiKey }: { apiKey: string }) {`,
     `  void import('posthog-js').then(({ default: posthog }) => {`,
-    `    // disable_session_recording: false records; so does startSessionRecording().`,
-    `    posthog.init(apiKey, { api_host: '/ingest', disable_session_recording: ${replay}${extra} });`,
+    `    // disable_session_recording: false, startSessionRecording(), set_config({ disable_conversations: false }).`,
+    `    posthog.init(apiKey, { api_host: '/ingest', ${options} });`,
     `  });`,
     `  return null;`,
     `}`,
   );
 
-const PROVIDER_OK = providerWith('true');
+const PROVIDER_OK = providerWith(PINS);
 
 describe('the PostHog init scanner (self-test on planted files)', () => {
-  it('sees the pin in the provider, and nothing in a comment', () => {
-    expect(pinMentions([PROVIDER_OK], 'disable_session_recording')).toEqual([
-      'components/analytics/posthog-provider.tsx:5 (the pin)',
-    ]);
+  it('sees the pins in the provider, and nothing in a comment', () => {
+    for (const name of ['disable_session_recording', 'disable_conversations']) {
+      expect(pinMentions([PROVIDER_OK], name)).toEqual([
+        'components/analytics/posthog-provider.tsx:5 (the pin)',
+      ]);
+    }
+    expect(providerInits([PROVIDER_OK]).map(dropsEveryLog)).toEqual([true]);
     expect(mentions([PROVIDER_OK], 'startSessionRecording')).toEqual([]);
+    expect(mentions([PROVIDER_OK], 'set_config')).toEqual([]);
     expect(inits([PROVIDER_OK])).toEqual([
       'components/analytics/posthog-provider.tsx:5 (holds the pin)',
     ]);
   });
 
-  it('does not take false, !0, a variable or a spread after it for the pin', () => {
-    for (const planted of [
-      providerWith('false'),
-      providerWith('!0'),
-      providerWith('recordingOff'),
-      providerWith('true', ', ...overrides'),
-    ]) {
-      expect(pinMentions([planted], 'disable_session_recording')).toEqual([
-        'components/analytics/posthog-provider.tsx:5',
+  it('does not take false, !0, a variable or a spread after it for a pin', () => {
+    for (const name of ['disable_session_recording', 'disable_conversations']) {
+      for (const planted of [
+        providerWith(PINS.replace(`${name}: true`, `${name}: false`)),
+        providerWith(PINS.replace(`${name}: true`, `${name}: !0`)),
+        providerWith(PINS.replace(`${name}: true`, `${name}: switchedOff`)),
+        providerWith(`${PINS}, ...overrides`),
+      ]) {
+        expect(pinMentions([planted], name)).toEqual([
+          'components/analytics/posthog-provider.tsx:5',
+        ]);
+      }
+    }
+  });
+
+  it('finds every other mention of a switch: set_config, a direct write, a quoted write', () => {
+    for (const name of ['disable_session_recording', 'disable_conversations']) {
+      const planted = file(
+        'lib/switch-back.ts',
+        `import posthog from 'posthog-js';`,
+        `posthog.set_config({ ${name}: false });`,
+        `posthog.config.${name} = false;`,
+        `posthog.config['${name}'] = false;`,
+      );
+      expect(pinMentions([PROVIDER_OK, planted], name)).toEqual([
+        'components/analytics/posthog-provider.tsx:5 (the pin)',
+        'lib/switch-back.ts:2',
+        'lib/switch-back.ts:3',
+        'lib/switch-back.ts:4',
       ]);
     }
   });
 
-  it('finds every other mention of the switch: set_config, a direct write, a quoted write', () => {
+  it('takes only a hook that returns null, alone in its options, for the log drop', () => {
+    const others = 'disable_session_recording: true, disable_conversations: true';
+    expect(
+      providerInits([providerWith(`${others}, logs: { beforeSend: () => { return null; } }`)]).map(
+        dropsEveryLog,
+      ),
+    ).toEqual([true]);
+    for (const logs of [
+      '',
+      ', logs: {}',
+      ', logs: { beforeSend: (record) => record }',
+      ', logs: { beforeSend: () => undefined }',
+      ', logs: { beforeSend: [() => null] }',
+      ', logs: { beforeSend: dropAll }',
+      ', logs: { beforeSend: () => { report(); return null; } }',
+      ', logs: { beforeSend: () => null, ...more }',
+      ', logs: { beforeSend: () => null }, ...overrides',
+      ', logs: loggingOptions',
+    ]) {
+      expect(providerInits([providerWith(`${others}${logs}`)]).map(dropsEveryLog)).toEqual([false]);
+    }
+  });
+
+  it('finds set_config by call, by element access and by destructuring', () => {
     const planted = file(
-      'lib/replay.ts',
+      'lib/switch-back.ts',
       `import posthog from 'posthog-js';`,
-      `posthog.set_config({ disable_session_recording: false });`,
-      `posthog.config.disable_session_recording = false;`,
-      `posthog.config['disable_session_recording'] = false;`,
+      `posthog.set_config({ logs: {} });`,
+      `posthog['set_config']({ logs: {} });`,
+      `const { set_config } = posthog;`,
     );
-    expect(pinMentions([PROVIDER_OK, planted], 'disable_session_recording')).toEqual([
-      'components/analytics/posthog-provider.tsx:5 (the pin)',
-      'lib/replay.ts:2',
-      'lib/replay.ts:3',
-      'lib/replay.ts:4',
+    expect(mentions([planted], 'set_config').map(where)).toEqual([
+      'lib/switch-back.ts:2',
+      'lib/switch-back.ts:3',
+      'lib/switch-back.ts:4',
     ]);
   });
 
@@ -391,5 +497,21 @@ describe('the one PostHog init never records a session (S22)', () => {
     expect(inits(app())).toEqual([
       expect.stringMatching(/^components\/analytics\/posthog-provider\.tsx:\d+ \(holds the pin\)$/),
     ]);
+  });
+});
+
+describe('the one PostHog init sends nothing that skips before_send (S28)', () => {
+  it('disable_conversations is named once: the provider’s init option, set to true', () => {
+    expect(pinMentions(app(), 'disable_conversations')).toEqual([
+      expect.stringMatching(/^components\/analytics\/posthog-provider\.tsx:\d+ \(the pin\)$/),
+    ]);
+  });
+
+  it('the provider’s init drops every log record: logs.beforeSend returns null', () => {
+    expect(providerInits(app()).map(dropsEveryLog)).toEqual([true]);
+  });
+
+  it('nothing names set_config', () => {
+    expect(mentions(app(), 'set_config').map(where)).toEqual([]);
   });
 });

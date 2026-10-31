@@ -109,6 +109,32 @@ describe('PostHogProvider', () => {
     );
   });
 
+  // Docket S28. Two more things the PostHog project can switch on by itself
+  // send the page address without passing before_send: console log capture
+  // (its Logs product) stamps every record with it after the logs hook has
+  // run, and Conversations (its chat) posts it with a new ticket. So the chat
+  // is switched off, and the logs hook drops every record before it is built.
+  it('MUTATION GUARD — never loads PostHog Conversations, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ disable_conversations: true }),
+    );
+  });
+
+  it('MUTATION GUARD — drops every log record, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    const options = posthogMock.init.mock.calls[0]?.[1] as {
+      logs?: { beforeSend?: (record: { body: string; level?: string }) => unknown };
+    };
+    expect(typeof options.logs?.beforeSend).toBe('function');
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+      expect(options.logs?.beforeSend?.({ body: '"placeholder console line"', level })).toBeNull();
+    }
+  });
+
   // The path guard below keeps PostHog off a share page, but a credential can
   // sit in another page's URL: the invite page's Sign in link is
   // /signin?redirect=/invite/<token>, and the SDK puts that URL on every event
