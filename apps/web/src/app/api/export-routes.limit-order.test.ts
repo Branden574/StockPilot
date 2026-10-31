@@ -47,6 +47,8 @@ type Overrides = Parameters<typeof makeServiceContext>[1];
 
 const ORDER_ID = '0a000000-0000-4000-8000-000000000201';
 const PO_ID = '0a000000-0000-4000-8000-0000000000f1';
+const CYCLE_COUNT_ID = '0a000000-0000-4000-8000-0000000000c1';
+const PO_IMPORT_ID = '0a000000-0000-4000-8000-0000000000e9';
 
 /** A member holding none of the export permissions below. */
 const BARE_VIEWER: Overrides = { role: 'viewer', permissions: new Set(['items:read', 'reports:read']) };
@@ -268,8 +270,8 @@ const ROUTES: RouteCase[] = [
     file: 'cycle-counts/[id]/pdf/route.tsx',
     load: () => import('./cycle-counts/[id]/pdf/route'),
     method: 'GET',
-    path: '/api/cycle-counts/cc-1/pdf',
-    params: { id: 'cc-1' },
+    path: `/api/cycle-counts/${CYCLE_COUNT_ID}/pdf`,
+    params: { id: CYCLE_COUNT_ID },
     refuse: () => signIn({ ...BARE_VIEWER }),
     refusedStatus: 403,
     permit: () => signIn(OWNER),
@@ -279,8 +281,8 @@ const ROUTES: RouteCase[] = [
     file: 'po-imports/[id]/export.csv/route.ts',
     load: () => import('./po-imports/[id]/export.csv/route'),
     method: 'GET',
-    path: '/api/po-imports/imp-1/export.csv',
-    params: { id: 'imp-1' },
+    path: `/api/po-imports/${PO_IMPORT_ID}/export.csv`,
+    params: { id: PO_IMPORT_ID },
     refuse: () => signIn({ ...BARE_VIEWER }),
     refusedStatus: 403,
     permit: () => signIn(OWNER),

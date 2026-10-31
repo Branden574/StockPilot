@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { isUuid } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
@@ -55,7 +57,7 @@ export async function POST(
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const { id: poId } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(poId)) {
+  if (!isUuid(poId)) {
     return NextResponse.json({ error: 'invalid_po_id' }, { status: 400 });
   }
 

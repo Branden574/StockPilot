@@ -94,6 +94,9 @@ vi.mock('@/server/services/context', () => ({
 
 import PoDetailPage from './page';
 
+// A well-formed id: the page refuses any other before reading (B63).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 function poWithExpected(expectedAt: string | null) {
   return {
     po: {
@@ -112,7 +115,7 @@ function poWithExpected(expectedAt: string | null) {
 }
 
 async function expectedRowText(): Promise<string | null> {
-  const { getByText } = render(await PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) }));
+  const { getByText } = render(await PoDetailPage({ params: Promise.resolve({ id: PO_ID }) }));
   return getByText('Expected').nextElementSibling?.textContent ?? null;
 }
 

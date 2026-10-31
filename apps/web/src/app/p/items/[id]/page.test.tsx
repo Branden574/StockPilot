@@ -150,3 +150,24 @@ describe('/p/items/[id]', () => {
     expect(missing.title).toBe('Item not found');
   });
 });
+
+// B63: a QR or link whose id was mistyped or cut short read the item with it
+// (getPublicItem answered null and cached that null for 60 s under the bad
+// id). The page and its title now refuse such an id before any read.
+describe('/p/items/[id]: an id that is not a uuid', () => {
+  it('is the generic not-found page, with no read', async () => {
+    for (const id of ['not-a-uuid', ID.slice(0, -1)]) {
+      await expect(PublicItemPage({ params: Promise.resolve({ id }) }), id).rejects.toBeInstanceOf(
+        NotFound,
+      );
+    }
+    expect(getPublicItem).not.toHaveBeenCalled();
+  });
+
+  it('titles the page "Item not found", with no read', async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ id: 'not-a-uuid' }) });
+    expect(meta.title).toBe('Item not found');
+    expect(meta.robots).toEqual({ index: false, follow: false });
+    expect(getPublicItem).not.toHaveBeenCalled();
+  });
+});

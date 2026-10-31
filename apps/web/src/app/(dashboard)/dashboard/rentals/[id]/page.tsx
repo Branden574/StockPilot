@@ -20,6 +20,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { InventoryService } from '@/server/services/inventory';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -28,6 +29,9 @@ import { formatNumber } from '@/lib/utils';
 
 export default async function RentalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it, ahead of the gates below (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
   // Same visibility gate as the rentals list page (rentals RLS additionally
   // warehouse-scopes rows; this keeps list/detail consistent for ungranted

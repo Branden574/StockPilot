@@ -107,9 +107,11 @@ const ccListPage = vi.fn(async () => ({
   hasPrevious: false,
   hasNext: false,
 }));
+/** A cycle count id: a record page's id is a uuid (B63). */
+const CC_ID = '5eed0000-0000-4000-8000-0000000000c1';
 const ccGetDetailPage = vi.fn(async () => ({
   header: {
-    id: 'cc-1',
+    id: CC_ID,
     status: 'in_progress',
     warehouse_id: null,
     notes: null,
@@ -241,7 +243,7 @@ describe('cycle counts list (/dashboard/cycle-counts)', () => {
 
 describe('cycle count detail (/dashboard/cycle-counts/[id])', () => {
   const args = {
-    params: Promise.resolve({ id: 'cc-1' }),
+    params: Promise.resolve({ id: CC_ID }),
     searchParams: emptySearchParams,
   };
   it('viewer without the grant is redirected (page used to be UNGATED)', async () => {

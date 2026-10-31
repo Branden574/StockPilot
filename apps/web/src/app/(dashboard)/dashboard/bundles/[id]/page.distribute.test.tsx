@@ -49,7 +49,7 @@ vi.mock('@/server/services/bundles', () => ({
     forCurrentUser: vi.fn(async () => ({
       get: vi.fn(async () => ({
         bundle: {
-          id: 'b-1',
+          id: '5eed0000-0000-4000-8000-0000000000b9',
           name: 'New Hire Bundle',
           sku: null,
           description: null,
@@ -82,7 +82,11 @@ import BundleDetailPage from './page';
 async function renderAs(role: Role, permissions: ReadonlySet<string> = effectivePermissions(role)) {
   ctx.role = role;
   ctx.permissions = permissions;
-  return render(await BundleDetailPage({ params: Promise.resolve({ id: 'b-1' }) }));
+  return render(
+    await BundleDetailPage({
+      params: Promise.resolve({ id: '5eed0000-0000-4000-8000-0000000000b9' }),
+    }),
+  );
 }
 
 beforeEach(() => {

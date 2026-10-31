@@ -1,6 +1,8 @@
 import { GoogleGenerativeAI, type ResponseSchema } from '@google/generative-ai';
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isUuid } from '@stockpilot/core';
+
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
 import {
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+  if (!isUuid(id)) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
 

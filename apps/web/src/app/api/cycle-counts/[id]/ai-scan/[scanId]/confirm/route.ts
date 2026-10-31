@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isUuid } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
@@ -28,7 +30,7 @@ export async function POST(
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const { scanId } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(scanId)) {
+  if (!isUuid(scanId)) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
   try {

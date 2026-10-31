@@ -4,6 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { isHandOverEntitled, readOrderSecrets } from '@/server/lib/order-secrets';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +45,9 @@ export async function GET(
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+  // A malformed id is a 400 before anything is read or spent (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.', NO_STORE);
+  if (invalidId) return invalidId;
 
   const { data, error } = await ctx.supabase
     .from('order_requests')

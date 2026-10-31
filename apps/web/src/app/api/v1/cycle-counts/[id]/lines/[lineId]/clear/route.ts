@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isUuid } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -32,7 +34,7 @@ export async function POST(
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const { id, lineId } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(id) || !/^[0-9a-f-]{36}$/i.test(lineId)) {
+  if (!isUuid(id) || !isUuid(lineId)) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
 

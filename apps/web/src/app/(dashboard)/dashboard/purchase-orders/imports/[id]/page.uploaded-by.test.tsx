@@ -91,8 +91,10 @@ vi.mock('@/components/po-imports/po-import-rename-button', () => ({
 
 import PoImportDetailPage from './page';
 
+const IMPORT_ID = '5eed0000-0000-4000-8000-0000000000e9';
+
 const header = {
-  id: 'imp-1',
+  id: IMPORT_ID,
   display_name: 'Fall order',
   file_name: 'fall.pdf',
   uploaded_by: UPLOADER,
@@ -105,7 +107,7 @@ const header = {
 };
 
 async function renderDetail() {
-  render(await PoImportDetailPage({ params: Promise.resolve({ id: 'imp-1' }) }));
+  render(await PoImportDetailPage({ params: Promise.resolve({ id: IMPORT_ID }) }));
 }
 
 beforeEach(() => {

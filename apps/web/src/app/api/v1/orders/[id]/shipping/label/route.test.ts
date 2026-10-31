@@ -30,7 +30,10 @@ function buildCtx() {
   };
 }
 
-function buildRequest(body: unknown, id = 'order-1') {
+/** The order's id: the route answers 400 for an id that is not a uuid (B63). */
+const ORDER_ID = '0a000000-0000-4000-8000-000000000201';
+
+function buildRequest(body: unknown, id = ORDER_ID) {
   return {
     req: new Request(`https://test.local/api/v1/orders/${id}/shipping/label`, {
       method: 'POST',
@@ -84,7 +87,7 @@ describe('POST /api/v1/orders/[id]/shipping/label', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ shipment });
-    expect(buyLabel).toHaveBeenCalledWith('order-1', 'rate_1');
+    expect(buyLabel).toHaveBeenCalledWith(ORDER_ID, 'rate_1');
   });
 
   it('maps a module_disabled ServiceError to 403', async () => {
