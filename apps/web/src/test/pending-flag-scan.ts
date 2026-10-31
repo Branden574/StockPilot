@@ -26,8 +26,11 @@ import ts from 'typescript';
  * module), `fetch`, and any function whose body can reject: it throws, or
  * awaits or returns a call that can reject, outside a try block that has a
  * catch. `if (isControlFlow(e)) throw e;` does not count: it passes on only a
- * redirect, while the router is already navigating. Followed across modules by import and, inside a component, to the
- * functions declared there (`const load = useCallback(async () => ...)`).
+ * redirect, while the router is already navigating. Followed across modules
+ * by import and, inside a component, to the functions declared there
+ * (`const load = useCallback(async () => ...)`). A wrapper that awaits a
+ * call of its own parameter passes on what it is given:
+ * `withStepUp(ensure, () => resendAction())` rejects when the action does.
  * Not followed: methods of objects (a Supabase query, which answers
  * `{ error }` instead of rejecting), functions passed in as props, and values
  * in variables. Those are judged by hand.
@@ -36,11 +39,19 @@ import ts from 'typescript';
  * a later call that clears it: an `await` of something that can reject, a
  * `throw`, or a `.then(...)` chain on something that can reject whose
  * rejection nothing handles. Each is fine when a `try` around it clears the
- * flag in `finally`, or has a catch that clears it, or has a catch that falls
- * through to the clearing call after the `try` (no return or throw in the
- * catch except `if (isControlFlow(e)) return;`, which keeps the flag while
- * the router navigates to sign-in). A `.then` chain is fine when its
- * `.catch`, second `.then` handler or `.finally` clears the flag.
+ * flag in `finally` (a finally covers its catch block too), or has a catch
+ * that clears it, or has a catch that falls through to the clearing call
+ * after the `try` (no return or throw in the catch except
+ * `if (isControlFlow(e)) return;`, which keeps the flag while the router
+ * navigates to sign-in). A `.then` chain is fine when its `.catch`, second
+ * `.then` handler or `.finally` clears the flag. A clear on a branch that
+ * returns first (`if (bad) { setBusy(false); return; }`) does not end the
+ * window: the path that goes on still has the flag set.
+ *
+ * ALLOWED. A finding the guard accepts is listed with its reason, keyed by
+ * file, function and flag (applyAllowlist); an entry that no longer matches
+ * any finding is stale and fails the guard, so it cannot hide the next bug at
+ * that place.
  *
  * Parsed with the TypeScript compiler, not a regex: comments and strings never
  * count, and a call split over several lines is still one call.
@@ -81,6 +92,37 @@ export interface PendingFlagFinding {
   problem: 'stays-set' | 'says-nothing';
 }
 
+/** A finding the guard accepts, keyed by file (relative to the repository), function and flag. */
+export interface PendingFlagAllowed {
+  file: string;
+  fn: string;
+  flag: string;
+  /** Why it is not a bug, or where it is fixed instead. */
+  reason: string;
+}
+
+/**
+ * Takes the allowed findings out. Returns what is left and the entries that
+ * matched nothing (stale: the code moved or was fixed, and a stale entry
+ * would hide the next finding at that place).
+ */
+export function applyAllowlist(
+  findings: readonly PendingFlagFinding[],
+  allowed: readonly PendingFlagAllowed[],
+  relative: (file: string) => string,
+): { remaining: PendingFlagFinding[]; stale: PendingFlagAllowed[] } {
+  const used = new Set<PendingFlagAllowed>();
+  const remaining = findings.filter((f) => {
+    const hit = allowed.find(
+      (a) => a.file === relative(f.file) && a.fn === f.fn && a.flag === f.flag,
+    );
+    if (!hit) return true;
+    used.add(hit);
+    return false;
+  });
+  return { remaining, stale: allowed.filter((a) => !used.has(a)) };
+}
+
 export interface PendingFlagScan {
   findings: PendingFlagFinding[];
   /** Flag windows around something that can reject, cleared on every path. */
@@ -103,7 +145,8 @@ const BUSY_WORDS =
   'Toggling|Completing|Lowering|Rotating|Revoking|Reviewing|Duplicating|Mutating|Retrying|' +
   'Unlinking|Opening|Parsing|Extracting|Building|Buying|Acting|Hydrating|Pulling|Picking|' +
   'LookingUp|Searching|Downloading|Printing|Connecting|Disconnecting|Testing|Assigning|' +
-  'Cancelling|Canceling|Confirming|Starting|Closing|Sending|Inviting|Linking|Publishing';
+  'Cancelling|Canceling|Confirming|Starting|Closing|Sending|Inviting|Linking|Publishing|' +
+  'Holding';
 const FLAG_NAME = new RegExp(
   `(?:${BUSY_WORDS})(?:Id|Ids|Key|Keys|Line|More|Section|Toggle|Blurb|Part|Workspace|Images|Rates|WarehouseId)?$`,
 );
@@ -455,7 +498,73 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
     if (!target) return null;
     if (target.kind === 'action') return target.name;
     if (target.kind === 'fetch') return 'fetch';
-    return fnRejects(target.info, target.node) ? target.name : null;
+    if (fnRejects(target.info, target.node)) return target.name;
+    // A wrapper that awaits (or returns) a call of one of its parameters
+    // passes on the rejection of what it was given: withStepUp(ensure, run)
+    // rejects when `run` does.
+    for (const i of passesOnParams(target.node)) {
+      const arg = call.arguments[i];
+      if (arg && valueRejects(info, arg)) return target.name;
+    }
+    return null;
+  }
+
+  /** Whether calling the function `value` names can reject (an inline function, an action, a local function). */
+  function valueRejects(info: ModuleInfo, value: ts.Expression): boolean {
+    const v = unwrap(value);
+    if (isFunctionNode(v)) return !!fnRejects(info, v);
+    if (ts.isIdentifier(v)) {
+      const target = resolveIdentifier(info, v.text, v);
+      if (!target) return false;
+      if (target.kind === 'action' || target.kind === 'fetch') return true;
+      return !!fnRejects(target.info, target.node);
+    }
+    return false;
+  }
+
+  const paramMemo = new Map<FunctionNode, number[]>();
+  /**
+   * The positions of `fn`'s parameters that it calls and awaits (or returns)
+   * outside a try with a catch: whatever is passed there, its rejection
+   * leaves `fn` too.
+   */
+  function passesOnParams(fn: FunctionNode): number[] {
+    const known = paramMemo.get(fn);
+    if (known) return known;
+    const names = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : null));
+    const out = new Set<number>();
+    const body = fn.body;
+    const visit = (n: ts.Node, caught: boolean) => {
+      if (n !== fn && isFunctionNode(n)) return;
+      if (ts.isTryStatement(n)) {
+        visit(n.tryBlock, caught || !!n.catchClause);
+        if (n.catchClause) visit(n.catchClause.block, caught);
+        if (n.finallyBlock) visit(n.finallyBlock, caught);
+        return;
+      }
+      if (!caught && (ts.isAwaitExpression(n) || ts.isReturnStatement(n))) {
+        const e = n.expression ? unwrap(n.expression) : undefined;
+        const inner = e && ts.isAwaitExpression(e) ? unwrap(e.expression) : e;
+        if (inner && ts.isCallExpression(inner) && ts.isIdentifier(unwrap(inner.expression))) {
+          const i = names.indexOf((unwrap(inner.expression) as ts.Identifier).text);
+          if (i >= 0) out.add(i);
+        }
+      }
+      ts.forEachChild(n, (c) => visit(c, caught));
+    };
+    if (body) {
+      if (ts.isBlock(body)) visit(body, false);
+      else {
+        const e = unwrap(ts.isAwaitExpression(body) ? body.expression : body);
+        if (ts.isCallExpression(e) && ts.isIdentifier(unwrap(e.expression))) {
+          const i = names.indexOf((unwrap(e.expression) as ts.Identifier).text);
+          if (i >= 0) out.add(i);
+        }
+      }
+    }
+    const result = [...out];
+    paramMemo.set(fn, result);
+    return result;
   }
 
   /** Any call under `node`, callbacks included, that can reject (for Promise.all's array). */
@@ -765,8 +874,17 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
         for (const risk of risks) {
           const start = [...mine].reverse().find((s) => s.pos < risk.pos && isStart(s));
           if (!start) continue;
-          // A flag already cleared again before the risk is not in flight.
-          const reset = mine.find((s) => s.pos > start.pos && s.pos < risk.pos && s.kind === 'end');
+          // A flag already cleared again before the risk is not in flight,
+          // unless that clear is on a branch that leaves first
+          // (`if (bad) { setBusy(false); return; }`): the path that goes on to
+          // the risk still has the flag set.
+          const reset = mine.find(
+            (s) =>
+              s.pos > start.pos &&
+              s.pos < risk.pos &&
+              s.kind === 'end' &&
+              !onExitingBranch(s.node, risk.node, fn),
+          );
           if (reset) continue;
           if (judge(fn, flag, start, risk, mine)) break; // one report per flag and function
         }
@@ -792,7 +910,16 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
           const mine = sets.filter((s) => s.flag === flag);
           const start = [...mine].reverse().find((s) => s.pos < at && isStart(s));
           if (!start) continue;
-          if (mine.some((s) => s.pos > start.pos && s.pos < at && s.kind === 'end')) continue;
+          if (
+            mine.some(
+              (s) =>
+                s.pos > start.pos &&
+                s.pos < at &&
+                s.kind === 'end' &&
+                !onExitingBranch(s.node, inner, fn),
+            )
+          )
+            continue;
           const innerSets = got.sets.filter((s) => s.flag === flag);
           for (const risk of got.risks) {
             // A callback that sets the flag itself before the risk owns that
@@ -954,12 +1081,43 @@ function fallsThrough(block: ts.Block): boolean {
  */
 function protectedByTry(node: ts.Node, fn: FunctionNode, flag: string): boolean {
   for (let child: ts.Node = node, p = node.parent; p && p !== fn; child = p, p = p.parent) {
-    if (!ts.isTryStatement(p) || p.tryBlock !== child) continue;
+    if (!ts.isTryStatement(p)) continue;
+    // A finally runs after its catch block too: a request awaited inside the
+    // catch (a fallback, a queue) is covered by the finally that clears.
+    if (p.catchClause === child) {
+      if (p.finallyBlock && callsFlag(p.finallyBlock, flag)) return true;
+      continue;
+    }
+    if (p.tryBlock !== child) continue;
     if (p.finallyBlock && callsFlag(p.finallyBlock, flag)) return true;
     if (p.catchClause) {
       if (callsFlag(p.catchClause.block, flag)) return true;
       if (fallsThrough(p.catchClause.block) && clearedAfter(p, fn, flag)) return true;
       // A catch that leaves without clearing: an outer try may still clear it.
+    }
+  }
+  return false;
+}
+
+/**
+ * True when `clear` sits on a branch that leaves `fn` before `later` can run:
+ * a statement after it in its own block (or in a block around it that does not
+ * also hold `later`) returns or throws, as in
+ * `if (bad) { toast.error(...); setBusy(false); return; }`.
+ */
+function onExitingBranch(clear: ts.Node, later: ts.Node, fn: FunctionNode): boolean {
+  const start = later.getStart();
+  const holdsLater = (n: ts.Node) => n.getStart() <= start && start < n.getEnd();
+  for (let child: ts.Node = clear, p = clear.parent; p && p !== fn; child = p, p = p.parent) {
+    if (holdsLater(p)) return false;
+    if (ts.isBlock(p) || ts.isCaseClause(p) || ts.isDefaultClause(p)) {
+      const i = p.statements.findIndex((st) => st === child);
+      if (
+        i >= 0 &&
+        p.statements.slice(i + 1).some((st) => ts.isReturnStatement(st) || ts.isThrowStatement(st))
+      ) {
+        return true;
+      }
     }
   }
   return false;
