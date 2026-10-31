@@ -38,6 +38,40 @@ function embedsAnImage(pdf: Buffer): boolean {
   return pdf.toString('latin1').includes('/Subtype /Image');
 }
 
+type PdfTextItem = { str: string; transform: number[] };
+type PdfPage = { getTextContent: () => Promise<{ items: PdfTextItem[] }> };
+type PdfParse = (
+  data: Uint8Array,
+  options: { pagerender: (page: PdfPage) => Promise<string> },
+) => Promise<unknown>;
+
+/** Each piece of text the PDF prints and the x where it starts, read back
+ *  through pdf-parse's bundled pdf.js (as inventory-export-pdf.render.test.tsx
+ *  does). */
+async function printedText(pdf: Buffer): Promise<Array<{ str: string; x: number }>> {
+  // The lib path, not the package root: pdf-parse's index reads a sample PDF
+  // when it loads (see src/types/pdf-parse-lib.d.ts).
+  const { default: parse } = (await import('pdf-parse/lib/pdf-parse.js')) as unknown as {
+    default: PdfParse;
+  };
+  const items: Array<{ str: string; x: number }> = [];
+  await parse(new Uint8Array(pdf), {
+    pagerender: async (page) => {
+      for (const item of (await page.getTextContent()).items) {
+        items.push({ str: item.str, x: item.transform[4]! });
+      }
+      return '';
+    },
+  });
+  return items;
+}
+
+/** Where the organization name starts on a page with no padding: at the left
+ *  edge with no logo, after the 36 pt logo and the row's 10 pt gap with one
+ *  (pdfStyles.headerLogo, pdfStyles.headerLeft). */
+const NAME_X_WITHOUT_LOGO = 0;
+const NAME_X_AFTER_LOGO = 36 + 10;
+
 describe('BrandedHeader — the logo is bytes, never a URL or a path', () => {
   const realFetch = globalThis.fetch;
   // Every address the render asks for, answered with a real PNG. A data: URL
@@ -85,9 +119,24 @@ describe('BrandedHeader — the logo is bytes, never a URL or a path', () => {
     expect(embedsAnImage(await renderToBuffer(headerDocument(`file://${file}`)))).toBe(false);
   });
 
-  it('prints the organization name with or without a logo', async () => {
-    const pdf = await renderToBuffer(headerDocument(null));
-    expect(embedsAnImage(pdf)).toBe(false);
+  // The six branded PDFs fall back to this header whenever prefetchPdfLogo
+  // answers null (a WebP or AVIF logo, a 404, a timeout, a refusal). Before the
+  // logo was fetched as bytes, a logo react-pdf could not draw still kept an
+  // empty 36 pt square before the name; now the name starts at the edge, as for
+  // an organization with no logo.
+  it('prints the organization name with or without a logo, at the left edge when there is none', async () => {
+    const nameX = async (orgLogoUrl: string | null) => {
+      const printed = await printedText(await renderToBuffer(headerDocument(orgLogoUrl)));
+      const name = printed.filter((t) => t.str === 'Example Org');
+      expect(name, String(orgLogoUrl)).toHaveLength(1);
+      return name[0]!.x;
+    };
+    const uri = `data:image/png;base64,${(await pngBytes()).toString('base64')}`;
+    expect(await nameX(uri)).toBeCloseTo(NAME_X_AFTER_LOGO, 1);
+    expect(await nameX(null)).toBeCloseTo(NAME_X_WITHOUT_LOGO, 1);
+    expect(
+      await nameX('https://proj.supabase.co/storage/v1/object/public/org-logos/org-1/logo-1.webp'),
+    ).toBeCloseTo(NAME_X_WITHOUT_LOGO, 1);
     expect(requested).toEqual([]);
   });
 });
