@@ -308,6 +308,10 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
     const watchedLocals = new Map<string, string>();
     const watchedNamespaces = new Map<string, Watched[]>();
     const constants = new Map<string, string>();
+    // A watched function's own module may call it too (an ungated wrapper there
+    // would be a way around the rule), so its own name is watched there.
+    for (const w of watched)
+      if (w.module === here) watchedLocals.set(w.name, `${w.module}#${w.name}`);
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const target = resolveModule(file.path, stmt.moduleSpecifier.text);
@@ -432,7 +436,14 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
       if (ts.isIdentifier(node) && watchedLocals.has(node.text)) {
         const p = node.parent;
         const declaration =
-          ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p);
+          ts.isImportSpecifier(p) ||
+          ts.isImportClause(p) ||
+          ts.isNamespaceImport(p) ||
+          ((ts.isFunctionDeclaration(p) ||
+            ts.isVariableDeclaration(p) ||
+            ts.isPropertyAssignment(p) ||
+            ts.isMethodDeclaration(p)) &&
+            p.name === node);
         const member = ts.isPropertyAccessExpression(p) && p.name === node;
         if (!declaration && !member) {
           const how = ts.isCallExpression(p) && p.expression === node ? 'call' : 'value';
@@ -739,6 +750,9 @@ const PLANTED: ScanFile[] = [
       `export async function grantSeat(admin: any) {`,
       `  await admin.from('organization_members').upsert({ user_id: 'u', role: 'owner' });`,
       `}`,
+      `export async function wrapsGrant(admin: any) {`,
+      `  return grantSeat(admin);`,
+      `}`,
     ].join('\n'),
   },
   {
@@ -828,8 +842,9 @@ describe('the scan, on planted sources', () => {
     ]);
   });
 
-  it('a reviewed seat whose function is called without the check fails, as does a use the scan cannot follow', () => {
+  it('a reviewed seat whose function is called without the check fails, from its own module too, as does a use the scan cannot follow', () => {
     expect(ungatedCallers(planted, [PLANTED_SEAT])).toEqual([
+      'server/services/planted-seats.ts#wrapsGrant (line 20) calls grantSeat without the check',
       'server/actions/planted-callers.ts#ungatedCaller (line 13) calls grantSeat without the check',
       'server/actions/planted-callers.ts#namespaceCaller (line 16) calls grantSeat without the check',
       'server/actions/planted-callers.ts#handOn (line 18) uses grantSeat as a value (cannot be followed)',
