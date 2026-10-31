@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -16,6 +17,8 @@ vi.mock('@/lib/auth/api-context', () => ({
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: vi.fn(),
 }));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 // Inject tiny Buffer fakes for the dynamic imports the route does — we
 // don't want to depend on the real bwip-js / qrcode binary output.
@@ -191,4 +194,32 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     expect(InventoryService).not.toHaveBeenCalled();
   });
 
+  // B63, in passing: an outage (internal_error) answered 403 Forbidden, with
+  // no report. Each ServiceError now keeps its real status, and an
+  // internal_error is reported, as the PO PDF route does.
+  it('an internal_error is a 500, reported; a permanent refusal keeps its status', async () => {
+    const cases = [
+      ['internal_error', 500],
+      ['validation_error', 400],
+      ['conflict', 409],
+      ['module_disabled', 403],
+    ] as const;
+    for (const [code, status] of cases) {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      vi.mocked(InventoryService).mockImplementationOnce(function () {
+        return {
+          get: vi.fn(async () => {
+            throw new ServiceError(code, `refused: ${code}`);
+          }),
+        } as unknown as InstanceType<typeof InventoryService>;
+      });
+      const res = await GET(buildRequest(), buildParams());
+      expect([code, res.status]).toEqual([code, status]);
+    }
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'internal_error' }),
+      expect.objectContaining({ tag: 'items.barcode' }),
+    );
+  });
 });

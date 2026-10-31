@@ -4,7 +4,7 @@ import { isUuid } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
 export const runtime = 'nodejs';
@@ -126,8 +126,14 @@ export async function GET(
   } catch (e) {
     if (e instanceof ServiceError) {
       // ServiceError messages are user-facing strings ("Item not found",
-      // "Permission denied") that we control — safe to return.
-      return new NextResponse(e.message, { status: e.code === 'not_found' ? 404 : 403 });
+      // "Permission denied") that we control — safe to return. Each keeps its
+      // real status (serviceErrorStatus): a failed read used to answer 403,
+      // which read as Forbidden, with no report (B63). An internal_error's
+      // public message is already generic; its cause is reported.
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'items.barcode', extra: { detail: e.internalDetail ?? null } });
+      }
+      return new NextResponse(e.message, { status: serviceErrorStatus(e.code) });
     }
     // Don't echo raw error messages — they can include stack-frame
     // file paths and Postgres internals. Send the real error to the
