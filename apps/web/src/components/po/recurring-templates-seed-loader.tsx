@@ -9,6 +9,10 @@ import {
   takeRecurringPoSeed,
   type RecurringPoSeed,
 } from '@/lib/purchase-orders/recurring-seed';
+import type {
+  UnofferedDestination,
+  UnofferedSupplier,
+} from '@/lib/purchase-orders/unoffered-choice';
 
 import {
   RecurringTemplatesPanel,
@@ -44,6 +48,10 @@ interface Props {
   lineLabels?: RecurringLineLabel[];
   /** Where the purchase order ?from= names went, as the server read it. */
   seedDestination?: RecurringSeedDestination | null;
+  /** Destinations templates hold that `locations` does not offer, by id. */
+  unofferedDestinations?: Record<string, UnofferedDestination>;
+  /** Suppliers templates or ?from= hold that `suppliers` does not offer, by id. */
+  unofferedSuppliers?: Record<string, UnofferedSupplier>;
 }
 
 const SEED_LOST =

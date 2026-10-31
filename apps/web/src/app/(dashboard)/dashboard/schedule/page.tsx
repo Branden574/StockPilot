@@ -49,9 +49,9 @@ export default async function SchedulePage({
   // hand from the membership bundle); an unreadable row falls back to the
   // documented default zone, as every org-time surface does, and is reported
   // instead of taking the calendar down (getOrgRowForRequest throws on a read
-  // error). The browser marks today on the viewer's own day once hydrated
-  // (schedule-calendar.tsx), which for anyone in the organization's zone is
-  // a day of this month.
+  // error). The calendar draws every day in this zone too (small fixes slice
+  // 8): each event on its start day here, its time here, and this today
+  // marked, so a viewer elsewhere never opens this month without a mark.
   // The same cached row gives the eyebrow the organization's name for this
   // page in the sidebar (Settings > Navigation renames; PLAN rule 10), with no
   // read of its own.
@@ -69,6 +69,7 @@ export default async function SchedulePage({
       return { timeZone: resolveOrgTimezone(null), navLabel: 'Schedule' };
     });
   const today = zonedParts(new Date(), timeZone);
+  const todayYmd = `${String(today.year).padStart(4, '0')}-${String(today.month).padStart(2, '0')}-${String(today.day).padStart(2, '0')}`;
   let year = today.year;
   let month = today.month;
   if (params.m) {
@@ -83,16 +84,24 @@ export default async function SchedulePage({
     }
   }
 
-  // 6-week grid: Sunday before the 1st through Saturday after the
-  // last → up to 42 cells. Pad the range a few days on each side so
-  // multi-day events that overlap the visible window still load.
-  const gridStart = new Date(year, month - 1, 1);
-  gridStart.setDate(1 - gridStart.getDay());
-  const gridEnd = new Date(gridStart);
-  gridEnd.setDate(gridStart.getDate() + 42);
+  // 6-week grid: Sunday before the 1st through Saturday after the last, 42
+  // calendar days (the calendar's monthGridDays). The events to read are
+  // those starting from the organization's midnight on the first day to its
+  // midnight after the last. That range was the SERVER's midnights (UTC on
+  // Vercel), never padded, so an event late in the evening of the grid's last
+  // day in a US zone (already the next day in UTC) was never read (small
+  // fixes slice 8). Two days of padding on each side cover every zone (none
+  // is more than 14 hours from UTC); an event read outside the grid has no
+  // cell and is not drawn. Multi-day events overlapping the window still
+  // load (listInRange matches on the end too).
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const gridFirstDay = Date.UTC(year, month - 1, 1 - firstWeekday);
+  const rangeFrom = new Date(gridFirstDay - 2 * DAY_MS);
+  const rangeTo = new Date(gridFirstDay + (42 + 2) * DAY_MS);
 
   const svc = await ScheduleService.forCurrentUser();
-  const events = await svc.listInRange(gridStart, gridEnd);
+  const events = await svc.listInRange(rangeFrom, rangeTo);
 
   const calendarEvents = events.map((e) => ({
     id: e.id,
@@ -123,7 +132,14 @@ export default async function SchedulePage({
         }
       />
 
-      <ScheduleCalendar year={year} month={month} events={calendarEvents} canManage={canManage} />
+      <ScheduleCalendar
+        year={year}
+        month={month}
+        events={calendarEvents}
+        canManage={canManage}
+        timeZone={timeZone}
+        todayYmd={todayYmd}
+      />
     </div>
   );
 }

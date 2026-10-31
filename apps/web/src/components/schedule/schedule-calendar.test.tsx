@@ -51,18 +51,36 @@ describe('ScheduleCalendar canManage gating', () => {
     // 42 grid cells → 42 per-day add links.
     expect(screen.getAllByLabelText(/Add event on/)).toHaveLength(42);
   });
+
+  // New event reads ?date= as that day (9:00 AM there, in the organization's
+  // zone), so each "+ Add" names its own cell's day: inside the month, and in
+  // the days of the months either side that fill the grid.
+  it('each "+ Add" opens New event on its own day, inside the month and outside it', () => {
+    render(<ScheduleCalendar year={2026} month={7} events={[]} canManage />);
+    const href = (ymd: string) => screen.getByLabelText(`Add event on ${ymd}`).getAttribute('href');
+    expect(href('2026-07-20')).toBe('/dashboard/schedule/new?date=2026-07-20');
+    // July 2026's grid runs from Sun Jun 28 to Sat Aug 8.
+    expect(href('2026-06-28')).toBe('/dashboard/schedule/new?date=2026-06-28');
+    expect(href('2026-08-08')).toBe('/dashboard/schedule/new?date=2026-08-08');
+    for (const add of screen.getAllByLabelText(/Add event on/)) {
+      const day = add.getAttribute('aria-label')!.replace('Add event on ', '');
+      expect(add).toHaveAttribute('href', `/dashboard/schedule/new?date=${day}`);
+    }
+  });
 });
 
-// The schedule page server-renders the calendar, which puts each event on
-// the day of its start and marks today, both from the clock's LOCAL day: the
+// The schedule page server-renders the calendar, which put each event on
+// the day of its start and marked today, both from the clock's LOCAL day: the
 // server's (UTC on Vercel) while it renders, the viewer's while the browser
 // hydrates. An event at 7:30 PM in Los Angeles is the next day in UTC, so the
 // server drew it in another cell and React threw error #418 (and the server's
 // "today", tomorrow in UTC every evening, stayed marked, since React does not
-// patch a class while hydrating). Events and the today mark are drawn once
-// the page has hydrated.
+// patch a class while hydrating). #331 drew both once hydrated. Since small
+// fixes slice 8 both are the ORGANIZATION's, from fixed props (its zone and
+// its today), so the server and the browser draw the same calendar
+// (schedule-calendar.org-zone.test.tsx has a viewer outside that zone).
 describe('ScheduleCalendar hydrates with the server in UTC and the browser in Los Angeles', () => {
-  it("draws an evening event on the viewer's day and marks the viewer's today, with no hydration error", async () => {
+  it("draws an evening event on the organization's day and marks the organization's today, on the server and in the browser, with no hydration error", async () => {
     // 8 PM on Oct 5 in Los Angeles; already Oct 6 in UTC.
     const t0 = Date.parse('2026-10-06T03:00:00.000Z');
     const evening = {
@@ -72,12 +90,22 @@ describe('ScheduleCalendar hydrates with the server in UTC and the browser in Lo
       startsAt: '2026-10-06T02:30:00Z',
     };
     const run = await hydrateAcrossClockShift(
-      () => <ScheduleCalendar year={2026} month={10} events={[evening]} canManage />,
+      () => (
+        <ScheduleCalendar
+          year={2026}
+          month={10}
+          events={[evening]}
+          canManage
+          timeZone="America/Los_Angeles"
+          todayYmd="2026-10-05"
+        />
+      ),
       { serverNow: t0, browserNow: t0 + 60_000 },
     );
     try {
       expect(run.errors).toEqual([]);
-      expect(run.html).not.toContain('Evening delivery');
+      // Drawn by the server already, in the cell the browser keeps.
+      expect(run.html).toContain('Evening delivery');
       const cellOf = (ymd: string) =>
         within(run.container)
           .getByLabelText(`Add event on ${ymd}`)

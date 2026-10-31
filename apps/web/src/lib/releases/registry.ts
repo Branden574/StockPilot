@@ -28,6 +28,173 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'small-fixes-8-2026-10',
+    revision: 1,
+    // fix/small-fixes-8 (no migration, web and server only: no over-the-air
+    // update). Held as a DRAFT until the web deploy is live; the follow-up
+    // that publishes it sets the real publishedAt, moves it among the
+    // releases published by then, and re-reads these words against what
+    // shipped. A draft at the top, dated after every release (newest first).
+    //
+    // Every user-visible change in the branch has a line (owner rule
+    // 2026-09-25):
+    //   - the purchase orders list's Overdue view (item E), where the
+    //     dashboard's overdue line leads;
+    //   - Edit purchase order naming a destination or supplier it cannot
+    //     offer, and the save refusing a deleted destination (items A, D, C);
+    //   - recurring templates naming a deleted destination or an archived
+    //     supplier, in Edit, Make recurring and the list (items B, D);
+    //   - the recurring run's notification naming a template it created
+    //     nothing for, and why (item C);
+    //   - the team calendar's last evening, times and today (item F);
+    //   - the weekly digest's dates (item G).
+    //   - the purchase orders list's Placed day, now the organization's in
+    //     both lists (item H), said in the Overdue view's line: the instant
+    //     list printed the viewer's day, a different one for a viewer outside
+    //     the organization's zone in the evening (slice 8 review). This
+    //     reverses the published redesign-web-fixes-2026-10 entry
+    //     web-times-in-your-time-zone (2026-10-20: "the Placed date on
+    //     Purchase orders now shows your own day"), so the line is worded as a
+    //     change from that note ("not your own"); owner question 1 in the PR;
+    //   - New and Edit event taking their times in the organization's zone
+    //     (slice 8 review), in the calendar line; and an unchanged Edit event
+    //     save keeping the event's time in the hour the clocks go back (a
+    //     wall clock that happens twice; production's form moved it an hour
+    //     too), in the same line;
+    //   - ordering a draft to a deleted location refused, in the Edit
+    //     purchase order line; a send-mode template whose purchase order
+    //     could not be sent named, in the run line.
+    // Left out as wording or labels with no new behaviour (slice 8 review):
+    // the dashboard's overdue line no longer advises updating the ETA (an
+    // ordered purchase order's expected date cannot be changed); the audit
+    // log labels "Recurring PO template"; a supplier the recurring page could
+    // not read is "Supplier unknown". Left out as changing nothing a reader
+    // sees: the location pickers list every site past 1000 locations, and the
+    // calendar reads fewer old open-ended events (the same events show).
+    //
+    // The Overdue line's link is labelled for both platforms: the phone opens
+    // the bare Purchase orders list for any /dashboard/purchase-orders?...
+    // (apps/mobile web-path-rewrite), which has no Overdue view yet.
+    //
+    // Who is told: the Overdue view, whoever can open the purchase orders list
+    // (purchase_orders:read, Purchase orders on), linked to the view; the
+    // purchase order and recurring lines, whoever can edit them
+    // (purchase_orders:manage, Purchase orders on; the Recurring page checks
+    // the same and shows a plan notice to an organization without it); the
+    // calendar line, whoever can open the calendar (schedule:read or
+    // schedule:manage, Schedule on); the digest line, every member (the
+    // notification settings are each member's own).
+    status: 'draft',
+    title: "An Overdue view for purchase orders, named destinations and suppliers, the calendar's last evening and the digest's date",
+    summary:
+      "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and a recurring template that cannot create its purchase order says why. The team calendar shows events late on its last date, and a weekly digest preview is dated the day it was sent.",
+    publishedAt: '2026-10-31T17:00:00Z',
+    entries: [
+      {
+        // PurchaseOrdersService.listOverdue, on overdueCount's own filter; the
+        // tab is ?status=overdue, which the dashboard has linked to since
+        // before #338 while the list fell back to All.
+        id: 'po-list-overdue-view',
+        category: 'new',
+        area: 'Purchase orders',
+        title: 'The purchase orders list has an Overdue view',
+        whatChanged:
+          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date now shows the day in your organization's time zone, not your own, so everyone sees the same date.",
+        whyItMatters:
+          "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
+        howItAffectsYou:
+          "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open purchase orders' },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // PoForm `unoffered` and the edit page's reads; the save's refusal is
+        // PurchaseOrdersService.resolveDestinationWarehouseId.
+        id: 'po-edit-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: "Editing a draft purchase order names a destination or supplier you can't pick",
+        whatChanged:
+          "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location, or ordering a draft that goes to one, is refused, naming the location.",
+        whyItMatters:
+          'A draft could be ordered to a destination or a supplier nobody could see on the form.',
+        // Said plainly (slice 8 review): the purchase order save accepts an
+        // archived supplier, but the form cannot offer one, so any save that
+        // does not choose a supplier, even one made to change something else,
+        // removes it. Owner question 7 in the PR asks whether to keep it.
+        howItAffectsYou:
+          "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringTemplatesPanel (Edit, Make recurring, the list) and the
+        // Recurring page's reads.
+        id: 'recurring-template-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'Recurring templates name a deleted destination or an archived supplier',
+        whatChanged:
+          "Editing a recurring purchase order template whose destination was deleted after it was saved showed an empty Destination box, and saving was then refused by a name the form never showed. Editing a template now names a deleted destination or an archived supplier under the box and opens on None or No supplier, and Make recurring names an archived supplier the same way. The list shows an archived supplier by name, and says when a template's destination stops it from creating purchase orders.",
+        whyItMatters:
+          'A template whose destination was deleted showed an empty Destination box, and nothing on the page said where it was ordering to.',
+        howItAffectsYou:
+          "Choose another destination or supplier from the list and save the template. If you save it without choosing, even to change something else, it is saved with none. An archived supplier isn't in the list, so saving the template removes it.",
+        whatToDo:
+          'If a template in the list says it creates no purchase order, edit it and choose another destination.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringPoTemplatesService.runDueTemplates (templatesSkipped) and
+        // the cron's notice: owners and admins, and the template's creator
+        // while they hold purchase_orders:manage (slice 8 review).
+        id: 'recurring-run-says-why',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'A recurring template that cannot create its purchase order says why',
+        whatChanged:
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft.",
+        whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
+        howItAffectsYou:
+          "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it names a purchase order that could not be sent, open it and send it.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // The page read events between the server's (UTC) midnights; the
+        // calendar now gets the organization's zone and today.
+        id: 'calendar-last-evening-and-zone',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar shows events late in the day on its last date',
+        whatChanged:
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
+        whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
+        howItAffectsYou: 'Every event on a date the calendar shows is on it.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        // lib/email/es/families/digest.ts formatted its days with no zone (UTC
+        // on Vercel); the cron and the preview now pass the workspace's.
+        id: 'digest-dated-in-workspace-zone',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'A weekly digest preview is dated the day it was sent',
+        whatChanged:
+          "A weekly inventory digest preview sent in the evening in US time zones, from 5 PM Pacific time (4 PM in winter), was dated the next day, in its subject and its As of date. The digest's dates now follow your workspace's time zone, in the preview and in the Monday email.",
+        whyItMatters: 'The preview named a day that had not started yet where you were.',
+        howItAffectsYou: "The preview and the Monday digest carry your workspace's date.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+    ],
+  },
+  {
     id: 'manage-order-items-and-app-fixes-2026-10',
     revision: 1,
     // Ordering visibility on the web and in the mobile app, two photo fixes on
