@@ -617,3 +617,38 @@ describe('Books page: the Table / Grid choice comes from its cookie', () => {
     expect(container.textContent).not.toContain('setting status to Active');
   });
 });
+
+/**
+ * B42: the bulk bar's Cycle count had no gate, so staff were sent to Start a
+ * count, which the server refuses below a manager with cycle_counts:assign
+ * and stock:adjust. The page asks the Cycle Counts module with its other
+ * gates and passes core countStartAllowed at both of its table calls.
+ */
+describe('Books page: Cycle count in the bulk bar only for someone who can start a count', () => {
+  it('a manager with Cycle Counts on is offered it (instant mode)', async () => {
+    render(await callPage());
+    expect(events).toContain('module:cycle_counts:start');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('a manager with Cycle Counts on is offered it (over the cap, the live list)', async () => {
+    m.loadInventoryDataset.mockImplementation(() => logged('dataset', async () => null));
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('staff (stock:adjust, no cycle_counts:assign) are not', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+
+  it('nor a manager whose organization turned Cycle Counts off', async () => {
+    m.checkModuleAccess.mockImplementation((id: string) =>
+      logged(`module:${id}`, async () => ({ enabled: id !== 'cycle_counts', canManage: true })),
+    );
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+});
