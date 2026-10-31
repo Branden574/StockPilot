@@ -15,6 +15,8 @@ import { basename, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { CUSTOMER_DOMAINS } from './customer-identity';
+
 /**
  * No address at the customer's mail domains in the tracked tree (docket S15,
  * 2026-10-25).
@@ -89,17 +91,11 @@ import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
 
-// The customer's mail domains, joined from pieces at run time so that this
-// file never holds one whole and a search of the repository for one finds
-// only the applied migration allowed below.
-const CUSTOMER_DOMAINS: readonly string[] = [
-  ['learn' + '4life', 'org'],
-  ['l4l' + 'north', 'com'],
-  ['l4' + 'l', 'org'],
-  ['cv' + 'west', 'org'],
-  ['cv' + 'south', 'org'],
-  ['ll' + 'ac', 'org'],
-].map((labels) => labels.join('.'));
+// The customer's mail domains (CUSTOMER_DOMAINS) come from customer-identity.ts,
+// which joins them from pieces at run time, so that neither file holds one
+// whole and a search of the repository for one finds only the applied
+// migration allowed below. The copy guard (customer-names-in-copy.guard.test.ts)
+// reads the same list.
 
 type Allowed = { file: string; sha256: string; why: string };
 

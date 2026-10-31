@@ -32,6 +32,8 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { copyInSource as readCopy } from '@/test/copy-in-source';
+
 const WEB_SRC = path.resolve(__dirname, '..');
 
 /** The phrases the recorded-quantity jargon used. Only "the book" is ever
@@ -126,70 +128,21 @@ function objectId(node: ts.ObjectLiteralExpression): string | null {
 
 type Copy = { line: number; text: string };
 
+/** The release object in the registry that quotes the old wording on purpose. */
+const quotesOldWording = (node: ts.ObjectLiteralExpression): boolean => {
+  const id = objectId(node);
+  return Boolean(id && QUOTES_OLD_WORDING.has(id));
+};
+
 /**
- * Every piece of copy in a file, as written: string and template literals (a
- * template's substitutions read "${…}") and the text of each JSX element with
- * its children joined (an expression child reads "${…}" unless it is a string,
- * a nested element contributes its own text, whitespace collapses). Comments
- * and import paths are not copy and are skipped.
+ * Every piece of copy in a file, as written (the shared reader,
+ * test/copy-in-source.ts): string and template literals and the text of each
+ * JSX element with its children joined. Comments and import paths are not
+ * copy and are skipped, and so is the registry's release that quotes the old
+ * wording.
  */
 function copyInSource(file: string, text: string): Copy[] {
-  const source = ts.createSourceFile(
-    file,
-    text,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
-  const skipObjects = rel(file) === REGISTRY;
-  const out: Copy[] = [];
-  const at = (node: ts.Node) =>
-    source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-
-  const jsxText = new Map<ts.Node, string>();
-  const flatten = (node: ts.JsxElement | ts.JsxFragment): string => {
-    const known = jsxText.get(node);
-    if (known !== undefined) return known;
-    const parts = node.children.map((child): string => {
-      if (ts.isJsxText(child)) return child.text;
-      if (ts.isJsxExpression(child)) {
-        const e = child.expression;
-        if (!e) return '';
-        if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
-        return '${…}';
-      }
-      if (ts.isJsxElement(child) || ts.isJsxFragment(child)) return ` ${flatten(child)} `;
-      return ' ';
-    });
-    const text = parts.join('').replace(/\s+/g, ' ').trim();
-    jsxText.set(node, text);
-    return text;
-  };
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
-    if (skipObjects && ts.isObjectLiteralExpression(node)) {
-      const id = objectId(node);
-      if (id && QUOTES_OLD_WORDING.has(id)) return;
-    }
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      out.push({ line: at(node), text: node.text });
-      return;
-    }
-    if (ts.isTemplateExpression(node)) {
-      const text = node.head.text + node.templateSpans.map((s) => '${…}' + s.literal.text).join('');
-      out.push({ line: at(node), text });
-      node.templateSpans.forEach((s) => visit(s.expression));
-      return;
-    }
-    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
-      const text = flatten(node);
-      if (text) out.push({ line: at(node), text });
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return out;
+  return readCopy(file, text, rel(file) === REGISTRY ? { skipObject: quotesOldWording } : {});
 }
 
 const copyIn = (file: string): Copy[] => copyInSource(file, readFileSync(file, 'utf8'));
