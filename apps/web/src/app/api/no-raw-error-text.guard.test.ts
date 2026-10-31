@@ -38,15 +38,16 @@ import { describe, expect, it } from 'vitest';
  * where an error is a catch clause's binding or a rejection handler's
  * parameter (whatever its name), or a name such as e, err, error, uploadErr,
  * pgError (also as a property: res.error.message). The text is followed
- * through what keeps it text: casts, string methods, `??`, `||`, `+`, a
- * branch of `?:`, a template.
+ * through what keeps it text: casts, string methods, `??`, `||`, `&&`, `+`,
+ * a branch of `?:`, a template.
  *
  * WHAT DOES NOT COUNT: text that goes only to the server, or becomes a yes or
  * no. Inside `new Error(...)` (it is only thrown or reported, and every catch
  * that answers is held to these same rules), `new ServiceError('internal_error',
  * ...)` (S13 keeps that text server side), `reportError(...)` and
  * `console.*(...)`; tested with `.includes()`, `.startsWith()`, a RegExp's
- * `.test()`, `===`, `.length`, `!` or `typeof`; read after `instanceof
+ * `.test()`, `===`, `.length`, `!` or `typeof`, or as a condition (`if`,
+ * `while`, the test of `?:`); read after `instanceof
  * ServiceError` or `instanceof ForbiddenError` (the app wrote those words); or
  * held in a const (or a destructured name) whose every use is one of these.
  *
