@@ -6,6 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // sendPasswordResetEmail helper (admin.generateLink → our /auth/confirm URL
 // → Resend). The Supabase built-in mailer (resetPasswordForEmail) is capped
 // at ~2 emails/hour project-wide and must never be reintroduced.
+//
+// Docket S25: the emailed link carries `r`, the account it is for, signed for
+// the user id GoTrue returned (checked with the app's own checker). The
+// signing value is a dull one under a neutral name, set before @/lib/env reads
+// the environment (src/test/secret-shaped-fixtures.guard.test.ts).
+vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_INPUT;
+});
 
 const generateLink = vi.fn();
 const sendEmail = vi.fn();
@@ -81,9 +90,13 @@ vi.mock('@/server/services/context', async () => {
   };
 });
 
+import { emailedConfirmLink } from '@/test/confirm-link-check';
+
 import { sendMemberPasswordResetAction } from './team';
 
 const TARGET = '22222222-2222-2222-2222-222222222222';
+/** GoTrue's hashed token is a sha224 in hex: 56 characters. */
+const LINK_HASH = 'ab'.repeat(28);
 
 describe('sendMemberPasswordResetAction', () => {
   beforeEach(() => {
@@ -99,7 +112,7 @@ describe('sendMemberPasswordResetAction', () => {
     generateLink.mockResolvedValue({
       data: {
         user: { id: TARGET },
-        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: 'hash123' },
+        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: LINK_HASH },
       },
       error: null,
     });
@@ -159,9 +172,11 @@ describe('sendMemberPasswordResetAction', () => {
     // MUST be our server-verified confirm route — the raw action_link hands
     // the session back in a URL fragment and bounces users to /signin.
     // (HTML entity-escapes the query &; text carries it raw.)
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&amp;type=recovery');
-    expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    expect(msg.html).toContain(`/auth/confirm?token_hash=${LINK_HASH}&amp;type=recovery`);
+    expect(msg.text).toContain(`/auth/confirm?token_hash=${LINK_HASH}&type=recovery`);
     expect(msg.html).not.toContain('https://sb/verify');
+    // S25: the page will name the member GoTrue made the link for.
+    expect(emailedConfirmLink(msg.text)).toMatchObject({ type: 'recovery', recipient: TARGET });
     // es registry sender for the security family.
     expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
 

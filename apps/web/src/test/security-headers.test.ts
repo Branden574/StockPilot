@@ -185,7 +185,9 @@ describe('the pre-existing header set is not regressed', () => {
  * window; connect-src, img-src, media-src, frame-src and form-action cover
  * requests, images, media, frames and form posts only. When a nonce policy
  * replaces 'unsafe-inline', the first test fails: rewrite both documents with
- * it.
+ * it, and give /auth/confirm's inline press gate (app/auth/confirm/press-gate.ts,
+ * docket S25) the nonce, or browsers stop running it and its page loses the
+ * gate without a sound (its button is left enabled on purpose).
  */
 describe('SECURITY.md and the ASVS mapping say what this CSP does not stop (B17)', () => {
   const ROOT = path.resolve(__dirname, '../../../..');

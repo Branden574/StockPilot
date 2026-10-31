@@ -35,7 +35,14 @@
      presented the /auth/confirm login CSRF as closed for browsers that send
      Fetch Metadata. Both corrected, with the defences added for them and the
      section 8 row updated. The GET list was read from the route files on
-     that date; it is not a sweep. -->
+     that date; it is not a sweep.
+
+     AMENDED 2026-10-31 (docket S25, first of two releases): INV-E5's
+     Enforced by, Tested at and "Also not covered" texts rewritten for the
+     signed account reference every /auth/confirm link now carries and the
+     page's press gate. The sentence on links without the reference is
+     transitional: the second release refuses them and removes it. Nothing
+     else in this document was re-verified. -->
 
 # Security invariants
 
@@ -1465,8 +1472,26 @@ application structure.
   there with no `Sec-Fetch-Site` is verified and logged (type only), by
   decision: without that header no header tells its own post from another
   site's, so refusing would refuse every browser without Fetch Metadata on a
-  page that loads no script and opens on whatever device holds the email.
-  Its page names the account the browser is already signed in as, and where a
+  page that works without its one script and opens on whatever device holds
+  the email. Every link the app emails names the account it is for (docket
+  S25): `r` carries the user id GoTrue returned with the token and the time
+  the link was built, with an HMAC-SHA256 tag over those, the link's type and
+  its token hash, keyed with a key derived from the service key under a fixed
+  label ([`confirm-recipient.ts`](../../apps/web/src/lib/auth/confirm-recipient.ts);
+  [`confirm-link.ts`](../../apps/web/src/lib/auth/confirm-link.ts) is the only
+  code that writes such a link). The page checks `r` before anything else (a
+  changed, moved or relabelled one gets the type's refused answer and one past
+  65 minutes the expired answer, with no lookup), looks the account up with
+  the service client and prints its full address above the form, and names
+  both accounts when the browser is signed in as another one (compared by id).
+  A failed or slow lookup gets a "try again" page with no form. `POST` checks
+  `r` again before `verifyOtp`, and a session GoTrue made for another account
+  than `r` names is signed out again in the same answer. The press counts only
+  once the page has been visible, in front and quiet for a second
+  ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)), so a
+  window swap (DoubleClickjacking) cannot land a press on it unseen. Until the
+  second S25 release a link without `r` still gets the page it got before,
+  with the signed-in notice and the gate, and is logged (type only). Where a
   link lands is fixed by its type
   ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
   not chosen by the link. The two `GET`s that spend something of the person's
@@ -1489,11 +1514,23 @@ application structure.
   and release-state's `route.cross-site.test.ts` (end to end through Next's
   App Route module);
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
-  (login CSRF: a post from another site, the signed-in notice, the fixed
-  landing) and
+  (login CSRF: a post from another site, `r` checked on `GET` and `POST`
+  before any lookup or `verifyOtp`, the account's address and the notices,
+  the failed lookup, a session made for another account, the gate on the
+  page, the fixed landing);
+  [`confirm-recipient.test.ts`](../../apps/web/src/lib/auth/confirm-recipient.test.ts)
+  (the signature: a known-answer vector, every changed part refused, the issue
+  time's bounds, the lab harness's copy held to the same vector);
+  [`confirm-link.test.ts`](../../apps/web/src/lib/auth/confirm-link.test.ts)
+  (the one link writer, and the account lookup's found, gone and failed
+  answers within five seconds);
+  [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
+  (the page's own script: the quiet second, focus, visibility, the window swap,
+  and a browser that never reports focus);
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
-  (each type's landings, and sweeps over the five link builders and the
-  repository's sign-in harnesses);
+  (each type's landings, and sweeps over the five link builders, each signing
+  for the id GoTrue returned with its link, and the repository's sign-in
+  harnesses, each signing `r` and waiting for the gate);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and
@@ -1547,18 +1584,23 @@ application structure.
   closed.**
   - Navigate and press. Another site can send a browser to `/auth/confirm` with
     a link it holds for its own account (a reset link for its own address is
-    one form away) and with the type it likes. The page must render for that
-    navigation, because a click in webmail is a cross-site navigation too, and
-    its form then posts from the app's own page, so `Sec-Fetch-Site` says
-    `same-origin` and the press is verified. The page now names the account
-    the browser is already signed in as, another site can no longer sign the
-    browser out first, and the link lands where its type says, not on a page
-    the other site chose. A browser that is signed out, whose person presses on
-    for a link they did not ask for, is still signed in to the account the link
-    belongs to. Closing that needs the link builders to add a recipient hint,
-    signed so the page can show it ("this link signs in as j***@..."); that is
-    an owner question. The first version of this entry presented the login
-    CSRF as closed for every browser that sends Fetch Metadata; it was not.
+    one form away). The page must render for that navigation, because a click
+    in webmail is a cross-site navigation too, and its form then posts from the
+    app's own page, so `Sec-Fetch-Site` says `same-origin` and the press is
+    verified. Since docket S25 the page prints the full address of the account
+    the link is for before anyone presses (and both addresses when the browser
+    is signed in as another account), the press counts only after a quiet
+    second in front, another site can no longer sign the browser out first,
+    and the link lands where its type says. What stays open: a person who
+    reads another account's address and presses anyway; a person talked into
+    stopping on the page and pressing again later, which the gate cannot tell
+    from a real press; and a lookalike address made to match the full one
+    (much harder than matching a mask). Until the second S25 release a link
+    without `r` (one sent before the first, or one built by hand from a token
+    the other site holds) still gets the old page, which cannot name the
+    account; the second release refuses it. The first version of this entry
+    presented the login CSRF as closed for every browser that sends Fetch
+    Metadata; it was not.
   - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
     Metadata, or one whose header an extension strips), which needs an unspent
     link for an account the attacker holds; the log line shows whether such

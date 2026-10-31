@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -16,6 +17,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *  - HARDCODED allowlist: only the demo QA account. A recovery link is an
  *    account-takeover primitive, so this must never work for a real user's
  *    email, no matter who holds the secret.
+ *  - The link names the account GoTrue made it for (`r`, docket S25), as
+ *    every emailed link does, so the walk sees the page people see.
  */
 const QA_EMAILS = new Set(['demo@stockpilotusa.com']);
 
@@ -49,7 +52,14 @@ export async function POST(req: NextRequest) {
   if (error || !hashedToken) {
     return NextResponse.json({ error: error?.message ?? 'no token' }, { status: 500 });
   }
-  return NextResponse.json({
-    confirmUrl: `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`,
+  const confirmUrl = confirmLinkUrl({
+    tokenHash: hashedToken,
+    type: 'recovery',
+    next: '/reset/complete',
+    userId: data?.user?.id,
   });
+  if (!confirmUrl) {
+    return NextResponse.json({ error: 'the link could not be signed' }, { status: 500 });
+  }
+  return NextResponse.json({ confirmUrl });
 }

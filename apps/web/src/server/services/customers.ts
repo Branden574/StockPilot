@@ -10,6 +10,7 @@ import {
   type PortalPricingMode,
 } from '@stockpilot/core';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { env } from '@/lib/env';
 import { renderPortalInviteEmail } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
@@ -506,7 +507,18 @@ export class CustomersService {
     }
     const hashedToken = linkRes.data?.properties?.hashed_token;
     const authUserId = linkRes.data?.user?.id;
-    if (!hashedToken || !authUserId) {
+    // The link names the account GoTrue made it for (`r`, docket S25), signed
+    // with the link's own type. Built before the mapping row below, so a link
+    // that cannot be signed (no key, or no usable id) leaves nothing behind.
+    const confirmUrl = hashedToken
+      ? confirmLinkUrl({
+          tokenHash: hashedToken,
+          type: linkType,
+          next: '/portal',
+          userId: authUserId,
+        })
+      : null;
+    if (!hashedToken || !authUserId || !confirmUrl) {
       throw new ServiceError('internal_error', 'Invite link was empty.');
     }
 
@@ -522,10 +534,6 @@ export class CustomersService {
         { onConflict: 'customer_id,user_id' },
       );
     if (mapErr) throw new ServiceError('internal_error', mapErr.message);
-
-    const confirmUrl =
-      `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}` +
-      `&type=${linkType}&next=${encodeURIComponent('/portal')}`;
 
     // Sender identity for the external es portal-invite: the portal
     // belongs to THIS org (the supplier), so the email is branded

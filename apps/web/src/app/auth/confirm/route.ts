@@ -1,10 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { confirmLanding } from '@/lib/auth/confirm-landing';
+import {
+  lookUpConfirmRecipient,
+  verifyConfirmRecipient,
+  type ConfirmRecipientAccount,
+} from '@/lib/auth/confirm-link';
 import { fetchSiteIsElsewhere } from '@/lib/auth/cross-site-request';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { completeEmailChange, EMAIL_CHANGE_RETURN_PATH } from '@/server/services/email-change';
+
+import { PRESS_GATE_FORM_ID, PRESS_GATE_SCRIPT } from './press-gate';
 
 import type { EmailOtpType } from '@supabase/supabase-js';
 
@@ -39,18 +46,31 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  * bounce, because the clicker is usually a signed-in user whose account has
  * NOT changed.
  *
- * NAVIGATE AND PRESS (docket S14 review). A post from another site is refused
- * (POST below), but nothing stops another site from SENDING the browser here
- * with a link it holds for its own account: this page must render for a click
- * in webmail, which is a cross-site navigation too, and its own form then posts
- * same-origin. Two things narrow that login CSRF. The page names the account
- * this browser is already signed in as, so pressing on is no longer a silent
- * swap (and another site can no longer sign the browser out first:
- * app/auth/session-ended). And where the link lands is fixed by its type
- * (lib/auth/confirm-landing.ts), so the other site no longer chooses which page
- * of its account opens. What stays open: a browser that is signed out, whose
- * person presses on for a link they did not ask for, is signed in to the
- * account the link belongs to (INV-E5, "Not covered").
+ * NAVIGATE AND PRESS (docket S14 review, S25). A post from another site is
+ * refused (POST below), but nothing stops another site from SENDING the
+ * browser here with a link it holds for its own account: this page must render
+ * for a click in webmail, which is a cross-site navigation too, and its own
+ * form then posts same-origin. So:
+ *   - every link carries `r`, the account it is for, signed by our server over
+ *     the link's type, token hash and issue time (lib/auth/confirm-link.ts).
+ *     GET checks it before anything else and, for a link that checks out,
+ *     looks that account up and prints its address above the form; a changed,
+ *     moved or relabelled `r` gets the type's refused answer and one past its
+ *     hour the expired answer, with no lookup. POST checks it again before
+ *     verifyOtp, so the token is not spent;
+ *   - a browser already signed in as another account is told both addresses
+ *     (and the one already signed in as the link's account is told nothing);
+ *     another site can no longer sign the browser out first
+ *     (app/auth/session-ended);
+ *   - the press counts only after the page has been in front of the person
+ *     for a quiet second (./press-gate.ts), so a window swap cannot land a
+ *     double-click's second press on the button unseen;
+ *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
+ * A link without `r` (sent before S25's first release, so expired within the
+ * hour, or built by hand) still gets the page it got before and is logged;
+ * the next release refuses it. What stays open: a person who reads another
+ * account's address and presses anyway, or is talked into pressing again
+ * later (INV-E5, "Not covered").
  */
 
 /** Only the email types we actually send through this route. 'magiclink' is
@@ -82,8 +102,32 @@ function refusedRedirect(origin: string, type: string | null): NextResponse {
   return NextResponse.redirect(`${origin}${dest}`, 303);
 }
 
+/**
+ * The answer for a link whose `r` did not check out (changed, cut, moved to
+ * another link, account or type): the refused answer, which says nothing, as
+ * for a post from another site. An email change has its own page.
+ */
+function refusedAnswer(origin: string, type: string | null): NextResponse {
+  return type === 'email_change' ? emailChangeExpiredPage() : refusedRedirect(origin, type);
+}
+
+/** The answer for a link that is past its time, or whose account is gone. */
+function expiredAnswer(origin: string, type: string | null): NextResponse {
+  return type === 'email_change' ? emailChangeExpiredPage() : failureRedirect(origin, type);
+}
+
+/** A link type for the logs: one the route sends, or 'other', never a value the request chose. */
+function loggedType(type: string | null): string {
+  return type && ALLOWED_TYPES.has(type as EmailOtpType) ? type : 'other';
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+/** An email address as the page prints it: escaped, in a face where l, I, 1, O and 0 read apart. */
+function addr(email: string): string {
+  return `<span class="addr">${escapeHtml(email)}</span>`;
 }
 
 const PAGE_HEADERS = {
@@ -97,8 +141,10 @@ const PAGE_HEADERS = {
  * The page's own palette (redesign P5.1): the app's light ground, card and
  * hairline, the flat accent button (the old blue-to-indigo gradient predated
  * the brand), and a dark scheme for devices set to dark. It is a style element
- * in the page itself: no app CSS, font or script loads here (CSP allows inline
- * styles), so the page stays zero JS.
+ * in the page itself: no app CSS, font or script file loads here (CSP allows
+ * inline styles). The address of the account a link is for sits in its own
+ * box, in a monospace face that wraps anywhere, and the button is dimmed while
+ * the press gate has not armed it (S25).
  */
 const PAGE_STYLE = `
 :root{color-scheme:light dark}
@@ -108,22 +154,30 @@ main{max-width:400px;width:100%;margin:16px;box-sizing:border-box;background:#ff
 h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin:0 0 10px}
 p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0 0 24px}
 p.note{background:#f9eedc;color:#975d11;border-radius:6px;padding:12px 14px;margin:0 0 20px;text-align:left}
+p.recipient{background:#f4f3ee;color:#0e0f0d;border-radius:6px;padding:12px 14px;margin:0 0 16px;text-align:left}
+.addr{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#2f7463;color:#ffffff;font:inherit;font-weight:500;font-size:15px;text-decoration:none;cursor:pointer}
 .btn:hover{background:#28695a}
 .btn:focus-visible{outline:2px solid #0e0f0d;outline-offset:2px}
+.btn[aria-disabled="true"]{opacity:.55;cursor:default}
+.btn[aria-disabled="true"]:hover{background:#2f7463}
 @media (prefers-color-scheme:dark){
 body{background:#0c0d0a;color:#f0efe8}
 main{background:#131410;border-color:#1f201b}
 p{color:#9a9b91}
 p.note{background:#292114;color:#e2b05a}
+p.recipient{background:#1c1d18;color:#f0efe8}
 .btn{background:#7acdb8;color:#07120e}
 .btn:hover{background:#8dd5c2}
+.btn[aria-disabled="true"]:hover{background:#7acdb8}
 .btn:focus-visible{outline-color:#f0efe8}
 }`;
 
 function shell(title: string, inner: string): string {
-  // Plain server-rendered HTML on purpose: zero JS, works in every client,
-  // and the token is only ever consumed by the human pressing the button.
+  // Plain server-rendered HTML on purpose: it works in every client, and the
+  // token is only ever consumed by the human pressing the button. The form
+  // page's one script is the press gate, which a client without scripts
+  // simply never runs (the button stays enabled in the markup).
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -140,14 +194,25 @@ function shell(title: string, inner: string): string {
 </body></html>`;
 }
 
-function statusPage(args: { title: string; heading: string; body: string; linkLabel: string; linkHref: string }) {
+function statusPage(args: {
+  title: string;
+  heading: string;
+  body: string;
+  linkLabel?: string;
+  linkHref?: string;
+  status?: number;
+}) {
+  const link =
+    args.linkLabel && args.linkHref
+      ? `<a href="${escapeHtml(args.linkHref)}" class="btn">${escapeHtml(args.linkLabel)}</a>`
+      : '';
   const html = shell(
     args.title,
     `<h1>${escapeHtml(args.heading)}</h1>
     <p>${escapeHtml(args.body)}</p>
-    <a href="${escapeHtml(args.linkHref)}" class="btn">${escapeHtml(args.linkLabel)}</a>`,
+    ${link}`,
   );
-  return new NextResponse(html, { status: 200, headers: PAGE_HEADERS });
+  return new NextResponse(html, { status: args.status ?? 200, headers: PAGE_HEADERS });
 }
 
 /** An email-change link that cannot be used: nothing about the account changed. */
@@ -158,6 +223,36 @@ function emailChangeExpiredPage(): NextResponse {
     body: 'Nothing about your account has changed. Open Settings → Profile to send a fresh verification.',
     linkLabel: 'Go to Settings → Profile',
     linkHref: EMAIL_CHANGE_RETURN_PATH,
+  });
+}
+
+/**
+ * The account a signed link is for could not be looked up (GoTrue failed, or
+ * took past five seconds). No form: the press is offered only with the
+ * account's address on the page. Nothing was spent, so the same link works
+ * once GoTrue answers.
+ */
+function tryAgainPage(): NextResponse {
+  return statusPage({
+    title: 'Try again',
+    heading: 'This link could not be opened just now',
+    body: 'Nothing was used and nothing changed. Wait a minute, then open the link from your email again.',
+    status: 503,
+  });
+}
+
+/**
+ * The press signed this browser in to an account other than the one the link
+ * named (a bug of ours: a builder signed the wrong id). The session was just
+ * ended, so the page claims nothing about any account.
+ */
+function otherAccountSignedOutPage(): NextResponse {
+  return statusPage({
+    title: 'Sign in to continue',
+    heading: 'Sign in to continue',
+    body: 'This link could not be completed in this browser. Sign in to StockPilot to continue.',
+    linkLabel: 'Go to sign in',
+    linkHref: '/signin',
   });
 }
 
@@ -175,19 +270,23 @@ function landingFor(type: string, next: string | null): string {
  * when it is signed out (an email scanner's prefetch carries no cookie, so this
  * costs it no round trip) or the check fails; the page then renders as before.
  */
-async function signedInAccount(): Promise<{ email: string | null } | null> {
+async function signedInAccount(): Promise<{ id: string; email: string | null } | null> {
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    return user ? { email: user.email ?? null } : null;
+    return user ? { id: user.id, email: user.email ?? null } : null;
   } catch {
     return null;
   }
 }
 
-/** The notice for a browser that is already signed in: pressing on replaces that session if the link is another account's. */
+/**
+ * A link without `r` in a browser that is already signed in (S14's notice):
+ * the page cannot say whose the link is, so it says what pressing on may do.
+ * The next release refuses such a link.
+ */
 function signedInNotice(email: string | null): string {
   const who = email
     ? `You're signed in as <strong>${escapeHtml(email)}</strong> on this browser.`
@@ -195,17 +294,57 @@ function signedInNotice(email: string | null): string {
   return `<p class="note">${who} If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.</p>`;
 }
 
-export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
-  const tokenHash = searchParams.get('token_hash');
-  const type = searchParams.get('type');
-
-  if (!tokenHash || !type || !ALLOWED_TYPES.has(type as EmailOtpType)) {
-    return failureRedirect(origin, type);
+/**
+ * The one line naming the account a signed link is for (S25): its full
+ * address, looked up on the server, so a lookalike cannot hide behind a mask.
+ * An email change names the address waiting to replace it too. Fixed words per
+ * type; only the escaped addresses vary.
+ */
+function recipientLine(type: string, account: { email: string; newEmail: string | null }): string {
+  const notYours = 'If that is not your email address, close this page.';
+  switch (type) {
+    case 'recovery':
+      return `This link sets a new password for ${addr(account.email)}. ${notYours}`;
+    case 'invite':
+      return `This invite is for ${addr(account.email)}. ${notYours}`;
+    case 'magiclink':
+      return `This link signs in as ${addr(account.email)}. ${notYours}`;
+    default:
+      return account.newEmail
+        ? `This link changes the sign-in email of ${addr(account.email)} to ${addr(account.newEmail)}. If neither address is yours, close this page.`
+        : `This link is for the account ${addr(account.email)}. ${notYours}`;
   }
-  const next = landingFor(type, searchParams.get('next'));
-  const signedIn = await signedInAccount();
+}
 
+/**
+ * A signed link in a browser signed in as ANOTHER account (compared by user
+ * id, never by address): pressing on replaces that session, and the page
+ * names both. A browser already signed in as the link's own account is told
+ * nothing: there is nothing to warn about.
+ */
+function otherAccountNotice(signedInEmail: string | null, recipientEmail: string): string {
+  const who = signedInEmail
+    ? `You're signed in as ${addr(signedInEmail)} on this browser.`
+    : 'This browser is already signed in to another StockPilot account.';
+  return `<p class="note">${who} Continuing signs you in as ${addr(recipientEmail)} instead. If you didn't ask for this link, close this page.</p>`;
+}
+
+/**
+ * The click-through page: the lines above the form (the account a signed link
+ * is for, and any notice), the form, which carries `r` back to POST when the
+ * link had one, and the press gate after it. Every value from the request is
+ * escaped, and each was checked first (the type against ALLOWED_TYPES, next
+ * against the type's landings, the token hash and `r` by their shapes when
+ * `r` is present), so nothing from the URL can add markup or reach the script.
+ */
+function confirmPage(args: {
+  type: string;
+  tokenHash: string;
+  next: string;
+  r: string | null;
+  lines: string;
+}): NextResponse {
+  const { type } = args;
   const heading =
     type === 'recovery'
       ? 'Reset your password'
@@ -223,20 +362,87 @@ export async function GET(request: NextRequest) {
   const html = shell(
     heading,
     `<h1>${heading}</h1>
-    ${signedIn ? signedInNotice(signedIn.email) : ''}
+    ${args.lines}
     <p>
       This link works once. Press the button to continue.
     </p>
-    <form method="post" action="/auth/confirm">
-      <input type="hidden" name="token_hash" value="${escapeHtml(tokenHash)}">
+    <form method="post" action="/auth/confirm" id="${PRESS_GATE_FORM_ID}">
+      <input type="hidden" name="token_hash" value="${escapeHtml(args.tokenHash)}">
       <input type="hidden" name="type" value="${escapeHtml(type)}">
-      <input type="hidden" name="next" value="${escapeHtml(next)}">
+      <input type="hidden" name="next" value="${escapeHtml(args.next)}">
+      ${args.r === null ? '' : `<input type="hidden" name="r" value="${escapeHtml(args.r)}">`}
       <button type="submit" class="btn">
         ${button}
       </button>
-    </form>`,
+    </form>
+    <script>${PRESS_GATE_SCRIPT}</script>`,
   );
   return new NextResponse(html, { status: 200, headers: PAGE_HEADERS });
+}
+
+export async function GET(request: NextRequest) {
+  const { searchParams, origin } = new URL(request.url);
+  const tokenHash = searchParams.get('token_hash');
+  const type = searchParams.get('type');
+
+  if (!tokenHash || !type || !ALLOWED_TYPES.has(type as EmailOtpType)) {
+    return failureRedirect(origin, type);
+  }
+  const next = landingFor(type, searchParams.get('next'));
+  const r = searchParams.get('r');
+
+  if (r === null) {
+    // A link without r: sent before S25's first release (expired within the
+    // hour), or built by hand. Until the next release it gets the page it got
+    // before; the log line, type only, says when none are left.
+    console.info('[auth/confirm] link without a recipient', { type });
+    const signedIn = await signedInAccount();
+    return confirmPage({
+      type,
+      tokenHash,
+      next,
+      r: null,
+      lines: signedIn ? signedInNotice(signedIn.email) : '',
+    });
+  }
+
+  // Checked before anything is read: a link r does not vouch for costs no
+  // session read and no lookup, and says nothing about any account.
+  const verdict = verifyConfirmRecipient({ type, tokenHash, r });
+  if (verdict.status === 'invalid') return refusedAnswer(origin, type);
+  if (verdict.status === 'stale') return expiredAnswer(origin, type);
+
+  const [signedIn, account]: [
+    { id: string; email: string | null } | null,
+    ConfirmRecipientAccount,
+  ] = await Promise.all([signedInAccount(), lookUpConfirmRecipient(verdict.userId)]);
+  // Deleted, disabled or without an address: the link cannot be used.
+  if (account.kind === 'gone') return expiredAnswer(origin, type);
+  if (account.kind === 'failed') {
+    // Fail closed: never the form without the address. Reported with the
+    // type only (never the id, the token or r).
+    void reportError(
+      new Error(
+        account.reason === 'timeout'
+          ? 'the confirmation link recipient lookup took too long'
+          : 'the confirmation link recipient lookup failed',
+      ),
+      { tag: 'auth.confirm_recipient_lookup_failed', level: 'warning', extra: { type } },
+    );
+    return tryAgainPage();
+  }
+  const notice =
+    signedIn && signedIn.id !== verdict.userId
+      ? otherAccountNotice(signedIn.email, account.email)
+      : '';
+  return confirmPage({
+    type,
+    tokenHash,
+    next,
+    r,
+    lines: `<p class="recipient">${recipientLine(type, account)}</p>
+    ${notice}`,
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -245,6 +451,7 @@ export async function POST(request: NextRequest) {
   const tokenHash = (form?.get('token_hash') as string | null) ?? null;
   const type = (form?.get('type') as string | null) ?? null;
   const next = (form?.get('next') as string | null) ?? null;
+  const r = (form?.get('r') as string | null) ?? null;
 
   // A post from another site (login CSRF, docket S14). The token in the form is
   // the credential and this answer SETS the session cookie, so a page on another
@@ -272,8 +479,22 @@ export async function POST(request: NextRequest) {
   // ever posts without it before anyone tightens this.
   if (!request.headers.has('sec-fetch-site')) {
     console.info('[auth/confirm] confirmation posted without Sec-Fetch-Site', {
-      type: type && ALLOWED_TYPES.has(type as EmailOtpType) ? type : 'other',
+      type: loggedType(type),
     });
+  }
+
+  // The account the link names (S25), checked again before the token is
+  // spent: the page's form carries r back, and a post can carry any r. A
+  // changed one is refused and one past its hour expired, as on GET.
+  let recipient: string | null = null;
+  if (r !== null) {
+    const verdict = verifyConfirmRecipient({ type: type ?? '', tokenHash: tokenHash ?? '', r });
+    if (verdict.status === 'invalid') return refusedAnswer(origin, type);
+    if (verdict.status === 'stale') return expiredAnswer(origin, type);
+    recipient = verdict.userId;
+  } else {
+    // Until the next release, verified as before (see GET).
+    console.info('[auth/confirm] link without a recipient', { type: loggedType(type) });
   }
 
   if (tokenHash && type && ALLOWED_TYPES.has(type as EmailOtpType)) {
@@ -282,6 +503,38 @@ export async function POST(request: NextRequest) {
       type: type as EmailOtpType,
       token_hash: tokenHash,
     });
+
+    // GoTrue made a session for an account other than the one r names: a
+    // builder of ours signed the wrong id (none is known). The browser must
+    // not stay in an account the page did not name.
+    const sessionUserId = data?.session?.user?.id ?? null;
+    if (recipient !== null && sessionUserId !== null && sessionUserId !== recipient) {
+      if (type === 'email_change') {
+        // GoTrue has already applied the change, to the session's account:
+        // repair its profile and tell its old address, as for any change.
+        try {
+          await completeEmailChange({ userId: sessionUserId });
+        } catch (e) {
+          void reportError(e, { tag: 'auth.email_change_complete_failed', level: 'warning' });
+        }
+      }
+      // This session only: clears the cookies verifyOtp just set, in this
+      // same answer.
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch {
+        // The page below claims nothing either way.
+      }
+      void reportError(
+        new Error('a confirmation link made a session for another account than its r names'),
+        {
+          tag: 'auth.confirm_recipient_mismatch',
+          level: 'error',
+          extra: { type },
+        },
+      );
+      return otherAccountSignedOutPage();
+    }
 
     if (type === 'email_change') {
       if (error) return emailChangeExpiredPage();
