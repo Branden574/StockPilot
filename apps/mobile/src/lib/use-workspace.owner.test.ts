@@ -80,19 +80,25 @@ vi.mock('./sync', () => ({
 }));
 vi.mock('./cycle-count-sync', () => ({ cycleCountSync: { forceSync: drains.forceSync } }));
 
+/** A membership read a test holds open (a slow connection), or none. */
+const membershipRead = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
+
 vi.mock('./supabase', () => {
   // u1 is a member of A, B and C; its default is A.
   const members = {
     select: () => members,
     eq: () => members,
-    not: async () => ({
-      data: [
-        { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
-        { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
-        { role: 'staff', organization_id: 'org-c', organizations: { name: 'C' } },
-      ],
-      error: null,
-    }),
+    not: async () => {
+      if (membershipRead.gate) await membershipRead.gate;
+      return {
+        data: [
+          { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
+          { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
+          { role: 'staff', organization_id: 'org-c', organizations: { name: 'C' } },
+        ],
+        error: null,
+      };
+    },
   };
   const profiles = {
     select: () => profiles,
@@ -156,6 +162,7 @@ beforeEach(() => {
   vi.mocked(deleteOrgData)
     .mockReset()
     .mockImplementation(async () => {});
+  membershipRead.gate = null;
 });
 
 describe("the workspace load uses only this account's saved workspace", () => {
@@ -760,6 +767,247 @@ describe('a cache repair that did not finish is still owed', () => {
     expect(deleteOrgData).not.toHaveBeenCalled();
     expect(published.length).toBe(before);
     expect(shown()).toBe('org-a');
+  });
+
+  /**
+   * Writing the record is a wait of its own, so the load and the switch check
+   * the account and the switches again once it is written, as after their
+   * other waits (the review of round c10). In these tests a held write lands
+   * in storage at once, as the native store applies writes in the order they
+   * are asked for, while the code that waits for it goes on only when the test
+   * releases it.
+   */
+  describe('the account and the switches are checked again once the record is written', () => {
+    /** Hold the next `count` writes of the record (see above). */
+    function holdRecordWrites(count: number) {
+      const releases: (() => void)[] = [];
+      const gates = Array.from(
+        { length: count },
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      let asked = 0;
+      const write = storage.setItem.getMockImplementation()!;
+      storage.setItem.mockImplementation(async (key: string, item: string) => {
+        if (key !== CACHE_REPAIR_OWED_STORAGE_KEY || asked === count) return write(key, item);
+        const gate = gates[asked]!;
+        asked += 1;
+        store.set(key, item);
+        await gate;
+      });
+      return {
+        asked: () => asked,
+        release: (n: number) => releases[n]!(),
+        releaseAll: () => releases.forEach((release) => release()),
+      };
+    }
+
+    /** Hold the membership read (a slow connection) until the call returned is made. */
+    function holdMembershipRead(): () => void {
+      let release!: () => void;
+      membershipRead.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        membershipRead.gate = null;
+        release();
+      };
+    }
+
+    const ACCOUNT_CHANGES: [string, string | null][] = [
+      ['another account signs in', 'u2'],
+      ['the account signs out', null],
+    ];
+
+    // Before the check, the load went on to save this account's choice for an
+    // account that had left, and to wipe the cache.
+    it.each(ACCOUNT_CHANGES)(
+      'the load: %s while its record is written, and the load saves, wipes and shows nothing; the repair stays owed',
+      async (_change, next) => {
+        put({ orgId: 'org-z', ownerId: 'u1' }); // this account's own, a workspace it has since left
+        const writes = holdRecordWrites(1);
+        try {
+          useWorkspace(); // u1's load records the repair, and waits for the write
+          await vi.waitFor(() => expect(writes.asked()).toBe(1));
+          const before = published.length;
+          emitAuth(next);
+          writes.release(0);
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-z', ownerId: 'u1' });
+          expect(deleteOrgData).not.toHaveBeenCalled();
+          expect(published.length).toBe(before);
+          expect(owed()).toBe(true); // the next load clears the cache
+        } finally {
+          writes.releaseAll();
+          emitAuth('u1');
+        }
+      },
+    );
+
+    // Before the check, the switch went on to save its workspace for the
+    // account that had left, and to wipe the cache.
+    it.each(ACCOUNT_CHANGES)(
+      'a switch: %s while its record is written, and the switch saves, wipes and shows nothing',
+      async (_change, next) => {
+        put({ orgId: 'org-a', ownerId: 'u1' });
+        useWorkspace();
+        await settled();
+        expect(shown()).toBe('org-a');
+        const writes = holdRecordWrites(1);
+        try {
+          const switching = setActiveOrg('org-c');
+          await vi.waitFor(() => expect(writes.asked()).toBe(1));
+          const before = published.length;
+          emitAuth(next);
+          writes.release(0);
+          await switching;
+          expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
+          expect(deleteOrgData).not.toHaveBeenCalled();
+          expect(published.length).toBe(before);
+          expect(shown()).toBe('org-a');
+        } finally {
+          writes.releaseAll();
+          emitAuth('u1');
+        }
+      },
+    );
+
+    it.each(ACCOUNT_CHANGES)(
+      "%s while a load's record and then a switch's are written: nothing is saved for the account that left, and nothing is shown",
+      async (_change, next) => {
+        put({ orgId: 'org-a', ownerId: 'u1' });
+        useWorkspace();
+        await settled();
+        put({ orgId: 'org-z', ownerId: 'u1' }); // the next load repairs
+        const writes = holdRecordWrites(2);
+        try {
+          useWorkspace(); // a screen opens: its load records the repair
+          await vi.waitFor(() => expect(writes.asked()).toBe(1));
+          const switching = setActiveOrg('org-c'); // the person picks C
+          await vi.waitFor(() => expect(writes.asked()).toBe(2));
+          const before = published.length;
+          emitAuth(next);
+          writes.release(0);
+          writes.release(1);
+          await switching;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-z', ownerId: 'u1' });
+          expect(deleteOrgData).not.toHaveBeenCalled();
+          expect(published.length).toBe(before);
+        } finally {
+          writes.releaseAll();
+          emitAuth('u1');
+        }
+      },
+    );
+
+    // The person picks another workspace while a screen's load is still
+    // reading. The switch asks for its record first, so its write lands
+    // first: the switch is counted and saves before the load's record is
+    // written. Before the check, the load then saved its own choice after the
+    // switch's: the screen showed the switch's workspace while every request
+    // named the load's (integrator decision 3).
+    it("a switch tapped while the load reads, whose record is written first: the switch's workspace stays saved and shown", async () => {
+      put({ orgId: 'org-a', ownerId: 'u1' });
+      useWorkspace();
+      await settled();
+      put({ orgId: 'org-z', ownerId: 'u1' }); // the next load repairs
+      const writes = holdRecordWrites(2);
+      const releaseMemberships = holdMembershipRead();
+      try {
+        useWorkspace(); // a screen opens: its load waits for the membership read
+        const switching = setActiveOrg('org-c'); // the person picks C meanwhile
+        await vi.waitFor(() => expect(writes.asked()).toBe(1)); // the switch's record
+        releaseMemberships();
+        await vi.waitFor(() => expect(writes.asked()).toBe(2)); // the load's record
+        writes.release(0); // the switch's write lands first: it is counted, then saves
+        await vi.waitFor(() =>
+          expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-c', ownerId: 'u1' }),
+        );
+        writes.release(1); // then the load's
+        await switching;
+        await settled();
+        expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-c', ownerId: 'u1' });
+        expect(shown()).toBe('org-c');
+      } finally {
+        releaseMemberships();
+        writes.releaseAll();
+      }
+    });
+
+    // The other order: the load's record is asked for first, and the switch
+    // runs to its end before the load goes on.
+    it("a switch made while the load's record is written: the switch's workspace stays saved and shown", async () => {
+      put({ orgId: 'org-a', ownerId: 'u1' });
+      useWorkspace();
+      await settled();
+      put({ orgId: 'org-z', ownerId: 'u1' }); // the next load repairs
+      const writes = holdRecordWrites(1);
+      try {
+        useWorkspace(); // a screen opens: its load records the repair, and waits for the write
+        await vi.waitFor(() => expect(writes.asked()).toBe(1));
+        await setActiveOrg('org-c'); // the person picks C meanwhile
+        expect(shown()).toBe('org-c');
+        writes.release(0); // the load goes on
+        await settled();
+        expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-c', ownerId: 'u1' });
+        expect(shown()).toBe('org-c');
+      } finally {
+        writes.releaseAll();
+      }
+    });
+
+    // A record is counted when its write is asked for, not when it lands
+    // (repairsRecorded). A switch's record asked for while a load's wipe runs
+    // lands before the load's removal, which is asked for later; the load's
+    // wipe ran before the switch's save, so it does not cover it. Counted only
+    // once its write had landed, the switch's record was not yet counted when
+    // the load checked, so the load removed it, and the switch's failed wipe
+    // was owed nowhere.
+    it("a load's wipe that worked leaves the record a switch asked for meanwhile: the switch's wipe fails, and the repair stays owed", async () => {
+      put({ orgId: 'org-a', ownerId: 'u1' });
+      useWorkspace();
+      await settled();
+      put({ orgId: 'org-z', ownerId: 'u1' }); // the next load repairs
+      let loadWipeDone!: () => void;
+      vi.mocked(deleteOrgData)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              loadWipeDone = resolve;
+            }),
+        )
+        .mockRejectedValueOnce(new Error('database is locked')); // the switch's wipe
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let writes: ReturnType<typeof holdRecordWrites> | undefined;
+      try {
+        useWorkspace(); // the load records, saves A, and its wipe waits its turn
+        await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
+        writes = holdRecordWrites(1);
+        const switching = setActiveOrg('org-c'); // the switch asks for its record: it lands
+        await vi.waitFor(() => expect(writes?.asked()).toBe(1));
+        loadWipeDone(); // the load's wipe works
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(owed()).toBe(true); // the load left the switch's record
+        writes.release(0); // the switch goes on: it saves C, and its wipe fails
+        await switching;
+        await settled();
+        expect(shown()).toBe('org-c');
+        expect(deleteOrgData).toHaveBeenCalledTimes(2);
+        expect(owed()).toBe(true);
+
+        useWorkspace(); // the next load clears the cache the switch left
+        await settled();
+        expect(deleteOrgData).toHaveBeenCalledTimes(3);
+        expect(shown()).toBe('org-c');
+        expect(owed()).toBe(false);
+      } finally {
+        writes?.releaseAll();
+        warn.mockRestore();
+      }
+    });
   });
 });
 
