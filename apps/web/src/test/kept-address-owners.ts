@@ -22,6 +22,11 @@ import ts from 'typescript';
  * Comments are blanked first (positions kept, so line numbers hold); string
  * and function bodies are read as written.
  *
+ * Also for `src/server/lib/kept-address-senders.guard.test.ts` and the
+ * guard's note checks: findFromChains (every `.from(…)` chain with the
+ * methods called on it, so a read or a delete can be placed) and codeMentions
+ * (a column named in code, comments left out).
+ *
  * Parsed with the TypeScript compiler, so a call split over several lines is
  * still one call.
  */
@@ -366,6 +371,96 @@ export function findCalls(file: string, text: string, callee: string): TsCall[] 
   };
   visit(sf);
   return out;
+}
+
+export interface FromChain {
+  file: string;
+  line: number;
+  /** The table, or null when `.from()` was given something the scan cannot
+   *  read (not a literal, nor a const of one). */
+  table: string | null;
+  /** The `.from()` argument as written. */
+  tableExpression: string;
+  /** The enclosing function's or method's name, '' at the top level. */
+  enclosing: string;
+  /** The methods called on it, in order (`['delete', 'eq']`). */
+  methods: string[];
+}
+
+/**
+ * Every `.from(…)` chain in one source file, whatever its table, with the
+ * methods called on it. Storage buckets (`.storage.from(…)`) are left out, as
+ * in findTsWrites. The kept-address guards read reads and deletes with it.
+ */
+export function findFromChains(file: string, text: string): FromChain[] {
+  if (!text.includes('.from(')) return [];
+  const sf = parse(file, text);
+  const out: FromChain[] = [];
+  const visit = (n: ts.Node) => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === 'from' &&
+      n.arguments.length >= 1
+    ) {
+      const receiver = unwrap(n.expression.expression);
+      const isStorage = ts.isPropertyAccessExpression(receiver) && receiver.name.text === 'storage';
+      if (!isStorage) {
+        const methods: string[] = [];
+        let cur: ts.Expression = n;
+        while (
+          cur.parent &&
+          ts.isPropertyAccessExpression(cur.parent) &&
+          cur.parent.expression === cur &&
+          cur.parent.parent &&
+          ts.isCallExpression(cur.parent.parent) &&
+          cur.parent.parent.expression === cur.parent
+        ) {
+          methods.push(cur.parent.name.text);
+          cur = cur.parent.parent;
+        }
+        out.push({
+          file,
+          line: lineOf(sf, n),
+          table: tableOf(sf, n.arguments[0]!),
+          tableExpression: squash(n.arguments[0]!.getText(sf)),
+          enclosing: enclosingName(n),
+          methods,
+        });
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/**
+ * The lines of one source file whose code (a string, a template, a name; not
+ * a comment) holds `word`, such as a column named in a select list or read
+ * off a row.
+ */
+export function codeMentions(file: string, text: string, word: string): number[] {
+  if (!text.includes(word)) return [];
+  const sf = parse(file, text);
+  const lines = new Set<number>();
+  const visit = (n: ts.Node) => {
+    if (
+      (ts.isStringLiteral(n) ||
+        ts.isNoSubstitutionTemplateLiteral(n) ||
+        ts.isTemplateHead(n) ||
+        ts.isTemplateMiddle(n) ||
+        ts.isTemplateTail(n) ||
+        ts.isIdentifier(n) ||
+        ts.isPrivateIdentifier(n)) &&
+      n.text.includes(word)
+    ) {
+      lines.add(lineOf(sf, n));
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return [...lines].sort((a, b) => a - b);
 }
 
 /** The string values of `const NAME = { key: 'value', … }` in one file, or
