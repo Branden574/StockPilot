@@ -16,6 +16,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from './po-draft-review';
+import { poStatusLabel } from './po-status';
 
 /**
  * F2-5 CALL-SITE PINS: "Draft PO for what is short" on the phone. The order
@@ -504,7 +505,12 @@ describe('the PO screen opens a draft read-only', () => {
     expect(po).toMatch(/\) : readOnly \? null : \(\s*<View style=\{styles\.qtyRow\}>/);
     expect(po).toMatch(/\{readOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
     expect(po).toMatch(/\{reviewOnly \? \(\s*<View style=\{styles\.partNotice\}>\s*<Text style=\{styles\.partNoticeText\}>\{PO_DRAFT_REVIEW_COPY\}<\/Text>/);
-    expect(po).toContain("if (s === 'draft') return 'Draft';");
+    // Re-pinned by docket B10 (was the exact line `if (s === 'draft') return
+    // 'Draft';` of the screen's own status list): the header now says every
+    // status through poStatusLabel, which po-status.test.ts holds to the
+    // web's words. Same pin: a draft's header says "Draft".
+    expect(po).toContain('{poStatusLabel(header?.status)}');
+    expect(poStatusLabel('draft')).toBe('Draft');
   });
 
   // Local walk 2026-09-30 (iPad and iPhone 17): the root stack shows no

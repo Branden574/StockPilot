@@ -311,8 +311,10 @@ class CycleCountSyncEngine {
           break;
         }
         // WHOSE row, decided now, for THIS row (outbox-scope.ts, the same
-        // predicate engine 1 uses). Another account's queued count, or any row
-        // with nobody signed in, is HELD: skipped, neither failed nor rejected.
+        // predicate engine 1 uses). Another account's queued count, any row
+        // with nobody signed in, and a row with no workspace of its own while
+        // this account's is not saved yet, is HELD: skipped, neither failed
+        // nor rejected.
         const decision = outboxSendDecision(row, await liveOutboxScope());
         if (!decision.send) continue;
         // A restart into an update is waiting (pauseForRestart): this row and
@@ -379,7 +381,8 @@ class CycleCountSyncEngine {
   private async sendRecordCount(
     payload: Record<string, unknown>,
     signal: AbortSignal,
-    scope: { orgId: string | null; asUserId: string; createdAt: number | null },
+    // orgId is never empty (outboxSendDecision): a count always names its workspace.
+    scope: { orgId: string; asUserId: string; createdAt: number | null },
   ): Promise<void> {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =

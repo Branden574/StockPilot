@@ -25,9 +25,16 @@ vi.mock('./supabase', () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }) } },
   readDeviceAuthSession: async () => ({ present: true, userId: 'u1' }),
 }));
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: { getItem: async (key: string) => (key === 'workspace.activeOrgId' ? 'org-a' : null) },
-}));
+// u1's own saved workspace, one value with its owner (workspace-keys.ts;
+// docket B10 re-pin, was the older single key, which no longer stamps a row).
+vi.mock('@react-native-async-storage/async-storage', async () => {
+  const { storedWorkspaceItem } = await import('./__fixtures__/saved-workspace');
+  return {
+    default: {
+      getItem: async (key: string) => storedWorkspaceItem(key, { orgId: 'org-a', ownerId: 'u1' }),
+    },
+  };
+});
 
 type Cache = typeof import('./cycle-count-cache');
 let raw: DatabaseSync;

@@ -227,6 +227,7 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
           ) : null}
           <Button
             block
+            wrap
             disabled={disabledReason !== null || submitting}
             accessibilityHint={disabledReason ?? undefined}
             onPress={() => onConfirm(text)}

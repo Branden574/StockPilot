@@ -41,6 +41,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from '@/lib/po-draft-review';
+import { poStatusLabel } from '@/lib/po-status';
 import {
   OVER_RECEIPT_CONFIRM_LABEL,
   OVER_RECEIPT_CONFIRM_TITLE,
@@ -732,7 +733,7 @@ export default function PoReceiveScreen() {
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.title}>{header?.po_number ?? 'PO'}</Text>
               <Text style={styles.subtitle}>
-                {header?.supplier_name ?? 'No supplier'} · {labelForStatus(header?.status ?? '')}
+                {header?.supplier_name ?? 'No supplier'} · {poStatusLabel(header?.status)}
               </Text>
             </View>
             {readOnly ? null : (
@@ -1175,14 +1176,6 @@ function Metric({
       {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
     </View>
   );
-}
-
-function labelForStatus(s: string): string {
-  if (s === 'draft') return 'Draft';
-  if (s === 'expected_inbound') return 'Expected';
-  if (s === 'ordered') return 'Ordered';
-  if (s === 'partially_received') return 'Partial';
-  return s;
 }
 
 function formatReceiptDate(iso: string | null): string {

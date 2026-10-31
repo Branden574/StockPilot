@@ -97,6 +97,50 @@ export class SsrfBlockedError extends Error {
   }
 }
 
+/**
+ * The host's lookup failed: the resolver errored (EAI_AGAIN, a resolver
+ * timeout, ENOTFOUND) or answered with no address. Unlike every other
+ * SsrfBlockedError this is not a refusal of the URL, and the same URL can
+ * resolve on the next try, so a caller that retries network failures may retry
+ * it. It extends SsrfBlockedError, so a caller that only checks for that class
+ * still treats it as blocked, as before.
+ */
+export class SsrfLookupFailedError extends SsrfBlockedError {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'SsrfLookupFailedError';
+  }
+}
+
+/**
+ * node's lookup takes no signal (getaddrinfo cannot be cancelled), so on its
+ * own a slow resolver held the caller past its own timeout: the abort was only
+ * seen once the lookup settled, and again on every redirect hop. This settles
+ * with the caller's abort reason as soon as the signal aborts, the way fetch
+ * rejects; the lookup itself runs to its end and its answer is dropped.
+ */
+function lookupUnlessAborted(
+  hostname: string,
+  signal: AbortSignal | undefined,
+): Promise<Array<{ address: string; family: number }>> {
+  if (!signal) return lookup(hostname, { all: true });
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    lookup(hostname, { all: true }).then(
+      (addrs) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(addrs);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 export async function assertSafeFetchUrl(
   raw: string,
   opts: SsrfGuardOptions = {},
@@ -108,11 +152,13 @@ export async function assertSafeFetchUrl(
 /**
  * Like {@link assertSafeFetchUrl}, but also returns the resolved IP —
  * used internally by {@link safeFetch} to pin the connection to the
- * exact address we just validated.
+ * exact address we just validated. `signal` is the caller's: once it aborts,
+ * the lookup is abandoned and this rejects with its reason.
  */
 async function resolveSafeUrl(
   raw: string,
   opts: SsrfGuardOptions = {},
+  signal?: AbortSignal,
 ): Promise<{ url: URL; address: string; family: 4 | 6 }> {
   let url: URL;
   try {
@@ -149,9 +195,12 @@ async function resolveSafeUrl(
   // Resolve DNS and reject if any returned address is private.
   let addrs: Array<{ address: string; family: number }>;
   try {
-    addrs = await lookup(hostname, { all: true });
+    addrs = await lookupUnlessAborted(hostname, signal);
   } catch (e) {
-    throw new SsrfBlockedError(
+    // The caller's abort (its timeout) is neither a refusal nor a failed
+    // lookup: it rejects with the abort reason, as fetch does.
+    signal?.throwIfAborted();
+    throw new SsrfLookupFailedError(
       `DNS resolution failed for ${hostname}: ${e instanceof Error ? e.message : 'unknown'}`,
     );
   }
@@ -167,7 +216,7 @@ async function resolveSafeUrl(
   // safe (they all passed the private-range check).
   const first = addrs[0];
   if (!first) {
-    throw new SsrfBlockedError(`DNS returned no addresses for ${hostname}`);
+    throw new SsrfLookupFailedError(`DNS returned no addresses for ${hostname}`);
   }
   return {
     url,
@@ -244,12 +293,14 @@ export async function safeFetch(
   },
 ): Promise<Response> {
   const { hostAllowlist, ...rest } = init ?? {};
+  // The caller's signal bounds every hop's lookup as well as its request.
+  const signal = rest.signal ?? undefined;
 
   // If the caller explicitly opted out of following (or chose error/manual),
   // honour it: validate the first URL, pin, and return whatever comes back.
   const wantsFollow = rest.redirect === undefined || rest.redirect === 'follow';
 
-  let { url, address } = await resolveSafeUrl(raw, { hostAllowlist });
+  let { url, address } = await resolveSafeUrl(raw, { hostAllowlist }, signal);
   let body = rest.body;
 
   for (let hop = 0; ; hop++) {
@@ -270,7 +321,7 @@ export async function safeFetch(
     } catch {
       throw new SsrfBlockedError('redirect Location is not a valid URL');
     }
-    ({ url, address } = await resolveSafeUrl(next, { hostAllowlist }));
+    ({ url, address } = await resolveSafeUrl(next, { hostAllowlist }, signal));
 
     // Per fetch semantics, 303 (and 301/302 for non-GET/HEAD historically)
     // turn the follow-up into a bodyless GET. Drop the body so we don't replay

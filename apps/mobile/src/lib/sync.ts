@@ -823,8 +823,9 @@ export async function drainQueue(): Promise<{
     // WHOSE row, decided now, for THIS row (outbox-scope.ts): the session can
     // end or change between two rows of one drain (a sign-out, "Use password
     // instead", a revoked session, a workspace switch). A row queued by
-    // another account, or any row with nobody signed in, is HELD: skipped and
-    // left exactly as it is, neither failed nor rejected.
+    // another account, any row with nobody signed in, and a row with no
+    // workspace of its own while this account's is not saved yet, is HELD:
+    // skipped and left exactly as it is, neither failed nor rejected.
     const decision = outboxSendDecision(action, await liveOutboxScope());
     if (!decision.send) continue;
 
@@ -924,9 +925,14 @@ export async function drainQueue(): Promise<{
   return { ok, failed, rejected };
 }
 
-/** Every queued send goes out under its row's organization and account. */
+/**
+ * Every queued send goes out under its row's organization and account. The
+ * organization is never empty (outboxSendDecision), so api() always sends it
+ * as X-Organization-Id: a queued change never reaches the server without its
+ * workspace.
+ */
 interface OutboxSendScope {
-  orgId: string | null;
+  orgId: string;
   asUserId: string;
 }
 
@@ -1044,6 +1050,8 @@ async function sendOne(
 let inFlightSync: Promise<void> | null = null;
 /** A pull asked for while another sync was running (see syncNow). */
 let forcedAfterInFlight: Promise<void> | null = null;
+/** A sync asked for to start after the running one (see syncAfterRunning). */
+let afterInFlight: Promise<void> | null = null;
 /** The cache generation the in-flight sync started under. */
 let inFlightGeneration = 0;
 /** The account epoch the in-flight sync started under (account-epoch.ts). */
@@ -1064,11 +1072,14 @@ export function pauseSyncForRestart(): () => void {
   };
 }
 
-/** Resolves once the sync running now, and a pull queued behind it, have ended. */
+/**
+ * Resolves once the sync running now, and any sync queued behind it (a forced
+ * pull, or syncAfterRunning), have ended.
+ */
 export async function whenSyncSettled(): Promise<void> {
-  while (inFlightSync || forcedAfterInFlight) {
+  while (inFlightSync || forcedAfterInFlight || afterInFlight) {
     try {
-      await (forcedAfterInFlight ?? inFlightSync);
+      await (forcedAfterInFlight ?? afterInFlight ?? inFlightSync);
     } catch {
       // syncNow never rejects; a settle must not either.
     }
@@ -1128,4 +1139,25 @@ export async function syncNow(force = false): Promise<void> {
     }
   })();
   return inFlightSync;
+}
+
+/**
+ * A sync (pull, then drain) that STARTS after this call. syncNow() joins a
+ * sync already running, and that sync's drain may already have passed a row
+ * the caller has just made sendable: a row with no workspace of its own, held
+ * until its account's workspace is saved (outbox-scope.ts
+ * 'workspace-loading'). The workspace load calls this once it has saved
+ * that workspace, so the row goes at once rather than at the next 60 s tick.
+ * A load that also clears the cache asks instead for the forced full pull it
+ * needs anyway, which also starts after a sync running and drains after its
+ * pull (use-workspace.ts). Joins a sync already asked for behind the running
+ * one.
+ */
+export function syncAfterRunning(): Promise<void> {
+  if (!inFlightSync) return syncNow();
+  afterInFlight ??= inFlightSync.then(() => {
+    afterInFlight = null;
+    return syncNow();
+  });
+  return afterInFlight;
 }

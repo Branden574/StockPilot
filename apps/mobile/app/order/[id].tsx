@@ -190,6 +190,7 @@ import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departu
 import { focusScrollY, initialSignArrival, orderScreenFocus, physicalSignatureTitle, stepSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
+import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
 import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
@@ -1226,6 +1227,10 @@ export default function OrderDetail() {
       await load();
     } catch (e) {
       setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
+      // The sheet says why; behind it, the order is read again when the
+      // server answered (409 return_changed: the replacement was substituted,
+      // re-issued, picked or sent elsewhere), still busy, as runAction does.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
     } finally {
       setReleaseBusy(false);
     }
@@ -1327,6 +1332,11 @@ export default function OrderDetail() {
       setReturnError(
         extractApiErrorMessage(e, 'Could not create the return. Please try again.'),
       );
+      // Then read the order again when the server answered, still busy: an
+      // over-budget refusal means the returnable budget on screen is stale
+      // (another device returned those units), and the sheet's caps and its
+      // own check (buildReturnPayload) follow the order that is read.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
     } finally {
       setReturnSubmitting(false);
     }
@@ -1776,9 +1786,10 @@ export default function OrderDetail() {
       setOrder(shown);
     }
     const attachmentsRead = await loadAttachments();
-    // Read-only carrier tracking. The wrapper soft-gates: if the shipping
-    // module is off, the member lacks access, or there is simply no shipment,
-    // it returns null and the section below stays hidden.
+    // Read-only carrier tracking. The wrapper soft-gates: with the shipping
+    // module off it does not ask at all (the server answered every order view
+    // with a 403, docket B10); if the member lacks access or there is simply
+    // no shipment, it returns null and the section below stays hidden.
     const shipmentRead = await getOrderShipment(id);
     setShipment(shipmentRead);
     // Kept in memory for this app session only (never written to the
@@ -1859,6 +1870,11 @@ export default function OrderDetail() {
       return true;
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
+      // A refusal means the order on screen is not the one the server holds
+      // (someone else moved it on): read it again so the status and the
+      // buttons are current, still under the busy key. No answer (a timeout)
+      // leaves it as shown. The read never turns the refusal into a throw.
+      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
       return false;
     } finally {
       setActing(null);
@@ -4109,7 +4125,11 @@ export default function OrderDetail() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {order?.replacement ? (
+      {/* Mounted while open too: after a refusal the order is read again
+          behind the sheet, and a read that comes back without the
+          replacement block (its read failed) must not take the sheet and the
+          refusal's sentence away before the person has read them. */}
+      {order?.replacement || releaseOpen ? (
         <ReleaseReplacementSheet
           visible={releaseOpen}
           online={!offline}

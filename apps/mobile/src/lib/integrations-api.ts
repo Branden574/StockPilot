@@ -77,11 +77,55 @@ export function saveAccountMapping(
 }
 
 /**
- * The mobile `api()` client throws `Error("API <status>: <body>")` on a non-2xx
- * response. The server is the source of truth for gating, so a 403 here means
- * the module is off or the user lacks `integrations:manage` — surface a friendly
- * inline message rather than the raw error text.
+ * The MFA gate's two refusals, in the phone's words. The server runs the gate
+ * before the permission check on the mapping save and the disconnect
+ * (assertPermission, mfaGateError) and answers 403 with details.reason:
+ * `aal2_required` when the account has a verified factor and this session did
+ * not sign in with it, `mfa_required` when the organization requires a factor
+ * the account has not set up. Neither is a refusal of access: the owner or
+ * admin keeps the screen and is told what to do. The phone has no in-place
+ * step-up (a session reaches AAL2 only at sign-in), so the instruction is the
+ * one the item screen's adjustment, the escalation and the book report give.
+ */
+export const INTEGRATIONS_AAL2_REQUIRED =
+  'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code, then try again. Nothing was changed.';
+export const INTEGRATIONS_MFA_REQUIRED =
+  'Your organization requires two-factor authentication. Set it up on the web, then sign in again. Nothing was changed.';
+
+/** The MFA gate's reason on a 403 api() threw, or null for any other failure. */
+function mfaGateReason(err: unknown): 'aal2_required' | 'mfa_required' | null {
+  if (!(err instanceof Error) || (err as { status?: unknown }).status !== 403) return null;
+  const details = (err as { details?: unknown }).details;
+  const reason =
+    details && typeof details === 'object' ? (details as { reason?: unknown }).reason : undefined;
+  return reason === 'aal2_required' || reason === 'mfa_required' ? reason : null;
+}
+
+/** The sentence for the MFA gate's refusal (above), or null when it is not one. */
+export function integrationsMfaSentence(err: unknown): string | null {
+  const reason = mfaGateReason(err);
+  if (reason === 'aal2_required') return INTEGRATIONS_AAL2_REQUIRED;
+  if (reason === 'mfa_required') return INTEGRATIONS_MFA_REQUIRED;
+  return null;
+}
+
+/**
+ * Whether the server refused the request with a 403. The server is the source
+ * of truth for gating, so a 403 here means the module is off or the user lacks
+ * `integrations:manage`: the screen shows its own Access denied state rather
+ * than the raw server sentence. The MFA gate's 403 is not one of these
+ * (integrationsMfaSentence): told "ask an admin", an owner or admin who only
+ * had to sign in again with their code lost the screen (docket B10 review).
+ *
+ * Read from the status api() puts on its ApiError, never from the message: the
+ * message is the server's sentence. This used to test the message for
+ * "API 403", the text api() threw before its errors were typed (2026-07-31),
+ * so no refusal matched and the Access denied state never showed (docket B10).
  */
 export function isForbiddenError(err: unknown): boolean {
-  return err instanceof Error && /^API 403\b/.test(err.message);
+  return (
+    err instanceof Error &&
+    (err as { status?: unknown }).status === 403 &&
+    mfaGateReason(err) === null
+  );
 }
