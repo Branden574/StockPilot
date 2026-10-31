@@ -213,6 +213,18 @@ export async function createOrgForCustomerAction(
       platform_admin_email: session.email,
     },
   });
+  // And the platform console's own trail: Platform > Audit lists this row as
+  // "Provisioned org". The action was defined for it but nothing wrote it
+  // until docket S20; createOrganizationAction writes the same action for a
+  // platform admin's own workspace (via 'onboarding').
+  await recordPlatformAudit({
+    actorUserId: session.userId,
+    actorEmail: session.email,
+    action: 'org_provisioned',
+    targetOrganizationId: orgId,
+    targetUserId: newUserId,
+    detail: { slug: orgSlug, via: 'provision' },
+  });
 
   // 9. Deliver the sign-in link via the app's Resend transport (see step 1
   //    — generateLink minted the link but sent nothing). If the send fails,
