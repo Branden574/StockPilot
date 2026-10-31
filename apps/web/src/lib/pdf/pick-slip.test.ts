@@ -1,6 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import {
+  countInPdf,
+  embeddedJpeg,
+  isWhite,
+  rgbAt,
+  SEE_THROUGH_SIZE,
+  seeThroughImage,
+  softMask,
+  STORAGE_PHOTO_URL,
+  withStoragePhoto,
+  type SeeThroughImage,
+} from '@/test/see-through-images';
+
+import { prefetchImagesAsDataUris } from './image-prefetch';
 import { locationFor, renderPickSlipPdf } from './pick-slip';
+
+// The photo goes through the real image prefetch, whose data-URI cache needs a
+// Next request scope; here it calls straight through. pick-slip.tsx does not
+// use next/cache, so the other tests are unaffected.
+vi.mock('next/cache', () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+}));
 
 const baseDetail = {
   request: {
@@ -125,7 +146,8 @@ describe('renderPickSlipPdf', () => {
     const replacement = await renderPickSlipPdf({
       ...baseDetail,
       replacement: {
-        slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: New Hire Shirt, M ×1, not yet received)',
+        slipLine:
+          'Exchange replacement for RMA-20261005-ABC123 (returned item: New Hire Shirt, M ×1, not yet received)',
       },
     } as any);
     const plain = await renderPickSlipPdf(baseDetail);
@@ -185,6 +207,40 @@ describe('renderPickSlipPdf', () => {
     ]);
     const buf = await renderPickSlipPdf(baseDetail, { rackHoldingsByItemId });
     expect(buf.byteLength).toBeGreaterThan(2000);
+  }, 30000);
+});
+
+/**
+ * B62: a photo with a see-through background, from storage through the image
+ * prefetch the pick slip route uses, into the printed slip. A WebP thumbnail
+ * printed on a black square (a black item vanished on it); it now prints as a
+ * JPEG on white. A PNG keeps its transparency, so the slip's paper shows.
+ */
+describe('a see-through photo on the pick slip (B62)', () => {
+  async function slipWithPhoto(image: SeeThroughImage): Promise<Buffer> {
+    return withStoragePhoto(image, async () => {
+      const uris = await prefetchImagesAsDataUris([['i1', STORAGE_PHOTO_URL] as const]);
+      const uri = uris.get('i1');
+      expect(uri).toMatch(/^data:image\/(jpeg|png);base64,/);
+      return renderPickSlipPdf(baseDetail, { imageUrlByItemId: new Map([['i1', uri!]]) });
+    });
+  }
+
+  it('a WebP prints as one JPEG on white, with no soft mask', async () => {
+    const pdf = await slipWithPhoto(await seeThroughImage('webp-lossy'));
+    expect(countInPdf(pdf, '/DCTDecode')).toBe(1);
+    expect(countInPdf(pdf, '/SMask')).toBe(0);
+    const corner = await rgbAt(embeddedJpeg(pdf), 0, 0);
+    expect(isWhite(corner), `corner of the printed photo: ${corner.join(',')}`).toBe(true);
+  }, 30000);
+
+  it('a PNG keeps its soft mask: see-through at the corner (the paper shows), opaque in the middle', async () => {
+    const pdf = await slipWithPhoto(await seeThroughImage('png'));
+    const mask = softMask(pdf);
+    const size = SEE_THROUGH_SIZE;
+    expect(mask).toHaveLength(size * size);
+    expect(mask[0]).toBe(0);
+    expect(mask[(size / 2) * size + size / 2]).toBe(255);
   }, 30000);
 });
 

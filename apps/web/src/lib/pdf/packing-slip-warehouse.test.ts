@@ -1,9 +1,27 @@
 import { inflateSync } from 'node:zlib';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import {
+  countInPdf,
+  embeddedJpeg,
+  isWhite,
+  rgbAt,
+  seeThroughImage,
+  STORAGE_PHOTO_URL,
+  withStoragePhoto,
+} from '@/test/see-through-images';
+
+import { prefetchImagesAsDataUris } from './image-prefetch';
 import { renderCustomerPackingSlipPdf } from './packing-slip-customer';
 import { renderWarehousePackingSlipPdf } from './packing-slip-warehouse';
+
+// The photo goes through the real image prefetch, whose data-URI cache needs a
+// Next request scope; here it calls straight through. The slips do not use
+// next/cache, so the other tests are unaffected.
+vi.mock('next/cache', () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+}));
 
 /**
  * Every text run in a @react-pdf document lands in a FlateDecode content
@@ -166,4 +184,31 @@ describe('renderWarehousePackingSlipPdf', () => {
     // …so the label's absence is a real absence, not a broken extractor.
     expect(extractPdfText(buf)).not.toContain(DIGITAL_SIGNATURE_LABEL);
   }, 30000);
+});
+
+/**
+ * B62: these slips printed a see-through WebP photo on a black square (a
+ * black item vanished on it). The photo goes from storage through the image
+ * prefetch both slip routes use; it now prints as a JPEG on white. The
+ * customer slip shares the line table, and it goes in the box.
+ */
+describe('a see-through photo on the packing slips (B62)', () => {
+  it.each([
+    ['warehouse', renderWarehousePackingSlipPdf],
+    ['customer', renderCustomerPackingSlipPdf],
+  ] as const)(
+    'the %s slip prints a WebP as one JPEG on white, with no soft mask',
+    async (_slip, render) => {
+      const pdf = await withStoragePhoto(await seeThroughImage('webp-lossy'), async () => {
+        const uris = await prefetchImagesAsDataUris([['i1', STORAGE_PHOTO_URL] as const]);
+        expect(uris.get('i1')).toMatch(/^data:image\/jpeg;base64,/);
+        return render({ ...baseInput, imageUrlByItemId: new Map([['i1', uris.get('i1')!]]) });
+      });
+      expect(countInPdf(pdf, '/DCTDecode')).toBe(1);
+      expect(countInPdf(pdf, '/SMask')).toBe(0);
+      const corner = await rgbAt(embeddedJpeg(pdf), 0, 0);
+      expect(isWhite(corner), `corner of the printed photo: ${corner.join(',')}`).toBe(true);
+    },
+    30000,
+  );
 });
