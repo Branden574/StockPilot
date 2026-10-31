@@ -181,6 +181,97 @@ describe('sheets hold the pop-up', () => {
   });
 });
 
+// The rule tests hand the controller the screen by hand (setScreen with
+// written values); this keeps the one component that hands it the real
+// screen honest: the route key the work routes are written in, What's New,
+// the slot, the launch animation, the keyboard and who is signed in, and the
+// cover Restart now shows.
+describe('the host hands the controller the real screen, and covers a restart', () => {
+  const HOST = 'src/components/update-prompt-host.tsx';
+  const host = flatCode(HOST);
+  /** squeeze, with trailing commas before } and ] dropped too. */
+  const tight = (text: string) => squeeze(text).replace(/,([}\]])/g, '$1');
+
+  it('reads each input from where it lives', () => {
+    // WORK_ROUTES are written as the segments joined with '/'.
+    expect(host).toContain("const routeKey = segments.join('/');");
+    expect(host).toContain('const slotTaken = useAnyTourVisibleExcept(UPDATE_PROMPT_LOCK_ID);');
+    expect(host).toContain('const whatsNewOpen = useWhatsNewOpen();');
+    expect(host).toContain('const { splashActive } = useColdLaunchGate();');
+    expect(host).toContain('const keyboardVisible = useKeyboardVisible();');
+    expect(host).toContain('const userId = user?.id ?? null;');
+    expect(host).toContain(
+      "const shown = Keyboard.addListener('keyboardDidShow', () => setVisible(true));",
+    );
+    expect(host).toContain(
+      "const hidden = Keyboard.addListener('keyboardDidHide', () => setVisible(false));",
+    );
+  });
+
+  it('sends every screen input whenever one changes, and says so when it unmounts', () => {
+    expect(tight(host)).toContain(
+      tight(
+        'React.useEffect(() => { updatePrompt.setScreen({ mounted: true, userId, routeKey, splashActive, keyboardVisible, whatsNewOpen, slotTaken, }); }, [userId, routeKey, splashActive, keyboardVisible, whatsNewOpen, slotTaken]);',
+      ),
+    );
+    expect(tight(host)).toContain(
+      tight('React.useEffect(() => () => updatePrompt.setScreen({ mounted: false }), []);'),
+    );
+
+    // Every field of ScreenInputs is sent, each from the local of its name,
+    // and each but `mounted` is a dependency of the effect that sends it.
+    const rules = parse('src/lib/ota-update-prompt.ts');
+    const screenInputs = rules.statements.find(
+      (st): st is ts.InterfaceDeclaration =>
+        ts.isInterfaceDeclaration(st) && st.name.text === 'ScreenInputs',
+    );
+    const fields = screenInputs!.members.map((m) => m.name!.getText(rules)).sort();
+    expect(fields).toEqual([
+      'keyboardVisible',
+      'mounted',
+      'routeKey',
+      'slotTaken',
+      'splashActive',
+      'userId',
+      'whatsNewOpen',
+    ]);
+    const sf = parse(HOST);
+    const sends = callsNamed(sf, 'setScreen');
+    expect(sends).toHaveLength(2);
+    const [send] = sends.filter((call) =>
+      squeeze(call.arguments[0]!.getText(sf)).includes('mounted:true'),
+    );
+    const object = send!.arguments[0] as ts.ObjectLiteralExpression;
+    expect(object.properties.map((p) => p.name!.getText(sf)).sort()).toEqual(fields);
+    for (const p of object.properties) {
+      if (p.name!.getText(sf) === 'mounted') continue;
+      expect(ts.isShorthandPropertyAssignment(p), p.getText(sf)).toBe(true);
+    }
+    let effect: ts.Node | undefined = send!.parent;
+    while (effect && !(ts.isCallExpression(effect) && calleeName(effect) === 'useEffect')) {
+      effect = effect.parent;
+    }
+    const deps = (effect as ts.CallExpression).arguments[1] as ts.ArrayLiteralExpression;
+    expect(deps.elements.map((e) => e.getText(sf)).sort()).toEqual(
+      fields.filter((f) => f !== 'mounted'),
+    );
+  });
+
+  it('draws the cover only while restarting, over everything, taking every touch, with the words VoiceOver reads', () => {
+    expect(host).toContain(
+      'const phase = React.useSyncExternalStore(updatePrompt.subscribe, updatePrompt.getPhase);',
+    );
+    expect(host).toContain("if (phase !== 'restarting') return null;");
+    expect(host).toContain('style={[StyleSheet.absoluteFill, styles.overlay]}');
+    expect(host).toContain('onStartShouldSetResponder={() => true}');
+    expect(host).toContain('accessible accessibilityViewIsModal');
+    expect(host).toContain('accessibilityLabel={RESTARTING_LABEL}');
+    expect(tight(host)).toContain(
+      tight('overlay: { backgroundColor: LAUNCH_SCREEN_GROUND, zIndex: 1000, elevation: 1000, },'),
+    );
+  });
+});
+
 describe('the one restart', () => {
   it('reloadAsync is called only by Restart now and by the crash screen’s own button', () => {
     const calls: string[] = [];
