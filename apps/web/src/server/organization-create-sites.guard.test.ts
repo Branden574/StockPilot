@@ -6,16 +6,18 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Security invariant: only a platform admin creates a workspace or makes an
- * account the owner of one (owner decision b.9, docket S20).
+ * account the owner of one (owner decision b.9, docket S20). The one other way
+ * to an owner seat is the owner's own hand-over of their workspace, pinned to
+ * its single caller (Rule 3).
  *
  * The database refuses a signed-in or anonymous insert into organizations (no
  * INSERT policy since 0138; supabase/tests/0138_organizations_insert_denied.test.sql
- * pins it), and a signed-in caller can never write an owner membership (the
- * 0220 guard as 0393 redefined it). So every workspace and every owner seat is
- * written by app code on the service role, and that code is the only gate.
- * createOrganizationAction checked only that its caller was signed in, so any
- * account could create workspaces by posting the action. This holds every
- * such write to the platform-admin check:
+ * pins it), and a signed-in caller can never insert an owner membership or
+ * promote a member to owner (the 0220 guard as 0393 redefined it). So every
+ * workspace and every owner seat is written by app code on the service role,
+ * and that code is the only gate. createOrganizationAction checked only that
+ * its caller was signed in, so any account could create workspaces by posting
+ * the action. This holds every such write to the platform-admin check:
  *
  *   Rule 1. Every `.from('organizations')` chained to `.insert(` or `.upsert(`
  *   sits in a function that first runs
@@ -23,15 +25,25 @@ import { describe, expect, it } from 'vitest';
  *   (imported from lib/auth/platform-admin) and then refuses when
  *   `!<gate>.ok`, both as statements of the function's own body that end
  *   before the write. The set is pinned to exactly createOrganizationAction
- *   and createOrgForCustomerAction.
+ *   and createOrgForCustomerAction. (An update of an organization creates
+ *   none, so it is not watched.)
  *
- *   Rule 2. Every `.from('organization_members')` insert or upsert whose row
- *   can seat an owner (role 'owner', or a role this scan cannot read) is gated
- *   the same way or is a REVIEWED entry. startActingAs (the Act as seat) has no
- *   check of its own, so every call of it must sit in a function gated the
- *   same way. Invite acceptance writes the invite's role, which 0001's check
- *   on organization_invites.role never lets be owner. The sets are pinned and
- *   a stale entry fails.
+ *   Rule 2. Every `.from('organization_members')` insert, upsert or update
+ *   whose row can seat an owner (role 'owner', or a role this scan cannot
+ *   read) is gated the same way or is a REVIEWED entry, by function, role, verb
+ *   and the client it writes through. An update that never names role leaves
+ *   the role as it was. startActingAs (the Act as seat) has no check of its
+ *   own, so every call of it must sit in a function gated the same way. Invite
+ *   acceptance writes the invite's role, which 0001's check on
+ *   organization_invites.role never lets be owner. The Team page's role change
+ *   refuses owner and writes through the caller's own client. The sets are
+ *   pinned and a stale entry fails.
+ *
+ *   Rule 3. transfer_org_ownership (0393; EXECUTE for service_role only) makes
+ *   a member the owner. It is called only by transferOwnershipAction (the
+ *   current owner, their password, and AAL2 when they have an authenticator),
+ *   and every other call fails until it is reviewed. An rpc whose function
+ *   name the scan cannot read fails too.
  *
  * Parsed with the TypeScript compiler, like the action-catch scanner
  * (src/test/action-catch-scan.ts): comments and strings never count, a chain
@@ -54,6 +66,7 @@ interface ScanFile {
 type Table = 'organizations' | 'organization_members';
 /** What a membership row writes as its role: an owner, a fixed other role, or a value the scan cannot read. */
 type SeatRole = 'owner' | 'other' | 'unknown';
+type WriteVerb = 'insert' | 'upsert' | 'update';
 
 interface WriteSite {
   /** `<file>#<nearest named function>`. */
@@ -61,10 +74,19 @@ interface WriteSite {
   file: string;
   line: number;
   table: Table;
-  verb: 'insert' | 'upsert';
+  verb: WriteVerb;
   /** organization_members only. */
   role: SeatRole | null;
   gated: boolean;
+  /** The client the write goes through: the source text before `.from(` ('admin', 'this.ctx.supabase'). */
+  receiver: string;
+}
+
+interface RpcCall {
+  key: string;
+  line: number;
+  /** The function name, or null when the scan cannot read it. */
+  name: string | null;
 }
 
 interface Reference {
@@ -78,15 +100,22 @@ interface Reference {
 
 interface Scan {
   writes: WriteSite[];
-  /** Inserts and upserts through `.from(<something the scan cannot read>)`. */
-  unreadTables: Array<{ key: string; line: number }>;
+  /** Inserts, upserts and updates through `.from(<something the scan cannot read>)`. */
+  unreadTables: Array<{ key: string; line: number; verb: WriteVerb }>;
+  /** Every `.rpc(<name>, ...)` call. */
+  rpcCalls: RpcCall[];
   /** References to each watched function, outside its own module, by `<module>#<name>`. */
   references: Map<string, Reference[]>;
 }
 
 const GATE = { module: 'lib/auth/platform-admin', name: 'checkPlatformAdmin' };
 const TABLES: ReadonlySet<string> = new Set<Table>(['organizations', 'organization_members']);
-const WRITE_VERBS: ReadonlySet<string> = new Set(['insert', 'upsert']);
+const WRITE_VERBS: ReadonlySet<string> = new Set<WriteVerb>(['insert', 'upsert', 'update']);
+/** The verbs that can create what each rule watches: an update of an organization creates none. */
+const WATCHED_VERBS: Record<Table, ReadonlySet<string>> = {
+  organizations: new Set<WriteVerb>(['insert', 'upsert']),
+  organization_members: new Set<WriteVerb>(['insert', 'upsert', 'update']),
+};
 
 type FunctionLike =
   | ts.FunctionDeclaration
@@ -248,7 +277,11 @@ function propertyName(p: ts.ObjectLiteralElementLike): string | null {
   return null;
 }
 
-/** The role a membership row writes. `role` is NOT NULL with no default (0001), so a row without one is refused. */
+/**
+ * The role a membership row writes. `role` is NOT NULL with no default (0001),
+ * so an inserted row without one is refused, and an update without one leaves
+ * the role as it was.
+ */
 function seatRole(row: ts.Expression | undefined): SeatRole {
   if (!row) return 'unknown';
   const n = unwrap(row);
@@ -288,6 +321,7 @@ interface Watched {
 function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): Scan {
   const writes: WriteSite[] = [];
   const unreadTables: Scan['unreadTables'] = [];
+  const rpcCalls: RpcCall[] = [];
   const references = new Map<string, Reference[]>(
     watched.map((w) => [`${w.module}#${w.name}`, []]),
   );
@@ -357,19 +391,26 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
     ) => {
       const table = stringValue(fromCall.arguments[0]!, constants);
       if (table === null) {
-        unreadTables.push({ key: `${file.path}#${siteName(verbCall)}`, line: lineOf(verbCall) });
+        unreadTables.push({
+          key: `${file.path}#${siteName(verbCall)}`,
+          line: lineOf(verbCall),
+          verb: verb as WriteVerb,
+        });
         return;
       }
-      if (!TABLES.has(table)) return;
+      if (!TABLES.has(table) || !WATCHED_VERBS[table as Table].has(verb)) return;
       writes.push({
         key: `${file.path}#${siteName(verbCall)}`,
         file: file.path,
         // The line of `.from(`, which a chain split over lines puts below its receiver.
         line: lineOf((fromCall.expression as ts.PropertyAccessExpression).name),
         table: table as Table,
-        verb: verb as WriteSite['verb'],
+        verb: verb as WriteVerb,
         role: table === 'organization_members' ? seatRole(verbCall.arguments[0]) : null,
         gated: gatedBefore(verbCall, gateNames),
+        receiver: (fromCall.expression as ts.PropertyAccessExpression).expression
+          .getText(sf)
+          .replace(/\s+/g, ''),
       });
     };
 
@@ -432,6 +473,20 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
         }
       }
 
+      // `<x>.rpc(<name>, ...)`: the function a database call runs.
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'rpc' &&
+        node.arguments.length >= 1
+      ) {
+        rpcCalls.push({
+          key: `${file.path}#${siteName(node)}`,
+          line: lineOf(node.expression.name),
+          name: stringValue(node.arguments[0]!, constants),
+        });
+      }
+
       // References to a watched function outside its own module.
       if (ts.isIdentifier(node) && watchedLocals.has(node.text)) {
         const p = node.parent;
@@ -481,7 +536,7 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
     };
     visit(sf);
   }
-  return { writes, unreadTables, references };
+  return { writes, unreadTables, rpcCalls, references };
 }
 
 // ── The rules ───────────────────────────────────────────────────────────────
@@ -489,6 +544,9 @@ function scanSources(files: readonly ScanFile[], watched: readonly Watched[]): S
 interface ReviewedSeat {
   key: string;
   role: SeatRole;
+  verb: WriteVerb;
+  /** The client the reviewed write goes through; another client is a new seat to review. */
+  receiver: string;
   why: string;
   /** The function whose every call must be gated, when the seat has no check of its own. */
   callers?: { watched: Watched; keys: string[] };
@@ -511,6 +569,8 @@ const REVIEWED_SEATS: ReviewedSeat[] = [
   {
     key: 'server/services/platform/impersonation.ts#startActingAs',
     role: 'owner',
+    verb: 'upsert',
+    receiver: 'admin',
     why: 'The Act as seat: a temporary owner row for the platform admin, with no check of its own. Every caller must run the platform-admin check first.',
     callers: {
       watched: { module: 'server/services/platform/impersonation', name: 'startActingAs' },
@@ -520,15 +580,37 @@ const REVIEWED_SEATS: ReviewedSeat[] = [
   {
     key: 'server/services/team.ts#acceptInviteWithToken',
     role: 'unknown',
+    verb: 'upsert',
+    receiver: 'admin',
     why: "Invite acceptance writes the invite's own role, and organization_invites.role is checked to admin, manager, staff or viewer (0001_init.sql, never altered), so it never seats an owner. The invite token gates it.",
+  },
+  {
+    key: 'server/services/team.ts#TeamService.updateMemberRole',
+    role: 'unknown',
+    verb: 'update',
+    receiver: 'this.ctx.supabase',
+    why: "The Team page's role change refuses 'owner' before it writes, and writes through the caller's own client (TeamService is only made from withContext), where the owner guard (0393) refuses any promotion to owner by a signed-in caller.",
   },
 ];
 
-/** Inserts and upserts through a table the scan cannot read, each checked by hand. */
-const REVIEWED_UNREAD_TABLES: Array<{ key: string; why: string }> = [
+/** Rule 3: transfer_org_ownership makes a member the owner; its only caller. */
+const OWNER_TRANSFER_RPC = 'transfer_org_ownership';
+const OWNER_TRANSFER_CALLERS = ['server/actions/team.ts#transferOwnershipAction'];
+
+/** `.rpc(<name>)` calls whose function name the scan cannot read, each checked by hand. */
+const REVIEWED_UNREAD_RPCS: Array<{ key: string; why: string }> = [];
+
+/** Inserts, upserts and updates through a table the scan cannot read, each checked by hand. */
+const REVIEWED_UNREAD_TABLES: Array<{ key: string; verb: WriteVerb; why: string }> = [
   {
     key: 'server/services/restore-points.ts#ensureRefMap',
+    verb: 'insert',
     why: "`table` is typed 'categories' | 'suppliers', and the write goes through the caller's own client, so RLS decides.",
+  },
+  {
+    key: 'server/services/recovery.ts#RecoveryService.restore',
+    verb: 'update',
+    why: "`table` comes from ENTITY_TABLE (inventory_items, categories, locations or suppliers), the row sets only deleted_at, deleted_by and archived_at, and the write goes through the caller's own client, so RLS decides.",
   },
 ];
 
@@ -545,9 +627,16 @@ function unreviewedOwnerSeats(scan: Scan, reviewed: readonly ReviewedSeat[]): st
         w.table === 'organization_members' &&
         w.role !== 'other' &&
         !w.gated &&
-        !reviewed.some((r) => r.key === w.key && r.role === w.role),
+        !reviewed.some(
+          (r) =>
+            r.key === w.key && r.role === w.role && r.verb === w.verb && r.receiver === w.receiver,
+        ),
     )
-    .map((w) => `${describeSite(w)} role ${w.role}`);
+    .map((w) => `${describeSite(w)} ${w.verb} role ${w.role}`);
+}
+
+function ownerTransferCallers(scan: Scan): string[] {
+  return scan.rpcCalls.filter((c) => c.name === OWNER_TRANSFER_RPC).map((c) => c.key);
 }
 
 function ungatedCallers(scan: Scan, reviewed: readonly ReviewedSeat[]): string[] {
@@ -631,20 +720,36 @@ describe('who creates a workspace or an owner seat (apps/web/src)', () => {
     }
   });
 
-  it('no reviewed entry is stale: each still names a write of that role, ungated', () => {
+  it('no reviewed entry is stale: each still names an ungated write of that verb and role, through that client', () => {
     for (const r of REVIEWED_SEATS) {
       const hits = real.writes.filter((w) => w.table === 'organization_members' && w.key === r.key);
-      expect(hits.length, r.key).toBeGreaterThan(0);
       expect(
-        hits.every((w) => w.role === r.role && !w.gated),
-        `${r.key}: ${JSON.stringify(hits.map((w) => ({ role: w.role, gated: w.gated })))}`,
+        hits.some(
+          (w) => w.role === r.role && w.verb === r.verb && w.receiver === r.receiver && !w.gated,
+        ),
+        `${r.key}: ${JSON.stringify(hits.map((w) => ({ verb: w.verb, role: w.role, receiver: w.receiver, gated: w.gated })))}`,
       ).toBe(true);
     }
   });
 
-  it('every insert or upsert names its table in a way the scan can read (or is reviewed)', () => {
-    expect(real.unreadTables.map((u) => u.key).sort()).toEqual(
-      REVIEWED_UNREAD_TABLES.map((r) => r.key).sort(),
+  it('Rule 3: transfer_org_ownership is called only from transferOwnershipAction', () => {
+    expect([...new Set(ownerTransferCallers(real))].sort()).toEqual(
+      [...OWNER_TRANSFER_CALLERS].sort(),
+    );
+  });
+
+  it('every rpc names its function in a way the scan can read (or is reviewed)', () => {
+    expect(
+      real.rpcCalls
+        .filter((c) => c.name === null)
+        .map((c) => c.key)
+        .sort(),
+    ).toEqual(REVIEWED_UNREAD_RPCS.map((r) => r.key).sort());
+  });
+
+  it('every insert, upsert or update names its table in a way the scan can read (or is reviewed)', () => {
+    expect(real.unreadTables.map((u) => `${u.key} ${u.verb}`).sort()).toEqual(
+      REVIEWED_UNREAD_TABLES.map((r) => `${r.key} ${r.verb}`).sort(),
     );
   });
 });
@@ -753,6 +858,57 @@ const PLANTED: ScanFile[] = [
       `export async function wrapsGrant(admin: any) {`,
       `  return grantSeat(admin);`,
       `}`,
+      `export async function promoteToOwner(admin: any, id: string) {`,
+      `  await admin.from('organization_members').update({ role: 'owner' }).eq('id', id);`,
+      `}`,
+      `export async function changeRole(admin: any, id: string, role: string) {`,
+      `  await admin.from('organization_members').update({ role }).eq('id', id);`,
+      `}`,
+      `export async function markDriver(admin: any, id: string) {`,
+      `  await admin.from('organization_members').update({ is_delivery_driver: true }).eq('id', id);`,
+      `}`,
+      `export async function renameWorkspace(admin: any, id: string) {`,
+      `  await admin.from('organizations').update({ name: 'x' }).eq('id', id);`,
+      `}`,
+      `export async function promoteThroughAVariable(admin: any, id: string) {`,
+      `  const members = admin.from('organization_members');`,
+      `  await members.update({ role: 'owner' }).eq('id', id);`,
+      `}`,
+      `export async function updateUnknownTable(admin: any, table: string) {`,
+      `  await admin.from(table).update({ role: 'owner' });`,
+      `}`,
+    ].join('\n'),
+  },
+  {
+    path: 'server/actions/planted-gated-promote.ts',
+    text: [
+      `'use server';`,
+      `import { checkPlatformAdmin } from '@/lib/auth/platform-admin';`,
+      `export async function gatedPromote(admin: any, id: string) {`,
+      `  const gate = await checkPlatformAdmin({ requireStepUp: true });`,
+      `  if (!gate.ok) return null;`,
+      `  await admin.from('organization_members').update({ role: 'owner' }).eq('id', id);`,
+      `}`,
+    ].join('\n'),
+  },
+  {
+    path: 'server/actions/planted-transfer.ts',
+    text: [
+      `'use server';`,
+      `const TRANSFER = 'transfer_org_ownership';`,
+      `export async function handOver(admin: any) {`,
+      `  await admin.rpc('transfer_org_ownership', { p_organization_id: 'o' });`,
+      `}`,
+      `export async function handOverByConstant(admin: any) {`,
+      `  await admin.rpc(TRANSFER, { p_organization_id: 'o' });`,
+      `}`,
+      `export async function otherRpc(admin: any) {`,
+      `  await admin.rpc('auth_user_exists_by_email', { p_email: 'x' });`,
+      `}`,
+      `export async function rpcByVariable(admin: any, fn: string) {`,
+      `  await admin.rpc(fn, {});`,
+      `}`,
+      `// admin.rpc('transfer_org_ownership') in a comment is not a call.`,
     ].join('\n'),
   },
   {
@@ -787,6 +943,8 @@ const PLANTED: ScanFile[] = [
 const PLANTED_SEAT: ReviewedSeat = {
   key: 'server/services/planted-seats.ts#grantSeat',
   role: 'owner',
+  verb: 'upsert',
+  receiver: 'admin',
   why: 'planted',
   callers: {
     watched: { module: 'server/services/planted-seats', name: 'grantSeat' },
@@ -820,9 +978,10 @@ describe('the scan, on planted sources', () => {
     ]);
   });
 
-  it('a table the scan cannot read is reported', () => {
-    expect(planted.unreadTables.map((u) => u.key)).toEqual([
-      'server/actions/planted-ungated.ts#viaUnknownTable',
+  it('a table the scan cannot read is reported, for an update too', () => {
+    expect(planted.unreadTables.map((u) => `${u.key} ${u.verb}`)).toEqual([
+      'server/actions/planted-ungated.ts#viaUnknownTable insert',
+      'server/services/planted-seats.ts#updateUnknownTable update',
     ]);
   });
 
@@ -835,11 +994,57 @@ describe('the scan, on planted sources', () => {
     expect(roleOf('spreadRow')).toEqual(['unknown']);
     expect(roleOf('ownerInAList')).toEqual(['owner']);
     expect(unreviewedOwnerSeats(planted, [PLANTED_SEAT])).toEqual([
-      'server/services/planted-seats.ts#ownerSeat (line 2) role owner',
-      'server/services/planted-seats.ts#roleFromInput (line 8) role unknown',
-      'server/services/planted-seats.ts#spreadRow (line 11) role unknown',
-      'server/services/planted-seats.ts#ownerInAList (line 14) role owner',
+      'server/services/planted-seats.ts#ownerSeat (line 2) insert role owner',
+      'server/services/planted-seats.ts#roleFromInput (line 8) upsert role unknown',
+      'server/services/planted-seats.ts#spreadRow (line 11) insert role unknown',
+      'server/services/planted-seats.ts#ownerInAList (line 14) insert role owner',
+      'server/services/planted-seats.ts#promoteToOwner (line 23) update role owner',
+      'server/services/planted-seats.ts#changeRole (line 26) update role unknown',
+      'server/services/planted-seats.ts#promoteThroughAVariable (line 35) update role owner',
     ]);
+  });
+
+  it('an update that promotes to owner, or sets a role the scan cannot read, is a seat; one that never names role is not', () => {
+    const writeOf = (fn: string) =>
+      plantedWrite(`server/services/planted-seats.ts#${fn}`).map((w) => [w.verb, w.role, w.gated]);
+    expect(writeOf('promoteToOwner')).toEqual([['update', 'owner', false]]);
+    expect(writeOf('changeRole')).toEqual([['update', 'unknown', false]]);
+    expect(writeOf('markDriver')).toEqual([['update', 'other', false]]);
+    expect(writeOf('promoteThroughAVariable')).toEqual([['update', 'owner', false]]);
+    // An update of an organization creates none: Rule 1 does not watch it.
+    expect(plantedWrite('server/services/planted-seats.ts#renameWorkspace')).toEqual([]);
+    // Gated the same way as a creator, a promotion passes.
+    expect(
+      plantedWrite('server/actions/planted-gated-promote.ts#gatedPromote').map((w) => [
+        w.table,
+        w.verb,
+        w.role,
+        w.gated,
+      ]),
+    ).toEqual([['organization_members', 'update', 'owner', true]]);
+    // A review covers its own verb and client only: the same function and
+    // role, written with another verb or through another client, is a new seat.
+    expect(
+      unreviewedOwnerSeats(planted, [
+        PLANTED_SEAT,
+        { ...PLANTED_SEAT, key: 'server/services/planted-seats.ts#promoteToOwner' },
+      ]),
+    ).toContain('server/services/planted-seats.ts#promoteToOwner (line 23) update role owner');
+    expect(
+      unreviewedOwnerSeats(planted, [{ ...PLANTED_SEAT, receiver: 'this.ctx.supabase' }]),
+    ).toContain('server/services/planted-seats.ts#grantSeat (line 17) upsert role owner');
+    expect(plantedWrite('server/services/planted-seats.ts#grantSeat')[0]!.receiver).toBe('admin');
+  });
+
+  it('Rule 3: every call of transfer_org_ownership is found, by name or through a constant; a name the scan cannot read is reported', () => {
+    expect(ownerTransferCallers(planted)).toEqual([
+      'server/actions/planted-transfer.ts#handOver',
+      'server/actions/planted-transfer.ts#handOverByConstant',
+    ]);
+    expect(planted.rpcCalls.filter((c) => c.name === null).map((c) => c.key)).toEqual([
+      'server/actions/planted-transfer.ts#rpcByVariable',
+    ]);
+    expect(planted.rpcCalls.map((c) => c.name)).toContain('auth_user_exists_by_email');
   });
 
   it('a reviewed seat whose function is called without the check fails, from its own module too, as does a use the scan cannot follow', () => {
