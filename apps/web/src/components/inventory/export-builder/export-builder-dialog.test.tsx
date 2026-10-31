@@ -643,6 +643,37 @@ describe('ExportBuilderDialog — a failed or superseded preview', () => {
     expect(screen.queryByText(FAILED)).toBeNull();
   });
 
+  // An answer counts only for the request (and attempt) it answers. Without
+  // that, the old failure stays on screen while Try again is still loading,
+  // and each further click starts another request.
+  it('shows loading after Try again, not the failure it is retrying', async () => {
+    const user = userEvent.setup();
+    previewSpy.mockRejectedValueOnce(new Error('fetch failed'));
+    previewSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
+    render(dialog());
+    expect(await screen.findByText(FAILED)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(FAILED)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+  });
+
+  // Same rule for new filters: the sample, readiness and count of the old
+  // filters must not stand in for the new ones while their answer is out.
+  it('shows loading for new filters, not the sample of the old ones', async () => {
+    const { rerender } = render(dialog());
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+
+    previewSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
+    rerender(dialog({ filters: { q: 'geometry' } }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('group', { name: 'Export readiness' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Export preview' })).toBeNull();
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+  });
+
   it('does not report a request that newer filters replaced as a failure', async () => {
     // The first request is still out when the filters change; the abort
     // rejects it, and that is not a failure.
