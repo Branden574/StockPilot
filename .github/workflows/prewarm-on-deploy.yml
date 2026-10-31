@@ -72,9 +72,12 @@ jobs:
           # answer is every warmed organization's ids, counts, timings and
           # any failed read's text. The exit status decides; only the HTTP
           # status is printed (apps/web/src/test/workflow-secret-curl.guard.test.ts).
+          # --globoff: curl takes the URL as written, one transfer, whatever
+          # the variable holds. The guard asks for it on every URL whose text
+          # it cannot see.
           for attempt in 1 2 3; do
             echo "Prewarm attempt ${attempt}..."
-            if curl -fsS --max-time 90 -o /dev/null -w 'HTTP %{http_code}\n' \
+            if curl -fsS --max-time 90 --globoff -o /dev/null -w 'HTTP %{http_code}\n' \
               -H "Authorization: Bearer ${BACKFILL_ADMIN_SECRET}" \
               "${PREWARM_URL}"; then
               echo "Prewarm OK on attempt ${attempt}."
