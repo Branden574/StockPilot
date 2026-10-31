@@ -282,12 +282,23 @@ const JOINS: readonly [string, string][] = [
   ['an underscore', '_'],
   ['a dot', '.'],
   ['a middle dot', '\u00B7'],
+  // A run of separators, as SEPARATOR allows.
+  ['a hyphen between spaces', ' - '],
+  ['two spaces', '  '],
+  ['a dot between spaces', ' . '],
+  ['an underscore, a hyphen and an underscore', '_-_'],
 ];
 
 /** Each place copy is read, holding `spelled` on the line given. */
 function contexts(spelled: string): [where: string, file: string, source: string, line: number][] {
   return [
     ['a string literal', 'probe.ts', `export const label = '${spelled}';`, 1],
+    [
+      'a template literal with no substitution',
+      'probe.ts',
+      'export const label = `' + spelled + '`;',
+      1,
+    ],
     [
       'the head of a template literal',
       'probe.ts',
@@ -553,6 +564,48 @@ describe("the copy people see names none of the customer's names", () => {
         [2],
       );
       check('(f) a literal inside an element', linesOf(name, findIn('probe.tsx', inside, [])), [4]);
+      // (g) Two literals on one line, the first allowed: the second is still
+      // reported, so an allowed literal never hides another on its line.
+      const oneLine = `export const PAIR = ['${spelled}', 'Ship to ${spelled}'];`;
+      check(
+        '(g) an allowed literal and another on its line',
+        linesOf(name, notAllowed(findIn('probe.ts', oneLine, allowShort), allowShort)),
+        [1],
+      );
+    });
+    expect(missed).toEqual([]);
+  });
+
+  it('allows a text only in the file its ALLOWED pair names', () => {
+    const missed: string[] = [];
+    CUSTOMER_NAMES.forEach((pieces, i) => {
+      const spelled = pieces.join(' ');
+      // The same text, allowed in another file only.
+      const elsewhere = [{ file: 'other.tsx', sha256: hashOf(spelled), why: 'a probe' }];
+      const sources: [form: string, file: string, source: string][] = [
+        ['a literal', 'probe.ts', `export const SHORT = '${spelled}';`],
+        [
+          "a literal among an element's children",
+          'probe.tsx',
+          [
+            'export const F = () => (',
+            '  <p>',
+            `    Ship to ${spelled}`,
+            `    {'${spelled}'}`,
+            '  </p>',
+            ');',
+          ].join('\n'),
+        ],
+      ];
+      for (const [form, file, source] of sources) {
+        // Exactly what is found with nothing allowed: the literal, and the
+        // element dropped for it.
+        const want = findIn(file, source, []);
+        const got = notAllowed(findIn(file, source, elsewhere), elsewhere);
+        if (want.length === 0 || JSON.stringify(got) !== JSON.stringify(want)) {
+          missed.push(`name ${i + 1}, ${form}: ${got.length} findings, ${want.length} expected`);
+        }
+      }
     });
     expect(missed).toEqual([]);
   });
@@ -593,9 +646,26 @@ describe("the copy people see names none of the customer's names", () => {
     ]);
   }, 30_000);
 
-  it("holds no whole name in customer-identity.ts, and its domains are S15's six", () => {
+  it("holds no whole name in customer-identity.ts, pins its ten names, and its domains are S15's six", () => {
     const identity = 'apps/web/src/test/customer-identity.ts';
     expect(findIn(identity, readFileSync(join(REPO_ROOT, identity), 'utf8'), [])).toEqual([]);
+    // sha256 of each name's pieces as JSON, in order: how many names there
+    // are, their order, their spelling and where each splits into pieces. A
+    // name changed or dropped would stop being found, and a piece split
+    // elsewhere would stop its spaced spellings matching, with every probe
+    // above still green, since they spell what the list holds.
+    expect(CUSTOMER_NAMES.map((pieces) => sha256(JSON.stringify(pieces)))).toEqual([
+      '060b8abcb6e147261a11e6066486c3c74c048f3a2dfda6c640a7da056b647bb9',
+      '0f1a99ab345832bb9ff26b670bbf735092be38b4e788785287f8d90ebdfb35cd',
+      '2d36f49695d8248f2ed3ce8407f03ca885912c94251e15663e44e631b265e574',
+      'd02a6307efb50154fdf98fc76d342d3b7ab48d6db66854716a7b3672e7c882ca',
+      'b27dd35b992844c600294bce6f8d8762112620d2e9eba65ffff48141d114127b',
+      '22fac869e9e520fd59c5c8edbe804348a75aeea002476177c471eb24cedff6c2',
+      '5eba5bd7d1b713c7ec8e82f30c054b7bbadcd4c3d21c44821ead21d1e9b55ab7',
+      '15b6e2153f1f416f367ad53959db63a4a48435d173598e4b7071649b354c7f46',
+      '6414976112102366adef15fc6cfbd541950fe1c20f3fd171e31b00f695cd4509',
+      'f174ecc5faa6df8dbbcfad083757c64ef372edfd7e0fb2e17071fcf0de9af9f3',
+    ]);
     // sha256 of each domain, in the order S15's guard has always read them.
     expect(CUSTOMER_DOMAINS.map(sha256)).toEqual([
       '2ae6be2eb6e43a564325887a402869fcda978960b5902c8aa3105356a5c019f0',
