@@ -28,6 +28,160 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'export-fixes-2026-10',
+    revision: 1,
+    // The export part of docket C9: #414 (squash 75f5b0fe1, merged 2026-10-31
+    // 09:26Z; web only, no migration and no phone code, so no over-the-air
+    // update). Live in production web build d8c556a672e3 (built 09:26:29Z,
+    // answering by 09:27:52Z). #414 kept its draft only in its PR body, never
+    // here; docs/whats-new-small-fixes-8 publishes it above
+    // small-fixes-8-2026-10, so one web deploy publishes both, at the top, the
+    // newest release, with its words re-read against 75f5b0fe1.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8):
+    //   - the title began "Smaller Excel exports with photos": only an export
+    //     in which rows share a photo is smaller, so it says what changed,
+    //     each photo stored once;
+    //   - the summary says "On the web", as a phone shows only the title and
+    //     the summary and the phone has no export; it names Items and Books
+    //     for the PDFs, and leaves the catalog cards to the long SKU line
+    //     (the draft said "keep catalog cards tidy");
+    //   - the title said long SKUs print whole "in PDFs" and the long SKU
+    //     line "in PDF exports": only the Items and Books export breaks a
+    //     SKU, barcode or ISBN itself (breakIdentifierLines, which only
+    //     lib/pdf/inventory-export-pdf.tsx uses); pick slips, packing slips
+    //     and report PDFs still wrap a SKU their own way, so both name Items
+    //     and Books. The line now says "too long for its space", as a value
+    //     that fits is not broken; "on lines of its own" is now "over two or
+    //     more lines"; and "the two- and three-across book catalogs" are the
+    //     Layout select's own words, Book catalog — two columns and Book
+    //     catalog — three columns (the layouts walked and tested; never "the"
+    //     before Book, which the on-record wording guard reads as the
+    //     recorded quantity's old name). That line is told only where the
+    //     Books module is on (below);
+    //   - the photo line's why said "a very large file that was slow to
+    //     download and to open" of "a list of copies that share one cover":
+    //     the writer stored a shared photo once per row, so how much larger
+    //     the file was depends on how many rows shared it, and nothing was
+    //     measured (no two Demo Co rows share a photo); it now says the file
+    //     could be much larger than it needed to be. Its "Nothing else in the
+    //     file changes" is gone: a cover address outside the book-cover
+    //     services is now left blank in an export (the guarded fetch, left
+    //     out below), so it says the export is made the same way as before;
+    //   - the sample line names the dialog by its title, Customize export,
+    //     and quotes its message and the loading line it kept showing, as
+    //     export-builder-preview.tsx writes them; it names the dialog's
+    //     button, Export file, which the sample never turns off.
+    //
+    // Every user-visible change in #414 has a line (owner rule 2026-09-25),
+    // except those #414's draft leaves out ("Not announced", and the
+    // integrator's decision on its question 5, under the owner's delegation):
+    //   - the header of the six branded PDFs no longer leaves an empty square
+    //     before the organization's name for a logo it cannot print (WebP,
+    //     AVIF, or one that does not load): the draft's entry 4, dropped
+    //     (question 5), because B48, which converts WebP and AVIF logos for
+    //     PDFs, will announce the logos printing again, which covers the same
+    //     headers;
+    //   - an SVG logo no longer prints (possible only for one uploaded in a
+    //     five-day window in May 2026 and never replaced; S18's kit counts
+    //     them, expected 0);
+    //   - export images are fetched through the SSRF guard, a security fix
+    //     whose only visible effect is that a cover address on a host outside
+    //     the book-cover services is left blank in an Excel or PDF export, as
+    //     it already was on order slips and report PDFs.
+    // Left out as changing nothing on screen: the sample's request schema
+    // and the dialog's hooks warnings; the DEPLOY.md correction is for
+    // whoever sets up a project. The sample line also covers a late failure
+    // of an older sample request, which could leave the loading line on
+    // screen for good and is now ignored.
+    //
+    // Walked on production on build d8c556a672e3, 2026-10-31 09:33Z to
+    // 09:53Z, in Demo Co as its admin, passed at 10:10Z: an Excel export of
+    // 30 Items with 22 photos holds 22 images, each in its own row and
+    // matching that row's photo; a long title and a long SKU stay inside
+    // their cards in Book catalog — two columns and three columns and print
+    // whole in the table, with no hyphen added; with the sample request
+    // blocked, the dialog says “Could not load a sample of this export. You
+    // can still export the file.” with Try again, Export file still exports,
+    // and Try again loads the sample once unblocked; an Items PDF prints its
+    // 22 photos. The one write (a Books item with a long title and SKU) was
+    // archived. Not walkable there, so each rests on the code and its tests:
+    // two rows sharing one photo (no two Demo Co rows share one), a cover
+    // address from a book-cover service (none there), an organization logo
+    // (none set) and a pick slip (no order in picking).
+    //
+    // Who is told: whoever can export (items:export, which the export and
+    // its sample both check; the Items page checks no permission or module).
+    // The long SKU line links to Books, so it also needs the Books module,
+    // which that page checks: an organization without Books is not told it,
+    // and its Items PDFs change only for a SKU or barcode too wide for its
+    // column, which the table sizes to the widest value up to 150 pt (about
+    // 34 characters). A member who cannot export is not told this release at
+    // all.
+    status: 'published',
+    title:
+      'Excel exports store each photo once, and long SKUs print whole in PDF exports of Items and Books',
+    summary:
+      'On the web, Excel exports store each photo once, PDF exports of Items and Books print long SKUs and barcodes whole, and the Customize export dialog says when its sample could not load.',
+    publishedAt: '2026-10-31T10:34:00Z',
+    entries: [
+      {
+        // toInventoryXlsx keys each photo by its type and a SHA-256 of its
+        // bytes (workbookImages) and adds it to the workbook once, then places
+        // it on every row that shows it (lib/inventory-export-xlsx.ts).
+        id: 'export-excel-photo-once',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Excel exports store each photo once',
+        whatChanged:
+          'When several rows of an Excel export share one photo, the file now holds that photo once instead of once for every row. Every row still shows its own photo.',
+        whyItMatters:
+          'A photo shared by many rows was stored again for every one of them, so the file could be much larger than it needed to be.',
+        howItAffectsYou:
+          'An Excel export in which rows share photos is smaller, and you export it the same way as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // breakIdentifierLines (lib/pdf/identifier-lines.ts) for the SKU,
+        // barcode and ISBN columns of the table and the catalog's identifier
+        // values; the catalog's card widths come from the page
+        // (lib/pdf/inventory-export-pdf.tsx). A value that fits comes back
+        // unchanged.
+        id: 'export-pdf-long-identifiers',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Long SKUs and barcodes print whole in PDF exports of Items and Books',
+        whatChanged:
+          'In a PDF export of Items or Books, a SKU, barcode or ISBN too long for its space now prints whole over two or more lines, with no hyphen added where a line ends. With Layout set to Book catalog — two columns or Book catalog — three columns, a long title or value also stays inside its own card and clear of the cover.',
+        whyItMatters:
+          'A long SKU could print with a hyphen it does not have, a long run of digits could be cut off at the edge of its column, and in a catalog a long title could run into the next card or over the cover.',
+        howItAffectsYou: 'Values that fit print exactly as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/books', label: 'Open Books' },
+        audience: { anyPermission: ['items:export'], modules: ['books'] },
+      },
+      {
+        // ExportBuilderPreview's failed state and its Try again, which asks
+        // for the sample again (export-builder-dialog.tsx); Export file is
+        // turned off only while exporting or when the choices are invalid.
+        id: 'export-sample-could-not-load',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The Customize export dialog says when its sample could not load',
+        whatChanged:
+          'The Customize export dialog, reached from Export on Items and Books, shows a sample of your export. If the sample cannot load, the dialog now says “Could not load a sample of this export. You can still export the file.” and offers Try again.',
+        whyItMatters:
+          'Before, a sample that failed to load kept saying “Loading a sample of this export…” with no end.',
+        howItAffectsYou: 'You can still choose Export file while the sample cannot load.',
+        whatToDo: 'If you see the message, choose Try again, or choose Export file as usual.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+    ],
+  },
+  {
     id: 'small-fixes-8-2026-10',
     revision: 1,
     // Small fixes slice 8: #374 (squash 919281a1c, merged 2026-10-31

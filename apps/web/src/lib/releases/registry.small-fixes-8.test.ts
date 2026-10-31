@@ -108,9 +108,12 @@ describe('the small fixes slice 8 release', () => {
     );
   });
 
-  it('is the newest entry, at the top, dated after every other release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    for (const r of RELEASES.slice(1)) {
+  // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the newest entry, at the top, dated after every other release", with ID at RELEASES[0] and every release from RELEASES[1] dated before it): the export fixes release (#414) is published later, at the top, directly above it, so it moves down by one. Claim kept: dated after every release below it, on a whole minute.
+  it('sits directly below the export fixes release, published later, and is dated after every release below it', () => {
+    expect(RELEASES[0]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[1]?.id).toBe(ID);
+    for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -249,17 +252,30 @@ describe('the small fixes slice 8 release', () => {
   // shows the title, the summary and the first linked line the reader can
   // reach as its button; the phone draws the button only when the link opens
   // one of its own screens (whats-new.tsx).
-  it('is the first notice for every member, and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list', () => {
-    for (const v of [everyone, member]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-    }
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
-      id: ID,
-      date: '2026-10-31',
-      title: release().title,
-      body: release().summary,
-      cta: { href: OVERDUE_VIEW, label: 'Open purchase orders' },
-    });
+  // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the first notice for every member, and an old phone build ...", ID first for the owner with every permission and for a member with no permission, with nothing read or seen): the export fixes release is published later, at the top, and reaches whoever holds the items:export permission, so that owner is told it first and this one once it is read or seen. A member with no permission is not told it. Claim kept: it is the first notice for every member the export fixes release does not reach, and an old phone build shows its title and summary with the same buttons.
+  it('is the first notice for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list', () => {
+    const exportRead = {
+      release_id: 'export-fixes-2026-10',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-10-31T10:40:00Z',
+      read_at: '2026-10-31T10:40:00Z',
+    };
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'export-fixes-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [exportRead], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('export-fixes-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, { 'export-fixes-2026-10': true })[0]).toEqual(
+      {
+        id: ID,
+        date: '2026-10-31',
+        title: release().title,
+        body: release().summary,
+        cta: { href: OVERDUE_VIEW, label: 'Open purchase orders' },
+      },
+    );
     // Whoever can open the team calendar, and not the purchase orders list.
     const scheduler: ReleaseViewer = {
       role: 'staff',
@@ -409,9 +425,7 @@ describe('the small fixes slice 8 release', () => {
     expect(calendar).toContain('const key = orgDayOf(ev.startsAt, timeZone);');
     expect(calendar).toContain('const isToday = d.ymd === todayYmd;');
     expect(calendar).not.toContain('useHydrated');
-    expect(page('schedule/page.tsx')).toContain(
-      'const today = zonedParts(new Date(), timeZone);',
-    );
+    expect(page('schedule/page.tsx')).toContain('const today = zonedParts(new Date(), timeZone);');
   });
 
   // Edit event kept a wall clock and converted it back on every save, so an
@@ -468,7 +482,9 @@ describe('the small fixes slice 8 release', () => {
     expect(actions).toContain('<Send className="h-4 w-4" /> Mark as ordered');
     expect(actions).toContain('<X className="h-4 w-4" /> Cancel PO');
     expect(actions).toContain("onClick={() => setStatus('ordered')}");
-    expect(runs).toContain("await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');");
+    expect(runs).toContain(
+      "await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');",
+    );
     expect(SHORTFALL_PO_PHONE_REVIEW_COPY).toBe('Review and order this draft on the web.');
     expect(phone('src/lib/po-draft-review.ts')).toContain(
       'export const PO_DRAFT_REVIEW_COPY = SHORTFALL_PO_PHONE_REVIEW_COPY;',
