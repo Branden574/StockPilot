@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
-import { makeSupabaseStub, servedLikePostgrest, type QueryResult } from '@/test/supabase-mock';
+import {
+  inFilters,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 import type { RecurringRunSummary } from '@/server/services/recurring-pos';
 
@@ -123,16 +129,41 @@ describe('GET /api/cron/recurring-pos — admin notification', () => {
  * (templatesSkipped, recurring-pos.run-skips.test.ts). The cron tells the
  * organization's owners and admins, as for every notice, AND the template's
  * creator, who may be a manager: the person who set the template up is the
- * one who will fix it. Each person once; a creator who is no longer an
- * accepted member of the organization is not told.
+ * one who will fix it. Each person once; a creator who is not an accepted
+ * member of this organization (another organization's member, a support
+ * session) is not told.
  */
 describe('GET /api/cron/recurring-pos — a skipped template is told to its creator too', () => {
+  const ACCEPTED = '2026-01-01T00:00:00Z';
+  const member = (
+    organization_id: string,
+    user_id: string,
+    role: string,
+    extra: { accepted_at?: string | null; impersonation_expires_at?: string } = {},
+  ) => ({
+    organization_id,
+    user_id,
+    role,
+    accepted_at: ACCEPTED,
+    impersonation_expires_at: null,
+    ...extra,
+  });
+  /** organization_members as stored. Of the org-1 rows, only admin-1,
+   *  manager-1, staff-1 and viewer-1 are accepted members: left-1 and
+   *  invited-admin-1 have not accepted, and support-1 is a support session
+   *  ("act as": a temporary owner row, accepted, with an expiry;
+   *  services/platform/impersonation.ts). The org-2 rows are another
+   *  organization's members. */
   const MEMBERS = [
-    { user_id: 'admin-1', role: 'owner', accepted: true },
-    { user_id: 'manager-1', role: 'manager', accepted: true },
-    { user_id: 'left-1', role: 'manager', accepted: false },
-    { user_id: 'staff-1', role: 'staff', accepted: true },
-    { user_id: 'viewer-1', role: 'viewer', accepted: true },
+    member('org-1', 'admin-1', 'owner'),
+    member('org-1', 'manager-1', 'manager'),
+    member('org-1', 'left-1', 'manager', { accepted_at: null }),
+    member('org-1', 'staff-1', 'staff'),
+    member('org-1', 'viewer-1', 'viewer'),
+    member('org-1', 'invited-admin-1', 'admin', { accepted_at: null }),
+    member('org-1', 'support-1', 'owner', { impersonation_expires_at: '2026-01-01T01:00:00Z' }),
+    member('org-2', 'other-org-manager-1', 'manager'),
+    member('org-2', 'other-org-owner-1', 'owner'),
   ];
 
   /** The organization's permission overrides for this run (none by default). */
@@ -149,19 +180,57 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     creatorsRead.error = null;
   });
 
-  /** organization_members as each read asks: by role (owners and admins),
-   *  or by user id (the creators), accepted members only. */
-  function members(call: { methods: string[]; args: unknown[][] }) {
-    const ins = call.methods
-      .map((m, i) => (m === 'in' ? (call.args[i] as [string, string[]]) : null))
-      .filter((x): x is [string, string[]] => x !== null);
-    const byRole = ins.find(([col]) => col === 'role')?.[1];
-    const byUser = ins.find(([col]) => col === 'user_id')?.[1];
-    if (byUser && creatorsRead.error) return { data: null, error: creatorsRead.error };
-    const rows = MEMBERS.filter(
-      (m) => m.accepted && (!byRole || byRole.includes(m.role)) && (!byUser || byUser.includes(m.user_id)),
-    ).map((m) => ({ user_id: m.user_id, role: m.role }));
-    return { data: rows, error: null };
+  /**
+   * organization_members answered as PostgREST would: each read's own
+   * filters (its organization, the roles or user ids it names, accepted, not
+   * a support session), its limit and its selected columns are applied to
+   * MEMBERS, so a read that drops a filter gets a row it must not and a test
+   * fails. Evaluated here because servedLikePostgrest cannot evaluate `.not`;
+   * any other method throws.
+   */
+  function members(call: MockCall): QueryResult {
+    if (creatorsRead.error && inFilters(call).some(([col]) => col === 'user_id')) {
+      return { data: null, error: creatorsRead.error };
+    }
+    let rows: Array<Record<string, unknown>> = [...MEMBERS];
+    let columns: string[] = [];
+    let limit = Infinity;
+    call.methods.forEach((method, i) => {
+      const [col, a, b] = (call.args[i] ?? []) as [string, unknown, unknown];
+      const get = (r: Record<string, unknown>) => r[col] ?? null;
+      switch (method) {
+        case 'select':
+          columns = col.split(',').map((c) => c.trim());
+          if (!columns.every((c) => /^[a-z_]+$/.test(c))) {
+            throw new Error(`members cannot select ${col}`);
+          }
+          break;
+        case 'eq':
+          rows = rows.filter((r) => get(r) === a);
+          break;
+        case 'in':
+          rows = rows.filter((r) => (a as unknown[]).includes(get(r)));
+          break;
+        case 'is':
+          rows = rows.filter((r) => get(r) === a);
+          break;
+        case 'not':
+          if (a !== 'is' || b !== null) {
+            throw new Error(`members cannot evaluate .not(${col}, ${String(a)}, ${String(b)})`);
+          }
+          rows = rows.filter((r) => get(r) !== null);
+          break;
+        case 'limit':
+          limit = Number(col);
+          break;
+        default:
+          throw new Error(`members cannot evaluate .${method}()`);
+      }
+    });
+    return {
+      data: rows.slice(0, limit).map((r) => Object.fromEntries(columns.map((c) => [c, r[c]]))),
+      error: null,
+    };
   }
 
   function runWith(summary: RecurringRunSummary) {
@@ -251,6 +320,28 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     expect(told()).toEqual(['admin-1']);
     createNotification.mockClear();
     await runWith(skipped(null));
+    expect(told()).toEqual(['admin-1']);
+  });
+
+  // The creators' memberships are read in this organization only: a creator
+  // who left it and is a manager of another organization would otherwise be
+  // told this organization's skipped templates, by that membership's role.
+  // And a support session ("act as") is not a member.
+  it('a creator who is a manager of another organization only is not told', async () => {
+    await runWith(skipped('other-org-manager-1'));
+    expect(told()).toEqual(['admin-1']);
+  });
+
+  it('a creator seen only through a support session ("act as") is not told', async () => {
+    await runWith(skipped('support-1'));
+    expect(told()).toEqual(['admin-1']);
+  });
+
+  // The owners and admins are read the same way: this organization's
+  // accepted members, never another organization's owner, an admin who has
+  // not accepted, or a support session (an owner row with an expiry).
+  it("a run's notice goes to this organization's accepted owners and admins only", async () => {
+    await runWith({ ...EMPTY, created: 1 });
     expect(told()).toEqual(['admin-1']);
   });
 
