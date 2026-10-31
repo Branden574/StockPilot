@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
@@ -14,8 +15,12 @@ vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/server/services/bundles', () => ({ BundlesService: vi.fn() }));
 vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
-// The real service's warehouse gate, for the 0365 refusal case below.
-vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn(async () => undefined) }));
+// The real service's warehouse gate, for the refusal cases below. The real
+// ForbiddenError, which the route tells apart from other failures.
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/warehouse')>()),
+  assertWarehouseAccess: vi.fn(async () => undefined),
+}));
 
 const BUNDLE = '2f0b8f7e-1111-4222-8333-444455556666';
 const WH = '3a1c9e8d-1111-4222-8333-444455556666';
@@ -153,5 +158,72 @@ describe('POST /api/v1/bundles/[id]/distribute — 0365 refusals are 400s', () =
       message: actual.BUNDLE_COMPONENT_NOT_VISIBLE,
     });
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['distribute_bundle']);
+  });
+});
+
+// The real service's warehouse gate (assertWarehouseAccess) refuses with a
+// ForbiddenError, not a ServiceError. As a 500 it was reported as an error on
+// every send, and the phone queued it ("saved locally and will sync") and
+// sent it again every minute: a 5xx "may have committed" (app/bundles/[id].tsx),
+// and the outbox re-sends a failed row on each drain (S16 review).
+describe('POST /api/v1/bundles/[id]/distribute — warehouse refusals', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  async function realService(refusal: Error) {
+    const actual = await vi.importActual<typeof import('@/server/services/bundles')>(
+      '@/server/services/bundles',
+    );
+    const stub = makeSupabaseStub({
+      'rpc:distribute_bundle': { data: [{ distribution_id: 'dist-1' }], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...buildCtx(),
+      role: 'staff' as const,
+      supabase: stub.client as never,
+    });
+    vi.mocked(BundlesService).mockImplementationOnce(function (
+      ctx: ConstructorParameters<typeof BundlesService>[0],
+    ) {
+      return new actual.BundlesService(ctx);
+    });
+    vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(refusal);
+    return stub;
+  }
+
+  it('a warehouse the caller may not write to is a 403 with its words, not reported', async () => {
+    const stub = await realService(
+      new ForbiddenError(`User does not have write access to warehouse ${WH}.`),
+    );
+    const res = await POST(request({ quantity: 1, warehouseId: WH, idempotencyKey: KEY }), params);
+    // A 4xx: the phone shows it and does not queue it; queued offline, the
+    // outbox parks it as a final refusal (drain-failure.ts).
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: `User does not have write access to warehouse ${WH}.`,
+    });
+    expect(reportError).not.toHaveBeenCalled();
+    expect(assertWarehouseAccess).toHaveBeenCalledWith(WH, 'write', expect.anything());
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('an access check that could not be read is a 503 the phone sends again, reported as a warning', async () => {
+    const refusal = new ForbiddenError(`User does not have write access to warehouse ${WH}.`, {
+      accessUnreadable: true,
+    });
+    const stub = await realService(refusal);
+    const res = await POST(request({ quantity: 1, warehouseId: WH, idempotencyKey: KEY }), params);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('5');
+    expect(await res.json()).toEqual({
+      error: 'check_failed',
+      message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+    });
+    expect(reportError).toHaveBeenCalledWith(refusal, {
+      tag: 'api.v1.bundles.distribute',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+    expect(stub.rpcCalls).toEqual([]);
   });
 });
