@@ -37,7 +37,8 @@ const h = vi.hoisted(() => ({
   }>,
   /** Every service-role client update() created, in order. */
   adminClients: [] as unknown[],
-  /** The SKU fan-out's chain: [method, ...args] per call, in order. */
+  /** The service-role chains, [method, ...args] per call, in order: a SKU
+   *  edit's check of the records it moves, then the SKU fan-out. */
   fanOut: [] as unknown[][],
   /** What the SKU fan-out answers. */
   fanOutAnswer: { data: [], error: null } as { data: unknown; error: unknown },
@@ -69,17 +70,21 @@ vi.mock('@/lib/ai/embeddings', () => ({
 }));
 // update() copies product-level fields to the SKU's other rack records with the
 // server-key client (the edit fan-out). This one records the chain and answers
-// h.fanOutAnswer.
+// h.fanOutAnswer. A SKU edit first READS the records it moves, with a client of
+// its own: those reads find nothing in the way.
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     const p: Record<string, unknown> = {};
-    for (const m of ['from', 'update', 'select', 'eq', 'neq', 'is', 'in']) {
+    let writes = false;
+    for (const m of ['from', 'update', 'select', 'eq', 'neq', 'is', 'in', 'order', 'range']) {
       p[m] = (...args: unknown[]) => {
+        if (m === 'update') writes = true;
         h.fanOut.push([m, ...args]);
         return p;
       };
     }
-    (p as { then: unknown }).then = (res: (v: unknown) => unknown) => res(h.fanOutAnswer);
+    (p as { then: unknown }).then = (res: (v: unknown) => unknown) =>
+      res(writes ? h.fanOutAnswer : { data: [], error: null });
     h.adminClients.push(p);
     return p;
   },
@@ -377,7 +382,7 @@ describe('duplicateItem(): the copy is embedded when it is saved', () => {
         rackRow: 'A',
         quantity: 0,
       }),
-    ).resolves.toBe('dup-1');
+    ).resolves.toMatchObject({ id: 'dup-1' });
 
     expect(keepAlive).toHaveBeenCalledTimes(1);
     await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['dup-1']);
@@ -480,9 +485,10 @@ describe('update(): a changed searched field is re-embedded, held by keepAlive',
   });
 
   it("is started before the SKU fan-out, so a fan-out that throws cannot skip this record's", async () => {
-    // The new SKU is taken at one of the other records' racks: this record
-    // already has it (its own UPDATE committed), the others cannot follow, and
-    // update() throws a conflict. Its search data must follow its new SKU.
+    // The new SKU is taken at one of the other records' racks after the check
+    // before the writes found it free: this record already has it (its own
+    // UPDATE committed), the others cannot follow, and update() throws a
+    // conflict. Its search data must follow its new SKU.
     h.fanOutAnswer = { data: null, error: { code: '23505', message: 'duplicate key' } };
     const svc = new InventoryService(updateCtx({ ...ITEM, sku: 'NEW-SKU' }));
 

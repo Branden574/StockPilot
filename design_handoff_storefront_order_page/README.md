@@ -97,7 +97,7 @@ Spacing: page padding `26px 32px 90px`, max-width 1560px centered; shell grid `m
 - Radius 12, --bg-elev, 1px --line, overflow hidden.
 - **Hover: translateY(-2px), border --line-strong, shadow, photo scales 1.045** (transform 400ms cubic-bezier(.2,.8,.2,1)).
 - **Photo**: aspect 4:3, `object-fit: cover`, bottom hairline --line-2; subtle inner vignette `inset 0 -18px 24px -18px rgba(0,0,0,0.35)`. Items without a photo: diagonal-stripe placeholder (repeating 135° hairlines of --line over --bg-sunk) + 2-letter initials in Instrument Serif 44px --ink-5.
-- **Availability pill** (bottom-left of photo, 8px inset): glassy pill — bg page@74% + blur 8px + hairline border; mono 10.5px; 6px glowing dot. Variants: in stock = accent dot + "107 avail"; low = amber dot/text + "Low · 8 left"; out = red dot/text + "Out of stock".
+- **Availability pill** (bottom-left of photo, 8px inset): glassy pill — bg page@74% + blur 8px + hairline border; mono 10.5px; 6px glowing dot. Variants: in stock = accent dot + "96 avail"; low = amber dot/text + "Low · 8 left"; out = red dot/text + "Out of stock".
 - **Quick view button** (top-right of photo): 30×30, radius 9, same glass treatment, eye icon; hidden (opacity 0, translateY(-3px)) until card hover, 160ms.
 - Body: padding 12/13/13, gap 7. Name: Inter Tight 13.5px 500, line-height 1.32, 2-line clamp, min-height 35px. Meta: mono 10.5px --ink-4, `SKU · Category` (dot separator --ink-5).
 - **Add button**: full-width, height 33, radius 9, transparent with 1px --line-strong border, 12.5px 550 --ink, plus icon; **hover inverts: --ink fill, --bg text**; active scale(0.985).
@@ -168,7 +168,7 @@ status (derived per item): stock === 0 ? 'out' : stock <= lowThreshold ? 'low' :
 - Color-mix effects (accent@14% etc.) → `color-mix(in oklab, var(--accent) 14%, transparent)` via CSS vars or Tailwind alpha syntax with an rgb fallback of the accent.
 
 ## Assets
-- `design/products/*.png` — real product photos cropped from the production app screenshot (planner, mousepad, backpack, mug, polo-m, polo-w, bottle, towel, fan, sanitizer). Production should use the real item image URLs; these are for parity testing.
+- `design/products/*.png` — product photos for the mock-up (planner, mousepad, backpack, mug, polo-m, polo-w, bottle, towel, fan, sanitizer). Production should use the real item image URLs; these are for parity testing.
 - Icons: 24×24 hairline strokes (stroke-width 1.5, round caps/joins), lucide-style. All paths are in `design/storefront-shell.jsx` — or use `lucide-react` equivalents (search, filter, arrow-up-down, eye, layout-grid, list, plus, minus, trash-2, shopping-cart, sparkles, package, truck, map, users, pencil-line, check, chevrons, alert-triangle).
 - Serif placeholder font: Instrument Serif (Google Fonts).
 

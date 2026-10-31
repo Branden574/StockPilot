@@ -66,6 +66,15 @@ export interface BundleOrganization {
   dashboard_layout: unknown;
   order_status_config: unknown;
   all_modules_comp: boolean | null;
+  /**
+   * When a hide in this organization last changed at least one record
+   * (organizations.order_catalog_last_hide_at, migration 0413): an ISO
+   * timestamp, or null when it never has. UNDEFINED when the answer did not
+   * carry the key at all (a database before 0413), which is "unknown", never
+   * "never hidden". Catalog loads use it to skip the freshness query when no
+   * hide can be newer than their cached read (design 7.2 item 3).
+   */
+  order_catalog_last_hide_at?: string | null;
 }
 
 export interface BundleMembership {
@@ -172,6 +181,24 @@ export function parseRequestContextBundle(
       }
       // Same reasoning for the comp flag (boolean NOT NULL): it widens the module set.
       if (typeof o.all_modules_comp !== 'boolean') return null;
+      // The ordering-visibility hide mark (0413). A catalog load skips its
+      // check for recently hidden items when this says nothing was hidden
+      // since its cached read, so anything that is not a timestamp or null is
+      // refused rather than read as "never". An absent key (a database before
+      // 0413) is unknown, and unknown always runs the check.
+      let lastHideAt: string | null | undefined;
+      if (!('order_catalog_last_hide_at' in o) || o.order_catalog_last_hide_at === undefined) {
+        lastHideAt = undefined;
+      } else if (o.order_catalog_last_hide_at === null) {
+        lastHideAt = null;
+      } else if (
+        typeof o.order_catalog_last_hide_at === 'string' &&
+        !Number.isNaN(Date.parse(o.order_catalog_last_hide_at))
+      ) {
+        lastHideAt = o.order_catalog_last_hide_at;
+      } else {
+        return null;
+      }
       organization = {
         id: o.id as string,
         name: o.name,
@@ -183,6 +210,7 @@ export function parseRequestContextBundle(
         dashboard_layout: o.dashboard_layout ?? null,
         order_status_config: o.order_status_config ?? null,
         all_modules_comp: o.all_modules_comp,
+        ...(lastHideAt === undefined ? {} : { order_catalog_last_hide_at: lastHideAt }),
       };
     }
     memberships.push({
@@ -300,7 +328,22 @@ export function orgRowFromMembership(held: BundleMembership | null): OrgRow | nu
     dashboard_layout: o.dashboard_layout,
     order_status_config: o.order_status_config,
     all_modules_comp: o.all_modules_comp,
+    ...(o.order_catalog_last_hide_at === undefined
+      ? {}
+      : { order_catalog_last_hide_at: o.order_catalog_last_hide_at }),
   };
+}
+
+/**
+ * The organization's ordering-visibility hide mark from a membership (0413):
+ * the ISO time a hide last changed a record, null when the organization never
+ * hid anything, or UNDEFINED when it is not known (no membership held, the
+ * organization row hidden by row level security, or a database before 0413).
+ * A caller deciding whether to look for recently hidden items must treat
+ * undefined as "a hide may be recent".
+ */
+export function orderCatalogLastHideAtOf(held: BundleMembership | null): string | null | undefined {
+  return held?.organization ? held.organization.order_catalog_last_hide_at : undefined;
 }
 
 /**

@@ -39,7 +39,14 @@ export type PlatformAuditAction =
   | 'org_deleted'
   /** Temporary platform-wide account disable (migration 0308). */
   | 'user_disabled'
-  | 'user_reenabled';
+  | 'user_reenabled'
+  /**
+   * A platform-managed permission exception (orders:manage_catalog_visibility,
+   * migration 0413). Written ONLY by platform_set_permission_exception itself,
+   * in the same transaction as the change (never through recordPlatformAudit):
+   * detail {permission, before, after, target_role}.
+   */
+  | 'permission_exception_changed';
 
 export interface RecordPlatformAuditInput {
   actorUserId: string;

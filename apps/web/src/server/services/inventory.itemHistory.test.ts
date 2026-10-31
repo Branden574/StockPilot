@@ -7,37 +7,38 @@ import { InventoryService } from './inventory';
 // itemMovementHistory() answers the owner's 2026-07-22 question ("who moved
 // them, when, where, why") by rendering the ledger AS IT IS. It must NOT infer
 // a single winning source — the two attempts that did were reverted for
-// regressing stagedWorklist. The rows below are the owner's REAL data for SKU
-// SP-0WK2L-LY1 (org 63c13e64…), pulled from prod, so these tests pin the exact
-// story the screen has to tell.
+// regressing stagedWorklist. The rows below model the owner's report for one
+// SKU: the people, ids, item, notes, receipt and PO numbers are synthetic, and
+// the times and quantities keep the incident's shape, so these tests pin the
+// exact story the screen has to tell.
 // ---------------------------------------------------------------------------
 
-const ITEM = '5f3538ee-3fe8-4fe6-aecb-b88cde7e1c3a';
-const WH = 'eab527b5-f68d-4d0b-b997-a853328bfa07';
-const STAGING_LOC = 'de9684f7-3cbe-4f9f-9afd-93b5837607fb';
-const RACK_37B = '28092906-ece8-4400-9e1c-50bcb2fa5237';
+const ITEM = '50000010-0000-4000-8000-000000000010';
+const WH = 'e000001e-0000-4000-8000-00000000001e';
+const STAGING_LOC = 'd000001b-0000-4000-8000-00000000001b';
+const RACK_37B = '20000008-0000-4000-8000-000000000008';
 
-// Real receipt ids from the owner's case.
-const R_POSTED = '0bbed45a-857b-468c-ada4-353f31aff1a8';
-const R_REVERSED = 'e729bb07-cdba-45b4-9c9b-b76e8f5279de';
-const R_REVERSAL = 'bf5cb04c-ed29-4c97-aa49-34cfc0745590';
+// Receipt ids for the owner's case (synthetic).
+const R_POSTED = '00000001-0000-4000-8000-000000000001';
+const R_REVERSED = 'e000001d-0000-4000-8000-00000000001d';
+const R_REVERSAL = 'b0000019-0000-4000-8000-000000000019';
 
-const ANDREW = { id: '161bffb1-4e97-47a4-b9d3-c8e0e3b8640f', full_name: 'Andrew Rosas', email: 'arosas@cvwest.org' };
-const PETER = { id: '6c6fbde6-291b-4af7-9484-29468553a434', full_name: 'Peter Pete', email: 'pmathis@cvsouth.org' };
+const JORDAN = { id: '10000003-0000-4000-8000-000000000003', full_name: 'Jordan Stone', email: 'jstone@site1.test' };
+const PAT = { id: '60000013-0000-4000-8000-000000000013', full_name: 'Pat Tester', email: 'ptester@school.test' };
 
 const ITEM_ROW = {
   id: ITEM,
-  name: 'Science Dimensions Earth & Space Science',
-  sku: 'SP-0WK2L-LY1',
+  name: 'Exploring Earth & Space Science: Level 8',
+  sku: 'SP-0DEM2-BK1',
   warehouse_id: WH,
   deleted_at: null,
 };
 
 /** Movement rows shaped exactly as PostgREST returns them (numeric columns
  *  arrive as strings from Postgres NUMERIC, actor as an embedded object). */
-const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
+const INCIDENT_MOVEMENTS: Array<Record<string, unknown>> = [
   {
-    id: '981911f8-97b5-4091-a484-bfca06777e88',
+    id: '90000014-0000-4000-8000-000000000014',
     created_at: '2026-07-22T22:21:44.373907Z',
     movement_type: 'transfer',
     quantity_change: '0.0000',
@@ -48,11 +49,11 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     to_location_id: RACK_37B,
     reason: null,
     notes: null,
-    user_id: ANDREW.id,
-    actor: ANDREW,
+    user_id: JORDAN.id,
+    actor: JORDAN,
   },
   {
-    id: '27381ab0-a335-40bc-a975-0c32a0cf6c3f',
+    id: '20000007-0000-4000-8000-000000000007',
     created_at: '2026-07-22T22:20:53.602234Z',
     movement_type: 'remove',
     quantity_change: '-10.0000',
@@ -63,11 +64,11 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     to_location_id: null,
     reason: 'added incorrectly ',
     notes: null,
-    user_id: ANDREW.id,
-    actor: ANDREW,
+    user_id: JORDAN.id,
+    actor: JORDAN,
   },
   {
-    id: '5543d8c2-f58d-4ad4-bec6-0516e28ad931',
+    id: '5000000d-0000-4000-8000-00000000000d',
     created_at: '2026-07-22T21:13:46.343836Z',
     movement_type: 'add',
     quantity_change: '10.0000',
@@ -76,13 +77,13 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     moved_quantity: null,
     from_location_id: null,
     to_location_id: null,
-    reason: 'Adding new stock into inventory. ',
+    reason: 'Added new stock to the shelf. ',
     notes: null,
-    user_id: PETER.id,
-    actor: PETER,
+    user_id: PAT.id,
+    actor: PAT,
   },
   {
-    id: '9be2a106-3342-41fc-a1df-3274876339c2',
+    id: '90000015-0000-4000-8000-000000000015',
     created_at: '2026-07-22T17:56:00.525970Z',
     movement_type: 'receive_po',
     quantity_change: '20.0000',
@@ -91,13 +92,13 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     moved_quantity: null,
     from_location_id: null,
     to_location_id: STAGING_LOC,
-    reason: 'PO CVW-002201',
+    reason: 'PO DEMO-002201',
     notes: R_POSTED,
-    user_id: ANDREW.id,
-    actor: ANDREW,
+    user_id: JORDAN.id,
+    actor: JORDAN,
   },
   {
-    id: '65db542e-0236-405b-a392-aa5563ae5901',
+    id: '60000011-0000-4000-8000-000000000011',
     created_at: '2026-06-24T22:32:17.415490Z',
     movement_type: 'correction',
     quantity_change: '-90.0000',
@@ -108,11 +109,11 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     to_location_id: null,
     reason: 'receipt_reversal',
     notes: R_REVERSAL,
-    user_id: ANDREW.id,
-    actor: ANDREW,
+    user_id: JORDAN.id,
+    actor: JORDAN,
   },
   {
-    id: 'e2989d99-b97a-4903-ae72-42636f0ae7b7',
+    id: 'e000001c-0000-4000-8000-00000000001c',
     created_at: '2026-06-24T21:41:23.484364Z',
     movement_type: 'receive_po',
     quantity_change: '90.0000',
@@ -123,11 +124,11 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
     to_location_id: null,
     reason: 'receipt_line',
     notes: R_REVERSED,
-    user_id: ANDREW.id,
-    actor: ANDREW,
+    user_id: JORDAN.id,
+    actor: JORDAN,
   },
   {
-    id: 'aea94f7c-32fc-4fe6-89cd-9d1275e2fad4',
+    id: 'a0000017-0000-4000-8000-000000000017',
     created_at: '2026-05-06T22:22:09.151744Z',
     movement_type: 'initial',
     quantity_change: '1.0000',
@@ -144,40 +145,40 @@ const REAL_MOVEMENTS: Array<Record<string, unknown>> = [
   },
 ];
 
-const REAL_RECEIPTS = [
+const INCIDENT_RECEIPTS = [
   {
     id: R_POSTED,
-    receipt_number: 'R-20260722-175600-e56648',
+    receipt_number: 'R-20260722-175600-0a0a01',
     status: 'posted',
     reversed_receipt_id: null,
     reversal_reason: null,
-    purchase_orders: { po_number: 'CVW-002201', status: 'received' },
+    purchase_orders: { po_number: 'DEMO-002201', status: 'received' },
   },
   {
     id: R_REVERSED,
-    receipt_number: 'R-20260624-214123-168444',
+    receipt_number: 'R-20260624-214123-0c0c03',
     status: 'reversed',
     reversed_receipt_id: null,
     reversal_reason: null,
-    purchase_orders: { po_number: 'CVW-002202', status: 'cancelled' },
+    purchase_orders: { po_number: 'DEMO-002202', status: 'cancelled' },
   },
   {
     id: R_REVERSAL,
-    receipt_number: 'R-20260624-214123-168444-REV',
+    receipt_number: 'R-20260624-214123-0c0c03-REV',
     status: 'reversal',
     reversed_receipt_id: R_REVERSED,
     reversal_reason: 'Wrong rack entered',
-    purchase_orders: { po_number: 'CVW-002202', status: 'cancelled' },
+    purchase_orders: { po_number: 'DEMO-002202', status: 'cancelled' },
   },
 ];
 
-const REAL_LOCATIONS = [
+const INCIDENT_LOCATIONS = [
   { id: STAGING_LOC, name: 'Staging' },
   { id: RACK_37B, name: '37-B' },
 ];
 
 function stubFor(
-  movements: Array<Record<string, unknown>> = REAL_MOVEMENTS,
+  movements: Array<Record<string, unknown>> = INCIDENT_MOVEMENTS,
   overrides: Record<string, unknown> = {},
 ) {
   return makeSupabaseStub({
@@ -185,8 +186,8 @@ function stubFor(
     // Manager-or-above access path reads warehouses for readableIds.
     'warehouses.select': { data: [{ id: WH }], error: null },
     'stock_movements.select': { data: movements, error: null, count: movements.length },
-    'locations.select': { data: REAL_LOCATIONS, error: null },
-    'receipts.select': { data: REAL_RECEIPTS, error: null },
+    'locations.select': { data: INCIDENT_LOCATIONS, error: null },
+    'receipts.select': { data: INCIDENT_RECEIPTS, error: null },
     ...overrides,
   });
 }
@@ -199,25 +200,25 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-LY1 story', () => {
+describe('InventoryService.itemMovementHistory — the owner’s SP-0DEM2-BK1 story', () => {
   it('returns the movements newest-first with who/when/what/where/why on each', async () => {
     const page = await svcFor(stubFor()).itemMovementHistory({ itemId: ITEM });
 
-    expect(page.itemSku).toBe('SP-0WK2L-LY1');
-    expect(page.rows.map((r) => r.id)).toEqual(REAL_MOVEMENTS.map((m) => m.id));
+    expect(page.itemSku).toBe('SP-0DEM2-BK1');
+    expect(page.rows.map((r) => r.id)).toEqual(INCIDENT_MOVEMENTS.map((m) => m.id));
 
     // The manual add the colleague made, and the manager's reversal of it.
     const add = page.rows.find((r) => r.movementType === 'add')!;
-    expect(add.actorName).toBe('Peter Pete');
-    expect(add.actorEmail).toBe('pmathis@cvsouth.org');
+    expect(add.actorName).toBe('Pat Tester');
+    expect(add.actorEmail).toBe('ptester@school.test');
     expect(add.quantityChange).toBe(10);
     expect(add.previousQuantity).toBe(54);
     expect(add.newQuantity).toBe(64);
-    expect(add.note).toBe('Adding new stock into inventory.');
+    expect(add.note).toBe('Added new stock to the shelf.');
     expect(add.at).toBe('2026-07-22T21:13:46.343836Z');
 
     const removal = page.rows.find((r) => r.movementType === 'remove')!;
-    expect(removal.actorName).toBe('Andrew Rosas');
+    expect(removal.actorName).toBe('Jordan Stone');
     expect(removal.quantityChange).toBe(-10);
     expect(removal.note).toBe('added incorrectly');
   });
@@ -234,10 +235,10 @@ describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-L
 
   it('carries receipt number + status and PO number + status for a posted receipt', async () => {
     const page = await svcFor(stubFor()).itemMovementHistory({ itemId: ITEM });
-    const received = page.rows.find((r) => r.id === '9be2a106-3342-41fc-a1df-3274876339c2')!;
-    expect(received.receiptNumber).toBe('R-20260722-175600-e56648');
+    const received = page.rows.find((r) => r.id === '90000015-0000-4000-8000-000000000015')!;
+    expect(received.receiptNumber).toBe('R-20260722-175600-0a0a01');
     expect(received.receiptStatus).toBe('posted');
-    expect(received.poNumber).toBe('CVW-002201');
+    expect(received.poNumber).toBe('DEMO-002201');
     expect(received.poStatus).toBe('received');
     expect(received.toLocationName).toBe('Staging');
     expect(received.reversal).toBeNull();
@@ -245,20 +246,20 @@ describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-L
 
   it('links the received-then-reversed pair in BOTH directions (rule 3)', async () => {
     const page = await svcFor(stubFor()).itemMovementHistory({ itemId: ITEM });
-    const original = page.rows.find((r) => r.id === 'e2989d99-b97a-4903-ae72-42636f0ae7b7')!;
-    const undo = page.rows.find((r) => r.id === '65db542e-0236-405b-a392-aa5563ae5901')!;
+    const original = page.rows.find((r) => r.id === 'e000001c-0000-4000-8000-00000000001c')!;
+    const undo = page.rows.find((r) => r.id === '60000011-0000-4000-8000-000000000011')!;
 
     expect(original.reversal).toEqual({
       role: 'reversed',
       counterpartMovementId: undo.id,
-      counterpartReceiptNumber: 'R-20260624-214123-168444-REV',
+      counterpartReceiptNumber: 'R-20260624-214123-0c0c03-REV',
     });
     expect(original.reversalReason).toBe('Wrong rack entered');
 
     expect(undo.reversal).toEqual({
       role: 'reversal',
       counterpartMovementId: original.id,
-      counterpartReceiptNumber: 'R-20260624-214123-168444',
+      counterpartReceiptNumber: 'R-20260624-214123-0c0c03',
     });
     expect(undo.reversalReason).toBe('Wrong rack entered');
 
@@ -277,7 +278,7 @@ describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-L
   // deleted their account was written by a person: "Deleted user".
   it('names an actor who deleted their account "Deleted user" (the row is stamped), unlike a system write', async () => {
     const stamped = {
-      ...REAL_MOVEMENTS[0]!,
+      ...INCIDENT_MOVEMENTS[0]!,
       id: 'del-1',
       user_id: null,
       actor: null,
@@ -297,16 +298,16 @@ describe('InventoryService.itemMovementHistory — rule 2: no internal tokens, n
       expect(r.note).not.toBe('receipt_reversal');
       if (r.note !== null) expect(r.note).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
     }
-    expect(page.rows.find((r) => r.id === 'e2989d99-b97a-4903-ae72-42636f0ae7b7')!.note).toBeNull();
-    expect(page.rows.find((r) => r.id === '65db542e-0236-405b-a392-aa5563ae5901')!.note).toBeNull();
+    expect(page.rows.find((r) => r.id === 'e000001c-0000-4000-8000-00000000001c')!.note).toBeNull();
+    expect(page.rows.find((r) => r.id === '60000011-0000-4000-8000-000000000011')!.note).toBeNull();
   });
 
   it("never promotes the machine-composed 'PO {number}' reason into note", async () => {
     const page = await svcFor(stubFor()).itemMovementHistory({ itemId: ITEM });
-    const received = page.rows.find((r) => r.id === '9be2a106-3342-41fc-a1df-3274876339c2')!;
+    const received = page.rows.find((r) => r.id === '90000015-0000-4000-8000-000000000015')!;
     expect(received.note).toBeNull();
     // …but the PO is still stated, structurally.
-    expect(received.poNumber).toBe('CVW-002201');
+    expect(received.poNumber).toBe('DEMO-002201');
   });
 });
 
@@ -323,10 +324,10 @@ describe('InventoryService.itemMovementHistory — rule 1: return rows are not c
       from_location_id: null,
       to_location_id: null,
       // cancel_order_request writes exactly this.
-      reason: 'Order cancelled (order_request 1d265b37-4b5c-49bb-bc12-07b0ad270cff)',
+      reason: 'Order cancelled (order_request 10000004-0000-4000-8000-000000000004)',
       notes: null,
-      user_id: ANDREW.id,
-      actor: ANDREW,
+      user_id: JORDAN.id,
+      actor: JORDAN,
     };
     const page = await svcFor(stubFor([cancelRestock])).itemMovementHistory({ itemId: ITEM });
     const row = page.rows[0]!;
@@ -341,7 +342,7 @@ describe('InventoryService.itemMovementHistory — rule 1: return rows are not c
 describe('InventoryService.itemMovementHistory — pagination', () => {
   it('over-fetches exactly one row past the window to decide hasMore', async () => {
     const many = Array.from({ length: 51 }, (_, i) => ({
-      ...REAL_MOVEMENTS[0]!,
+      ...INCIDENT_MOVEMENTS[0]!,
       id: `m-${i}`,
     }));
     const stub = stubFor(many, {
@@ -360,7 +361,7 @@ describe('InventoryService.itemMovementHistory — pagination', () => {
   it('reports hasMore=false when the window is not full', async () => {
     const page = await svcFor(stubFor()).itemMovementHistory({ itemId: ITEM });
     expect(page.hasMore).toBe(false);
-    expect(page.rows).toHaveLength(REAL_MOVEMENTS.length);
+    expect(page.rows).toHaveLength(INCIDENT_MOVEMENTS.length);
   });
 
   it('offsets the range so "ask for more" reads the NEXT window, newest-first', async () => {
@@ -389,10 +390,10 @@ describe('InventoryService.itemMovementHistory — pagination', () => {
     // The stub returns a FULL 1000-row page on the first call and a short page
     // on the second — fetchAllRows must ask twice rather than stopping at the
     // PostgREST max_rows ceiling (the defect that got attempt #1 reverted).
-    const full = Array.from({ length: 1000 }, (_, i) => ({ ...REAL_MOVEMENTS[0]!, id: `a-${i}` }));
-    const rest = Array.from({ length: 200 }, (_, i) => ({ ...REAL_MOVEMENTS[0]!, id: `b-${i}` }));
+    const full = Array.from({ length: 1000 }, (_, i) => ({ ...INCIDENT_MOVEMENTS[0]!, id: `a-${i}` }));
+    const rest = Array.from({ length: 200 }, (_, i) => ({ ...INCIDENT_MOVEMENTS[0]!, id: `b-${i}` }));
     let call = 0;
-    const stub = stubFor(REAL_MOVEMENTS, {
+    const stub = stubFor(INCIDENT_MOVEMENTS, {
       'stock_movements.select': () => {
         call += 1;
         // call 1 = head count, calls 2+ = the paged window.
@@ -427,12 +428,12 @@ describe('InventoryService.itemMovementHistory — batching and access', () => {
   });
 
   it('404s an item that is missing or soft-deleted', async () => {
-    const missing = stubFor(REAL_MOVEMENTS, { 'inventory_items.select': { data: [], error: null } });
+    const missing = stubFor(INCIDENT_MOVEMENTS, { 'inventory_items.select': { data: [], error: null } });
     await expect(svcFor(missing).itemMovementHistory({ itemId: ITEM })).rejects.toMatchObject({
       code: 'not_found',
     });
 
-    const deleted = stubFor(REAL_MOVEMENTS, {
+    const deleted = stubFor(INCIDENT_MOVEMENTS, {
       'inventory_items.select': { data: [{ ...ITEM_ROW, deleted_at: '2026-07-01T00:00:00Z' }], error: null },
     });
     await expect(svcFor(deleted).itemMovementHistory({ itemId: ITEM })).rejects.toMatchObject({
@@ -441,7 +442,7 @@ describe('InventoryService.itemMovementHistory — batching and access', () => {
   });
 
   it('refuses an item in a warehouse the caller cannot read', async () => {
-    const stub = stubFor(REAL_MOVEMENTS, {
+    const stub = stubFor(INCIDENT_MOVEMENTS, {
       'inventory_items.select': { data: [{ ...ITEM_ROW, warehouse_id: 'other-wh' }], error: null },
       'user_warehouse_assignments.select': { data: [], error: null },
     });
@@ -453,23 +454,23 @@ describe('InventoryService.itemMovementHistory — batching and access', () => {
 
   it('still returns the movements when the location lookup fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const stub = stubFor(REAL_MOVEMENTS, {
+    const stub = stubFor(INCIDENT_MOVEMENTS, {
       'locations.select': { data: null, error: { message: 'boom' } },
     });
     const page = await svcFor(stub).itemMovementHistory({ itemId: ITEM });
-    expect(page.rows).toHaveLength(REAL_MOVEMENTS.length);
+    expect(page.rows).toHaveLength(INCIDENT_MOVEMENTS.length);
     // Degrades to no route rather than leaking a raw location uuid.
     expect(page.rows.find((r) => r.movementType === 'transfer')!.fromLocationName).toBeNull();
   });
 
   it('still returns the movements when the receipt/PO lookup fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const stub = stubFor(REAL_MOVEMENTS, {
+    const stub = stubFor(INCIDENT_MOVEMENTS, {
       'receipts.select': { data: null, error: { message: 'boom' } },
     });
     const page = await svcFor(stub).itemMovementHistory({ itemId: ITEM });
-    expect(page.rows).toHaveLength(REAL_MOVEMENTS.length);
-    const received = page.rows.find((r) => r.id === '9be2a106-3342-41fc-a1df-3274876339c2')!;
+    expect(page.rows).toHaveLength(INCIDENT_MOVEMENTS.length);
+    const received = page.rows.find((r) => r.id === '90000015-0000-4000-8000-000000000015')!;
     expect(received.receiptNumber).toBeNull();
     expect(received.poNumber).toBeNull();
     expect(received.note).toBeNull();

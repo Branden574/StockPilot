@@ -57,9 +57,9 @@ const EXPECTED: Expected[] = [
     id: 'team-invite',
     subject: 'You’re invited to join L4L North Region on StockPilot',
     subjectParams: { org: 'L4L North Region' },
-    preheader: 'Branden added you as an Operator. Accept within 7 days to keep the seat.',
+    preheader: 'Carsten added you as an Operator. Accept within 7 days to keep the seat.',
     preheaderParams: {
-      inviterFirst: 'Branden',
+      inviterFirst: 'Carsten',
       roleWithArticle: 'an Operator',
       window: '7 days',
     },
@@ -315,8 +315,8 @@ const EXPECTED: Expected[] = [
   },
   {
     id: 'email-change-current',
-    subject: 'Approve changing your StockPilot email to branden@stockpilotusa.com',
-    subjectParams: { newEmail: 'branden@stockpilotusa.com' },
+    subject: 'Approve changing your StockPilot email to carsten@example.com',
+    subjectParams: { newEmail: 'carsten@example.com' },
     preheader:
       'A request was made to change your sign-in email. Approve it only if that was you — 60 minutes to act.',
     preheaderParams: { linkExpiry: '60 minutes' },
@@ -326,8 +326,8 @@ const EXPECTED: Expected[] = [
     id: 'email-changed',
     subject: 'Your StockPilot email was changed',
     preheader:
-      'This account now signs in as branden@stockpilotusa.com. If that wasn’t you, contact your administrator right away.',
-    preheaderParams: { newEmail: 'branden@stockpilotusa.com' },
+      'This account now signs in as carsten@example.com. If that wasn’t you, contact your administrator right away.',
+    preheaderParams: { newEmail: 'carsten@example.com' },
     badge: 'Email changed',
   },
   {

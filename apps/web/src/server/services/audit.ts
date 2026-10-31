@@ -21,6 +21,15 @@ export type AuditEvent =
   | 'permissions.role_override'
   | 'permissions.user_override'
   | 'permissions.auditor_preset'
+  /**
+   * StockPilot support changed a member's platform-managed permission
+   * exception (orders:manage_catalog_visibility, migration 0413). Written by
+   * platform_set_permission_exception in the same transaction as the change;
+   * user_id is the platform actor; metadata {entity_type 'user', entity_id,
+   * permission, before, after, target_role, platform_admin_email}. Kept apart
+   * from permissions.user_override so the two powers audit separately.
+   */
+  | 'permissions.platform_exception_changed'
   | 'rental.created'
   | 'rental.returned'
   | 'rental.cancelled'
@@ -28,6 +37,12 @@ export type AuditEvent =
   | 'user.reactivated'
   | 'user.password.changed'
   | 'security.session_revoked'
+  /**
+   * The shared export budget refused a caller (lib/export-rate-limit.ts):
+   * one row per refusal, no entity, read by the hourly audit-anomaly cron
+   * (security/monitors.ts) to spot a sustained export-abuse pattern.
+   */
+  | 'security.export_rate_limited'
   | 'inventory.item.created'
   | 'inventory.item.updated'
   | 'inventory.item.duplicated'
@@ -42,6 +57,16 @@ export type AuditEvent =
    * request_hash, surface. No ip or user agent (a SQL-written row).
    */
   | 'inventory.item.ungrouped'
+  /**
+   * Ordering visibility (0413): a record was hidden from or shown in Place an
+   * Order. Written by set_order_catalog_visibility itself, in the same
+   * transaction, one row per CHANGED record (none for a retry or an
+   * unchanged id): entity inventory_item, warehouse_id, before/after
+   * {order_catalog_visible}, operation_id, operation_size, surface,
+   * acting_as_platform. Activity label "Ordering visibility changed"
+   * (core ORDER_VISIBILITY_AUDIT_LABEL).
+   */
+  | 'item.order_visibility_changed'
   /**
    * Group selected (0400): explicit display groups. Written by
    * apply_item_grouping itself, in the same transaction as the change; no ip
@@ -531,9 +556,20 @@ async function readRequestMeta(): Promise<RequestMeta> {
   };
 }
 
-/** The one place an audit_logs row is shaped, so `audit` and `auditMany`
- *  write exactly the same columns and metadata for the same payload. */
+/**
+ * The one place an audit_logs row is shaped, so `audit` and `auditMany`
+ * write exactly the same columns and metadata for the same payload.
+ *
+ * `is_system` is decided by the context and nothing else. A scheduled job's
+ * context (`ctx.isSystem`) borrows an owner's or admin's user id, so its rows
+ * are stamped `is_system: true`, after `extra`, where a payload cannot unset
+ * it. Any other context's rows never carry the key, even when `extra` names
+ * it, so a person's row can never pass for a job's (the readers that skip
+ * job rows would then skip that person's own actions). A person's row keeps
+ * exactly the shape it always had.
+ */
 function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
+  const { is_system: _ignored, ...extra } = payload.extra ?? {};
   return {
     organization_id: c.organizationId,
     user_id: c.userId,
@@ -547,7 +583,8 @@ function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
       before: payload.before ?? null,
       after: payload.after ?? null,
       reason: payload.reason ?? null,
-      ...(payload.extra ?? {}),
+      ...extra,
+      ...(c.isSystem === true ? { is_system: true } : {}),
     },
   };
 }

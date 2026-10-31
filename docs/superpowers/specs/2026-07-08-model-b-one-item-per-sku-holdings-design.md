@@ -10,9 +10,9 @@
 
 A SKU is ONE product. `inventory_items` holds one row per SKU (per org). The *quantity* of that SKU is distributed across **holdings** — each holding is "how many units sit at a given location/rack under a given charter." On-hand for the item is the **sum of its holdings**. The Items list shows one row per SKU with the running total, expandable to the per-holding breakdown (charter · location · rack · qty). Receiving adds to a holding; fulfilling an order subtracts from a chosen holding; transfers move between holdings; the total re-sums automatically. Charter becomes a property of **where the stock sits (the holding)**, not of the product.
 
-Example (real data, SKU `SP-G69UU-05H`):
+Example (real data, SKU `SP-GDEM4-G01`):
 ```
-Acer Chromebook  SP-G69UU-05H   total 281
+Acer Chromebook  SP-GDEM4-G01   total 281
   ├ CVSII-West-Shaw · rack 1-A · 75
   ├ CVLYII-Visalia  · rack 1-C · 100
   └ CVSII-Madera    · rack 2-A · 106

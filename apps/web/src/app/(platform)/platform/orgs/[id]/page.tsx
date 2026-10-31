@@ -21,6 +21,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
 import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { cn } from '@/lib/utils';
+import { formatDayInZone, formatMomentInZone } from '@/lib/platform/dates';
 import {
   describeLastActive,
   formatLastActive,
@@ -32,10 +33,22 @@ import {
   getOrgBillingState,
   getOrgInventory,
   getOrgMembers,
+  getOrgMembersOrderItemsAccess,
   getOrgOrders,
   getOrgOverview,
+  type PlatformMemberOrderItemsAccess,
   type PlatformOrgMember,
 } from '@/server/services/platform/orgs';
+
+import type { OrderItemsAccessTarget } from '@/components/platform/order-items-access-dialog';
+
+import {
+  ORDER_ITEMS_ACCESS_DISABLED_COPY,
+  ORDER_ITEMS_ACCESS_MODULE_OFF_COPY,
+  orderCatalogAccessChipCopy,
+  orderCatalogAccessSourceCopy,
+  resolveOrgTimezone,
+} from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
@@ -175,8 +188,9 @@ export default async function PlatformOrgDetailPage({
             orgId: id,
             search,
             page: Number.isFinite(usersPage) ? usersPage : 1,
+            timeZone: overview.timezone,
           }))}
-        {tab === 'orders' && (await OrdersTab({ orgId: id }))}
+        {tab === 'orders' && (await OrdersTab({ orgId: id, timeZone: overview.timezone }))}
         {tab === 'billing' && (await BillingTab({ orgId: id }))}
       </div>
 
@@ -213,7 +227,7 @@ function OverviewTab({
       <DetailSection flush className="max-w-2xl">
         <KeyValueList>
           <KeyValueRow label="Created">
-            {new Date(overview.createdAt).toLocaleDateString()}
+            {formatDayInZone(overview.createdAt, overview.timezone)}
           </KeyValueRow>
           <KeyValueRow label="Timezone">{overview.timezone ?? '—'}</KeyValueRow>
           <KeyValueRow label="Currency">{overview.currency ?? '—'}</KeyValueRow>
@@ -280,13 +294,19 @@ async function UsersTab({
   orgId,
   search,
   page,
+  timeZone,
 }: {
   orgId: string;
   search: string | null;
   page: number;
+  /** The organization's stored zone: its members' dates are printed in it. */
+  timeZone: string | null;
 }) {
   const result = await getOrgMembers(orgId, { search, page });
   const { members, total, pageSize, pageCount } = result;
+  // Order items access (0413) for exactly these members: one batched read,
+  // null when it failed (the column then says so; nothing else is affected).
+  const orderItemsAccess = await getOrgMembersOrderItemsAccess(orgId, members);
   const first = members.length === 0 ? 0 : (result.page - 1) * pageSize + 1;
   const last = (result.page - 1) * pageSize + members.length;
 
@@ -332,7 +352,13 @@ async function UsersTab({
           title={result.search ? `No members match “${result.search}”.` : 'No members.'}
         />
       ) : (
-        <MembersTable members={members} activityAvailable={result.activityAvailable !== false} />
+        <MembersTable
+          orgId={orgId}
+          members={members}
+          activityAvailable={result.activityAvailable !== false}
+          orderItemsAccess={orderItemsAccess}
+          timeZone={timeZone}
+        />
       )}
 
       {/*
@@ -406,10 +432,12 @@ function LastActiveCell({
   member,
   available,
   now,
+  timeZone,
 }: {
   member: PlatformOrgMember;
   available: boolean;
   now: Date;
+  timeZone: string | null;
 }) {
   if (!available) {
     return (
@@ -419,7 +447,7 @@ function LastActiveCell({
     );
   }
   const resolved = resolveLastActive(member);
-  const title = describeLastActive(member);
+  const title = describeLastActive(member, timeZone);
   if (resolved.source === 'never') {
     return (
       <span className="text-muted-foreground" title={title}>
@@ -427,7 +455,7 @@ function LastActiveCell({
       </span>
     );
   }
-  const label = formatLastActive(resolved.at, now);
+  const label = formatLastActive(resolved.at, now, timeZone);
   if (resolved.floor) {
     return (
       <span className="text-muted-foreground" title={title}>
@@ -443,6 +471,89 @@ function LastActiveCell({
 }
 
 /**
+ * One Order items cell (orders:manage_catalog_visibility, migration 0413): the
+ * effective-access chip and where it comes from (Role default, Allowed by
+ * StockPilot, Denied by StockPilot), both from the core preview the dialog
+ * uses. When an allowed capability cannot be used yet (a disabled account,
+ * the Orders module off) the chip says Not allowed and its title says why.
+ *
+ * Renderings that must never look alike:
+ *   unavailable  the read failed for this page: a dash, and a note above the
+ *                table. Never "Role default": a deny that is not shown is the
+ *                one mistake this column must not make.
+ *   unknown      no entry for this member (no user id, a role this build does
+ *                not know): a dash, and the row's menu offers no dialog.
+ */
+function OrderItemsAccessCell({
+  access,
+  available,
+}: {
+  access: PlatformMemberOrderItemsAccess | undefined;
+  available: boolean;
+}) {
+  if (!available || !access) {
+    return (
+      <span
+        data-testid="order-items-access-cell"
+        className="text-muted-foreground"
+        title={available ? undefined : 'Order items access could not be loaded for this page.'}
+      >
+        —
+      </span>
+    );
+  }
+  const { preview } = access;
+  const why = preview.capability
+    ? preview.blockers.map((b) =>
+        b === 'account_disabled'
+          ? ORDER_ITEMS_ACCESS_DISABLED_COPY
+          : ORDER_ITEMS_ACCESS_MODULE_OFF_COPY,
+      )
+    : [];
+  return (
+    <div data-testid="order-items-access-cell" className="flex flex-col items-start gap-0.5">
+      <Badge
+        variant={preview.effective ? 'success' : 'secondary'}
+        title={why.length > 0 ? why.join(' ') : undefined}
+      >
+        {orderCatalogAccessChipCopy(preview.effective)}
+      </Badge>
+      <span className="text-muted-foreground text-[12px]">
+        {orderCatalogAccessSourceCopy(preview.source)}
+      </span>
+    </div>
+  );
+}
+
+/** What a row's Order items access dialog starts from: plain data for the client. */
+function orderItemsAccessTarget(
+  orgId: string,
+  member: PlatformOrgMember,
+  access: PlatformMemberOrderItemsAccess | undefined,
+): OrderItemsAccessTarget | null {
+  if (!access || !member.userId) return null;
+  return {
+    organizationId: orgId,
+    userId: member.userId,
+    name: member.fullName ?? member.email ?? 'This member',
+    role: access.role,
+    disabled: access.disabled,
+    exception: access.exception,
+    ordersModuleEnabled: access.ordersModuleEnabled,
+    canRequestOrders: access.canRequestOrders,
+  };
+}
+
+/**
+ * A date column's header tooltip: whose zone its dates are in. The console's
+ * pages render on the server, so a date with no zone named was the server's
+ * (UTC) day (B9).
+ */
+function orgZoneNote(timeZone: string | null): string {
+  return `In this organization's time zone (${resolveOrgTimezone(timeZone)}).`;
+}
+
+/**
  * The Actions cell stays on screen while the table scrolls sideways (sticky to
  * the card's right edge, on the card's own fill, taking the row hover with
  * it), with a hairline beside it where the table can scroll under it.
@@ -450,14 +561,25 @@ function LastActiveCell({
 const ACTIONS_CELL = 'bg-card sticky right-0 max-lg:border-l max-lg:border-border';
 
 function MembersTable({
+  orgId,
   members,
   activityAvailable,
+  orderItemsAccess,
+  timeZone,
 }: {
+  orgId: string;
   members: PlatformOrgMember[];
   activityAvailable: boolean;
+  /** Per member; null when the read failed for this page. */
+  orderItemsAccess: Map<string, PlatformMemberOrderItemsAccess> | null;
+  timeZone: string | null;
 }) {
   // One clock read per render, so every row on the page ages from the same instant.
   const now = new Date();
+  // This page renders on the server, so a bare toLocaleDateString() printed
+  // the server's day (UTC) with no zone named, and an evening join in the
+  // Pacific read as the next day (B9). Members' dates are the organization's.
+  const zoneNote = orgZoneNote(timeZone);
   return (
     <div className="flex flex-col gap-2">
       {!activityAvailable ? (
@@ -465,17 +587,28 @@ function MembersTable({
           Activity could not be loaded for this page. Members, status and actions are unaffected.
         </p>
       ) : null}
+      {orderItemsAccess === null ? (
+        <p className="text-warning text-[12.5px]">
+          Order items access could not be loaded for this page. Reload to see or change it. Members,
+          status and the other actions are unaffected.
+        </p>
+      ) : null}
       {/* The Actions column is the only way to disable or re-enable an
           account, so it is never clipped: the card scrolls sideways on a
           narrow screen, and the column stays pinned to its right edge. */}
-      <PlatformTable label="Members" minWidth={760}>
+      <PlatformTable label="Members" minWidth={880}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>User</TableHead>
             <TableHead>Role</TableHead>
-            <TableHead>Joined</TableHead>
-            <TableHead title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization.">
+            <TableHead title={zoneNote}>Joined</TableHead>
+            <TableHead
+              title={`An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization. ${zoneNote}`}
+            >
               Last active
+            </TableHead>
+            <TableHead title="Manage order items: whether they can choose which items and books appear in Place an Order. Change it from the row's actions.">
+              Order items
             </TableHead>
             <TableHead className={cn(ACTIONS_CELL, 'text-right')}>Actions</TableHead>
           </TableRow>
@@ -492,7 +625,7 @@ function MembersTable({
                   {m.disabledAt ? (
                     <Badge
                       variant="destructive"
-                      title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
+                      title={`Disabled ${formatMomentInZone(m.disabledAt, timeZone)}`}
                     >
                       Disabled
                     </Badge>
@@ -501,10 +634,21 @@ function MembersTable({
               </TableCell>
               <TableCell className="text-ink-2">{m.role}</TableCell>
               <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
+                {formatDayInZone(m.joinedAt, timeZone)}
               </TableCell>
               <TableCell className="text-[12.5px]">
-                <LastActiveCell member={m} available={activityAvailable} now={now} />
+                <LastActiveCell
+                  member={m}
+                  available={activityAvailable}
+                  now={now}
+                  timeZone={timeZone}
+                />
+              </TableCell>
+              <TableCell className="text-[12.5px]">
+                <OrderItemsAccessCell
+                  access={m.userId ? orderItemsAccess?.get(m.userId) : undefined}
+                  available={orderItemsAccess !== null}
+                />
               </TableCell>
               <TableCell className={cn(ACTIONS_CELL, 'group-hover:bg-muted text-right')}>
                 {m.userId ? (
@@ -539,6 +683,11 @@ function MembersTable({
                     // The allowlist itself never crosses to the client — only
                     // this boolean does.
                     protectedAdmin={isPlatformAdmin(m.email)}
+                    orderItemsAccess={orderItemsAccessTarget(
+                      orgId,
+                      m,
+                      m.userId ? orderItemsAccess?.get(m.userId) : undefined,
+                    )}
                   />
                 ) : (
                   <span className="text-muted-foreground text-[12px]">—</span>
@@ -559,7 +708,7 @@ function MembersTable({
   );
 }
 
-async function OrdersTab({ orgId }: { orgId: string }) {
+async function OrdersTab({ orgId, timeZone }: { orgId: string; timeZone: string | null }) {
   const orders = await getOrgOrders(orgId);
   if (orders.length === 0)
     return <StatePanel kind="empty" headingLevel={null} title="No orders." />;
@@ -569,12 +718,13 @@ async function OrdersTab({ orgId }: { orgId: string }) {
         label="Orders"
         minWidth={560}
         head={['Order', 'Status', 'Requester', 'Created']}
+        headTitles={{ 3: orgZoneNote(timeZone) }}
         mono={[0]}
         rows={orders.map((o) => [
           o.id.slice(0, 8),
           o.status,
           o.requester ?? '—',
-          new Date(o.createdAt).toLocaleDateString(),
+          formatDayInZone(o.createdAt, timeZone),
         ])}
       />
       <CapNote count={orders.length} />
@@ -608,12 +758,14 @@ async function BillingTab({ orgId }: { orgId: string }) {
 /**
  * A read-only preview of one org's rows. `numeric` columns are right-aligned
  * (figures line up), `mono` columns print in the mono face (ids, SKUs,
- * quantities).
+ * quantities), and `headTitles` gives a column's header a tooltip (a date
+ * column says whose zone it is in).
  */
 function PreviewTable({
   label,
   minWidth,
   head,
+  headTitles = {},
   rows,
   numeric = [],
   mono = [],
@@ -621,6 +773,7 @@ function PreviewTable({
   label: string;
   minWidth: number;
   head: string[];
+  headTitles?: Partial<Record<number, string>>;
   rows: string[][];
   numeric?: number[];
   mono?: number[];
@@ -630,7 +783,11 @@ function PreviewTable({
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           {head.map((h, j) => (
-            <TableHead key={h} className={numeric.includes(j) ? 'text-right' : undefined}>
+            <TableHead
+              key={h}
+              title={headTitles[j]}
+              className={numeric.includes(j) ? 'text-right' : undefined}
+            >
               {h}
             </TableHead>
           ))}

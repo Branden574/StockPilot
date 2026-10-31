@@ -36,13 +36,20 @@ vi.mock('next/link', () => ({
   },
 }));
 vi.mock('next/image', () => ({
-  default: (props: { src: string; alt?: string; priority?: boolean; unoptimized?: boolean }) => (
+  default: (props: {
+    src: string;
+    alt?: string;
+    priority?: boolean;
+    unoptimized?: boolean;
+    onError?: React.ReactEventHandler<HTMLImageElement>;
+  }) => (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={props.src}
       alt={props.alt ?? ''}
       data-priority={props.priority ? 'true' : 'false'}
       data-unoptimized={props.unoptimized ? 'true' : 'false'}
+      onError={props.onError}
     />
   ),
 }));
@@ -95,6 +102,7 @@ vi.mock('@/components/inventory/bulk-actions', () => ({
   },
 }));
 
+import { textActionTouchGapY } from '@/components/patterns/touch-target';
 import { ELSEWHERE_PLACEMENT_KIND, ELSEWHERE_PLACEMENT_LABEL } from '@/lib/placements';
 
 import {
@@ -649,6 +657,344 @@ describe('Grid card content: what the row shows, nothing else', () => {
   });
 });
 
+/**
+ * R8: a card whose photo fails to load (an expired signed address, a deleted
+ * file, an imported cover whose host is down) left its square empty: a blank
+ * card, where a record with no photo shows the hatch. The card now draws that
+ * same hatch, with no hover preview of the broken photo. Mutation caught: the
+ * onError dropped (the img stays), the hatch drawn another way, or the hover
+ * preview kept around it.
+ */
+describe('a Grid photo that fails to load (R8)', () => {
+  const mediaOf = (container: HTMLElement, selector: string) =>
+    container.querySelector(`${selector} [data-slot="grid-card-media"]`)! as HTMLElement;
+
+  it('a record card shows the hatch a card with no photo shows, without a hover preview', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const media = mediaOf(container, '[data-row-key="plain-1"]');
+    const img = media.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://img.test/bp-thumb.webp');
+    expect(media.querySelector('[data-testid="hover-preview"]')).not.toBeNull();
+
+    fireEvent.error(img);
+
+    expect(media.querySelector('img')).toBeNull();
+    expect(media.querySelector('[data-testid="hover-preview"]')).toBeNull();
+    const hatch = media.querySelector('[data-slot="missing-photo"]');
+    expect(hatch).not.toBeNull();
+    // Drawn exactly as the hatch on Mousepad's card, which has no photo.
+    const noPhoto = mediaOf(container, '[data-row-key="plain-2"]');
+    expect(hatch!.outerHTML).toBe(noPhoto.querySelector('[data-slot="missing-photo"]')!.outerHTML);
+    // Only the photo changed: the name link and the checkbox are still there.
+    const card = media.closest('[data-slot="grid-card"]') as HTMLElement;
+    expect(within(card).getByRole('link', { name: 'Laptop Backpack' })).toBeInTheDocument();
+    expect(
+      within(card).getByRole('checkbox', { name: 'Select Laptop Backpack' }),
+    ).toBeInTheDocument();
+  });
+
+  it('a size run, a SKU family and a named group card each show the hatch when their cover fails', () => {
+    const photo = (id: string) => ({ image_thumb_url: `https://img.test/${id}.webp` });
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('tee-s', { name: 'Tee - S', sku: 'TEE-S', ...photo('tee-s') }),
+        row('tee-m', { name: 'Tee - M', sku: 'TEE-M', ...photo('tee-m') }),
+        row('tee-l', { name: 'Tee - L', sku: 'TEE-L', ...photo('tee-l') }),
+        {
+          ...row('split', { name: 'Chromebook', sku: 'CB-1', ...photo('cb') }),
+          rowKey: 'split:L1',
+          line_quantity: 4,
+        },
+        {
+          ...row('split', { name: 'Chromebook', sku: 'CB-1', ...photo('cb') }),
+          rowKey: 'split:L2',
+          line_quantity: 6,
+        },
+        row('g1', { name: 'Desk Lamp', sku: 'LAMP-1', ...inGroup('grp-desk', 'Desk Set') }),
+        row('g2', {
+          name: 'Desk Tray',
+          sku: 'TRAY-1',
+          ...inGroup('grp-desk', 'Desk Set'),
+          ...photo('tray'),
+        }),
+      ] as never,
+    });
+    for (const key of ['style-group:tee', 'sku-group:CB-1', 'display-group:grp-desk']) {
+      const media = mediaOf(container, `[data-group-key="${key}"]`);
+      fireEvent.error(media.querySelector('img')!);
+      expect(media.querySelector('img'), key).toBeNull();
+      expect(media.querySelector('[data-testid="hover-preview"]'), key).toBeNull();
+      expect(media.querySelector('[data-slot="missing-photo"]'), key).not.toBeNull();
+    }
+  });
+
+  it('the failed address is not asked for again, but a new one is (a refresh signs photos again)', () => {
+    const table = (thumb: string) => (
+      <InventoryTable
+        items={[row('bp', { name: 'Backpack', image_thumb_url: thumb })] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+        initialView="grid"
+      />
+    );
+    const { container, rerender } = render(table('https://img.test/bp.webp?v=1'));
+    const media = () => mediaOf(container, '[data-row-key="bp"]');
+    fireEvent.error(media().querySelector('img')!);
+    expect(media().querySelector('img')).toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=1'));
+    expect(media().querySelector('img')).toBeNull();
+    expect(media().querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=2'));
+    expect(media().querySelector('img')).toHaveAttribute('src', 'https://img.test/bp.webp?v=2');
+    expect(media().querySelector('[data-slot="missing-photo"]')).toBeNull();
+  });
+
+  // The optimizer rule is not R8's to change (B30 decides it): a pre-sized
+  // thumb is served as it is, and only a photo without one (a legacy master,
+  // an imported book cover) goes through the image optimizer, as in the rows.
+  it('leaves the optimizer rule as it was: a thumb is served as it is, a master-only photo is optimized', () => {
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('thumbed', {
+          image_url: 'https://img.test/thumbed-master.jpg',
+          image_thumb_url: 'https://img.test/thumbed-thumb.webp',
+        }),
+        row('legacy', { image_url: 'https://img.test/legacy-master.jpg', image_thumb_url: null }),
+      ] as never,
+    });
+    const thumbed = mediaOf(container, '[data-row-key="thumbed"]').querySelector('img')!;
+    expect(thumbed).toHaveAttribute('src', 'https://img.test/thumbed-thumb.webp');
+    expect(thumbed).toHaveAttribute('data-unoptimized', 'true');
+    const legacy = mediaOf(container, '[data-row-key="legacy"]').querySelector('img')!;
+    expect(legacy).toHaveAttribute('src', 'https://img.test/legacy-master.jpg');
+    expect(legacy).toHaveAttribute('data-unoptimized', 'false');
+  });
+});
+
+/**
+ * The table's 34 px thumbnail (ListThumb) had the Grid card's defect, from
+ * before the redesign: a photo that failed to load (an expired signed
+ * address, a deleted file, an imported cover whose host is down) left the
+ * tile empty, with no hatch. It now draws the hatch a row with no photo draws,
+ * with no hover preview, on record rows and on group headers, and a new
+ * address is tried again. Mutation caught: the onError dropped, the hatch
+ * drawn another way, or the preview kept around the broken photo.
+ */
+describe('a table thumbnail that fails to load', () => {
+  const thumbOf = (container: HTMLElement, selector: string) =>
+    container.querySelector(`${selector} [data-slot="thumb"]`)! as HTMLElement;
+
+  it('a record row shows the hatch a row with no photo shows, without a hover preview', () => {
+    const { container } = renderTable();
+    const thumb = thumbOf(container, '[data-row-key="plain-1"]');
+    const img = thumb.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://img.test/bp-thumb.webp');
+    // A diet row: its preview loads the master on demand.
+    expect(previews.find((p) => p.title === 'Laptop Backpack')?.srcLoader).toBeDefined();
+    previews.length = 0;
+
+    fireEvent.error(img);
+
+    expect(thumb.querySelector('img')).toBeNull();
+    const hatch = thumb.querySelector('[data-slot="missing-photo"]');
+    expect(hatch).not.toBeNull();
+    // Drawn exactly as the hatch on Mousepad's row, which has no photo.
+    const noPhoto = thumbOf(container, '[data-row-key="plain-2"]');
+    expect(hatch!.outerHTML).toBe(noPhoto.querySelector('[data-slot="missing-photo"]')!.outerHTML);
+    // No preview of the broken photo: no address and no loader for it.
+    const after = previews.filter((p) => p.title === 'Laptop Backpack');
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((p) => p.src === null && p.srcLoader === undefined)).toBe(true);
+    // Only the photo changed: the name link is still there.
+    const tr = thumb.closest('tr') as HTMLElement;
+    expect(within(tr).getByRole('link', { name: 'Laptop Backpack' })).toBeInTheDocument();
+  });
+
+  it('a group header shows the hatch when its cover fails', () => {
+    const { container } = renderTable({
+      items: [
+        row('tee-s', {
+          name: 'Tee - S',
+          sku: 'TEE-S',
+          image_thumb_url: 'https://img.test/tee.webp',
+        }),
+        row('tee-m', { name: 'Tee - M', sku: 'TEE-M' }),
+        row('tee-l', { name: 'Tee - L', sku: 'TEE-L' }),
+      ] as never,
+    });
+    const header = container.querySelector('[data-group-key="style-group:tee"]') as HTMLElement;
+    const img = header.querySelector('[data-slot="thumb"] img')!;
+    fireEvent.error(img);
+    expect(header.querySelector('[data-slot="thumb"] img')).toBeNull();
+    expect(header.querySelector('[data-slot="thumb"] [data-slot="missing-photo"]')).not.toBeNull();
+  });
+
+  it('the failed address is not asked for again, but a new one is (a refresh signs photos again)', () => {
+    const table = (thumb: string) => (
+      <InventoryTable
+        items={[row('bp', { name: 'Backpack', image_thumb_url: thumb })] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />
+    );
+    const { container, rerender } = render(table('https://img.test/bp.webp?v=1'));
+    const thumb = () => thumbOf(container, '[data-row-key="bp"]');
+    fireEvent.error(thumb().querySelector('img')!);
+    expect(thumb().querySelector('img')).toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=1'));
+    expect(thumb().querySelector('img')).toBeNull();
+    expect(thumb().querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=2'));
+    expect(thumb().querySelector('img')).toHaveAttribute('src', 'https://img.test/bp.webp?v=2');
+    expect(thumb().querySelector('[data-slot="missing-photo"]')).toBeNull();
+  });
+
+  // The optimizer rule is unchanged (B30 decides it), as on the Grid card.
+  it('leaves the optimizer rule as it was: a thumb is served as it is, a master-only photo is optimized', () => {
+    const { container } = renderTable({
+      items: [
+        row('thumbed', {
+          image_url: 'https://img.test/thumbed-master.jpg',
+          image_thumb_url: 'https://img.test/thumbed-thumb.webp',
+        }),
+        row('legacy', { image_url: 'https://img.test/legacy-master.jpg', image_thumb_url: null }),
+      ] as never,
+    });
+    const thumbed = thumbOf(container, '[data-row-key="thumbed"]').querySelector('img')!;
+    expect(thumbed).toHaveAttribute('src', 'https://img.test/thumbed-thumb.webp');
+    expect(thumbed).toHaveAttribute('data-unoptimized', 'true');
+    const legacy = thumbOf(container, '[data-row-key="legacy"]').querySelector('img')!;
+    expect(legacy).toHaveAttribute('src', 'https://img.test/legacy-master.jpg');
+    expect(legacy).toHaveAttribute('data-unoptimized', 'false');
+  });
+});
+
+/**
+ * FX2 (verified on the lab, pre-existing): a category's name was drawn in the
+ * org's own colour, which fails 4.5:1 for most colours (Supplies #22c55e
+ * 2.28:1, Science #14b8a6 2.49:1 on a white row; 7 of the 8 colours the
+ * categories manager offers fail on white). DESIGN-SPEC 6.9 draws Category in
+ * ink 2 and CONFLICTS C8 keeps the dot: the name now reads in ink 2 (#2a2c28
+ * light, #d8d6cc dark) and the 6 px dot keeps the colour, hidden from readers.
+ */
+describe('a category reads in ink 2, its colour on the dot (FX2)', () => {
+  const COLOURED = {
+    ...LOOKUPS,
+    categories: new Map<string, { name: string; color: string | null }>([
+      ['cat-sci', { name: 'Science', color: '#14b8a6' }],
+      ['cat-swag', { name: 'Swag', color: null }],
+    ]),
+  };
+  const sciencePage = () => [
+    row('sci-1', { name: 'Beaker', sku: 'BK-1', category_id: 'cat-sci' }),
+    row('tee-s', { name: 'Lab Coat - S', sku: 'LC-S', category_id: 'cat-sci' }),
+    row('tee-m', { name: 'Lab Coat - M', sku: 'LC-M', category_id: 'cat-sci' }),
+    row('plain', { name: 'Mousepad', sku: 'MP-1' }),
+  ];
+
+  /** Every label the Category cell or a card's meta line draws for `name`. */
+  const labels = (root: HTMLElement, name: string) =>
+    within(root)
+      .getAllByText(name)
+      .filter((el) => el.tagName === 'SPAN');
+
+  // Mutation caught: the inline text colour back on the label, or ink 2 lost
+  // from the table, a record card or a group card.
+  it.each(['table', 'grid'] as const)(
+    'in the %s, the name is ink 2 with no colour of its own, and the dot keeps the colour',
+    (view) => {
+      const { container } = renderTable({
+        initialView: view,
+        lookups: COLOURED,
+        items: sciencePage() as never,
+      });
+      // A record and a size run (its header row or card).
+      const science = labels(container, 'Science');
+      expect(science.length).toBeGreaterThanOrEqual(2);
+      for (const label of science) {
+        expect(label).toHaveClass('text-ink-2');
+        expect(label.style.color).toBe('');
+        const dot = label.querySelector(':scope > span[aria-hidden]') as HTMLElement;
+        expect(dot).not.toBeNull();
+        expect(dot).toHaveClass('h-1.5', 'w-1.5', 'rounded-full');
+        expect(dot.style.backgroundColor).toMatch(/^(#14b8a6|rgb\(20, 184, 166\))$/i);
+        expect(dot.textContent).toBe('');
+      }
+      // A category with no colour: the same ink 2, and no dot.
+      const [swag] = labels(container, 'Swag');
+      expect(swag).toHaveClass('text-ink-2');
+      expect(swag!.style.color).toBe('');
+      expect(swag!.querySelector('span')).toBeNull();
+    },
+  );
+});
+
+/**
+ * W5 (Phase A walk at 390, both themes): a group card's meta line was one
+ * line the card cut off mid-word: "Generic" cut after 27 of its 44 px on
+ * Redesign Lab Hoodie, hidden on Desk Set, cut after 5 px on Science Shelf.
+ * The line now wraps between whole parts (happy-dom has no layout: these pin
+ * the shape that lets it; the lab measures it).
+ */
+describe('a Grid card`s meta line wraps instead of cutting a word (W5)', () => {
+  /** Each card's meta line, as [card key, the line]. */
+  const metaLines = (container: HTMLElement): Array<[string | null, HTMLElement | null]> =>
+    [...container.querySelectorAll('[data-slot="grid-card"]')].map((card) => [
+      card.getAttribute('data-row-key') ?? card.getAttribute('data-group-key'),
+      card.querySelector<HTMLElement>('[data-slot="meta-line"]'),
+    ]);
+
+  // Mutation caught: the line made one line again (no flex-wrap), a row gap
+  // added between wrapped lines, or a "·" moved to the start of the part
+  // after it (a wrapped line would start with it).
+  it('every card: the parts may wrap, each "·" stays with the part before it, the last has none', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const lines = metaLines(container);
+    expect(lines.map(([key]) => key)).toEqual(
+      expect.arrayContaining(['plain-1', 'style-group:tee', 'display-group:grp-desk']),
+    );
+    for (const [key, line] of lines) {
+      expect(line, String(key)).not.toBeNull();
+      expect(line).toHaveClass('inline-flex', 'max-w-full', 'flex-wrap', 'gap-x-1.5');
+      expect(line).not.toHaveClass('gap-1.5');
+      expect(line!.parentElement).toHaveAttribute('data-slot', 'grid-card-meta');
+      const parts = [...line!.children];
+      parts.forEach((part, i) => {
+        const dots = [...part.children].filter((c) => c.textContent === '·');
+        if (i < parts.length - 1) {
+          expect(dots, `${key} part ${i}`).toHaveLength(1);
+          expect(part.lastElementChild, `${key} part ${i}`).toBe(dots[0]);
+          expect(dots[0]).toHaveAttribute('aria-hidden', 'true');
+        } else {
+          expect(dots, `${key} last part`).toHaveLength(0);
+        }
+      });
+    }
+  });
+
+  // The words and their order are the ones the one-line meta showed.
+  it('keeps every word in its order: a record, a size run and a named group', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const text = (key: string) =>
+      Object.fromEntries(metaLines(container))[key]?.textContent?.replace(/\s+/g, ' ');
+    expect(text('plain-2')).toBe('Swag·Generic');
+    expect(text('style-group:tee')).toBe('Apparel·Generic');
+    expect(text('display-group:grp-desk')).toBe('2 records·Swag·Generic');
+  });
+});
+
 describe('Grid group cards: the header row, as a card', () => {
   it('a size run: its "N sizes" badge, roll-up on hand, rack summary and a drill-down named like the chevron', () => {
     const { container } = renderTable({ initialView: 'grid' });
@@ -718,6 +1064,54 @@ describe('Grid group cards: the header row, as a card', () => {
     expect(screen.getByRole('button', { name: 'Remove from group Desk Set' })).toBeInTheDocument();
   });
 
+  // W8 (Phase A walk at 390): on a phone the two actions wrap onto two lines
+  // 4 px apart, and each one's 44 px target reaches 13 px past it, so a tap
+  // at the centre of "Rename group" landed on "Remove from group" (the later
+  // target paints over). Where the target is on, wrapped actions now keep the
+  // 14 px the Item cell keeps (textActionTouchGapY); a fine pointer keeps
+  // 4 px. Mutation caught: the class dropped, or the fine-pointer gap changed.
+  it('Rename and Remove keep 14 px between them wherever their 44 px targets are on', () => {
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('g1', { name: 'Desk Lamp', ...inGroup('grp-desk', 'Desk Set') }),
+        row('g2', { name: 'Desk Tray', ...inGroup('grp-desk', 'Desk Set') }),
+      ] as never,
+      canRenameGroups: true,
+    });
+    const card = container.querySelector(
+      '[data-group-key="display-group:grp-desk"]',
+    )! as HTMLElement;
+    const rename = within(card).getByRole('button', { name: 'Rename group Desk Set' });
+    const remove = within(card).getByRole('button', { name: 'Remove from group Desk Set' });
+    const row_ = rename.parentElement!;
+    expect(row_).toHaveAttribute('data-slot', 'grid-card-actions');
+    expect(remove.parentElement).toBe(row_);
+    expect(textActionTouchGapY.split(' ')).toEqual([
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+    ]);
+    expect(row_).toHaveClass(
+      'flex',
+      'flex-wrap',
+      'gap-x-3',
+      'gap-y-1',
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+    );
+    // Each action keeps the shared 44 px target, on exactly where the room is.
+    for (const action of [rename, remove]) {
+      expect(action).toHaveClass(
+        'relative',
+        'before:min-h-11',
+        'before:min-w-11',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+        'text-[12px]',
+      );
+    }
+  });
+
   it('a named group under a filter says "N matching"', () => {
     urlState.params = new URLSearchParams('stock=low');
     renderTable({
@@ -780,6 +1174,8 @@ describe('the Items tour reaches a record in both views', () => {
     expect(table.container.querySelector(step!.target!)?.tagName).toBe('TR');
     table.unmount();
     const grid = renderTable({ initialView: 'grid' });
-    expect(grid.container.querySelector(step!.target!)?.getAttribute('data-slot')).toBe('grid-card');
+    expect(grid.container.querySelector(step!.target!)?.getAttribute('data-slot')).toBe(
+      'grid-card',
+    );
   });
 });

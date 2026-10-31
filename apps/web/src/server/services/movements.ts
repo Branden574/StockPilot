@@ -200,7 +200,7 @@ export class MovementsService {
     //    notes keeps the receipt id for consumers like stagedWorklist). New
     //    rows already carry 'PO {n}' in reason.
     //  * Rows whose reason stringifies a RECORD'S UUID: pre-0306 pick/cancel
-    //    rows ('Order pick (order_request b3c7390a-…)', written before
+    //    rows ('Order pick (order_request a0000060-…)', written before
     //    order_number existed in 0254) and the return rows the SHIPPED RMA
     //    RPCs still write today ('Return restock (return …)', 0153/0154/0197).
     //    The ledger is append-only, so both are resolved HERE rather than

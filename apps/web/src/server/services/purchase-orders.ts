@@ -9,6 +9,7 @@ import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 import { createNotification } from './notifications';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { keepAlive } from './lib/defer';
 import {
   planAutoReorder,
   shouldAutoSend,
@@ -861,7 +862,7 @@ export class PurchaseOrdersService {
    * This discarded the RPC error and fell back to `PO-${Date.now()}`. The
    * function was MISSING from production from 2026-05-20 until 0350, so every
    * auto-numbered PO silently got an epoch timestamp (27 of them, e.g.
-   * PO-1788277456195) and nobody could see why. The fallback still exists — a
+   * PO-1700000000505) and nobody could see why. The fallback still exists — a
    * PO must never fail to get a number — but a failure is now reported, so the
    * next time an RPC goes missing it is a Sentry event and not three months of
    * ugly supplier-facing documents.
@@ -1173,37 +1174,42 @@ export class PurchaseOrdersService {
     });
 
     // Notify org owners/admins (best-effort, except the editor themselves).
-    void (async () => {
-      try {
-        const admin = createAdminClient();
-        const { data: members } = await admin
-          .from('organization_members')
-          .select('user_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .in('role', ['owner', 'admin'])
-          .not('accepted_at', 'is', null)
-          .is('impersonation_expires_at', null);
-        // Fan out notifications concurrently — createNotification catches its
-        // own errors, so a serial await-loop only adds latency (N round-trips) —
-        // but at most PO_NOTIFY_CONCURRENCY at once: each one is a profile read
-        // and an INSERT, and this list is every owner and admin of the org.
-        const recipients = ((members ?? []) as Array<{ user_id: string }>).filter(
-          (m) => m.user_id !== this.ctx.userId, // don't notify the editor
-        );
-        await mapWithConcurrency(recipients, PO_NOTIFY_CONCURRENCY, (m) =>
-          createNotification({
-            organizationId: this.ctx.organizationId,
-            userId: m.user_id,
-            type: 'purchase_order.updated',
-            title: 'Purchase order updated',
-            body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
-            link: `/dashboard/purchase-orders/${id}`,
-          }),
-        );
-      } catch {
-        // Best-effort: notification errors never fail the edit.
-      }
-    })();
+    // Started now and kept alive past the response (lib/defer.ts keepAlive):
+    // a bare `void (async () => ...)()` held nothing once update() returned,
+    // so a suspended instance never sent the notifications.
+    keepAlive(
+      (async () => {
+        try {
+          const admin = createAdminClient();
+          const { data: members } = await admin
+            .from('organization_members')
+            .select('user_id')
+            .eq('organization_id', this.ctx.organizationId)
+            .in('role', ['owner', 'admin'])
+            .not('accepted_at', 'is', null)
+            .is('impersonation_expires_at', null);
+          // Fan out notifications concurrently — createNotification catches its
+          // own errors, so a serial await-loop only adds latency (N round-trips) —
+          // but at most PO_NOTIFY_CONCURRENCY at once: each one is a profile read
+          // and an INSERT, and this list is every owner and admin of the org.
+          const recipients = ((members ?? []) as Array<{ user_id: string }>).filter(
+            (m) => m.user_id !== this.ctx.userId, // don't notify the editor
+          );
+          await mapWithConcurrency(recipients, PO_NOTIFY_CONCURRENCY, (m) =>
+            createNotification({
+              organizationId: this.ctx.organizationId,
+              userId: m.user_id,
+              type: 'purchase_order.updated',
+              title: 'Purchase order updated',
+              body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
+              link: `/dashboard/purchase-orders/${id}`,
+            }),
+          );
+        } catch {
+          // Best-effort: notification errors never fail the edit.
+        }
+      })(),
+    );
 
     return { id, poNumber };
   }

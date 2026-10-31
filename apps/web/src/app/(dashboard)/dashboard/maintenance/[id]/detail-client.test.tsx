@@ -43,7 +43,6 @@ const FORBIDDEN = [
   'Ticket created',
   'Request submitted to Zendesk',
   'DC4 notified',
-  'Andrew notified',
   'Ticket assigned',
   'Email sent',
   'Zendesk comment',
@@ -69,6 +68,8 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('the OPEN Archive confirm dialog never contains forbidden ticket/notification vocabulary', async () => {
@@ -80,6 +81,8 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('the OPEN Resolve dialog never contains forbidden ticket/notification vocabulary', async () => {
@@ -91,6 +94,8 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('a closed sweep before any dialog is opened would prove nothing — all three buttons render but no dialog is in the DOM yet', () => {

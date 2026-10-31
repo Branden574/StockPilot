@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { reset as resetAnalytics } from '@/lib/analytics';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { signOutAction } from '@/server/actions/auth';
 
@@ -81,7 +82,7 @@ export function UserMenu({
           variant="ghost"
           size="icon"
           aria-label={`Account menu for ${fullName ?? email}`}
-          className="ring-offset-background hover:ring-border focus-visible:ring-ring ml-1 size-8 shrink-0 rounded-full p-0 hover:bg-transparent hover:ring-2 focus-visible:ring-2 [@media(pointer:coarse)]:size-11"
+          className="ring-offset-background hover:ring-border focus-visible:ring-ring @max-[358px]:ml-0 ml-1 size-8 shrink-0 rounded-full p-0 hover:bg-transparent hover:ring-2 focus-visible:ring-2 [@media(pointer:coarse)]:size-11"
         >
           <Avatar className="size-7">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
@@ -214,6 +215,10 @@ export function UserMenu({
               // And this person's tour state, kept for the browser session
               // (sign-out is a soft navigation, so module state survives it).
               forgetTourState();
+              // And what an interrupted run kept in this tab
+              // (lib/interrupted-run): a sign-out on purpose leaves none of it.
+              // Before the request, which answers with a redirect.
+              purgeInterruptedRuns();
               await signOutAction();
               router.refresh();
             }}

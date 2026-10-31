@@ -20,7 +20,7 @@ import {
 } from './order-returns-view';
 
 /**
- * SO-000085 as prod holds it (read-only measurement, 2026-08-17): three lines
+ * SO-000085 as modelled here (from the 2026-08-17 report): three lines
  * each requested 1 / fulfilled 1; ONE closed RMA whose single line restocked
  * the Women's Polo S (applied = true, returned_quantity on that line = 1). The
  * swap for a Medium exists only in the notes.
@@ -30,11 +30,11 @@ const M_LINE = 'line-m';
 const XL_LINE = 'line-xl';
 
 const CLOSED_RMA: OrderReturnView = {
-  id: '85d6084b-0000-0000-0000-000000000000',
-  returnNumber: 'RMA-20260817-EEF074',
+  id: '80000085-0000-0000-0000-000000000000',
+  returnNumber: 'RMA-20260817-D3F0A1',
   status: 'closed',
   reasonCode: 'other',
-  notes: 'Size S New Hire shirt was swapped out for Ladies size M',
+  notes: 'Size S shirt was swapped out for a size M',
   createdAt: '2026-08-17T17:10:00Z',
   closedAt: '2026-08-17T17:12:00Z',
   lines: [{ orderRequestLineId: S_LINE, quantity: 1, disposition: 'restock', applied: true }],
@@ -49,7 +49,7 @@ describe('order-returns-view — the rule: applied is the only thing that counts
   it('refs by line: the closed RMA lands on the S line as APPLIED with its number; M and XL have no refs', () => {
     const refs = returnRefsByLine([CLOSED_RMA]);
     expect(refs.get(S_LINE)).toEqual({
-      applied: { quantity: 1, returnNumbers: ['RMA-20260817-EEF074'] },
+      applied: { quantity: 1, returnNumbers: ['RMA-20260817-D3F0A1'] },
       pending: { quantity: 0, returnNumbers: [] },
     });
     expect(refs.has(M_LINE)).toBe(false);
@@ -116,7 +116,7 @@ describe('order-returns-view — the rule: applied is the only thing that counts
     const refs = returnRefsByLine([CLOSED_RMA, second]);
     expect(refs.get(S_LINE)?.applied).toEqual({
       quantity: 3,
-      returnNumbers: ['RMA-20260817-EEF074', 'RMA-4'],
+      returnNumbers: ['RMA-20260817-D3F0A1', 'RMA-4'],
     });
   });
 
@@ -351,13 +351,13 @@ describe('labels + panel wording', () => {
   });
 
   it('returnHandle: the number, else an id prefix', () => {
-    expect(returnHandle(CLOSED_RMA)).toBe('RMA-20260817-EEF074');
+    expect(returnHandle(CLOSED_RMA)).toBe('RMA-20260817-D3F0A1');
     expect(returnHandle({ id: 'abcdef12-3456', returnNumber: null })).toBe('Return abcdef12');
   });
 
   it('describeLineReturnRefs names the RMA behind the figure, and any pending one', () => {
     const refs = returnRefsByLine([CLOSED_RMA]);
-    expect(describeLineReturnRefs(1, refs.get(S_LINE))).toBe('1 returned on RMA-20260817-EEF074');
+    expect(describeLineReturnRefs(1, refs.get(S_LINE))).toBe('1 returned on RMA-20260817-D3F0A1');
     expect(describeLineReturnRefs(0, refs.get(S_LINE))).toBeNull();
     // Number without any refs loaded (returns read failed / not loaded).
     expect(describeLineReturnRefs(1, undefined)).toBe('1 returned');
@@ -373,7 +373,7 @@ describe('labels + panel wording', () => {
       },
     ]);
     expect(describeLineReturnRefs(1, withPending.get(S_LINE))).toBe(
-      '1 returned on RMA-20260817-EEF074; 1 pending on RMA-9',
+      '1 returned on RMA-20260817-D3F0A1; 1 pending on RMA-9',
     );
   });
 });

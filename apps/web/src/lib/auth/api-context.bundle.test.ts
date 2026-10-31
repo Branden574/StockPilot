@@ -28,6 +28,7 @@ import { effectivePermissions, type Permission, type PermissionOverride } from '
 import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
 
 import { withApiContext } from './api-context';
+import { heldMembership, orderCatalogLastHideAtOf } from './request-context-bundle';
 
 const USER = '99999999-9999-9999-9999-999999999999';
 const ORG_A = 'aaaaaaaa-1111-1111-1111-111111111111';
@@ -42,6 +43,8 @@ interface Membership {
   enabled_modules?: string[];
   role_overrides?: Array<{ permission: string; granted: boolean }>;
   user_overrides?: Array<{ permission: string; granted: boolean }>;
+  /** organizations.order_catalog_last_hide_at (0413). */
+  last_hide_at?: string | null;
 }
 
 const world = {
@@ -88,6 +91,7 @@ function bundleJson() {
             dashboard_layout: null,
             order_status_config: null,
             all_modules_comp: m.all_modules_comp ?? false,
+            order_catalog_last_hide_at: m.last_hide_at ?? null,
           },
       role_overrides: m.role_overrides ?? [],
       user_overrides: m.user_overrides ?? [],
@@ -336,6 +340,75 @@ describe('the API context resolves in one round trip', () => {
     // owner's overrides would arrive if anyone ever changed that.
     expect(fast?.permissions).toEqual(effectivePermissions('owner'));
     expect(fast?.permissions?.has('items:delete')).toBe(true);
+  });
+});
+
+// Ordering visibility (0413): orders:manage_catalog_visibility is
+// platform-managed, so an explicit deny holds for the owner too (both paths),
+// and the phone's catalog load needs the organization's hide mark, which the
+// bundle already carries.
+describe('the platform-managed key and the hide mark', () => {
+  const KEY: Permission = 'orders:manage_catalog_visibility';
+
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])('an owner StockPilot denied the key lacks it, and only it, on both paths (%s)', async (_kind, make) => {
+    world.memberships = [
+      {
+        organization_id: ORG_A,
+        role: 'owner',
+        role_overrides: [{ permission: 'items:delete', granted: false }],
+        user_overrides: [
+          { permission: KEY, granted: false },
+          { permission: 'items:delete', granted: false },
+        ],
+      },
+    ];
+    const { fast, legacy, legacyCalls } = await both(make());
+    expect(shape(fast)).toEqual(shape(legacy));
+    expect(fast?.permissions?.has(KEY)).toBe(false);
+    expect(fast?.permissions?.has('items:delete')).toBe(true);
+    expect(fast?.permissions?.size).toBe(effectivePermissions('owner').size - 1);
+    expect(legacyCalls).toContain('table:user_permission_overrides');
+  });
+
+  it('a manager: a role row for the key is ignored, a user deny is not (both paths)', async () => {
+    world.memberships = [
+      { organization_id: ORG_A, role: 'manager', role_overrides: [{ permission: KEY, granted: false }] },
+    ];
+    let r = await both(cookie());
+    expect(shape(r.fast)).toEqual(shape(r.legacy));
+    expect(r.fast?.permissions?.has(KEY)).toBe(true);
+    world.memberships = [
+      { organization_id: ORG_A, role: 'manager', user_overrides: [{ permission: KEY, granted: false }] },
+    ];
+    r = await both(cookie());
+    expect(shape(r.fast)).toEqual(shape(r.legacy));
+    expect(r.fast?.permissions?.has(KEY)).toBe(false);
+  });
+
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])('the one-round-trip context carries its membership, hide mark included (%s)', async (_kind, make) => {
+    world.memberships = [
+      { organization_id: ORG_A, role: 'manager', last_hide_at: '2026-10-26T18:04:05.123456+00:00' },
+    ];
+    const { fast, legacy } = await both(make());
+    expect(orderCatalogLastHideAtOf(heldMembership(fast!))).toBe('2026-10-26T18:04:05.123456+00:00');
+    // The legacy reads hold no membership: the mark is unknown, never "never".
+    expect(heldMembership(legacy!)).toBeNull();
+    expect(orderCatalogLastHideAtOf(heldMembership(legacy!))).toBeUndefined();
+    // Not enumerable: never serialized with the context.
+    expect(Object.keys(fast!)).not.toContain('order_catalog_last_hide_at');
+    expect(JSON.stringify({ ...fast, supabase: null })).not.toContain('2026-10-26T18:04:05');
+  });
+
+  it('an organization that never hid anything answers null', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
+    const ctx = await withApiContext(cookie());
+    expect(orderCatalogLastHideAtOf(heldMembership(ctx!))).toBeNull();
   });
 });
 

@@ -89,12 +89,11 @@ export async function getCachedOrgTimezone(organizationId: string): Promise<stri
  * visible on the next page load, because the value decides where warehouse
  * mail is addressed.
  *
- * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature behavior
- * during the code-before-migration window. A read of the not-yet-existing
- * column errors with Postgres 42703 (undefined_column, surfaced verbatim by
- * PostgREST), and ONLY that error maps to `{ state: 'fallback' }` — which
- * readers resolve to the compiled L4L constants, byte-identical to what
- * shipped before this feature. Once the column exists, that arm is never
+ * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN during the
+ * code-before-migration window. A read of the not-yet-existing column errors
+ * with Postgres 42703 (undefined_column, surfaced verbatim by PostgREST), and
+ * ONLY that error maps to `{ state: 'fallback' }` — which readers resolve to
+ * the compiled sample constants. Once the column exists, that arm is never
  * taken: an org with no stored value is 'unset' and its email action is
  * HIDDEN, and an org with an invalid stored value is 'invalid' and fails
  * CLOSED (never silently re-routed to another tenant's mailboxes).

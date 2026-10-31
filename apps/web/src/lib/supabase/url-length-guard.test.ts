@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The browser client's guard reports through the isomorphic core reporter;
+// the server clients' guard takes the server reporter by injection (below).
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('@/lib/error-reporter', () => ({ reportError }));
+vi.mock('@/lib/error-reporter-core', () => ({ reportError }));
 
 import {
   guardedSupabaseFetch,
+  makeGuardedSupabaseFetch,
   resetUrlLengthGuardForTests,
   URL_BLOCK_CHARS_PROD,
 } from './url-length-guard';
@@ -170,5 +173,28 @@ describe('guardedSupabaseFetch', () => {
     expect(data).toBeNull();
     expect(error?.code).toBe('URL_TOO_LONG');
     expect(realFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('makeGuardedSupabaseFetch', () => {
+  // The server clients' guard is this check with the server reporter, which
+  // keeps the report alive past the response (url-length-guard.server.ts).
+  it('reports through the reporter it was given, with the same once-per-key rule', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const injected = vi.fn(async () => {});
+    const guarded = makeGuardedSupabaseFetch(injected);
+    const url = restUrl(7_000, 'stock_reservations');
+    await guarded(url);
+    await guarded(url);
+    expect(injected).toHaveBeenCalledTimes(1);
+    expect(reportError).not.toHaveBeenCalled();
+    expect((injected.mock.calls[0] as unknown as [Error, { tag: string }])[1].tag).toBe(
+      'supabase.url_length',
+    );
+    // One "reported once" set for every guard: the browser guard does not
+    // report the same key again.
+    await guardedSupabaseFetch(url);
+    expect(reportError).not.toHaveBeenCalled();
+    expect((await guarded(restUrl(15_800, 'stock_reservations'))).status).toBe(414);
   });
 });

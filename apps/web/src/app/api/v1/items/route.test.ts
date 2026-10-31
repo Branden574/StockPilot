@@ -124,7 +124,91 @@ describe('POST /api/v1/items', () => {
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ id: 'item-new' });
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Nike Pegasus 41' }));
+    // A body without `confirmNewRack` is the phone in the field, which asks on
+    // its own screen: it keeps creating the rack as before (2026-10-24).
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Nike Pegasus 41' }), {
+      allowUnconfirmedNewRack: true,
+    });
+  });
+
+  // ═══ THE NEW-RACK QUESTION AND THE PHONE IN THE FIELD (2026-10-24) ═══
+  // The phone build in the field (the current OTA) asks "Create new rack
+  // 1-B?" itself and posts a body with NO confirmNewRack key (its
+  // submitCreateItem sends buildCreateItemInput's output as it is). It must
+  // keep working: its create still creates the rack. A body that carries the
+  // key, whatever its value, is a client that can answer, and gets the
+  // server's question.
+  describe('the new-rack answer', () => {
+    // Exactly what today's phone sends for the incident: a typed rack, stock,
+    // and no answer key (buildCreateItemInput's output).
+    const PHONE_TODAY = {
+      ...VALID_BODY,
+      name: 'Spiral notebook',
+      quantityOnHand: 130,
+      binLocation: '1-B',
+      customFields: { rack_number: '1', rack_row: 'B' },
+      warehouseId: '22222222-2222-4222-8222-222222222222',
+    };
+
+    function stubCreate(impl: () => Promise<unknown>) {
+      const create = vi.fn(impl);
+      vi.mocked(InventoryService).mockImplementationOnce(function () {
+        return { create } as unknown as InstanceType<typeof InventoryService>;
+      });
+      return create;
+    }
+
+    it("today's phone (no key): created, and the rack is created as before", async () => {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      const create = stubCreate(async () => ({ id: 'item-new' }));
+
+      const res = await POST(buildRequest(PHONE_TODAY));
+
+      expect(res.status).toBe(201);
+      const [input, opts] = create.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+      expect(input).not.toHaveProperty('confirmNewRack');
+      expect(input.binLocation).toBe('1-B');
+      expect(opts).toEqual({ allowUnconfirmedNewRack: true });
+    });
+
+    it('a client that answers no gets the strict rule, and the refusal reaches it whole (409 + details)', async () => {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      const detail = {
+        reason: 'NEW_RACK_REQUIRES_CONFIRMATION',
+        label: '1-B',
+        title: 'Create new rack 1-B?',
+        message:
+          '1-B does not exist in DC4 yet. Continuing creates it and moves 130 units into it.',
+        suggestions: ['17-B'],
+      };
+      const create = stubCreate(async () => {
+        throw new ServiceError('conflict', detail.message, detail);
+      });
+
+      const res = await POST(buildRequest({ ...PHONE_TODAY, confirmNewRack: false }));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'conflict',
+        message: detail.message,
+        details: detail,
+      });
+      const [input, opts] = create.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+      expect(input.confirmNewRack).toBe(false);
+      expect(opts).toEqual({});
+    });
+
+    it('a client that answers yes passes the answer on, with no legacy allowance', async () => {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      const create = stubCreate(async () => ({ id: 'item-new' }));
+
+      const res = await POST(buildRequest({ ...PHONE_TODAY, confirmNewRack: true }));
+
+      expect(res.status).toBe(201);
+      const [input, opts] = create.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+      expect(input.confirmNewRack).toBe(true);
+      expect(opts).toEqual({});
+    });
   });
 
   it('returns 403 when the caller lacks items:create', async () => {

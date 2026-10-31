@@ -19,9 +19,21 @@
  * It never throws, because postgrest-js would retry a thrown fetch, and it
  * never logs query values (an `ilike` term is user input): only the table
  * path, the length and the parameter names.
+ *
+ * WHO REPORTS. The check is built by makeGuardedSupabaseFetch around a
+ * reporter. The browser client's guard (guardedSupabaseFetch, below) uses the
+ * isomorphic core reporter. The server clients (admin.ts, server.ts and the
+ * Bearer data client in api-context.ts) use guardedServerSupabaseFetch
+ * (url-length-guard.server.ts), the same check with the server reportError,
+ * which keeps the report's POST alive past the response
+ * (lib/error-reporter.ts). One copy of the check, and one "reported once"
+ * set, for both.
  */
 
-import { reportError } from '@/lib/error-reporter';
+import { reportError as reportFromAnywhere, type ErrorContext } from '@/lib/error-reporter-core';
+
+/** How the guard sends its one report per (method, table, length bucket). */
+export type UrlGuardReporter = (err: unknown, context: ErrorContext) => Promise<void>;
 
 /** Warn above this many characters of path plus query string. */
 export const URL_WARN_CHARS = 6_000;
@@ -103,11 +115,22 @@ function tooLongResponse(table: string, length: number, limit: number): Response
 }
 
 /**
- * Drop-in `fetch` for `createClient(..., { global: { fetch } })`. Only looks
- * at PostgREST requests (a path containing `/rest/v1/`); everything else
- * passes straight through.
+ * A drop-in `fetch` for `createClient(..., { global: { fetch } })` that
+ * reports through `report`. Only looks at PostgREST requests (a path
+ * containing `/rest/v1/`); everything else passes straight through.
  */
-export function guardedSupabaseFetch(
+export function makeGuardedSupabaseFetch(
+  report: UrlGuardReporter,
+): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  return (input, init) => guardedFetch(report, input, init);
+}
+
+/** The browser client's guard (lib/supabase/client.ts). Server clients use
+ *  guardedServerSupabaseFetch (url-length-guard.server.ts). */
+export const guardedSupabaseFetch = makeGuardedSupabaseFetch(reportFromAnywhere);
+
+function guardedFetch(
+  report: UrlGuardReporter,
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
@@ -125,7 +148,7 @@ export function guardedSupabaseFetch(
           const block = length > URL_BLOCK_CHARS_PROD;
           if (firstTime(key)) {
             const params = [...new Set(url.searchParams.keys())].join(',');
-            void reportError(new Error('Supabase request URL near the limit'), {
+            void report(new Error('Supabase request URL near the limit'), {
               tag: 'supabase.url_length',
               level: block ? 'error' : 'warning',
               extra: { method, table, length, params, blocked: block },

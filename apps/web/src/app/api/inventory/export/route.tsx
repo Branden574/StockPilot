@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
     // Compute-heavy (up to 10k rows -> in-memory xlsx/pdf render). Cap like
     // every other export route so one account can't sustain a serverless-cost
     // DoS; this also emits the security.export_rate_limited audit event.
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const json = await request.json().catch(() => null);

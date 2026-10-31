@@ -112,8 +112,10 @@ describe('ONE predicate: both drains and every counter use outbox-scope.ts (patt
   };
 
   it('engine 1 decides per row, inside its loop, with the shared predicate', () => {
+    // OWNED_BY_USER_SQL too: a full pull keeps an adopted count for this
+    // account's queued rows by the same rule (sync.ts, unconfirmed rows).
     expect(sync).toMatch(
-      /import \{ OutboxSessionChangedError, outboxSendDecision \} from '\.\/outbox-scope'/,
+      /import \{ OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision \} from '\.\/outbox-scope'/,
     );
     const loop = loopBody(sync, 'for (const action of pending)', 'return { ok, failed, rejected }');
     expect(loop).toContain('outboxSendDecision(action, await liveOutboxScope())');

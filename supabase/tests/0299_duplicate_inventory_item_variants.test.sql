@@ -93,7 +93,7 @@ insert into public.inventory_items
   values (:src, :org, :wh, 'PEG41-10', 'Nike Pegasus 41 - 10', 6, 'active',
           'none', 'pair', 'product', '{"size": "10-OLD"}'::jsonb,
           :grp, '10', 'US 10', 'US_MENS',
-          'D', 'regular', 'Black/White', '07', 'A. Rosas',
+          'D', 'regular', 'Black/White', '07', 'J. Stone',
           'size=10|system=US_MENS',
           'FD2722-001', 400, 'block',
           'public', true)
@@ -180,7 +180,7 @@ select is(
 select is(
   (select player_name from public.inventory_items
     where organization_id = :org and sku = 'PEG41-10-B'),
-  'A. Rosas',
+  'J. Stone',
   'player_name is inherited');
 
 select is(
@@ -311,7 +311,7 @@ select is(
 select is(
   (select player_name from public.inventory_items
     where organization_id = :org and sku = 'PEG41-CLEAR'),
-  'A. Rosas',
+  'J. Stone',
   'clearing two fields does not clear their neighbours');
 
 -- ── 29-31. The group roll-up over four placements ───────────────────────────

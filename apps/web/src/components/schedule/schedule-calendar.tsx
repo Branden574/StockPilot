@@ -220,9 +220,13 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
                         // Revealed on hover, and always when it or anything in
                         // its day holds the keyboard focus, and on touch
                         // screens, where there is no hover (CONFLICTS D18).
+                        // Focus in the day is the descendant selector, not
+                        // Tailwind's group-focus-within variant, which Safari
+                        // pays for on every focus change of every page
+                        // (lib/group-focus-variants.guard.test.ts).
                         <Link
                           href={`/dashboard/schedule/new?date=${ymd(d)}`}
-                          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded px-1 text-[11px] leading-6 opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+                          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring pointer-coarse:opacity-100 rounded px-1 text-[11px] leading-6 opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 group-hover:opacity-100 [.group:focus-within_&]:opacity-100"
                           aria-label={`Add event on ${ymd(d)}`}
                         >
                           + Add

@@ -3,8 +3,14 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { createClient } from '@/lib/supabase/server';
-import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
+import {
+  isAuthPagePath,
+  RETURN_PATH_HEADER,
+  SESSION_HEADER_USER_EMAIL,
+  SESSION_HEADER_USER_ID,
+} from '@/lib/supabase/middleware';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
+import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   bundleMembership,
   holdMembership,
@@ -331,15 +337,30 @@ export const getServerSession = cache(async (): Promise<ServerSession | null> =>
   return session;
 });
 
+/**
+ * Sign-in, carrying the page to come back to: `?redirect=<path and query>`,
+ * the proxy's own rule for a signed-out request (lib/supabase/middleware.ts),
+ * which the sign-in form reads back through safeRedirectPath. For a Server
+ * Action it is the page the action was sent from. The path is the proxy's on
+ * the routes in its matcher and the client's anywhere else, so it is
+ * sanitized the same way (a same-origin path or nothing), and dropped when it
+ * is a sign-in page itself.
+ */
+async function signInPath(): Promise<string> {
+  const back = safeRedirectPath((await headers()).get(RETURN_PATH_HEADER), '');
+  if (!back || isAuthPagePath(back)) return '/signin';
+  return `/signin?${new URLSearchParams({ redirect: back }).toString()}`;
+}
+
 export const requireSession = cache(async (): Promise<ServerSession> => {
   const session = await getServerSession();
-  if (!session) redirect('/signin');
+  if (!session) redirect(await signInPath());
   return session;
 });
 
 export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
   const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
-  if (!session) redirect('/signin');
+  if (!session) redirect(await signInPath());
 
   // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
   //
@@ -423,9 +444,12 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
  * From the bundle when it holds this organization WITH THIS ROLE: the override
  * rows are the same rows `loadEffectivePermissions` selects, read in the same
  * round trip as the membership they belong to, and fed to the same
- * `effectivePermissions`. Owner is never overridable, in either path. Any
- * disagreement (no bundle, organization not in it, a different role) goes to the
- * legacy loader, which keeps its own failure behaviour.
+ * `effectivePermissions`. Owner is never overridable, in either path, EXCEPT
+ * for a platform-managed key StockPilot support explicitly denied to them
+ * (orders:manage_catalog_visibility, migration 0413): the owner's own user
+ * rows are handed over, and core applies only that deny. Any disagreement (no
+ * bundle, organization not in it, a different role) goes to the legacy loader,
+ * which keeps its own failure behaviour.
  */
 async function resolvePermissions(
   bundle: RequestContextBundle | null,
@@ -437,9 +461,7 @@ async function resolvePermissions(
   // overrides that modify it can never be from two different moments.
   const held = bundleMembership(bundle, organizationId);
   if (held && held.role === role) {
-    return role === 'owner'
-      ? effectivePermissions('owner')
-      : effectivePermissions(role, held.role_overrides, held.user_overrides);
+    return effectivePermissions(role, held.role_overrides, held.user_overrides);
   }
   const supabase = await createClient();
   return loadEffectivePermissions(supabase, organizationId, userId, role);

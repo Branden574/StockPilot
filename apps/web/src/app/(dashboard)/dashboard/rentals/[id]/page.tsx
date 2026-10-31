@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
@@ -40,10 +40,12 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
   // still link here) fell to the error screen ("Something broke loading this
   // page") instead of saying the module is off. It now shows the checkouts
   // list's module-off panel. The module set came with the request's
-  // membership, so this costs no extra round trip.
+  // membership, so this costs no extra round trip. When that set could not
+  // be read, the page says it could not check and offers Try again, and
+  // still reads nothing.
   const rentalsModule = await checkModuleAccess('rentals');
   if (!rentalsModule.enabled) {
-    return <ModuleNotEnabled moduleId="rentals" canManage={rentalsModule.canManage} />;
+    return <ModuleUnavailable moduleId="rentals" access={rentalsModule} />;
   }
 
   const [rentalsSvc, inventorySvc, warehousesSvc] = await Promise.all([

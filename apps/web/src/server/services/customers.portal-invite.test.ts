@@ -41,7 +41,7 @@ function makeService() {
       error: null,
     },
     'customer_users.insert': { data: null, error: null },
-    'user_profiles.select': { data: { email: 'branden@l4lnorth.com' }, error: null },
+    'user_profiles.select': { data: { email: 'carsten@north.example' }, error: null },
   });
   const ctx = makeServiceContext(stub.client, {
     role: 'admin',
@@ -81,7 +81,7 @@ describe('CustomersService.inviteUser — es portal-invite wiring', () => {
     expect(msg.to).toBe('maya@harborpine.example');
     // Registry sender: supplier-branded portal@ + replies to the supplier.
     expect(msg.from).toBe('L4L North Region via StockPilot <portal@stockpilotusa.com>');
-    expect(msg.replyTo).toBe('branden@l4lnorth.com');
+    expect(msg.replyTo).toBe('carsten@north.example');
     // Registry subject, byte-equal (supplier org, not the customer record).
     expect(msg.subject).toBe(
       'You’re invited to order from L4L North Region’s supplier portal',

@@ -13,6 +13,8 @@
  *   2. deleteOrgData(): the cached items, warehouses, POs, counts and bundles,
  *      plus the sync cursor and the cached permissions / warehouse scope.
  *      The outbox (pending_actions) is NEVER touched: unsent work survives.
+ *      The photos and the record of whose cache this is stay: the account
+ *      is the same (cache-owner.ts).
  *   3. A forced FULL pull (no `?since`), so the lists refill from the server.
  *   4. Tell the permission and warehouse-scope hooks to re-read.
  *

@@ -23,6 +23,9 @@ import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
  *      recognise as a member.
  *   3. FAIL CLOSED: an unreadable set denies every non-core module; core
  *      modules stay on, as they always were (the gate never asked for them).
+ *      A denial for an unreadable set says so (`checkFailed`, docket R7), so
+ *      a page can offer Try again instead of "not enabled"; an answer that
+ *      WAS read never does, whatever it says.
  *   4. PER REQUEST: a module switched off is off on the next request.
  *   5. COST: a render that resolves its org context and asks any number of
  *      gates makes ONE Supabase call in total, and never `module_enabled`.
@@ -75,7 +78,12 @@ interface Db {
   member: boolean;
 }
 let db: Db;
-const faults = { bundle: false, modulesRead: false, orgRead: false, frameworkError: null as unknown };
+const faults = {
+  bundle: false,
+  modulesRead: false,
+  orgRead: false,
+  frameworkError: null as unknown,
+};
 const calls = { rpc: [] as string[], from: [] as string[] };
 
 /**
@@ -141,7 +149,10 @@ vi.mock('@/lib/supabase/server', () => ({
       if (fn === 'module_enabled' && args) {
         // Answered faithfully, so the OLD gate passes the parity table and
         // only the cost assertions tell the two apart.
-        return { data: sqlModuleEnabled(args.p_org, args.p_module, { uid: 'u1', isOrgMember: db.member }), error: null };
+        return {
+          data: sqlModuleEnabled(args.p_org, args.p_module, { uid: 'u1', isOrgMember: db.member }),
+          error: null,
+        };
       }
       if (fn !== 'get_request_context' || faults.bundle) {
         return { data: null, error: { code: 'PGRST202', message: 'not found' } };
@@ -268,6 +279,11 @@ describe('parity with SQL module_enabled() (0354), every module', () => {
       const got = await checkModuleAccess(moduleId);
       const want = oldGate(moduleId);
       expect({ moduleId, enabled: got.enabled }).toEqual({ moduleId, enabled: want });
+      // Every read here succeeded: an "off" is an answer, never "could not check".
+      expect({ moduleId, checkFailed: got.checkFailed }).toEqual({
+        moduleId,
+        checkFailed: undefined,
+      });
       // And the model says what 0354 says, not merely what the new code says.
       const tier = MODULE_REGISTRY[moduleId].tier;
       expect(want).toBe(tier === 'core' || comp || row === 'enabled');
@@ -281,11 +297,18 @@ describe('never wider than module_enabled()', () => {
     async (p) => {
       faults.bundle = p === 'legacy';
       for (const comp of [true, false]) {
-        db = { comp, rows: Object.fromEntries(NON_CORE.map((m) => [m, true])), role: 'admin', member: false };
+        db = {
+          comp,
+          rows: Object.fromEntries(NON_CORE.map((m) => [m, true])),
+          role: 'admin',
+          member: false,
+        };
         for (const moduleId of NON_CORE) {
           newRequest();
           const got = await checkModuleAccess(moduleId);
           expect(got.enabled).toBe(false);
+          // RLS hides the rows without an error: a plain "not enabled".
+          expect(got.checkFailed).toBeUndefined();
           // module_enabled() reads the rows as definer and would have said yes:
           expect(sqlModuleEnabled(ORG, moduleId, { uid: 'u1', isOrgMember: false })).toBe(true);
         }
@@ -295,17 +318,27 @@ describe('never wider than module_enabled()', () => {
 });
 
 describe('fails closed', () => {
-  it('organization_modules unreadable, not comped: every non-core module is denied, core stays on', async () => {
+  it('organization_modules unreadable, not comped: every non-core module is denied as "could not check", core stays on', async () => {
     faults.bundle = true;
     faults.modulesRead = true;
+    db.role = 'owner';
     db.rows = Object.fromEntries(NON_CORE.map((m) => [m, true]));
     for (const moduleId of NON_CORE) {
       newRequest();
-      expect((await checkModuleAccess(moduleId)).enabled).toBe(false);
+      // Denied (fail closed), and the denial says why: the rows were never
+      // seen, so this is not "off". canManage is the role's, as always.
+      await expect(checkModuleAccess(moduleId)).resolves.toEqual({
+        enabled: false,
+        canManage: true,
+        checkFailed: true,
+      });
     }
     for (const moduleId of CORE) {
       newRequest();
-      expect((await checkModuleAccess(moduleId)).enabled).toBe(true);
+      await expect(checkModuleAccess(moduleId)).resolves.toEqual({
+        enabled: true,
+        canManage: true,
+      });
     }
     expect(consoleError).toHaveBeenCalled();
   });
@@ -320,21 +353,31 @@ describe('fails closed', () => {
     db.comp = true;
     for (const moduleId of NON_CORE) {
       newRequest();
-      expect((await checkModuleAccess(moduleId)).enabled).toBe(true);
+      await expect(checkModuleAccess(moduleId)).resolves.toEqual({
+        enabled: true,
+        canManage: false,
+      });
     }
   });
 
-  it('organization row unreadable: denied even with an enabled row, and logged', async () => {
+  it('organization row unreadable: denied as "could not check" even with an enabled row, and logged', async () => {
     faults.bundle = true;
     faults.orgRead = true;
     db.rows = Object.fromEntries(NON_CORE.map((m) => [m, true]));
     for (const moduleId of NON_CORE) {
       newRequest();
-      await expect(checkModuleAccess(moduleId)).resolves.toEqual({ enabled: false, canManage: false });
+      await expect(checkModuleAccess(moduleId)).resolves.toEqual({
+        enabled: false,
+        canManage: false,
+        checkFailed: true,
+      });
     }
     for (const moduleId of CORE) {
       newRequest();
-      expect((await checkModuleAccess(moduleId)).enabled).toBe(true);
+      await expect(checkModuleAccess(moduleId)).resolves.toEqual({
+        enabled: true,
+        canManage: false,
+      });
     }
     expect(consoleError).toHaveBeenCalledWith(
       '[module-gate] module set unreadable, denying access',
@@ -355,22 +398,76 @@ describe('fails closed', () => {
     await expect(checkModuleAccess('books')).rejects.toBe(faults.frameworkError);
     expect(consoleError).not.toHaveBeenCalled();
   });
+
+  // Why a feature inside a gated page needs no "could not check" state of
+  // its own (a rental's Report a problem, gated on maintenance_requests, on
+  // a page gated on rentals): within one request every non-core module is
+  // answered from the SAME read, so a set that could not be read denies them
+  // all as "could not check" (and the page itself shows ModuleCheckFailed
+  // before it draws any feature), and a comp that was read grants them all.
+  // A feature's module can never be unknown while its page's module is on.
+  it('within one request, an unreadable set answers every non-core module alike', async () => {
+    faults.bundle = true;
+    faults.modulesRead = true;
+    db.rows = { rentals: true, maintenance_requests: true };
+    newRequest();
+    const page = await checkModuleAccess('rentals');
+    const feature = await checkModuleAccess('maintenance_requests');
+    expect(page).toEqual({ enabled: false, canManage: false, checkFailed: true });
+    expect(feature).toEqual(page);
+
+    db.comp = true;
+    newRequest();
+    expect(await checkModuleAccess('rentals')).toEqual({ enabled: true, canManage: false });
+    expect(await checkModuleAccess('maintenance_requests')).toEqual({
+      enabled: true,
+      canManage: false,
+    });
+
+    faults.modulesRead = false;
+    faults.orgRead = true;
+    newRequest();
+    const pageOrgUnread = await checkModuleAccess('rentals');
+    expect(pageOrgUnread.checkFailed).toBe(true);
+    expect(await checkModuleAccess('maintenance_requests')).toEqual(pageOrgUnread);
+  });
+
+  it('the failed request does not stick: the next request that reads the set answers "on" or "off" again', async () => {
+    faults.bundle = true;
+    faults.modulesRead = true;
+    db.rows = { rentals: true };
+    expect((await checkModuleAccess('rentals')).checkFailed).toBe(true);
+
+    faults.modulesRead = false;
+    newRequest();
+    await expect(checkModuleAccess('rentals')).resolves.toEqual({
+      enabled: true,
+      canManage: false,
+    });
+    await expect(checkModuleAccess('po_imports')).resolves.toEqual({
+      enabled: false,
+      canManage: false,
+    });
+  });
 });
 
 describe('per request, never across requests', () => {
-  it.each(['bundle', 'legacy'] as const)('%s path: a module switched off is off on the next request', async (p) => {
-    faults.bundle = p === 'legacy';
-    db.rows = { books: true };
-    expect((await checkModuleAccess('books')).enabled).toBe(true);
+  it.each(['bundle', 'legacy'] as const)(
+    '%s path: a module switched off is off on the next request',
+    async (p) => {
+      faults.bundle = p === 'legacy';
+      db.rows = { books: true };
+      expect((await checkModuleAccess('books')).enabled).toBe(true);
 
-    db.rows = { books: false };
-    newRequest();
-    expect((await checkModuleAccess('books')).enabled).toBe(false);
+      db.rows = { books: false };
+      newRequest();
+      expect((await checkModuleAccess('books')).enabled).toBe(false);
 
-    db.comp = true; // and a comp granted in the platform console is on next request
-    newRequest();
-    expect((await checkModuleAccess('books')).enabled).toBe(true);
-  });
+      db.comp = true; // and a comp granted in the platform console is on next request
+      newRequest();
+      expect((await checkModuleAccess('books')).enabled).toBe(true);
+    },
+  );
 });
 
 describe('canManage is unchanged: owner and admin, whatever the module state', () => {
@@ -406,7 +503,7 @@ describe('cost', () => {
     expect(calls.from).toEqual([]);
   });
 
-  it('on the legacy path the gates share the layout\'s two reads, and still never call module_enabled', async () => {
+  it("on the legacy path the gates share the layout's two reads, and still never call module_enabled", async () => {
     faults.bundle = true;
     db.rows = { books: true };
     await requireOrgContext();

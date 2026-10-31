@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { confirmExceptionCountAction } from '@/server/actions/exceptions';
 
 /**
@@ -266,7 +267,9 @@ function ConfirmCountDialogBody({
         countedQuantity: confirm.counted,
         note: trimmed === '' ? null : trimmed,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // No answer: it may have landed. The payload is kept, so pressing again
       // resends it and the server answers the replay.
       setError(NO_ANSWER_COPY);

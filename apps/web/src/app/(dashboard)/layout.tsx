@@ -25,10 +25,10 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { orSessionEnded } from '@/lib/auth/session-ended';
+import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
-import { createClient } from '@/lib/supabase/server';
 
 import { resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
@@ -64,10 +64,18 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // an unreadable list still fails this layout closed (error screen, #229).
   const mfaFactorsRead = getMfaFactorsForRequest();
   mfaFactorsRead.catch(() => {});
+  // ALSO STARTED FIRST: the session's verified claims, for the enrolled-member
+  // gate below. Page renders keep their own key set (the proxy is a separate
+  // function), so the first read in a server instance, and the first after
+  // auth-js's 10-minute cache expires, fetches it from the Auth server. Started
+  // here, that fetch runs alongside the context and the batch below instead of
+  // after them. Request-cached, so the page's withContext() takes this same
+  // read. It never rejects, and only the gate awaits it: a member with no
+  // authenticator is never held by it.
+  const claimsRead = getVerifiedSessionClaimsForRequest();
   // Cached: this resolves with the same data the page will use in the
   // same render — zero extra DB round trips beyond the page's own.
   const ctx = await requireOrgContext();
-  const supabase = await createClient();
   // Gates the "Platform admin" link in the account menu. Header-based on
   // purpose (perf plan 2026-07-02 P1d): the previous
   // `currentUserIsPlatformAdmin()` made a SECOND GoTrue `auth.getUser()`
@@ -153,8 +161,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // Banner instead of redirect: the previous redirect-on-every-page-load
   // approach raced with Chrome's prefetch behavior and triggered the
   // "Throttling navigation to prevent the browser from hanging" warning,
-  // which renders as a black/blank screen on certain sections (Andrew,
-  // Chrome, no MFA enrolled). The banner is always visible above the
+  // which renders as a black/blank screen on certain sections (a manager
+  // on Chrome, no MFA enrolled). The banner is always visible above the
   // page content until the user enrolls; can't loop, can't throttle,
   // and behaves the same across browsers.
   // An org row this member cannot read is held to the strictest policy, not
@@ -186,12 +194,16 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // 'optional' policy. Same challenge flow policy-required users get:
   // /signin/mfa (outside this layout, exempt in the middleware's
   // signed-in bounce, and renders fine at AAL1 — so no redirect loop).
-  // getAuthenticatorAssuranceLevel() decodes the session JWT locally;
-  // an unreadable AAL fails CLOSED into the challenge page, which
-  // itself skips straight to /dashboard when the session is really AAL2.
+  // The level is the access token's `aal` claim, read only once the token's
+  // signature checks out (lib/auth/verified-claims: a local ES256 check, no
+  // Auth round trip once the key set is cached), not
+  // getAuthenticatorAssuranceLevel()'s unchecked decode of the cookie. The
+  // read has been under way since the top of this layout. An unverifiable
+  // token fails CLOSED into the challenge page, which itself skips straight
+  // to /dashboard when the session is really AAL2.
   if (hasVerifiedFactor) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aal?.currentLevel !== 'aal2') {
+    const claims = await claimsRead;
+    if (claims?.aal !== 'aal2') {
       const h = await headers();
       const pathname = h.get('x-pathname') ?? '';
       const qs = pathname.startsWith('/dashboard')

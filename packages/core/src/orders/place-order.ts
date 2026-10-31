@@ -684,7 +684,10 @@ export type OrderRecordedRefusalReason =
   | 'item_not_orderable'
   | 'invalid';
 
-/** Why one item cannot be ordered (`order_items_orderable`, first match). */
+/** Why one item cannot be ordered (`order_items_orderable`, first match;
+ *  `hidden_from_orders` from `_order_items_hidden_from_orders`, migration
+ *  0413, whenever none of the others applies: hidden from new ordering by
+ *  Manage order items). */
 export type OrderItemRefusalReason =
   | 'not_visible'
   | 'deleted'
@@ -692,7 +695,8 @@ export type OrderItemRefusalReason =
   | 'archived'
   | 'rental'
   | 'awaiting_first_receipt'
-  | 'kit_stock';
+  | 'kit_stock'
+  | 'hidden_from_orders';
 
 /** The parts of an error's `details` this module reads. */
 export interface OrderRefusalDetails {
@@ -1395,6 +1399,16 @@ export const ORDER_TIMEZONE_UNREADABLE_FINAL_COPY =
   "Your organization's time zone couldn't be read, so it wasn't sent. Wait a moment, then submit it again.";
 export const ORDER_ITEM_ARCHIVED_COPY = 'This item was archived.';
 export const ORDER_ITEM_NOT_AVAILABLE_COPY = "This item isn't available to you here.";
+/** Hidden from new ordering (Manage order items, migration 0413). The
+ *  database's own message for the line gate (hint order_item_hidden). */
+export const ORDER_ITEM_HIDDEN_COPY = 'This item is no longer available for new orders.';
+
+/** "Backpack is no longer available for new orders.", named from the
+ *  person's own cart or read, never from the server's answer. */
+export function orderItemHiddenCopy(name: string): string {
+  const n = name.trim();
+  return n === '' ? ORDER_ITEM_HIDDEN_COPY : `${n} is no longer available for new orders.`;
+}
 
 /** "DC4 doesn't deliver to that site anymore. Choose another site." */
 export function orderSiteNotServicedCopy(warehouseName: string | null): string {
@@ -1417,6 +1431,8 @@ export function orderItemRefusalCopy(reason: string, name: string): string {
       return `${name} is a pre-assembled kit and can't be put on an order. Order the kit's items instead.`;
     case 'archived':
       return ORDER_ITEM_ARCHIVED_COPY;
+    case 'hidden_from_orders':
+      return ORDER_ITEM_HIDDEN_COPY;
     default:
       return ORDER_ITEM_NOT_AVAILABLE_COPY;
   }

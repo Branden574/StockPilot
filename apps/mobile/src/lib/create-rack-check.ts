@@ -20,7 +20,11 @@
  * canonicaliser. `describeNewRackPlacement` keys labels exactly that way.
  */
 
-import { describeNewRackPlacement } from '@stockpilot/core';
+import {
+  describeNewRackPlacement,
+  newRackBlockerReason,
+  type NewRackBlocker,
+} from '@stockpilot/core';
 
 export type CreateRackCheck =
   /** Nothing is created: no rack typed, or no stock would move. */
@@ -28,7 +32,19 @@ export type CreateRackCheck =
   /** The rack exists; Save proceeds with no question. */
   | { kind: 'existing'; label: string }
   /** The rack would be CREATED. Confirm, offering near-matches first. */
-  | { kind: 'new'; label: string; title: string; message: string; suggestions: string[] }
+  | {
+      kind: 'new';
+      label: string;
+      title: string;
+      message: string;
+      suggestions: string[];
+      /**
+       * Whether this member's yes creates the rack and moves the stock onto it
+       * (2026-10-25). The confirm button says "Create rack and save" only then,
+       * and "Save anyway" when the yes cannot (see `blockedBy`).
+       */
+      createsRack: boolean;
+    }
   /** The racks could not be read, so "exists" is unknown. Confirm, never assume. */
   | { kind: 'unchecked'; label: string; title: string; message: string };
 
@@ -40,6 +56,14 @@ export function checkCreateRack(input: {
   warehouseName: string | null | undefined;
   /** The warehouse's rack names, or null when they could not be read. */
   existingRacks: readonly string[] | null;
+  /**
+   * What stops this member's yes from putting the stock on a new rack
+   * (`newRackBlockerFor`, the server's own rule), or null when nothing does or
+   * it is not known yet (2026-10-25). A Staff member cannot create racks, so
+   * "Create rack and save" created none: the server refused the create and the
+   * stock stayed in Unplaced.
+   */
+  blockedBy?: NewRackBlocker | null;
 }): CreateRackCheck {
   const label = (input.binLocation ?? '').trim();
   // The server auto-places (and so creates a rack) only when a label was typed
@@ -53,12 +77,15 @@ export function checkCreateRack(input: {
   // A failed read is NOT an empty warehouse. Treating it as one would call
   // every rack new (harmless nagging) — but treating it as "fine" would wave
   // the incident straight through. Ask.
+  const blockedBy = input.blockedBy ?? null;
   if (input.existingRacks === null) {
     return {
       kind: 'unchecked',
       label,
       title: `Put the stock on ${label}?`,
-      message: `Could not check the racks${where} just now. If ${label} does not exist yet, saving creates it and moves ${units} into it.`,
+      message: blockedBy
+        ? `Could not check the racks${where} just now. If ${label} does not exist yet, saving does not put the ${units} on it, because ${newRackBlockerReason(blockedBy)}.`
+        : `Could not check the racks${where} just now. If ${label} does not exist yet, saving creates it and moves ${units} into it.`,
     };
   }
 
@@ -67,6 +94,7 @@ export function checkCreateRack(input: {
     warehouseName: input.warehouseName,
     quantity: input.units,
     existingLabels: input.existingRacks,
+    blockedBy,
   });
   if (decision.exists) return { kind: 'existing', label: decision.matchedLabel ?? decision.label };
   return {
@@ -75,6 +103,7 @@ export function checkCreateRack(input: {
     title: decision.title,
     message: decision.message,
     suggestions: decision.suggestions,
+    createsRack: blockedBy === null,
   };
 }
 

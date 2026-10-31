@@ -89,7 +89,7 @@ describe('movementNoteEditable', () => {
 
   it('NEW (0231+) receipt row: sentinel note is not editable despite the PO {n} reason', () => {
     // Saving here would overwrite the movement's only link back to its receipt.
-    expect(movementNoteEditable('PO CVW-002201', RECEIPT_ID)).toBe(false);
+    expect(movementNoteEditable('PO DEMO-002201', RECEIPT_ID)).toBe(false);
     expect(movementNoteEditable('receipt_reversal', RECEIPT_ID)).toBe(false);
   });
 

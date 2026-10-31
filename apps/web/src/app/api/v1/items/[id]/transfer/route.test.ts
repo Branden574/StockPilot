@@ -113,9 +113,21 @@ function install(opts: {
   mintError?: { message: string; code?: string };
   /** The caller's role — defaults to manager; the D1 pins use staff/viewer. */
   role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
+  /**
+   * The warehouses a staff caller works in (B38: below manager the mint asks
+   * for write access to its warehouse before it creates anything). Defaults to
+   * the source's warehouse, where a staff put-away happens.
+   */
+  assigned?: string[];
 }): SupabaseStub {
   const queue = [...(opts.locationRows ?? [])];
+  const assigned = opts.assigned ?? [WAREHOUSE];
   const stub = makeSupabaseStub({
+    'user_warehouse_assignments.select': {
+      data: assigned.map((w, i) => ({ warehouse_id: w, is_primary: i === 0 })),
+      error: null,
+    },
+    'organization_members.select': { data: { all_warehouses: false }, error: null },
     // The route reads `locations` twice: once for the source holding's
     // warehouse/kind, once for the destination (or the dedupe candidates).
     'locations.select': () => ({
@@ -785,6 +797,42 @@ describe('POST /api/v1/items/[id]/transfer — D1: staff mints the labelled crat
     expect(body.error).toBe('forbidden');
     expect(String(body.message)).toMatch(/Transfer stock permission/);
     expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(1);
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  // B38. The new rack or crate is created in the SOURCE location's warehouse,
+  // and locations are readable org-wide, so a staff member could name a source
+  // in a warehouse they do not work in. transfer_stock refuses that move, but
+  // only after the mint had created the location there. The mint now asks
+  // first, and the phone hears the transfer's own sentence, as before.
+  it('a STAFF put-away from a source in a warehouse they do not work in is refused BEFORE anything is minted', async () => {
+    const stub = install({
+      role: 'staff',
+      assigned: ['eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'],
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book(YELLOW_LABEL)],
+      holdingRows: [YELLOW_HOLDING],
+      insertedLocation: { id: CRATE, kind: 'crate', name: 'Yellow #6 on rack 38-B' },
+    });
+
+    const res = await POST(
+      request({
+        fromLocationId: STAGING,
+        quantity: 10,
+        newRack: YELLOW_FIELDS,
+        acknowledgedCrateChanges: [],
+        acknowledgedRackChanges: [],
+      }),
+      { params },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      error: 'forbidden',
+      message: 'You can only move stock between warehouses you work in.',
+    });
+    expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(0);
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 });

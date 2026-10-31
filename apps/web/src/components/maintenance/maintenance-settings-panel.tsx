@@ -49,8 +49,8 @@ const NOTIFY_OPTIONS: Array<{ value: MaintenanceNotifyMode; label: string }> = [
  * server action (`updateMaintenanceSettingsAction`) re-gates on
  * `maintenance_requests:configure` — this component never assumes the page's
  * own gate is the only line of defense. Deliberately does NOT build a
- * permissions UI: granting read_all/manage to an individual (Andrew's real
- * grant path) happens entirely on /dashboard/settings/roles's existing
+ * permissions UI: granting read_all/manage to an individual (the DC4 lead's
+ * real grant path) happens entirely on /dashboard/settings/roles's existing
  * per-user-exceptions matrix (role-permission-matrix.tsx); this panel only
  * links there. Recipients are configured per org on
  * /dashboard/settings/email-routing (per-org email routing, migration 0337) —

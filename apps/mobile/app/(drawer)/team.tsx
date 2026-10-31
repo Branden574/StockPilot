@@ -2,6 +2,8 @@ import { Mail, Users } from 'lucide-react-native';
 import * as React from 'react';
 import { Image, Linking, Pressable, View } from 'react-native';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
@@ -136,6 +138,11 @@ function MemberCard({ member }: { member: MemberRow }) {
   const pending = !member.accepted_at;
   const name = member.profile?.full_name ?? member.profile?.email ?? member.invited_email ?? 'Unnamed';
   const email = member.profile?.email ?? member.invited_email;
+  // A link only for one plain address (core plainAddressMailtoUrl). Before,
+  // `mailto:${email}` opened whatever was stored, so an address such as
+  // "a@b.com?bcc=x@y.z" or one with an invisible character opened a message
+  // to someone the card does not show. Any other text is shown, not linked.
+  const mailto = plainAddressMailtoUrl(email);
   const avatar = member.profile?.avatar_url ?? null;
   const initials = name
     .split(/[\s._-]+/)
@@ -173,7 +180,7 @@ function MemberCard({ member }: { member: MemberRow }) {
           <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
             {name}
           </Body>
-          {email ? (
+          {email && mailto ? (
             // A link (it opens Mail) in a 44pt frame. The frame is padding
             // around the email, so it grows with the email (a wrapped or
             // larger address) instead of centring it in a fixed box, and the
@@ -182,7 +189,7 @@ function MemberCard({ member }: { member: MemberRow }) {
             // size. One line at the default size is 15.2 + 29 = 44.2pt;
             // minHeight keeps 44 at the sizes below the default.
             <Pressable
-              onPress={() => Linking.openURL(`mailto:${email}`).catch(() => undefined)}
+              onPress={() => Linking.openURL(mailto).catch(() => undefined)}
               accessibilityRole="link"
               style={({ pressed }) => ({
                 minHeight: 44,
@@ -200,6 +207,14 @@ function MemberCard({ member }: { member: MemberRow }) {
                 {email}
               </Mono>
             </Pressable>
+          ) : email ? (
+            // Not one plain address: the same words in the same place, with
+            // no touchable and no Mail glyph, so nothing offers to open Mail.
+            <View style={{ marginTop: 3 }}>
+              <Mono size={11.5} tracking={0.04} color={c.ink3}>
+                {email}
+              </Mono>
+            </View>
           ) : null}
         </View>
         <View style={{ alignItems: 'flex-end', gap: 6 }}>

@@ -107,7 +107,8 @@ export function invalidateInventoryListAfterWrite(organizationId: string, label:
  * Run the body of a STREAMED Route Handler response so the stock writes it
  * makes still expire the Items/Books cache.
  *
- * WHY IT IS NEEDED (measured on next 16.3.5 with src/test/next-route-harness):
+ * WHY IT IS NEEDED (measured on next 16.3.5, and again on 16.4.3, with
+ * src/test/next-route-harness):
  * a Route Handler's recorded tags are sent to the cache exactly once, when the
  * handler returns its Response (route-modules/app-route/module.js,
  * resolvePendingRevalidations). A streamed body keeps running after that. The
@@ -122,14 +123,17 @@ export function invalidateInventoryListAfterWrite(organizationId: string, label:
  * WHY after(), AND WHY THE ORGS ARE HELD BACK UNTIL THEN: after() callbacks
  * run once the response has closed, inside withExecuteRevalidates
  * (after/after-context.js runCallbacks), which DOES send the tags they record
- * to the cache. But it sends only tags that are new relative to the work store
- * as it stood when the callbacks started (revalidation-utils.js
- * diffRevalidationState compares tag + profile). Had the tools recorded
- * `inventory-list-<org>` during the stream, the flush below would record the
- * same tag with the same profile, match that dead entry, and be dropped too:
- * the harness shows zero tags for that sequence as well. So inside this scope
- * revalidateInventoryList only queues the org, and the tag is recorded for the
- * first time in the after() callback.
+ * to the cache. On next 16.3 it sent only tags that were new relative to the
+ * work store as it stood when the callbacks started (revalidation-utils.js
+ * diffRevalidationState compared tag + profile), so had the tools recorded
+ * `inventory-list-<org>` during the stream, the flush below would have matched
+ * that dead entry and been dropped too. Since 16.4 (vercel/next.js#99499) it
+ * also sends a tag recorded again since then: cloneRevalidationState keeps
+ * each entry's revalidatedAt, revalidate.js moves it on for a repeat, and
+ * diffRevalidationState sends any entry whose revalidatedAt moved on. The
+ * flush no longer depends on the orgs being held back, and they still are:
+ * inside this scope revalidateInventoryList only queues the org, and the
+ * after() callback records each tag once, in one call to the cache.
  *
  * The callback waits for `fn` to settle before flushing, so a write that
  * commits after the client disconnected (a disconnect closes the response
@@ -139,10 +143,12 @@ export function invalidateInventoryListAfterWrite(organizationId: string, label:
  * client (web chat-panel, mobile ai/chat) re-reads a list on that event, so
  * the next read is a later navigation.
  *
- * Constraint: the request must not also invalidate the same org BEFORE its
- * handler returns. That entry would already be in the store when the flush
- * runs, and Next would de-duplicate the flush away. The chat route writes only
- * its own chat tables before returning.
+ * A request that also invalidates the same org BEFORE its handler returns
+ * gets a second expiry when the stream closes. Next 16.3 de-duplicated that
+ * one away, so this used to be a constraint; since 16.4 it is sent, and it is
+ * needed, because the write in the stream came after the first expiry. The
+ * chat route writes only its own chat tables before returning
+ * (lib/ai/sessions.ts), so it still costs one expiry per org per turn.
  *
  * Where after() cannot register (outside a request, e.g. a script or a test
  * without Next's storages, or a host with no waitUntil) it throws, and `fn`

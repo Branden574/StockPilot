@@ -24,13 +24,11 @@ import { describe, expect, it } from 'vitest';
 
 const SRC = join(__dirname, '..', '..');
 
-const ALLOWED = new Map<string, string>([
-  ['server/services/audit.ts', 'the audit writer itself'],
-  [
-    'lib/export-rate-limit.ts',
-    'records every export-limit trip; reads { error } and reports it, and its row has no metadata to shape',
-  ],
-]);
+// lib/export-rate-limit.ts was the one other writer until 2026-10-24: its
+// bare `void` INSERT held nothing once the 429 was sent. Its trip row now goes
+// through insertAuditRowReported, which keeps the INSERT alive past the
+// response.
+const ALLOWED = new Map<string, string>([['server/services/audit.ts', 'the audit writer itself']]);
 
 /** A write verb on the audit_logs builder, across line breaks and whitespace. */
 const AUDIT_WRITE = /from\(\s*['"`]audit_logs['"`]\s*\)\s*\.\s*(insert|upsert|update|delete)\s*\(/;

@@ -255,3 +255,27 @@ describe('/dashboard/orders/new opens the phone storefront', () => {
     expect(existsSync(path.join(__dirname, '../../app/order/new/index.tsx'))).toBe(true);
   });
 });
+
+// Ordering visibility (0413, design 8.6): the web's Manage order items page
+// opens the native management screen (a real screen, never a WebView), with
+// or without the page's filter query, never home. The cold-start shim under
+// app/dashboard/orders/ is pinned beside it.
+describe('/dashboard/orders/manage-items opens the phone management screen', () => {
+  it('with or without a query; the other orders rules are unchanged', () => {
+    expect(rewriteWebPath('/dashboard/orders/manage-items')).toBe('/order/manage-items');
+    expect(rewriteWebPath('/dashboard/orders/manage-items?visibility=hidden&page=3')).toBe('/order/manage-items');
+    expect(rewriteWebPath('stockpilot:///dashboard/orders/manage-items')).toBe('/order/manage-items');
+    expect(rewriteWebPath('/dashboard/orders/new')).toBe('/order/new');
+    expect(rewriteWebPath('/dashboard/orders')).toBe('/orders');
+    expect(rewriteWebPath('/dashboard/orders/manage-items-old')).toBe('/');
+  });
+
+  it('a cold start reaches the static shim, which redirects to the management screen', () => {
+    const shim = path.join(__dirname, '../../app/dashboard/orders/manage-items.tsx');
+    expect(existsSync(shim)).toBe(true);
+    expect(readFileSync(shim, 'utf8')).toMatch(/<Redirect href=\{'\/order\/manage-items' as Href\} \/>/);
+    // The static route beside order/[id], so /order/manage-items is never
+    // the order screen with id "manage-items".
+    expect(existsSync(path.join(__dirname, '../../app/order/manage-items.tsx'))).toBe(true);
+  });
+});

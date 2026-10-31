@@ -490,7 +490,7 @@ export-preset shape before assuming it fits unchanged.
 
 423 lines, tests `./po` (the **purchase-order** PDF, `apps/web/src/lib/pdf/po.tsx`), NOT
 `report-table.tsx`. Its own header comment explains its existence precisely: the owner once reported
-a receipts row rendering as `"R-20260721-223330-e7a08bJul 21, 2026"` — text touching text with no
+a receipts row rendering as `"R-20260721-223330-0e0e05Jul 21, 2026"` — text touching text with no
 gap, because `@react-pdf` silently overflows columns rather than erroring. The test hard-codes
 Helvetica AFM glyph-width metrics and asserts, **for every column, that the widest content it can
 ever hold fits inside the content box its flex weight buys once each cell's gutter (`CELL_GUTTER =

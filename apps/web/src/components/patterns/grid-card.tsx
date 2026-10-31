@@ -14,8 +14,9 @@ import { PatternPhoto } from './photo';
  * selection, scope, sort, filters, totals or page membership.
  *
  * MEDIA: a fixed square (`aspect-square`) with the photo absolutely
- * positioned and `object-contain` on a white tile, so photos are never cropped
- * and a tall photo can never stretch its card (the reference's defect). No
+ * positioned and `object-cover`, so the photo fills its square edge to edge
+ * with no white bars (as Place an Order's cards do since #412) and a tall
+ * photo can never stretch its card (the reference's defect). No
  * photo, or a photo that fails, shows the hatch. Pass the small rendition the
  * row already carries (`imageSrc`), never a master; or pass `media` to use
  * the caller's own image element.
@@ -38,7 +39,10 @@ import { PatternPhoto } from './photo';
  * optional meta line, the labelled quantity ("142 on hand") with the
  * placement (warehouse and rack) opposite, optional quantity notes ("12
  * awaiting put-away"), and a footer (the coverage bar, a group card's
- * drill-down).
+ * drill-down). The meta line wraps rather than cutting anything off: on a
+ * narrow card (two to a 390 px phone) "2 records · Furniture · Generic" takes
+ * two lines, every word whole (a word wider than the card, the last resort,
+ * breaks inside itself).
  *
  * `stretchLink` (default on) widens the name link's click area to the whole
  * card, as the reference's card opens the record. The checkbox, the status
@@ -114,9 +118,9 @@ export function GridCard({
     >
       <div
         data-slot="grid-card-media"
-        className="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b bg-white"
+        className="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b"
       >
-        {media ?? <PatternPhoto src={imageSrc} alt={imageAlt} fit="contain" />}
+        {media ?? <PatternPhoto src={imageSrc} alt={imageAlt} fit="cover" />}
         {checkbox != null ? (
           <div
             data-slot="grid-card-checkbox"
@@ -125,9 +129,13 @@ export function GridCard({
               // The checkbox's own ::before, positioned on this chip, covers
               // the chip (and 44 x 44 on phones and coarse pointers).
               "pointer-coarse:[&>[role=checkbox]]:before:-inset-[9px] [&>[role=checkbox]]:before:absolute [&>[role=checkbox]]:before:-inset-px [&>[role=checkbox]]:before:content-[''] max-sm:[&>[role=checkbox]]:before:-inset-[9px]",
+              // Focus in the card is the descendant selector, not Tailwind's
+              // group-focus-within variant, which Safari pays for on every
+              // focus change of every page (lib/group-focus-variants.guard.test.ts).
+              // String.raw keeps the one backslash of the escaped "/".
               selected || selectionActive
                 ? 'opacity-100'
-                : 'pointer-coarse:opacity-100 opacity-0 group-focus-within/card:opacity-100 group-hover/card:opacity-100',
+                : String.raw`pointer-coarse:opacity-100 opacity-0 group-hover/card:opacity-100 [.group\/card:focus-within_&]:opacity-100`,
             )}
           >
             {checkbox}
@@ -173,7 +181,10 @@ export function GridCard({
             </div>
           ) : null}
           {meta != null ? (
-            <div className="text-muted-foreground mt-0.5 truncate text-[12px] leading-[18px]">
+            <div
+              data-slot="grid-card-meta"
+              className="text-muted-foreground mt-0.5 text-[12px] leading-[18px] [overflow-wrap:anywhere]"
+            >
               {meta}
             </div>
           ) : null}
