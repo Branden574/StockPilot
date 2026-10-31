@@ -5,11 +5,9 @@
  *
  * The Destination select offers sites linked to a warehouse and the Supplier
  * select the active suppliers. A draft can hold something else: a staging
- * area or a location deleted since (production 2026-10-06: four Demo Co
- * purchase orders to Staging, three Learn4Life ones to deleted locations; no
- * draft among them today), or a supplier archived since. Radix shows a value
- * no option has as a blank box, and the form kept it, so the save sent it
- * back unseen.
+ * area or a location deleted since, or a supplier archived since. Radix shows
+ * a value no option has as a blank box, and the form kept it, so the save
+ * sent it back unseen.
  *
  * Same treatment as Make recurring (#334): the form keeps only a value it
  * offers. Otherwise the select opens on None / No supplier, and a note under

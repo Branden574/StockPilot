@@ -68,10 +68,9 @@ export const RELEASES: Release[] = [
     // the dashboard's overdue line no longer advises updating the ETA (an
     // ordered purchase order's expected date cannot be changed); the audit
     // log labels "Recurring PO template"; a supplier the recurring page could
-    // not read is "Supplier unknown". Left out as not visible in production:
-    // the location pickers list every site past 1000 locations (the largest
-    // organization has 114), and the calendar reads fewer old open-ended
-    // events (the same events show).
+    // not read is "Supplier unknown". Left out as changing nothing a reader
+    // sees: the location pickers list every site past 1000 locations, and the
+    // calendar reads fewer old open-ended events (the same events show).
     //
     // The Overdue line's link is labelled for both platforms: the phone opens
     // the bare Purchase orders list for any /dashboard/purchase-orders?...

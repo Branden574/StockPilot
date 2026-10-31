@@ -236,9 +236,9 @@ export class ScheduleService {
    *
    * So an open-ended event is read only when it STARTS in the range. The
    * filter was `ends_at is null or ends_at >= from`, which read every
-   * open-ended event that ever started before `to` (31 of production's 36
-   * events, 2026-10-11), oldest first under the cap below, so an organization
-   * with 500 of them saw none of this month's (small fixes slice 8 review).
+   * open-ended event that ever started before `to`, oldest first under the
+   * cap below, so an organization with 500 of them saw none of this month's
+   * (small fixes slice 8 review).
    */
   async listInRange(from: Date, to: Date): Promise<ScheduleEventRow[]> {
     assertModuleEnabled(this.ctx, 'schedule');

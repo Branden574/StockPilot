@@ -7,11 +7,10 @@ import { describe, expect, it, vi } from 'vitest';
  *
  * THE DEFECT (small fixes slice 8 review). The filter was
  * `or(ends_at.is.null, ends_at.gte.<from>)` with `starts_at < to`, so EVERY
- * open-ended event that started before `to` matched, however long ago:
- * production 2026-10-11 has 31 of 36 events open-ended, 19 of them started
- * more than 45 days ago, all read and thrown away on every month view. The
- * read is ordered oldest first and capped at 500, so once an organization has
- * 500 open-ended events the current month reads only old rows and shows none.
+ * open-ended event that started before `to` matched, however long ago, and
+ * each month view read them all and threw away the old ones. The read is
+ * ordered oldest first and capped at 500, so once an organization has 500
+ * open-ended events the current month reads only old rows and shows none.
  *
  * The `.or()` is evaluated here the way PostgREST does for the shapes the
  * method uses (and(...), is.null, gte), so the test pins what is read, not

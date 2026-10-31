@@ -18,8 +18,7 @@ import {
  * UTC, which is already Tuesday from UTC+10 east (Sydney in daylight time:
  * 1 AM Tuesday), so such an organization got Monday's date on Tuesday's
  * digest; and a preview sent after 5 PM in Los Angeles (now 01:00 UTC the
- * next day) carried tomorrow's date. No production organization is east of
- * UTC today (2026-10-11); previews are sent from Los Angeles.
+ * next day) carried tomorrow's date.
  */
 
 const SYDNEY = 'Australia/Sydney';

@@ -104,13 +104,11 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   let supplierOptions = suppliers.map((s) => ({ id: s.id as string, name: s.name as string }));
 
   // A draft can hold a destination or supplier the form does not offer: a
-  // staging area or a location deleted since (production 2026-10-06: four
-  // Demo Co purchase orders to Staging, three Learn4Life ones to deleted
-  // locations, none of them drafts), or an archived supplier. The selects
-  // showed those blank and the save sent them back unseen. The form now keeps
-  // none of them and names each one (PoForm `unoffered`, small fixes slice 8),
-  // so read what they are, in this organization through RLS. Labels only: a
-  // failed read names nothing, never an error page.
+  // staging area or a location deleted since, or an archived supplier. The
+  // selects showed those blank and the save sent them back unseen. The form
+  // now keeps none of them and names each one (PoForm `unoffered`, small
+  // fixes slice 8), so read what they are, in this organization through RLS.
+  // Labels only: a failed read names nothing, never an error page.
   const currentDestinationId =
     (po as { destination_location_id?: string | null }).destination_location_id ?? null;
   const currentSupplierId = (po as { supplier_id?: string | null }).supplier_id ?? null;
