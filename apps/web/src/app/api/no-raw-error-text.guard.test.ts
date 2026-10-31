@@ -20,8 +20,9 @@ import { describe, expect, it } from 'vitest';
  *
  * WHAT IS READ. Every module under app/api, every response helper (http.ts,
  * *-http.ts, *error-response.ts, export-errors.ts) anywhere in src, and every
- * module an API route imports directly: a helper builds text a route answers
- * as it is (the AI ISBN extract's `notes` did, S16 review). Not the service
+ * module an API route imports directly (`@/...` or a relative path, by
+ * import, export-from or import()): a helper builds text a route answers as
+ * it is (the AI ISBN extract's `notes` did, S16 review). Not the service
  * layer (server/services) nor Server Actions (server/actions): a service
  * answers through ServiceError, whose internal_error message is generic
  * (S13), and Server Actions are the B12 sweep's.
@@ -136,17 +137,22 @@ function parse(file: string, source: string): ts.SourceFile {
   );
 }
 
-/** The file an `@/...` specifier names, or null. */
-function moduleFile(specifier: string): string | null {
-  if (!specifier.startsWith('@/')) return null;
-  const base = path.join(SRC, specifier.slice(2));
-  for (const candidate of [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+/** The source file an `@/...` or relative specifier in `from` names, or null (a package). */
+function moduleFile(specifier: string, from: string): string | null {
+  const base = specifier.startsWith('@/')
+    ? path.join(SRC, specifier.slice(2))
+    : specifier.startsWith('.')
+      ? path.resolve(path.dirname(from), specifier)
+      : null;
+  if (base === null) return null;
+  const candidates = [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
+  if (/\.tsx?$/.test(base)) candidates.unshift(base);
+  return (
+    candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null
+  );
 }
 
-/** The `@/...` modules a file imports: import and export-from, and import(). */
+/** The source modules a file imports: import and export-from, and import(). */
 function importsOf(file: string): string[] {
   const out: string[] = [];
   const visit = (node: ts.Node) => {
@@ -167,7 +173,7 @@ function importsOf(file: string): string[] {
     ts.forEachChild(node, visit);
   };
   visit(parse(file, readFileSync(file, 'utf8')));
-  return out.flatMap((specifier) => moduleFile(specifier) ?? []);
+  return out.flatMap((specifier) => moduleFile(specifier, file) ?? []);
 }
 
 /** Every module the census reads (see WHAT IS READ). */
@@ -180,6 +186,7 @@ function scope(): string[] {
     .flatMap(importsOf)
     .filter(
       (file) =>
+        file.startsWith(SRC + path.sep) &&
         !file.startsWith(API + path.sep) &&
         !/\.test\.tsx?$/.test(file) &&
         !NOT_READ.test(path.relative(SRC, file)),
@@ -712,6 +719,15 @@ describe("API routes never answer an error's own text", () => {
     expect(read).toContain('server/loaders/inventory-list.ts');
     // Dynamically imported too (extract-isbns-ai: `await import('@/lib/xlsx-to-csv')`).
     expect(read).toContain('lib/xlsx-to-csv.ts');
+    // A relative import out of app/api is followed like an `@/` one.
+    const route = path.join(API, 'books/extract-isbns-ai/route.ts');
+    expect(moduleFile('../../../../lib/books/isbn-ai-extract', route)).toBe(
+      path.join(SRC, 'lib/books/isbn-ai-extract.ts'),
+    );
+    expect(moduleFile('@/lib/books/isbn-ai-extract', route)).toBe(
+      path.join(SRC, 'lib/books/isbn-ai-extract.ts'),
+    );
+    expect(moduleFile('next/server', route)).toBeNull();
     expect(read.filter((file) => NOT_READ.test(file))).toEqual([]);
     expect(read.filter((file) => /\.test\.tsx?$/.test(file))).toEqual([]);
   });
