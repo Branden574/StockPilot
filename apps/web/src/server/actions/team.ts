@@ -451,8 +451,11 @@ const acceptInviteWithSignupSchema = z.object({
 /**
  * Combined sign-up + invite-acceptance flow.
  *
- * This is the ONLY path through which a brand-new auth user is created in
- * this app — public signup is disabled. The action:
+ * Public signup is disabled. A brand-new auth user is created in this app in
+ * three places, each gated: here (a single-use invite token), Platform >
+ * Provision (createOrgForCustomerAction in actions/platform-admin.ts, platform
+ * admins only) and the B2B portal invite (CustomersService.inviteUser in
+ * services/customers.ts, customers:manage). The action:
  *   1. Validates the invite token, expiry, and `accepted_at`.
  *   2. Creates a Supabase auth user via the admin client (bypasses the
  *      org-level `enable_signup=false` setting because invites are gated by

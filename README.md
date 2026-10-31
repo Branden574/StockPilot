@@ -69,9 +69,24 @@ pnpm dev                       # web app at http://localhost:3000
 | Preview | Vercel preview per PR | Supabase dev project |
 | Production | Vercel prod (stockpilotusa.com) | Supabase prod project |
 
-## Onboarding a new org
+## Creating a workspace
 
-Public `/signup` is intentionally disabled (StockPilot is invite-only). To onboard a new organization today, see the magic-link runbook in the Appendix of [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md) — about 5 minutes per org via the Supabase Dashboard.
+Public `/signup` is off (StockPilot is invite-only), and only a platform admin creates a workspace.
+
+- **A customer's workspace:** Platform > Provision creates the customer's account, their workspace and their owner seat in one step, and emails them a sign-in link. It needs a verified sign-in email on `STOCKPILOT_PLATFORM_ADMIN_EMAILS` and an authenticator code from the last 15 minutes. An authenticator is set up under Settings > Security, inside a workspace.
+- **A platform admin with no workspace** gets the create form on `/onboarding`, under the same two conditions. Everyone else with no workspace sees the invite-only card there, with Sign out, a link to the ordering portal and Delete my account.
+- **Joining an existing workspace** is an invite from that workspace's Team page.
+
+### Locally
+
+`supabase db reset` seeds the workspace Acme Demo Co with no members (`supabase/seed.sql`). To use it, add a user in local Studio (Authentication > Users), then make that user its owner in Studio's SQL editor. Studio runs as `postgres`, so the owner-row guard lets the insert through:
+
+```sql
+insert into public.organization_members (organization_id, user_id, role, accepted_at)
+values ('00000000-0000-0000-0000-000000000001', '<the user id>', 'owner', now());
+```
+
+Or run `node apps/web/scripts/perf-lab/seed.mjs --target=local` for a workspace with one account per role (see [`apps/web/scripts/perf-lab/README.md`](./apps/web/scripts/perf-lab/README.md)).
 
 ## Documentation
 
@@ -80,6 +95,5 @@ Public `/signup` is intentionally disabled (StockPilot is invite-only). To onboa
 | [`docs/SYSTEM-GUIDE.md`](./docs/SYSTEM-GUIDE.md) | Engineers / architecture deep-dive |
 | [`docs/WAREHOUSING-OVERVIEW.md`](./docs/WAREHOUSING-OVERVIEW.md) | Operators / what the system does in plain English |
 | [`docs/COST-AND-VALUE.md`](./docs/COST-AND-VALUE.md) | Investors / customers — operating cost vs. commercial WMS |
-| [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md) | Founder — pitch workbook + onboarding runbook |
 | [`BLUEPRINT.md`](./BLUEPRINT.md) | Historical — pre-pivot architecture plan (superseded 2026-05-04) |
 | [`SECURITY.md`](./SECURITY.md) | Security disclosure process |
