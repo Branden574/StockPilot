@@ -55,6 +55,8 @@ import { Thumb } from '@/components/ui/thumb';
 import { onRecordsUngrouped } from '@/lib/ungroup-selected';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
+import { countSelectOffers } from '@/lib/count-select-offers';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   attachDisplayGroups,
   groupRowAccessibilityActions,
@@ -234,6 +236,12 @@ export default function BooksScreen() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
+  // Select is offered only when the select bar has something to offer (B42):
+  // Review to someone who can start a count, Group and Ungroup to someone who
+  // can edit items. A viewer was offered Select and a bar whose Review the
+  // server always refused.
+  const enabledModules = useEnabledModules();
+  const selectOffers = countSelectOffers({ role, permissions, enabledModules });
   // True ONLY when the read hit PostgREST's cap, i.e. the rows in hand are a
   // prefix of the filtered set. At current volumes (111 books on the largest
   // org, cap 1000) this never fires; when it does it is disclosed above the
@@ -282,6 +290,12 @@ export default function BooksScreen() {
   // Cycle-count select mode: tapping a card toggles it into the shared
   // count-selection store instead of opening the book.
   const [selectMode, setSelectMode] = React.useState(false);
+  // Select mode ends when the bar stops having anything to offer (the role or
+  // the permissions arrived, or changed), so no bar is left with no action.
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- leaves select mode when the offers change; a no-op when it is already off
+    if (!selectOffers.any) setSelectMode(false);
+  }, [selectOffers.any]);
   // The select bar's measured height (it grows when its actions wrap at large
   // text sizes). While it shows, the list's end clears it too, so the last
   // cards and the pager are never left under the bar. Identical to Items.
@@ -888,12 +902,14 @@ export default function BooksScreen() {
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-            <IconChip
-              icon={selectMode ? Check : ListChecks}
-              onPress={() => setSelectMode((v) => !v)}
-              accessibilityLabel={selectMode ? 'Done selecting' : 'Select books'}
-              minTap
-            />
+            {selectOffers.any ? (
+              <IconChip
+                icon={selectMode ? Check : ListChecks}
+                onPress={() => setSelectMode((v) => !v)}
+                accessibilityLabel={selectMode ? 'Done selecting' : 'Select books'}
+                minTap
+              />
+            ) : null}
             <IconChip
               icon={Plus}
               onPress={() => router.push({ pathname: '/item/new', params: { type: 'book' } })}

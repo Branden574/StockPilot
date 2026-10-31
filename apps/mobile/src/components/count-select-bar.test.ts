@@ -252,12 +252,16 @@ describe('Ungroup: a connection first, then at most 100, with where each record 
 describe('the gates and the actions, as the bar draws them', () => {
   const code = codeOnly(src);
 
+  // The rules themselves (items:update; sports:manage with the sports module)
+  // live in countSelectOffers since B42, and count-select-offers.test.ts runs
+  // them.
   it('Group is offered to someone who can edit items; Ungroup by core rule, families with sports:manage and the module', () => {
     expect(code).toContain(
-      "const canGroup = showWriteCtaForRole(role, permissions, 'items:update');",
+      'const offers = countSelectOffers({ role, permissions, enabledModules });',
     );
+    expect(code).toContain('const canGroup = offers.group;');
     expect(code).toMatch(
-      /const canUngroup = phoneUngroupOffer\(picks, \{\s*editItems: canGroup,\s*unlinkFamilies:\s*showWriteCtaForRole\(role, permissions, 'sports:manage'\) && enabledModules\.has\('sports'\),\s*\}\);/,
+      /const canUngroup = phoneUngroupOffer\(picks, \{\s*editItems: offers\.group,\s*unlinkFamilies: offers\.unlinkFamilies,\s*\}\);/,
     );
     expect(code).toMatch(/\{canGroup \? \(\s*<Pressable\s+onPress=\{\(\) => void openGroup\(\)\}/);
     expect(code).toMatch(
