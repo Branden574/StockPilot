@@ -49,6 +49,8 @@ import { GET } from './route';
 describe('GET /api/purchase-orders/[id]/pdf — the header logo', () => {
   const STORED = 'https://proj.supabase.co/storage/v1/object/public/org-logos/org-1/logo-1.png';
   const LOGO_BYTES = 'data:image/png;base64,TE9HTw==';
+  /** The route answers 400 for an id that is not a uuid (B63). */
+  const PO_ID = '0a000000-0000-4000-8000-0000000000f1';
 
   function signInWithLogo(logoUrl: string | null) {
     const stub = makeSupabaseStub({
@@ -71,8 +73,8 @@ describe('GET /api/purchase-orders/[id]/pdf — the header logo', () => {
   }
 
   async function getPdf() {
-    return GET(new NextRequest('https://test.local/api/purchase-orders/po-1/pdf'), {
-      params: Promise.resolve({ id: 'po-1' }),
+    return GET(new NextRequest(`https://test.local/api/purchase-orders/${PO_ID}/pdf`), {
+      params: Promise.resolve({ id: PO_ID }),
     });
   }
 
@@ -83,7 +85,7 @@ describe('GET /api/purchase-orders/[id]/pdf — the header logo', () => {
       return {
         get: async () => ({
           po: {
-            id: 'po-1',
+            id: PO_ID,
             po_number: 'PO-0001',
             status: 'sent',
             notes: null,

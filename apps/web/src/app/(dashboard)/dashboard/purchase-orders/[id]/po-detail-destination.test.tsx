@@ -122,6 +122,9 @@ vi.mock('@/server/services/context', () => ({
 
 import PoDetailPage from './page';
 
+// A well-formed id: the page refuses any other before reading (B63).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 /** The staging bucket every warehouse has, and the dead end this test pins. */
 const STAGING = {
   id: 'loc-staging',
@@ -162,7 +165,7 @@ function poRow(destinationLocationId: string | null) {
 }
 
 async function renderPage() {
-  return render(await PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) }));
+  return render(await PoDetailPage({ params: Promise.resolve({ id: PO_ID }) }));
 }
 
 /**

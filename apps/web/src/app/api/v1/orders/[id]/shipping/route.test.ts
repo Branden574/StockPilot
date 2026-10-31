@@ -30,7 +30,10 @@ function buildCtx() {
   };
 }
 
-function buildRequest(id = 'order-1') {
+/** The order's id: the route answers 400 for an id that is not a uuid (B63). */
+const ORDER_ID = '0a000000-0000-4000-8000-000000000201';
+
+function buildRequest(id = ORDER_ID) {
   return {
     req: new Request(`https://test.local/api/v1/orders/${id}/shipping`, {
       method: 'GET',
@@ -66,7 +69,7 @@ describe('GET /api/v1/orders/[id]/shipping', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ shipment });
-    expect(getShipment).toHaveBeenCalledWith('order-1');
+    expect(getShipment).toHaveBeenCalledWith(ORDER_ID);
   });
 
   it('returns 200 with { shipment: null } when none exists', async () => {

@@ -112,7 +112,8 @@ function bench(orderNumber: number | null) {
 beforeEach(() => vi.clearAllMocks());
 
 const listArgs = { searchParams: Promise.resolve({}) };
-const detailArgs = { params: Promise.resolve({ id: 'ret-1' }) };
+// A well-formed id: the page refuses any other before reading (B63).
+const detailArgs = { params: Promise.resolve({ id: '5eed0000-0000-4000-8000-0000000000a9' }) };
 
 describe('returns list — order column', () => {
   it('prints the SO number when the parent order has one', async () => {
