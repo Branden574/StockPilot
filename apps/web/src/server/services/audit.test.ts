@@ -285,6 +285,54 @@ describe('auditMany()', () => {
 });
 
 /**
+ * B9: the six scheduled jobs (restore points, auto-reorder, recurring POs,
+ * auto-archive, auto-delete, daily briefing) run under a context that BORROWS
+ * an owner's or admin's user id, and their rows carried nothing else to say a
+ * job wrote them. Readers had only the user agent to guess from: the platform
+ * console's Last active (0351 allowlists browser and app agents) and the
+ * hourly anomaly monitor, which does not read the agent at all and counted a
+ * nightly auto-archive of 25 items as that person mass-archiving.
+ */
+describe('rows a scheduled job writes (metadata.is_system)', () => {
+  const systemCtx = {
+    organizationId: 'org-1',
+    userId: 'user-1',
+    isSystem: true,
+  } as unknown as ServiceContext;
+  type Row = { user_id: string; metadata: Record<string, unknown> };
+
+  it('audit() marks the row as written by the system, keeping the borrowed user id', async () => {
+    h.insert.mockResolvedValue(ok);
+    await audit(payload(3), systemCtx);
+    const [row] = h.insert.mock.calls[0]! as [Row];
+    expect(row.user_id).toBe('user-1');
+    expect(row.metadata).toMatchObject({
+      entity_id: 'item-3',
+      bulk_op: 'set_rack',
+      is_system: true,
+    });
+  });
+
+  it("auditMany() marks every row, and a payload's extra cannot unmark one", async () => {
+    h.insert.mockResolvedValue(ok);
+    await auditMany([payload(1), { ...payload(2), extra: { is_system: false } }], systemCtx);
+    const [rows] = h.insert.mock.calls[0]! as [Row[]];
+    expect(rows.map((r) => r.metadata.is_system)).toEqual([true, true]);
+  });
+
+  it("a person's row never carries the mark, even when a payload's extra names it", async () => {
+    h.insert.mockResolvedValue(ok);
+    await audit({ ...payload(4), extra: { is_system: true, bulk_op: 'set_rack' } }, ctx);
+    await auditMany([{ ...payload(5), extra: { is_system: true } }], ctx);
+    const [one] = h.insert.mock.calls[0]! as [Row];
+    const [[many]] = h.insert.mock.calls[1]! as [Row[]];
+    expect(one.metadata).not.toHaveProperty('is_system');
+    expect(one.metadata.bulk_op).toBe('set_rack');
+    expect(many!.metadata).not.toHaveProperty('is_system');
+  });
+});
+
+/**
  * Review of this branch: audit() now reports a lost row, one report per failed
  * INSERT. reportError posts to the alerts webhook on every call, with no
  * dedupe, so the placement pass of a bulk Set rack during a gateway incident

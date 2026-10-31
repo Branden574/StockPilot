@@ -9,7 +9,9 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { AuthNotice } from '@/components/auth/auth-notice';
 import { publishAuthState } from '@/components/auth/auth-state';
+import { linkFragment, signInNotice, type LinkFragment } from '@/lib/auth/auth-page-notices';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,13 +25,26 @@ import {
   SignInFormInput,
 } from '@stockpilot/core';
 
+// The fragment is read, not watched: the notice is about the link the browser
+// arrived from, and nothing on this page changes what the fragment says.
+// SessionFragmentScrub (in the root layout) swaps a session for
+// SPENT_SESSION_FRAGMENT, and both read
+// as a failed link, so every render shows the same note. The server has no
+// fragment, so a server render reads 'none'.
+const unwatched = () => () => {};
+const fragmentInBrowser = (): LinkFragment => linkFragment(window.location.hash);
+const fragmentOnServer = (): LinkFragment => 'none';
+
 export function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirect = safeRedirectPath(params.get('redirect'));
-  // Sent here by app/auth/session-ended after this device's session was ended
-  // elsewhere (revoked, or signed out everywhere).
-  const sessionEnded = params.get('reason') === 'session_ended';
+  // Why the person is here when a route sent them (docket B39): an emailed
+  // link that did not work (app/auth/confirm, app/auth/callback, or Supabase
+  // in the fragment), or this device's session ended elsewhere
+  // (app/auth/session-ended). Fixed words only, never a URL value.
+  const fragment = React.useSyncExternalStore(unwatched, fragmentInBrowser, fragmentOnServer);
+  const notice = signInNotice(params, fragment);
 
   // Cosmetic only — drives the panel beside the form. Never read by any
   // authentication decision, and the flow is identical if it is ignored.
@@ -83,14 +98,7 @@ export function SignInForm() {
 
   return (
     <form onSubmit={onSubmit} className="space-y-4" noValidate>
-      {sessionEnded ? (
-        <p
-          role="status"
-          className="bg-sunk text-ink-2 rounded-md px-3 py-2 text-[13px] leading-[19.5px]"
-        >
-          You were signed out on this device. Sign in again to continue.
-        </p>
-      ) : null}
+      {notice ? <AuthNotice notice={notice} /> : null}
       <div className="auth-field space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input

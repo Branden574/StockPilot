@@ -2,7 +2,7 @@ import { Calendar } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader } from '@/components/patterns/page-header';
 import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -28,7 +28,7 @@ export default async function SchedulePage({
 }) {
   const moduleAccess = await checkModuleAccess('schedule');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="schedule" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="schedule" access={moduleAccess} />;
   }
   // Visibility gates on schedule:read (manager+ by default, grantable to
   // read-only members). schedule:manage holders keep access even if an org

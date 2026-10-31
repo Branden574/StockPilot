@@ -5,6 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import { backfillBookCoversAction } from '@/server/actions/books-backfill-covers';
 
 /**
@@ -41,6 +42,8 @@ export function BackfillCoversButton() {
         toast.success(`Scanned ${scanned} books: ${parts.join(' · ')}.`);
       }
     } catch (err) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(err)) return;
       toast.error(err instanceof Error ? err.message : "Couldn't backfill covers. Try again in a moment.");
     } finally {
       setBusy(false);

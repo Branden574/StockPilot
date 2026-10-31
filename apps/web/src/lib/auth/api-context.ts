@@ -4,13 +4,18 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
-import { guardedSupabaseFetch } from '@/lib/supabase/url-length-guard';
+import { guardedServerSupabaseFetch } from '@/lib/supabase/url-length-guard.server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
+import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import type { ServiceContext } from '@/server/services/context';
 
-import { parseRequestContextBundle } from '@/lib/auth/request-context-bundle';
+import {
+  holdMembership,
+  parseRequestContextBundle,
+  type BundleMembership,
+} from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
 import { effectivePermissions, isAdminRole } from '@stockpilot/core';
@@ -40,21 +45,6 @@ export function aalFromJwt(token: string): 'aal1' | 'aal2' | null {
       aal?: unknown;
     };
     return payload.aal === 'aal2' ? 'aal2' : payload.aal === 'aal1' ? 'aal1' : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Reads the `session_id` claim from a Supabase access token (already validated
- *  upstream). Used to identify the caller's CURRENT auth.sessions row. */
-export function sessionIdFromJwt(token: string): string | null {
-  try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const payload = JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as {
-      session_id?: unknown;
-    };
-    return typeof payload.session_id === 'string' ? payload.session_id : null;
   } catch {
     return null;
   }
@@ -139,6 +129,10 @@ async function mfaFromPolicy(
         // Bearer/API path: trust the verified token's own AAL claim.
         mfaSatisfied = bearerAal === 'aal2';
       } else {
+        // Cookie path: withApiContext() ran auth.getUser() on THIS client
+        // first, so the stored token decoded here is one the Auth server just
+        // accepted (the bearer path's rule), and auth-js does not log its
+        // insecure-user warning after a successful getUser().
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
         mfaSatisfied = data?.currentLevel === 'aal2';
       }
@@ -202,6 +196,10 @@ type ApiBundleResolution =
       mfaPolicy: MfaPolicy;
       enabledModules: Set<ModuleId>;
       permissions: Set<Permission>;
+      /** The membership that answered, attached to the context it produces
+       *  (holdMembership): a catalog load reads the organization's
+       *  ordering-visibility hide mark from it with no round trip (0413). */
+      held: BundleMembership;
     };
 
 async function resolveApiContextFromBundle(
@@ -266,11 +264,11 @@ async function resolveApiContextFromBundle(
       ),
       // The SAME bundle the role came from, so a role and the overrides that
       // modify it can never be read from two different moments. Owner is never
-      // overridable, exactly as resolvePermissions() has it on the page path.
-      permissions:
-        held.role === 'owner'
-          ? effectivePermissions('owner')
-          : effectivePermissions(held.role, held.role_overrides, held.user_overrides),
+      // overridable except for a platform-managed key StockPilot denied them
+      // (core effectivePermissions applies only that), exactly as
+      // resolvePermissions() has it on the page path.
+      permissions: effectivePermissions(held.role, held.role_overrides, held.user_overrides),
+      held,
     };
   } catch {
     // A fixed string, never the error: it can quote request details.
@@ -394,6 +392,45 @@ async function pickActiveMembership(
 }
 
 /**
+ * The Supabase SSR client's session cookie, `sb-<projectRef>-auth-token[.N]`.
+ * Without one in the request there is no cookie session to read.
+ */
+const SUPABASE_AUTH_COOKIE_RE = /(?:^|;\s*)sb-[^=]+-auth-token(?:\.\d+)?=/;
+
+/**
+ * One warning per refused cookie write, so a refusal of the app's own traffic
+ * (a proxy that renames the host or strips both headers, a browser that
+ * misreports) shows in the runtime logs. Only a write that came with a session
+ * cookie is logged: without one the answer was null anyway, and a bot's bare
+ * POST is not news. The method, the path, Sec-Fetch-Site and the Origin's host
+ * only (null when the header was absent): never the query string, a cookie or
+ * a token.
+ */
+function logRefusedCrossSiteWrite(req: Request): void {
+  let path = '(unreadable)';
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    // Keep the placeholder.
+  }
+  const origin = req.headers.get('origin');
+  let originHost: string | null = null;
+  if (origin !== null) {
+    try {
+      originHost = origin === 'null' ? 'null' : new URL(origin).host || '(no host)';
+    } catch {
+      originHost = '(unreadable)';
+    }
+  }
+  console.warn('[api-context] refused a cookie-authenticated write not sent from this origin', {
+    method: req.method,
+    path,
+    secFetchSite: req.headers.get('sec-fetch-site')?.slice(0, 32) ?? null,
+    originHost: originHost?.slice(0, 255) ?? null,
+  });
+}
+
+/**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
  *
  *   1. Cookie-based (web fetches from the dashboard) — uses the SSR
@@ -407,10 +444,16 @@ async function pickActiveMembership(
  * Returns null when neither path resolves a user — the caller should
  * 401. Redirect-to-/signin behavior is intentionally NOT done here
  * because API routes don't have a useful redirect target.
+ *
+ * The cookie path also returns null for a write (any method but GET, HEAD and
+ * OPTIONS) that a browser did not send from a page of this origin, before the
+ * session is read: another origin, one it will not name, or neither Origin nor
+ * Sec-Fetch-Site at all (docket S14, lib/auth/cross-site-request.ts). Pass the
+ * request the route received, or one built from it with the same method, URL
+ * and headers: the rule reads all three.
  */
 export async function withApiContext(req?: Request): Promise<ServiceContext | null> {
-  const auth = req?.headers.get('authorization') ?? null;
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  const bearer = bearerTokenFrom(req);
 
   if (bearer) {
     // Bearer path: validate the JWT against the Auth API and bind a
@@ -428,7 +471,10 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       {
         // The guard refuses a PostgREST URL too long to succeed instead of
         // letting it fail after ~7 s of retries (see url-length-guard.ts).
-        global: { headers: { Authorization: `Bearer ${bearer}` }, fetch: guardedSupabaseFetch },
+        global: {
+          headers: { Authorization: `Bearer ${bearer}` },
+          fetch: guardedServerSupabaseFetch,
+        },
         auth: { persistSession: false, autoRefreshToken: false },
       },
     );
@@ -439,23 +485,26 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     const fast = await resolveApiContextFromBundle(supabase, userRes.user.id, requestedOrgId);
     if (fast) {
       if (!fast.ok) return null;
-      return {
-        organizationId: fast.organizationId,
-        userId: userRes.user.id,
-        role: fast.role,
-        permissions: fast.permissions,
-        supabase,
-        ...(await mfaFromPolicy(
+      return holdMembership<ServiceContext>(
+        {
+          organizationId: fast.organizationId,
+          userId: userRes.user.id,
+          role: fast.role,
+          permissions: fast.permissions,
           supabase,
-          fast.mfaPolicy,
-          fast.role,
-          userHasVerifiedFactor(userRes.user),
-          // The bearer client has no stored session, so read AAL from the token
-          // itself (already verified above by adminAuth.auth.getUser(bearer)).
-          aalFromJwt(bearer),
-        )),
-        enabledModules: fast.enabledModules,
-      };
+          ...(await mfaFromPolicy(
+            supabase,
+            fast.mfaPolicy,
+            fast.role,
+            userHasVerifiedFactor(userRes.user),
+            // The bearer client has no stored session, so read AAL from the token
+            // itself (already verified above by adminAuth.auth.getUser(bearer)).
+            aalFromJwt(bearer),
+          )),
+          enabledModules: fast.enabledModules,
+        },
+        fast.held,
+      );
     }
 
     // Status and membership in parallel. The status read is NOT free on this
@@ -516,6 +565,23 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   // header is honored if present so a cookie-authed client can request a
   // specific org (membership is verified before use).
   //
+  const cookieHeader = req?.headers.get('cookie') ?? '';
+  const hasSessionCookie = SUPABASE_AUTH_COOKIE_RE.test(cookieHeader);
+
+  // A write a browser did not send from a page of this origin is refused first
+  // (docket S14): another origin, one it will not name, or neither Origin nor
+  // Sec-Fetch-Site (fail closed: every supported browser sends Origin on a
+  // write). The browser attaches the session cookie whatever page made the
+  // request, and SameSite=Lax still lets a page on a sibling subdomain post
+  // with it; a route handler gets no Origin check from the framework the way a
+  // server action does. Null is every caller's signed-out answer, so the
+  // refusal needs no route change, and nothing below (getUser, the context
+  // RPC) runs for it.
+  if (req && refusesCrossSiteCookieWrite(req)) {
+    if (hasSessionCookie) logRefusedCrossSiteWrite(req);
+    return null;
+  }
+
   // Fast-path: short-circuit when the request carries no Supabase auth
   // cookie at all. Without this, anonymous requests to any /api/*
   // endpoint paid a ~500-700ms round trip to supabase.auth.getUser()
@@ -524,11 +590,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   // cookies are present we already know there's no session and can
   // skip the network call entirely. Anonymous /api/ai/chat now 401s
   // in <50ms instead of ~676ms (measured in production).
-  const cookieHeader = req?.headers.get('cookie') ?? '';
-  if (cookieHeader && !/(?:^|;\s*)sb-[^=]+-auth-token(?:\.\d+)?=/.test(cookieHeader)) {
-    return null;
-  }
-  if (!cookieHeader) {
+  if (!hasSessionCookie) {
     return null;
   }
 
@@ -544,17 +606,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   const fast = await resolveApiContextFromBundle(supabase, user.id, requestedOrgId);
   if (fast) {
     if (!fast.ok) return null;
-    return {
-      organizationId: fast.organizationId,
-      userId: user.id,
-      role: fast.role,
-      permissions: fast.permissions,
-      supabase,
-      // No bearer AAL on this path: the cookie client reads its own assurance
-      // level, exactly as it did before.
-      ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
-      enabledModules: fast.enabledModules,
-    };
+    return holdMembership<ServiceContext>(
+      {
+        organizationId: fast.organizationId,
+        userId: user.id,
+        role: fast.role,
+        permissions: fast.permissions,
+        supabase,
+        // No bearer AAL on this path: the cookie client reads its own assurance
+        // level, exactly as it did before.
+        ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
+        enabledModules: fast.enabledModules,
+      },
+      fast.held,
+    );
   }
 
   // Same parallel shape as the bearer branch above — a disabled account is

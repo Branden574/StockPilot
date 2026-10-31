@@ -23,6 +23,7 @@ import { hasSeenScanTip, markScanTipSeen } from '@/lib/scanner-tip-flag';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
 import { fileSizeOf, uploadFileToBucket } from '@/lib/storage-upload';
+import { linkToOpen, signerFor, STORED_FILE_LINK_SECONDS } from '@/lib/stored-file-link';
 import { supabase } from '@/lib/supabase';
 import { FONT, RADIUS, SPACE, palette, type Palette, type ThemeMode } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -35,6 +36,9 @@ interface AttachmentRow {
   storage_path: string;
   file_name: string | null;
   url: string | null;
+  /** When `url` was signed (ms), so a tap can tell an expired link
+   *  (lib/stored-file-link.ts). Null with no link. */
+  signedAt: number | null;
 }
 
 const MAX_BYTES = 15 * 1024 * 1024; // must match the bucket's file_size_limit (mig 0211)
@@ -142,22 +146,29 @@ export function PoAttachments({ poId }: { poId: string }) {
     const list = (rows ?? []) as { id: string; storage_path: string; file_name: string | null }[];
 
     const signed = new Map<string, string>();
+    // Timed from before the request, so a link is never thought to last
+    // longer than it does.
+    const signedAt = Date.now();
     if (list.length > 0) {
       const { data: urls } = await supabase.storage.from(BUCKET).createSignedUrls(
         list.map((r) => r.storage_path),
-        60 * 60,
+        STORED_FILE_LINK_SECONDS,
       );
       for (const u of (urls ?? []) as { path?: string | null; signedUrl: string }[]) {
         if (u.path) signed.set(u.path, u.signedUrl);
       }
     }
     setItems(
-      list.map((r) => ({
-        id: r.id,
-        storage_path: r.storage_path,
-        file_name: r.file_name,
-        url: signed.get(r.storage_path) ?? null,
-      })),
+      list.map((r) => {
+        const url = signed.get(r.storage_path) ?? null;
+        return {
+          id: r.id,
+          storage_path: r.storage_path,
+          file_name: r.file_name,
+          url,
+          signedAt: url ? signedAt : null,
+        };
+      }),
     );
     setLoading(false);
   }, [poId]);
@@ -166,6 +177,34 @@ export function PoAttachments({ poId }: { poId: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
+
+  /**
+   * Opens a file. The links are signed for an hour when the card mounts, and
+   * the purchase order screen can stay open longer: a link that is about to
+   * expire, or missing, is signed again now (lib/stored-file-link.ts) and
+   * kept for the next tap.
+   */
+  async function openFile(row: AttachmentRow) {
+    const link = await linkToOpen(
+      { url: row.url, signedAt: row.signedAt },
+      signerFor(supabase, BUCKET, row.storage_path),
+    );
+    if (!link) {
+      // Signing failed (offline, or a storage-RLS denial): say so instead of
+      // a dead tap. (This screen has no pull to refresh.)
+      Alert.alert(
+        'Couldn’t open file',
+        'No download link is available right now. Check your connection and try again.',
+      );
+      return;
+    }
+    if (link.resigned) {
+      setItems((prev) =>
+        prev.map((x) => (x.id === row.id ? { ...x, url: link.url, signedAt: link.signedAt } : x)),
+      );
+    }
+    void Linking.openURL(link.url);
+  }
 
   /**
    * Core upload shared by every attach source (camera, library, Files app,
@@ -535,18 +574,7 @@ export function PoAttachments({ poId }: { poId: string }) {
             <Pressable
               accessibilityRole="button"
               style={({ pressed }) => [styles.fileOpen, pressed && { opacity: 0.7 }]}
-              onPress={() => {
-                if (row.url) {
-                  void Linking.openURL(row.url);
-                } else {
-                  // Signed-URL minting failed (offline, or a storage-RLS
-                  // denial) — say so instead of a dead tap.
-                  Alert.alert(
-                    'Couldn’t open file',
-                    'No download link is available right now. Pull to refresh and try again.',
-                  );
-                }
-              }}
+              onPress={() => void openFile(row)}
             >
               {/* The paperclip emoji in the words became an icon. */}
               <Paperclip size={15} color={c.ink3} strokeWidth={1.75} />

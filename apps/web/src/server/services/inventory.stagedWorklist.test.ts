@@ -40,7 +40,7 @@ describe('InventoryService.stagedWorklist', () => {
             inventory_items: {
               id: STAGING_ITEM,
               name: 'Acer Chromebook (Madera)',
-              sku: 'SP-9U4BK-0EK',
+              sku: 'SP-9DEM3-CB1',
               item_type: 'product',
               deleted_at: null,
             },
@@ -53,7 +53,7 @@ describe('InventoryService.stagedWorklist', () => {
             inventory_items: {
               id: UNPLACED_ITEM,
               name: 'Acer Chromebook (Manchester)',
-              sku: 'SP-EPOMX-QAN',
+              sku: 'SP-EDEM1-AAA',
               item_type: 'product',
               deleted_at: null,
             },
@@ -87,7 +87,7 @@ describe('InventoryService.stagedWorklist', () => {
             receipt_number: 'R-001',
             received_at: '2026-06-26T00:00:00Z',
             status: 'posted',
-            purchase_orders: { po_number: 'CVSII-001841' },
+            purchase_orders: { po_number: 'DEMO-001841' },
           },
         ],
         error: null,
@@ -104,7 +104,7 @@ describe('InventoryService.stagedWorklist', () => {
     expect(staging.sourceKind).toBe('staging');
     expect(staging.quantity).toBe(150);
     expect(staging.sourceLocationId).toBe('stg-loc');
-    expect(staging.sourcePoNumber).toBe('CVSII-001841');
+    expect(staging.sourcePoNumber).toBe('DEMO-001841');
     expect(staging.receiptNumber).toBe('R-001');
 
     // Unplaced row: surfaced for placement, but NO PO source/receipt/age even
@@ -216,9 +216,9 @@ describe('InventoryService.stagedWorklist', () => {
 // ---------------------------------------------------------------------------
 // Source attribution (owner report 2026-07-22, reproduced from the real rows).
 //
-// "Science Dimensions Earth & Space Science" had been received on 2026-06-24
-// against CVW-002202 — a receipt later REVERSED, on a PO later CANCELLED — and
-// received again on 2026-07-22 against CVW-002201. Its 20 staged units came
+// "Exploring Earth & Space Science: Level 8" had been received on 2026-06-24
+// against DEMO-002202 — a receipt later REVERSED, on a PO later CANCELLED — and
+// received again on 2026-07-22 against DEMO-002201. Its 20 staged units came
 // from the July receipt, but the worklist took the item's EARLIEST receive_po
 // movement with no regard for receipt status, so the Staging screen showed the
 // June receipt: wrong PO, wrong receipt number, "4 weeks ago", and a false
@@ -238,8 +238,8 @@ function scienceDimensionsStub(receipts: Array<Record<string, unknown>>) {
           locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
           inventory_items: {
             id: SCIENCE_ITEM,
-            name: 'Science Dimensions Earth & Space Science',
-            sku: 'SP-0WK2L-LY1',
+            name: 'Exploring Earth & Space Science: Level 8',
+            sku: 'SP-0DEM2-BK1',
             item_type: 'book',
             deleted_at: null,
           },
@@ -271,17 +271,17 @@ function scienceDimensionsStub(receipts: Array<Record<string, unknown>>) {
 
 const JUNE_RECEIPT = {
   id: '11111111-0000-4000-8000-000000000006',
-  receipt_number: 'R-20260624-214123-168444',
+  receipt_number: 'R-20260624-214123-0c0c03',
   received_at: '2026-06-24T21:41:23Z',
   status: 'reversed',
-  purchase_orders: { po_number: 'CVW-002202' },
+  purchase_orders: { po_number: 'DEMO-002202' },
 };
 const JULY_RECEIPT = {
   id: '11111111-0000-4000-8000-000000000007',
-  receipt_number: 'R-20260722-175600-e56648',
+  receipt_number: 'R-20260722-175600-0a0a01',
   received_at: '2026-07-22T17:56:00Z',
   status: 'posted',
-  purchase_orders: { po_number: 'CVW-002201' },
+  purchase_orders: { po_number: 'DEMO-002201' },
 };
 
 describe('InventoryService.stagedWorklist — which receipt staged this stock', () => {
@@ -291,8 +291,8 @@ describe('InventoryService.stagedWorklist — which receipt staged this stock', 
     );
     const [row] = await svc.stagedWorklist();
 
-    expect(row!.sourcePoNumber).toBe('CVW-002201');
-    expect(row!.receiptNumber).toBe('R-20260722-175600-e56648');
+    expect(row!.sourcePoNumber).toBe('DEMO-002201');
+    expect(row!.receiptNumber).toBe('R-20260722-175600-0a0a01');
     expect(row!.receivedAt).toBe('2026-07-22T17:56:00Z');
   });
 
@@ -318,7 +318,7 @@ describe('InventoryService.stagedWorklist — which receipt staged this stock', 
     );
     const [row] = await svc.stagedWorklist();
 
-    expect(row!.sourcePoNumber).toBe('CVW-002202');
+    expect(row!.sourcePoNumber).toBe('DEMO-002202');
     expect(row!.receivedAt).toBe('2026-06-24T21:41:23Z');
     expect(row!.ageDays).toBeGreaterThan(14);
   });
@@ -906,5 +906,79 @@ describe('InventoryService.stagedWorklist({ itemIds }) — put away from an orde
       itemIds: Array.from({ length: 101 }, (_, i) => id(i + 1)),
     });
     expect(rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B38: a holding in the organization-level Staging bucket (0194: a location
+// with no warehouse) belongs to an item that has a warehouse now (the page
+// reads items through their warehouse). The row carries the ITEM's warehouse
+// beside the holding's, so Place can open on it; it rides the existing embed.
+// ---------------------------------------------------------------------------
+
+describe("InventoryService.stagedWorklist — the item's own warehouse (B38)", () => {
+  const ORG_ITEM = '33333333-3333-3333-3333-333333333333';
+
+  function stub() {
+    return makeSupabaseStub({
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: ORG_ITEM,
+            location_id: 'org-stg',
+            quantity: 6,
+            // The organization's bucket: no warehouse on the location.
+            locations: { id: 'org-stg', kind: 'staging', warehouse_id: null },
+            inventory_items: {
+              id: ORG_ITEM,
+              name: 'Trail Runner',
+              sku: 'SP-TR-1',
+              item_type: 'product',
+              deleted_at: null,
+              custom_fields: null,
+              warehouse_id: 'wh-main',
+            },
+          },
+          {
+            item_id: STAGING_ITEM,
+            location_id: 'stg-loc',
+            quantity: 2,
+            locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+            // An embed without the column (an older fixture shape) reads null.
+            inventory_items: {
+              id: STAGING_ITEM,
+              name: 'Desk Lamp',
+              sku: 'SP-DL-1',
+              item_type: 'product',
+              deleted_at: null,
+            },
+          },
+        ],
+        error: null,
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+  }
+
+  it("keeps the holding's warehouse (none) and adds the item's", async () => {
+    const rows = await new InventoryService(makeServiceContext(stub().client)).stagedWorklist();
+    expect(rows.find((r) => r.itemId === ORG_ITEM)).toMatchObject({
+      warehouseId: null,
+      itemWarehouseId: 'wh-main',
+      sourceLocationId: 'org-stg',
+    });
+    expect(rows.find((r) => r.itemId === STAGING_ITEM)).toMatchObject({
+      warehouseId: 'wh-1',
+      itemWarehouseId: null,
+    });
+  });
+
+  it('asks the EXISTING inventory_items embed for warehouse_id: no query of its own', async () => {
+    const s = stub();
+    await new InventoryService(makeServiceContext(s.client)).stagedWorklist();
+    expect(s.fromCalls).not.toContain('inventory_items');
+    const projection = s.chainArgsAll.get('item_stock_levels.select')![0]![0]![0] as string;
+    const embed = projection.slice(projection.indexOf('inventory_items!inner('));
+    expect(embed).toMatch(/\bwarehouse_id\b/);
   });
 });

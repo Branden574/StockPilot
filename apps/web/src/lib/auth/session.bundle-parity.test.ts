@@ -44,6 +44,7 @@ const ORG_FIELDS = {
   dashboard_layout: null,
   order_status_config: null,
   all_modules_comp: false,
+  order_catalog_last_hide_at: '2026-10-26T18:04:05.123456+00:00',
 };
 
 let fixture: Fixture;
@@ -110,7 +111,11 @@ vi.mock('@/lib/supabase/server', () => ({
             const org = fixture.members.find((m) => m.organization_id === filters.id)?.org;
             if (!org) return null;
             const { id: _id, name: _name, ...settings } = org;
-            return settings;
+            // Only the columns the read asked for, as PostgREST answers: a
+            // legacy read that forgets a column cannot pass for the bundle.
+            if (!selected) return settings;
+            const cols = selected.split(',').map((c) => c.trim());
+            return Object.fromEntries(Object.entries(settings).filter(([k]) => cols.includes(k)));
           }
           case 'organization_modules':
             return (member?.modules ?? []).map((module_id) => ({ module_id }));
@@ -119,7 +124,9 @@ vi.mock('@/lib/supabase/server', () => ({
         }
       };
       const builder: Record<string, unknown> = {};
-      for (const m of ['select', 'not', 'is', 'limit', 'neq']) builder[m] = () => builder;
+      let selected: string | null = null;
+      for (const m of ['not', 'is', 'limit', 'neq', 'in']) builder[m] = () => builder;
+      builder.select = (cols?: string) => ((selected = cols ?? null), builder);
       builder.order = (col: string) => ((ordered = ordered || col === 'created_at'), builder);
       builder.eq = (col: string, val: unknown) => ((filters[col] = val), builder);
       builder.maybeSingle = async () => ({ data: result(), error: null });
@@ -237,6 +244,69 @@ describe('one round trip gives the same answer as seven', () => {
     const bundle = await resolve('bundle');
     expect(bundle.out).toEqual((await resolve('legacy')).out);
     expect(bundle.out.permissions).toContain('items:delete');
+  });
+
+  // ── Ordering visibility (0413): orders:manage_catalog_visibility is
+  // platform-managed. An explicit deny holds for the OWNER too, a role row for
+  // it is ignored, and the org row carries the hide mark, on both paths.
+  const KEY = 'orders:manage_catalog_visibility';
+
+  it('an owner whom StockPilot denied the platform-managed key lacks it, and only it, on both paths', async () => {
+    fixture = {
+      profile: profile(),
+      members: [
+        member('A', 'owner', {
+          roleOverrides: [{ permission: 'items:delete', granted: false }],
+          userOverrides: [
+            { permission: KEY, granted: false },
+            { permission: 'items:delete', granted: false },
+          ],
+        }),
+      ],
+    };
+    const bundle = await resolve('bundle');
+    const legacy = await resolve('legacy');
+    expect(bundle.out).toEqual(legacy.out);
+    expect(bundle.out.permissions).not.toContain(KEY);
+    expect(bundle.out.permissions).toContain('items:delete'); // still immutable for every other key
+    expect(legacy.tables).toContain('user_permission_overrides'); // the owner's one read
+  });
+
+  it('a manager: a role row for the key is ignored, an explicit deny is not', async () => {
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'manager', { roleOverrides: [{ permission: KEY, granted: false }] })],
+    };
+    const roleRowOnly = await resolve('bundle');
+    expect(roleRowOnly.out).toEqual((await resolve('legacy')).out);
+    expect(roleRowOnly.out.permissions).toContain(KEY);
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'manager', { userOverrides: [{ permission: KEY, granted: false }] })],
+    };
+    const denied = await resolve('bundle');
+    expect(denied.out).toEqual((await resolve('legacy')).out);
+    expect(denied.out.permissions).not.toContain(KEY);
+  });
+
+  it('a staff member StockPilot allowed holds the key on both paths, and nothing else extra', async () => {
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'staff', { userOverrides: [{ permission: KEY, granted: true }] })],
+    };
+    const bundle = await resolve('bundle');
+    expect(bundle.out).toEqual((await resolve('legacy')).out);
+    expect(bundle.out.permissions).toContain(KEY);
+    expect(bundle.out.permissions).not.toContain('orders:approve');
+  });
+
+  it('the organization row carries the hide mark on both paths', async () => {
+    fixture = { profile: profile(), members: [member('A', 'staff')] };
+    const bundle = await resolve('bundle');
+    const legacy = await resolve('legacy');
+    expect(bundle.out.orgRow?.order_catalog_last_hide_at).toBe('2026-10-26T18:04:05.123456+00:00');
+    expect(legacy.out.orgRow?.order_catalog_last_hide_at).toBe('2026-10-26T18:04:05.123456+00:00');
+    expect(bundle.out.orgRow).toEqual(legacy.out.orgRow);
   });
 
   it('the organization comes from a MEMBERSHIP, never from the stale default in the profile', async () => {

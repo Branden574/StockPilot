@@ -74,10 +74,9 @@ export type OrgEmailRoutingState =
  * (Postgres 42703 — code deployed before migration 0337).
  *
  * DEPLOY-ORDER SAFETY: the fallback state exists solely so code-before-
- * migration cannot outage anything — readers map it to the compiled
- * constants, byte-identical to the pre-feature behavior. Once the column
- * exists it is never produced: an org without a stored value is 'unset'
- * (action hidden), not 'fallback'.
+ * migration cannot outage anything — readers map it to the compiled sample
+ * constants. Once the column exists it is never produced: an org without a
+ * stored value is 'unset' (action hidden), not 'fallback'.
  */
 export type OrgEmailRoutingReadState = OrgEmailRoutingState | { state: 'fallback' };
 

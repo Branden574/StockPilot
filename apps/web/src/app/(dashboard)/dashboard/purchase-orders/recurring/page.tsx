@@ -20,7 +20,7 @@ import { LocationsService } from '@/server/services/locations';
 import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
 import { SuppliersService } from '@/server/services/suppliers';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { createClient } from '@/lib/supabase/server';
 import { withContext } from '@/server/services/context';
 
@@ -50,7 +50,7 @@ export default async function RecurringPosPage({
 }) {
   const moduleAccess = await checkModuleAccess('purchase_orders');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="purchase_orders" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="purchase_orders" access={moduleAccess} />;
   }
 
   const ctx = await requireOrgContext();

@@ -208,7 +208,7 @@ function inboundTakenBy(line: ReadinessLineAssessment, item: ReadinessItemAssess
  *
  * A draft's number is named only when it is the only one. F2-1 production
  * walk (2026-09-28): an item on four drafts of 25 said "On draft
- * PO-1785135627464 100", the first draft's number beside the total of all
+ * PO-1700000000303 100", the first draft's number beside the total of all
  * four, so that PO read as holding 100.
  */
 function openDraftsPhrase(drafts: ReadinessDraftFacts): string | null {

@@ -8,10 +8,17 @@ import {
   locationNameSitsOnRack,
   normalizeCrateColorForWrite,
   normalizeRackFields,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
   parseRackLabel,
+  type Role,
 } from '@stockpilot/core';
 import { z } from 'zod';
 
+import {
+  assertWarehouseAccess,
+  ForbiddenError,
+  roleSeesEveryWarehouse,
+} from '@/lib/auth/warehouse';
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
@@ -24,6 +31,18 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+
+/**
+ * The placement mint's refusal when the warehouse it would create the rack or
+ * crate in is one the caller (below manager) does not work in. The same words
+ * as InventoryService.transferStock's TRANSFER_WAREHOUSE_WRITE_REFUSED (the
+ * phone shows both verbatim), because it is the same rule: below manager, both
+ * ends of a move are in warehouses the caller writes (transfer_stock, 0365).
+ * Checked here BEFORE the mint instead of after it; a test pins the two
+ * sentences together. Declared here because inventory.ts imports this file.
+ */
+export const PLACEMENT_WAREHOUSE_WRITE_REFUSED =
+  'You can only move stock between warehouses you work in.';
 
 export const createLocationSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -339,6 +358,18 @@ export class LocationsService {
     // that answers with the app's own ServiceError shape (and the MFA step-up)
     // before a round trip is spent.
     assertAnyPermission(this.ctx, ['stock:transfer', 'locations:manage']);
+    // THE WAREHOUSE, before anything is minted (B38). mint_placement_location
+    // checks only that the warehouse is the org's. Below manager the move that
+    // follows is refused unless the caller writes the destination's warehouse
+    // (transfer_stock, 0365), but by then the rack or crate existed, empty.
+    // Who gets here with a warehouse they cannot write: the phone's transfer
+    // route, which takes a new rack's warehouse from the SOURCE location
+    // (readable org-wide), so a stale or hand-made source in another
+    // warehouse; and on the web, a viewer granted stock:transfer. A staff
+    // member naming another warehouse on the web is refused before this: each
+    // place action first reads the warehouse under their own access
+    // (warehouses_select), which hides one they are not assigned to.
+    await this.assertMayPlaceInWarehouse(input.warehouseId);
     const name = crateAwareLocationName(input);
     const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
     const { data, error } = await this.ctx.supabase.rpc('mint_placement_location', {
@@ -372,6 +403,32 @@ export class LocationsService {
       throw new ServiceError('internal_error', 'mint_placement_location returned no row');
     }
     return row as Record<string, unknown>;
+  }
+
+  /**
+   * Whether the caller may put stock into this warehouse, the rule the move
+   * itself is held to (transfer_stock, 0365; user_can_access_warehouse 'write':
+   * manager and above everywhere, staff where assigned, a viewer nowhere).
+   * Managers and above skip the read: the role is the whole rule for them
+   * (roleSeesEveryWarehouse). Refusals are ServiceErrors, so the web actions
+   * and the phone's transfer route answer them as they answer the transfer's:
+   * the same sentence, a 403; a failed read of the caller's own access is a
+   * retryable conflict that claims no scope.
+   */
+  private async assertMayPlaceInWarehouse(warehouseId: string): Promise<void> {
+    if (roleSeesEveryWarehouse(this.ctx.role as Role)) return;
+    try {
+      await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+    } catch (e) {
+      if (!(e instanceof ForbiddenError)) throw e;
+      if (e.accessUnreadable) {
+        throw new ServiceError('conflict', ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
+      }
+      // A viewer writes no warehouse: transferStock's words for a caller below
+      // staff, since "warehouses you work in" would not be true of them.
+      if (this.ctx.role === 'viewer') throw new ServiceError('forbidden', 'Permission denied');
+      throw new ServiceError('forbidden', PLACEMENT_WAREHOUSE_WRITE_REFUSED);
+    }
   }
 
   /**

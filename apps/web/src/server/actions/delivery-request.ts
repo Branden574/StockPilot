@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 
@@ -70,7 +71,8 @@ export async function recordDeliveryRequestDraftedAction(input: {
         is_condensed: parsed.data.isCondensed,
       },
     });
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     // audit() is already best-effort; this is belt and braces so the client
     // promise never rejects. Also covers the existence check above: a flaky
     // read must not surface as a broken action either.

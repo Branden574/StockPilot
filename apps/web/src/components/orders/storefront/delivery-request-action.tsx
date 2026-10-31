@@ -19,7 +19,10 @@ import {
 } from '@stockpilot/core';
 
 import { capture } from '@/lib/analytics';
-import { reportError } from '@/lib/error-reporter';
+import { isControlFlow } from '@/lib/control-flow';
+// The isomorphic reporter: this module is in a browser bundle, and
+// @/lib/error-reporter is server-only (see error-reporter-core.ts).
+import { reportError } from '@/lib/error-reporter-core';
 import { recordDeliveryRequestDraftedAction } from '@/server/actions/delivery-request';
 
 import {
@@ -206,7 +209,9 @@ function DeliveryRequestActionInner({
     recordDeliveryRequestDraftedAction({
       orderId: input.orderId,
       isCondensed: prepared.draft.condensed,
-    }).catch(() => {
+    }).catch((e: unknown) => {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The RPC itself can reject (offline); bookkeeping is best-effort and
       // must never surface to the employee who already has their draft.
     });

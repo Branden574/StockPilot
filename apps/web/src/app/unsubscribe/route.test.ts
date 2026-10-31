@@ -32,6 +32,18 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => createAdminClientMock(),
 }));
 
+// The POST limiter (per link, per address; B15). It allows unless a test says
+// otherwise; the member links' limits are pinned in route.members.test.ts.
+const rateLimitAnswer = vi.hoisted(() => ({ allowed: true }));
+const checkRateLimitMock = vi.hoisted(() =>
+  vi.fn(async (_key: string, limit: number, windowMs: number, _mode?: string) => ({
+    allowed: rateLimitAnswer.allowed,
+    count: rateLimitAnswer.allowed ? 1 : limit,
+    resetAt: Date.now() + windowMs,
+  })),
+);
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: checkRateLimitMock }));
+
 import { GET, POST } from './route';
 import { mintUnsubscribeToken } from '@/lib/email/unsubscribe';
 
@@ -79,6 +91,7 @@ describe('/unsubscribe', () => {
     vi.clearAllMocks();
     Object.assign(envState, INITIAL_ENV);
     adminHolder.client = null;
+    rateLimitAnswer.allowed = true;
   });
 
   it('GET renders the confirm page without ever touching the database', async () => {
@@ -152,6 +165,25 @@ describe('/unsubscribe', () => {
 
     expect(res.status).toBe(400);
     expect(stub.fromCalls).toEqual([]);
+    // Checked after the signature: a forged link costs no limiter call.
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it('POST is rate limited per link, by its hash: 429 with Retry-After, nothing written', async () => {
+    const stub = wireAdmin();
+    rateLimitAnswer.allowed = false;
+    const link = mintUnsubscribeToken(EMAIL)!;
+
+    const res = await POST(buildOneClickPost(EMAIL, link));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toMatch(/^\d+$/);
+    expect(stub.fromCalls).toEqual([]);
+    const keys = checkRateLimitMock.mock.calls.map((c) => c[0]);
+    expect(keys.some((k) => /^unsubscribe:link:[0-9a-f]{64}$/.test(k))).toBe(true);
+    expect(keys.join(' ')).not.toContain(link);
+    expect(keys.join(' ')).not.toContain(EMAIL);
+    for (const c of checkRateLimitMock.mock.calls) expect(c[3]).toBe('closed');
   });
 
   it('POST fails closed when UNSUBSCRIBE_SECRET is unset — even a previously valid link', async () => {

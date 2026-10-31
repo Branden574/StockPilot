@@ -187,6 +187,8 @@ export function detectPrivilegeEscalations(
 /**
  * Flags a burst of item deletes/archives by one actor in one org — insider
  * threat, a compromised account wiping data, or a costly accidental mass action.
+ * A scheduled job's rows (the nightly auto-archive and auto-delete) are not an
+ * actor's: see `groupByOrgUser`.
  */
 export function detectMassMutations(
   rows: AuditRow[],
@@ -211,7 +213,16 @@ export function detectExportAbuse(
   return groupByOrgUser(trips, threshold);
 }
 
-/** Shared (org,user) grouping + threshold used by the per-actor detectors. */
+/**
+ * Shared (org,user) grouping + threshold used by the per-actor detectors.
+ *
+ * Rows a scheduled job wrote (`metadata.is_system`, stamped by audit() from
+ * the job's context) are left out. Their user id is BORROWED from an owner or
+ * admin so the job's writes have someone to attribute to; the person did not
+ * act. Counted, the nightly auto-archive of 25 zero-stock items raised "mass
+ * item delete/archive" naming that person. audit() is the only writer that
+ * sets the key, and it strips it from every other context's rows.
+ */
 function groupByOrgUser(
   rows: AuditRow[],
   threshold: number,
@@ -219,6 +230,7 @@ function groupByOrgUser(
   const counts = new Map<string, { organizationId: string; userId: string; count: number }>();
   for (const r of rows) {
     if (!r.organization_id || !r.user_id) continue;
+    if (r.metadata?.is_system === true) continue;
     const key = `${r.organization_id}::${r.user_id}`;
     const existing = counts.get(key);
     if (existing) existing.count += 1;

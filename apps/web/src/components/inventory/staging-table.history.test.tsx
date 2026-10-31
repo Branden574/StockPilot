@@ -25,8 +25,8 @@ beforeEach(() => {
     ok: true,
     json: async () => ({
       itemId: 'item-a',
-      itemName: 'Science Dimensions Earth & Space Science',
-      itemSku: 'SP-0WK2L-LY1',
+      itemName: 'Exploring Earth & Space Science: Level 8',
+      itemSku: 'SP-0DEM2-BK1',
       rows: [],
       total: 0,
       limit: 50,
@@ -71,7 +71,7 @@ function renderTable(props: Partial<StagingTableProps> = {}) {
   return render(
     <StagingTable
       rows={[
-        makeRow('item-a', 'Science Dimensions Earth & Space Science'),
+        makeRow('item-a', 'Exploring Earth & Space Science: Level 8'),
         makeRow('item-b', 'Other Book', { sourceLocationId: 'stg-2' }),
       ]}
       destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack', rackNumber: '1', rackRow: null, crateColor: null, crateNumber: null }] }}
@@ -90,7 +90,7 @@ describe('StagingTable history entry point', () => {
 
     await user.click(
       screen.getByRole('button', {
-        name: 'View history for Science Dimensions Earth & Space Science',
+        name: 'View history for Exploring Earth & Space Science: Level 8',
       }),
     );
 

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Binding constraint 6: the maintenance-requests hub tile must be hidden
@@ -29,7 +29,13 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
-const moduleAccess = vi.hoisted(() => ({ current: { enabled: true, canManage: false } }));
+const moduleAccess = vi.hoisted(() => ({
+  current: { enabled: true, canManage: false } as {
+    enabled: boolean;
+    canManage: boolean;
+    checkFailed?: boolean;
+  },
+}));
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async (moduleId: string) => {
     if (moduleId !== 'maintenance_requests') throw new Error(`unexpected module ${moduleId}`);
@@ -41,9 +47,10 @@ vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 // The tiles are IntentLinks (real anchors warmed on intent), which read the
 // router; the hub never prefetches them on sight.
 const prefetch = vi.hoisted(() => vi.fn());
+const refresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard/settings',
-  useRouter: () => ({ prefetch, push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ prefetch, push: vi.fn(), replace: vi.fn(), refresh }),
 }));
 vi.mock('@/lib/onboarding/tours', () => ({ SETTINGS_TOUR: {} }));
 
@@ -78,7 +85,29 @@ describe('Maintenance requests hub tile', () => {
     ).toBeInTheDocument();
   });
 
-  it("is visible to an admin who holds an explicit configure override (Andrew's real grant path, in reverse)", async () => {
+  // Docket R7: the hub and the sub-nav share one gate table, and a module set
+  // that could not be read is not "off" in either.
+  it('says it could not be checked, with Try again and no link, when the module set was unreadable', async () => {
+    moduleAccess.current = { enabled: false, canManage: true, checkFailed: true };
+    render(await SettingsPage());
+    expect(screen.queryByRole('link', { name: /Maintenance requests/ })).toBeNull();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Maintenance requests' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("We couldn't check whether this module is on.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows nothing of it to an admin without the configure grant when the module set was unreadable', async () => {
+    setCtx('admin');
+    moduleAccess.current = { enabled: false, canManage: true, checkFailed: true };
+    render(await SettingsPage());
+    expect(screen.queryByText('Maintenance requests')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it("is visible to an admin who holds an explicit configure override (the DC4 lead's real grant path, in reverse)", async () => {
     setCtx('admin', [
       'maintenance_requests:submit',
       'maintenance_requests:read_all',

@@ -74,7 +74,7 @@ describe('PoImportsService — cancelled-PO reimport decision', () => {
     const res = await svc(
       stubFor(
         [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
-        [{ id: 'po-1', status: 'cancelled', po_number: 'CVW-002200' }],
+        [{ id: 'po-1', status: 'cancelled', po_number: 'DEMO-002200' }],
       ),
     ).createFromUpload(UPLOAD);
 
@@ -83,7 +83,7 @@ describe('PoImportsService — cancelled-PO reimport decision', () => {
     expect(res.reimportOfCancelled).toEqual({
       predecessorImportId: 'old-import',
       cancelledPoId: 'po-1',
-      cancelledPoNumber: 'CVW-002200',
+      cancelledPoNumber: 'DEMO-002200',
     });
   });
 

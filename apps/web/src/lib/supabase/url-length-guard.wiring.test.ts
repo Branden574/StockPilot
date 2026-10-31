@@ -20,7 +20,12 @@ const env = vi.hoisted(() => ({
 
 vi.mock('@/lib/env', () => ({ env }));
 vi.mock('@/lib/env.client', () => ({ env }));
-vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+const reporters = vi.hoisted(() => ({
+  server: vi.fn(async () => {}),
+  core: vi.fn(async () => {}),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError: reporters.server }));
+vi.mock('@/lib/error-reporter-core', () => ({ reportError: reporters.core }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({ getAll: () => [], set: () => {} }),
 }));
@@ -61,7 +66,8 @@ vi.mock('@supabase/ssr', () => ({
   },
 }));
 
-import { guardedSupabaseFetch } from './url-length-guard';
+import { guardedSupabaseFetch, resetUrlLengthGuardForTests } from './url-length-guard';
+import { guardedServerSupabaseFetch } from './url-length-guard.server';
 
 function globalFetch(options: Record<string, unknown> | undefined): unknown {
   return (options?.global as { fetch?: unknown } | undefined)?.fetch;
@@ -77,13 +83,13 @@ describe('Supabase clients use the URL-length guard', () => {
   it('the service-role client', async () => {
     const { createAdminClient } = await import('./admin');
     createAdminClient();
-    expect(globalFetch(seen.supabaseJs[0]?.options)).toBe(guardedSupabaseFetch);
+    expect(globalFetch(seen.supabaseJs[0]?.options)).toBe(guardedServerSupabaseFetch);
   });
 
   it('the cookie server client', async () => {
     const { createClient } = await import('./server');
     await createClient();
-    expect(globalFetch(seen.server[0]?.options)).toBe(guardedSupabaseFetch);
+    expect(globalFetch(seen.server[0]?.options)).toBe(guardedServerSupabaseFetch);
   });
 
   it('the browser client', async () => {
@@ -100,9 +106,32 @@ describe('Supabase clients use the URL-length guard', () => {
     await withApiContext(req).catch(() => null);
     // [0] validates the token (auth only); [1] is the data client.
     const dataClient = seen.supabaseJs[1]?.options;
-    expect(globalFetch(dataClient)).toBe(guardedSupabaseFetch);
+    expect(globalFetch(dataClient)).toBe(guardedServerSupabaseFetch);
     expect((dataClient?.global as { headers?: Record<string, string> }).headers).toEqual({
       Authorization: 'Bearer token-abc',
     });
+  });
+});
+
+describe('which reporter each guard uses', () => {
+  // Mutation caught: the server clients reporting through the core reporter,
+  // whose POST nothing keeps alive once the route has answered.
+  it('the server guard reports through the server reportError, the browser guard through the core', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('[]', { status: 200 })),
+    );
+    resetUrlLengthGuardForTests();
+    const long = (table: string) =>
+      `https://example.supabase.co/rest/v1/${table}?select=id&id=in.%28${'a'.repeat(7_000)}`;
+    await guardedServerSupabaseFetch(long('orders'));
+    expect(reporters.server).toHaveBeenCalledTimes(1);
+    expect(reporters.core).not.toHaveBeenCalled();
+    await guardedSupabaseFetch(long('items'));
+    expect(reporters.core).toHaveBeenCalledTimes(1);
+    expect(reporters.server).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 });

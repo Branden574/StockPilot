@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -11,6 +12,7 @@ import { CycleCountsService } from '@/server/services/cycle-counts';
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) return err(error.code, error.message);
   // ForbiddenError comes out of assertWarehouseAccess when the caller
   // isn't allowed to touch the warehouse. Map it to the 'forbidden'

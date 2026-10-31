@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { FilterBar } from '@/components/patterns/filter-bar';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -42,7 +42,7 @@ export default async function BundlesListPage({
 }) {
   const moduleAccess = await checkModuleAccess('bundles');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="bundles" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="bundles" access={moduleAccess} />;
   }
   const params = await searchParams;
   const search = params.q?.trim() || undefined;

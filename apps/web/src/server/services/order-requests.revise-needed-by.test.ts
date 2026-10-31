@@ -74,7 +74,7 @@ function orderRow(over: Record<string, unknown> = {}) {
     needed_by: OLD,
     order_number: 16,
     fulfillment_type: 'pickup',
-    requester_name: 'Doua Vang',
+    requester_name: 'Lena Hale',
     assigned_delivery_user_id: null,
     ...over,
   };
@@ -563,7 +563,7 @@ describe('the Schedule entry', () => {
         status: 'scheduled',
         warehouse_id: 'wh-1',
         created_by: 'approver-1',
-        title: 'SO-000016 pickup — Doua Vang',
+        title: 'SO-000016 pickup — Lena Hale',
         details: orderScheduleEventDetails({ id: ORDER, orderNumber: 16, neededBy: '2026-10-03T21:00:00.000Z' }, LA),
       });
       // The zone was read once, by the revision; the admin client read none.

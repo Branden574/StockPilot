@@ -12,6 +12,8 @@ import {
   View,
 } from 'react-native';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { DataListScreen } from '@/components/data-list-screen';
@@ -317,6 +319,12 @@ function UserCard({
   const disabled = shouldShowDisabledBadge(user.profile);
   const name = user.profile?.full_name ?? user.profile?.email ?? user.invited_email ?? 'Unnamed';
   const email = user.profile?.email ?? user.invited_email;
+  // A link only for one plain address (core plainAddressMailtoUrl). Before,
+  // `mailto:${email}` opened whatever was stored, so an address such as
+  // "a@b.com?bcc=x@y.z" or one with an invisible character opened a message
+  // to someone the card does not show. Any other text is shown, not linked,
+  // and VoiceOver is not offered an Email action for it.
+  const mailto = plainAddressMailtoUrl(email);
   const avatar = user.profile?.avatar_url ?? null;
   const initials = name
     .split(/[\s._-]+/)
@@ -334,7 +342,7 @@ function UserCard({
   // space stands in for the 3pt gap under the name, so the card grows about
   // 27pt and the frame lies over neither the name nor the card's padding.
   const openEmail = () => {
-    if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);
+    if (mailto) Linking.openURL(mailto).catch(() => undefined);
   };
   return (
     <Pressable
@@ -344,7 +352,7 @@ function UserCard({
       // iOS folds the card's children into the card for VoiceOver, so the
       // email link inside it is offered as an action here (swipe up or
       // down); a double tap still opens the role picker where it did.
-      accessibilityActions={userCardActions(canEdit, email)}
+      accessibilityActions={userCardActions(canEdit, mailto ? email : null)}
       onAccessibilityAction={(e) => {
         if (e.nativeEvent.actionName === 'email') openEmail();
         else if (e.nativeEvent.actionName === 'activate' && canEdit) onPress();
@@ -376,7 +384,7 @@ function UserCard({
           <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
             {name}
           </Body>
-          {email ? (
+          {email && mailto ? (
             <Pressable
               onPress={openEmail}
               style={({ pressed }) => ({
@@ -392,6 +400,14 @@ function UserCard({
                 {email}
               </Mono>
             </Pressable>
+          ) : email ? (
+            // Not one plain address: the same words in the same frame, with
+            // no touchable and no Mail glyph, so nothing offers to open Mail.
+            <View style={{ minHeight: 44, justifyContent: 'center' }}>
+              <Mono size={11} tracking={0.04} color={c.ink3}>
+                {email}
+              </Mono>
+            </View>
           ) : null}
         </View>
           <View style={{ alignItems: 'flex-end', gap: 6 }}>

@@ -288,7 +288,8 @@ describe('createSnapshot (version 2 carries each record id)', () => {
     });
     await createSnapshot(ctx, { kind: 'manual', label: 'before split' });
     const snap = h.inserted[0]?.snapshot as RestoreSnapshot;
-    expect(snap.version).toBe(2);
+    // Version 3 (ordering visibility, 0413) still carries every record id.
+    expect(snap.version).toBe(3);
     expect(snap.items.map((i) => [i.id, i.sku, i.binLocation, i.quantityOnHand])).toEqual([
       [A, 'SP-PAIR', '22-A', 9],
       [B, 'SP-PAIR', '22-C', 4],
@@ -379,6 +380,11 @@ describe('restoreSnapshot after an Ungroup', () => {
       binLocation: '7-B',
       quantityOnHand: 6,
     });
+    // create() asks before it creates the rack a create's stock is typed onto
+    // (2026-10-24), and nobody can answer it during a restore. Without this
+    // option a re-created record with stock whose rack is gone is refused,
+    // and the catch below counts it as a failure without a word.
+    expect(h.create.mock.calls[0]?.[1]).toEqual({ allowUnconfirmedNewRack: true });
     expect(res).toMatchObject({ updated: 1, recreated: 1, extrasFlagged: 0 });
   });
 
@@ -513,6 +519,7 @@ describe('restoreSnapshot after an Ungroup', () => {
       binLocation: '22-C',
       quantityOnHand: 4,
     });
+    expect(h.create.mock.calls[0]?.[1]).toEqual({ allowUnconfirmedNewRack: true });
     expect(res).toMatchObject({
       updated: 1,
       recreated: 1,
@@ -636,6 +643,10 @@ describe('restoreSnapshot: a version 1 point after an Ungroup (PR stage, DATA-1)
     ).toEqual([
       ['SP-PAIR', '22-C'],
       ['SP-PAIR', '22-E'],
+    ]);
+    expect(h.create.mock.calls.map((c) => c[1])).toEqual([
+      { allowUnconfirmedNewRack: true },
+      { allowUnconfirmedNewRack: true },
     ]);
     expect(res).toMatchObject({
       updated: 1,
@@ -1407,5 +1418,114 @@ describe('what a restore gives back to a record whose SKU now belongs to another
       'supplierId',
       'unitOfMeasure',
     ]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Ordering visibility (0413): snapshot version 3 records each record's
+// order_catalog_visible, so a record the point captured hidden from new
+// ordering is re-created hidden (InventoryService.create's server-only
+// opts.orderCatalogVisible). A version 2 point has no value and re-creates
+// shown, as before. A record matched alive keeps its own live choice: the
+// restore never writes the column to it. Versions 2 and 3 both match by id.
+// ---------------------------------------------------------------------------
+describe('restore points and ordering visibility (version 3)', () => {
+  const captured = (id: string, sku: string, visible: boolean) => ({
+    id,
+    sku,
+    name: 'New Hire Shirt',
+    quantity_on_hand: 3,
+    bin_location: null,
+    status: 'active',
+    item_type: 'product',
+    warehouse_id: 'wh-1',
+    order_catalog_visible: visible,
+  });
+
+  it('createSnapshot reads order_catalog_visible and keeps it on each record', async () => {
+    const { ctx, reads } = harness({
+      capture: [captured(A, 'SH-XS', false), captured(B, 'SH-S', true)],
+    });
+    await createSnapshot(ctx, { kind: 'manual', label: null });
+    const capture = reads.find((r) => r.table === 'inventory_items');
+    expect(capture?.select.split(',').map((x) => x.trim())).toContain('order_catalog_visible');
+    const snap = h.inserted[0]?.snapshot as RestoreSnapshot;
+    expect(snap.version).toBe(3);
+    expect(snap.items.map((i) => [i.id, i.orderCatalogVisible])).toEqual([
+      [A, false],
+      [B, true],
+    ]);
+  });
+
+  it('version 3: a record captured hidden is re-created hidden; a shown one gets the default', async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 3,
+        capturedAt: '2026-10-26T00:00:00.000Z',
+        items: [
+          item({ id: A, sku: 'SH-XS', quantityOnHand: 2, orderCatalogVisible: false }),
+          item({ id: B, sku: 'SH-S', quantityOnHand: 4, orderCatalogVisible: true }),
+        ],
+      },
+      active: [],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(res).toMatchObject({ recreated: 2 });
+    const bySku = new Map(h.create.mock.calls.map((c) => [(c[0] as { sku: string }).sku, c[1]]));
+    expect(bySku.get('SH-XS')).toEqual({ allowUnconfirmedNewRack: true, orderCatalogVisible: false });
+    expect(bySku.get('SH-S')).toEqual({ allowUnconfirmedNewRack: true });
+  });
+
+  it('version 3 still matches by id, and a matched record keeps its live choice', async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 3,
+        capturedAt: '2026-10-26T00:00:00.000Z',
+        items: [item({ id: A, sku: 'SH-XS', binLocation: '22-A', quantityOnHand: 9, orderCatalogVisible: false })],
+      },
+      active: [row(A, 'SH-XS-RENAMED', '22-A', 9)],
+    });
+    await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A]);
+    for (const c of h.update.mock.calls) {
+      expect(c[1]).not.toHaveProperty('orderCatalogVisible');
+      expect(c[1]).not.toHaveProperty('order_catalog_visible');
+    }
+  });
+
+  it('a version 2 point (no value) re-creates shown, and still matches by id', async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 2,
+        capturedAt: '2026-10-12T00:00:00.000Z',
+        items: [
+          item({ id: A, sku: 'SP-KEEP', binLocation: '1-A', quantityOnHand: 3 }),
+          item({ id: C, sku: 'SP-GONE', binLocation: '2-B', quantityOnHand: 1 }),
+        ],
+      },
+      active: [row(A, 'SP-NEWSKU', '1-A', 3)],
+    });
+    await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A]);
+    expect(h.create.mock.calls.map((c) => c[1])).toEqual([{ allowUnconfirmedNewRack: true }]);
+  });
+
+  it('a version 3 point needs no SKU-change warning either', async () => {
+    const { ctx, reads } = harness({
+      point: {
+        version: 3,
+        captured_at: '2026-10-26T08:00:00.000Z',
+        created_at: '2026-10-26T08:00:01.000Z',
+      },
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 3,
+      changes: [],
+      more: 0,
+      truncated: false,
+    });
+    expect(reads.some((r) => r.table === 'audit_logs')).toBe(false);
   });
 });

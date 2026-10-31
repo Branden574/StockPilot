@@ -1,9 +1,11 @@
 import { render, screen } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import type { ProcedureListRow } from '@/server/services/procedures';
 
 import { ProcedureCard } from './procedure-card';
+import { ProcedureCategoryPill, ProcedureFallbackBand } from './procedure-fallback-band';
 
 function row(overrides: Partial<ProcedureListRow> = {}): ProcedureListRow {
   return {
@@ -101,5 +103,56 @@ describe('ProcedureCard', () => {
     const video = container.querySelector('video')!;
     expect(video).toHaveAttribute('preload', 'metadata');
     expect(video.muted).toBe(true);
+  });
+});
+
+/**
+ * A procedure category's stored colour is plain text that an admin can write
+ * through the Data API, and the server renderer copies a style value into the
+ * page as given, so an unchecked `;` added CSS declarations (docket T14). A
+ * value that is not `#rrggbb` draws the slate a procedure without a category
+ * draws. Rendered on the server, as the list and detail pages are.
+ */
+describe('a stored category colour that is not #rrggbb (docket T14)', () => {
+  const INJECTED = '#000;position:fixed;inset:0;z-index:2147483647;background:#fff';
+  const styles = (html: string) => [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]!);
+
+  it('the card draws slate in the server HTML, never the stored text', () => {
+    const html = renderToString(<ProcedureCard procedure={row({ category_color: INJECTED })} />);
+    expect(html).not.toContain('position:');
+    expect(html).not.toContain('z-index');
+    expect(styles(html)).toEqual([
+      'background-color:#475569',
+      'color:#475569',
+      'background-color:#475569',
+    ]);
+  });
+
+  it('the band and the pill each fall back to slate on their own', () => {
+    for (const color of [
+      INJECTED,
+      'red;position:fixed',
+      '#2563eb;',
+      'url(https://x.example/a.png)',
+    ]) {
+      expect(styles(renderToString(<ProcedureFallbackBand color={color} />)), color).toEqual([
+        'background-color:#475569',
+        'color:#475569',
+      ]);
+      expect(
+        styles(renderToString(<ProcedureCategoryPill name="Safety" color={color} />)),
+        color,
+      ).toEqual(['background-color:#475569']);
+    }
+  });
+
+  it('a #rrggbb colour is still drawn', () => {
+    expect(styles(renderToString(<ProcedureFallbackBand color="#2563eb" />))).toEqual([
+      'background-color:#2563eb',
+      'color:#2563eb',
+    ]);
+    expect(styles(renderToString(<ProcedureCategoryPill name="Safety" color="#2563eb" />))).toEqual(
+      ['background-color:#2563eb'],
+    );
   });
 });

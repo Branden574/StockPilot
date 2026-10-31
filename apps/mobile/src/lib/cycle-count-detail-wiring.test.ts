@@ -58,8 +58,46 @@ describe('cycle-count/[id].tsx — post goes through the API twin (SP-055)', () 
 describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', () => {
   it('guards the store-then-read after the fetch and surfaces it when nothing is on screen', () => {
     expect(screen).toMatch(
-      /try \{\s+await cacheCycleCount\(fetchedHeader, fetchedLines\);\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
+      /try \{\s+if \(!\(await cacheCycleCount\(fetchedHeader, fetchedLines, fetchedUnder\)\)\) return 'discarded';\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
     );
+  });
+});
+
+// B18 review of 254fb9c72: cacheCycleCount discards a fetch made for another
+// cache, account or workspace and answers false, and the screen ignored the
+// answer. With no copy on the phone it then showed a count with no lines, no
+// message and no Retry (a count opened from a notification just after another
+// account signed in: that account's first pull resets the cache while the
+// fetch is out); with an older copy, it kept that one.
+describe('cycle-count/[id].tsx: a fetch the cache discarded is loaded again once, then said', () => {
+  it('loads the count again when cacheCycleCount answers false, once, and then shows the read failure with Retry', () => {
+    expect(screen).toContain('const loadOnce = React.useCallback(async (): Promise<LoadPass> => {');
+    expect(screen).toContain("type LoadPass = 'discarded' | undefined;");
+    // A discarded store stops the pass before anything is read back or the
+    // spinner is stopped (pinned above, in the store's try).
+    expect(screen.match(/return 'discarded'/g)).toHaveLength(1);
+    expect(screen).toMatch(
+      /const load = React\.useCallback\(async \(\) => \{\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+setReadError\(COUNT_NOT_SAVED_AFTER_A_CHANGE\);\s+setEmptyState\('read-failed'\);\s+setLoading\(false\);\s+\}, \[loadOnce\]\);/,
+    );
+    // Two passes at most: the mount, the workspace change and both Retry
+    // buttons go through load().
+    expect(screen.match(/loadOnce\(\)/g)).toHaveLength(2);
+    expect(screen.match(/void load\(\);/g)).toHaveLength(3);
+    expect(screen).toContain('const COUNT_NOT_SAVED_AFTER_A_CHANGE =');
+  });
+});
+
+// B18 reviews, 2026-10-25: a fetch that finished after a sign-out's wipe, a
+// workspace switch's, or another account's sign-in wrote its count into the
+// cache it no longer belonged to. The store is guarded by what the screen
+// noted BEFORE the fetch (executed in cache-owner.sqlite.test.ts).
+describe('cycle-count/[id].tsx: the count is stored only for the cache and account it was fetched for', () => {
+  it('notes the cache and the account before the fetch is sent, and stores under that note', () => {
+    const note = screen.indexOf('const fetchedUnder = await cacheWriteScope();');
+    const fetch = screen.indexOf('fetchAllCycleCountLines(supabase, id)');
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(fetch);
+    expect(screen.match(/cacheCycleCount\(/g)).toHaveLength(1);
   });
 });
 

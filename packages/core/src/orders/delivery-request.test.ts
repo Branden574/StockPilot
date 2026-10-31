@@ -59,8 +59,8 @@ function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryReque
     fulfillmentType: 'delivery',
     warehouseName: 'DC4',
     destination: { id: 'ch-1', name: 'CVW Clovis', code: 'CVW-CLO', address: null },
-    requestedFor: 'Marissa Delgado',
-    requesterEmail: 'mdelgado@learn4life.org',
+    requestedFor: 'Rebecca Lindsey',
+    requesterEmail: 'rlindsey@sampleorg.test',
     neededByLocal: '2026-08-18T09:00',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
@@ -80,7 +80,7 @@ function manyLines(n: number): DeliveryRequestInput {
 }
 
 describe('recipients are INPUT, not a constant the builder reaches for', () => {
-  it('a second org gets ITS OWN addresses — the L4L mailbox appears nowhere', () => {
+  it('a second org gets ITS OWN addresses — the compiled pair appears nowhere', () => {
     /*
      * THE TENANCY TEST. Before the move the builder read
      * DELIVERY_REQUEST_EMAIL directly, so every org's delivery request would
@@ -105,8 +105,8 @@ describe('recipients are INPUT, not a constant the builder reaches for', () => {
 
     const url = buildDeliveryRequestOutlookUrl(draft);
     expect(url).toContain(encodeURIComponent(encodeURIComponent('ops@othercorp.test')));
-    expect(url).not.toContain('learn4life');
-    expect(url).not.toContain('cvwest');
+    expect(url).not.toContain('sampleorg');
+    expect(url).not.toContain('site1');
     // The clipboard instructions are what an employee follows by hand when
     // both links fail — they must name the same two mailboxes.
     expect(buildDeliveryRequestClipboardText(draft)).toContain('TO: intake@othercorp.test');
@@ -138,9 +138,9 @@ describe('recipients are INPUT, not a constant the builder reaches for', () => {
       encodeURIComponent(encodeURIComponent('Fresno Warehouse DC4')),
     );
     expect(buildDeliveryRequestMailtoUrl(draft)).not.toContain('Fresno');
-    expect(buildDeliveryRequestMailtoUrl(draft)).not.toContain('Andrew');
+    expect(buildDeliveryRequestMailtoUrl(draft)).not.toContain('Jordan');
     expect(buildDeliveryRequestClipboardText(draft)).not.toContain('Fresno');
-    expect(buildDeliveryRequestClipboardText(draft)).not.toContain('Andrew');
+    expect(buildDeliveryRequestClipboardText(draft)).not.toContain('Jordan');
   });
 
   it('a draft built with no display names still routes to both addresses', () => {
@@ -179,14 +179,14 @@ describe('the builder REFUSES a recipient it cannot route', () => {
   const BAD = [
     ['empty', ''],
     ['whitespace only', '   '],
-    ['a comma-joined second address', 'arosas@cvwest.org,evil@attacker.test'],
-    ['a semicolon-joined second address', 'arosas@cvwest.org;evil@attacker.test'],
-    ['a space-joined second address', 'arosas@cvwest.org evil@attacker.test'],
-    ['a name-addr', 'Andrew Rosas <arosas@cvwest.org>'],
-    ['no domain dot', 'arosas@localhost'],
-    ['no at sign', 'arosas.cvwest.org'],
-    ['two at signs', 'a@b@cvwest.org'],
-    ['a newline', 'arosas@cvwest.org\nBcc: evil@attacker.test'],
+    ['a comma-joined second address', 'jstone@site1.test,evil@attacker.test'],
+    ['a semicolon-joined second address', 'jstone@site1.test;evil@attacker.test'],
+    ['a space-joined second address', 'jstone@site1.test evil@attacker.test'],
+    ['a name-addr', 'Jordan Stone <jstone@site1.test>'],
+    ['no domain dot', 'jstone@localhost'],
+    ['no at sign', 'jstone.site1.test'],
+    ['two at signs', 'a@b@site1.test'],
+    ['a newline', 'jstone@site1.test\nBcc: evil@attacker.test'],
   ] as const;
 
   for (const [label, value] of BAD) {
@@ -216,20 +216,20 @@ describe('the builder REFUSES a recipient it cannot route', () => {
         makeInput({
           recipients: unbranded({
             to: DELIVERY_REQUEST_EMAIL.to,
-            cc: 'arosas@cvwest.org,evil@attacker.test',
+            cc: 'jstone@site1.test,evil@attacker.test',
           }),
         }),
       ),
     ).toThrow(/recipient "cc" must be exactly one plain email address/);
   });
 
-  it('accepts the real production pair', () => {
+  it('accepts the compiled sample pair', () => {
     // The negative cases above are worthless without this: a guard that
     // rejected everything would satisfy all of them.
     expect(() => buildDeliveryRequestDraft(makeInput())).not.toThrow();
     const draft = buildDeliveryRequestDraft(makeInput());
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 });
 
@@ -617,7 +617,7 @@ describe('DeliveryRequestRecipients is branded — an object literal is not one'
       deliveryRequestRecipients({
         to: 'intake@othercorp.test',
         cc: 'ops@othercorp.test',
-        ccName: 'Rosas, Andrew',
+        ccName: 'Stone, Jordan',
       }),
     ).toThrow(/Display name contains RFC 5322 specials/);
   });
@@ -627,7 +627,7 @@ describe('DeliveryRequestRecipients is branded — an object literal is not one'
     // in either), so the factory used to store them and a whitespace toName
     // reached the OWA mailtouri path as the chip '  <addr>' — a name-addr
     // with an invisible name. Measured before the fix: the decoded to-part
-    // was "  <dc4@learn4life.org>". Both blank shapes now normalize to
+    // was "  <dc4@sampleorg.test>". Both blank shapes now normalize to
     // absent, so the compose urls are byte-identical to the bare-address
     // form.
     const blank = deliveryRequestRecipients({

@@ -37,7 +37,7 @@ describe('formatHoldingLabel', () => {
 });
 
 describe('formatArchiveStockBlockMessage', () => {
-  it("matches Andrew's Persepolis case with pluralized units and every location", () => {
+  it("matches the real Persepolis case with pluralized units and every location", () => {
     const msg = formatArchiveStockBlockMessage(181, [
       { label: '100-A', quantity: 140 },
       { label: '38-B', quantity: 41 },
@@ -140,13 +140,13 @@ describe('RACK_WRITE_OFF_MOVEMENT_TYPE', () => {
 describe('formatLocationArchiveStockBlockMessage', () => {
   it('names the location, the total, and the items holding it', () => {
     const msg = formatLocationArchiveStockBlockMessage('100-A', 22, [
-      { name: 'Science Dimensions Earth & Space Science', quantity: 12 },
-      { name: 'Science Dimensions Earth & Space Science', quantity: 10 },
+      { name: 'Exploring Earth & Space Science: Level 8', quantity: 12 },
+      { name: 'Exploring Earth & Space Science: Level 8', quantity: 10 },
     ]);
     expect(msg).toContain('100-A');
     expect(msg).toContain('22 units');
     expect(msg).toContain('2 items');
-    expect(msg).toContain('12 of Science Dimensions Earth & Space Science');
+    expect(msg).toContain('12 of Exploring Earth & Space Science: Level 8');
   });
 
   it('says what archiving anyway ACTUALLY does — never "write it off"', () => {

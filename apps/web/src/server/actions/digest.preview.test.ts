@@ -46,6 +46,9 @@ vi.mock('@/server/services/digest', () => ({
 }));
 
 import { sendDigestPreviewAction } from './digest';
+import { requireOrgContext } from '@/lib/auth/session';
+import { env } from '@/lib/env';
+import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
 const EMPTY = {
   lowStock: [],
@@ -123,5 +126,103 @@ describe('sendDigestPreviewAction: its days are the organization\'s (small fixes
       EMPTY,
       expect.objectContaining({ now, timeZone: 'America/Los_Angeles' }),
     );
+  });
+});
+
+/**
+ * B15: the preview carries the Monday email's unsubscribe, a signed one-click
+ * link for the caller in the workspace they sent it from, dated with today's
+ * UTC day (it works for 90 days), instead of the settings page behind
+ * sign-in. The signing value is a dull one under a
+ * neutral name (src/test/secret-shaped-fixtures.guard.test.ts).
+ */
+describe('sendDigestPreviewAction: one-click unsubscribe', () => {
+  const PREVIEW_SIGNING_VALUE = 'preview-' + 'v'.repeat(24);
+  const MEMBER = '00000000-0000-4000-8000-0000000000a1';
+  const ORG = '00000000-0000-4000-8000-00000000c0c0';
+  const SETTINGS = 'https://stockpilotusa.com/dashboard/settings/notifications';
+  const signable = env as Record<string, string | undefined>;
+
+  type Sent = { headers?: Record<string, string> };
+  const sent = () => (sendEmailMock.mock.calls[0] as unknown as [Sent])[0];
+
+  beforeEach(() => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: ORG,
+      organizationName: 'Example workspace',
+      userId: MEMBER,
+      email: 'member@example.test',
+      fullName: 'Member',
+      role: 'owner',
+    } as never);
+  });
+  afterEach(() => {
+    delete signable.UNSUBSCRIBE_SECRET;
+  });
+
+  it("names the caller and the caller's workspace, dated today, and advertises the one-click POST", async () => {
+    signable.UNSUBSCRIBE_SECRET = PREVIEW_SIGNING_VALUE;
+    // 7 PM on Oct 13 in Sydney is still Oct 13 in UTC (08:00).
+    const sentAt = new Date('2026-10-13T08:00:00.000Z');
+    vi.setSystemTime(sentAt);
+    const res = await sendDigestPreviewAction();
+    expect(res.ok).toBe(true);
+    const link = mintMemberUnsubscribeToken(
+      { userId: MEMBER, organizationId: ORG, kind: 'weekly_digest' },
+      sentAt,
+    );
+    expect(link).toContain(`.${ORG}.20261013.`);
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    expect(sent().headers).toEqual({
+      'List-Unsubscribe': `<${url}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    });
+    // The footer's Unsubscribe is the same link; Manage stays the settings page.
+    expect(renderMock).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ settingsUrl: SETTINGS, unsubscribeUrl: url }),
+    );
+  });
+
+  it('keeps the settings page, with no one-click header, when no link can be signed', async () => {
+    const res = await sendDigestPreviewAction();
+    expect(res.ok).toBe(true);
+    expect(sent().headers).toEqual({ 'List-Unsubscribe': `<${SETTINGS}>` });
+    expect(renderMock).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ unsubscribeUrl: SETTINGS }),
+    );
+  });
+
+  it("gives the text part the one-click link and the organization's date together", async () => {
+    // Merged with small fixes slice 8: the text part takes the preview's
+    // options plus its moment and zone, so neither the link nor the date is
+    // lost. 6 PM on Oct 12 in Los Angeles is Oct 13 in UTC: the link is
+    // dated the UTC day, the text the organization's.
+    signable.UNSUBSCRIBE_SECRET = PREVIEW_SIGNING_VALUE;
+    getCachedOrgTimezoneMock.mockResolvedValue('America/Los_Angeles');
+    const sentAt = new Date('2026-10-13T01:00:00.000Z');
+    vi.setSystemTime(sentAt);
+    const { weeklyDigestText } = await import('@/lib/email/es/families/digest');
+
+    const res = await sendDigestPreviewAction();
+
+    expect(res.ok).toBe(true);
+    const link = mintMemberUnsubscribeToken(
+      { userId: MEMBER, organizationId: ORG, kind: 'weekly_digest' },
+      sentAt,
+    );
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    for (const rendered of [renderMock, weeklyDigestText]) {
+      expect(rendered).toHaveBeenCalledWith(
+        EMPTY,
+        expect.objectContaining({
+          settingsUrl: SETTINGS,
+          unsubscribeUrl: url,
+          now: sentAt,
+          timeZone: 'America/Los_Angeles',
+        }),
+      );
+    }
   });
 });

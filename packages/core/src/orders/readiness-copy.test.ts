@@ -464,7 +464,7 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
   });
 
   // F2-1 production walk (2026-09-28): an item on four draft POs of 25 each
-  // said "On draft PO-1785135627464 100", the FIRST draft's number beside the
+  // said "On draft PO-1700000000303 100", the FIRST draft's number beside the
   // TOTAL of all four, so that PO read as holding 100. A draft's number is
   // named only when it is the only draft; otherwise the drafts are counted.
   describe('an item on several draft POs', () => {
@@ -475,7 +475,7 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
       truncated: truncatedRemaining > 0,
       truncatedRemaining,
     });
-    const FOUR = drafts([draft('PO-1785135627464', 25), draft('PO-B', 25), draft('PO-C', 25), draft('PO-D', 25)]);
+    const FOUR = drafts([draft('PO-1700000000303', 25), draft('PO-B', 25), draft('PO-C', 25), draft('PO-D', 25)]);
     const why = (d: ReturnType<typeof drafts>) =>
       describeReadinessWhy(only(assess('pending_approval', [{ item: 'a', requested: 100 }], [item('a', { drafts: d })])).item!, {
         timeZone: TZ,
@@ -483,7 +483,7 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
 
     it("the Why counts them beside their total, never one draft's number", () => {
       expect(why(FOUR).parts).toEqual(['On record 0', 'On 4 draft POs 100 (not ordered)']);
-      expect(why(FOUR).text).not.toContain('PO-1785135627464');
+      expect(why(FOUR).text).not.toContain('PO-1700000000303');
       // One draft is still named, with its own quantity.
       expect(why(drafts([draft('PO-D', 6)])).parts).toContain('On draft PO-D 6 (not ordered)');
       // Past the facts' row cap (0377 lists 10): more than 10.
@@ -506,7 +506,7 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
       expect(lineSentence([{ item: 'a', requested: 60 }], [item('a', { drafts: FOUR })])).toBe(
         '60 short. 4 draft POs cover 60 but have not been ordered.',
       );
-      expect(lineSentence([{ item: 'a', requested: 60 }], [item('a', { drafts: FOUR })])).not.toContain('PO-1785135627464');
+      expect(lineSentence([{ item: 'a', requested: 60 }], [item('a', { drafts: FOUR })])).not.toContain('PO-1700000000303');
       // One draft: named, as before.
       expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { drafts: drafts([draft('PO-D', 25)]) })])).toBe(
         '4 short. Draft PO-D covers 4 but has not been ordered.',

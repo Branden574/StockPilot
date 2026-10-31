@@ -159,10 +159,21 @@ export const createItemSchema = z
      * against the `sports:manage` permission; the form is never trusted.
      */
     trackingModeOverride: trackingModeSchema.optional(),
+    /**
+     * The person's answer to "Create new rack 1-B?" (2026-10-24). `true` only
+     * after they confirmed creating the rack this item's opening stock is
+     * typed onto. Otherwise a create that would make a new rack is refused
+     * before anything is written, with NEW_RACK_REQUIRES_CONFIRMATION (see
+     * inventory/new-rack-confirmation.ts). A safety answer, never a
+     * permission.
+     */
+    confirmNewRack: z.boolean().optional(),
   });
 export type CreateItemInput = z.infer<typeof createItemSchema>;
 
-export const updateItemSchema = createItemSchema.partial();
+// The new-rack answer belongs to a CREATE. An edit that sets a rack goes
+// through its own placement path, which this field says nothing about.
+export const updateItemSchema = createItemSchema.omit({ confirmNewRack: true }).partial();
 export type UpdateItemInput = z.infer<typeof updateItemSchema>;
 
 /**
@@ -286,6 +297,8 @@ export const bulkCreateSizedVariantsSchema = z
      * trusted.
      */
     trackingModeOverride: trackingModeSchema.optional(),
+    /** The person's answer to "Create new rack?", exactly as on createItemSchema. */
+    confirmNewRack: z.boolean().optional(),
   });
 export type BulkCreateSizedVariantsInput = z.infer<typeof bulkCreateSizedVariantsSchema>;
 
@@ -306,7 +319,7 @@ export type AdjustStockInput = z.infer<typeof adjustStockSchema>;
 
 /**
  * Remove (write off) a quantity of ONE item from ONE specific location — the
- * rack-scoped removal Andrew reached for when he tried to archive a
+ * rack-scoped removal a DC4 manager reached for when they tried to archive a
  * consolidated rack. A reason is MANDATORY and free-text (owner ask: review how
  * the reason is captured), trimmed and stored verbatim on the resulting
  * stock_movements row so the item history reads truthfully. The quantity is

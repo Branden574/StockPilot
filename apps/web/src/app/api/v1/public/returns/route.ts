@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
+import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { publicRequestIp, returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -49,6 +50,9 @@ export const dynamic = 'force-dynamic';
  * until staff approve, receive and process it.
  */
 
+/** The most lines one return may carry; the longest array the body accepts. */
+const MAX_LINES = 100;
+
 const lineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().int().positive().max(10_000),
@@ -60,7 +64,7 @@ const bodySchema = z.object({
   token: z.string().uuid(),
   reasonCode: z.enum(['damaged', 'wrong_item', 'end_of_year', 'overage', 'other']).optional(),
   notes: z.string().max(2000).nullish(),
-  lines: z.array(lineSchema).min(1).max(100),
+  lines: z.array(lineSchema).min(1).max(MAX_LINES),
   idempotencyKey: z.string().uuid().optional(),
   hp: z.string().max(500).optional(),
 });
@@ -93,8 +97,25 @@ export async function POST(req: NextRequest) {
   } catch {
     return answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
   }
-  const parsed = bodySchema.safeParse(raw);
-  if (!parsed.success) {
+  // GHSA-mrhx-c7xc-m3w5: zod 3 still parses every element of an over-long
+  // array, one issue per bad element (lib/oversized-array.ts), so a body with
+  // any array longer than MAX_LINES, at any depth, is refused before
+  // safeParse, with the same 400 as any other malformed body. The return
+  // form (requester-return-form.tsx) sends no array but `lines`.
+  //
+  // Checking a body must never answer 500: this runs before the rate limiter,
+  // for anyone. The check walks without recursion and the schema converts
+  // nothing (no coercion; `exchange` is passed through untouched), so nothing
+  // here is known to throw. If a later change makes it throw, the body gets
+  // the same 400. Nothing is reported, because a report sent from here would
+  // be one per anonymous request, before any limit.
+  let parsed: ReturnType<typeof bodySchema.safeParse> | null;
+  try {
+    parsed = hasArrayLongerThan(raw, MAX_LINES) ? null : bodySchema.safeParse(raw);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed?.success) {
     return answer(
       { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
       { status: 400 },

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { itemPhotoPath, itemPhotoThumbPath, randomPhotoFileBase } from '@stockpilot/core';
+
 import {
   exceptionEvidencePathShape,
   exceptionEvidenceThumbPath,
@@ -493,5 +495,26 @@ describe('exceptionEvidenceUploadNames', () => {
       `${ORG}/${ENTITY}/${U}.png`,
       `${ORG}/${ENTITY}/${U}.webp`,
     ]);
+  });
+});
+
+describe("the web signs what the phone stores (B31: the phone's thumbnails)", () => {
+  // The web signs every stored path with the service role only when it passes
+  // itemImageAnyPathShape (item-images.ts isSignableItemImagePath), and its
+  // Items list then signs ONLY the thumbnail of a row that has one. A phone
+  // thumbnail name this shape refused would show no photo at all on the web.
+  it('accepts the phone photo and both thumbnail formats, for the item and in any org', () => {
+    for (let i = 0; i < 500; i += 1) {
+      const base = randomPhotoFileBase();
+      const paths = [
+        itemPhotoPath(ORG, ENTITY, `${base}.jpg`),
+        itemPhotoThumbPath(ORG, ENTITY, base, 'jpg'),
+        itemPhotoThumbPath(ORG, ENTITY, base, 'png'),
+      ];
+      for (const p of paths) {
+        expect(isValidStoragePath(p, itemImageAnyPathShape()), p).toBe(true);
+        expect(isValidStoragePath(p, itemImagePathShape(ORG, ENTITY)), p).toBe(true);
+      }
+    }
   });
 });

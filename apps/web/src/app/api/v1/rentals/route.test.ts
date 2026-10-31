@@ -53,8 +53,8 @@ function futureIso(days = 7) {
 function validBody() {
   return {
     warehouseId: WAREHOUSE,
-    borrowerName: 'Andrew Rosas',
-    borrowerEmail: 'andrew@example.com',
+    borrowerName: 'Jordan Stone',
+    borrowerEmail: 'jordan@example.com',
     expectedReturnAt: futureIso(),
     notes: 'Canopy #3',
     lines: [{ itemId: ITEM, quantity: 2 }],
@@ -100,7 +100,7 @@ describe('POST /api/v1/rentals', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         warehouseId: WAREHOUSE,
-        borrowerName: 'Andrew Rosas',
+        borrowerName: 'Jordan Stone',
         lines: [{ itemId: ITEM, quantity: 2 }],
       }),
     );

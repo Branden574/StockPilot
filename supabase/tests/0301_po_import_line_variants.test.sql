@@ -174,7 +174,7 @@ insert into public.po_import_lines
    mapping_confidence, serial_hint)
   values
   (:ln_b, :imp, 2, 'inventory', 'Falcons Home Jersey - M', '07',
-   'M', 'Medium', 'ALPHA', null, 'mens', 'Red/Black', 'A. Rosas',
+   'M', 'Medium', 'ALPHA', null, 'mens', 'Red/Black', 'J. Stone',
    'Falcons Home Jersey 2026', :grp, 0.875, 'sn-00A7/b'),
   (:ln_c, :imp, 3, 'inventory', 'Falcons Home Jersey - L', '00',
    'L', 'Large', 'ALPHA', null, 'mens', 'Red/Black', null, null, null, null, null),
