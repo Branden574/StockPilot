@@ -1371,6 +1371,12 @@ WEB_TESTS=(
   # expression and no install. The file carries the "Security invariant"
   # marker.
   src/test/dependency-audit.guard.test.ts
+  # A workflow that calls one of our routes with a secret never prints the
+  # answer (S16 review): the Actions logs of this public repository are
+  # public, and the deploy hook printed the prewarm route's answer (every
+  # warmed organization's ids, counts and any failed read's text). The file
+  # carries the "Security invariant" marker.
+  src/test/workflow-secret-curl.guard.test.ts
 
   # The export budget's trip row (security.export_rate_limited, which the
   # hourly audit-anomaly cron counts to spot sustained export abuse) is

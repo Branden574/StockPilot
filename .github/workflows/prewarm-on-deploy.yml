@@ -68,12 +68,15 @@ jobs:
           # 3x retry with backoff: a deploy is also when instances are
           # coldest, so the first attempt can hit a slow boot or a transient
           # 429/5xx. --max-time stays under the route's maxDuration=60.
+          # -o /dev/null: this log is public (a public repository), and the
+          # answer is every warmed organization's ids, counts, timings and
+          # any failed read's text. The exit status decides; only the HTTP
+          # status is printed (apps/web/src/test/workflow-secret-curl.guard.test.ts).
           for attempt in 1 2 3; do
             echo "Prewarm attempt ${attempt}..."
-            if curl -fsS --max-time 90 \
+            if curl -fsS --max-time 90 -o /dev/null -w 'HTTP %{http_code}\n' \
               -H "Authorization: Bearer ${BACKFILL_ADMIN_SECRET}" \
               "${PREWARM_URL}"; then
-              echo ""
               echo "Prewarm OK on attempt ${attempt}."
               exit 0
             fi
