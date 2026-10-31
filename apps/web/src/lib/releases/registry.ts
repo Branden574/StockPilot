@@ -103,13 +103,14 @@ export const RELEASES: Release[] = [
     //   a rotated portrait and with a GIF (stored as a JPEG; each photo with
     //   its small copy beside it), and the web Items list showing the phone's
     //   photo. On a second iPhone: the Location filter on Items and Books (the
-    //   two sites only; an item listed under its Location with its stock on a
-    //   rack), the new-rack question for a member who can create racks
-    //   (Cancel saved nothing), the Move stock sheet loaded with Unplaced
-    //   first and no note, a count of 3 emptied and read back uncounted from
-    //   the server, 2,5 typed over the uncounted line saving nothing, 47,5 and
-    //   47.2.3 saving nothing and named under Check the counts, and a Post with
-    //   no variance that changed no stock. On an iPad: Open in
+    //   two sites only; an item listed under its Location with its stock at
+    //   the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+    //   its saved rack text)), the new-rack question for a member who can
+    //   create racks (Cancel saved nothing), the Move stock sheet loaded with
+    //   Unplaced first and no note, a count of 3 emptied and read back
+    //   uncounted from the server, 2,5 typed over the uncounted line saving
+    //   nothing, 47,5 and 47.2.3 saving nothing and named under Check the
+    //   counts, and a Post with no variance that changed no stock. On an iPad: Open in
     //   Default Email App with no mail account (the new sentence, and no Open
     //   another draft? on a second tap), Back on Settings, Support, the AI
     //   screen, the Books tab and ten list screens with return values from
@@ -131,14 +132,16 @@ export const RELEASES: Release[] = [
     // placed order, Frequently ordered, kits, exchanges, public request links
     // and the customer portal, a staff requester; Place an order's photos
     // after #412 (the walk's shots of it predate it) and a Grid photo that is
-    // not square after #413; a GIF on New item and Take photo on the Scan tab
-    // (no camera); the new-rack words for a member who cannot create racks,
-    // and the Move stock note; the Multiple placements found sheet (the
-    // simulator has no camera); Sync first while a clear is unsent; the AI
-    // shelf scan review; an Outlook tab the browser blocks; a file opened
-    // after its link ran out (it takes an hour); a sign-out and an account
-    // change (the phone's Sign out ends every session of the account, and
-    // would have signed the other walkers out).
+    // not square after #413; the phone's Location filter listing an item whose
+    // stock is all on a rack, in a crate or in Unplaced (the walked item's
+    // stock was at the site itself, which the old filter listed too); a GIF on
+    // New item and Take photo on the Scan tab (no camera); the new-rack words
+    // for a member who cannot create racks, and the Move stock note; the
+    // Multiple placements found sheet (the simulator has no camera); Sync
+    // first while a clear is unsent; the AI shelf scan review; an Outlook tab
+    // the browser blocks; a file opened after its link ran out (it takes an
+    // hour); a sign-out and an account change (the phone's Sign out ends every
+    // session of the account, and would have signed the other walkers out).
     // #413's own title says the Grid photos fill their square. They do not:
     // the Grid draws each photo with CardPhoto, still objectFit contain
     // (components/inventory/inventory-table.tsx:4263-4264), and #413 removed
@@ -194,9 +197,9 @@ export const RELEASES: Release[] = [
     // withdrawnNote).
     status: 'published',
     title:
-      'Choose which items and books appear in Place an order, photos on the web no longer sit on white, and mobile app fixes',
+      'Choose which items and books appear in Place an order, photo fixes on the web, and mobile app fixes',
     summary:
-      'Managers, admins and owners can now choose which items and books appear in Place an order, on the web and in the mobile app; a hidden item is not offered to anyone for new orders. On the web, photos on Place an order, New rental and the Grid no longer sit on white. In the mobile app, the Location filter on Items matches the web, emptying a count box clears its count, and signing out removes the photos the app kept. Close the app completely and open it again to load the update.',
+      'Managers, admins and owners can now choose which items and books appear in Place an order, on the web and in the mobile app; a hidden item is not offered to anyone for new orders. On the web, photos on Place an order and New rental fill their box again. In the mobile app, the Location filter on Items matches the web, emptying a count box clears its count, and signing out removes the photos the app kept. Close the app completely and open it again to load the update.',
     publishedAt: '2026-10-30T16:32:00Z',
     entries: [
       {
@@ -259,9 +262,14 @@ export const RELEASES: Release[] = [
         // exchanges, 0413:75-77; kits, core orders/catalog-visibility.ts:172-173. No mark in
         // Place an order: the row is dropped at the source (orders-new-catalog.ts:890). The cart,
         // core orders/storefront/stale-cart.ts:43-49 and :144, phone-copy.ts:96 and :102, the web
-        // storefront-cart.tsx:246-248 and :312; Submit waits, orders-storefront.tsx:1288-1289 with
-        // copy.ts:162, and the phone's checkout.ts:131; hidden while sending, 0413:61-63 and
-        // orders-storefront.tsx:935-937; a placed order's line, order-requests.ts:2718-2737.
+        // storefront-cart.tsx:246-248 and :312; lowered only on the web, whose marked line keeps
+        // a stepper capped at its quantity (storefront-cart.tsx:248-254), while the phone's has
+        // Remove only (stale-cart.ts:146 stepper false; apps/mobile/src/components/
+        // order-storefront/cart-panel.tsx:175 and :192), and the hidden item has no card left to
+        // change it from (orders-new-catalog.ts:890, the phone's catalog too); Submit waits,
+        // orders-storefront.tsx:1288-1289 with copy.ts:162, and the phone's checkout.ts:131;
+        // hidden while sending, 0413:61-63 and orders-storefront.tsx:935-937; a placed order's
+        // line, order-requests.ts:2718-2737.
         // Walked: the hidden record gone from Place an order's catalog and search on production
         // (web) and on the simulator (search by name and SKU, its category and All items), and
         // back after Show. Code only: a marked cart line, the refusal while sending, Add items,
@@ -278,7 +286,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Your organization decides which items can be ordered, and no new order can include a hidden item, whoever places it.',
         howItAffectsYou:
-          "A hidden item already in your cart is marked: its line reads “An item no longer listed here” and “Can't be ordered from here anymore. Remove it.” You can lower or remove that line but not raise it, and the order cannot be sent until you remove it. If an item is hidden just as you send, the order is not placed, that line is marked and the rest of your cart is kept. On an order already placed, a hidden item's line can be lowered or removed but not raised, and the order goes ahead as before. The item stays on Items and Books for everyone who could see it before.",
+          "A hidden item already in your cart is marked: its line reads “An item no longer listed here” and “Can't be ordered from here anymore. Remove it.” You can remove that line, or lower it on the web, but not raise it, and the order cannot be sent until you remove it. If an item is hidden just as you send, the order is not placed, that line is marked and the rest of your cart is kept. On an order already placed, a hidden item's line can be lowered or removed but not raised, and the order goes ahead as before. The item stays on Items and Books for everyone who could see it before.",
         whatToDo:
           "No action needed. If a line in your cart says it can't be ordered from here anymore, remove it and send the order. In the mobile app, close the app completely and open it again to load the latest update.",
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },
@@ -296,24 +304,29 @@ export const RELEASES: Release[] = [
         // bg-white), whose photo is CardPhoto (inventory-grid.tsx:220 and :253, built in
         // inventory/inventory-table.tsx), still objectFit contain (:4263-4264): shown whole,
         // with the card's colour around it (grid-card.tsx:112 bg-background, group cards
-        // inventory-grid.tsx:259 bg-sunk; app/globals.css:128 and :213). The Grid is on Items,
-        // Books and Rentals items (inventory-grid.tsx:10). Since the new look: both whites came
-        // with #369 (31f4b3e61), before which Place an order and New rental used cover. Tests:
-        // storefront-tokens.guard.test.ts:312-324, item-card.test.tsx:66-77. Walked: New rental's
-        // photo after #412 (the web walker, 2026-10-27). Code only: Place an order after #412,
-        // a Grid photo that is not square after #413, and dark mode. No audience: the Grid
-        // reaches everyone who can read items (items-books-grid's audience is items:read), and
-        // the other two pages reach who may order or rent.
+        // inventory-grid.tsx:259 bg-sunk; app/globals.css:128 and :213), which in light mode is a
+        // pale off-white (:128 60 23.1% 97.5%, :108 #f4f3ee). Hovering a Grid photo still shows
+        // it on white: CardPhoto wraps it in ImageHoverPreview (inventory-table.tsx:4241), whose
+        // popup is bg-white object-contain (components/ui/image-hover-preview.tsx:366). The Grid
+        // is on Items, Books and Rentals items (inventory-grid.tsx:10). Since the new look: both
+        // whites came with #369 (31f4b3e61), before which Place an order and New rental used
+        // cover. Tests: storefront-tokens.guard.test.ts:312-324, item-card.test.tsx:66-77.
+        // Walked: New rental's photo after #412 (the web walker, 2026-10-27). Code only: Place
+        // an order after #412, a Grid photo that is not square after #413, dark mode and the
+        // hover preview. No audience: the Grid reaches everyone who can read items
+        // (items-books-grid's audience is items:read), and the other two pages reach who may
+        // order or rent.
         id: 'photos-no-white-backing',
         category: 'fixed',
         area: 'Orders, Rentals and Inventory',
-        title: 'Photos on Place an order, New rental and the Grid no longer sit on white',
+        title:
+          'Photos on Place an order and New rental fill their box again, and Grid photos lose their white square',
         whatChanged:
           "On the web, item photos on Place an order fill their box again, from the item cards to the cart and the review, and so do the item photos on New rental. In the Grid view of Items, Books and Rentals items, a photo no longer sits on a white square: a photo that is not square is still shown whole, and the space around it takes the card's own colour.",
         whyItMatters:
           'Since the new look, these photos were drawn on white, so a photo whose shape was different from its box had white bars beside it, in dark mode too.',
         howItAffectsYou:
-          "On Place an order and New rental, a photo whose shape is different from its box is trimmed at its edges to fill it, as before the new look. In the Grid, photos are not trimmed, so the space around a photo that is not square is now the card's colour, which is dark in dark mode. A photo with a see-through background no longer has white behind it. The photos themselves are not changed.",
+          "On Place an order and New rental, a photo whose shape is different from its box is trimmed at its edges to fill it, as before the new look, and a photo with a see-through background no longer has white behind it. In the Grid, photos are not trimmed, so the space around a photo that is not square is now the card's colour: dark in dark mode, and a pale off-white in light mode. Hovering over a Grid photo still shows its preview on white. The photos themselves are not changed.",
         whatToDo: 'No action needed.',
       },
       {
@@ -326,8 +339,10 @@ export const RELEASES: Release[] = [
         // and services/locations.ts:171; the item page's LOCATION row,
         // apps/mobile/src/lib/placement-rows.ts:170. Walked: Items and Books offered the two
         // Demo Co sites only, and Items under a site listed an item whose Location is that site
-        // with its stock on a rack. Audience: items:read, in every role's defaults, which the
-        // lists need.
+        // with its stock at the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+        // its saved rack text), which the old filter listed too. Code only: an item whose stock
+        // is all on a rack, in a crate or in Unplaced. Audience: items:read, in every role's
+        // defaults, which the lists need.
         id: 'app-location-filter-matches-web',
         category: 'fixed',
         area: 'Inventory',
@@ -460,12 +475,16 @@ export const RELEASES: Release[] = [
         // :49-66 (a fresh link reused, else a new one); purchase orders,
         // src/components/po-attachments.tsx:187-206 with the words at :192-198; orders,
         // app/order/[id].tsx:1358, :2518-2550 (:2535 a photo falls back to the link it has and the
-        // copy on the phone), the proof of delivery card :3598. Before (f2406ef60^): links made
-        // once at load (po-attachments.tsx:146-148, order/[id].tsx:1349) and "Pull to refresh and
-        // try again" (:546, :2512); app/po/[id].tsx has no pull to refresh. Walked: a purchase
-        // order file and an order's proof photo opened with a fresh link. Code only: after an hour,
-        // a new link and the offline words. Audience: modules only, as an order's proof of delivery
-        // shows to anyone who can read the order, drivers included, so no one permission covers it.
+        // copy on the phone, CachedImage keyed by the storage path, so the words at :2536-2543
+        // come only for a file that is not a photo, or a photo the screen holds no link for;
+        // po-attachments.tsx:192-199 says them for every purchase order file with no link), the
+        // proof of delivery card :3598. Before (f2406ef60^): links made once at load
+        // (po-attachments.tsx:146-148, order/[id].tsx:1349) and "Pull to refresh and try again"
+        // (:546, :2512); app/po/[id].tsx has no pull to refresh. Walked: a purchase order file and
+        // an order's proof photo opened with a fresh link. Code only: after an hour, a new link,
+        // the offline words and a photo opened from the copy on the phone. Audience: modules only,
+        // as an order's proof of delivery shows to anyone who can read the order, drivers
+        // included, so no one permission covers it.
         id: 'app-proof-and-po-files-open-after-an-hour',
         category: 'fixed',
         area: 'Orders and purchase orders',
@@ -476,7 +495,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'The links to these files are made when the screen loads and last an hour. After that, a file such as a PDF opened on an error page, and a photo that was not already on the phone did not appear.',
         howItAffectsYou:
-          'If the app needs a new link and cannot get one, for example when the phone is offline, the file does not open and the app says “No download link is available right now. Check your connection and try again.” It used to end with Pull to refresh and try again, though the purchase order screen has no pull to refresh. A photo on an order that the phone has already loaded can still open.',
+          'If the app needs a new link and cannot get one, for example when the phone is offline, a purchase order file, or a proof of delivery file that is not a photo, does not open and the app says “No download link is available right now. Check your connection and try again.” It used to end with Pull to refresh and try again, though the purchase order screen has no pull to refresh. A proof of delivery photo opens from the copy on the phone if it was shown before; otherwise it may not appear until the phone is back online.',
         whatToDo: 'Close the app completely and open it again to load the latest update.',
         audience: { modules: ['orders', 'purchase_orders'] },
       },

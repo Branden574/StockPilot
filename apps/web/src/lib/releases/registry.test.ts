@@ -14792,7 +14792,7 @@ describe('the Manage order items, photos and mobile app fixes release (manage-or
       'can now choose which items and books appear in Place an order, on the web and in the mobile app;',
     );
     expect(r.summary).toContain(
-      'On the web, photos on Place an order, New rental and the Grid no longer sit on white.',
+      'On the web, photos on Place an order and New rental fill their box again.',
     );
     expect(r.summary).toContain('In the mobile app, the Location filter on Items matches the web');
     expect(r.summary).toMatch(/Close the app completely and open it again to load the update\.$/);
@@ -14863,6 +14863,19 @@ describe('the Manage order items, photos and mobile app fixes release (manage-or
     expect(STOREFRONT_LINE_NOT_ORDERABLE_COPY).toBe(
       "Can't be ordered from here anymore. Remove it.",
     );
+    // A marked cart line can be lowered only on the web, whose stepper tops
+    // out at what the line holds; the mobile app draws no stepper for it, only
+    // Remove.
+    expect(source('components/orders/storefront/storefront-cart.tsx')).toContain(
+      'const ceiling = unorderable\n              ? Math.min(line.quantity,',
+    );
+    expect(repoFile('packages/core/src/orders/storefront/stale-cart.ts')).toContain(
+      'stepper: item !== undefined && !unorderable,',
+    );
+    expect(phone('src/components/order-storefront/cart-panel.tsx')).toContain('{view.stepper ? (');
+    expect(entry('order-items-hidden-from-place-an-order').howItAffectsYou).toContain(
+      'You can remove that line, or lower it on the web, but not raise it,',
+    );
     // Photos: Place an order fills its box; the Grid still shows a photo whole,
     // with no white tile behind it. If the Grid is changed to fill its square,
     // reword photos-no-white-backing in place.
@@ -14877,6 +14890,18 @@ describe('the Manage order items, photos and mobile app fixes release (manage-or
     );
     expect(entry('photos-no-white-backing').whatChanged).toContain(
       'a photo that is not square is still shown whole',
+    );
+    // The card's colour is a pale off-white in light mode, and hovering over a
+    // Grid photo still shows its preview on white.
+    expect(source('app/globals.css')).toContain('--background: 60 23.1% 97.5%;');
+    expect(table).toContain(
+      'if (failedSrc === thumbSrc) return <MissingPhoto className="absolute inset-0" />;\n  return (\n    <ImageHoverPreview',
+    );
+    expect(source('components/ui/image-hover-preview.tsx')).toContain(
+      'className="block h-[280px] w-full bg-white object-contain"',
+    );
+    expect(entry('photos-no-white-backing').howItAffectsYou).toContain(
+      'a pale off-white in light mode. Hovering over a Grid photo still shows its preview on white.',
     );
     // The mobile app's Location filter reads each item's Location.
     expect(phone('app/(drawer)/(tabs)/inventory.tsx')).toContain(
@@ -14915,6 +14940,18 @@ describe('the Manage order items, photos and mobile app fixes release (manage-or
         "'No download link is available right now. Check your connection and try again.',",
       );
     }
+    // A purchase order file with no new link says so; an order's photo falls
+    // back to the link the screen holds and the copy on the phone, so there
+    // only a file that is not a photo, or a photo with no link at all, says so.
+    expect(phone('src/components/po-attachments.tsx')).toContain(
+      'if (!link) {\n      // Signing failed (offline, or a storage-RLS denial): say so instead of',
+    );
+    expect(phone('app/order/[id].tsx')).toContain(
+      'const url = link?.url ?? (isImage ? a.url : null);\n    if (!url) {',
+    );
+    expect(entry('app-proof-and-po-files-open-after-an-hour').howItAffectsYou).toContain(
+      'a purchase order file, or a proof of delivery file that is not a photo, does not open',
+    );
     // The new-rack question and the Move stock note.
     expect(repoFile('packages/core/src/inventory/rack-near-match.ts')).toContain(
       "title = `${noun === 'crate' ? 'Crate' : 'Rack'} ${label} does not exist`;",
