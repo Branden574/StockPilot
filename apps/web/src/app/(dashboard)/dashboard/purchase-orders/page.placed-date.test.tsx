@@ -204,6 +204,28 @@ describe("the purchase orders list prints Placed as the organization's day", () 
     }
   });
 
+  // The list most organizations get (800 purchase orders or fewer): the page
+  // hands the instant table the organization's zone too. A Los Angeles
+  // organization cannot show it, as its zone is also the default.
+  it('an organization in Sydney, in the instant table: Oct 6 as well', async () => {
+    listStats.mockResolvedValue(stats(1));
+    getOrgRowForRequest.mockResolvedValue({ timezone: 'Australia/Sydney' });
+    // 1:30 AM on Oct 6 in Sydney; 7:30 AM on Oct 5 in Los Angeles.
+    listPage.mockResolvedValue({
+      rows: [{ ...ROW, ordered_at: '2026-10-05T14:30:00.000Z' }],
+      total: 1,
+    });
+    const run = await hydratedPlacedCell('Australia/Sydney');
+    try {
+      expect(run.errors).toEqual([]);
+      expect(run.html).not.toContain('Oct 5');
+      expect(placedCell(run.container)).toBe('Oct 6');
+      expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ perPage: 800 }));
+    } finally {
+      run.unmount();
+    }
+  });
+
   it('an unreadable organization row is the documented default zone, reported, never an error page', async () => {
     listStats.mockResolvedValue(stats(900));
     getOrgRowForRequest.mockRejectedValue(new Error('getOrgRowForRequest: statement timeout'));

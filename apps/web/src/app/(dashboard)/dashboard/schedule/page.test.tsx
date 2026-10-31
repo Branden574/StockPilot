@@ -230,7 +230,9 @@ describe('the eyebrow follows a Settings > Navigation rename', () => {
  *     zone are loaded: the range was the server's midnights (UTC on Vercel),
  *     so an evening event in the grid's last cell (after midnight UTC) was
  *     never read, whatever the comment above it promised ("Pad the range a
- *     few days on each side");
+ *     few days on each side"). East of UTC the grid's first morning comes
+ *     before its first UTC midnight, and an open-ended event is now read only
+ *     when it starts in the range, so the range is padded before the grid too;
  *   - event times print in the organization's zone, not Pacific;
  *   - today is the organization's today, so a viewer outside its zone never
  *     opens the organization's month without a Today mark.
@@ -254,13 +256,23 @@ describe('the team calendar reads and draws the organization’s days', () => {
     status: 'scheduled',
     locationText: null,
   });
-  /** schedule_events as listInRange reads them: starts before `to`, and no end or an end at or after `from`. */
+  /**
+   * schedule_events as listInRange reads them (server/services/schedule.ts,
+   * pinned by schedule.list-in-range.test.ts): starts before `to`, and either
+   * ends at or after `from`, or has no end and starts at or after `from` (an
+   * open-ended event is a point at its start). Small fixes slice 8 narrowed
+   * the open-ended rule (it read every open-ended event that started before
+   * `to`); a fake on the old rule still served an event the page's range
+   * leaves out, so it could not catch a range that starts too late.
+   */
   function servedFrom(events: Ev[]) {
     listInRange.mockImplementation((async (from: Date, to: Date) =>
       events.filter(
         (e) =>
           Date.parse(e.startsAt) < to.getTime() &&
-          (e.endsAt === null || Date.parse(e.endsAt) >= from.getTime()),
+          (e.endsAt === null
+            ? Date.parse(e.startsAt) >= from.getTime()
+            : Date.parse(e.endsAt) >= from.getTime()),
       )) as never);
   }
   const cellOf = (container: HTMLElement, ymd: string) =>
@@ -297,6 +309,34 @@ describe('the team calendar reads and draws the organization’s days', () => {
     const [from, to] = listInRange.mock.calls[0] as unknown as [Date, Date];
     expect(from.getTime()).toBeLessThanOrEqual(Date.parse('2026-09-27T07:00:00.000Z'));
     expect(to.getTime()).toBeGreaterThanOrEqual(Date.parse('2026-11-08T08:00:00.000Z'));
+  });
+
+  // East of UTC the grid's first day starts before its UTC midnight: the
+  // padding before the range is what reads that morning.
+  it("loads the grid's first morning east of UTC: 9 AM on Sep 27 in Sydney (23:00 UTC on Sep 26) shows on Sep 27", async () => {
+    getOrgRowForRequest.mockResolvedValue({ timezone: 'Australia/Sydney' });
+    // October 2026's grid starts on Sun Sep 27; Sydney is UTC+10 until its
+    // daylight time starts on Oct 4.
+    servedFrom([ev('ev-first', 'Morning delivery', '2026-09-26T23:00:00Z')]);
+    const at = Date.parse('2026-10-15T01:00:00.000Z');
+    const page = await pageAt(at, 'UTC', '2026-10');
+    const run = await hydrateAcrossClockShift(() => page, {
+      serverNow: at,
+      browserNow: at + 60_000,
+      browserZone: 'Australia/Sydney',
+    });
+    try {
+      expect(run.errors).toEqual([]);
+      expect(heading(run.container)).toEqual(['October 2026']);
+      expect(
+        within(cellOf(run.container, '2026-09-27')).getByText('Morning delivery'),
+      ).toBeInTheDocument();
+    } finally {
+      run.unmount();
+    }
+    // The range starts by Sydney's midnight on Sep 27 (14:00 UTC on Sep 26).
+    const [from] = listInRange.mock.calls[0] as unknown as [Date, Date];
+    expect(from.getTime()).toBeLessThanOrEqual(Date.parse('2026-09-26T14:00:00.000Z'));
   });
 
   it("prints event times in the organization's zone: 2 PM in New York, not Pacific's 11 AM", async () => {

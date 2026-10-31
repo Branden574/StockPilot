@@ -92,6 +92,38 @@ describe("ScheduleCalendar draws the organization's days and times", () => {
     }
   });
 
+  // The events above fall on the same date in New York and in the default
+  // zone (Pacific), so they cannot tell which zone picked the cell. This one
+  // does not: only the organization's zone puts it on Oct 6.
+  it('a New York organization: an event at 1:30 AM on Oct 6 there sits on Oct 6, though it is still Oct 5 in Los Angeles', async () => {
+    // 1:30 AM on Oct 6 in New York; 10:30 PM on Oct 5 in Los Angeles.
+    const early = event('ev-3', 'Early delivery', '2026-10-06T05:30:00Z');
+    const t0 = Date.parse('2026-10-06T06:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ScheduleCalendar
+          year={2026}
+          month={10}
+          events={[early]}
+          canManage
+          timeZone={NEW_YORK}
+          todayYmd="2026-10-06"
+        />
+      ),
+      { serverNow: t0, browserNow: t0 + 60_000, browserZone: 'America/Los_Angeles' },
+    );
+    try {
+      expect(run.errors).toEqual([]);
+      expect(
+        within(cellOf(run.container, '2026-10-06')).getByText('Early delivery'),
+      ).toBeInTheDocument();
+      expect(within(cellOf(run.container, '2026-10-05')).queryByText('Early delivery')).toBeNull();
+      expect(within(cellOf(run.container, '2026-10-06')).getByText(/1:30\sAM/)).toBeInTheDocument();
+    } finally {
+      run.unmount();
+    }
+  });
+
   it("marks the organization's today, whatever the viewer's day: one mark, on that cell", async () => {
     // 10 PM on Oct 31 in Los Angeles is already Nov 1 in New York, the
     // organization's zone: the page opens November and today is Nov 1.

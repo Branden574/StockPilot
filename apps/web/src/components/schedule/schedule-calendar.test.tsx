@@ -51,6 +51,22 @@ describe('ScheduleCalendar canManage gating', () => {
     // 42 grid cells → 42 per-day add links.
     expect(screen.getAllByLabelText(/Add event on/)).toHaveLength(42);
   });
+
+  // New event reads ?date= as that day (9:00 AM there, in the organization's
+  // zone), so each "+ Add" names its own cell's day: inside the month, and in
+  // the days of the months either side that fill the grid.
+  it('each "+ Add" opens New event on its own day, inside the month and outside it', () => {
+    render(<ScheduleCalendar year={2026} month={7} events={[]} canManage />);
+    const href = (ymd: string) => screen.getByLabelText(`Add event on ${ymd}`).getAttribute('href');
+    expect(href('2026-07-20')).toBe('/dashboard/schedule/new?date=2026-07-20');
+    // July 2026's grid runs from Sun Jun 28 to Sat Aug 8.
+    expect(href('2026-06-28')).toBe('/dashboard/schedule/new?date=2026-06-28');
+    expect(href('2026-08-08')).toBe('/dashboard/schedule/new?date=2026-08-08');
+    for (const add of screen.getAllByLabelText(/Add event on/)) {
+      const day = add.getAttribute('aria-label')!.replace('Add event on ', '');
+      expect(add).toHaveAttribute('href', `/dashboard/schedule/new?date=${day}`);
+    }
+  });
 });
 
 // The schedule page server-renders the calendar, which put each event on
