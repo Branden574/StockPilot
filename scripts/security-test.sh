@@ -110,7 +110,7 @@ PGTAP_TESTS=(
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
   # Only a platform admin creates a workspace (S20): no signed-in or anonymous
   # caller inserts an organization (RLS on, no INSERT policy since 0138), and
-  # no function anon or authenticated may execute inserts one.
+  # no function anon or authenticated may execute, and no trigger, inserts one.
   supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql

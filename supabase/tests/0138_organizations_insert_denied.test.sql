@@ -8,10 +8,10 @@
 -- authenticated still hold the table INSERT privilege (0402's explicit grants).
 -- Workspaces are created only by app code on the service role, behind the
 -- platform-admin check; apps/web/src/server/organization-create-sites.guard.test.ts
--- pins those places. No function that anon or authenticated may execute inserts
--- an organization either.
+-- pins those places. No function that anon or authenticated may execute, and no
+-- trigger, inserts an organization either.
 begin;
-select plan(6);
+select plan(7);
 
 \set org   '\'0138a000-0000-4000-8000-0000000000a1\''
 \set owner '\'0138b000-0000-4000-8000-0000000000b1\''
@@ -84,6 +84,18 @@ select is_empty(
         and (has_function_privilege('anon', p.oid, 'execute')
              or has_function_privilege('authenticated', p.oid, 'execute')) $$,
   'no function anon or authenticated may execute inserts into public.organizations'
+);
+
+-- Nor does any trigger: a trigger function runs for whoever fires its trigger,
+-- whatever EXECUTE it grants, so one on a table a member may write would create
+-- organizations past both checks above.
+select is_empty(
+  $$ select t.tgrelid::regclass::text || ' ' || t.tgname
+       from pg_trigger t
+       join pg_proc p on p.oid = t.tgfoid
+      where not t.tgisinternal
+        and p.prosrc ~* 'insert\s+into\s+("?public"?\s*\.\s*)?"?organizations\M' $$,
+  'no trigger runs a function that inserts into public.organizations'
 );
 
 select * from finish();
