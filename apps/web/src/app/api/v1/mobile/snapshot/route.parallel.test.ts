@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -458,6 +459,21 @@ describe('rate limit and authentication still deny', () => {
 
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthenticated' });
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+    expect(queries).toHaveLength(0);
+  });
+
+  it('answers 500, never 401 or 403, and reads nothing when the permission set could not be read', async () => {
+    // Docket S19: the phone keeps its cache and its last good permission set
+    // on any non-2xx, and says "You do not have access to that." only for a
+    // 401 or 403.
+    vi.mocked(withApiContext).mockRejectedValue(new PermissionsUnavailableError());
+
+    const res = await GET(request());
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal_error', code: 'snapshot_uncaught' });
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(getWarehouseAccess).not.toHaveBeenCalled();
     expect(queries).toHaveLength(0);
