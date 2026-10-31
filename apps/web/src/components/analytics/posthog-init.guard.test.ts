@@ -38,12 +38,33 @@ import { describe, expect, it } from 'vitest';
  *   (f) Nothing names set_config, which would replace any of these options
  *       while the page runs (logs among them, hook and all).
  *
+ * The S22 review found a third path of S28's kind, and two ways round the
+ * rules above:
+ *
+ *   (g) advanced_disable_feature_flags is held as (a) holds the replay switch.
+ *       The SDK keeps the first page a device visited, query and all, and
+ *       sends it with every feature-flags request, past before_send; the app
+ *       reads no flag.
+ *   (h) Only the provider and lib/analytics.ts load posthog-js at runtime,
+ *       and neither exports more than its own names, so the instance reaches
+ *       no module these rules skip: a re-export would carry it to a second
+ *       init that (c) never reads.
+ *   (i) Neither names config. A write to posthog.config can replace any
+ *       option, and the SDK reads logs from it live, a new object without
+ *       the hook and all.
+ *
  * It reads the source through the AST, so comments never count.
  */
 
 const WEB_SRC = path.resolve(__dirname, '../..');
 const PROVIDER = path.join(WEB_SRC, 'components/analytics/posthog-provider.tsx');
 const PACKAGE = 'posthog-js';
+
+/** The only modules that may load posthog-js at runtime, each with every name it exports. */
+const LOADERS: ReadonlyMap<string, readonly string[]> = new Map([
+  [PROVIDER, ['PostHogProvider']],
+  [path.join(WEB_SRC, 'lib/analytics.ts'), ['analyticsEnabled', 'capture', 'identify', 'reset']],
+]);
 
 interface ScanFile {
   path: string;
@@ -280,6 +301,75 @@ function inits(files: readonly ScanFile[]): string[] {
   });
 }
 
+/**
+ * Every load of posthog-js these rules cannot follow: one in a module other
+ * than the provider and lib/analytics.ts, or one of a subpath.
+ */
+function loadsOutside(files: readonly ScanFile[]): string[] {
+  return findAll(files, loadsPosthog)
+    .filter((found) => !LOADERS.has(found.file.path) || runtimeSpecifier(found.node) !== PACKAGE)
+    .map((found) => `${where(found)} ${runtimeSpecifier(found.node)}`);
+}
+
+/** Whether a statement carries a modifier such as `export` or `default`. */
+function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+  return ts.canHaveModifiers(node) && !!ts.getModifiers(node)?.some((m) => m.kind === kind);
+}
+
+/** The names a binding declares: `a`, `{ a, b: c }`, `[a, ...d]`. */
+function bindingNames(name: ts.BindingName): string[] {
+  if (ts.isIdentifier(name)) return [name.text];
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : bindingNames(element.name),
+  );
+}
+
+/**
+ * Every name a module exports, types included: `default` for a default
+ * export and `*` for `export * from`. An export it cannot name is reported by
+ * where it is, so none passes unread.
+ */
+function exportedNames(file: ScanFile): string[] {
+  const source = parse(file);
+  return source.statements.flatMap((statement): string[] => {
+    if (ts.isExportDeclaration(statement)) {
+      const clause = statement.exportClause;
+      if (!clause) return ['*'];
+      return ts.isNamespaceExport(clause)
+        ? [clause.name.text]
+        : clause.elements.map((element) => element.name.text);
+    }
+    if (ts.isExportAssignment(statement)) return ['default'];
+    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) return [];
+    if (hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) return ['default'];
+    if (ts.isVariableStatement(statement)) {
+      return statement.declarationList.declarations.flatMap((d) => bindingNames(d.name));
+    }
+    if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isInterfaceDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isEnumDeclaration(statement) ||
+        ts.isModuleDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement)) &&
+      statement.name &&
+      (ts.isIdentifier(statement.name) || ts.isStringLiteral(statement.name))
+    ) {
+      return [statement.name.text];
+    }
+    return [`an export at ${where({ file, source, node: statement })}`];
+  });
+}
+
+/** Every place the provider or lib/analytics.ts names config. */
+function configMentions(files: readonly ScanFile[]): Found[] {
+  return mentions(
+    files.filter((file) => LOADERS.has(file.path)),
+    'config',
+  );
+}
+
 /** The app's own modules: tests and the test helpers are not the app. */
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -300,9 +390,15 @@ const file = (relative: string, ...lines: string[]): ScanFile => ({
   text: lines.join('\n'),
 });
 
-/** The provider's three pins, as its init options hold them. */
-const PINS =
-  'disable_session_recording: true, disable_conversations: true, logs: { beforeSend: () => null }';
+/** The switches the provider pins to the literal true. */
+const SWITCHES = [
+  'disable_session_recording',
+  'disable_conversations',
+  'advanced_disable_feature_flags',
+] as const;
+
+/** The provider's pins, as its init options hold them. */
+const PINS = `${SWITCHES.map((name) => `${name}: true`).join(', ')}, logs: { beforeSend: () => null }`;
 
 /** A planted provider whose one init passes these options (line 5). */
 const providerWith = (options: string): ScanFile =>
@@ -320,9 +416,26 @@ const providerWith = (options: string): ScanFile =>
 
 const PROVIDER_OK = providerWith(PINS);
 
+/** A planted lib/analytics.ts in the shape of the real one. */
+const ANALYTICS_OK = file(
+  'lib/analytics.ts',
+  `export const analyticsEnabled = true;`,
+  `let loaded: Promise<typeof import('posthog-js').default> | null = null;`,
+  `const load = () => (loaded ??= import('posthog-js').then((m) => m.default));`,
+  `export function capture(event: string): void {`,
+  `  void load().then((posthog) => posthog.capture(event));`,
+  `}`,
+  `export function identify(id: string): void {`,
+  `  void load().then((posthog) => posthog.identify(id));`,
+  `}`,
+  `export function reset(): void {`,
+  `  void load().then((posthog) => posthog.reset());`,
+  `}`,
+);
+
 describe('the PostHog init scanner (self-test on planted files)', () => {
   it('sees the pins in the provider, and nothing in a comment', () => {
-    for (const name of ['disable_session_recording', 'disable_conversations']) {
+    for (const name of SWITCHES) {
       expect(pinMentions([PROVIDER_OK], name)).toEqual([
         'components/analytics/posthog-provider.tsx:5 (the pin)',
       ]);
@@ -336,7 +449,7 @@ describe('the PostHog init scanner (self-test on planted files)', () => {
   });
 
   it('does not take false, !0, a variable or a spread after it for a pin', () => {
-    for (const name of ['disable_session_recording', 'disable_conversations']) {
+    for (const name of SWITCHES) {
       for (const planted of [
         providerWith(PINS.replace(`${name}: true`, `${name}: false`)),
         providerWith(PINS.replace(`${name}: true`, `${name}: !0`)),
@@ -351,7 +464,7 @@ describe('the PostHog init scanner (self-test on planted files)', () => {
   });
 
   it('finds every other mention of a switch: set_config, a direct write, a quoted write', () => {
-    for (const name of ['disable_session_recording', 'disable_conversations']) {
+    for (const name of SWITCHES) {
       const planted = file(
         'lib/switch-back.ts',
         `import posthog from 'posthog-js';`,
@@ -369,7 +482,7 @@ describe('the PostHog init scanner (self-test on planted files)', () => {
   });
 
   it('takes only a hook that returns null, alone in its options, for the log drop', () => {
-    const others = 'disable_session_recording: true, disable_conversations: true';
+    const others = SWITCHES.map((name) => `${name}: true`).join(', ');
     expect(
       providerInits([providerWith(`${others}, logs: { beforeSend: () => { return null; } }`)]).map(
         dropsEveryLog,
@@ -471,6 +584,82 @@ describe('the PostHog init scanner (self-test on planted files)', () => {
     expect(posthogLoads([typesOnly, typeQuery])).toEqual(['lib/analytics.ts:2 posthog-js']);
     expect(inits([typesOnly, typeQuery])).toEqual([]);
   });
+
+  it('finds a load outside the provider and lib/analytics.ts, as a re-export that carries the instance to a second init', () => {
+    const reexport = file('lib/ph.ts', `export { default as posthog } from 'posthog-js';`);
+    const second = file(
+      'lib/second-init.ts',
+      `import { posthog } from '@/lib/ph';`,
+      `export function start(apiKey: string): void {`,
+      `  posthog.init(apiKey, { api_host: '/ingest' }, 'second');`,
+      `}`,
+    );
+    const planted = [PROVIDER_OK, ANALYTICS_OK, reexport, second];
+    // The second init's module loads nothing from posthog-js itself, so the
+    // init count never reads it: the load outside is what is caught.
+    expect(inits(planted)).toEqual(['components/analytics/posthog-provider.tsx:5 (holds the pin)']);
+    expect(loadsOutside(planted)).toEqual(['lib/ph.ts:1 posthog-js']);
+    expect(loadsOutside([PROVIDER_OK, ANALYTICS_OK])).toEqual([]);
+    expect(
+      loadsOutside([
+        file('lib/analytics.ts', `import { PostHogProvider } from 'posthog-js/react';`),
+      ]),
+    ).toEqual(['lib/analytics.ts:1 posthog-js/react']);
+  });
+
+  it('names every export of a module, so a loader that hands the instance on is caught', () => {
+    expect(exportedNames(PROVIDER_OK)).toEqual(['PostHogProvider']);
+    expect(exportedNames(ANALYTICS_OK)).toEqual([
+      'analyticsEnabled',
+      'capture',
+      'identify',
+      'reset',
+    ]);
+    const handsOn = file(
+      'lib/analytics.ts',
+      `import posthog from 'posthog-js';`,
+      `export { default as instance } from 'posthog-js';`,
+      `export * from 'posthog-js';`,
+      `export const { config, init: start } = posthog;`,
+      `export default posthog;`,
+      `export function load() { return posthog; }`,
+      `const same = posthog;`,
+      `export { same, same as again };`,
+      `export type Instance = typeof posthog;`,
+    );
+    expect(exportedNames(handsOn)).toEqual([
+      'instance',
+      '*',
+      'config',
+      'start',
+      'default',
+      'load',
+      'same',
+      'again',
+      'Instance',
+    ]);
+  });
+
+  it('finds config named in a loader: a direct write, a quoted write, destructuring, a key', () => {
+    const planted = file(
+      'lib/analytics.ts',
+      `import posthog from 'posthog-js';`,
+      `posthog.config.logs = { captureConsoleLogs: true };`,
+      `posthog.config['logs'] = {};`,
+      `posthog['config'].logs = {};`,
+      `const { config } = posthog;`,
+      `Object.assign(posthog, { config: {} });`,
+    );
+    const elsewhere = file('lib/settings.ts', `export const config = { theme: 'light' };`);
+    expect(configMentions([PROVIDER_OK, planted, elsewhere]).map(where)).toEqual([
+      'lib/analytics.ts:2',
+      'lib/analytics.ts:3',
+      'lib/analytics.ts:4',
+      'lib/analytics.ts:5',
+      'lib/analytics.ts:6',
+    ]);
+    expect(configMentions([PROVIDER_OK, ANALYTICS_OK])).toEqual([]);
+  });
 });
 
 /* ───────────────────────────── the app's source ───────────────────────────── */
@@ -513,5 +702,29 @@ describe('the one PostHog init sends nothing that skips before_send (S28)', () =
 
   it('nothing names set_config', () => {
     expect(mentions(app(), 'set_config').map(where)).toEqual([]);
+  });
+
+  it('advanced_disable_feature_flags is named once: the provider’s init option, set to true (S22 review)', () => {
+    expect(pinMentions(app(), 'advanced_disable_feature_flags')).toEqual([
+      expect.stringMatching(/^components\/analytics\/posthog-provider\.tsx:\d+ \(the pin\)$/),
+    ]);
+  });
+});
+
+describe('the PostHog instance stays where these rules read it (S22 review)', () => {
+  it('only the provider and lib/analytics.ts load posthog-js at runtime, from the bare package', () => {
+    expect(loadsOutside(app())).toEqual([]);
+  });
+
+  it('neither exports more than its own names, so the instance goes no further', () => {
+    for (const [loader, names] of LOADERS) {
+      const found = app().find((candidate) => candidate.path === loader);
+      if (!found) throw new Error(`${path.relative(WEB_SRC, loader)} is gone: update LOADERS`);
+      expect(exportedNames(found)).toEqual(names);
+    }
+  });
+
+  it('neither names config, so no write to posthog.config can undo an option', () => {
+    expect(configMentions(app()).map(where)).toEqual([]);
   });
 });

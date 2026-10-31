@@ -123,6 +123,20 @@ describe('PostHogProvider', () => {
     );
   });
 
+  // Docket S22 review, a path of S28's kind. The SDK keeps the first page a
+  // device visited, query and all, and sends it with every feature-flags
+  // request, past before_send: at load when the PostHog project has any flag,
+  // and after every identify(). The app reads no flag, so it asks for none.
+  // posthog-provider.sdk.test.tsx proves it through the real SDK.
+  it('MUTATION GUARD — never asks for feature flags, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ advanced_disable_feature_flags: true }),
+    );
+  });
+
   it('MUTATION GUARD — drops every log record, whatever the PostHog project says', async () => {
     render(<PostHogProvider>{null}</PostHogProvider>);
     await flush();

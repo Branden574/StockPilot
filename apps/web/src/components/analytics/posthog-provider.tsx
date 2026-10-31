@@ -22,8 +22,9 @@ import { isSharePath } from '@/lib/share-paths';
  * NEVER A RECORDING: session replay is off in the code (docket S22), so the
  * replay switch in the PostHog project cannot turn it on; nor can that project
  * turn on what sends the page's address past before_send, its chat and its
- * console log capture (docket S28). Whatever the init below leaves unset, the
- * project decides, with no review and no test to see it;
+ * console log capture (docket S28), and no feature-flags request carries the
+ * first address a device visited (S22 review). Whatever the init below leaves
+ * unset, the project decides, with no review and no test to see it;
  * posthog-init.guard.test.ts keeps this the one init, with these in it.
  *
  * THIS IS LIVE: `NEXT_PUBLIC_POSTHOG_KEY` is set for production and preview
@@ -92,6 +93,12 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         // the address is added.
         disable_conversations: true,
         logs: { beforeSend: () => null },
+        // Nor ask for feature flags (docket S22 review): the SDK keeps the
+        // first page a device visited, query and all, and sends it with every
+        // flags request, past before_send. That request goes at load when the
+        // project has any flag, and after every identify(). The app reads no
+        // flag. A PostHog survey needs its flags, so none can show.
+        advanced_disable_feature_flags: true,
         // Nor send the page's address as a Referer. A beacon or a script tag
         // goes by the page's referrer policy, which for a same-origin request
         // such as /ingest is the full address, query and all (next.config.ts),

@@ -1,3 +1,5 @@
+import { gunzipSync } from 'node:zlib';
+
 import { render } from '@testing-library/react';
 import posthog, { type BeforeSendFn, type PostHogConfig } from 'posthog-js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -11,7 +13,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
  * named SDK instance with them, plus switches that keep it from loading flags,
  * surveys or scripts and one that lets it capture in a test browser. Session
  * replay is not among them: whether it records is the provider's own setting
- * (docket S22), and the last describe block turns it on in the project.
+ * (docket S22), and the last describe block turns it on in the project. There
+ * the feature-flags tests also let the SDK ask for flags, so the provider's
+ * own advanced_disable_feature_flags decides (S22 review).
  * fetch and sendBeacon are stubbed before the SDK loads, since it keeps its own
  * reference to fetch from then on: no request leaves the process. Placeholder
  * key and tokens.
@@ -141,6 +145,43 @@ function sentTo(host: string, path: string): unknown[] {
     });
 }
 
+/** A request body as text: JSON, base64 form data (data=...) or gzip. */
+async function bodyText(body: unknown): Promise<string> {
+  if (body === undefined || body === null) return '';
+  if (typeof body === 'string') {
+    return body.startsWith('data=')
+      ? Buffer.from(decodeURIComponent(body.slice('data='.length)), 'base64').toString('utf8')
+      : body;
+  }
+  let bytes: Uint8Array | undefined;
+  if (body instanceof ArrayBuffer) bytes = new Uint8Array(body);
+  else if (ArrayBuffer.isView(body))
+    bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  else if (body instanceof Blob) bytes = new Uint8Array(await body.arrayBuffer());
+  // A body this cannot read fails the test, so a check that the token is
+  // absent never passes for want of reading it.
+  if (!bytes) throw new Error(`a request body the test cannot read: ${String(body)}`);
+  const gzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  return Buffer.from(gzip ? gunzipSync(bytes) : bytes).toString('utf8');
+}
+
+/** Each request sent to a host since the last mockClear: its path and its body as text. */
+async function requestsTo(host: string): Promise<{ path: string; body: string }[]> {
+  const requests: { path: string; body: string }[] = [];
+  for (const [url, init] of fetchStub.mock.calls) {
+    if (!String(url).startsWith(`${host}/`)) continue;
+    requests.push({ path: String(url).slice(host.length), body: await bodyText(init?.body) });
+  }
+  return requests;
+}
+
+/** The bodies of the feature-flags requests (/flags/?v=2) sent to a host. */
+async function flagsSentTo(host: string): Promise<string[]> {
+  return (await requestsTo(host))
+    .filter(({ path }) => path.startsWith('/flags/'))
+    .map(({ body }) => body);
+}
+
 /**
  * Runs one of the SDK's own extension scripts, of the installed version (the
  * file PostHog serves under /static/<version>/), and tells each waiting
@@ -232,10 +273,11 @@ describe('PostHog on /signin, through the real SDK', () => {
  *
  * They lean on posthog-js internals (read in 1.438.15): a preloaded project
  * answer applied during init, scripts put in the body while `defaults` is
- * unset, the extension scripts' names, the logs sent as the page goes away and
- * one chat per page. If a control fails after an SDK update, the SDK changed:
- * read its source again before changing a test, and never loosen the
- * provider's half.
+ * unset, the extension scripts' names, the logs sent as the page goes away,
+ * one chat per page, and the first address kept at the first event and sent
+ * with each flags request. If a control fails after an SDK update, the SDK
+ * changed: read its source again before changing a test, and never loosen
+ * the provider's half.
  */
 describe('PostHog when the PostHog project switches a feature on, through the real SDK', () => {
   // Docket S22 (owner decision d.4). A recording is the page itself: its text,
@@ -466,4 +508,91 @@ describe('PostHog when the PostHog project switches a feature on, through the re
       forget();
     }
   });
+
+  // Docket S22 review, a path of S28's kind. The SDK keeps the first page this
+  // device visited, query and all, and sends it as person properties
+  // ($initial_current_url, $initial_referrer) in its feature-flags request,
+  // never through capture(): at load when the project has any flag, and after
+  // identify() whatever the project has (the dashboard identifies every member
+  // on its first load). For a new invitee that page is usually the invite
+  // page's Sign in link. The app reads no flag, so the provider asks for none.
+  it.each([
+    { project: 'has a feature flag', id: 'with', hasFeatureFlags: true },
+    { project: 'has no feature flag', id: 'without', hasFeatureFlags: false },
+  ])(
+    'sends the first address in no feature-flags request, at load or after identify(), when the project $project',
+    async ({ id, hasFeatureFlags }) => {
+      onSignInFromInvite();
+      const providerKey = `phc_placeholder_flags_${id}_provider`;
+      const controlKey = `phc_placeholder_flags_${id}_control`;
+      const providerHost = `https://flags-${id}-provider.ingest.example.invalid`;
+      const controlHost = `https://flags-${id}-control.ingest.example.invalid`;
+
+      const forget = projectSays([providerKey, controlKey], { hasFeatureFlags });
+      try {
+        // QUIET keeps a test SDK from asking for flags. Here the provider's own
+        // values come last, so nothing above can stand in for them.
+        const provider = posthog.init(
+          providerKey,
+          {
+            ...providerOptions,
+            ...QUIET,
+            api_host: providerHost,
+            advanced_disable_flags: providerOptions.advanced_disable_flags,
+            advanced_disable_feature_flags: providerOptions.advanced_disable_feature_flags,
+          },
+          `s22_flags_${id}_provider`,
+        );
+        const control = posthog.init(
+          controlKey,
+          {
+            ...providerOptions,
+            ...QUIET,
+            api_host: controlHost,
+            advanced_disable_flags: false,
+            advanced_disable_feature_flags: false,
+          },
+          `s22_flags_${id}_control`,
+        );
+        // The first event keeps the first address, as the provider's pageview does.
+        provider.capture('$pageview');
+        control.capture('$pageview');
+        if (hasFeatureFlags) {
+          await vi.waitFor(async () => expect(await flagsSentTo(controlHost)).not.toEqual([]));
+        }
+        // The member signs in and lands on the dashboard, which identifies them.
+        window.history.replaceState(null, '', '/dashboard');
+        const askedBefore = (await flagsSentTo(controlHost)).length;
+        provider.identify('00000000-0000-4000-8000-000000000001', { email: 'member@example.com' });
+        control.identify('00000000-0000-4000-8000-000000000002', { email: 'member@example.com' });
+        await vi.waitFor(async () =>
+          expect((await flagsSentTo(controlHost)).length).toBeGreaterThan(askedBefore),
+        );
+        // What either holds goes out when the page goes away.
+        window.dispatchEvent(new Event('onpagehide' in window ? 'pagehide' : 'unload'));
+        await vi.waitFor(async () =>
+          expect((await requestsTo(providerHost)).some(({ path }) => path.startsWith('/e/'))).toBe(
+            true,
+          ),
+        );
+
+        // The control: each flags request carries the first address, token and
+        // all, while its events, which passed before_send, carry it scrubbed.
+        for (const body of await flagsSentTo(controlHost)) {
+          expect(body).toContain(`/signin?redirect=/invite/${TOKEN}`);
+        }
+        const controlEvents = (await requestsTo(controlHost)).filter(({ path }) =>
+          path.startsWith('/e/'),
+        );
+        expect(controlEvents.some(({ body }) => body.includes('/invite/[redacted]'))).toBe(true);
+        for (const { body } of controlEvents) expect(body).not.toContain(TOKEN);
+
+        // The provider: no flags request at all, and the token in no request.
+        expect(await flagsSentTo(providerHost)).toEqual([]);
+        for (const { body } of await requestsTo(providerHost)) expect(body).not.toContain(TOKEN);
+      } finally {
+        forget();
+      }
+    },
+  );
 });
