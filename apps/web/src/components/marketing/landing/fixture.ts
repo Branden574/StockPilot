@@ -24,8 +24,9 @@
  *     group/variant model.
  *  8. A PO's bill-to charter is independent of the items' ownership charter.
  *
- * Vendor names are invented. Naming a real publisher or distributor would imply
- * a commercial relationship that does not exist.
+ * Vendor, charter and warehouse names are invented. Naming a real publisher or
+ * distributor would imply a commercial relationship that does not exist, and
+ * naming a real customer's charter or warehouse would point at that customer.
  */
 
 /** Crate colour registry — mirrors packages/core/src/inventory/crate-colors.ts. */
@@ -85,7 +86,7 @@ export const PO = {
   number: 'PO-000412',
   supplier: 'Meridian Book Supply',
   /** Bill-to charter. Independent of the items' ownership charter (rule 8). */
-  billToCharter: 'L4L',
+  billToCharter: 'Charter A',
   placed: 'Apr 18',
   expected: 'Apr 30',
   receipt: 'RCPT-0092',
@@ -225,7 +226,7 @@ export const STALE_ROW: StagingRow = {
   receipt: null,
   receivedLabel: '2 weeks ago',
   ageDays: 11,
-  warehouse: 'DC4 Warehouse',
+  warehouse: 'Main Warehouse',
 };
 
 export const STAGING: StagingRow[] = [
@@ -238,7 +239,7 @@ export const STAGING: StagingRow[] = [
     receipt: PO.receipt,
     receivedLabel: '3 days ago',
     ageDays: 3 + i * 0,
-    warehouse: 'DC4 Warehouse',
+    warehouse: 'Main Warehouse',
   })),
   STALE_ROW,
 ];

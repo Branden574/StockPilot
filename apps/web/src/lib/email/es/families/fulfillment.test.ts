@@ -611,12 +611,10 @@ describe('senders + delivery helpers', () => {
   });
 
   it('builds the via-StockPilot display-from (registry sample byte-form)', () => {
-    expect(buildViaStockPilotFrom('L4L North Region')).toBe(
-      'L4L North Region via StockPilot <orders@stockpilotusa.com>',
+    expect(buildViaStockPilotFrom('Sample Org')).toBe(
+      'Sample Org via StockPilot <orders@stockpilotusa.com>',
     );
-    expect(esEmailById('partial-receipt').from).toBe(
-      buildViaStockPilotFrom('L4L North Region'),
-    );
+    expect(esEmailById('partial-receipt').from).toBe(buildViaStockPilotFrom('Sample Org'));
   });
 
   it('quotes org names with specials and neutralizes header injection', () => {

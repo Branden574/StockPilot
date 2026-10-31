@@ -317,7 +317,7 @@ export function ScheduleEventForm({
           id="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Donation drop · Fresno HQ"
+          placeholder="Donation drop · Main office"
           required
         />
       </div>
@@ -430,7 +430,7 @@ export function ScheduleEventForm({
             id="location"
             value={locationText}
             onChange={(e) => setLocationText(e.target.value)}
-            placeholder="DC4 dock 2 / Customer site / 1234 Main St"
+            placeholder="Dock 2 / Customer site / 1234 Main St"
           />
         </div>
         <div className="space-y-1.5">

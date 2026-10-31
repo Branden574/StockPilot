@@ -172,7 +172,7 @@ export function PoUploadForm() {
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
-          placeholder="Example: August DC4 Book Order"
+          placeholder="Example: August Restock Order"
         />
         <p className="text-muted-foreground text-[12.5px]">
           Give this import a name so it is easy to find later. Prefilled from the file name — edit
