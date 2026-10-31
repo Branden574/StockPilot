@@ -321,6 +321,7 @@ _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/app/api/export-routes.limit-order.test.ts`,
 `apps/web/src/lib/auth/confirm-landing.test.ts`,
 `apps/web/src/app/auth/confirm/route.test.ts`,
+`apps/web/src/app/auth/confirm/route.recipient-session.test.ts`,
 `apps/web/src/lib/auth/confirm-recipient.test.ts`,
 `apps/web/src/lib/auth/confirm-link.test.ts`,
 `apps/web/src/app/auth/confirm/press-gate.test.ts`.

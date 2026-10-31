@@ -1518,6 +1518,10 @@ application structure.
   before any lookup or `verifyOtp`, the account's address and the notices,
   the failed lookup, a session made for another account, the gate on the
   page, the fixed landing);
+  [`route.recipient-session.test.ts`](../../apps/web/src/app/auth/confirm/route.recipient-session.test.ts)
+  (the real `@supabase/ssr` and auth-js: a press that GoTrue answers for
+  another account leaves with no session cookie, signed out of that session
+  only);
   [`confirm-recipient.test.ts`](../../apps/web/src/lib/auth/confirm-recipient.test.ts)
   (the signature: a known-answer vector, every changed part refused, the issue
   time's bounds, the lab harness's copy held to the same vector);

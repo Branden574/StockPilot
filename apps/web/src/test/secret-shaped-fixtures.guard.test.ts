@@ -51,6 +51,7 @@ const FILES = [
   'src/lib/auth/confirm-recipient.test.ts',
   'src/lib/auth/confirm-link.test.ts',
   'src/app/auth/confirm/press-gate.test.ts',
+  'src/app/auth/confirm/route.recipient-session.test.ts',
   'src/test/confirm-link-check.ts',
 ];
 
