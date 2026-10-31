@@ -25,9 +25,10 @@ describe('hydrate() saves the workspace it chooses', () => {
     // workspace key alone, then two setItems): the choice is saved with the
     // account that made it, in one value and one write (integrator decision
     // 3), also when the saved one had no owner or another account's
-    // (use-workspace.owner.test.ts runs it).
+    // (use-workspace.owner.test.ts runs it). And again when an older app's key
+    // sits beside it, so that the save removes that key (the B10 review).
     expect(hydrate).toMatch(
-      /if \(activeOrgId && \(choice\.persist \|\| saved\.ownerId !== userId\)\) \{\s*try \{\s*await saveWorkspace\(AsyncStorage, activeOrgId, userId\);/,
+      /if \(activeOrgId && \(choice\.persist \|\| saved\.ownerId !== userId \|\| olderBuildSince !== null\)\) \{\s*try \{\s*await saveWorkspace\(AsyncStorage, activeOrgId, userId\);/,
     );
     // One writer and one reader for the writer and the header
     // (workspace-keys.wiring.test.ts keeps the literals to that one module).
@@ -41,10 +42,15 @@ describe('hydrate() saves the workspace it chooses', () => {
     // Re-pinned by the docket B10 review (was `choice.resetCache` at each
     // site): the cache is also cleared when another account's saved
     // workspace, which the choice does not count, is not the one chosen
-    // (use-workspace.owner.test.ts and cache-owner.sqlite.test.ts run it).
+    // (use-workspace.owner.test.ts and cache-owner.sqlite.test.ts run it),
+    // or when an older app saved another workspace since this build did (a
+    // rolled-back phone update; use-workspace.owner.test.ts).
     expect(hydrate).toContain('const othersWorkspace = persisted === null ? saved.orgId : null;');
+    expect(hydrate).toContain(
+      'const olderBuildSince = await readOlderBuildWorkspaceSince(AsyncStorage).catch(() => null);',
+    );
     expect(hydrate).toMatch(
-      /const resetCache =\s*choice\.resetCache \|\| \(othersWorkspace !== null && othersWorkspace !== activeOrgId\);/,
+      /const resetCache =\s*choice\.resetCache \|\|\s*\(othersWorkspace !== null && othersWorkspace !== activeOrgId\) \|\|\s*\(olderBuildSince !== null && olderBuildSince !== activeOrgId\);/,
     );
     // Every site reads the combined rule, never the choice's alone.
     expect(hydrate.match(/choice\.resetCache/g)).toHaveLength(1);

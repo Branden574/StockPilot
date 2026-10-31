@@ -5,6 +5,7 @@ import {
   LEGACY_ACTIVE_ORG_STORAGE_KEY,
   SAVED_WORKSPACE_STORAGE_KEY,
   ownSavedWorkspace,
+  readOlderBuildWorkspaceSince,
   readSavedWorkspace,
   saveWorkspace,
   savedWorkspaceFor,
@@ -143,6 +144,49 @@ describe('readSavedWorkspace', () => {
         },
       }),
     ).rejects.toBe(fault);
+  });
+});
+
+/**
+ * AFTER A ROLLED-BACK PHONE UPDATE (docket B10 review). The older app reads and
+ * writes only the older key, which this build removes whenever it saves its own
+ * value, and its pulls fill the cache with that workspace. The older key beside
+ * this build's value was therefore written since by an older build.
+ */
+describe('readOlderBuildWorkspaceSince: the workspace an older build saved after this build did', () => {
+  it("answers the older key's workspace while this build's value is saved too", async () => {
+    const storage = memory({
+      [SAVED_WORKSPACE_STORAGE_KEY]: value('org-b', 'u1'),
+      [LEGACY_ACTIVE_ORG_STORAGE_KEY]: 'org-a',
+    });
+    await expect(readOlderBuildWorkspaceSince(storage)).resolves.toBe('org-a');
+  });
+
+  it("answers none for the older key alone: that is today's phones' saved workspace, read as the upgrade fallback", async () => {
+    const storage = memory({ [LEGACY_ACTIVE_ORG_STORAGE_KEY]: 'org-a' });
+    await expect(readOlderBuildWorkspaceSince(storage)).resolves.toBeNull();
+    await expect(readSavedWorkspace(storage)).resolves.toEqual({ orgId: 'org-a', ownerId: null });
+  });
+
+  it("answers none with only this build's value saved, an empty older key, or nothing", async () => {
+    const own = memory({ [SAVED_WORKSPACE_STORAGE_KEY]: value('org-b', 'u1') });
+    await expect(readOlderBuildWorkspaceSince(own)).resolves.toBeNull();
+    const empty = memory({
+      [SAVED_WORKSPACE_STORAGE_KEY]: value('org-b', 'u1'),
+      [LEGACY_ACTIVE_ORG_STORAGE_KEY]: '',
+    });
+    await expect(readOlderBuildWorkspaceSince(empty)).resolves.toBeNull();
+    await expect(readOlderBuildWorkspaceSince(memory())).resolves.toBeNull();
+  });
+
+  it('is never what a request names or queued work carries: those read the one value first', async () => {
+    const storage = memory({
+      [SAVED_WORKSPACE_STORAGE_KEY]: value('org-b', 'u1'),
+      [LEGACY_ACTIVE_ORG_STORAGE_KEY]: 'org-a',
+    });
+    const saved = await readSavedWorkspace(storage);
+    expect(savedWorkspaceFor(saved, 'u1')).toBe('org-b');
+    expect(ownSavedWorkspace(saved, 'u1')).toBe('org-b');
   });
 });
 

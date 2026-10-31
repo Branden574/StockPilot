@@ -9,7 +9,12 @@ import { refreshEnabledModules } from './enabled-modules';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
 import { chooseActiveOrg } from './workspace-choice';
-import { readSavedWorkspace, saveWorkspace, savedWorkspaceFor } from './workspace-keys';
+import {
+  readOlderBuildWorkspaceSince,
+  readSavedWorkspace,
+  saveWorkspace,
+  savedWorkspaceFor,
+} from './workspace-keys';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
@@ -212,6 +217,11 @@ async function loadWorkspace(userId: string) {
   // out without it would put the screen and the snapshot pull in two
   // workspaces.
   const persisted = savedWorkspaceFor(saved, userId);
+  // A workspace an older app saved since this build last saved its own (a
+  // rolled-back phone update, then this build again): read only to tell
+  // whether the cache must be cleared (resetCache below). Unreadable counts as
+  // none, as before this check.
+  const olderBuildSince = await readOlderBuildWorkspaceSince(AsyncStorage).catch(() => null);
   // See workspace-choice.ts: the same order the server uses, and the choice is
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
   // screen shows. Before, a choice made after sign-out lived only in memory and
@@ -259,9 +269,19 @@ async function loadWorkspace(userId: string) {
   // cache's whoever saved it, and this load repaired. The cache is now kept
   // only when the other account's workspace and the one the server answers
   // this account for are both the one chosen.
+  //
+  // AFTER A ROLLED-BACK PHONE UPDATE the same holds for a workspace the older
+  // app saved since this build last saved (workspace-keys.ts
+  // readOlderBuildWorkspaceSince): the older app's pulls filled the cache
+  // with it, while this build's own value, read first, is still the one from
+  // before the rollback. This build then showed its own workspace over that
+  // workspace's rows, which its delta pulls, from the older app's cursor,
+  // never swept (docket B10 review).
   const othersWorkspace = persisted === null ? saved.orgId : null;
   const resetCache =
-    choice.resetCache || (othersWorkspace !== null && othersWorkspace !== activeOrgId);
+    choice.resetCache ||
+    (othersWorkspace !== null && othersWorkspace !== activeOrgId) ||
+    (olderBuildSince !== null && olderBuildSince !== activeOrgId);
   // EVERY LOAD THAT CHOOSES A WORKSPACE LEAVES IT SAVED AS THIS ACCOUNT'S
   // (integrator decision 3). Either it is saved here, with this account as its
   // owner, in one write (a new choice, a workspace saved by an older build
@@ -270,9 +290,11 @@ async function loadWorkspace(userId: string) {
   // when the choice is the stored one, and the stored one is only ever this
   // account's or an older build's: savedWorkspaceFor). The outbox holds a row
   // with no workspace of its own until that is true (outbox-scope.ts
-  // 'workspace-loading').
+  // 'workspace-loading'). It is saved again when an older app's key sits
+  // beside it: the save removes that key (integrator decision 3), so the
+  // cache is cleared for it once.
   let savedNow = false;
-  if (activeOrgId && (choice.persist || saved.ownerId !== userId)) {
+  if (activeOrgId && (choice.persist || saved.ownerId !== userId || olderBuildSince !== null)) {
     try {
       await saveWorkspace(AsyncStorage, activeOrgId, userId);
       savedNow = true;

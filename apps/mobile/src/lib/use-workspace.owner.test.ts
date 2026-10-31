@@ -425,6 +425,54 @@ describe("a load that saves this account's workspace sends the rows held for it"
 });
 
 /**
+ * AFTER A ROLLED-BACK PHONE UPDATE (docket B10 review). The older app reads and
+ * writes only the older key, which this build removes whenever it saves, and
+ * its pulls fill the cache with that workspace: a member of several workspaces
+ * opens there in its default, say. Re-applied, this build reads its own value
+ * first, still the one from before the rollback, and showed that workspace over
+ * the other one's rows, which its delta pulls (from the older app's cursor)
+ * never swept. The older key beside this build's value can only have been
+ * written since by an older build (or left by a removal that failed, when the
+ * reset below is merely once too many).
+ */
+describe('after a rolled-back phone update: the older key beside this build value', () => {
+  it('naming another workspace: the load clears the cache once, keeps this build value and removes the older key', async () => {
+    store.set(SAVED_WORKSPACE_STORAGE_KEY, value('org-b', 'u1')); // saved before the rollback
+    store.set(LEGACY_ACTIVE_ORG_STORAGE_KEY, 'org-a'); // the older app's load saved u1's default
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-b');
+    expect(deleteOrgData).toHaveBeenCalledTimes(1);
+    expect(drains.syncNow.mock.calls).toEqual([[true]]);
+    expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-b', ownerId: 'u1' });
+    expect(store.has(LEGACY_ACTIVE_ORG_STORAGE_KEY)).toBe(false);
+
+    // The next load finds the cache its own: nothing cleared, nothing written.
+    vi.mocked(deleteOrgData).mockClear();
+    drains.syncNow.mockClear();
+    storage.setItem.mockClear();
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-b');
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(drains.syncNow).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('naming the workspace this build chooses: nothing is cleared, and the older key is removed', async () => {
+    store.set(SAVED_WORKSPACE_STORAGE_KEY, value('org-b', 'u1'));
+    store.set(LEGACY_ACTIVE_ORG_STORAGE_KEY, 'org-b');
+    useWorkspace();
+    await settled();
+    expect(shown()).toBe('org-b');
+    expect(deleteOrgData).not.toHaveBeenCalled();
+    expect(drains.syncNow).not.toHaveBeenCalled();
+    expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-b', ownerId: 'u1' });
+    expect(store.has(LEGACY_ACTIVE_ORG_STORAGE_KEY)).toBe(false);
+  });
+});
+
+/**
  * TODAY'S PHONES. The phone ships only by an over-the-air update, and every
  * phone in the field holds only the older single key: the workspace with no
  * owner (the two-key form of the first version never shipped). Rows queued

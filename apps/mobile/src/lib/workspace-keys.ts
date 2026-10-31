@@ -90,6 +90,28 @@ export async function readSavedWorkspace(storage: {
 }
 
 /**
+ * The workspace an OLDER BUILD saved after this build last saved its own
+ * value, or null (docket B10 review).
+ *
+ * This build removes the older key whenever it saves (saveWorkspace), so the
+ * older key BESIDE this build's value was written since by an older build:
+ * after a rolled-back phone update the older app reads and writes only that
+ * key, and its pulls fill the cache with its workspace. Once this build is
+ * back, its own value, read first, is still the one from before the rollback.
+ * (Or the older key was left by a removal that failed, which saveWorkspace
+ * only reports.) Never a workspace to choose, name or stamp, since its owner
+ * is unknown: the workspace load takes it only as one the cache may hold
+ * (use-workspace.ts). The older key alone is today's phones' saved workspace,
+ * read as the upgrade fallback (readSavedWorkspace); this answers null then.
+ */
+export async function readOlderBuildWorkspaceSince(storage: {
+  getItem(key: string): Promise<string | null>;
+}): Promise<string | null> {
+  if (!(await storage.getItem(SAVED_WORKSPACE_STORAGE_KEY))) return null;
+  return (await storage.getItem(LEGACY_ACTIVE_ORG_STORAGE_KEY)) || null;
+}
+
+/**
  * Save `orgId` as `ownerId`'s chosen workspace: ONE setItem holding both, so a
  * failure leaves the previous record exactly as it was (and throws, for the
  * caller to treat as not saved). Never a workspace without its owner: with no

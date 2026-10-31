@@ -62,6 +62,7 @@ describe('the saved-workspace keys have one definition', () => {
   it.each([
     ['use-workspace.ts', /readSavedWorkspace\(AsyncStorage\)/],
     ['use-workspace.ts', /savedWorkspaceFor\(saved, userId\)/],
+    ['use-workspace.ts', /readOlderBuildWorkspaceSince\(AsyncStorage\)/],
     ['use-workspace.ts', /await saveWorkspace\(AsyncStorage, activeOrgId, userId\);/],
     ['use-workspace.ts', /await saveWorkspace\(AsyncStorage, orgId, ownerId\);/],
     ['api.ts', /savedWorkspaceFor\(await readSavedWorkspace\(AsyncStorage\), userId\)/],
