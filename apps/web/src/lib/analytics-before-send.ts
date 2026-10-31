@@ -18,9 +18,11 @@
  * A session replay's records are read apart: the page address, a network
  * request's URL, a console line, a custom record; never a snapshot or a
  * mutation, which is the page itself, often compressed into a binary string
- * that any rewrite would break. An event with no credential comes back as the
- * same object: product analytics is otherwise untouched. `perf_` events are
- * reduced to route templates first (lib/perf/scrub.ts).
+ * that any rewrite would break. The provider has switched replay off since
+ * docket S22; this part stays for a tab still running an older bundle. An
+ * event with no credential comes back as the same object: product analytics
+ * is otherwise untouched. `perf_` events are reduced to route templates first
+ * (lib/perf/scrub.ts).
  *
  * TOTAL and FAIL CLOSED. It never throws (a throwing before_send drops the
  * event or breaks capture for the page), and an event it cannot read is

@@ -95,6 +95,20 @@ describe('PostHogProvider', () => {
     );
   });
 
+  // Docket S22 (owner decision d.4). Whether a visit is recorded is decided by
+  // the replay switch in the PostHog project, unless the code says no: the SDK
+  // records only when the project says yes AND this option is false, its
+  // default. A recording is the page itself, which before_send leaves alone.
+  // posthog-provider.sdk.test.tsx proves the project's yes is overruled.
+  it('MUTATION GUARD — never records a session, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ disable_session_recording: true }),
+    );
+  });
+
   // The path guard below keeps PostHog off a share page, but a credential can
   // sit in another page's URL: the invite page's Sign in link is
   // /signin?redirect=/invite/<token>, and the SDK puts that URL on every event

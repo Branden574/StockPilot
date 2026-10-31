@@ -9,7 +9,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
  * arrived in the fragment, neither in an event nor in the Referer of a request.
  * The provider's own options are taken from its init call; each test starts a
  * named SDK instance with them, plus switches that keep it from loading flags,
- * replay, surveys or scripts and one that lets it capture in a test browser.
+ * surveys or scripts and one that lets it capture in a test browser. Session
+ * replay is not among them: whether it records is the provider's own setting
+ * (docket S22), and the last describe block turns it on in the project.
  * fetch and sendBeacon are stubbed before the SDK loads, since it keeps its own
  * reference to fetch from then on: no request leaves the process. Placeholder
  * key and tokens.
@@ -42,7 +44,6 @@ const REFRESH = 'refreshplaceholder';
 const QUIET: Partial<PostHogConfig> = {
   api_host: INGEST,
   advanced_disable_flags: true,
-  disable_session_recording: true,
   disable_surveys: true,
   disable_external_dependency_loading: true,
   capture_pageview: false,
@@ -72,6 +73,45 @@ function onSignInFromInvite(): void {
     '',
     `/signin?redirect=/invite/${TOKEN}#access_token=${ACCESS}&refresh_token=${REFRESH}&token_type=bearer&type=recovery`,
   );
+}
+
+/**
+ * Every script the SDK asks for, kept out of the document so happy-dom never
+ * fetches it. With `defaults` unset the SDK puts scripts in the body.
+ */
+function interceptScripts(): { scripts: HTMLScriptElement[]; restore: () => void } {
+  const scripts: HTMLScriptElement[] = [];
+  function keep<T extends Node>(node: T): T {
+    if (node instanceof HTMLScriptElement) scripts.push(node);
+    return node;
+  }
+  const append = vi.spyOn(document.body, 'appendChild').mockImplementation(keep);
+  const insert = vi.spyOn(document.body, 'insertBefore').mockImplementation(keep);
+  return {
+    scripts,
+    restore: () => {
+      append.mockRestore();
+      insert.mockRestore();
+    },
+  };
+}
+
+const projectAnswers = window as unknown as {
+  _POSTHOG_REMOTE_CONFIG?: Record<string, { config: Record<string, unknown> }>;
+};
+
+/**
+ * The PostHog project's answer for each key, as the config script PostHog
+ * serves would leave it. The SDK applies it during init, before anything else.
+ * Returns the cleanup. Each test uses keys of its own, since the SDK also
+ * keeps the answer per key.
+ */
+function projectSays(keys: readonly string[], config: Record<string, unknown>): () => void {
+  const answers = (projectAnswers._POSTHOG_REMOTE_CONFIG ??= {});
+  for (const key of keys) answers[key] = { config: { hasFeatureFlags: false, ...config } };
+  return () => {
+    for (const key of keys) delete answers[key];
+  };
 }
 
 describe('PostHog on /signin, through the real SDK', () => {
@@ -117,14 +157,7 @@ describe('PostHog on /signin, through the real SDK', () => {
     // The SDK loads its remote config as a script from /ingest on every page,
     // before anything else; a script tag also goes by the page's policy.
     onSignInFromInvite();
-    const scripts: HTMLScriptElement[] = [];
-    function keep<T extends Node>(node: T): T {
-      if (node instanceof HTMLScriptElement) scripts.push(node);
-      return node;
-    }
-    // Kept out of the document, so happy-dom never fetches it.
-    const append = vi.spyOn(document.body, 'appendChild').mockImplementation(keep);
-    const insert = vi.spyOn(document.body, 'insertBefore').mockImplementation(keep);
+    const { scripts, restore } = interceptScripts();
     try {
       posthog.init(
         KEY,
@@ -137,11 +170,69 @@ describe('PostHog on /signin, through the real SDK', () => {
         'b39_scripts',
       );
     } finally {
-      append.mockRestore();
-      insert.mockRestore();
+      restore();
     }
 
     expect(scripts.map((script) => script.src)).toEqual([`${INGEST}/array/${KEY}/config.js`]);
     expect(scripts[0]?.getAttribute('referrerpolicy')).toBe('strict-origin');
+  });
+});
+
+/*
+ * What the PostHog project can switch on by itself, with no code change. Each
+ * test starts two instances fed the same project answer: one with the
+ * provider's options, and a control with the provider's switch for that
+ * feature taken out. The control proves the harness sees the feature at work,
+ * so the provider's test cannot pass for want of it.
+ */
+describe('PostHog when the PostHog project switches a feature on, through the real SDK', () => {
+  // Docket S22 (owner decision d.4). A recording is the page itself: its text,
+  // its links (a requester's return link among them) and, if the project
+  // turns body capture on, the responses. before_send leaves it alone.
+  it('never asks for the session recorder, even when the project turns replay on', async () => {
+    const providerKey = 'phc_placeholder_replay_provider';
+    const controlKey = 'phc_placeholder_replay_control';
+    const providerHost = 'https://provider.ingest.example.invalid';
+    const controlHost = 'https://control.ingest.example.invalid';
+    // The SDK asks for /static/<version>/lazy-recorder.js first, the ?v= form
+    // only after a load error, and the project can name another script.
+    const recorderFrom = (host: string) => (script: HTMLScriptElement) =>
+      script.src.startsWith(`${host}/static/`) && /recorder/.test(script.src);
+
+    const forget = projectSays([providerKey, controlKey], {
+      sessionRecording: { endpoint: '/s/' },
+    });
+    const { scripts, restore } = interceptScripts();
+    try {
+      posthog.init(
+        providerKey,
+        {
+          ...providerOptions,
+          ...QUIET,
+          api_host: providerHost,
+          disable_external_dependency_loading: false,
+          // Last, so nothing above can stand in for the provider's own value.
+          disable_session_recording: providerOptions.disable_session_recording,
+        },
+        's22_replay_provider',
+      );
+      posthog.init(
+        controlKey,
+        {
+          ...providerOptions,
+          ...QUIET,
+          api_host: controlHost,
+          disable_external_dependency_loading: false,
+          disable_session_recording: false,
+        },
+        's22_replay_control',
+      );
+
+      await vi.waitFor(() => expect(scripts.some(recorderFrom(controlHost))).toBe(true));
+      expect(scripts.filter(recorderFrom(providerHost)).map((script) => script.src)).toEqual([]);
+    } finally {
+      restore();
+      forget();
+    }
   });
 });
