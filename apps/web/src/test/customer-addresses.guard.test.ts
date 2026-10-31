@@ -76,9 +76,9 @@ import { CUSTOMER_DOMAINS } from './customer-identity';
  * their paths are read; people's names, which no pattern can tell from words;
  * an address split across folder levels (a / inside it); and an address split
  * across lines of the file, put together at run time from pieces (as the
- * domains below are), broken up by other markup or by spaces, written in
- * words with no brackets, spelled with lookalike letters from another script,
- * or in an encoding not listed above (base64, for one).
+ * domains in customer-identity.ts are), broken up by other markup or by
+ * spaces, written in words with no brackets, spelled with lookalike letters
+ * from another script, or in an encoding not listed above (base64, for one).
  * Git history keeps the old content.
  *
  * IF THIS FAILS: replace the address with a synthetic one at a reserved
@@ -554,9 +554,9 @@ describe("the tracked tree holds no address at the customer's mail domains", () 
     expect(new Set(ALLOWED.map((a) => `${a.file} ${a.sha256}`)).size).toBe(ALLOWED.length);
   });
 
-  // The spellings below are built from the pieces above at run time, like the
-  // domains themselves, and a miss is reported by its name and the domain's
-  // place in the list, so a failing run prints no domain.
+  // The spellings below are built at run time from the domains, which
+  // customer-identity.ts joins from pieces, and a miss is reported by its name
+  // and the domain's place in the list, so a failing run prints no domain.
   it('finds each spelling of an address as written', () => {
     expect(
       misses((domain, [label, tld]) => {
