@@ -3,9 +3,21 @@
 // every redirect hop re-validated), so a staff-editable legacy
 // custom_fields.thumbnail_url can no longer make the server fetch an internal
 // host. A body over the byte cap is refused (advertised or streamed). The
-// optional downscale fits inside the box and has its own cache key.
+// optional downscale fits inside the box and has its own cache key. A photo
+// with a see-through background prints on white, never on black (B62).
 import sharp from 'sharp';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  CONVERTED_FORMATS,
+  HIDDEN_COLOURS,
+  isRed,
+  isWhite,
+  rgbAt,
+  SEE_THROUGH_SIZE,
+  seeThroughImage,
+  type SeeThroughImage,
+} from '@/test/see-through-images';
 
 const { cacheKeys, cachedFns, safeFetch } = vi.hoisted(() => ({
   cacheKeys: [] as string[][],
@@ -132,10 +144,115 @@ describe('prefetchImagesAsDataUris', () => {
     const small = await meta(out.get('small'));
     expect([small.width, small.height]).toEqual([60, 90]);
   });
-  it('the sized path has its own cache key; the unsized one keeps v5', () => {
+  // B62: the unsized entries stored before the flatten hold see-through photos
+  // on a black square for up to 25 days, so that key moved to v7 (nothing
+  // calls revalidateTag on these entries). The sized path always flattened and
+  // makes the same bytes, so its v6 entries stay.
+  it('the unsized key is v7, so no black square stored under v5 is served; the sized key stays v6', () => {
     expect(cacheKeys).toEqual(
-      expect.arrayContaining([['pdf-image-data-uri-v5'], ['pdf-image-data-uri-v6']]),
+      expect.arrayContaining([['pdf-image-data-uri-v7'], ['pdf-image-data-uri-v6']]),
     );
+    expect(cacheKeys).not.toContainEqual(['pdf-image-data-uri-v5']);
+  });
+});
+
+/**
+ * B62: a photo with a see-through background printed on a black square in
+ * the pick slip, both packing slips and the report PDFs. JPEG has no
+ * transparency, and libvips paints a transparent pixel black on a JPEG save
+ * (even one that hides white), so every JPEG this helper makes flattens onto
+ * white first, as the sized path always did. PNG and JPEG still pass through
+ * unchanged: react-pdf keeps a PNG's transparency, so the page shows through.
+ */
+describe('photos with a see-through background (B62)', () => {
+  async function convertedSet(): Promise<SeeThroughImage[]> {
+    const out: SeeThroughImage[] = [];
+    for (const format of CONVERTED_FORMATS) {
+      for (const hidden of HIDDEN_COLOURS) out.push(await seeThroughImage(format, hidden));
+    }
+    return out;
+  }
+
+  /** Each image at its own URL, answered by URL (the worker pool fetches them
+   *  in any order), all in one batch. */
+  async function prefetchAll(images: SeeThroughImage[], opts?: { maxEdgePx?: number }) {
+    const urlOf = (i: number) => `${SIGNED}&photo=${i}`;
+    fetchSpy.mockImplementation(async (url: string) => {
+      const image = images.find((_, i) => urlOf(i) === url);
+      if (!image) throw new Error(`unexpected request: ${url}`);
+      return response(image.bytes, { 'content-type': image.contentType });
+    });
+    const out = await prefetchImagesAsDataUris(
+      images.map((image, i) => [image.label, urlOf(i)] as const),
+      opts,
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(images.length);
+    return out;
+  }
+
+  /** What went wrong for each image that did not print as a JPEG on white
+   *  with its red photo kept; empty when every one did. */
+  async function notOnWhite(images: SeeThroughImage[], out: Map<string, string | null>) {
+    const wrong: string[] = [];
+    const middle = SEE_THROUGH_SIZE / 2;
+    for (const { label } of images) {
+      const uri = out.get(label);
+      if (!uri?.startsWith('data:image/jpeg;base64,')) {
+        wrong.push(`${label}: ${uri === null ? 'no image' : uri?.slice(0, 24)}`);
+        continue;
+      }
+      const jpeg = Buffer.from(uri.split(',')[1]!, 'base64');
+      const corner = await rgbAt(jpeg, 0, 0);
+      const centre = await rgbAt(jpeg, middle, middle);
+      if (!isWhite(corner)) wrong.push(`${label}: corner ${corner.join(',')}`);
+      if (!isRed(centre)) wrong.push(`${label}: centre ${centre.join(',')}`);
+    }
+    return wrong;
+  }
+
+  it('WebP (lossy and lossless), AVIF and GIF print on white with the photo kept', async () => {
+    const images = await convertedSet();
+    expect(images).toHaveLength(8);
+    expect(await notOnWhite(images, await prefetchAll(images))).toEqual([]);
+  });
+
+  // The same images through the sized path (Book Order Totals covers), which
+  // has always flattened: one fixture set for both paths.
+  it('the sized path prints the same images on white too', async () => {
+    const images = await convertedSet();
+    expect(await notOnWhite(images, await prefetchAll(images, { maxEdgePx: 240 }))).toEqual([]);
+  });
+
+  it('a see-through PNG comes back unchanged, its transparency kept', async () => {
+    const png = await seeThroughImage('png');
+    const out = await prefetchAll([png]);
+    expect(out.get(png.label)).toBe(`data:image/png;base64,${png.bytes.toString('base64')}`);
+  });
+
+  // Ordinary photos do not change: a photo with nothing see-through makes the
+  // same JPEG as before the flatten, and the sized path the same bytes as
+  // before (so its v6 cache entries stay valid).
+  it('an opaque photo gives the bytes it gave before', async () => {
+    const opaque = await sharp({
+      create: { width: 48, height: 32, channels: 3, background: { r: 30, g: 90, b: 160 } },
+    })
+      .webp({ quality: 80 })
+      .toBuffer();
+    const image = { label: 'opaque webp', bytes: opaque, contentType: 'image/webp' };
+    const before = await sharp(opaque).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    const out = await prefetchAll([image]);
+    expect(out.get(image.label)).toBe(`data:image/jpeg;base64,${before.toString('base64')}`);
+  });
+
+  it('the sized path makes the bytes it made before for a see-through photo', async () => {
+    const webp = await seeThroughImage('webp-lossy');
+    const before = await sharp(webp.bytes)
+      .resize({ width: 40, height: 40, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 75, mozjpeg: true })
+      .toBuffer();
+    const out = await prefetchAll([webp], { maxEdgePx: 40 });
+    expect(out.get(webp.label)).toBe(`data:image/jpeg;base64,${before.toString('base64')}`);
   });
 });
 
