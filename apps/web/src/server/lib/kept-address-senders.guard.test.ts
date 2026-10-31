@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  analyzeSenderFile,
+  analyzeSenderFiles,
   type CallSite,
   type KeptAddressSpec,
   linkSenderFiles,
@@ -40,25 +40,36 @@ import {
  *      (checked below), so a call into it never sends.
  *   2. READING. A function reads a kept address when it names the column, an
  *      alias of it the file can see, or selects it (KEPT_ADDRESSES), the
- *      query followed back through its variables; or when a function of its
- *      own file that does not ask hands it the address (it is handed it). A
- *      support ticket's address is a column with a common name (email), so
- *      any read of support_tickets counts: any chain with a select, but an
- *      insert's or upsert's whose select names no kept column.
+ *      query followed back through its variables; when a function of its
+ *      own file that does not ask hands it the address (it is handed it);
+ *      or when it reads a registered alias off a row a call returned to it
+ *      (`detail.requesterEmail` of a maintenance detail a loader in another
+ *      file returns). A support ticket's address is a column with a common
+ *      name (email), so any read of support_tickets counts: any chain with a
+ *      select, but an insert's or upsert's whose select names no kept
+ *      column, and any call of a function that returns a ticket row or its
+ *      address, in its own file or another (`gets it from
+ *      listSupportTickets()`).
  *   3. PER FUNCTION. A function that reads a kept address and sends, or hands
  *      the address (or a row holding it) to a function of another file
  *      outside packages/core, calls the answer itself, unless the sender or
  *      function it hands it to calls the answer (the receiving sender asks).
- *      A hand-off checked by hand is in REVIEWED_HANDOFFS with the reason. A
- *      hand-off into a file of the scan that reaches no function the scan
- *      knows is a finding of its own.
- *   4. ALIASES. Every property that carries a kept address (an object key
- *      whose value is the address, wherever the object is, but in the
- *      arguments of an answer or of a send primitive: sendEmail,
- *      `.emails.send`, fetch) is registered in KEPT_ADDRESSES with its file
- *      and function, and every registered alias is still made there. A
- *      registered alias is then read like the column wherever its file can
- *      be seen (that file, and the files that import it).
+ *      The answer is the function of server/lib/kept-address.ts the call
+ *      reaches, imported under any name, through a namespace import or a
+ *      re-export; a function of another file, or of its own, that only has
+ *      the answer's name does not ask. A hand-off checked by hand is in
+ *      REVIEWED_HANDOFFS with the reason. A hand-off into a file of the scan
+ *      that reaches no function the scan knows is a finding of its own.
+ *   4. ALIASES. Every property that carries a kept address under another
+ *      name (an object key whose value is the address, wherever the object
+ *      is, but in the arguments of an answer or of a send primitive:
+ *      sendEmail, `.emails.send`, fetch) is registered in KEPT_ADDRESSES
+ *      with its file and function, and every registered alias is still made
+ *      there. A registered alias is then read like the column wherever its
+ *      file can be seen (that file, and the files that import it), and off
+ *      any row a call returned. A key with the column's own name (the
+ *      support mapper's `email`) is no alias: the rows that carry it are
+ *      followed by what each function returns (point 2).
  *   5. TABLES IT CANNOT READ. In a file that sends, a select through a
  *      `.from()` whose table the scan cannot read (a variable, an imported
  *      constant), or through a query it cannot trace back to a `.from()` at
@@ -89,9 +100,12 @@ const CORE = 'packages/core/src';
 const TEST_HELPERS = 'apps/web/src/test';
 const TIMEOUT = 180_000;
 
+/** The answers' file: a call is an answer only when it reaches one of its functions. */
+const KEPT_ADDRESS_FILE = 'apps/web/src/server/lib/kept-address.ts';
 const MAINTENANCE_SERVICE = 'apps/web/src/server/services/maintenance-requests.ts';
 const RENTAL_EMAILS = 'apps/web/src/lib/email/rentals.ts';
 const RENTAL_SERVICE = 'apps/web/src/server/services/rentals.ts';
+const SUPPORT_SERVICE = 'apps/web/src/server/services/support-tickets.ts';
 
 /** The kept addresses, their aliases and their answers. */
 const KEPT_ADDRESSES: Array<KeptAddressSpec & { aliasWhy: Record<string, string> }> = [
@@ -165,9 +179,18 @@ const NO_ANSWER_YET: Array<{ file: string; table: string; why: string }> = [
   },
 ];
 
-/** Hand-offs of a kept address to another file, checked by hand (none today). */
-const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string; why: string }> =
-  [];
+/** Hand-offs of a kept address (or a row holding it) to another file, checked by hand. */
+const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string; why: string }> = [
+  {
+    file: 'apps/web/src/app/(platform)/platform/support/page.tsx',
+    enclosing: 'PlatformSupportPage',
+    callee: 'createAttachmentSignedUrls',
+    why:
+      "It hands the tickets' screenshot storage keys (attachmentPath, made from the rows " +
+      'listSupportTickets() returns), never an address; createAttachmentSignedUrls signs them ' +
+      'for the platform admin and sends nothing.',
+  },
+];
 
 /** Selects through a table the scan cannot read, in a file that sends. */
 const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: string }> = [
@@ -221,9 +244,16 @@ interface Source {
   text: string;
 }
 
-function analyzeFiles(sources: Source[], known: Set<string>): SenderFile[] {
-  const resolve = resolverFor(known);
-  return sources.map((s) => analyzeSenderFile(s.file, s.text, KEPT_ADDRESSES, resolve));
+/** The sources, read against `context` (files read before, not read again). */
+function analyzeFiles(
+  sources: Source[],
+  known: Set<string>,
+  context: SenderFile[] = [],
+): SenderFile[] {
+  return analyzeSenderFiles(sources, KEPT_ADDRESSES, resolverFor(known), {
+    answerFile: KEPT_ADDRESS_FILE,
+    known: context,
+  });
 }
 
 interface Scan {
@@ -308,11 +338,15 @@ function senderFindings({ files, units }: Scan): string[] {
     for (const table of [...new Set(u.reads.map((r) => r.table))]) {
       const spec = KEPT_ADDRESSES.find((s) => s.table === table)!;
       const what = `${spec.table}.${spec.column}`;
-      // A unit that only gets the address from a caller in its file says so.
+      // A unit that only gets the address from a caller in its file, or from
+      // what functions return, says so.
       const own = u.reads.filter((r) => r.table === table);
+      const GETS = 'gets it from ';
       const reads = own.every((r) => r.how.startsWith('is handed it by '))
         ? `is handed ${what} by ${own[0]!.how.slice('is handed it by '.length)}`
-        : `reads ${what}`;
+        : own.every((r) => r.how.startsWith(GETS))
+          ? `gets ${what} from ${[...new Set(own.map((r) => r.how.slice(GETS.length)))].join(', ')}`
+          : `reads ${what}`;
       const calls = [...u.localCalls, ...u.importCalls];
       const sendsThrough = calls.filter((c) => c.target !== null && sending.has(c.target));
       const unresolved = u.importCalls.filter((c) => c.unresolved && c.carries.includes(table));
@@ -448,16 +482,14 @@ describe('kept-address senders (B23 guard)', () => {
   const repo = () => (repoScan ??= analyze(repoSources()));
   /** The repository with planted files added (or put in place of a file of
    *  the same name); imports resolve among both. Planted files are analyzed
-   *  against the repository's files; the repository's own analysis is
-   *  reused, so only an import of a planted file from a repository file is
-   *  not seen (no plant needs one). */
+   *  against the repository's files and what their functions return; the
+   *  repository's own analysis is reused, so only an import of a planted
+   *  file from a repository file is not seen (no plant needs one). */
   const withPlanted = (planted: Source[]) => {
     const plantedFiles = new Set(planted.map((p) => p.file));
     const known = new Set([...repoSources().map((s) => s.file), ...plantedFiles]);
-    const files = [
-      ...repo().files.filter((f) => !plantedFiles.has(f.file)),
-      ...analyzeFiles(planted, known),
-    ];
+    const context = repo().files.filter((f) => !plantedFiles.has(f.file));
+    const files = [...context, ...analyzeFiles(planted, known, context)];
     return senderFindings(scan(files));
   };
 
@@ -512,6 +544,27 @@ describe('kept-address senders (B23 guard)', () => {
         u.sends.map((s) => `${u.file}:${s.line} ${s.how}`),
       );
       expect(sends).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    'follows the rows the support list functions and the maintenance detail return',
+    () => {
+      const returns = (file: string, name: string) =>
+        repo().units.find((u) => u.file === file && u.name === name)?.returns;
+      for (const name of ['listSupportTickets', 'listMyTickets', 'mapRow']) {
+        expect(returns(SUPPORT_SERVICE, name), name).toEqual({ support_tickets: 'row' });
+      }
+      expect(returns(MAINTENANCE_SERVICE, 'MaintenanceRequestsService.get')).toMatchObject({
+        maintenance_requests: 'row',
+      });
+      const page = repo().units.find(
+        (u) =>
+          u.file === 'apps/web/src/app/(platform)/platform/support/page.tsx' &&
+          u.name === 'PlatformSupportPage',
+      );
+      expect(page?.reads.map((r) => r.how)).toContain('gets it from listSupportTickets()');
     },
     TIMEOUT,
   );
@@ -985,6 +1038,256 @@ describe('kept-address senders (B23 guard)', () => {
           'apps/web/src/server/services/plant-unresolved.ts:13 tell() hands maintenance_requests.requester_email_snapshot to remind() (@/server/email/plant-obj), which reaches no function the scan can follow in apps/web/src/server/email/plant-obj.ts: make it a function, method or object function the scan reads, or ask maintenanceRequesterAccountDeleted() first',
           'apps/web/src/server/services/plant-unresolved.ts:12 tell() is handed maintenance_requests.requester_email_snapshot by reopen() and sends email through reopened() without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
         ]);
+      },
+      TIMEOUT,
+    );
+
+    // Review 3 (2026-10-31), finding 3: an answer was counted by its bare
+    // name, so a function that only had that name passed for asking. Each
+    // plant below passed the helper of b52da7e63 with no finding.
+    const PLANTS_ANSWER_LOOKALIKES = (): Source[] => {
+      const real = readFileSync(path.join(REPO, SUPPORT_SERVICE), 'utf8');
+      const IMPORT = `import {
+  supportTicketOwner,
+  supportTicketSubmitterAccountDeleted,
+} from '@/server/lib/kept-address';`;
+      if (!real.includes(IMPORT))
+        throw new Error('the support service no longer imports the answer');
+      return [
+        {
+          // The support service with its own copy in place of the import.
+          file: SUPPORT_SERVICE,
+          text: real.replace(
+            IMPORT,
+            `import { supportTicketOwner } from '@/server/lib/kept-address';
+function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
+  return false;
+}`,
+          ),
+        },
+        {
+          file: 'apps/web/src/server/email/plant-own-answer.ts',
+          text: `
+              export async function remindRequester(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              function maintenanceRequesterAccountDeleted(_row: unknown) {
+                return false;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/lib/plant-lookalike.ts',
+          text: `
+              export function maintenanceRequesterAccountDeleted(_row: unknown) {
+                return false;
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-lookalike-import.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/plant-lookalike';
+              export async function remindRequester(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }`,
+        },
+        {
+          file: 'apps/web/src/server/email/plant-shadowed-answer.ts',
+          text: `
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
+              export async function viaMember(admin: Admin, id: string, rules: Rules) {${READ_MAINTENANCE}
+                if (!data || rules.maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              export async function viaParameter(
+                admin: Admin,
+                id: string,
+                maintenanceRequesterAccountDeleted: (row: unknown) => boolean,
+              ) {${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              export async function viaNested(admin: Admin, id: string) {
+                function maintenanceRequesterAccountDeleted(_row: unknown) {
+                  return false;
+                }${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              export const realAnswer = maintenanceRequesterAccountDeleted;`,
+        },
+      ];
+    };
+    const PLANTS_ANSWER_IMPORTED: Source[] = [
+      {
+        file: 'apps/web/src/server/lib/plant-kept-barrel.ts',
+        text: `export { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';`,
+      },
+      {
+        file: 'apps/web/src/server/email/plant-asks-every-way.ts',
+        text: `
+              import { maintenanceRequesterAccountDeleted as requesterGone } from '@/server/lib/kept-address';
+              import * as kept from '@/server/lib/kept-address';
+              import { maintenanceRequesterAccountDeleted } from '@/server/lib/plant-kept-barrel';
+              export async function viaAlias(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || requesterGone(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              export async function viaNamespace(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || kept.maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }
+              export async function viaBarrel(admin: Admin, id: string) {${READ_MAINTENANCE}
+                if (!data || maintenanceRequesterAccountDeleted(data)) return;
+                await sendEmail({ to: data.requester_email_snapshot, subject: 'Reminder', html: '' });
+              }`,
+      },
+    ];
+
+    // Review 3 (2026-10-31), finding 4: a kept address a function returned
+    // was not followed, in its file or in another one. Each plant below
+    // passed the helper of b52da7e63 with no finding. The two-hop sender
+    // comes before its loader, so what the loader returns is learned in a
+    // later round of analyzeSenderFiles.
+    const PLANTS_RETURNED: Source[] = [
+      {
+        file: 'apps/web/src/server/email/plant-two-hop.ts',
+        text: `
+              import { loadDetail } from '@/server/lib/plant-load-request';
+              export async function remindRequester(id: string) {
+                const detail = await loadDetail(id);
+                await sendEmail({ to: detail.requesterEmail ?? '', subject: 'Reminder', html: '' });
+              }
+              export async function remindAgain(id: string) {
+                const { requesterEmail } = await loadDetail(id);
+                await sendEmail({ to: requesterEmail ?? '', subject: 'Reminder', html: '' });
+              }`,
+      },
+      {
+        file: 'apps/web/src/server/jobs/plant-ticket-reminder.ts',
+        text: `
+              import { listSupportTickets } from '@/server/services/support-tickets';
+              export async function remindOpenTickets() {
+                const tickets = await listSupportTickets({ status: 'open' });
+                for (const t of tickets) {
+                  await sendEmail({ to: t.email, subject: 'Is your ticket still open?', html: '' });
+                }
+              }`,
+      },
+      {
+        file: 'apps/web/src/server/jobs/plant-my-tickets.ts',
+        text: `
+              import { listMyTickets } from '@/server/services/support-tickets';
+              export async function digest(userId: string, organizationId: string) {
+                const [first] = await listMyTickets({ userId, organizationId });
+                if (first) await sendEmail({ to: first.email, subject: 'Your tickets', html: '' });
+              }`,
+      },
+      {
+        file: 'apps/web/src/server/services/plant-ticket-helper.ts',
+        text: `
+              async function loadTicket(admin: Admin, id: string) {
+                const { data } = await admin.from('support_tickets').select('*').eq('id', id).single();
+                return data;
+              }
+              const ticketOf = (admin: Admin, id: string) => loadTicket(admin, id);
+              export async function loadTickets(admin: Admin, ids: string[]) {
+                return Promise.all(ids.map((id) => loadTicket(admin, id)));
+              }
+              export async function remind(admin: Admin, id: string) {
+                const t = await ticketOf(admin, id);
+                await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }
+              export async function remindAll(admin: Admin, ids: string[]) {
+                const tickets = await Promise.all(ids.map((id) => loadTicket(admin, id)));
+                for (const t of tickets) await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+              }`,
+      },
+      {
+        file: 'apps/web/src/server/jobs/plant-ticket-batch.ts',
+        text: `
+              import { loadTickets } from '@/server/services/plant-ticket-helper';
+              export async function remindBatch(admin: Admin, ids: string[]) {
+                for (const t of await loadTickets(admin, ids)) {
+                  await sendEmail({ to: t.email, subject: 'Still open?', html: '' });
+                }
+              }`,
+      },
+      {
+        file: 'apps/web/src/server/lib/plant-load-request.ts',
+        text: `
+              import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
+              export async function loadDetail(id: string) {
+                const svc = await MaintenanceRequestsService.forCurrentUser();
+                return svc.get(id);
+              }`,
+      },
+    ];
+
+    it(
+      '(9) an answer is the kept-address.ts function a call reaches: a function, an import or a member that only has its name is not one',
+      () => {
+        expect(withPlanted(PLANTS_ANSWER_LOOKALIKES())).toEqual([
+          'apps/web/src/server/services/support-tickets.ts:363 updateSupportTicket() reads support_tickets.email and sends email through sendResolvedNotice() without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/support-tickets.ts:362 updateSupportTicket() hands support_tickets.email to keepAlive() (@/server/services/lib/defer) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          'apps/web/src/server/services/support-tickets.ts:415 sendResolvedNotice() is handed support_tickets.email by updateSupportTicket() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/support-tickets.ts:392 sendResolvedNotice() hands support_tickets.email to renderSupportResolvedEmailHtml() (@/lib/email/es/families/support) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          'apps/web/src/server/email/plant-own-answer.ts:9 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/email/plant-lookalike-import.ts:10 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/email/plant-lookalike-import.ts:9 remindRequester() hands maintenance_requests.requester_email_snapshot to maintenanceRequesterAccountDeleted() (@/server/lib/plant-lookalike) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          'apps/web/src/server/email/plant-shadowed-answer.ts:10 viaMember() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/email/plant-shadowed-answer.ts:23 viaParameter() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/email/plant-shadowed-answer.ts:35 viaNested() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(9) the answer imported under another name, through a namespace import or through a re-export is asked',
+      () => {
+        expect(withPlanted(PLANTS_ANSWER_IMPORTED)).toEqual([]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(10) a kept address a function returns: rows from listSupportTickets() and listMyTickets(), a helper of the same file, a callback, and a loader in another file',
+      () => {
+        expect(withPlanted(PLANTS_RETURNED)).toEqual([
+          'apps/web/src/server/email/plant-two-hop.ts:5 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/email/plant-two-hop.ts:9 remindAgain() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/jobs/plant-ticket-reminder.ts:6 remindOpenTickets() gets support_tickets.email from listSupportTickets() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/jobs/plant-my-tickets.ts:5 digest() gets support_tickets.email from listMyTickets() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/plant-ticket-helper.ts:12 remind() gets support_tickets.email from ticketOf() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/plant-ticket-helper.ts:16 remindAll() gets support_tickets.email from loadTicket() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/jobs/plant-ticket-batch.ts:5 remindBatch() gets support_tickets.email from loadTickets() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      '(10) a function that asks for each row a function returns is fine',
+      () => {
+        const planted: Source[] = [
+          {
+            file: 'apps/web/src/server/jobs/plant-ticket-reminder-asks.ts',
+            text: `
+              import { supportTicketSubmitterAccountDeleted } from '@/server/lib/kept-address';
+              import { listSupportTickets } from '@/server/services/support-tickets';
+              export async function remindOpenTickets() {
+                const tickets = await listSupportTickets({ status: 'open' });
+                for (const t of tickets) {
+                  const owner = { organization_id: t.organizationId, submitted_by: t.submittedBy };
+                  if (supportTicketSubmitterAccountDeleted(owner)) continue;
+                  await sendEmail({ to: t.email, subject: 'Is your ticket still open?', html: '' });
+                }
+              }`,
+          },
+        ];
+        expect(withPlanted(planted)).toEqual([]);
       },
       TIMEOUT,
     );
