@@ -700,7 +700,7 @@ describe('OrderLineActions and ShortLineFixes when a change gets no answer', () 
     await user.type(field, '9');
     await user.click(screen.getByRole('button', { name: /save quantity for blue widget/i }));
     expect(toastMock.error).toHaveBeenCalledWith(
-      requestFailedMessage('change the quantity of Blue widget'),
+      requestFailedMessage(offline(), 'change the quantity of Blue widget'),
     );
     expect(screen.getByLabelText(/requested quantity for blue widget/i)).toHaveValue(9);
     expect(screen.getByRole('button', { name: /save quantity for blue widget/i })).toBeEnabled();
@@ -713,7 +713,9 @@ describe('OrderLineActions and ShortLineFixes when a change gets no answer', () 
     await user.click(screen.getByRole('button', { name: /remove blue widget/i }));
     await screen.findByRole('dialog');
     await user.click(screen.getByRole('button', { name: /remove item/i }));
-    expect(toastMock.error).toHaveBeenCalledWith(requestFailedMessage('remove Blue widget'));
+    expect(toastMock.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'remove Blue widget'),
+    );
     expect(screen.getByRole('button', { name: /remove item/i })).toBeEnabled();
     expect(refreshSpy).not.toHaveBeenCalled();
   });
@@ -732,7 +734,7 @@ describe('OrderLineActions and ShortLineFixes when a change gets no answer', () 
     );
     await user.click(screen.getByRole('button', { name: 'Lower to 30: Blue widget' }));
     expect(toastMock.error).toHaveBeenCalledWith(
-      requestFailedMessage('change the quantity of Blue widget'),
+      requestFailedMessage(offline(), 'change the quantity of Blue widget'),
     );
     expect(screen.getByRole('button', { name: 'Lower to 30: Blue widget' })).toBeEnabled();
     expect(refreshSpy).not.toHaveBeenCalled();

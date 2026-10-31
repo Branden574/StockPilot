@@ -553,7 +553,7 @@ describe('AddItemsDialog', () => {
 
     await vi.waitFor(() => {
       expect(toastMock.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the items were added', 'the order'),
+        requestUnconfirmedMessage(offline(), 'the items were added', 'the order'),
       );
     });
     expect(refreshSpy).toHaveBeenCalledTimes(1);

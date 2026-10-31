@@ -26,7 +26,7 @@ describe('BillingActions when the request gets no answer', () => {
     render(<BillingActions currentPlan="free" hasStripeCustomer={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('open checkout')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'open checkout')),
     );
     expect(screen.getByRole('button', { name: 'Upgrade to Pro' })).toBeEnabled();
   });
@@ -36,7 +36,9 @@ describe('BillingActions when the request gets no answer', () => {
     render(<BillingActions currentPlan="pro" hasStripeCustomer />);
     fireEvent.click(screen.getByRole('button', { name: 'Manage subscription' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('open the billing portal')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'open the billing portal'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Manage subscription' })).toBeEnabled();
   });

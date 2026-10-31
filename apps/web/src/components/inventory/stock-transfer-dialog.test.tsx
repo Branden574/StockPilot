@@ -950,7 +950,11 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
 // server error, a deploy) left the button spinning forever with no message,
 // and the new-location confirmation stuck open with its button spinning.
 describe('StockTransferDialog when the transfer gets no answer', () => {
-  const UNCONFIRMED = requestUnconfirmedMessage('the stock was moved', "the item's Movements tab");
+  const UNCONFIRMED = requestUnconfirmedMessage(
+    offline(),
+    'the stock was moved',
+    "the item's Movements tab",
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();

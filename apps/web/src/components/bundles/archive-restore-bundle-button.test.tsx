@@ -39,7 +39,9 @@ describe('bundle Archive and Restore when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith(requestFailedMessage('archive the bundle')),
+      expect(mockToast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'archive the bundle'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
     expect(mockToast.success).not.toHaveBeenCalled();
@@ -53,7 +55,9 @@ describe('bundle Archive and Restore when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
     await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith(requestFailedMessage('restore the bundle')),
+      expect(mockToast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'restore the bundle'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
     expect(mockToast.success).not.toHaveBeenCalled();

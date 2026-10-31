@@ -62,7 +62,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('check the code'));
+      toast.error(requestFailedMessage(e, 'check the code'));
       return;
     } finally {
       setPending(false);
@@ -96,7 +96,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('use the recovery code'));
+      toast.error(requestFailedMessage(e, 'use the recovery code'));
       return;
     } finally {
       setRecoveryPending(false);

@@ -60,7 +60,7 @@ export function SupportForm() {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('send your ticket'));
+      toast.error(requestFailedMessage(e, 'send your ticket'));
       return;
     } finally {
       setBusy(false);

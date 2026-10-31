@@ -239,7 +239,9 @@ describe('ShareLinkPanel when the request gets no answer', () => {
     issue.mockRejectedValueOnce(offline());
     render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
-    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('create the share link'));
+    expect(toastError).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'create the share link'),
+    );
     expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Generate link' })).toBeEnabled();
   });
@@ -249,7 +251,9 @@ describe('ShareLinkPanel when the request gets no answer', () => {
     render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
-    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('revoke the share link'));
+    expect(toastError).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'revoke the share link'),
+    );
     expect(screen.queryByText('Revoke this share link?')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeEnabled();
     expect(refreshMock).not.toHaveBeenCalled();

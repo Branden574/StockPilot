@@ -127,7 +127,7 @@ describe('BinsManager when the request gets no answer', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Shelf one' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save bin' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('create the bin')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'create the bin')),
     );
     expect(screen.getByRole('button', { name: 'Save bin' })).toBeEnabled();
     expect(screen.getByLabelText('Code')).toHaveValue('sto-1');
@@ -141,7 +141,7 @@ describe('BinsManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('archive the bin'),
+      requestFailedMessage(offline(), 'archive the bin'),
     );
     expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
   });

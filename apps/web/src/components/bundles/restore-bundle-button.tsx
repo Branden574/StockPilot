@@ -36,7 +36,7 @@ export function RestoreBundleButton({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('restore the bundle'));
+      toast.error(requestFailedMessage(e, 'restore the bundle'));
       return;
     } finally {
       setBusy(false);

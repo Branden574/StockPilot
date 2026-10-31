@@ -317,7 +317,7 @@ describe('BulkIsbnImport when the import gets no answer', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import 1 book' }));
     });
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('import the books'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'import the books'));
     expect(screen.getByRole('button', { name: 'Import 1 book' })).toBeEnabled();
     expect(screen.getByLabelText(`Title for ${ISBN_A}`)).toHaveValue(`Book ${ISBN_A}`);
     expect(router.push).not.toHaveBeenCalled();

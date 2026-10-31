@@ -192,9 +192,9 @@ describe('EditableMovementNote when the save gets no answer', () => {
     fireEvent.change(input, { target: { value: 'counted twice' } });
     fireEvent.click(screen.getByRole('button', { name: /save note/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('save the note'),
+      requestFailedMessage(offline(), 'save the note'),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the note'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the note'));
     expect(screen.getByRole('textbox', { name: /movement note/i })).toHaveValue('counted twice');
     expect(screen.getByRole('button', { name: /save note/i })).toBeEnabled();
   });

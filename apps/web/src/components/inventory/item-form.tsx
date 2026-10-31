@@ -1392,7 +1392,7 @@ export function ItemForm({
         if (isControlFlow(e)) return;
         // No answer (offline, a server error, a deploy). The run may have been
         // created before the answer was lost, so look before saving it again.
-        toast.error(requestUnconfirmedMessage('the sizes were created', listName));
+        toast.error(requestUnconfirmedMessage(e, 'the sizes were created', listName));
         return;
       }
       if (!res.ok) {
@@ -1572,9 +1572,10 @@ export function ItemForm({
       // again; a create may have happened before the answer was lost.
       toast.error(
         isEdit
-          ? requestFailedMessage(isBook ? 'save the book' : 'save the item')
+          ? requestFailedMessage(e, isBook ? 'save this book' : 'save the item')
           : requestUnconfirmedMessage(
-              isBook ? 'the book was created' : 'the item was created',
+              e,
+              isBook ? 'this book was created' : 'the item was created',
               listName,
             ),
       );

@@ -94,7 +94,7 @@ describe('AddSizedVariantsButton when the save gets no answer', () => {
     vi.mocked(bulkCreateSizedVariantsAction).mockRejectedValueOnce(offline());
     const dialog = await createSizeL(SOURCE);
     expect(toast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the sizes were created', 'the Items list'),
+      requestUnconfirmedMessage(offline(), 'the sizes were created', 'the Items list'),
     );
     expect(within(dialog).getByRole('button', { name: 'Create variants' })).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();
@@ -104,7 +104,7 @@ describe('AddSizedVariantsButton when the save gets no answer', () => {
     vi.mocked(bulkCreateSizedVariantsAction).mockRejectedValueOnce(offline());
     await createSizeL({ ...SOURCE, itemType: 'book' });
     expect(toast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the sizes were created', 'the Books list'),
+      requestUnconfirmedMessage(offline(), 'the sizes were created', 'the Books list'),
     );
   });
 });

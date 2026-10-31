@@ -671,7 +671,7 @@ describe('CsvImport when a request gets no answer', () => {
     render(<CsvImport sportsEnabled={false} warehouses={WH} />);
     await upload(user);
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('check the file')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'check the file')),
     );
     expect(screen.queryByText('Reviewing…')).toBeNull();
   });
@@ -684,7 +684,7 @@ describe('CsvImport when a request gets no answer', () => {
     await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the file was imported', 'the Items list'),
+        requestUnconfirmedMessage(offline(), 'the file was imported', 'the Items list'),
       ),
     );
     expect(screen.getByRole('table')).toBeTruthy();

@@ -1012,7 +1012,7 @@ export function PoForm({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('save the purchase order'));
+        toast.error(requestFailedMessage(e, 'save the purchase order'));
         return;
       } finally {
         setSubmitting(false);
@@ -1032,7 +1032,9 @@ export function PoForm({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestUnconfirmedMessage('the purchase order was created', 'Purchase orders'));
+        toast.error(
+          requestUnconfirmedMessage(e, 'the purchase order was created', 'Purchase orders'),
+        );
         return;
       } finally {
         setSubmitting(false);

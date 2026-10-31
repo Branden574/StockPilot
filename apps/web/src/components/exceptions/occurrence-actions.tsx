@@ -103,6 +103,7 @@ export function OccurrenceActions({
       if (isControlFlow(e)) return;
       setError(
         requestFailedMessage(
+          e,
           action === 'acknowledge' ? 'acknowledge the exception' : 'add the note',
         ),
       );

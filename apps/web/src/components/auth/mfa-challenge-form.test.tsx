@@ -170,7 +170,7 @@ describe('MfaChallengeForm when the request gets no answer', () => {
     fireEvent.change(screen.getByLabelText('Authentication code'), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: 'Verify & continue' }));
     await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(requestFailedMessage('check the code')),
+      expect(toastError).toHaveBeenCalledWith(requestFailedMessage(offline(), 'check the code')),
     );
     expect(screen.getByRole('button', { name: 'Verify & continue' })).toBeEnabled();
     expect(screen.getByLabelText('Authentication code')).toHaveValue('123456');
@@ -183,7 +183,9 @@ describe('MfaChallengeForm when the request gets no answer', () => {
     openRecovery();
     fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
     await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(requestFailedMessage('use the recovery code')),
+      expect(toastError).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'use the recovery code'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Use recovery code' })).toBeEnabled();
     expect(replace).not.toHaveBeenCalled();

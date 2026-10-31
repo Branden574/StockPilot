@@ -1368,7 +1368,11 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 // server error, a deploy) left the button spinning forever with no message,
 // and the new-rack confirmation stuck open with its button spinning.
 describe('PlaceFromStagingDialog when the placement gets no answer', () => {
-  const UNCONFIRMED = requestUnconfirmedMessage('the stock was placed', "the item's Movements tab");
+  const UNCONFIRMED = requestUnconfirmedMessage(
+    offline(),
+    'the stock was placed',
+    "the item's Movements tab",
+  );
 
   it("says to check the item's Movements tab before trying again, and Place stock works again", async () => {
     mockPlaceStockAction.mockRejectedValueOnce(offline());

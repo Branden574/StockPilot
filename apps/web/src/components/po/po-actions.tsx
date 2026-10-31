@@ -43,7 +43,7 @@ export function PoActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(`mark the purchase order as ${next}`));
+      toast.error(requestFailedMessage(e, `mark the purchase order as ${next}`));
       return;
     } finally {
       setBusy(null);

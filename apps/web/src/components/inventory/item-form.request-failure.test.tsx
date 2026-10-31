@@ -104,7 +104,7 @@ describe('ItemForm when a save gets no answer', () => {
     await user.click(screen.getByRole('button', { name: 'Create item' }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the item was created', 'the Items list'),
+        requestUnconfirmedMessage(offline(), 'the item was created', 'the Items list'),
       ),
     );
     expect(push).not.toHaveBeenCalled();
@@ -117,7 +117,7 @@ describe('ItemForm when a save gets no answer', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the item')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the item')),
     );
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });

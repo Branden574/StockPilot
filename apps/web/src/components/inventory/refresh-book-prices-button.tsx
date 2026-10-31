@@ -18,7 +18,7 @@ export function RefreshBookPricesButton() {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('refresh the book prices'));
+      toast.error(requestFailedMessage(e, 'refresh the book prices'));
       return;
     } finally {
       setLoading(false);

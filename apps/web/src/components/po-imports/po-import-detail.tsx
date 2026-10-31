@@ -311,7 +311,7 @@ export function PoImportDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('parse the import again'));
+      toast.error(requestFailedMessage(e, 'parse the import again'));
       return;
     } finally {
       setBusy(false);
@@ -330,7 +330,7 @@ export function PoImportDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('cancel the import'));
+      toast.error(requestFailedMessage(e, 'cancel the import'));
       return;
     } finally {
       setBusy(false);

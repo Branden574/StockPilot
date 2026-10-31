@@ -71,7 +71,7 @@ export function MaintenanceNotesPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestUnconfirmedMessage('the note was added', "the request's notes");
+      const message = requestUnconfirmedMessage(e, 'the note was added', "the request's notes");
       setError(message);
       toast.error(message);
       return;

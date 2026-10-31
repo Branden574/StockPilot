@@ -336,7 +336,7 @@ export function CycleCountDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return false;
-      const message = requestFailedMessage('save the counted quantity');
+      const message = requestFailedMessage(e, 'save the counted quantity');
       toast.error(message);
       setLineError({ id: line.id, message });
       return false;
@@ -369,7 +369,7 @@ export function CycleCountDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return false;
-      const message = requestFailedMessage('clear the counted quantity');
+      const message = requestFailedMessage(e, 'clear the counted quantity');
       toast.error(message);
       setLineError({ id: line.id, message });
       return false;
@@ -395,7 +395,7 @@ export function CycleCountDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('cancel the count');
+      const message = requestFailedMessage(e, 'cancel the count');
       toast.error(message);
       setCancelError(message);
       return;
@@ -421,7 +421,7 @@ export function CycleCountDetail({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('post the count');
+      const message = requestFailedMessage(e, 'post the count');
       toast.error(message);
       setPostError(message);
       return;
@@ -1049,7 +1049,7 @@ function AssigneePicker({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('assign the count'));
+      toast.error(requestFailedMessage(e, 'assign the count'));
       return;
     } finally {
       setBusy(false);

@@ -242,7 +242,9 @@ describe('MaintenanceRequestActions when the request gets no answer', () => {
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Archive' }),
     );
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('archive the request')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'archive the request'),
+      ),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
@@ -266,7 +268,9 @@ describe('MaintenanceRequestActions when the request gets no answer', () => {
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel request' }),
     );
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('cancel the request')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'cancel the request'),
+      ),
     );
   });
 });

@@ -72,7 +72,9 @@ describe('PortalPricingModePanel when the save gets no answer', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the pricing mode')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'save the pricing mode'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });

@@ -55,7 +55,9 @@ describe('order assign and cancel controls when the request gets no answer', () 
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /Assign/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('assign the delivery')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'assign the delivery'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: /Assign/ })).toBeEnabled();
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
@@ -76,7 +78,9 @@ describe('order assign and cancel controls when the request gets no answer', () 
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /^Assign$/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('assign the picker')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'assign the picker'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: /^Assign$/ })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
@@ -89,7 +93,9 @@ describe('order assign and cancel controls when the request gets no answer', () 
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('cancel the request')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'cancel the request'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Cancel request' })).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();

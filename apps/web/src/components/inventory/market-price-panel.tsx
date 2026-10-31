@@ -39,7 +39,7 @@ export function MarketPricePanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('refresh the market price'));
+      toast.error(requestFailedMessage(e, 'refresh the market price'));
       return;
     } finally {
       setLoading(false);

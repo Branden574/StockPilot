@@ -30,7 +30,9 @@ describe('invite forms when the request gets no answer', () => {
     render(<AcceptInviteButton token="tok-1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Accept invite' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('accept the invite')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'accept the invite'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Accept invite' })).toBeEnabled();
     expect(replace).not.toHaveBeenCalled();
@@ -47,7 +49,9 @@ describe('invite forms when the request gets no answer', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Accept & create account' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('create your account')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'create your account'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Accept & create account' })).toBeEnabled();
     expect(replace).not.toHaveBeenCalled();

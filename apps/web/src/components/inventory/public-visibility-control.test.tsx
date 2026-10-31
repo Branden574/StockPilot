@@ -48,7 +48,7 @@ describe('PublicVisibilityControl when the change gets no answer', () => {
     await user.click(screen.getByRole('combobox', { name: 'Public visibility' }));
     await user.click(await screen.findByRole('option', { name: 'Hidden' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('change the public visibility'),
+      requestFailedMessage(offline(), 'change the public visibility'),
     );
     const select = screen.getByRole('combobox', { name: 'Public visibility' });
     expect(select).toHaveTextContent('Internal only');

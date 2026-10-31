@@ -527,7 +527,7 @@ export function BulkPlaceDialog({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setPendingConfirm(null);
-      toast.error(requestUnconfirmedMessage('the stock was placed', 'Staging'));
+      toast.error(requestUnconfirmedMessage(e, 'the stock was placed', 'Staging'));
       return;
     } finally {
       setSubmitting(false);

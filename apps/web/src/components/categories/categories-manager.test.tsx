@@ -458,7 +458,9 @@ describe('CategoriesManager when a request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('archive the category')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'archive the category'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
   });
@@ -480,7 +482,9 @@ describe('CategoriesManager when a request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('restore the category')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'restore the category'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
@@ -492,7 +496,7 @@ describe('CategoriesManager when a request gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /Set up Sports/ }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage('set up the Sports categories'),
+        requestFailedMessage(offline(), 'set up the Sports categories'),
       ),
     );
     expect(screen.getByRole('button', { name: /Set up Sports/ })).toBeEnabled();
@@ -514,7 +518,7 @@ describe('CategoriesManager when a request gets no answer', () => {
     await user.click(select);
     await user.click(await screen.findByRole('option', { name: 'Internal only' }));
     expect(
-      await screen.findByText(requestFailedMessage('change who can see the category')),
+      await screen.findByText(requestFailedMessage(offline(), 'change who can see the category')),
     ).toBeTruthy();
     expect(select).toHaveTextContent('Public');
     expect(select).toBeEnabled();

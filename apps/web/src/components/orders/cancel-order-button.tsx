@@ -53,7 +53,7 @@ export function CancelOrderButton({ orderId, status }: Props) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('cancel the request'));
+      toast.error(requestFailedMessage(e, 'cancel the request'));
       return;
     } finally {
       setBusy(false);

@@ -76,7 +76,7 @@ export function DistributeBundleModal({
   const [previewing, setPreviewing] = React.useState(false);
   // The preview call got no answer (B40). Try again bumps previewAttempt,
   // which runs the effect again for the same quantity and warehouse.
-  const [previewFailed, setPreviewFailed] = React.useState(false);
+  const [previewError, setPreviewError] = React.useState<string | null>(null);
   const [previewAttempt, setPreviewAttempt] = React.useState(0);
 
   React.useEffect(() => {
@@ -91,18 +91,18 @@ export function DistributeBundleModal({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setPreview(null);
       setPreviewing(false);
-      setPreviewFailed(false);
+      setPreviewError(null);
       return;
     }
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0 || !warehouseId) {
       setPreview(null);
       setPreviewing(false);
-      setPreviewFailed(false);
+      setPreviewError(null);
       return;
     }
     setPreviewing(true);
-    setPreviewFailed(false);
+    setPreviewError(null);
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
       let res: Awaited<ReturnType<typeof previewBundleDistributionAction>>;
@@ -120,7 +120,7 @@ export function DistributeBundleModal({
         // stay on "Calculating preview…" with Distribute disabled for good.
         setPreviewing(false);
         setPreview(null);
-        setPreviewFailed(true);
+        setPreviewError(requestFailedMessage(e, 'load the preview'));
         return;
       }
       if (ctrl.signal.aborted) return;
@@ -163,7 +163,11 @@ export function DistributeBundleModal({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       toast.error(
-        requestUnconfirmedMessage('the kits were distributed', "the bundle's recent distributions"),
+        requestUnconfirmedMessage(
+          e,
+          'the kits were distributed',
+          "the bundle's recent distributions",
+        ),
       );
       return;
     } finally {
@@ -270,7 +274,7 @@ export function DistributeBundleModal({
           <PreviewBlock
             preview={preview}
             previewing={previewing}
-            failed={previewFailed}
+            failed={previewError}
             onRetry={() => setPreviewAttempt((n) => n + 1)}
           />
         </div>
@@ -303,7 +307,8 @@ function PreviewBlock({
 }: {
   preview: Preview | null;
   previewing: boolean;
-  failed: boolean;
+  /** What to say when the preview got no answer, or null. */
+  failed: string | null;
   onRetry: () => void;
 }) {
   if (previewing && !preview) {
@@ -320,7 +325,7 @@ function PreviewBlock({
         role="alert"
         className="border-border flex items-center justify-between gap-3 rounded-md border p-3 text-[12.5px]"
       >
-        <span className="text-destructive">{requestFailedMessage('load the preview')}</span>
+        <span className="text-destructive">{failed}</span>
         <Button type="button" variant="outline" size="sm" onClick={onRetry}>
           Try again
         </Button>

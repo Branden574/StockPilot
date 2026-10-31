@@ -221,7 +221,11 @@ describe('DistributeBundleModal when a request gets no answer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Distribute 1 kit' }));
     });
     expect(mockToast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the kits were distributed', "the bundle's recent distributions"),
+      requestUnconfirmedMessage(
+        offline(),
+        'the kits were distributed',
+        "the bundle's recent distributions",
+      ),
     );
     expect(screen.getByRole('button', { name: 'Distribute 1 kit' })).toBeEnabled();
     expect(mockToast.success).not.toHaveBeenCalled();
@@ -235,7 +239,9 @@ describe('DistributeBundleModal when a request gets no answer', () => {
     await openAndSettle();
 
     expect(screen.queryByText(CALCULATING)).not.toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent(requestFailedMessage('load the preview'));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'load the preview'),
+    );
     expect(screen.getByRole('button', { name: 'Distribute 1 kit' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

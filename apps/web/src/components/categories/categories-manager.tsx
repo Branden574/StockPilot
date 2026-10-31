@@ -259,7 +259,7 @@ export function CategoriesManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('archive the category'));
+      toast.error(requestFailedMessage(e, 'archive the category'));
       return;
     } finally {
       setArchiveBusy(false);
@@ -282,7 +282,7 @@ export function CategoriesManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('restore the category'));
+      toast.error(requestFailedMessage(e, 'restore the category'));
       return;
     } finally {
       setRestoreBusy(false);
@@ -304,7 +304,7 @@ export function CategoriesManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('set up the Sports categories'));
+      toast.error(requestFailedMessage(e, 'set up the Sports categories'));
       return;
     } finally {
       setSetupBusy(false);
@@ -926,7 +926,7 @@ function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setValue(previous);
-      setError(requestFailedMessage('change who can see the category'));
+      setError(requestFailedMessage(e, 'change who can see the category'));
       return;
     } finally {
       setBusy(false);

@@ -48,7 +48,7 @@ describe('PoForm when the save gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create PO' }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the purchase order was created', 'Purchase orders'),
+        requestUnconfirmedMessage(offline(), 'the purchase order was created', 'Purchase orders'),
       ),
     );
     expect(push).not.toHaveBeenCalled();
@@ -69,7 +69,9 @@ describe('PoForm when the save gets no answer', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the purchase order')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'save the purchase order'),
+      ),
     );
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();

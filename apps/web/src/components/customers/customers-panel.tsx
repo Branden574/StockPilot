@@ -144,7 +144,7 @@ export function CustomersPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      setCreateError(requestUnconfirmedMessage('the customer was added', 'the customer list'));
+      setCreateError(requestUnconfirmedMessage(e, 'the customer was added', 'the customer list'));
       return;
     } finally {
       setBusy(null);
@@ -315,7 +315,7 @@ function CustomerCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('change the price list'));
+      toast.error(requestFailedMessage(e, 'change the price list'));
       return;
     } finally {
       setBusy(null);
@@ -336,7 +336,7 @@ function CustomerCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      setInviteError(requestFailedMessage('send the invite'));
+      setInviteError(requestFailedMessage(e, 'send the invite'));
       return;
     } finally {
       setBusy(null);
@@ -358,7 +358,7 @@ function CustomerCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('remove the user'));
+      toast.error(requestFailedMessage(e, 'remove the user'));
       return;
     } finally {
       setBusy(null);
@@ -378,7 +378,7 @@ function CustomerCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('add the item to the catalog'));
+      toast.error(requestFailedMessage(e, 'add the item to the catalog'));
       return;
     } finally {
       setBusy(null);
@@ -398,7 +398,7 @@ function CustomerCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('remove the item from the catalog'));
+      toast.error(requestFailedMessage(e, 'remove the item from the catalog'));
       return;
     } finally {
       setBusy(null);
@@ -585,7 +585,7 @@ function PriceListsSection({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestUnconfirmedMessage('the price list was created', 'the price lists'));
+      toast.error(requestUnconfirmedMessage(e, 'the price list was created', 'the price lists'));
       return;
     } finally {
       setBusy(null);
@@ -702,7 +702,7 @@ function PriceListCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the price'));
+      toast.error(requestFailedMessage(e, 'save the price'));
       return;
     } finally {
       setBusy(null);
@@ -724,7 +724,7 @@ function PriceListCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('remove the price'));
+      toast.error(requestFailedMessage(e, 'remove the price'));
       return;
     } finally {
       setBusy(null);

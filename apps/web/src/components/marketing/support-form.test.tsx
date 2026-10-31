@@ -40,7 +40,7 @@ describe('SupportForm when the ticket gets no answer', () => {
     await act(async () => {
       fillAndSend();
     });
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('send your ticket'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'send your ticket'));
     expect(screen.getByRole('button', { name: 'Send ticket' })).toBeEnabled();
     expect(screen.getByLabelText(/^Details/)).toHaveValue('It stops after a scan.');
     expect(screen.queryByText('Ticket received')).not.toBeInTheDocument();

@@ -49,7 +49,7 @@ export function StartCycleCountForm({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestUnconfirmedMessage('the count was started', 'Cycle counts'));
+      toast.error(requestUnconfirmedMessage(e, 'the count was started', 'Cycle counts'));
       return;
     } finally {
       setBusy(false);

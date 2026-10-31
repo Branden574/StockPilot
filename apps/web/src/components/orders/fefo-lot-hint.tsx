@@ -71,7 +71,11 @@ export function FefoLotHint({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       toast.error(
-        requestUnconfirmedMessage('the lot picks were recorded', "each lot's remaining quantity"),
+        requestUnconfirmedMessage(
+          e,
+          'the lot picks were recorded',
+          "each lot's remaining quantity",
+        ),
       );
       router.refresh();
       return;

@@ -42,9 +42,11 @@ describe('ItemActivityPanel when Load older gets no answer', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Load older' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('load older activity'),
+      requestFailedMessage(offline(), 'load older activity'),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('load older activity'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'load older activity'),
+    );
     await waitFor(() => expect(screen.getByRole('button', { name: 'Load older' })).toBeEnabled());
   });
 });

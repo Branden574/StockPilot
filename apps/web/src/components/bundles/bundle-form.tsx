@@ -141,8 +141,8 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
       if (isControlFlow(e)) return;
       toast.error(
         isEdit
-          ? requestFailedMessage('save the bundle')
-          : requestUnconfirmedMessage('the bundle was created', 'the Bundles list'),
+          ? requestFailedMessage(e, 'save the bundle')
+          : requestUnconfirmedMessage(e, 'the bundle was created', 'the Bundles list'),
       );
     } finally {
       setSubmitting(false);

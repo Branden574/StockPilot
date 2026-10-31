@@ -756,10 +756,12 @@ describe('CycleCountDetail when a request gets no answer', () => {
     fireEvent.blur(input);
     await waitFor(() =>
       expect(within(row).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('save the counted quantity'),
+        requestFailedMessage(offline(), 'save the counted quantity'),
       ),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the counted quantity'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'save the counted quantity'),
+    );
     expect(input.value).toBe('');
     expect(input).toBeEnabled();
   });
@@ -773,7 +775,7 @@ describe('CycleCountDetail when a request gets no answer', () => {
     fireEvent.blur(input);
     await waitFor(() =>
       expect(within(row).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('clear the counted quantity'),
+        requestFailedMessage(offline(), 'clear the counted quantity'),
       ),
     );
     expect(input.value).toBe('4');
@@ -787,7 +789,7 @@ describe('CycleCountDetail when a request gets no answer', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post adjustments' }));
     await waitFor(() =>
       expect(within(dialog).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('post the count'),
+        requestFailedMessage(offline(), 'post the count'),
       ),
     );
     expect(within(dialog).getByRole('button', { name: 'Post adjustments' })).toBeEnabled();
@@ -802,7 +804,7 @@ describe('CycleCountDetail when a request gets no answer', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel count' }));
     await waitFor(() =>
       expect(within(dialog).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('cancel the count'),
+        requestFailedMessage(offline(), 'cancel the count'),
       ),
     );
     expect(within(dialog).getByRole('button', { name: 'Cancel count' })).toBeEnabled();
@@ -824,7 +826,7 @@ describe('CycleCountDetail when a request gets no answer', () => {
     await user.click(picker);
     await user.click(await screen.findByRole('option', { name: 'Riley Counter' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('assign the count')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'assign the count')),
     );
     expect(picker).toBeEnabled();
   });

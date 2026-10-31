@@ -89,7 +89,9 @@ export function StockAdjustDialog({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestUnconfirmedMessage('the stock was adjusted', "the item's Movements tab"));
+      toast.error(
+        requestUnconfirmedMessage(e, 'the stock was adjusted', "the item's Movements tab"),
+      );
       return;
     } finally {
       setSubmitting(false);

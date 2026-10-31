@@ -106,7 +106,7 @@ export function MaintenanceSettingsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the maintenance settings'));
+      toast.error(requestFailedMessage(e, 'save the maintenance settings'));
       return;
     } finally {
       setBusy(false);

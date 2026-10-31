@@ -241,7 +241,7 @@ export function CsvImport({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('check the file'));
+        toast.error(requestFailedMessage(e, 'check the file'));
         return;
       } finally {
         setReviewing(false);
@@ -347,7 +347,7 @@ export function CsvImport({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestUnconfirmedMessage('the file was imported', 'the Items list'));
+      toast.error(requestUnconfirmedMessage(e, 'the file was imported', 'the Items list'));
     } finally {
       setImporting(false);
       submitting.current = false;

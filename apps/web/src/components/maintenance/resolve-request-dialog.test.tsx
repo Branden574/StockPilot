@@ -329,7 +329,9 @@ describe('ResolveRequestDialog when the request gets no answer', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Mark resolved' }));
     await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith(requestFailedMessage('resolve the request')),
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'resolve the request'),
+      ),
     );
     expect(onResolved).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);

@@ -380,11 +380,11 @@ describe('LocationsManager when a request gets no answer', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() =>
       expect(within(dialog).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('archive the location'),
+        requestFailedMessage(offline(), 'archive the location'),
       ),
     );
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      requestFailedMessage('archive the location'),
+      requestFailedMessage(offline(), 'archive the location'),
     );
     const again = within(dialog).getByRole('button', { name: 'Archive' });
     expect(again).toBeEnabled();
@@ -405,7 +405,7 @@ describe('LocationsManager when a request gets no answer', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
     await waitFor(() =>
       expect(within(dialog).getByRole('alert')).toHaveTextContent(
-        requestFailedMessage('restore the location'),
+        requestFailedMessage(offline(), 'restore the location'),
       ),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();

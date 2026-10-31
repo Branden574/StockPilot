@@ -96,7 +96,7 @@ export function EditableMovementNote({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('save the note');
+      const message = requestFailedMessage(e, 'save the note');
       setError(message);
       toast.error(message);
       return;

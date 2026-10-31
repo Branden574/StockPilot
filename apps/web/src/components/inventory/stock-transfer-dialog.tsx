@@ -441,7 +441,11 @@ export function StockTransferDialog({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestUnconfirmedMessage('the stock was moved', "the item's Movements tab");
+      const message = requestUnconfirmedMessage(
+        e,
+        'the stock was moved',
+        "the item's Movements tab",
+      );
       setPendingConfirm(null);
       setServerError(message);
       toast.error(message);

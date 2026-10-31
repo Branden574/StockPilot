@@ -901,7 +901,7 @@ describe('BulkPlaceDialog when the placement gets no answer', () => {
     await chooseExisting(user, '1-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
     expect(mockToast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the stock was placed', 'Staging'),
+      requestUnconfirmedMessage(offline(), 'the stock was placed', 'Staging'),
     );
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
@@ -916,7 +916,7 @@ describe('BulkPlaceDialog when the placement gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
     await user.click(screen.getByRole('button', { name: /create and place/i }));
     expect(mockToast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the stock was placed', 'Staging'),
+      requestUnconfirmedMessage(offline(), 'the stock was placed', 'Staging'),
     );
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();

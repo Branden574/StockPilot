@@ -249,7 +249,7 @@ function CharterTableRow({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('archive the charter');
+      const message = requestFailedMessage(e, 'archive the charter');
       setConfirmError(message);
       toast.error(message);
       return;
@@ -275,7 +275,7 @@ function CharterTableRow({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('restore the charter');
+      const message = requestFailedMessage(e, 'restore the charter');
       setConfirmError(message);
       toast.error(message);
       return;

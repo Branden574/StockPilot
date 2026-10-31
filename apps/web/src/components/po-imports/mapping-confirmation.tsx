@@ -85,7 +85,7 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('confirm the mappings'));
+      toast.error(requestFailedMessage(e, 'confirm the mappings'));
       return;
     } finally {
       setBusy(false);

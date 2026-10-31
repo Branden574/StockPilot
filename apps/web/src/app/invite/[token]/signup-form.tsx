@@ -46,7 +46,7 @@ export function InviteSignupForm({ token, email }: InviteSignupFormProps) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('create your account'));
+      toast.error(requestFailedMessage(e, 'create your account'));
       return;
     } finally {
       setSubmitting(false);

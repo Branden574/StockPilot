@@ -87,7 +87,7 @@ export function DigitalPick({
       if (isControlFlow(e)) return false;
       // No answer (offline, a server error, a deploy). The picked quantity is
       // set, not added, so the same Save is safe to send again.
-      toast.error(requestFailedMessage('save the picked quantity'));
+      toast.error(requestFailedMessage(e, 'save the picked quantity'));
       return false;
     } finally {
       setSavingLine(null);
@@ -144,7 +144,7 @@ export function DigitalPick({
       // No answer (offline, a server error, a deploy). Completing again is
       // safe: complete_picking refuses an order that already completed, and
       // the saved quantities are set, not added.
-      toast.error(requestFailedMessage('complete picking'));
+      toast.error(requestFailedMessage(e, 'complete picking'));
     } finally {
       setCompleting(false);
     }

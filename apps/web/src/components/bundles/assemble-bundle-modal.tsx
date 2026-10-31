@@ -80,7 +80,7 @@ export function AssembleBundleModal({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       toast.error(
-        requestUnconfirmedMessage('the kits were assembled', "the bundle's pre-assembled stock"),
+        requestUnconfirmedMessage(e, 'the kits were assembled', "the bundle's pre-assembled stock"),
       );
       return;
     } finally {

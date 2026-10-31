@@ -112,7 +112,9 @@ describe('purchase order controls when the request gets no answer', () => {
     render(<MakeRecurringButton poId="po-1" />);
     fireEvent.click(screen.getByRole('button', { name: /Make recurring/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('open the recurring template')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'open the recurring template'),
+      ),
     );
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /Make recurring/ })).toBeEnabled();
@@ -126,14 +128,14 @@ describe('purchase order controls when the request gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Mark as ordered/ }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage('mark the purchase order as ordered'),
+        requestFailedMessage(offline(), 'mark the purchase order as ordered'),
       ),
     );
     expect(screen.getByRole('button', { name: /Mark as ordered/ })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: /Cancel PO/ }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage('mark the purchase order as cancelled'),
+        requestFailedMessage(offline(), 'mark the purchase order as cancelled'),
       ),
     );
     expect(screen.getByRole('button', { name: /Cancel PO/ })).toBeEnabled();
@@ -163,7 +165,7 @@ describe('purchase order controls when the request gets no answer', () => {
     });
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('invoice.pdf was attached', "the PO's files"),
+        requestUnconfirmedMessage(offline(), 'invoice.pdf was attached', "the PO's files"),
       ),
     );
     // A refresh with no connection becomes a full page load.
@@ -180,7 +182,7 @@ describe('purchase order controls when the request gets no answer', () => {
     render(<PoAttachmentsList purchaseOrderId="po-1" attachments={files} canManage />);
     fireEvent.click(screen.getByRole('button', { name: 'Delete packing-slip.pdf' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('delete the file')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'delete the file')),
     );
     expect(screen.getByRole('button', { name: 'Delete packing-slip.pdf' })).toBeEnabled();
   });
@@ -192,7 +194,7 @@ describe('purchase order controls when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Edit notes' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the notes')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the notes')),
     );
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled();
   });
@@ -205,7 +207,9 @@ describe('purchase order controls when the request gets no answer', () => {
     fireEvent.change(within(dialog).getByLabelText('PO number'), { target: { value: 'PO-0002' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('rename the purchase order')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'rename the purchase order'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled();
   });
@@ -217,7 +221,9 @@ describe('purchase order controls when the request gets no answer', () => {
     await user.click(screen.getByRole('combobox'));
     await user.click(await screen.findByRole('option', { name: 'Main DC' }));
     await user.click(screen.getByRole('button', { name: /Set destination/ }));
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('set the destination'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'set the destination'),
+    );
     expect(screen.getByRole('button', { name: /Set destination/ })).toBeEnabled();
   });
 
@@ -236,7 +242,9 @@ describe('purchase order controls when the request gets no answer', () => {
     fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'Miscount' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /Confirm reversal/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('reverse the receipt')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'reverse the receipt'),
+      ),
     );
     expect(within(dialog).getByRole('button', { name: /Confirm reversal/ })).toBeEnabled();
   });

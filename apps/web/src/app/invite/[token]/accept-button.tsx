@@ -22,7 +22,7 @@ export function AcceptInviteButton({ token }: { token: string }) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('accept the invite'));
+      toast.error(requestFailedMessage(e, 'accept the invite'));
       return;
     } finally {
       setSubmitting(false);

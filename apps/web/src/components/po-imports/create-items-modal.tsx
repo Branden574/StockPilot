@@ -400,7 +400,7 @@ export function CreateItemsModal({
       if (isControlFlow(e)) return;
       // Sent again, a line that already got its item is skipped, so a retry
       // never creates a second one.
-      toast.error(requestFailedMessage('create the items'));
+      toast.error(requestFailedMessage(e, 'create the items'));
       return;
     } finally {
       setBusy(false);

@@ -230,7 +230,7 @@ function WarehouseTableRow({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('archive the warehouse');
+      const message = requestFailedMessage(e, 'archive the warehouse');
       setConfirmError(message);
       toast.error(message);
       return;
@@ -256,7 +256,7 @@ function WarehouseTableRow({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('restore the warehouse');
+      const message = requestFailedMessage(e, 'restore the warehouse');
       setConfirmError(message);
       toast.error(message);
       return;

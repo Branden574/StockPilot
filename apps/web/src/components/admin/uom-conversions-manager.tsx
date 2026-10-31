@@ -109,7 +109,7 @@ export function UomConversionsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the conversion'));
+      toast.error(requestFailedMessage(e, 'save the conversion'));
       return;
     } finally {
       setBusy(false);
@@ -138,7 +138,7 @@ export function UomConversionsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('delete the conversion');
+      const message = requestFailedMessage(e, 'delete the conversion');
       setDeleteError(message);
       toast.error(message);
       return;

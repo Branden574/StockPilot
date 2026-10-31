@@ -391,7 +391,7 @@ function AddItemsBody({
       // saved. The same picks sent again would add an item already on the
       // order a second time, so they go, as for a refusal that can never
       // take them, and the order is read again.
-      toast.error(requestUnconfirmedMessage('the items were added', 'the order'));
+      toast.error(requestUnconfirmedMessage(e, 'the items were added', 'the order'));
       setPicks({});
       onClose();
       router.refresh();

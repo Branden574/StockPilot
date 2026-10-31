@@ -82,7 +82,7 @@ export function VendorMappingsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the vendor mapping'));
+      toast.error(requestFailedMessage(e, 'save the vendor mapping'));
       return;
     } finally {
       setBusy(false);
@@ -111,7 +111,7 @@ export function VendorMappingsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('delete the vendor mapping');
+      const message = requestFailedMessage(e, 'delete the vendor mapping');
       setDeleteError(message);
       toast.error(message);
       return;

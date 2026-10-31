@@ -33,7 +33,7 @@ export function MakeRecurringButton({ poId }: Props) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('open the recurring template'));
+      toast.error(requestFailedMessage(e, 'open the recurring template'));
       return;
     } finally {
       setBusy(false);

@@ -144,7 +144,9 @@ describe('OrderAttachmentsPanel when a request gets no answer', () => {
     renderPanel({ canManage: true, attachments: [attachment('a1')] });
     fireEvent.click(screen.getByRole('button', { name: 'Delete attachment' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('delete the attachment')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'delete the attachment'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Delete attachment' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
@@ -163,7 +165,11 @@ describe('OrderAttachmentsPanel when a request gets no answer', () => {
     });
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('slip.pdf was attached', "the order's proof of delivery"),
+        requestUnconfirmedMessage(
+          offline(),
+          'slip.pdf was attached',
+          "the order's proof of delivery",
+        ),
       ),
     );
     expect(upload).toHaveBeenCalledTimes(1);

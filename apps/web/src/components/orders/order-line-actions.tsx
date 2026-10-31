@@ -551,7 +551,7 @@ async function commitLineQuantity(input: {
     if (isControlFlow(e)) return false;
     // No answer (offline, a server error, a deploy). Setting a quantity is
     // safe to send again; the editor stays open with the typed number.
-    toast.error(requestFailedMessage(`change the quantity of ${input.itemName}`));
+    toast.error(requestFailedMessage(e, `change the quantity of ${input.itemName}`));
     return false;
   }
   if (!res.ok) {
@@ -578,7 +578,7 @@ async function commitLineRemoval(input: {
   } catch (e) {
     // A redirect (the session ended): the router is already navigating.
     if (isControlFlow(e)) return false;
-    toast.error(requestFailedMessage(`remove ${input.itemName}`));
+    toast.error(requestFailedMessage(e, `remove ${input.itemName}`));
     return false;
   }
   if (!res.ok) {

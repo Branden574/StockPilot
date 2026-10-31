@@ -111,9 +111,11 @@ describe('VendorMappingsManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('delete the vendor mapping'),
+      requestFailedMessage(offline(), 'delete the vendor mapping'),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('delete the vendor mapping'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'delete the vendor mapping'),
+    );
     expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
   });

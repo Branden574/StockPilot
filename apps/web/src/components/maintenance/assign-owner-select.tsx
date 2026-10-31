@@ -54,7 +54,7 @@ export function AssignOwnerSelect({ requestId, currentOwnerUserId, members }: Pr
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('assign the owner'));
+      toast.error(requestFailedMessage(e, 'assign the owner'));
       setValue(previous);
       return;
     } finally {

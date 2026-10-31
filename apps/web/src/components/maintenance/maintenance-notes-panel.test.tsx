@@ -199,7 +199,7 @@ describe('MaintenanceNotesPanel when the note gets no answer', () => {
     await user.type(screen.getByLabelText('New internal note'), 'Called the vendor for an ETA.');
     await user.click(screen.getByRole('button', { name: 'Add note' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestUnconfirmedMessage('the note was added', "the request's notes"),
+      requestUnconfirmedMessage(offline(), 'the note was added', "the request's notes"),
     );
     expect(screen.getByLabelText('New internal note')).toHaveValue('Called the vendor for an ETA.');
     expect(screen.getByRole('button', { name: 'Add note' })).toBeEnabled();

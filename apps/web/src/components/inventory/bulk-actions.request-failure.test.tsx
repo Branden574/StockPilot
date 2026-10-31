@@ -58,7 +58,7 @@ describe('BulkActions when a bulk write gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /Create draft POs/i }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the draft POs were created', 'Purchase orders'),
+        requestUnconfirmedMessage(offline(), 'the draft POs were created', 'Purchase orders'),
       ),
     );
     expect(screen.getByRole('button', { name: /Create draft POs/i })).toBeEnabled();
@@ -73,7 +73,7 @@ describe('BulkActions when a bulk write gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('change the public visibility'),
+      requestFailedMessage(offline(), 'change the public visibility'),
     );
     expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ describe('BulkActions when a bulk write gets no answer', () => {
     const confirm = within(dialog).getAllByRole('button', { name: /Archive/i });
     await user.click(confirm[confirm.length - 1]!);
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('update the items')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'update the items')),
     );
     const again = within(dialog).getAllByRole('button', { name: /Archive/i });
     expect(again[again.length - 1]).toBeEnabled();

@@ -27,7 +27,9 @@ describe('RefreshBookPricesButton when the refresh gets no answer', () => {
     render(<RefreshBookPricesButton />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh book prices' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('refresh the book prices')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'refresh the book prices'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Refresh book prices' })).toBeEnabled();
   });

@@ -97,7 +97,7 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('create the share link'));
+      toast.error(requestFailedMessage(e, 'create the share link'));
       return;
     } finally {
       setGenerating(false);
@@ -132,7 +132,7 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setConfirmOpen(false);
-      toast.error(requestFailedMessage('revoke the share link'));
+      toast.error(requestFailedMessage(e, 'revoke the share link'));
       return;
     } finally {
       setRevoking(false);

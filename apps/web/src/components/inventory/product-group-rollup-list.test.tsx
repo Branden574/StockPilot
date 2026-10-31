@@ -375,7 +375,7 @@ describe('ProductGroupRollupList when a request gets no answer', () => {
     render(<ProductGroupRollupList groups={[group()]} />);
     await user.click(screen.getByRole('button', { name: /expand/i }));
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(requestFailedMessage('load the variants'));
+    expect(alert).toHaveTextContent(requestFailedMessage(offline(), 'load the variants'));
     expect(screen.queryByText('Loading variants…')).toBeNull();
     await user.click(within(alert).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('PEG-9')).toBeInTheDocument();
@@ -391,7 +391,9 @@ describe('ProductGroupRollupList when a request gets no answer', () => {
     await user.type(screen.getByRole('textbox', { name: /reason for unlinking/i }), 'Wrong style');
     await user.click(screen.getByRole('button', { name: 'Confirm unlink' }));
     await waitFor(() =>
-      expect(toastMock.error).toHaveBeenCalledWith(requestFailedMessage('unlink the item')),
+      expect(toastMock.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'unlink the item'),
+      ),
     );
     expect(screen.getByText('PEG-9')).toBeInTheDocument();
     expect(toastMock.success).not.toHaveBeenCalled();
@@ -405,7 +407,7 @@ describe('ProductGroupRollupList when a request gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }));
     await waitFor(() =>
       expect(toastMock.error).toHaveBeenCalledWith(
-        requestFailedMessage('archive the product group'),
+        requestFailedMessage(offline(), 'archive the product group'),
       ),
     );
     expect(routerMock.refresh).not.toHaveBeenCalled();
@@ -421,7 +423,7 @@ describe('ProductGroupRollupList when a request gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /restore nike pegasus 41/i }));
     await waitFor(() =>
       expect(toastMock.error).toHaveBeenCalledWith(
-        requestFailedMessage('restore the product group'),
+        requestFailedMessage(offline(), 'restore the product group'),
       ),
     );
     expect(routerMock.refresh).not.toHaveBeenCalled();

@@ -55,7 +55,7 @@ export function PortalPricingModePanel({ initial }: { initial: PortalPricingMode
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the pricing mode'));
+      toast.error(requestFailedMessage(e, 'save the pricing mode'));
       return;
     } finally {
       setBusy(false);

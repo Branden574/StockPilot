@@ -303,7 +303,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('release the replacement'));
+      toast.error(requestFailedMessage(e, 'release the replacement'));
       return;
     } finally {
       setBusy(null);
@@ -501,7 +501,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('approve the request'));
+      toast.error(requestFailedMessage(e, 'approve the request'));
       return;
     } finally {
       setBusy(null);
@@ -539,7 +539,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('deny the request'));
+      toast.error(requestFailedMessage(e, 'deny the request'));
       return;
     } finally {
       setBusy(null);
@@ -561,7 +561,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('generate the pick slip'));
+      toast.error(requestFailedMessage(e, 'generate the pick slip'));
       return;
     } finally {
       setBusy(null);
@@ -582,7 +582,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('claim picking'));
+      toast.error(requestFailedMessage(e, 'claim picking'));
       return;
     } finally {
       setBusy(null);
@@ -603,7 +603,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('release picking'));
+      toast.error(requestFailedMessage(e, 'release picking'));
       return;
     } finally {
       setBusy(null);
@@ -624,7 +624,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('complete picking'));
+      toast.error(requestFailedMessage(e, 'complete picking'));
       return;
     } finally {
       setBusy(null);
@@ -659,7 +659,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('generate the packing slips'));
+      toast.error(requestFailedMessage(e, 'generate the packing slips'));
       return;
     } finally {
       setBusy(null);
@@ -680,7 +680,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('stage the order'));
+      toast.error(requestFailedMessage(e, 'stage the order'));
       return;
     } finally {
       setBusy(null);
@@ -701,7 +701,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('stage the order'));
+      toast.error(requestFailedMessage(e, 'stage the order'));
       return;
     } finally {
       setBusy(null);
@@ -722,7 +722,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('mark the order on the way'));
+      toast.error(requestFailedMessage(e, 'mark the order on the way'));
       return;
     } finally {
       setBusy(null);
@@ -758,7 +758,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('reopen picking'));
+      toast.error(requestFailedMessage(e, 'reopen picking'));
       return;
     } finally {
       setBusy(null);
@@ -780,7 +780,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('close the order'));
+      toast.error(requestFailedMessage(e, 'close the order'));
       return;
     } finally {
       setBusy(null);
@@ -804,7 +804,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('record the signature'));
+      toast.error(requestFailedMessage(e, 'record the signature'));
       return;
     } finally {
       setBusy(null);
@@ -860,7 +860,7 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('save the internal notes'));
+      toast.error(requestFailedMessage(e, 'save the internal notes'));
       return;
     } finally {
       setBusy(null);
@@ -1722,7 +1722,7 @@ function NeededBySuggest({
       if (isControlFlow(e)) return;
       // No answer (offline, a server error, a deploy): the button comes back.
       setPhase('idle');
-      toast.error(requestFailedMessage('suggest a deadline'));
+      toast.error(requestFailedMessage(e, 'suggest a deadline'));
       return;
     }
     if (!res.ok || !res.data.iso) {
@@ -1743,7 +1743,7 @@ function NeededBySuggest({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('set the needed-by date'));
+      toast.error(requestFailedMessage(e, 'set the needed-by date'));
       setPhase('suggested');
       return;
     }

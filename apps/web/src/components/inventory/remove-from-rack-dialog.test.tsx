@@ -210,7 +210,7 @@ describe('RemoveFromRackDialog when the write-off gets no answer', () => {
     renderDialog();
     await removeWholeHolding(user);
     expect(mockToast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the stock was removed', "the item's Movements tab"),
+      requestUnconfirmedMessage(offline(), 'the stock was removed', "the item's Movements tab"),
     );
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /remove stock/i })).toBeEnabled();

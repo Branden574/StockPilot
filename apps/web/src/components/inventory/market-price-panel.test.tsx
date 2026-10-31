@@ -27,7 +27,9 @@ describe('MarketPricePanel when Refresh gets no answer', () => {
     render(<MarketPricePanel itemId="item-1" initial={null} ourRetail={null} ourCost={null} />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('refresh the market price')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'refresh the market price'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
     expect(screen.queryByText('Fetching…')).toBeNull();

@@ -246,7 +246,9 @@ describe('MaintenanceSettingsPanel when the save gets no answer', () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getByRole('button', { name: 'Save settings' }));
-    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('save the maintenance settings'));
+    expect(toastError).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'save the maintenance settings'),
+    );
     expect(screen.getByRole('button', { name: 'Save settings' })).toBeEnabled();
     expect(refreshMock).not.toHaveBeenCalled();
   });

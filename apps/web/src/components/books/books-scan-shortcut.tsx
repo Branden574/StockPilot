@@ -52,7 +52,7 @@ export const BooksScanShortcut = React.forwardRef<BooksScanShortcutHandle>(
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('look up the book'));
+        toast.error(requestFailedMessage(e, 'look up the book'));
       } finally {
         setBusy(false);
       }

@@ -99,7 +99,7 @@ export function ResolveRequestDialog({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       // Stays open, as on a refusal: the typed note and staged photos are kept.
-      toast.error(requestFailedMessage('resolve the request'));
+      toast.error(requestFailedMessage(e, 'resolve the request'));
       return;
     } finally {
       setPending(false);

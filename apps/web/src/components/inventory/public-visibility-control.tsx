@@ -66,7 +66,7 @@ export function PublicVisibilityControl({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setCurrent(previous);
-      setError(requestFailedMessage('change the public visibility'));
+      setError(requestFailedMessage(e, 'change the public visibility'));
       return;
     } finally {
       setBusy(false);

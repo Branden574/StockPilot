@@ -313,7 +313,7 @@ export function PoReceiveDialog({
       if (isControlFlow(e)) return;
       // The same Post sends the same idempotency key, so a receipt that did
       // land is answered again, never posted twice.
-      fail(requestFailedMessage('post the receipt'));
+      fail(requestFailedMessage(e, 'post the receipt'));
       return;
     } finally {
       setSubmitting(false);

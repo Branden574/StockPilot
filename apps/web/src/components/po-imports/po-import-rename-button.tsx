@@ -70,7 +70,7 @@ export function PoImportRenameButton({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('rename the import'));
+      toast.error(requestFailedMessage(e, 'rename the import'));
       return;
     } finally {
       setBusy(false);

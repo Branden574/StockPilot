@@ -74,7 +74,7 @@ export function PoFileActions({
           if (isControlFlow(e)) return;
           // No answer (offline, a server error, a deploy): the file is stored,
           // but whether it was attached is unknown, so it is left in place.
-          toast.error(requestUnconfirmedMessage(`${file.name} was attached`, "the PO's files"));
+          toast.error(requestUnconfirmedMessage(e, `${file.name} was attached`, "the PO's files"));
           continue;
         }
         if (!r.ok) {
@@ -150,7 +150,7 @@ export function PoAttachmentsList({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('delete the file'));
+      toast.error(requestFailedMessage(e, 'delete the file'));
       return;
     } finally {
       setDeletingId(null);

@@ -30,7 +30,7 @@ export function ArchiveBundleButton({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('archive the bundle'));
+      toast.error(requestFailedMessage(e, 'archive the bundle'));
       return;
     } finally {
       setBusy(false);

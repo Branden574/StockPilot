@@ -173,9 +173,11 @@ describe('ChartersManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('archive the charter'),
+      requestFailedMessage(offline(), 'archive the charter'),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('archive the charter'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'archive the charter'),
+    );
     expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
   });

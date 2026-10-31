@@ -100,7 +100,11 @@ describe('AssembleBundleModal when the request gets no answer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Assemble' }));
     });
     expect(mockToast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the kits were assembled', "the bundle's pre-assembled stock"),
+      requestUnconfirmedMessage(
+        offline(),
+        'the kits were assembled',
+        "the bundle's pre-assembled stock",
+      ),
     );
     expect(screen.getByRole('button', { name: 'Assemble' })).toBeEnabled();
     expect(screen.getByLabelText('Quantity')).toHaveValue(2);

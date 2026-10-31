@@ -221,7 +221,7 @@ describe('BundleForm when the save gets no answer', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     });
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the bundle'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the bundle'));
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
@@ -268,7 +268,7 @@ describe('BundleForm when the save gets no answer', () => {
     });
     expect(createBundleAction).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the bundle was created', 'the Bundles list'),
+      requestUnconfirmedMessage(offline(), 'the bundle was created', 'the Bundles list'),
     );
     expect(screen.getByRole('button', { name: 'Create bundle' })).toBeEnabled();
   });

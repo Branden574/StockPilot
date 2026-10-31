@@ -181,7 +181,7 @@ function GroupRow({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        setLoadError(requestFailedMessage('load the variants'));
+        setLoadError(requestFailedMessage(e, 'load the variants'));
         return;
       } finally {
         setLoading(false);
@@ -230,7 +230,7 @@ function GroupRow({
         if (isControlFlow(e)) return;
         // No answer (offline, a server error, a deploy). Thrown out of the
         // transition it would replace the page with the error card.
-        toast.error(requestFailedMessage('unlink the item'));
+        toast.error(requestFailedMessage(e, 'unlink the item'));
         return;
       }
       if (!res.ok) {
@@ -276,7 +276,7 @@ function GroupRow({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('archive the product group'));
+        toast.error(requestFailedMessage(e, 'archive the product group'));
         return;
       } finally {
         setBusy(null);
@@ -310,7 +310,7 @@ function GroupRow({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('restore the product group'));
+        toast.error(requestFailedMessage(e, 'restore the product group'));
         return;
       } finally {
         setBusy(null);

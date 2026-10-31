@@ -81,7 +81,7 @@ export function ItemActivityPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('load older activity');
+      const message = requestFailedMessage(e, 'load older activity');
       setError(message);
       toast.error(message);
       return;

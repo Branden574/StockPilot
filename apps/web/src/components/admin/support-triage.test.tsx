@@ -211,7 +211,9 @@ describe('SupportTriage when the save gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('update the ticket')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'update the ticket'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();

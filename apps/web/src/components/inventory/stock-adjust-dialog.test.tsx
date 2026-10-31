@@ -92,7 +92,7 @@ describe('StockAdjustDialog when the adjustment gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the stock was adjusted', "the item's Movements tab"),
+        requestUnconfirmedMessage(offline(), 'the stock was adjusted', "the item's Movements tab"),
       ),
     );
     expect(toast.success).not.toHaveBeenCalled();

@@ -348,7 +348,7 @@ export function BulkActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestUnconfirmedMessage('the draft POs were created', 'Purchase orders'));
+      toast.error(requestUnconfirmedMessage(e, 'the draft POs were created', 'Purchase orders'));
       return;
     } finally {
       setDraftBusy(false);
@@ -420,7 +420,7 @@ export function BulkActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      setVisibilityError(requestFailedMessage('change the public visibility'));
+      setVisibilityError(requestFailedMessage(e, 'change the public visibility'));
       return;
     } finally {
       setBusy(false);
@@ -455,7 +455,7 @@ export function BulkActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('update the items'));
+      toast.error(requestFailedMessage(e, 'update the items'));
       return;
     } finally {
       setBusy(false);

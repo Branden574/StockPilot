@@ -89,7 +89,7 @@ describe('AssignOwnerSelect when the request gets no answer', () => {
     await user.click(screen.getByRole('combobox'));
     const listbox = await screen.findByRole('listbox');
     await user.click(within(listbox).getByRole('option', { name: 'Jane Smith' }));
-    expect(toastError).toHaveBeenCalledWith(requestFailedMessage('assign the owner'));
+    expect(toastError).toHaveBeenCalledWith(requestFailedMessage(offline(), 'assign the owner'));
     expect(screen.getByRole('combobox')).toHaveTextContent('Unassigned');
     expect(screen.getByRole('combobox')).toBeEnabled();
     expect(refreshMock).not.toHaveBeenCalled();

@@ -98,7 +98,7 @@ export function MaintenanceRequestActions({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setArchiveOpen(false);
-      toast.error(requestFailedMessage('archive the request'));
+      toast.error(requestFailedMessage(e, 'archive the request'));
       return;
     } finally {
       setPending(false);
@@ -121,7 +121,7 @@ export function MaintenanceRequestActions({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       setCancelOpen(false);
-      toast.error(requestFailedMessage('cancel the request'));
+      toast.error(requestFailedMessage(e, 'cancel the request'));
       return;
     } finally {
       setPending(false);

@@ -152,7 +152,7 @@ export function PoUploadForm() {
       // No answer (offline, a server error, a deploy, a dropped upload). The
       // same file sent again is safe: the upload is recorded by its checksum,
       // so a file that did land opens its existing import.
-      toast.error(requestFailedMessage('upload the file'));
+      toast.error(requestFailedMessage(e, 'upload the file'));
     } finally {
       setSubmitting(false);
     }

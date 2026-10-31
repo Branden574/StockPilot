@@ -182,7 +182,7 @@ export function ItemSerialsPanel({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage('load the serial numbers'));
+        toast.error(requestFailedMessage(e, 'load the serial numbers'));
         return;
       } finally {
         setLoading(false);
@@ -227,7 +227,7 @@ export function ItemSerialsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('save the serial number');
+      const message = requestFailedMessage(e, 'save the serial number');
       setRowError(row.id, message);
       toast.error(message);
       return;
@@ -257,7 +257,7 @@ export function ItemSerialsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('change the status');
+      const message = requestFailedMessage(e, 'change the status');
       setRowError(row.id, message);
       toast.error(message);
       return;
@@ -285,7 +285,7 @@ export function ItemSerialsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('delete the serial number');
+      const message = requestFailedMessage(e, 'delete the serial number');
       setRowError(deleteTarget.id, message);
       toast.error(message);
       setDeleteTarget(null);
@@ -331,7 +331,7 @@ export function ItemSerialsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('add the serial numbers');
+      const message = requestFailedMessage(e, 'add the serial numbers');
       setAddError(message);
       toast.error(message);
       return;

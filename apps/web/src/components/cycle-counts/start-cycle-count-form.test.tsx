@@ -79,7 +79,7 @@ describe('StartCycleCountForm when Start count gets no answer', () => {
     await user.click(screen.getByRole('button', { name: 'Start count' }));
     await vi.waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the count was started', 'Cycle counts'),
+        requestUnconfirmedMessage(offline(), 'the count was started', 'Cycle counts'),
       );
     });
     expect(screen.getByRole('button', { name: 'Start count' })).toBeEnabled();

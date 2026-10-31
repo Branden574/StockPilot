@@ -227,7 +227,7 @@ describe('ItemSerialsPanel when a request gets no answer', () => {
     fireEvent.click(screen.getByLabelText('Save serial number'));
     const row = screen.getByTestId('serial-row-serial-manual');
     expect(await within(row).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('save the serial number'),
+      requestFailedMessage(offline(), 'save the serial number'),
     );
     expect(within(row).getByLabelText('Save serial number')).toBeEnabled();
   });
@@ -240,7 +240,7 @@ describe('ItemSerialsPanel when a request gets no answer', () => {
     await user.click(await screen.findByRole('option', { name: 'Damaged' }));
     const row = screen.getByTestId('serial-row-serial-manual');
     expect(await within(row).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('change the status'),
+      requestFailedMessage(offline(), 'change the status'),
     );
     expect(within(row).getByLabelText('Status for serial SN-MANUAL-1')).toBeEnabled();
   });
@@ -253,7 +253,7 @@ describe('ItemSerialsPanel when a request gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     const row = screen.getByTestId('serial-row-serial-manual');
     expect(await within(row).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('delete the serial number'),
+      requestFailedMessage(offline(), 'delete the serial number'),
     );
     await waitFor(() => expect(screen.queryByText('Delete serial number?')).toBeNull());
     expect(toast.success).not.toHaveBeenCalled();
@@ -269,7 +269,7 @@ describe('ItemSerialsPanel when a request gets no answer', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /add 1 serial/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('add the serial numbers'),
+      requestFailedMessage(offline(), 'add the serial numbers'),
     );
     expect(screen.getByRole('button', { name: /add 1 serial/i })).toBeEnabled();
   });
@@ -279,7 +279,9 @@ describe('ItemSerialsPanel when a request gets no answer', () => {
     render(<ItemSerialsPanel {...BASE_PROPS} initialTotal={120} />);
     fireEvent.click(screen.getByRole('button', { name: /next/i }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('load the serial numbers')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'load the serial numbers'),
+      ),
     );
     expect(screen.getByRole('button', { name: /next/i })).toBeEnabled();
     expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();

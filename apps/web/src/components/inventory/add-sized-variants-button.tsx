@@ -165,6 +165,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       if (isControlFlow(e)) return;
       toast.error(
         requestUnconfirmedMessage(
+          e,
           'the sizes were created',
           source.itemType === 'book' ? 'the Books list' : 'the Items list',
         ),

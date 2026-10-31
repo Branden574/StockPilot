@@ -106,7 +106,11 @@ describe('FefoLotHint when the record gets no answer', () => {
     await user.type(screen.getByRole('spinbutton', { name: 'Picked quantity from lot L-A' }), '2');
     await user.click(screen.getByRole('button', { name: 'Record picked lots' }));
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      requestUnconfirmedMessage('the lot picks were recorded', "each lot's remaining quantity"),
+      requestUnconfirmedMessage(
+        offline(),
+        'the lot picks were recorded',
+        "each lot's remaining quantity",
+      ),
     );
     expect(refresh).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Record picked lots' })).toBeEnabled();

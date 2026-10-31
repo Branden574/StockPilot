@@ -350,7 +350,7 @@ describe('PoReceiveDialog when the post gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /post receipt/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('post the receipt'),
+      requestFailedMessage(offline(), 'post the receipt'),
     );
     expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(5);
     const again = screen.getByRole('button', { name: /post receipt/i });

@@ -281,7 +281,7 @@ describe('CustomersPanel when a request gets no answer', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Create' }));
     expect(
       await within(dialog).findByText(
-        requestUnconfirmedMessage('the customer was added', 'the customer list'),
+        requestUnconfirmedMessage(offline(), 'the customer was added', 'the customer list'),
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Create' })).toBeEnabled();
@@ -295,7 +295,9 @@ describe('CustomersPanel when a request gets no answer', () => {
     const select = screen.getByLabelText('Price list');
     await user.selectOptions(select, 'pl-1');
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('change the price list')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'change the price list'),
+      ),
     );
     expect(select).toBeEnabled();
   });
@@ -308,7 +310,7 @@ describe('CustomersPanel when a request gets no answer', () => {
     await user.type(screen.getByPlaceholderText('buyer@customer.com'), 'second@westfield.test');
     await user.click(screen.getByRole('button', { name: 'Invite' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('send the invite'),
+      requestFailedMessage(offline(), 'send the invite'),
     );
     expect(screen.getByRole('button', { name: 'Invite' })).toBeEnabled();
   });
@@ -323,7 +325,7 @@ describe('CustomersPanel when a request gets no answer', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove buyer@westfield.test' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('remove the user')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'remove the user')),
     );
     expect(screen.getByRole('button', { name: 'Remove buyer@westfield.test' })).toBeEnabled();
 
@@ -334,14 +336,16 @@ describe('CustomersPanel when a request gets no answer', () => {
     const matches = screen.getAllByRole('button').filter((b) => b.className === ITEM_MATCH_ROW);
     await user.click(matches[0]!);
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('add the item to the catalog')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'add the item to the catalog'),
+      ),
     );
 
     const removeItem = screen.getByRole('button', { name: 'Remove Notebook 0 from the catalog' });
     await user.click(removeItem);
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage('remove the item from the catalog'),
+        requestFailedMessage(offline(), 'remove the item from the catalog'),
       ),
     );
     expect(removeItem).toBeEnabled();
@@ -358,7 +362,7 @@ describe('CustomersPanel when a request gets no answer', () => {
     await user.click(screen.getByRole('button', { name: /Add/ }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('the price list was created', 'the price lists'),
+        requestUnconfirmedMessage(offline(), 'the price list was created', 'the price lists'),
       ),
     );
     expect(screen.getByRole('button', { name: /Add/ })).toBeEnabled();
@@ -367,7 +371,7 @@ describe('CustomersPanel when a request gets no answer', () => {
     const removePrice = screen.getByRole('button', { name: 'Remove the price for Notebook 3' });
     await user.click(removePrice);
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('remove the price')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'remove the price')),
     );
     expect(removePrice).toBeEnabled();
 
@@ -377,7 +381,7 @@ describe('CustomersPanel when a request gets no answer', () => {
     await user.type(screen.getByLabelText(/^Price for /), '3.50');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the price')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the price')),
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });

@@ -89,7 +89,7 @@ describe('ImageUploader when a request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('delete the photo')),
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'delete the photo')),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('button', { name: 'Remove image' })).toBeInTheDocument();
@@ -101,7 +101,9 @@ describe('ImageUploader when a request gets no answer', () => {
     const { container } = render(<ImageUploader itemId={ITEM_ID} initialImages={[]} />);
     chooseFront(container);
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('upload "front.jpg"')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'upload "front.jpg"'),
+      ),
     );
     expect(await screen.findByText('Drop images, or click to browse')).toBeInTheDocument();
     // The button sits inside the drop zone's label, which names it.
@@ -116,7 +118,7 @@ describe('ImageUploader when a request gets no answer', () => {
     chooseFront(container);
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        requestUnconfirmedMessage('"front.jpg" was saved', "the item's photos"),
+        requestUnconfirmedMessage(offline(), '"front.jpg" was saved', "the item's photos"),
       ),
     );
     expect(toast.success).not.toHaveBeenCalled();

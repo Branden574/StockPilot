@@ -107,7 +107,7 @@ describe('UomConversionsManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('delete the conversion'),
+      requestFailedMessage(offline(), 'delete the conversion'),
     );
     expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();

@@ -198,7 +198,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           // The file is up, but whether its row was written is unknown.
           failed++;
           toast.error(
-            requestUnconfirmedMessage(`"${original.name}" was saved`, "the item's photos"),
+            requestUnconfirmedMessage(e, `"${original.name}" was saved`, "the item's photos"),
           );
           return;
         }
@@ -229,7 +229,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
             failed++;
             batch.settle(`${i}:${original.name}`, false);
             publishProgress();
-            toast.error(requestFailedMessage(`upload "${original.name}"`));
+            toast.error(requestFailedMessage(e, `upload "${original.name}"`));
           }
         }
       });
@@ -254,7 +254,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       if (isControlFlow(e)) throw e;
       // No answer (offline, a server error, a deploy): the photo stays, and
       // both confirms (this card's and the lightbox's) close on the message.
-      toast.error(requestFailedMessage('delete the photo'));
+      toast.error(requestFailedMessage(e, 'delete the photo'));
       return;
     }
     if (!res.ok) {

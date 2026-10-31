@@ -84,7 +84,7 @@ export function BinsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('create the bin'));
+      toast.error(requestFailedMessage(e, 'create the bin'));
       return;
     } finally {
       setBusy(false);
@@ -109,7 +109,7 @@ export function BinsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('archive the bin');
+      const message = requestFailedMessage(e, 'archive the bin');
       setArchiveError(message);
       toast.error(message);
       return;

@@ -257,7 +257,7 @@ describe('OccurrenceActions when the request gets no answer', () => {
     render(<OccurrenceActions occurrenceId={ID} acknowledged={false} />);
     await click('Acknowledge');
     expect(screen.getByRole('alert')).toHaveTextContent(
-      requestFailedMessage('acknowledge the exception'),
+      requestFailedMessage(offline(), 'acknowledge the exception'),
     );
     expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
     actOnExceptionAction.mockResolvedValueOnce({ ok: true });
@@ -274,7 +274,9 @@ describe('OccurrenceActions when the request gets no answer', () => {
     render(<OccurrenceActions occurrenceId={ID} acknowledged />);
     fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'moved to rack 4' } });
     await click('Add note');
-    expect(screen.getByRole('alert')).toHaveTextContent(requestFailedMessage('add the note'));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'add the note'),
+    );
     expect(screen.getByLabelText(/Note/)).toHaveValue('moved to rack 4');
     expect(screen.getByRole('button', { name: 'Add note' })).toBeEnabled();
   });

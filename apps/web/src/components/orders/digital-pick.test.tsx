@@ -336,7 +336,9 @@ describe('DigitalPick when a request gets no answer', () => {
       '60',
     );
     await user.click(within(pens).getByRole('button', { name: 'Save' }));
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the picked quantity'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'save the picked quantity'),
+    );
     expect(within(pens).getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 
@@ -347,7 +349,7 @@ describe('DigitalPick when a request gets no answer', () => {
     await user.click(
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Complete picking' }),
     );
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('complete picking'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'complete picking'));
     expect(routerPush).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /Complete picking/ })).toBeEnabled();
   });

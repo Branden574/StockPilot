@@ -5607,7 +5607,7 @@ function SavedViewChip({
       if (isControlFlow(e)) return;
       // No answer (offline, a deploy): the warehouse was not switched, so
       // applying the rest would show the view under the wrong warehouse.
-      toast.error(requestFailedMessage('apply the view'));
+      toast.error(requestFailedMessage(e, 'apply the view'));
       return;
     }
     const next = new URLSearchParams();
@@ -5636,7 +5636,7 @@ function SavedViewChip({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('delete the view'));
+      toast.error(requestFailedMessage(e, 'delete the view'));
       return;
     } finally {
       setDeleting(false);
@@ -5660,7 +5660,7 @@ function SavedViewChip({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(next ? 'share the view' : 'make the view private'));
+      toast.error(requestFailedMessage(e, next ? 'share the view' : 'make the view private'));
       return;
     } finally {
       setSharing(false);
@@ -5805,7 +5805,7 @@ function SaveCurrentViewButton({
       if (isControlFlow(e)) return;
       // B40: no answer (offline, a server error the action threw, a deploy
       // that no longer has it). The popover stays open with the name kept.
-      toast.error(requestFailedMessage('save the view'));
+      toast.error(requestFailedMessage(e, 'save the view'));
       return;
     } finally {
       setSaving(false);

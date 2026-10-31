@@ -44,7 +44,7 @@ describe('BooksScanShortcut when the lookup gets no answer', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Scan' }));
     });
-    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('look up the book'));
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'look up the book'));
     expect(push).not.toHaveBeenCalled();
 
     // Not stuck on "Still looking up the last scan": the next scan is looked up.

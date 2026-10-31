@@ -199,7 +199,7 @@ function TicketCard({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('update the ticket'));
+      toast.error(requestFailedMessage(e, 'update the ticket'));
       return;
     } finally {
       setBusy(false);

@@ -155,7 +155,7 @@ describe('ManagerActionsPanel when an order step gets no answer', () => {
       const button = screen.getByRole('button', { name: new RegExp(step.name) });
       fireEvent.click(button);
       await waitFor(() =>
-        expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(step.what)),
+        expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), step.what)),
       );
       expect(screen.getByRole('button', { name: new RegExp(step.name) })).toBeEnabled();
       expect(toast.success).not.toHaveBeenCalled();
@@ -171,7 +171,9 @@ describe('ManagerActionsPanel when an order step gets no answer', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Save notes/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('save the internal notes')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'save the internal notes'),
+      ),
     );
     expect(screen.getByLabelText('Internal notes')).toHaveValue('Call ahead');
     expect(screen.getByRole('button', { name: /Save notes/ })).toBeEnabled();
@@ -186,7 +188,9 @@ describe('ManagerActionsPanel when an order step gets no answer', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /Suggest deadline from note/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('suggest a deadline')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'suggest a deadline'),
+      ),
     );
     expect(screen.getByRole('button', { name: /Suggest deadline from note/ })).toBeEnabled();
   });
@@ -205,7 +209,9 @@ describe('ManagerActionsPanel when an order step gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Suggest deadline from note/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage('set the needed-by date')),
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'set the needed-by date'),
+      ),
     );
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });

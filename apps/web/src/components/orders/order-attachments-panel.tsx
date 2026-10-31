@@ -137,7 +137,11 @@ export function OrderAttachmentsPanel({
           // but whether it was attached is unknown, so it is left in place.
           unconfirmed += 1;
           toast.error(
-            requestUnconfirmedMessage(`${file.name} was attached`, "the order's proof of delivery"),
+            requestUnconfirmedMessage(
+              e,
+              `${file.name} was attached`,
+              "the order's proof of delivery",
+            ),
           );
           continue;
         }
@@ -168,7 +172,7 @@ export function OrderAttachmentsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('delete the attachment'));
+      toast.error(requestFailedMessage(e, 'delete the attachment'));
       return;
     } finally {
       setDeletingId(null);

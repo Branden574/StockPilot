@@ -177,7 +177,7 @@ export function LocationsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('archive the location');
+      const message = requestFailedMessage(e, 'archive the location');
       setArchiveRefusal({ message, holdsStock: false });
       toast.error(message);
       return;
@@ -212,7 +212,7 @@ export function LocationsManager({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('restore the location');
+      const message = requestFailedMessage(e, 'restore the location');
       setRestoreError(message);
       toast.error(message);
       return;

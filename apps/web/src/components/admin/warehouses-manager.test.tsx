@@ -199,7 +199,10 @@ describe('WarehousesManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('archive the warehouse'),
+      requestFailedMessage(offline(), 'archive the warehouse'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'archive the warehouse'),
     );
     expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
@@ -212,7 +215,10 @@ describe('WarehousesManager when the request gets no answer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      requestFailedMessage('restore the warehouse'),
+      requestFailedMessage(offline(), 'restore the warehouse'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'restore the warehouse'),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
   });

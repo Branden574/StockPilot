@@ -462,7 +462,7 @@ export function RecurringTemplatesPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(next ? 'turn the template on' : 'turn the template off'));
+      toast.error(requestFailedMessage(e, next ? 'turn the template on' : 'turn the template off'));
       return;
     } finally {
       setToggling(null);
@@ -485,7 +485,7 @@ export function RecurringTemplatesPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      const message = requestFailedMessage('delete the template');
+      const message = requestFailedMessage(e, 'delete the template');
       setDeleteError(message);
       toast.error(message);
       return;
@@ -559,8 +559,8 @@ export function RecurringTemplatesPanel({
       // look first.
       toast.error(
         isEdit
-          ? requestFailedMessage('save the template')
-          : requestUnconfirmedMessage('the template was created', 'the recurring templates'),
+          ? requestFailedMessage(e, 'save the template')
+          : requestUnconfirmedMessage(e, 'the template was created', 'the recurring templates'),
       );
       return;
     } finally {

@@ -28,7 +28,7 @@ export function BillingActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('open checkout'));
+      toast.error(requestFailedMessage(e, 'open checkout'));
       return;
     } finally {
       setLoading(null);
@@ -48,7 +48,7 @@ export function BillingActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('open the billing portal'));
+      toast.error(requestFailedMessage(e, 'open the billing portal'));
       return;
     } finally {
       setLoading(null);

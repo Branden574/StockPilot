@@ -52,7 +52,7 @@ export function PoRenameButton({ poId, currentNumber }: { poId: string; currentN
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage('rename the purchase order'));
+      toast.error(requestFailedMessage(e, 'rename the purchase order'));
       return;
     } finally {
       setBusy(false);
