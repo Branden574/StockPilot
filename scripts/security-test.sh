@@ -108,6 +108,10 @@ PGTAP_TESTS=(
   supabase/tests/0218_lock_org_billing_columns.test.sql
   supabase/tests/0219_org_module_minplan_rls.test.sql
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
+  # Only a platform admin creates a workspace (S20): no signed-in or anonymous
+  # caller inserts an organization (RLS on, no INSERT policy since 0138), and
+  # no function anon or authenticated may execute inserts one.
+  supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql
   supabase/tests/0282_cycle_count_assignment_lock.test.sql
@@ -965,6 +969,17 @@ WEB_TESTS=(
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+
+  # Only a platform admin creates a workspace (S20, owner decision b.9):
+  # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
+  # before it reads its input, the real check against every caller type (each
+  # role, no membership, a portal user, a rewritten profile email, a failed
+  # verified-email lookup, a stale step-up); and every insert into
+  # organizations and every owner seat in apps/web/src runs after that check
+  # or is a reviewed entry whose callers do. Both files carry the "Security
+  # invariant" marker.
+  src/server/actions/organization.create-gate.test.ts
+  src/server/organization-create-sites.guard.test.ts
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
