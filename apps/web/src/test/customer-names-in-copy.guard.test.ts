@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { type Copy, copyInSource } from './copy-in-source';
 import { CUSTOMER_DOMAINS, CUSTOMER_NAMES } from './customer-identity';
+import { decode } from './decode-text';
 
 /**
  * No customer name in the copy people see (docket S17, 2026-10-31).
@@ -22,15 +24,30 @@ import { CUSTOMER_DOMAINS, CUSTOMER_NAMES } from './customer-identity';
  * screens and the code they share (apps/web/src, apps/mobile/app,
  * apps/mobile/src, packages/<name>/src, and apps/mobile/app.config.ts, whose
  * strings iOS and the App Store show), tests, mocks and fixtures left out, and
- * reads its copy: string and template literals, JSX attribute values and the
- * text of each JSX element with its children joined (test/copy-in-source.ts,
- * the reader the on-record wording guard uses too). It fails on any of the
- * customer's names (test/customer-identity.ts), in any case, with nothing, a
- * space, a hyphen, an underscore, a dot or a middle dot between its pieces,
- * after compatibility forms are folded (NFKC), and with no letter or digit on
- * either side. A JSX element is not reported for a name already reported
- * inside it (in a child element, or a literal among its children); a literal
- * is always reported.
+ * reads the copy of every one: string and template literals, JSX attribute
+ * values and the text of each JSX element with its children joined
+ * (test/copy-in-source.ts, the reader the on-record wording guard uses too).
+ * No test of a file's raw text decides what is read, since a file need not
+ * hold a name as written to show one. Each piece of copy is read twice, and a
+ * name in either reading is a finding:
+ *
+ * - As written, with compatibility forms such as full-width letters folded
+ *   (NFKC). TypeScript has already undone the backslash escapes of a string
+ *   or template literal.
+ * - Decoded, with the decoder customer-addresses.guard.test.ts reads with
+ *   (test/decode-text.ts): %-escapes, HTML references (JSX shows a reference
+ *   in its text and attribute values as its character), backslash escapes
+ *   left in the text (a string inside a string, or JSX), <br> and <wbr>
+ *   undone and compatibility forms folded, round after round until nothing
+ *   changes.
+ *
+ * It fails on any of the customer's names (test/customer-identity.ts), in any
+ * case, with nothing or a run of spaces, hyphens, underscores, dots and
+ * middle dots between its pieces, with characters that do not show (a soft
+ * hyphen, a zero-width space or joiner, a direction mark, a variation
+ * selector) anywhere in it, and with no letter or digit on either side. A JSX
+ * element is not reported for a name already reported inside it (in a child
+ * element, or a literal among its children); a literal is always reported.
  *
  * A failure names the file, the line and the name's place in the list, never
  * the name or the text: the logs of a public repository are public too. The
@@ -45,9 +62,10 @@ import { CUSTOMER_DOMAINS, CUSTOMER_NAMES } from './customer-identity';
  * until the repository's own question, O19, is settled;
  * customer-addresses.guard.test.ts reads all of them for addresses); images;
  * a name that comes from data or is put together at run time; a name split by
- * markup or by other characters; and a name in lookalike letters from another
- * script, written with escapes, or in another encoding. Git history keeps the
- * old copy.
+ * markup (in JSX, <wbr /> is an element) or by characters that show; and a
+ * name in lookalike letters from another script, or in an encoding the
+ * decoder does not read (base64, for one, or a named HTML reference outside
+ * its table). Git history keeps the old copy.
  *
  * IF THIS FAILS: write a generic example instead (Main Warehouse, Sample Org,
  * Charter A). Add a pair to ALLOWED only for text that members are never
@@ -88,9 +106,20 @@ const ALLOWED: readonly Allowed[] = [
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Characters that do not show: format characters (a soft hyphen, a zero-width
+// space or joiner, a direction mark) and the others a font may ignore (a
+// variation selector, a combining grapheme joiner).
+const UNSEEN = String.raw`\p{Cf}\p{Default_Ignorable_Code_Point}`;
+
+// Between two letters of a piece: any run of characters that do not show.
+const IN_PIECE = `[${UNSEEN}]*`;
+
 // Between two pieces of a name: nothing, or a run of white space, hyphens,
-// underscores, dots and middle dots.
-const SEPARATOR = String.raw`[\s\-_.\u00B7]*`;
+// underscores, dots, middle dots and characters that do not show.
+const SEPARATOR = String.raw`[\s\-_.\u00B7${UNSEEN}]*`;
+
+/** A piece as a pattern: its letters in order, with characters that do not show allowed between them. */
+const pieceSource = (piece: string) => [...piece].map(escapeRe).join(IN_PIECE);
 
 /**
  * Each name as one pattern: all of its pieces in order (none optional, so the
@@ -100,10 +129,24 @@ const SEPARATOR = String.raw`[\s\-_.\u00B7]*`;
 const NAME_PATTERNS: readonly RegExp[] = CUSTOMER_NAMES.map(
   (pieces) =>
     new RegExp(
-      String.raw`(?<![\p{L}\p{N}])${pieces.map(escapeRe).join(SEPARATOR)}(?![\p{L}\p{N}])`,
+      String.raw`(?<![\p{L}\p{N}])${pieces.map(pieceSource).join(SEPARATOR)}(?![\p{L}\p{N}])`,
       'iu',
     ),
 );
+
+/**
+ * The readings of one piece of copy a name is looked for in: as written, with
+ * compatibility forms folded, and decoded (test/decode-text.ts, the decoder
+ * customer-addresses.guard.test.ts reads with), the second only where it
+ * differs. A name in either reading is a finding, so a decoding that eats a
+ * character (a backslash before a name's first letter, read as an escape)
+ * never hides a name written plainly.
+ */
+function readingsOf(text: string): string[] {
+  const written = text.normalize('NFKC');
+  const decoded = decode(text);
+  return decoded === written ? [written] : [written, decoded];
+}
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -126,9 +169,11 @@ function findIn(file: string, text: string, allowed: readonly Allowed[] = ALLOWE
   const isAllowed = (hash: string) => allowed.some((a) => a.file === file && a.sha256 === hash);
   const hits: { copy: Copy; name: number; sha256: string }[] = [];
   for (const copy of copyInSource(file, text)) {
-    const folded = copy.text.normalize('NFKC');
+    const readings = readingsOf(copy.text);
     NAME_PATTERNS.forEach((pattern, i) => {
-      if (pattern.test(folded)) hits.push({ copy, name: i + 1, sha256: hashOf(copy.text) });
+      if (readings.some((reading) => pattern.test(reading))) {
+        hits.push({ copy, name: i + 1, sha256: hashOf(copy.text) });
+      }
     });
   }
   const reported = hits.filter(
@@ -151,14 +196,6 @@ function findIn(file: string, text: string, allowed: readonly Allowed[] = ALLOWE
     return [{ file, line: copy.line, name, sha256: hash }];
   });
 }
-
-// Only a file whose text holds the first piece of a name (in any case,
-// compatibility forms folded) can hold that name; no other file is parsed.
-const FIRST_PIECES = [...new Set(CUSTOMER_NAMES.map((pieces) => pieces[0]!))];
-const mayHoldAName = (text: string) => {
-  const folded = text.normalize('NFKC').toLowerCase();
-  return FIRST_PIECES.some((piece) => folded.includes(piece));
-};
 
 // The screens and the code they share, and the phone's app config by name: its
 // app name and permission strings are shown by iOS and the App Store.
@@ -200,21 +237,24 @@ function copyFiles(records: string): string[] {
   return [...files];
 }
 
-const listTracked = (root: string) =>
+const listTracked = (root: string, env: NodeJS.ProcessEnv = process.env) =>
   execFileSync('git', ['ls-files', '--stage', '-z'], {
     cwd: root,
+    env,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
 
 /**
- * Every customer name in the copy of the checkout at `root`. Files are read
- * from disk; one that is listed but not on disk, or is a link there, is
- * skipped.
+ * Every customer name in the copy of the checkout at `root`, git run with
+ * `env`. Every copy file is parsed and read: a file need not hold a name as
+ * written to show one (an escape, a reference, JSX children joined), so no
+ * test of its raw text decides what is read. Files are read from disk; one
+ * that is listed but not on disk, or is a link there, is skipped.
  */
-function scanCheckout(root: string): Found[] {
+function scanCheckout(root: string, env: NodeJS.ProcessEnv = process.env): Found[] {
   const found: Found[] = [];
-  for (const file of copyFiles(listTracked(root))) {
+  for (const file of copyFiles(listTracked(root, env))) {
     const path = join(root, file);
     let text: string;
     try {
@@ -223,7 +263,7 @@ function scanCheckout(root: string): Found[] {
     } catch {
       continue; // listed but not on disk (deleted in a working tree)
     }
-    if (mayHoldAName(text)) found.push(...findIn(file, text));
+    found.push(...findIn(file, text));
   }
   return found;
 }
@@ -249,12 +289,7 @@ type Probe = { form: string; file: string; source: string; line: number };
 /** Each probe that does not find name `name` on its line, as "name N, form". */
 function misses(name: number, probes: readonly Probe[]): string[] {
   return probes
-    .filter(
-      (p) =>
-        // A source the first-piece filter passes over is never read at all.
-        !mayHoldAName(p.source) ||
-        !findIn(p.file, p.source, []).some((f) => f.name === name && f.line === p.line),
-    )
+    .filter((p) => !findIn(p.file, p.source, []).some((f) => f.name === name && f.line === p.line))
     .map((p) => `name ${name}, ${p.form}`);
 }
 
@@ -288,6 +323,36 @@ const JOINS: readonly [string, string][] = [
   ['a dot between spaces', ' . '],
   ['an underscore, a hyphen and an underscore', '_-_'],
 ];
+
+// Characters that do not show, as a file holds them.
+const INVISIBLE: readonly [string, string][] = [
+  ['a soft hyphen', '\u00AD'],
+  ['a zero-width space', '\u200B'],
+  ['a zero-width non-joiner', '\u200C'],
+  ['a zero-width joiner', '\u200D'],
+  ['a left-to-right mark', '\u200E'],
+  ['a word joiner', '\u2060'],
+  ['a variation selector', '\uFE0F'],
+  ['a combining grapheme joiner', '\u034F'],
+];
+
+const codeOf = (c: string) => c.codePointAt(0)!;
+const hexOf = (c: string) => codeOf(c).toString(16).toUpperCase().padStart(2, '0');
+
+/**
+ * A name's first piece split after its first letter, and its other pieces
+ * with a space before each, so a probe can write the first letter, or put a
+ * mark after it, in some other way.
+ */
+function partsOf(pieces: readonly string[]) {
+  const [first, ...rest] = pieces as readonly [string, ...string[]];
+  return {
+    first,
+    head: first.charAt(0),
+    tail: first.slice(1),
+    others: rest.map((p) => ` ${p}`).join(''),
+  };
+}
 
 /** Each place copy is read, holding `spelled` on the line given. */
 function contexts(spelled: string): [where: string, file: string, source: string, line: number][] {
@@ -388,6 +453,96 @@ describe("the copy people see names none of the customer's names", () => {
       missed.push(...misses(i + 1, probes));
     });
     expect(missed).toEqual([]);
+  });
+
+  // A name written with escapes or references, or with characters that do
+  // not show in it, still reads as the name: in a link (%-escapes), in JSX
+  // text and attribute values (HTML references, which JSX shows as their
+  // characters), in a literal that TypeScript or the code at run time undoes
+  // (backslash escapes), and wherever a mark that does not show sits in it.
+  it('finds every name written with escapes, references or characters that do not show', () => {
+    const missed: string[] = [];
+    CUSTOMER_NAMES.forEach((pieces, i) => {
+      const { first, head, tail, others } = partsOf(pieces);
+      const withHead = (spelledHead: string) => `${spelledHead}${tail}${others}`;
+      const marked = (mark: string) => `${head}${mark}${tail}${others}`;
+      const forms: [form: string, spelled: string][] = [
+        // %-escapes, as in a link.
+        ['its first piece %-encoded', [...first].map((c) => `%${hexOf(c)}`).join('') + others],
+        ['its first letter %-encoded twice', withHead(`%25${hexOf(head)}`)],
+        ['its first letter as %uXXXX', withHead(`%u00${hexOf(head)}`)],
+        // HTML references.
+        ['its first letter as a decimal reference', withHead(`&#${codeOf(head)};`)],
+        ['its first letter as a hexadecimal reference', withHead(`&#x${hexOf(head)};`)],
+        [
+          'every character as a reference',
+          [...pieces.join(' ')].map((c) => `&#${codeOf(c)};`).join(''),
+        ],
+        ['its first letter as a %-encoded reference', withHead(`%26%23${codeOf(head)}%3B`)],
+        ['&shy; inside its first piece', marked('&shy;')],
+        ['&zwj; inside its first piece', marked('&zwj;')],
+        ['<wbr> inside its first piece', marked('<wbr>')],
+        // Backslash escapes: TypeScript undoes one in a literal; two (a
+        // string inside a string), or one in JSX, leave text that code may
+        // still undo.
+        ['its first letter as \\u00XX', withHead(`\\u00${hexOf(head)}`)],
+        ['its first letter as \\xXX', withHead(`\\x${hexOf(head)}`)],
+        ['its first letter as \\\\u00XX', withHead(`\\\\u00${hexOf(head)}`)],
+        ['an escaped zero-width space inside its first piece', marked('\\u200B')],
+        // A backslash before a name: decoded, \f (say) is an escape, so the
+        // name is found as written.
+        ['a backslash right before it', `\\\\${pieces.join(' ')}`],
+        // Characters that do not show.
+        ...INVISIBLE.map(([what, mark]): [string, string] => [
+          `${what} inside its first piece`,
+          marked(mark),
+        ]),
+      ];
+      if (pieces.length > 1) {
+        // References JSX shows as white space or a middle dot, and
+        // characters that do not show, between the pieces.
+        for (const ref of ['nbsp', 'ensp', 'emsp', 'thinsp', 'middot']) {
+          forms.push([`&${ref}; between its pieces`, pieces.join(`&${ref};`)]);
+        }
+        for (const [what, mark] of INVISIBLE) {
+          forms.push([`${what} between its pieces`, pieces.join(mark)]);
+        }
+      }
+      // A letter as a reference JSX shows as a form of it.
+      const spaced = pieces.join(' ');
+      for (const [ref, letter] of [
+        ['ordf', 'a'],
+        ['ordm', 'o'],
+        ['image', 'i'],
+        ['real', 'r'],
+      ] as const) {
+        const at = spaced.toLowerCase().indexOf(letter);
+        if (at < 0) continue;
+        forms.push([
+          `its first ${letter} as &${ref};`,
+          `${spaced.slice(0, at)}&${ref};${spaced.slice(at + 1)}`,
+        ]);
+      }
+      const probes: Probe[] = [];
+      for (const [form, spelled] of forms) {
+        for (const [where, file, source, line] of contexts(spelled)) {
+          // JSX text reads a < as the start of an element.
+          if (where === 'JSX text' && spelled.includes('<')) continue;
+          probes.push({ form: `${form}, ${where}`, file, source, line });
+        }
+      }
+      missed.push(...misses(i + 1, probes));
+    });
+    expect(missed).toEqual([]);
+  });
+
+  // JSX shows an HTML reference in its text and attribute values as its
+  // character, from the XHTML list. These are the references in that list
+  // whose character, compatibility forms folded, is a letter, a digit, white
+  // space or a middle dot, and so can sit in a name.
+  it('decodes each reference JSX shows as part of a word', () => {
+    expect(decode('&nbsp;|&ensp;|&emsp;|&thinsp;|&middot;')).toBe(' | | | |\u00B7');
+    expect(decode('&ordf;&ordm;&image;&real;&sup1;&sup2;&sup3;&trade;')).toBe('aoIR123TM');
   });
 
   it('leaves lookalikes alone', () => {
@@ -645,6 +800,50 @@ describe("the copy people see names none of the customer's names", () => {
       'apps/mobile/src/lib/run-copy.ts',
     ]);
   }, 30_000);
+
+  // Every copy file is read: a file need not hold a name as written to show
+  // one, so no test of a file's raw text may pass over it.
+  it('reads every copy file in a checkout, though none holds a name as written', () => {
+    const root = mkdtempSync(join(tmpdir(), 'names-guard-'));
+    // No variable a git hook sets (GIT_DIR, GIT_INDEX_FILE, ...) may point
+    // these runs at another repository.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root, env, stdio: 'pipe' });
+      const want: string[] = [];
+      CUSTOMER_NAMES.forEach((pieces, i) => {
+        const { head, tail, others } = partsOf(pieces);
+        const files: [file: string, text: string][] = [
+          // A reference JSX shows as the first letter.
+          [
+            `apps/web/src/components/reference-${i + 1}.tsx`,
+            `export const A = () => <p>&#${codeOf(head)};${tail}${others}</p>;\n`,
+          ],
+          // The first piece in two string children, which JSX joins.
+          [
+            `apps/web/src/components/children-${i + 1}.tsx`,
+            `export const B = () => <p>{'${head}'}{'${tail}'}${others}</p>;\n`,
+          ],
+          // An escaped zero-width space inside the first piece.
+          [
+            `apps/mobile/app/escaped-${i + 1}.ts`,
+            `export const label = '${head}\\u200B${tail}${others}';\n`,
+          ],
+        ];
+        for (const [file, text] of files) {
+          mkdirSync(join(root, dirname(file)), { recursive: true });
+          writeFileSync(join(root, file), text);
+          want.push(`${file}:1 (customer name ${i + 1})`);
+        }
+      });
+      execFileSync('git', ['add', '-A'], { cwd: root, env, stdio: 'pipe' });
+      const got = report(scanCheckout(root, env));
+      expect(want.filter((w) => !got.includes(w))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("holds no whole name in customer-identity.ts, pins its ten names, and its domains are S15's six", () => {
     const identity = 'apps/web/src/test/customer-identity.ts';
