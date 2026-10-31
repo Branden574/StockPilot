@@ -92,9 +92,14 @@ export async function sendDigestPreviewAction() {
     cycleCounts: (profile as { digest_section_cycle_counts?: boolean } | null)
       ?.digest_section_cycle_counts ?? true,
   };
+  // One moment for the whole preview: its OVERDUE flags, its subject's
+  // dateline, its "As of" pill and its days, all in the workspace's zone
+  // (small fixes slice 8: a preview sent after 5 PM in Los Angeles carried
+  // tomorrow's UTC date).
+  const now = new Date();
   const fullPayload = await getDigestData(supabase, ctx.organizationId, {
     timeZone,
-    now: new Date(),
+    now,
   });
   const payload = applySectionOptIns(fullPayload, sections);
   const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
@@ -118,17 +123,19 @@ export async function sendDigestPreviewAction() {
     unsubscribeUrl: unsubscribe.url,
   };
   // Registry subject: "[Preview] StockPilot weekly digest — {date}".
-  const subject = weeklyDigestPreviewSubject();
+  const subject = weeklyDigestPreviewSubject(now, timeZone);
   // Preview variant: purple preview strip, no motion, all-clear state
   // renders as an intentional "All clear." banner (never looks broken).
   const html = renderWeeklyDigestHtml(payload, {
     ...opts,
     recipientName: ctx.fullName,
     preview: true,
-    // The footer names the next Monday run in the workspace's zone.
+    now,
+    // The days it prints, and the next Monday run the footer names, in the
+    // workspace's zone.
     timeZone,
   });
-  const text = weeklyDigestText(payload, opts);
+  const text = weeklyDigestText(payload, { ...opts, now, timeZone });
   const res = await sendEmail({
     to: ctx.email,
     subject,

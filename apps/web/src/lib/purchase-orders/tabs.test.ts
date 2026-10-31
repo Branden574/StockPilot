@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_NON_CANCELLED_STATUSES,
   isPoTab,
+  OVERDUE_PO_ATTENTION_DETAIL,
+  OVERDUE_PO_STATUSES,
   statusesForTab,
   TAB_LABELS,
   TAB_ORDER,
@@ -18,7 +20,8 @@ describe('purchase-orders tab partition', () => {
   it('every non-"all" tab status is unique across tabs (mutually exclusive partition)', () => {
     const seen = new Map<string, PoTab[]>();
     for (const tab of TAB_ORDER) {
-      if (tab === 'all') continue;
+      // 'all' spans the partition and 'overdue' is a view across it.
+      if (tab === 'all' || tab === 'overdue') continue;
       for (const status of TAB_STATUSES[tab]) {
         const tabs = seen.get(status) ?? [];
         tabs.push(tab);
@@ -68,5 +71,39 @@ describe('purchase-orders tab partition', () => {
       expect(statusesForTab('in_transit')).toEqual(['expected_inbound', 'partially_received']);
       expect(statusesForTab('received')).toEqual(['received']);
     });
+  });
+});
+
+describe('the Overdue view (small fixes slice 8)', () => {
+  it('is a tab the dashboard\'s ?status=overdue link selects, labelled Overdue, right after All', () => {
+    expect(isPoTab('overdue')).toBe(true);
+    expect(TAB_LABELS.overdue).toBe('Overdue');
+    expect(TAB_ORDER.indexOf('overdue')).toBe(TAB_ORDER.indexOf('all') + 1);
+  });
+
+  it('spans the open statuses a purchase order can be overdue in, and no others', () => {
+    expect(new Set(statusesForTab('overdue'))).toEqual(
+      new Set(['ordered', 'expected_inbound', 'partially_received']),
+    );
+    expect(statusesForTab('overdue')).toEqual([...OVERDUE_PO_STATUSES]);
+    for (const status of ['draft', 'received', 'cancelled']) {
+      expect(statusesForTab('overdue')).not.toContain(status);
+    }
+  });
+
+  it('a copy: a caller changing it cannot change the list', () => {
+    statusesForTab('overdue').push('draft');
+    expect(OVERDUE_PO_STATUSES).not.toContain('draft');
+  });
+});
+
+// The dashboard's overdue line said "Chase your suppliers or update the
+// ETA.", but an ordered purchase order's expected date cannot be changed:
+// update() edits drafts only, and the only other writer of expected_at is a
+// PO import creating a new one (slice 8 review).
+describe("the dashboard's overdue line", () => {
+  it('gives only advice someone can follow', () => {
+    expect(OVERDUE_PO_ATTENTION_DETAIL).toBe('Expected receipt date has passed. Chase your suppliers.');
+    expect(OVERDUE_PO_ATTENTION_DETAIL).not.toMatch(/ETA|update/i);
   });
 });

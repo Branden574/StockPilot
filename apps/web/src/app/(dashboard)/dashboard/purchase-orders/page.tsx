@@ -3,6 +3,8 @@ import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
@@ -22,6 +24,7 @@ import {
 } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { searchedPage } from '@/lib/purchase-orders/list-search';
 import { cn, formatCurrency } from '@/lib/utils';
 import {
   isPoTab,
@@ -31,7 +34,7 @@ import {
   type PoTab,
 } from '@/lib/purchase-orders/tabs';
 
-import { formatCalendarDate } from '@stockpilot/core';
+import { formatCalendarDate, resolveOrgTimezone } from '@stockpilot/core';
 
 export const metadata = { title: 'Purchase orders' };
 
@@ -95,6 +98,21 @@ export default async function PurchaseOrdersPage({
     ),
   ]);
 
+  // The Placed column prints a day, and whose day it is matters: in the
+  // server's zone (UTC on Vercel) an evening order in California lands on the
+  // next date, a morning one in Sydney on the day before. So the
+  // organization's zone, from the request-cached org row the layout reads
+  // (normally already in hand from the membership bundle), in both tables
+  // (small fixes slice 8). Started before the list reads; an unreadable row
+  // is the documented default zone, reported, never an error page
+  // (getOrgRowForRequest throws on a read error).
+  const timeZoneRead = getOrgRowForRequest(orgCtx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'purchase_orders.list.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
+
   // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
   // shows 0" — the enforcement read in the service is the fail-closed one.
   const isAdmin = orgCtx.role === 'owner' || orgCtx.role === 'admin';
@@ -138,6 +156,11 @@ export default async function PurchaseOrdersPage({
   let totalFiltered = 0;
   let supplierMap = new Map<string, string>();
   let loadFailed = false;
+  // The Overdue view (?status=overdue, where the dashboard's overdue line
+  // links): every overdue purchase order, and the organization's day the
+  // rule was applied on ("YYYY-MM-DD").
+  let overdueTotal = 0;
+  let overdueAsOf: string | null = null;
   let activeWarehouse: string | null = null;
   // Instant mode: when the org's whole PO set is small, load the active tab in
   // full and filter client-side (zero-latency, like Items/Books). Above the cap
@@ -157,23 +180,49 @@ export default async function PurchaseOrdersPage({
     ]);
     stats = rawStats;
     instant = rawStats.totalCount <= PO_INSTANT_CAP;
-    const poPage = await poSvc.listPage({
-      warehouseId: warehouseFilter ?? undefined,
-      // All = all NON-cancelled statuses (owner request 2026-07-16) — a
-      // cancelled PO is void/mostly test noise and stays reachable via its
-      // own Cancelled tab instead. statusesForTab() always returns an
-      // explicit array now (never null), so this applies identically in
-      // BOTH the instant (client-filtered) and server-paginated branches
-      // below — they both flow through this same listPage() call.
-      statuses: statusesForTab(tab),
-      // Instant mode filters client-side, so it loads the tab unfiltered.
-      q: instant ? '' : q,
-      page: instant ? 1 : page,
-      perPage: instant ? PO_INSTANT_CAP : PAGE_SIZE,
-    });
-    visible = poPage.rows;
-    totalFiltered = poPage.total;
     supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
+    if (tab === 'overdue') {
+      // Overdue (small fixes slice 8): exactly the purchase orders the
+      // dashboard's overdue line counts, for the same warehouse
+      // (PurchaseOrdersService.listOverdue uses the count's own filter:
+      // receivable, and the organization's date after the expected day).
+      // Read whole; the instant list searches them in the browser, and the
+      // server-paged list (above 800) searches and pages them here, with the
+      // rule the other views search by (lib/purchase-orders/list-search.ts).
+      const overdue = await poSvc.listOverdue({ warehouseId: warehouseFilter ?? undefined });
+      overdueTotal = overdue.rows.length;
+      overdueAsOf = overdue.asOfDay;
+      if (instant) {
+        visible = overdue.rows;
+        totalFiltered = overdue.rows.length;
+      } else {
+        const found = searchedPage(overdue.rows, {
+          query: q,
+          page,
+          perPage: PAGE_SIZE,
+          supplierName: (id) => (id ? (supplierMap.get(id) ?? '—') : '—'),
+        });
+        visible = found.rows;
+        totalFiltered = found.total;
+      }
+    } else {
+      const poPage = await poSvc.listPage({
+        warehouseId: warehouseFilter ?? undefined,
+        // All = all NON-cancelled statuses (owner request 2026-07-16) — a
+        // cancelled PO is void/mostly test noise and stays reachable via its
+        // own Cancelled tab instead. statusesForTab() always returns an
+        // explicit array now (never null), so this applies identically in
+        // BOTH the instant (client-filtered) and server-paginated branches
+        // below — they both flow through this same listPage() call.
+        statuses: statusesForTab(tab),
+        // Instant mode filters client-side, so it loads the tab unfiltered.
+        q: instant ? '' : q,
+        page: instant ? 1 : page,
+        perPage: instant ? PO_INSTANT_CAP : PAGE_SIZE,
+      });
+      visible = poPage.rows;
+      totalFiltered = poPage.total;
+    }
   } catch (error) {
     console.error('[dashboard/purchase-orders] failed to load POs', {
       tab,
@@ -183,9 +232,10 @@ export default async function PurchaseOrdersPage({
     loadFailed = true;
   }
 
-  // The table is a client component (its Placed day waits for the viewer's
-  // zone), so the rows cross the wire: only the columns it prints, and only
-  // the names of the suppliers these rows name, never the whole lookup list.
+  // The table is a client component (the instant list searches in the
+  // browser, and both lists draw the same table), so the rows cross the wire:
+  // only the columns it prints, and only the names of the suppliers these
+  // rows name, never the whole lookup list.
   const tableRows: PoInstantRow[] = visible.map((po) => ({
     id: po.id,
     po_number: po.po_number,
@@ -202,6 +252,7 @@ export default async function PurchaseOrdersPage({
     const name = po.supplier_id ? supplierMap.get(po.supplier_id) : undefined;
     if (po.supplier_id && name !== undefined) supplierNames[po.supplier_id] = name;
   }
+  const timeZone = await timeZoneRead;
 
   const avgLead = stats.avgLeadDays != null ? Math.round(stats.avgLeadDays) : null;
 
@@ -222,16 +273,16 @@ export default async function PurchaseOrdersPage({
     (q ? `&q=${encodeURIComponent(q)}` : '') +
     (activeWarehouse ? `&warehouse=${encodeURIComponent(activeWarehouse)}` : '');
 
-  // The six status tabs, as the segmented track: links that keep `q`, a
-  // navigation landmark named "Filter by status" with aria-current on the tab
-  // shown, as the pill links were.
+  // The status tabs and the Overdue view, as the segmented track: links that
+  // keep `q`, a navigation landmark named "Filter by status" with
+  // aria-current on the tab shown, as the pill links were.
   const statusTabs = (
     <SegmentedTabs
       semantics="nav"
       aria-label="Filter by status"
       activeId={tab}
-      // Six tabs do not fit a phone's width; they wrap to a second line there
-      // instead of scrolling the current one out of sight.
+      // Seven tabs do not fit a phone's width; they wrap to a second line
+      // there instead of scrolling the current one out of sight.
       className="max-sm:flex-wrap"
       items={TAB_ORDER.map((t) => ({
         id: t,
@@ -313,6 +364,19 @@ export default async function PurchaseOrdersPage({
     </div>
   );
 
+  // The Overdue view says what it lists, and how many, in the words of the
+  // rule the dashboard counts by (#338), under the filter row.
+  const overdueLine =
+    tab === 'overdue' && !loadFailed && overdueAsOf && overdueTotal > 0 ? (
+      <p className="text-muted-foreground text-[13px] leading-5">
+        {overdueTotal === 1
+          ? '1 purchase order is overdue'
+          : `${overdueTotal} purchase orders are overdue`}
+        : ordered or in transit and not fully received, with an expected date before today,{' '}
+        {formatCalendarDate(`${overdueAsOf}T00:00:00.000Z`)}, in your organization&apos;s time zone.
+      </p>
+    ) : null;
+
   let list: React.ReactNode;
   if (loadFailed) {
     list = (
@@ -347,6 +411,18 @@ export default async function PurchaseOrdersPage({
         />
       </>
     );
+  } else if (tab === 'overdue' && overdueTotal === 0) {
+    list = (
+      <>
+        {toolbar}
+        <StatePanel
+          kind="empty"
+          icon={ClipboardList}
+          title="Nothing overdue"
+          description="No purchase order that is ordered or in transit has an expected date before today in your organization's time zone."
+        />
+      </>
+    );
   } else if (instant) {
     list =
       visible.length === 0 ? (
@@ -360,13 +436,20 @@ export default async function PurchaseOrdersPage({
           />
         </>
       ) : (
-        <PoInstantTable rows={tableRows} supplierNames={supplierNames} leading={statusTabs} />
+        <PoInstantTable
+          rows={tableRows}
+          supplierNames={supplierNames}
+          timeZone={timeZone}
+          leading={statusTabs}
+          caption={overdueLine}
+        />
       );
   } else if (visible.length === 0) {
     const noMatch = totalFiltered === 0 && q !== '';
     list = (
       <>
         {toolbar}
+        {overdueLine}
         <StatePanel
           kind={noMatch ? 'no-match' : 'empty'}
           icon={noMatch ? SearchX : ClipboardList}
@@ -392,9 +475,11 @@ export default async function PurchaseOrdersPage({
     list = (
       <>
         {toolbar}
+        {overdueLine}
         <PoListTable
           rows={tableRows}
           supplierNames={supplierNames}
+          timeZone={timeZone}
           footer={showPager ? pager(true) : undefined}
         />
       </>

@@ -4,12 +4,14 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone } from '@stockpilot/core';
 
 export const metadata = { title: 'Edit event · Schedule' };
 
@@ -23,6 +25,17 @@ export default async function EditScheduleEventPage({
   // to lower-role users instead of bouncing them through /dashboard.
   const ctx = await requireOrgContext();
   if (!can(ctx, 'schedule:manage')) notFound();
+
+  // The form's date and time are a wall clock in the ORGANIZATION's zone, as
+  // the calendar and the event's page draw them (small fixes slice 8 review):
+  // Edit opens on the time the event's page prints. Read as the calendar
+  // reads it; a failed read is the default zone, reported.
+  const timeZoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'schedule.event_form.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   const [scheduleSvc, warehousesSvc, bundlesSvc] = await Promise.all([
     ScheduleService.forCurrentUser(),
@@ -58,6 +71,8 @@ export default async function EditScheduleEventPage({
       requesterName: e.requesterName,
     }));
 
+  const timeZone = await timeZoneRead;
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
@@ -73,6 +88,7 @@ export default async function EditScheduleEventPage({
           warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
           bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
           conflictCandidates={conflictCandidates}
+          timeZone={timeZone}
           defaults={{
             id: event.id,
             title: event.title,

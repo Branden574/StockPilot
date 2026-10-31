@@ -8,11 +8,11 @@ import { reportError } from '@/lib/error-reporter';
 
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
 import { shouldAutoSend } from './auto-reorder';
-import { PurchaseOrdersService } from './purchase-orders';
+import { PurchaseOrdersService, refusedDestination } from './purchase-orders';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { whereOrderableItem } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
-import { audit } from './audit';
+import { audit, insertAuditRowReported } from './audit';
 
 // ── Zod schema ──────────────────────────────────────────────────────────────
 
@@ -55,6 +55,71 @@ export interface RecurringRunSummary {
   /** Names of the templates that created nothing because not one of their
    *  lines could be ordered (also counted in `failures`). */
   templatesWithNothingOrderable: string[];
+  /**
+   * The templates whose purchase order the save refused or could not make
+   * (also counted in `failures`), in run order, each with why in words a
+   * person can act on (skippedTemplateReason). The cron tells the
+   * organization's owners and admins and each template's creator
+   * (recurringRunNotice); the run also reports and audits each one.
+   */
+  templatesSkipped: RecurringSkippedTemplate[];
+  /**
+   * Names of the send-mode templates whose purchase order was created (a
+   * draft, counted in `created`) and then could not be sent (also counted in
+   * `failures`), in run order. The notice said only "created" (slice 8
+   * review).
+   */
+  templatesSendFailed: string[];
+}
+
+/** One template the run created no purchase order for, and why. */
+export interface RecurringSkippedTemplate {
+  templateId: string;
+  name: string;
+  /** Whole sentences, ending in what to do (or that it runs again). */
+  reason: string;
+  /** recurring_po_templates.created_by; null when the record names nobody. */
+  createdBy: string | null;
+}
+
+/**
+ * Where a template is fixed, said in the notification: templates are edited
+ * on the web only (the phone's Recurring POs can pause, resume or delete
+ * them), on the page the sidebar calls Recurring POs.
+ */
+const EDIT_TEMPLATE_DESTINATION =
+  'On the web, open Recurring POs, edit the template and choose another destination.';
+
+/**
+ * Why a template's purchase order was not made, from what its save threw.
+ *
+ * A destination deleted after the template was saved, or one linked to no
+ * warehouse (the purchase order save refuses both, refusedDestination), is
+ * said in the template's words, by name, with where to fix it: the save's own
+ * message for the second ("That destination location ... Pick a
+ * warehouse-backed location.") points at a form the reader is not on. Any
+ * other refusal (a ServiceError the app wrote: a destination the run may not
+ * write to, a supplier not found, a line the database refuses) is the save's
+ * own message, which names the problem. Anything else is an unexpected error:
+ * its text can carry database detail, so it is never shown, only reported
+ * (`refusal: 'unexpected'`).
+ */
+export function skippedTemplateReason(e: unknown): { reason: string; refusal: string } {
+  const refused = refusedDestination(e);
+  if (refused) {
+    const subject = refused.locationName ? `Its destination, "${refused.locationName}",` : 'Its destination';
+    return refused.why === 'deleted'
+      ? { reason: `${subject} was deleted. ${EDIT_TEMPLATE_DESTINATION}`, refusal: 'destination_deleted' }
+      : {
+          reason: `${subject} isn't linked to a warehouse. ${EDIT_TEMPLATE_DESTINATION}`,
+          refusal: 'destination_no_warehouse',
+        };
+  }
+  if (e instanceof ServiceError && e.code !== 'internal_error') {
+    const message = e.message.trim();
+    return { reason: /[.!?]$/.test(message) ? message : `${message}.`, refusal: e.code };
+  }
+  return { reason: 'An unexpected error stopped it. It runs again on its next date.', refusal: 'unexpected' };
 }
 
 /** At most this many template names are spelled out in a notification. */
@@ -74,10 +139,24 @@ function namesForNotice(names: string[]): string {
  * so a template whose lines were left off (deleted items, kit stock) ordered
  * less than it says every period with no word to anyone, and one with
  * nothing orderable left created nothing and notified nobody.
+ *
+ * `recipientId`: the notice for that person. The skipped templates they
+ * created are named first, every one of them, then the others up to the
+ * usual three; without it, the first three in run order. A template's creator
+ * is told because of their template, and was told "1 more template" without
+ * its name when it came fourth (slice 8 review).
+ *
+ * The title says it needs attention whenever a template created nothing or
+ * its purchase order could not be sent, even beside others that ran.
  */
-export function recurringRunNotice(summary: RecurringRunSummary): { title: string; body: string } | null {
+export function recurringRunNotice(
+  summary: RecurringRunSummary,
+  opts: { recipientId?: string | null } = {},
+): { title: string; body: string } | null {
   const leftOff = summary.linesLeftOff > 0;
-  if (summary.created === 0 && !leftOff) return null;
+  const skipped = summary.templatesSkipped;
+  const sendFailed = summary.templatesSendFailed;
+  if (summary.created === 0 && !leftOff && skipped.length === 0) return null;
 
   const parts: string[] = [];
   if (summary.created > 0) {
@@ -106,8 +185,36 @@ export function recurringRunNotice(summary: RecurringRunSummary): { title: strin
       } items can be ordered any more. Edit or disable ${idle.length === 1 ? 'it' : 'them'}.`,
     );
   }
+  // A send-mode template whose purchase order exists as a draft because
+  // sending it failed (the draft stays; someone sends it by hand).
+  if (sendFailed.length > 0) {
+    parts.push(
+      sendFailed.length === 1
+        ? `${namesForNotice(sendFailed)} created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.`
+        : `${namesForNotice(sendFailed)} created their purchase orders as drafts, but they could not be sent. Open them in Purchase orders and send them.`,
+    );
+  }
+  // A template whose purchase order the save refused or could not make
+  // (until 2026-10-11 only counted, so a refusal told nobody anything). The
+  // recipient's own templates first, all of them.
+  const recipientId = opts.recipientId ?? null;
+  const mine = recipientId ? skipped.filter((s) => s.createdBy === recipientId) : [];
+  const others = recipientId ? skipped.filter((s) => s.createdBy !== recipientId) : skipped;
+  const named = [...mine, ...others.slice(0, Math.max(0, NOTICE_MAX_NAMES - mine.length))];
+  for (const s of named) {
+    parts.push(`"${s.name}" created no purchase order. ${s.reason}`);
+  }
+  const moreSkipped = skipped.length - named.length;
+  if (moreSkipped > 0) {
+    parts.push(`${moreSkipped} more template${moreSkipped === 1 ? '' : 's'} created no purchase order.`);
+  }
+  const needsAttention =
+    summary.created === 0 ||
+    skipped.length > 0 ||
+    summary.templatesWithNothingOrderable.length > 0 ||
+    sendFailed.length > 0;
   return {
-    title: summary.created > 0 ? 'Recurring purchase orders ran' : 'Recurring purchase orders need attention',
+    title: needsAttention ? 'Recurring purchase orders need attention' : 'Recurring purchase orders ran',
     body: parts.join(' '),
   };
 }
@@ -525,6 +632,7 @@ export class RecurringPoTemplatesService {
       line_items: unknown;
       notes: string | null;
       next_run_at: string;
+      created_by: string | null;
     };
 
     // Paginate enabled templates that are due.
@@ -532,7 +640,7 @@ export class RecurringPoTemplatesService {
       this.ctx.supabase
         .from('recurring_po_templates')
         .select(
-          'id, supplier_id, destination_location_id, name, cadence, custom_days, send_mode, max_auto_send_cents, line_items, notes, next_run_at',
+          'id, supplier_id, destination_location_id, name, cadence, custom_days, send_mode, max_auto_send_cents, line_items, notes, next_run_at, created_by',
         )
         .eq('organization_id', this.ctx.organizationId)
         .eq('enabled', true)
@@ -549,6 +657,8 @@ export class RecurringPoTemplatesService {
     let linesLeftOff = 0;
     const templatesWithLinesLeftOff: string[] = [];
     const templatesWithNothingOrderable: string[] = [];
+    const templatesSkipped: RecurringSkippedTemplate[] = [];
+    const templatesSendFailed: string[] = [];
 
     for (const tpl of templates) {
       // ── CLAIM ────────────────────────────────────────────────────────────
@@ -592,11 +702,23 @@ export class RecurringPoTemplatesService {
         // 0-row match is a lost race and stays silent.
         if (advErr) throw advErr;
         claimed = Boolean(advanced);
-      } catch {
+      } catch (e) {
+        // Reported, naming the template: a claim that fails every day (a
+        // refusal on recurring_po_templates) would stop the template for good
+        // with only the cron's failure count to show for it.
         failures += 1;
+        void reportError(e, {
+          tag: 'recurring_pos.claim_failed',
+          organizationId: this.ctx.organizationId,
+          extra: { templateId: tpl.id },
+        });
       }
       if (!claimed) continue;
 
+      // Set once the template's purchase order exists: an error after that
+      // (sending it) is not a skipped template, the purchase order is there
+      // as a draft.
+      let createdPoId: string | null = null;
       try {
         // Parse line items from jsonb — fail-closed: malformed/empty → skip. The
         // schedule was already advanced by the claim above, so a bad template
@@ -652,18 +774,19 @@ export class RecurringPoTemplatesService {
           const total = lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
           // Create the PO (always starts as draft). The destination goes
-          // through the purchase order save's own rule: one linked to no
-          // warehouse is refused there, and the catch below counts a failure.
-          // A destination deleted AFTER the template was saved is not refused
-          // there, so the PO is created to it, as a hand-made PO to that
-          // location would be; only the template save refuses a deleted one
-          // (assertDestination).
+          // through the purchase order save's own rule
+          // (resolveDestinationWarehouseId): one linked to no warehouse, or
+          // deleted AFTER the template was saved (refused since 2026-10-11;
+          // before, the PO was created to a location that no longer exists),
+          // is refused there, and the catch below skips the template and
+          // says why.
           const po = await new PurchaseOrdersService(this.ctx).create({
             supplierId: tpl.supplier_id ?? null,
             destinationLocationId: tpl.destination_location_id ?? null,
             notes: tpl.notes ?? undefined,
             lines,
           });
+          createdPoId = po.id;
           created++;
 
           // Auto-send decision — only relevant when send_mode==='send'.
@@ -699,12 +822,65 @@ export class RecurringPoTemplatesService {
             }
           }
         }
-      } catch {
+      } catch (e) {
         // The claim already stamped last_run_at / next_run_at, so this template
         // will NOT retry inside the same period — same as the previous
-        // "advance for every attempted template" contract. The failures counter
-        // is what the cron summary reports it by.
+        // "advance for every attempted template" contract.
         failures++;
+        if (createdPoId !== null) {
+          // The purchase order exists (a draft); only sending it failed. The
+          // notice names the template (it said only "created" until the
+          // slice 8 review), so someone sends the draft by hand.
+          templatesSendFailed.push(tpl.name);
+          void reportError(e, {
+            tag: 'recurring_pos.auto_send_failed',
+            organizationId: this.ctx.organizationId,
+            extra: { templateId: tpl.id, poId: createdPoId },
+          });
+        } else {
+          // Until 2026-10-11 this was the whole of it: a failure counted and
+          // nothing said, while last_run_at read as if the template ran.
+          // Now the template is named with why: in the summary (the cron
+          // tells the owners and admins and the template's creator), in
+          // error reporting and in the audit log, on the template. One
+          // template never stops the others: the loop goes on.
+          const { reason, refusal } = skippedTemplateReason(e);
+          templatesSkipped.push({ templateId: tpl.id, name: tpl.name, reason, createdBy: tpl.created_by ?? null });
+          if (refusal === 'unexpected') {
+            void reportError(e, {
+              tag: 'recurring_pos.template_failed',
+              organizationId: this.ctx.organizationId,
+              extra: { templateId: tpl.id },
+            });
+          } else {
+            void reportError(new Error(`recurring PO template skipped: the purchase order save refused it (${refusal})`), {
+              tag: 'recurring_pos.template_skipped',
+              level: 'warning',
+              organizationId: this.ctx.organizationId,
+              extra: { templateId: tpl.id, refusal },
+            });
+          }
+          // A SYSTEM row (no user): nobody skipped it. audit() writes the
+          // context's user, which for the cron is the first owner or admin
+          // found (the actor its purchase orders are created as), so the log
+          // read as if that person had done it. Same metadata shape as
+          // audit() writes; the log shows "System" for a row naming nobody.
+          void insertAuditRowReported({
+            organization_id: this.ctx.organizationId,
+            user_id: null,
+            event: 'recurring_po_template.run_skipped',
+            metadata: {
+              entity_type: 'recurring_po_template',
+              entity_id: tpl.id,
+              warehouse_id: null,
+              before: null,
+              after: null,
+              reason,
+              name: tpl.name,
+              refusal,
+            },
+          });
+        }
       }
     }
 
@@ -716,6 +892,8 @@ export class RecurringPoTemplatesService {
       linesLeftOff,
       templatesWithLinesLeftOff,
       templatesWithNothingOrderable,
+      templatesSkipped,
+      templatesSendFailed,
     };
   }
 
