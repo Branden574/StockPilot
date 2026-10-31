@@ -21,9 +21,14 @@ import { describe, expect, it } from 'vitest';
  * from the count back to the scan photo), and the doubled volume (N direct +
  * N replays) tripped the route's 120/min per-user rate limit on a large scan.
  *
- * The fix keeps the mirror but immediately ACKs the outbox row it created —
- * `outboxAck` is precisely the "the server already has this" bookkeeping
- * (delete the row + clear local_dirty, in one transaction).
+ * The first fix kept the mirror but immediately ACKed the outbox row it
+ * created. Re-pinned by the docket B10 review: the copy is now
+ * `mirrorRecordedCount`, which writes the count and supersedes the line's older
+ * queued counts in one transaction and queues NO row at all (proven on a real
+ * SQLite in outbox-owner.sqlite.test.ts). The queued row's moment between the
+ * write and the ack is gone, and so is the workspace it needed: since B10 the
+ * outbox refuses to queue while the saved workspace is another account's, and
+ * the scan then reported a count the server had saved as not saved.
  */
 
 const screen = readFileSync(
@@ -37,31 +42,26 @@ const confirmFn = screen.slice(
 );
 
 describe('AI scan confirm leaves no replayable outbox row (SP-036)', () => {
-  it('imports outboxAck from the cycle-count cache', () => {
+  it('imports mirrorRecordedCount from the cycle-count cache, and not the offline edit path', () => {
     expect(confirmFn.length, 'onConfirm slice not found').toBeGreaterThan(0);
     const importBlock = screen.slice(
       screen.indexOf("from '@/lib/cycle-count-cache'") - 400,
       screen.indexOf("from '@/lib/cycle-count-cache'"),
     );
-    expect(importBlock).toMatch(/\boutboxAck\b/);
+    expect(importBlock).toMatch(/\bmirrorRecordedCount\b/);
+    expect(importBlock).not.toMatch(/\bupdateLocalLine\b|\boutboxAck\b/);
+    expect(screen).not.toMatch(/\bupdateLocalLine\(|\boutboxAck\(/);
   });
 
-  it('acks the outbox row that the local mirror created, after the direct POST', () => {
-    const mirror = confirmFn.indexOf('updateLocalLine(');
-    const ack = confirmFn.indexOf('outboxAck(');
-    expect(mirror, 'the local mirror write must still happen').toBeGreaterThan(-1);
-    expect(ack, 'the mirror’s outbox row must be acked').toBeGreaterThan(-1);
-    // Order matters: mirror first (it is what creates the row), ack second.
-    expect(ack).toBeGreaterThan(mirror);
-    // …and the ack must target THAT row's id, not some unrelated value.
+  it('copies each line after the direct POST succeeded, for the account whose session sent it', () => {
     expect(confirmFn).toMatch(
-      /(?:const|let)\s+(\w+)\s*=\s*await\s+updateLocalLine\(\s*w\.lineId,\s*w\.count\s*\);[\s\S]{0,200}?outboxAck\(\s*\1\.outboxId\s*\)/,
+      /if \(!res\.ok\) \{[\s\S]*?throw new Error\([\s\S]*?\}[\s\S]*?await mirrorRecordedCount\(w\.lineId, w\.count, session\.user\.id\);/,
     );
   });
 
-  it('never leaves a bare un-acked updateLocalLine on the confirm path', () => {
-    // A bare `await updateLocalLine(...)` whose result is discarded is exactly
-    // the regression: the outbox row it enqueues gets replayed by forceSync.
-    expect(confirmFn).not.toMatch(/^\s*await updateLocalLine\(/m);
+  it('never queues a line on the confirm path', () => {
+    // A queued copy is exactly the regression: forceSync replays it without
+    // the aiScanId.
+    expect(confirmFn).not.toMatch(/updateLocalLine\(|enqueue\(/);
   });
 });
