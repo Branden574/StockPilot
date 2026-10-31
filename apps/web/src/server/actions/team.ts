@@ -12,8 +12,10 @@ import {
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -448,12 +450,21 @@ const acceptInviteWithSignupSchema = z.object({
   fullName: z.string().min(1).max(120).optional(),
 });
 
+/** The one answer for an invite whose address cannot get a new account here. */
+const INVITE_ACCOUNT_EXISTS_COPY =
+  'An account already exists for this email. Use the "I already have an account" option instead.';
+
 /**
  * Combined sign-up + invite-acceptance flow.
  *
- * This is the ONLY path through which a brand-new auth user is created in
- * this app — public signup is disabled. The action:
- *   1. Validates the invite token, expiry, and `accepted_at`.
+ * Public signup is disabled. A brand-new auth user is created in this app in
+ * three places, each gated: here (a single-use invite token), Platform >
+ * Provision (createOrgForCustomerAction in actions/platform-admin.ts, platform
+ * admins only) and the B2B portal invite (CustomersService.inviteUser in
+ * services/customers.ts, customers:manage). The action:
+ *   1. Validates the invite token, expiry, and `accepted_at`, and refuses an
+ *      address that already has an account or is on the platform-admin
+ *      allowlist (the same answer for both).
  *   2. Creates a Supabase auth user via the admin client (bypasses the
  *      org-level `enable_signup=false` setting because invites are gated by
  *      a single-use token only the inviter could have provided).
@@ -512,10 +523,27 @@ export async function acceptInviteWithSignupAction(input: {
   if (existsErr) return err('internal_error', existsErr.message);
   const alreadyExists = existsData === true;
   if (alreadyExists) {
-    return err(
-      'conflict',
-      'An account already exists for this email. Use the "I already have an account" option instead.',
-    );
+    return err('conflict', INVITE_ACCOUNT_EXISTS_COPY);
+  }
+
+  // Never create the account of a platform admin. The allowlist gives the
+  // Platform console, and creating workspaces, to whoever holds an account
+  // with that verified email, and step 3 creates one confirmed, with a
+  // password the token holder chooses. The token is not proof of the mailbox:
+  // TeamService.invite returns it to the inviter and the Team page lists it
+  // under Pending invites. So any workspace admin could invite an allowlisted
+  // address that has no account yet and claim it here. An allowlisted
+  // address gets its account from the operator before it goes on the list.
+  // The answer is the existing-account answer, word for word, so the token
+  // holder cannot tell an allowlisted address from one that has an account.
+  // An existing account still accepts an invite through acceptInviteAction.
+  if (isPlatformAdmin(email)) {
+    void reportError(new Error('Invite sign-up refused for a platform-admin address'), {
+      tag: 'team.invite_signup.platform_admin_address',
+      level: 'warning',
+      organizationId: invite.organization_id as string,
+    });
+    return err('conflict', INVITE_ACCOUNT_EXISTS_COPY);
   }
 
   // 3. Create the auth user (admin path bypasses enable_signup=false).

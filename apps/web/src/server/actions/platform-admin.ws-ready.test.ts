@@ -83,6 +83,23 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
     expect(msg.html).not.toContain('https://sb/verify');
     // The dedicated ws-ready design, not the old generic invite.
     expect(msg.html).toContain('Your workspace is ready.');
+
+    // Platform > Audit lists it as "Provisioned org" (docket S20: the action
+    // was defined but never written by any path).
+    const { recordPlatformAudit } = await import('@/server/services/platform/audit');
+    const { checkPlatformAdmin } = await import('@/lib/auth/platform-admin');
+    const gate = (await vi.mocked(checkPlatformAdmin).mock.results[0]!.value) as {
+      session: { userId: string; email: string };
+    };
+    expect(recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(recordPlatformAudit).toHaveBeenCalledWith({
+      actorUserId: gate.session.userId,
+      actorEmail: gate.session.email,
+      action: 'org_provisioned',
+      targetOrganizationId: 'org-1',
+      targetUserId: 'auth-user-9',
+      detail: { slug: 'acme-co', via: 'provision' },
+    });
   });
 
   // Docket B39 review: GoTrue's raw action_link hands its session back in the

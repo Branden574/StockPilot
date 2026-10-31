@@ -108,6 +108,13 @@ PGTAP_TESTS=(
   supabase/tests/0218_lock_org_billing_columns.test.sql
   supabase/tests/0219_org_module_minplan_rls.test.sql
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
+  # Only a platform admin creates a workspace (S20): no signed-in or anonymous
+  # caller inserts an organization (RLS on, no INSERT policy since 0138), and
+  # nothing in the database creates one either: no function, whoever may run
+  # it (an INSERT or MERGE into the table, or dynamic SQL that names it), no
+  # trigger, and no view or rewrite rule a caller of the Data API can write
+  # through.
+  supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql
   supabase/tests/0282_cycle_count_assignment_lock.test.sql
@@ -965,6 +972,21 @@ WEB_TESTS=(
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+
+  # Only a platform admin creates a workspace (S20, owner decision b.9):
+  # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
+  # before it reads its input, the real check against every caller type (each
+  # role, no membership, a portal user, a rewritten profile email, a failed
+  # verified-email lookup, a stale step-up); and every insert into
+  # organizations and every owner seat in apps/web/src runs after that check
+  # or is a reviewed entry whose callers do. A team invite never creates the
+  # account of an allowlisted address (the token is handed to the inviter, so
+  # it is not proof of the mailbox), and its refusal is the existing-account
+  # answer word for word. All three files carry the "Security invariant"
+  # marker.
+  src/server/actions/organization.create-gate.test.ts
+  src/server/organization-create-sites.guard.test.ts
+  src/server/actions/team.invite-signup-platform-admin.test.ts
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
