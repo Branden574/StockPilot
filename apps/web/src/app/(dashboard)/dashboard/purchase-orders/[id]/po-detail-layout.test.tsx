@@ -14,6 +14,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const poGet = vi.fn();
 const inventoryByIds = vi.fn();
 const locationsList = vi.fn();
+const listForPurchaseOrder = vi.fn(async () => ({ receipts: [], lines: [] }));
+const attachmentsList = vi.fn(async () => []);
 let role = 'owner';
 
 vi.mock('@/lib/auth/session', () => ({
@@ -94,11 +96,7 @@ vi.mock('@/server/services/locations', () => ({
   LocationsService: { forCurrentUser: vi.fn(async () => ({ list: locationsList })) },
 }));
 vi.mock('@/server/services/receiving', () => ({
-  ReceivingService: {
-    forCurrentUser: vi.fn(async () => ({
-      listForPurchaseOrder: vi.fn(async () => ({ receipts: [], lines: [] })),
-    })),
-  },
+  ReceivingService: { forCurrentUser: vi.fn(async () => ({ listForPurchaseOrder })) },
 }));
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: {
@@ -108,7 +106,7 @@ vi.mock('@/server/services/warehouses', () => ({
   },
 }));
 vi.mock('@/server/services/po-attachments', () => ({
-  PoAttachmentsService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
+  PoAttachmentsService: { forCurrentUser: vi.fn(async () => ({ list: attachmentsList })) },
 }));
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ byIds: inventoryByIds })) },
@@ -128,6 +126,8 @@ vi.mock('@/server/services/context', () => ({
 }));
 
 import PoDetailPage from './page';
+
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
 
 function po(status = 'partially_received') {
   return {
@@ -168,7 +168,7 @@ function po(status = 'partially_received') {
 }
 
 async function renderPage() {
-  return render(await PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) }));
+  return render(await PoDetailPage({ params: Promise.resolve({ id: PO_ID }) }));
 }
 
 beforeEach(() => {
@@ -202,7 +202,7 @@ describe('the PO page header', () => {
   it('keeps every action, with the status actions after the files and Mark as ordered last', async () => {
     await renderPage();
     const pdf = screen.getByRole('link', { name: /download pdf/i });
-    expect(pdf).toHaveAttribute('href', '/api/purchase-orders/po-1/pdf');
+    expect(pdf).toHaveAttribute('href', `/api/purchase-orders/${PO_ID}/pdf`);
     expect(pdf).toHaveAttribute('target', '_blank');
     const order = [
       pdf,
@@ -352,5 +352,23 @@ describe('the PO page lines', () => {
     const receipts = screen.getByRole('heading', { name: 'Receipts' }).closest('section')!;
     expect(within(receipts).getByTestId('receipt-history')).toBeInTheDocument();
     expect(screen.getByTestId('attachments')).toBeInTheDocument();
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before anything is read.
+// The PO read's invalid-uuid error reached the error boundary, and the
+// receipts and attachments reads beside it started with the bad id too.
+describe('PO page: an id that is not a uuid', () => {
+  it('is the not-found page, with no PO, receipts or attachments read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', PO_ID.slice(0, -1)]) {
+      await expect(PoDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(poGet).not.toHaveBeenCalled();
+    expect(listForPurchaseOrder).not.toHaveBeenCalled();
+    expect(attachmentsList).not.toHaveBeenCalled();
+    expect(requireOrgContext).not.toHaveBeenCalled();
   });
 });

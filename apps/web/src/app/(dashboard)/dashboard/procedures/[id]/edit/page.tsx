@@ -6,6 +6,7 @@ import { ProcedureForm } from '@/components/procedures/procedure-form';
 import { UploadRecoveryToast } from '@/components/procedures/upload-recovery-toast';
 import { requireOrgContext } from '@/lib/auth/session';
 import { can } from '@stockpilot/core';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { ProceduresService } from '@/server/services/procedures';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -15,6 +16,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function EditProcedurePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
   if (!can(ctx, 'categories:manage')) {
     notFound();

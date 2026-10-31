@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
@@ -74,6 +75,9 @@ export default async function WarehouseDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
 
   const warehousesSvc = await WarehousesService.forCurrentUser();
   let warehouse;

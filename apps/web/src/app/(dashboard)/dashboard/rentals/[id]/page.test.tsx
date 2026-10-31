@@ -389,3 +389,24 @@ describe('rentals/[id]: header and items card', () => {
     expect(screen.getByText('No items on this rental.')).toBeTruthy();
   });
 });
+
+// B63: a mistyped or cut-off link is Page not found before anything else:
+// ahead of the rentals visibility redirect and the module-off panel, and
+// before the rental is read (its invalid-uuid error used to reach the error
+// boundary as "Something broke loading this page").
+describe('rentals/[id]: a rental id that is not a uuid', () => {
+  it('is the not-found page, with no gate asked and nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    // A viewer who would be redirected, with the module off: still not found.
+    ctxHolder.current = { role: 'viewer', permissions: new Set<string>() };
+    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    for (const id of ['not-a-uuid', RENTAL_ID.slice(0, -1)]) {
+      await expect(RentalDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(checkModuleAccessMock).not.toHaveBeenCalled();
+    expect(rentalGet).not.toHaveBeenCalled();
+  });
+});

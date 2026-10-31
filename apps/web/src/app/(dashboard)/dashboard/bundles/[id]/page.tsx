@@ -22,6 +22,7 @@ import {
 import { can, canDistributeBundles } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatNumber, formatRelative } from '@/lib/utils';
@@ -31,6 +32,9 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 
 export default async function BundleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
   const canManage = can(ctx, 'bundles:manage');
   // Same visibility gate as the bundles list page — without it, an UNgranted

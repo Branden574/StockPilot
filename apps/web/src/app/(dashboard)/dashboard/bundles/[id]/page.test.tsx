@@ -86,9 +86,11 @@ vi.mock('@/components/bundles/archive-bundle-button', () => ({
 
 import BundleDetailPage from './page';
 
+const BUNDLE_ID = '5eed0000-0000-4000-8000-0000000000b9';
+
 function bundle(over: Record<string, unknown> = {}) {
   return {
-    id: 'b-1',
+    id: BUNDLE_ID,
     name: 'Science Starter Kit',
     sku: 'KIT-SCI-01',
     description: 'One per new science classroom.',
@@ -104,7 +106,7 @@ function bundle(over: Record<string, unknown> = {}) {
 async function renderAs(role: Role = 'owner') {
   ctx.role = role;
   ctx.permissions = effectivePermissions(role);
-  return render(await BundleDetailPage({ params: Promise.resolve({ id: 'b-1' }) }));
+  return render(await BundleDetailPage({ params: Promise.resolve({ id: BUNDLE_ID }) }));
 }
 
 beforeEach(() => {
@@ -168,7 +170,7 @@ describe('bundle page header', () => {
     await renderAs('manager');
     expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute(
       'href',
-      '/dashboard/bundles/b-1/edit',
+      `/dashboard/bundles/${BUNDLE_ID}/edit`,
     );
     expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Distribute' })).toBeTruthy();
@@ -284,5 +286,27 @@ describe('bundle page cards', () => {
     await renderAs();
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     expect(screen.queryByText(/Group selected|Ungroup/i)).toBeNull();
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before anything else:
+// ahead of the bundles:read redirect, and before the bundle is read (the
+// catch-all around that read already answered not found, but only after the
+// read had failed).
+describe('bundle page: an id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    const { BundlesService } = await import('@/server/services/bundles');
+    vi.mocked(requireOrgContext).mockClear();
+    vi.mocked(BundlesService.forCurrentUser).mockClear();
+    ctx.role = 'viewer';
+    ctx.permissions = new Set<string>();
+    for (const id of ['not-a-uuid', BUNDLE_ID.slice(0, -1)]) {
+      await expect(BundleDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(BundlesService.forCurrentUser).not.toHaveBeenCalled();
   });
 });

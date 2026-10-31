@@ -6,6 +6,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { requireOrgContext } from '@/lib/auth/session';
 import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import {
@@ -29,6 +30,9 @@ const FORM_WIDTH = 'w-full max-w-[960px]';
 
 export default async function EditPoPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
 
   const ctx = await requireOrgContext();
   if (!can(ctx, 'purchase_orders:manage')) {

@@ -12,6 +12,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { fetchCountAssignees, type CountAssignee } from '@/server/lib/count-assignees';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -49,6 +50,9 @@ export default async function CycleCountDetailPage({
   searchParams: Promise<DetailSearchParams>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const sp = await searchParams;
   const requestedPage = Math.max(1, Number(sp.page) || 1);
   const search = (sp.q ?? '').trim();

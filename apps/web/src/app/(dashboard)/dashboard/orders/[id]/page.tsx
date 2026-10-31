@@ -122,6 +122,7 @@ import {
   resolveReturnToken,
   signatureLinkToken,
 } from '@/server/lib/order-secrets';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
@@ -194,6 +195,11 @@ export default async function OrderDetailPage({
   const contextStarted = withContext();
   contextStarted.catch(() => {});
   const [{ id }, ctx] = await Promise.all([params, requireOrgContext()]);
+  // A malformed id (a mistyped or cut-off link) is Page not found before any
+  // read starts with it (B63): the order read's invalid-uuid error reached
+  // the error boundary. The service context above still starts first, so a
+  // real order opens exactly as before.
+  notFoundUnlessUuid(id);
   const canApprove = can(ctx, 'orders:approve');
 
   // ORDER READINESS (F2-1) starts HERE, beside the order read, not after it.

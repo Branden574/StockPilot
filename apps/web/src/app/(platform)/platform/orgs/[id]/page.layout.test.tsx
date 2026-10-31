@@ -41,6 +41,9 @@ vi.mock('next/link', async () => {
 vi.mock('next/navigation', () => ({
   usePathname: () => null,
   useSearchParams: () => null,
+  notFound: vi.fn(() => {
+    throw new Error('notFound');
+  }),
 }));
 vi.mock('@/lib/auth/platform-admin', () => ({
   requirePlatformAdmin: vi.fn(async () => {}),
@@ -387,5 +390,32 @@ describe("platform org detail — dates in the organization's zone", () => {
       'title',
       "In this organization's time zone (America/Los_Angeles).",
     );
+  });
+});
+
+// B63: a mistyped or cut-off console link answered the root error page
+// ("Something went wrong") with a crash report: the overview read threw on the
+// invalid uuid. It is Page not found now, after the platform-admin gate and
+// before anything is read or audited.
+describe('platform org detail: an id that is not a uuid', () => {
+  it('is the not-found page after the platform-admin gate, with nothing read or audited', async () => {
+    const { requirePlatformAdmin } = await import('@/lib/auth/platform-admin');
+    const { getOrgOverview } = await import('@/server/services/platform/orgs');
+    const { recordPlatformAudit } = await import('@/server/services/platform/audit');
+    vi.mocked(getOrgOverview).mockClear();
+    vi.mocked(recordPlatformAudit).mockClear();
+    for (const id of ['not-a-uuid', ORG.slice(0, -1)]) {
+      vi.mocked(requirePlatformAdmin).mockClear();
+      await expect(
+        PlatformOrgDetailPage({
+          params: Promise.resolve({ id }),
+          searchParams: Promise.resolve({}),
+        }),
+        id,
+      ).rejects.toThrow('notFound');
+      expect(requirePlatformAdmin).toHaveBeenCalledTimes(1);
+    }
+    expect(getOrgOverview).not.toHaveBeenCalled();
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
   });
 });

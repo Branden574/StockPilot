@@ -8,6 +8,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
@@ -39,6 +40,9 @@ export default async function EditItemPage({
   searchParams: Promise<{ return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it, and before the items:update redirect (B63).
+  notFoundUnlessUuid(id);
   const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
   // Viewers (or any role without items:update) can't edit existing items.

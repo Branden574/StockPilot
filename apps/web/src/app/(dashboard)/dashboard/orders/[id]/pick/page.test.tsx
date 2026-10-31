@@ -151,3 +151,22 @@ describe('orders/[id]/pick: readiness for the completion confirm (F2-2)', () => 
     expect(lastProps()).toMatchObject({ canPick: false, readiness: null });
   });
 });
+
+// B63: a link whose id was mistyped or cut short is Page not found before the
+// readiness and order reads start (the order read's invalid-uuid error used to
+// be swallowed into a 404 only after both had run).
+describe('orders/[id]/pick: an order id that is not a uuid', () => {
+  it('is the not-found page, with nothing read and no request context asked for', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', ORDER.slice(0, -1)]) {
+      vi.clearAllMocks();
+      await expect(DigitalPickPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+      expect(events).toEqual([]);
+      expect(orderGet).not.toHaveBeenCalled();
+      expect(readinessForCurrentUser).not.toHaveBeenCalled();
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
+  });
+});
