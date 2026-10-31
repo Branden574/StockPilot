@@ -15,6 +15,7 @@ import {
   createOrganizationSchema,
   type CreateOrganizationInput,
   CreateOrganizationFormInput,
+  isStorableOrgTimezone,
 } from '@stockpilot/core';
 
 // A native select drawn like the shared Input on these external forms: the
@@ -38,6 +39,10 @@ const INDUSTRIES = [
 
 export function CreateOrganizationForm() {
   const router = useRouter();
+  // The creator's browser zone, offered only when the create check would take
+  // it (B41: a zone the app and the Book Order Totals report both use); else
+  // UTC, so the box never starts on a value it would refuse.
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const {
     register,
     handleSubmit,
@@ -46,7 +51,7 @@ export function CreateOrganizationForm() {
     resolver: zodResolver(createOrganizationSchema),
     defaultValues: {
       name: '',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      timezone: isStorableOrgTimezone(browserZone) ? browserZone : 'UTC',
       currency: 'USD',
     },
   });
@@ -105,7 +110,13 @@ export function CreateOrganizationForm() {
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="timezone">Timezone</Label>
-          <Input id="timezone" className="sm:h-10" {...register('timezone')} />
+          <Input
+            id="timezone"
+            className="sm:h-10"
+            {...register('timezone')}
+            aria-invalid={!!errors.timezone}
+          />
+          {errors.timezone && <p className="text-destructive text-xs">{errors.timezone.message}</p>}
         </div>
         <div className="space-y-2">
           <Label htmlFor="currency">Currency</Label>

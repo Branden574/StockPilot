@@ -72,7 +72,8 @@ describe('cycle-count/new.tsx — embedded picker wiring (mobile twin of 7b738cd
   it('the dead-end copy is gone and Start stays disabled at zero picks', () => {
     expect(screen).not.toContain('Go to Items or Books');
     expect(screen).not.toContain('then come back');
-    expect(screen).toContain('disabled={busy || picks.length === 0}');
+    // Off too for anyone who cannot start a count (B42).
+    expect(screen).toContain('disabled={busy || picks.length === 0 || managerOnly}');
     // The unchanged start contract: scope='selection' via POST /api/v1/cycle-counts.
     expect(screen).toContain("scope: 'selection'");
     expect(screen).toContain("'/api/v1/cycle-counts'");

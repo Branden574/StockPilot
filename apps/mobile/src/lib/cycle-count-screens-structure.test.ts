@@ -1003,7 +1003,8 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     'Start count',
     'Count started',
     'Could not start count',
-    'Please try again.',
+    // A failed start's words come from countStartFailureMessage since B42
+    // ('Please try again.' when the failure is no error); its test runs them.
   ])('says "%s"', (word) => {
     expect(wordsOf(PICKER)).toContain(word);
   });
@@ -1102,6 +1103,7 @@ describe('count picker: the shared selection, as checkbox rows', () => {
 
   // Start count commits the count: the ink button, a button to VoiceOver
   // (it was a pressable on the ink colour with no role).
+  // B42: and off for anyone who cannot start a count, who reads why above it.
   it('Start count is the shared ink Button, off with no picks or while starting', () => {
     const { sf, els } = elements(PICKER, (el, s) => tagOf(el, s) === 'Button');
     // Start count, and Try again on a failed read (below).
@@ -1109,7 +1111,7 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     const start = els.find((el) => textOf(el, sf) === 'Start count')!;
     expect(attrText(start, 'variant', sf)).toBeUndefined();
     expect(attrText(start, 'onPress', sf)).toBe('start');
-    expect(attrText(start, 'disabled', sf)).toBe('busy || picks.length === 0');
+    expect(attrText(start, 'disabled', sf)).toBe('busy || picks.length === 0 || managerOnly');
     expect(attrText(start, 'leading', sf)).toBe(
       'busy ? <ActivityIndicator color={c.paper} /> : undefined',
     );
@@ -1118,7 +1120,7 @@ describe('count picker: the shared selection, as checkbox rows', () => {
 
   it('the start sends the picks once, clears them when the count starts, and says what it left out', () => {
     const body = functionBody(PICKER, 'start');
-    expect(body).toMatch(/if \(picks\.length === 0 \|\| busy\) return;/);
+    expect(body).toMatch(/if \(picks\.length === 0 \|\| busy \|\| managerOnly\) return;/);
     expect(body).toMatch(
       /scope: 'selection',\s*itemIds: picks\.map\(\(p\) => p\.id\),\s*notes: notes\.trim\(\) \|\| null,/,
     );
@@ -1210,7 +1212,8 @@ describe('Counts tab: words, the filters and the offline view', () => {
     'No counts match your search.',
     'Open counts download when you are online. Connect to see your full history.',
     'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.',
-    'Counts started from the web appear here for review.',
+    // B42: said to anyone who cannot start a count (staff included).
+    'Counts a manager starts appear here.',
     'Previous',
     'Next',
     'POSTED',
@@ -1268,7 +1271,8 @@ describe('Counts tab: words, the filters and the offline view', () => {
     // The prompt and the hint both follow the Books module, read from the
     // module set the tab bar gates with.
     expect(importsFrom(COUNTS_TAB, '@/lib/enabled-modules')).toEqual(['useEnabledModules']);
-    expect(code).toContain("const booksOn = useEnabledModules().has('books');");
+    expect(code).toContain('const enabledModules = useEnabledModules();');
+    expect(code).toContain("const booksOn = enabledModules.has('books');");
     expect(code).toMatch(
       /Alert\.alert\('Start a cycle count', 'Pick what you want to count, then tap Select\.', \[\s*\.\.\.startCountChoices\(booksOn\)\.map\(\(choice\) => \(\{\s*text: choice\.text,\s*onPress: \(\) => router\.push\(choice\.path\),\s*\}\)\),\s*\{ text: 'Cancel', style: 'cancel' \},\s*\]\)/,
     );

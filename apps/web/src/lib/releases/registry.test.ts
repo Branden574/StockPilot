@@ -14860,6 +14860,8 @@ describe('the unsubscribe, new rack question and other-website fixes release (un
     // stored zone, which only owners and admins change, under Workspace
     // timezone. No sentence says an unset zone is UTC: the create form stores
     // the creator's browser zone, and an unreadable row falls back to Pacific.
+    // Since B41 the form starts on the browser zone only when the create check
+    // takes it (an Area/Location name such as America/Chicago), else on UTC.
     expect(source('app/(dashboard)/dashboard/team/page.tsx')).toContain(
       'timeZone={resolveOrgTimezone(orgRow.data?.timezone as string | null | undefined)}',
     );
@@ -14867,7 +14869,10 @@ describe('the unsubscribe, new rack question and other-website fixes release (un
       '.then((org) => resolveOrgTimezone(org?.timezone))',
     );
     expect(source('components/onboarding/create-organization-form.tsx')).toContain(
-      "timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',",
+      "const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';",
+    );
+    expect(source('components/onboarding/create-organization-form.tsx')).toContain(
+      "timezone: isStorableOrgTimezone(browserZone) ? browserZone : 'UTC',",
     );
     expect(source('components/settings/org-timezone-editor.tsx')).toContain(
       '<Label htmlFor="org-timezone">Workspace timezone</Label>',

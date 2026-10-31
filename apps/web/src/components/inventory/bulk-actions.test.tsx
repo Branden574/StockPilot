@@ -61,6 +61,42 @@ describe('BulkActions', () => {
     expect(link.getAttribute('href')).not.toMatch(/items=/);
   });
 
+  // B42: the button had no gate, so staff (and anyone else who could select
+  // rows) were sent to Start a count, which the server always refuses below a
+  // manager with cycle_counts:assign and stock:adjust. The page decides with
+  // core countStartAllowed and passes the answer.
+  it('Cycle count is offered only with canStartCount', async () => {
+    const onCycleCount = vi.fn();
+    const { rerender } = render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={onCycleCount}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Cycle count/ })).not.toBeInTheDocument();
+
+    rerender(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={onCycleCount}
+        canStartCount
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Cycle count/ }));
+    expect(onCycleCount).toHaveBeenCalledTimes(1);
+  });
+
   it('shows Archive when selection is not archived', () => {
     render(
       <BulkActions

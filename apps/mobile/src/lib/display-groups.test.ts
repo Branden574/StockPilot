@@ -558,7 +558,12 @@ describe('screen pins', () => {
     expect(bar).toContain('GROUP_COPY.bulkAction');
     // P7: the label the phone shows is core's word, the one What's New names.
     expect(bar).toContain('{GROUP_COPY.bulkActionShort}');
-    expect(bar).toContain("'items:update'");
+    // The gate is read once for the whole bar since B42 (countSelectOffers,
+    // run in count-select-offers.test.ts).
+    expect(bar).toContain('const canGroup = offers.group;');
+    expect(read('./count-select-offers.ts')).toContain(
+      "showWriteCtaForRole(role, permissions, 'items:update')",
+    );
     expect(bar).toContain('phoneGroupingCheck');
     expect(bar).toContain('isOnline');
     expect(bar).toContain('GROUP_COPY.offline');

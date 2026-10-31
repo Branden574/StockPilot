@@ -310,7 +310,10 @@ describe('screen pins', () => {
   it('the select bar offers Ungroup by core rule, with the sports gate for families, online only', () => {
     const bar = read('../components/count-select-bar.tsx');
     expect(bar).toContain('phoneUngroupOffer(picks');
-    expect(bar).toContain(
+    // The gates are read once for the whole bar since B42 (countSelectOffers,
+    // run in count-select-offers.test.ts).
+    expect(bar).toContain('unlinkFamilies: offers.unlinkFamilies,');
+    expect(read('./count-select-offers.ts')).toContain(
       "showWriteCtaForRole(role, permissions, 'sports:manage') && enabledModules.has('sports')",
     );
     expect(bar).toContain('UNGROUP_COPY.selectedOffline');

@@ -6,7 +6,7 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { GROUP_COPY, UNGROUP_COPY } from '@stockpilot/core';
 
 import { Mono } from '@/components/ui/text';
-import { showWriteCtaForRole } from '@/lib/cta-gating';
+import { countSelectOffers } from '@/lib/count-select-offers';
 import { groupSelectedHref, phoneGroupingCheck } from '@/lib/display-groups';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOnline } from '@/lib/sync';
@@ -20,7 +20,9 @@ import { useTheme } from '@/lib/use-theme';
 /**
  * Floating bar shown while a list tab is in cycle-count select mode.
  * Reads the shared count-selection store so it reflects picks made across
- * both the Items and Books tabs. "Review" opens the confirm screen.
+ * both the Items and Books tabs. "Review" opens the confirm screen, and is
+ * drawn only for someone who can start a count (B42: a manager with
+ * cycle_counts:assign and stock:adjust, the module on; countSelectOffers).
  *
  * "Group" (Group selected, migration 0400) opens the grouping review for the
  * picks, offered to someone who can edit items (the permission alone decides,
@@ -59,12 +61,14 @@ export function CountSelectBar({
   const picks = useCountPicks();
   const { role } = useRole();
   const permissions = useEffectivePermissions();
-  const canGroup = showWriteCtaForRole(role, permissions, 'items:update');
   const enabledModules = useEnabledModules();
+  // One read of who may do what here (B42): Review only for someone who can
+  // start a count, Group and Ungroup by their own rules, unchanged.
+  const offers = countSelectOffers({ role, permissions, enabledModules });
+  const canGroup = offers.group;
   const canUngroup = phoneUngroupOffer(picks, {
-    editItems: canGroup,
-    unlinkFamilies:
-      showWriteCtaForRole(role, permissions, 'sports:manage') && enabledModules.has('sports'),
+    editItems: offers.group,
+    unlinkFamilies: offers.unlinkFamilies,
   });
 
   if (!visible) return null;
@@ -168,23 +172,25 @@ export function CountSelectBar({
             </Mono>
           </Pressable>
         ) : null}
-        <Pressable
-          onPress={() => {
-            if (count === 0) return;
-            router.push('/cycle-count/new');
-          }}
-          disabled={count === 0}
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.reviewBtn,
-            { backgroundColor: c.ink, opacity: count === 0 ? 0.4 : pressed ? 0.85 : 1 },
-          ]}
-        >
-          <ClipboardCheck size={15} color={c.paper} strokeWidth={1.8} />
-          <Mono size={13} color={c.paper}>
-            Review
-          </Mono>
-        </Pressable>
+        {offers.review ? (
+          <Pressable
+            onPress={() => {
+              if (count === 0) return;
+              router.push('/cycle-count/new');
+            }}
+            disabled={count === 0}
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.reviewBtn,
+              { backgroundColor: c.ink, opacity: count === 0 ? 0.4 : pressed ? 0.85 : 1 },
+            ]}
+          >
+            <ClipboardCheck size={15} color={c.paper} strokeWidth={1.8} />
+            <Mono size={13} color={c.paper}>
+              Review
+            </Mono>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );

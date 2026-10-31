@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { COUNT_START_MANAGER_ONLY_COPY } from '@stockpilot/core';
+
 import { StartCycleCountForm } from './start-cycle-count-form';
 
 // The Whole warehouse scope: snapshot one warehouse or every active item, with
@@ -53,12 +55,13 @@ describe('StartCycleCountForm', () => {
     const user = userEvent.setup();
     startActionMock.mockResolvedValue({
       ok: false,
-      error: { code: 'forbidden', message: 'Only a manager can start a count.' },
+      // The server's refusal of a start (assertCountStartFloors, B42).
+      error: { code: 'forbidden', message: COUNT_START_MANAGER_ONLY_COPY },
     });
     render(<StartCycleCountForm warehouses={WAREHOUSES} />);
     await user.click(screen.getByRole('button', { name: 'Start count' }));
     await vi.waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Only a manager can start a count.');
+      expect(toast.error).toHaveBeenCalledWith(COUNT_START_MANAGER_ONLY_COPY);
     });
     expect(routerMock.push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Start count' })).toBeEnabled();

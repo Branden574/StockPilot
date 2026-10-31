@@ -253,6 +253,50 @@ describe('cycle counts history page: empty states and controls', () => {
     expect(screen.queryByText('Start your first count')).not.toBeInTheDocument();
   });
 
+  // B42: staff hold stock:adjust, which was this page's gate, but not
+  // cycle_counts:assign, so they were offered a start the server always
+  // refused. The start follows the server's floors (core countStartAllowed).
+  it('staff with stock:adjust but no cycle_counts:assign get no start affordances and the manager sentence', async () => {
+    ctxHolder.current = { role: 'staff', permissions: undefined };
+    listPage.mockResolvedValue(pageOf(0, 1, []));
+    await renderPage();
+    expect(screen.queryByRole('link', { name: '+ Start a count' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Start your first count' })).not.toBeInTheDocument();
+    expect(screen.getByText('No cycle counts yet')).toBeInTheDocument();
+    expect(screen.getByText('Counts a manager starts appear here.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Start a count to snapshot/)).not.toBeInTheDocument();
+  });
+
+  it('a manager whose cycle_counts:assign was taken away is not offered a start either', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['cycle_counts:read', 'stock:adjust']),
+    };
+    listPage.mockResolvedValue(pageOf(0, 1, []));
+    await renderPage();
+    expect(screen.queryByRole('link', { name: '+ Start a count' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Start your first count' })).not.toBeInTheDocument();
+  });
+
+  it('a manager still gets both, and the sentence about starting one', async () => {
+    listPage.mockResolvedValue(pageOf(0, 1, []));
+    await renderPage();
+    expect(screen.getByRole('link', { name: '+ Start a count' })).toHaveAttribute(
+      'href',
+      '/dashboard/cycle-counts/new',
+    );
+    expect(screen.getByRole('link', { name: 'Start your first count' })).toHaveAttribute(
+      'href',
+      '/dashboard/cycle-counts/new',
+    );
+    expect(
+      screen.getByText(
+        'Start a count to snapshot expected quantities, then enter actuals as you walk the warehouse. We post the variance adjustments for you.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Counts a manager starts appear here.')).not.toBeInTheDocument();
+  });
+
   it('a member without the read permission is sent away before any read', async () => {
     ctxHolder.current = { role: 'viewer', permissions: new Set(['items:read']) };
     await expect(CycleCountsPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('redirect:/dashboard');
