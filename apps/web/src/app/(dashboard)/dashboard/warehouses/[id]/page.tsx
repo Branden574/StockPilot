@@ -3,11 +3,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import {
-  newOrderFromWarehouseHref,
-  warehouseMailtoUrl,
-  warehouseTelUrl,
-} from '@/components/locations/warehouse-links';
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
+import { newOrderFromWarehouseHref, warehouseTelUrl } from '@/components/locations/warehouse-links';
 import {
   DetailSection,
   DetailSectionMeta,
@@ -136,8 +134,8 @@ export default async function WarehouseDetailPage({
   );
 
   const contactTel = warehouseTelUrl(warehouse.contact_phone);
-  const contactMailto = warehouseMailtoUrl(warehouse.contact_email);
-  const managerMailto = warehouseMailtoUrl(warehouse.manager?.email);
+  const contactMailto = plainAddressMailtoUrl(warehouse.contact_email);
+  const managerMailto = plainAddressMailtoUrl(warehouse.manager?.email);
 
   return (
     <div className={PAGE}>

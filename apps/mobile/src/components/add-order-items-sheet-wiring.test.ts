@@ -22,4 +22,12 @@ describe('add-order-items-sheet.tsx — item query wiring', () => {
     // Rental items go out through Rentals; addLines refuses them (2026-09-24).
     expect(sheet).toContain(".eq('is_rental', false)");
   });
+
+  // Ordering visibility (0413, design 5.1): the picker offers only records
+  // shown in Orders. The server's line gate refuses a hidden item anyway
+  // (old builds without this predicate still offer it and show the refusal);
+  // this keeps the new build from offering one at all.
+  it('offers only records shown in Orders (order_catalog_visible)', () => {
+    expect(sheet).toContain(".eq('order_catalog_visible', true)");
+  });
 });

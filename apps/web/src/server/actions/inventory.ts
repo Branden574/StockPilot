@@ -840,16 +840,16 @@ export async function transferStockAction(
       // ═══ STAGING IS NOT A DESTINATION. UNPLACED IS — rack 100-A ═══
       //
       // These two buckets were refused TOGETHER, and lumping them cost 220
-      // books on 2026-07-23. Andrew created a test rack (100-A, a rack number
+      // books on 2026-07-23. A manager created a test rack (100-A, a rack number
       // the DC4 floor does not have), moved 242 units onto it from Staging,
       // and then had to get them off again. Every destination list filtered
       // BOTH buckets out, so the only two affordances were "transfer to
-      // another REAL rack" and "Remove from rack" — which is a WRITE-OFF. He
+      // another REAL rack" and "Remove from rack" — which is a WRITE-OFF. They
       // wrote off four lots (Persepolis -140, Maus I -40, Hunger Games -20,
       // The distance between us -20) with reason "test", two hours after a
       // physical cycle count had verified those exact balances. They were real
-      // PO receipts (CVW-002199/002200/002201). Nothing brought them back, and
-      // 22 units of a fifth lot are stranded on 100-A to this day.
+      // PO receipts. Nothing brought them back, and 22 units of a fifth lot
+      // are stranded on 100-A to this day.
       //
       // The two buckets were never the same thing:
       //

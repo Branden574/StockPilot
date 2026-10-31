@@ -69,7 +69,7 @@ describe('GET /api/v1/maintenance-requests/members', () => {
       permissions: ['maintenance_requests:manage'],
       membersData: [
         { user_id: 'u-2', user: { id: 'u-2', full_name: 'Zoe Zephyr', email: 'zoe@example.com' } },
-        { user_id: 'u-1', user: { id: 'u-1', full_name: 'Andrew Rosas', email: 'andrew@example.com' } },
+        { user_id: 'u-1', user: { id: 'u-1', full_name: 'Jordan Stone', email: 'jordan@example.com' } },
         // No full_name — falls back to email, matching fetchAcceptedMembers.
         { user_id: 'u-3', user: { id: 'u-3', full_name: null, email: 'noname@example.com' } },
       ],
@@ -80,7 +80,7 @@ describe('GET /api/v1/maintenance-requests/members', () => {
     const body = await res.json();
     expect(body).toEqual({
       members: [
-        { userId: 'u-1', name: 'Andrew Rosas' },
+        { userId: 'u-1', name: 'Jordan Stone' },
         { userId: 'u-3', name: 'noname@example.com' },
         { userId: 'u-2', name: 'Zoe Zephyr' },
       ],
@@ -95,7 +95,7 @@ describe('GET /api/v1/maintenance-requests/members', () => {
   it('scopes the roster query to this org and to accepted members only (chainArgs pin)', async () => {
     const { ctx, stub } = buildCtx({
       permissions: ['maintenance_requests:manage'],
-      membersData: [{ user_id: 'u-1', user: { id: 'u-1', full_name: 'Andrew Rosas', email: 'andrew@example.com' } }],
+      membersData: [{ user_id: 'u-1', user: { id: 'u-1', full_name: 'Jordan Stone', email: 'jordan@example.com' } }],
     });
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx as never);
     await GET(getReq());

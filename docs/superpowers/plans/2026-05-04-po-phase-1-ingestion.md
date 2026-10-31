@@ -38,8 +38,8 @@ apps/web/src/lib/po-parser/
   normalize.ts                                         # canonical line shape + helpers
   normalize.test.ts
   fixtures/
-    po-cvsii-001824.txt                                # paste of pdf-parse output for tests
-    po-cvsii-001824.csv                                # equivalent CSV fixture
+    po-demo-000101.txt                                 # synthetic PO text in pdf-parse output layout
+    po-demo-000101.csv                                 # equivalent CSV fixture
 
 apps/web/src/server/services/
   po-imports.ts                                        # PoImportsService: list, get, create, approve, cancel
@@ -842,18 +842,22 @@ git commit -m "feat(po-parser): normalize helpers (uom, money, qty, sha256)"
 ## Task 8: PDF parser (Staples format)
 
 **Files:**
-- Create: `apps/web/src/lib/po-parser/fixtures/po-cvsii-001824.txt`
+- Create: `apps/web/src/lib/po-parser/fixtures/po-demo-000101.txt`
 - Create: `apps/web/src/lib/po-parser/pdf.ts`
 - Create: `apps/web/src/lib/po-parser/pdf.test.ts`
 
 - [ ] **Step 1: Capture the fixture**
 
-Run `pdf-parse` against the real Staples PO once, save the `.text` output:
+Run `pdf-parse` against a Staples-format PO once, save the `.text` output:
 
 ```bash
-node -e "(async()=>{const f=await import('node:fs/promises');const p=(await import('pdf-parse')).default;const b=await f.readFile(process.argv[1]);const r=await p(b);console.log(r.text);})()" /path/to/PO-CVSII-001824.pdf > apps/web/src/lib/po-parser/fixtures/po-cvsii-001824.txt
+node -e "(async()=>{const f=await import('node:fs/promises');const p=(await import('pdf-parse')).default;const b=await f.readFile(process.argv[1]);const r=await p(b);console.log(r.text);})()" /path/to/staples-po.pdf > apps/web/src/lib/po-parser/fixtures/po-demo-000101.txt
 ```
 Expected: file is created with the raw text dump from the PDF, including header rows, line items with item numbers, and the TAX line.
+
+(2026-10-25: the committed fixture is a synthetic document in the same layout. Every
+person, address, phone number and PO number in it is made up, and the line rows,
+total and parser quirks are unchanged, so the tests below assert the same things.)
 
 - [ ] **Step 2: Write the failing test**
 
@@ -865,7 +869,7 @@ import { join } from 'node:path';
 import { parsePdfText } from './pdf';
 
 const FIXTURE = readFileSync(
-  join(__dirname, 'fixtures/po-cvsii-001824.txt'),
+  join(__dirname, 'fixtures/po-demo-000101.txt'),
   'utf8',
 );
 
@@ -873,7 +877,7 @@ describe('parsePdfText (Staples format)', () => {
   const po = parsePdfText(FIXTURE);
 
   it('extracts the PO number', () => {
-    expect(po.poNumber).toBe('PO-CVSII-001824');
+    expect(po.poNumber).toBe('PO-DEMO-000101');
   });
 
   it('extracts the vendor', () => {
@@ -884,8 +888,8 @@ describe('parsePdfText (Staples format)', () => {
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });
 
-  it('extracts a Fresno shipping address', () => {
-    expect(po.shippingAddress).toMatch(/Fresno/i);
+  it('extracts a Sampleton shipping address', () => {
+    expect(po.shippingAddress).toMatch(/Sampleton/i);
   });
 
   it('produces at least 13 line rows', () => {
@@ -1076,7 +1080,7 @@ pnpm --filter @stockpilot/web test pdf
 ```
 Expected: 9 tests passed.
 
-If any single fixture-derived test fails, **do not weaken the assertion** — fix the regex in `parsePdfText`. The fixture is from a real Staples PO and the parser must match.
+If any single fixture-derived test fails, **do not weaken the assertion** — fix the regex in `parsePdfText`. The fixture keeps a real Staples PO's layout with synthetic values, and the parser must match it.
 
 - [ ] **Step 6: Commit**
 
@@ -1090,7 +1094,7 @@ git commit -m "feat(po-parser): pdf parser with Staples-format fixture (9 tests)
 ## Task 9: CSV parser
 
 **Files:**
-- Create: `apps/web/src/lib/po-parser/fixtures/po-cvsii-001824.csv`
+- Create: `apps/web/src/lib/po-parser/fixtures/po-demo-000101.csv`
 - Create: `apps/web/src/lib/po-parser/csv.ts`
 - Create: `apps/web/src/lib/po-parser/csv.test.ts`
 
@@ -1098,7 +1102,7 @@ git commit -m "feat(po-parser): pdf parser with Staples-format fixture (9 tests)
 
 ```csv
 po_number,vendor,po_date,total
-PO-CVSII-001824,Staples Advantage,2026-04-29,299.53
+PO-DEMO-000101,Staples Advantage,2026-04-29,299.53
 line_number,qty,uom,description,unit_cost,line_total,vendor_item_number,vendor_product_number,auxiliary_number,coa_code
 1,1,EA,TAX,23.11,23.11,,,,
 2,1,PK,"Duracell Coppertop AA Alkaline Batteries, 24/Pack",16.67,16.67,867474,867474,867474,62-00
@@ -1116,7 +1120,7 @@ import { join } from 'node:path';
 import { parseCsvText } from './csv';
 
 const FIXTURE = readFileSync(
-  join(__dirname, 'fixtures/po-cvsii-001824.csv'),
+  join(__dirname, 'fixtures/po-demo-000101.csv'),
   'utf8',
 );
 
@@ -1124,7 +1128,7 @@ describe('parseCsvText', () => {
   const po = parseCsvText(FIXTURE);
 
   it('reads header from first 2 rows', () => {
-    expect(po.poNumber).toBe('PO-CVSII-001824');
+    expect(po.poNumber).toBe('PO-DEMO-000101');
     expect(po.vendorName).toMatch(/Staples Advantage/);
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });
@@ -1265,7 +1269,7 @@ Expected: 4 tests passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/lib/po-parser/{csv.ts,csv.test.ts,fixtures/po-cvsii-001824.csv}
+git add apps/web/src/lib/po-parser/{csv.ts,csv.test.ts,fixtures/po-demo-000101.csv}
 git commit -m "feat(po-parser): csv parser with Staples-shaped fixture (4 tests)"
 ```
 
@@ -3125,7 +3129,7 @@ Expected: typecheck 0 errors, all tests green (existing 13 + new ~30), build und
 2. `pnpm dev`
 3. Sign in as the seed admin
 4. **Admin → Vendor mappings** → add a mapping for Staples + vendor item `867474` → existing AA-batteries item
-5. **PO imports → New import** → upload `PO-CVSII-001824.pdf`
+5. **PO imports → New import** → upload a Staples-format PO PDF
 6. Detail page: confirm 13+ lines parsed, TAX line classified as `tax`, AA batteries line shows `mapped` to your item
 7. Pick vendor + warehouse, click **Approve**
 8. Lands on `/dashboard/purchase-orders/<new-po-id>` showing the new PO with status `expected_inbound`

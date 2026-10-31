@@ -61,6 +61,14 @@ export interface OrgRow {
    * zero extra round-trips.
    */
   all_modules_comp?: boolean | null;
+  /**
+   * Ordering visibility (migration 0413): when a hide in this organization
+   * last changed at least one record; null when it never has. UNDEFINED means
+   * unknown (an answer that did not carry it), never "never hidden": a
+   * catalog load then runs its check for recently hidden items. Read off the
+   * same cached org row, so it costs no round trip.
+   */
+  order_catalog_last_hide_at?: string | null;
 }
 
 export const getOrgRowForRequest = cache(async (organizationId: string): Promise<OrgRow | null> => {
@@ -76,7 +84,7 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   const { data, error } = await supabase
     .from('organizations')
     .select(
-      'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
+      'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp, order_catalog_last_hide_at',
     )
     .eq('id', organizationId)
     .maybeSingle();

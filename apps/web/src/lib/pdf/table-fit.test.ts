@@ -20,7 +20,7 @@ import { formatCurrencyForPdf, formatDateForPdf, formatNumberForPdf } from './st
  * Column-fit invariants for the purchase-order PDF tables.
  *
  * WHY THIS EXISTS: the owner reported a receipts row rendering as
- * "R-20260721-223330-e7a08bJul 21, 2026" — the receipt number touching the
+ * "R-20260721-223330-0e0e05Jul 21, 2026" — the receipt number touching the
  * date with no gap. A rendered-text snapshot would not have caught it: both
  * strings were present and correct. The defect was purely geometric, and
  * @react-pdf silently overflows rather than erroring, so nothing downstream
@@ -152,7 +152,7 @@ describe('receipts table fits its widest possible content', () => {
   it('holds the owner-reported receipt number that collided in production', () => {
     expectFits(
       'receipt number (reported sample)',
-      width('R-20260721-223330-e7a08b', 'Courier', MONO_FONT_SIZE),
+      width('R-20260721-223330-0e0e05', 'Courier', MONO_FONT_SIZE),
       RECEIPT_COLS,
       RECEIPT_COLS.number,
     );
@@ -207,7 +207,7 @@ describe('receipts table fits its widest possible content', () => {
     const truncatedWorst = (RECEIVED_BY_MAX - 1) * DESIGN_ADVANCE + width('…', 'Helvetica', BODY_FONT_SIZE);
     expectFits('received by (truncated)', truncatedWorst, RECEIPT_COLS, RECEIPT_COLS.by);
     // Cross-check the budget against a real long email at real metrics.
-    const email = truncate('branden.vincent-walker@subdomain.example.com', RECEIVED_BY_MAX);
+    const email = truncate('carsten.hartley-fowler@subdomain.example.com', RECEIVED_BY_MAX);
     expect(email.length).toBeLessThanOrEqual(RECEIVED_BY_MAX);
     expectFits('received by (real email)', width(email, 'Helvetica', BODY_FONT_SIZE), RECEIPT_COLS, RECEIPT_COLS.by);
   });

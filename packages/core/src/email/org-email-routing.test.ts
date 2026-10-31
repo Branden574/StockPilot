@@ -146,7 +146,7 @@ describe('recipientsForRouting — what a surface may compose with, per state', 
     expect(m?.cc).toBe('copy@other-tenant.invalid');
   });
 
-  it('MUTATION KILL: UNSET yields null for BOTH features — an unconfigured org never gets L4L mailboxes', () => {
+  it('MUTATION KILL: UNSET yields null for BOTH features — an unconfigured org never gets the compiled pair', () => {
     // The mutant under test is `case 'unset': return <compiled constants>`,
     // which would wire every unconfigured org to one tenant's real intake —
     // the exact multi-tenant leak this feature exists to end.

@@ -346,7 +346,7 @@ export function TransferMirror() {
     <div className="place">
       <div className="place-head">
         <span className="lbl">Pick list</span>
-        <span className="hint">Claimed by A. Rosas · released or reassigned explicitly</span>
+        <span className="hint">Claimed by J. Stone · released or reassigned explicitly</span>
       </div>
       <div className="split">
         <div className="split-cell">

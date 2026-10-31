@@ -141,11 +141,11 @@ $ git diff --stat main -- supabase/
 **PASS.**
 
 ```
-$ grep -rn "dc4@learn4life.org\|arosas@cvwest.org" apps/web/src apps/mobile packages --include='*.ts' --include='*.tsx' | grep -v ".test."
-apps/web/src/lib/site.ts:30: * anywhere may promise it. "A copy will also be sent to arosas@cvwest.org" is
-apps/web/src/lib/site.ts:49:  to: 'dc4@learn4life.org',
-apps/web/src/lib/site.ts:50:  cc: 'arosas@cvwest.org',
-apps/web/src/lib/site.ts:55:  'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.';
+$ grep -rn "dc4@sampleorg.test\|jstone@site1.test" apps/web/src apps/mobile packages --include='*.ts' --include='*.tsx' | grep -v ".test."
+apps/web/src/lib/site.ts:30: * anywhere may promise it. "A copy will also be sent to jstone@site1.test" is
+apps/web/src/lib/site.ts:49:  to: 'dc4@sampleorg.test',
+apps/web/src/lib/site.ts:50:  cc: 'jstone@site1.test',
+apps/web/src/lib/site.ts:55:  'The DC4 address creates the delivery-request ticket. A copy will also be sent to jstone@site1.test.';
 ```
 
 **PASS** — exactly one recipient definition, in `site.ts` only.
@@ -169,11 +169,11 @@ Before every click on "Email delivery request" / "Open in Outlook", `window.__re
 Added Black Handbag (DEMO-021) + Black Sunglasses (DEMO-017), fulfillment Delivery, site North Campus, needed-by `2026-08-10T14:00`, manager note added. Submitted through the "Review order request" confirm step. Success screen: **SO-000015 · Demo Distribution Center · 2 units**. Cross-checked in a second tab at `/dashboard/orders`: row `SO-000015 … 2 2 Pending Delivery …` present, same number.
 
 ### 2. Preview — **PASS**
-Preview dialog showed `EMAIL RECIPIENTS` heading, `To: dc4@learn4life.org`, `CC: arosas@cvwest.org` as plain `<dt>/<dd>` text (no input/editable field anywhere in the dialog), helper sentence "The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org." Body (readonly textarea) contained site (North Campus), full destination address, needed-by in org time with zone named (`Aug 10, 2026, 2:00 PM (America/Los_Angeles)`), and both line items. Subject: `Delivery Request — StockPilot Order SO-000015 — North Campus`.
+Preview dialog showed `EMAIL RECIPIENTS` heading, `To: dc4@sampleorg.test`, `CC: jstone@site1.test` as plain `<dt>/<dd>` text (no input/editable field anywhere in the dialog), helper sentence "The DC4 address creates the delivery-request ticket. A copy will also be sent to jstone@site1.test." Body (readonly textarea) contained site (North Campus), full destination address, needed-by in org time with zone named (`Aug 10, 2026, 2:00 PM (America/Los_Angeles)`), and both line items. Subject: `Delivery Request — StockPilot Order SO-000015 — North Campus`.
 
 ### 3. Open (stub-verified) — **PASS**
 With `__openMode='success'`, clicked "Email delivery request". `window.__recorded.opens[0].url` decoded to:
-`https://outlook.office.com/mail/deeplink/compose?to=dc4@learn4life.org&cc=arosas@cvwest.org&subject=Delivery Request — StockPilot Order SO-000015 — North Campus&body=<full body with site, address, date+zone, items>`.
+`https://outlook.office.com/mail/deeplink/compose?to=dc4@sampleorg.test&cc=jstone@site1.test&subject=Delivery Request — StockPilot Order SO-000015 — North Campus&body=<full body with site, address, date+zone, items>`.
 Success toast/live-region text appeared: "Delivery request draft opened in Outlook. Review it and press Send yourself." The fallback panel did **not** render. `window.__recorded.assigns` stayed empty (no mailto attempted — correct, since the primary path succeeded). Confirmed via `browser_tabs list` that no real tab to `outlook.office.com` was ever created (only the two localhost tabs existed) — the stub genuinely intercepted `window.open`.
 **REAL COMPOSE RENDER in the org's M365 tenant: NOT RUN** (owner/environment QA, cannot be automated here).
 
@@ -190,13 +190,13 @@ window.location.assign.toString()
 
 The assignment throws no error and reports as "successful" if you compare the property before/after, but the underlying native `assign` is still what actually runs, because `Location` is a spec-level exotic object whose own properties resist plain reassignment in Chromium — this is a browser platform restriction, not a mistake in how the stub was written.
 
-Consequence: clicking "Email delivery request" in blocked mode triggered a **real** call to `window.location.assign(mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=...&body=...)`. Chromium's console logged:
+Consequence: clicking "Email delivery request" in blocked mode triggered a **real** call to `window.location.assign(mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=...&body=...)`. Chromium's console logged:
 
 ```
-[INFO] Launched external handler for 'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=Delivery%20Request...'
+[INFO] Launched external handler for 'mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=Delivery%20Request...'
 ```
 
-`ps aux` confirmed macOS Mail.app (`/System/Applications/Mail.app/Contents/MacOS/Mail`) launched at that moment (process start time matched the click, within seconds). This is exactly the outcome the owner's hard no-send prohibition exists to prevent — the OS mail handler really was invoked with the real `dc4@learn4life.org` / `arosas@cvwest.org` addresses and the real subject/body.
+`ps aux` confirmed macOS Mail.app (`/System/Applications/Mail.app/Contents/MacOS/Mail`) launched at that moment (process start time matched the click, within seconds). This is exactly the outcome the owner's hard no-send prohibition exists to prevent — the OS mail handler really was invoked with the real `dc4@sampleorg.test` / `jstone@site1.test` addresses and the real subject/body.
 
 **Containment, immediately, before any further action:**
 - `osascript … tell application "System Events" to tell process "Mail" to get name of every window` → empty (zero Mail windows ever rendered).
@@ -207,7 +207,7 @@ Consequence: clicking "Email delivery request" in blocked mode triggered a **rea
 
 **What the walk still confirms despite the harness limitation** — the product's own behavior, verified before the risky click fully resolved:
 - `window.__recorded.opens` grew by one (the stubbed `window.open` still correctly returned `null` in blocked mode and was recorded) — **PASS**.
-- The visible fallback panel rendered with both recipients named: *"Outlook did not open — your browser may have blocked the popup. Copy the details and create the email yourself: To dc4@learn4life.org, CC arosas@cvwest.org."* — **PASS**.
+- The visible fallback panel rendered with both recipients named: *"Outlook did not open — your browser may have blocked the popup. Copy the details and create the email yourself: To dc4@sampleorg.test, CC jstone@site1.test."* — **PASS**.
 - The repeat-draft warning appeared on this second draft attempt: *"You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4."*, rendered as a `role="status"` paragraph — **PASS** (this is walk item 6, confirmed here).
 
 **REAL MAILTO HANDOFF (does the default mail app honor the cc): NOT RUN as an intentional, controlled check** — the only real-world signal available is the accidental `mailto:` launch above, and no compose window was ever confirmed open to inspect its fields, so this remains open, owner-owed QA. Recorded separately from the deliberate NOT RUN items below because it happened as an unintended side effect, not a planned test.
@@ -215,11 +215,11 @@ Consequence: clicking "Email delivery request" in blocked mode triggered a **rea
 **Recommendation (not actioned in this task — verification only):** the stub-based safe interception method in the brief works for `window.open` but does not work for `window.location.assign` in Chromium. A future safe re-run of this specific sub-check needs either a different interception technique (e.g., a component-level test with jsdom, where `Location` is a plain mutable object) or a machine with no mail handler registered for the `mailto:` scheme at all.
 
 ### 5. Copy — **PASS**
-Clicked "Copy the details" (from the always-present preview-dialog footer button, since the fallback panel's own copy button was only reachable via the risky path above). The write succeeded (`navigator.clipboard.writeText`, no permission prompt) and the live region announced "Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details." Read the **real macOS clipboard** via `pbpaste` (not a browser-side read, which hung on a permission prompt and was abandoned rather than waited out indefinitely):
+Clicked "Copy the details" (from the always-present preview-dialog footer button, since the fallback panel's own copy button was only reachable via the risky path above). The write succeeded (`navigator.clipboard.writeText`, no permission prompt) and the live region announced "Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details." Read the **real macOS clipboard** via `pbpaste` (not a browser-side read, which hung on a permission prompt and was abandoned rather than waited out indefinitely):
 
 ```
-TO: dc4@learn4life.org
-CC: arosas@cvwest.org
+TO: dc4@sampleorg.test
+CC: jstone@site1.test
 SUBJECT: Delivery Request — StockPilot Order SO-000015 — North Campus
 
 MESSAGE:

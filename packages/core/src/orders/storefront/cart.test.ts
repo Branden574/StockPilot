@@ -76,7 +76,7 @@ describe('cartReducer', () => {
 
 // ---------------------------------------------------------------------------
 // A NEW ORDER MUST NOT INHERIT THE LAST ONE'S REQUESTER — owner report
-// 2026-08-19: "I placed an order for Raymond Allen and put his email in; next
+// 2026-08-19: "I placed an order for Elliot Vance and put his email in; next
 // time I go to place an order his name is still saved."
 //
 // `case 'clear'` only ever emptied `lines`, so onBehalfOf / neededBy / charterId
@@ -87,7 +87,7 @@ describe('cartReducer', () => {
 // This is not cosmetic. onBehalfOf is who the order is FOR: it becomes
 // `requestedFor` + `requesterEmail` on the submitted order, which is who gets
 // notified and who the warehouse hands the goods to. Silently carrying it into
-// the next person's order sends someone else's delivery confirmation to Raymond.
+// the next person's order sends someone else's delivery confirmation to Elliot.
 // neededBy is the same shape of hazard one step further on — it drives the
 // auto-created schedule event on approve, so a stale date books a delivery for
 // a day nobody chose.
@@ -97,7 +97,7 @@ describe('cartReducer — reset', () => {
     warehouseId: 'wh-1',
     charterId: 'charter-9',
     fulfillmentType: 'delivery' as const,
-    onBehalfOf: { name: 'Raymond Allen', email: 'rallen@example.org' },
+    onBehalfOf: { name: 'Elliot Vance', email: 'evance@example.org' },
     notes: 'leave at the front desk',
     neededBy: '2026-09-01',
     lines: [{ itemId: 'i1', quantity: 3 }],
@@ -127,7 +127,7 @@ describe('cartReducer — reset', () => {
     // shopper empties their basket would be its own surprise.
     const next = cartReducer(dirty, { type: 'clear' });
     expect(next.lines).toEqual([]);
-    expect(next.onBehalfOf).toEqual({ name: 'Raymond Allen', email: 'rallen@example.org' });
+    expect(next.onBehalfOf).toEqual({ name: 'Elliot Vance', email: 'evance@example.org' });
   });
 });
 

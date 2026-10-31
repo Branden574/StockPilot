@@ -660,7 +660,7 @@ export default async function OrderDetailPage({
 
     // Per-org delivery-request email routing (migration 0337). The compose
     // button renders only when this resolves to a routable pair — unset or
-    // invalid routing HIDES it (fail closed; never the compiled L4L
+    // invalid routing HIDES it (fail closed; never the compiled
     // constants, which only the pre-migration 'fallback' state may supply).
     showDeliveryRequest
       ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
@@ -1478,7 +1478,7 @@ export default async function OrderDetailPage({
                 is arithmetic on records (provided − returned across closed
                 returns), and for an in-person swap recorded only in a
                 return's notes it is factually WRONG (SO-000085: the records
-                say net 2, Lillian holds 3). So the caveat is PRINTED in the
+                say net 2, the requester holds 3). So the caveat is PRINTED in the
                 strip — a reader who never hovers must not be misled — in the
                 same words the phone prints beneath its Returns card
                 (ORDER_RETURN_SUMMARY_NOTE, one constant, both surfaces). It
@@ -1751,8 +1751,8 @@ export default async function OrderDetailPage({
 
             {/* The order's returns — number, status, what came back and how it
               was dispositioned, and the NOTES. The notes are where an
-              in-person swap is recorded today (SO-000085: "Size S … swapped
-              out for Ladies size M" — the replacement is on no order line),
+              in-person swap is recorded today (SO-000085: a size S "swapped
+              out" for a size M — the replacement is on no order line),
               so they must be readable where a human looks at the order.
               Rendered for every viewer (RLS decided what came back); the RMA
               number is a link only when the returns page would open for this

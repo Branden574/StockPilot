@@ -25,6 +25,7 @@ const m = vi.hoisted(() => ({
   list: vi.fn(),
   myRequests: vi.fn(),
   forCurrentUser: vi.fn(),
+  canManageOrderItems: vi.fn(),
 }));
 
 // Every prop but next/link's own reaches the anchor (aria-current, classes).
@@ -68,6 +69,9 @@ vi.mock('@/lib/auth/session', () => ({ requireOrgContext: m.requireOrgContext })
 vi.mock('@/server/services/context', () => ({ withContext: m.withContext }));
 vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: { forCurrentUser: m.forCurrentUser },
+}));
+vi.mock('@/server/services/order-catalog-visibility', () => ({
+  canManageOrderItems: m.canManageOrderItems,
 }));
 
 import OrdersPage from './page';
@@ -150,6 +154,7 @@ beforeEach(() => {
   m.forCurrentUser.mockResolvedValue({ list: m.list, myRequests: m.myRequests });
   m.list.mockResolvedValue([]);
   m.myRequests.mockResolvedValue([]);
+  m.canManageOrderItems.mockReturnValue(false);
   setViewer(true);
 });
 
@@ -668,5 +673,42 @@ describe('Orders page: empty and failed states keep their words', () => {
     expect(view.queryByRole('table')).toBeNull();
     // A failure is not useful content.
     expect(view.queryByTestId('perf-useful')).toBeNull();
+  });
+});
+
+describe('Orders page: Manage order items (ordering visibility, design 8.1)', () => {
+  it('is offered beside Place order when the service context allows it, and decided from that context', async () => {
+    const serviceCtx = { organizationId: 'org-1', role: 'manager' };
+    m.withContext.mockResolvedValue(serviceCtx);
+    m.canManageOrderItems.mockReturnValue(true);
+    const view = await renderPage();
+    const link = view.getByRole('link', { name: 'Manage order items' });
+    expect(link.getAttribute('href')).toBe('/dashboard/orders/manage-items');
+    expect(m.canManageOrderItems).toHaveBeenCalledWith(serviceCtx);
+    // In the header's actions, with Place order.
+    const actions = view.container.querySelector('[data-slot="page-header-actions"]');
+    expect(actions?.textContent).toContain('Manage order items');
+    expect(actions?.textContent).toContain('+ Place order');
+  });
+
+  it('a requester StockPilot allowed sees it on My requests too', async () => {
+    setViewer(false);
+    m.canManageOrderItems.mockReturnValue(true);
+    const view = await renderPage();
+    expect(view.getByRole('link', { name: 'Manage order items' })).toBeInTheDocument();
+  });
+
+  it('is not offered without the capability, the switch or the module', async () => {
+    m.canManageOrderItems.mockReturnValue(false);
+    const view = await renderPage();
+    expect(view.queryByRole('link', { name: 'Manage order items' })).toBeNull();
+  });
+
+  it('is not offered when the service context failed (fail closed); the page still renders', async () => {
+    m.withContext.mockRejectedValue(new Error('context down'));
+    m.canManageOrderItems.mockReturnValue(true);
+    const view = await renderPage();
+    expect(view.queryByRole('link', { name: 'Manage order items' })).toBeNull();
+    expect(view.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 });

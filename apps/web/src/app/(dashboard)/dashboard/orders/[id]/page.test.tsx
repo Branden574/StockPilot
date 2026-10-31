@@ -193,15 +193,15 @@ vi.mock('@/components/orders/send-delivery-request-button', () => ({
 
 const getCachedOrgTimezoneMock = vi.fn(async (_orgId: string) => 'America/Chicago');
 // Per-org email routing (migration 0337): resolves 'valid' with the compiled
-// pair by default (the L4L seed's state); individual tests override to pin
-// the hidden states.
+// sample pair by default (a configured org's state); individual tests
+// override to pin the hidden states.
 const getOrgEmailRoutingMock = vi.fn(async (_orgId: string, _feature: string) => ({
   state: 'valid' as const,
   recipients: {
-    to: 'dc4@learn4life.org',
-    cc: 'arosas@cvwest.org',
+    to: 'dc4@sampleorg.test',
+    cc: 'jstone@site1.test',
     toName: 'Fresno Warehouse DC4',
-    ccName: 'Andrew Rosas',
+    ccName: 'Jordan Stone',
   },
 }));
 vi.mock('@/lib/dashboard/cached-org', () => ({
@@ -821,10 +821,10 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
       // The org's resolved routing (per-org email routing, migration 0337),
       // flattened to plain strings for the RSC boundary.
       recipients: {
-        to: 'dc4@learn4life.org',
-        cc: 'arosas@cvwest.org',
+        to: 'dc4@sampleorg.test',
+        cc: 'jstone@site1.test',
         toName: 'Fresno Warehouse DC4',
-        ccName: 'Andrew Rosas',
+        ccName: 'Jordan Stone',
       },
       orderId: ORDER_ID,
       orderNumber: 42,
@@ -865,7 +865,7 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
     await renderPage();
     expect(sendDeliveryRequestProps).toHaveBeenCalledTimes(1);
     expect(sendDeliveryRequestProps.mock.calls[0]![0]).toMatchObject({
-      recipients: { to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org' },
+      recipients: { to: 'dc4@sampleorg.test', cc: 'jstone@site1.test' },
     });
   });
 

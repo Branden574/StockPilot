@@ -100,18 +100,28 @@ for (let n = 0; n < 60; n += 1) {
     awaiting_first_receipt: false,
     deleted_at: null,
     is_bundle: null,
+    order_catalog_visible: true,
+    order_catalog_visibility_changed_at: null,
   };
   ITEMS.push(row);
   const granted = category === CAT_GRANTED || category === CAT_GRANTED_2;
   const charterOk = charter === null || charter === CHARTER_MINE;
   if (granted && charterOk) VISIBLE.push(row.id);
 }
-// Rows no catalog shows: another warehouse, a rental, a deleted item.
+// Rows no catalog shows: another warehouse, a rental, a deleted item, and an
+// item hidden from new ordering (0413).
 ITEMS.push({ ...ITEMS[0]!, id: id(900), warehouse_id: WH_OTHER });
 ITEMS.push({ ...ITEMS[0]!, id: id(901), is_rental: true });
 ITEMS.push({ ...ITEMS[0]!, id: id(902), deleted_at: '2026-09-01T00:00:00Z' });
+ITEMS.push({
+  ...ITEMS[0]!,
+  id: id(903),
+  order_catalog_visible: false,
+  order_catalog_visibility_changed_at: '2026-09-01T00:00:00.000Z',
+});
 const ALL_ORDERABLE = ITEMS.filter(
-  (r) => r.warehouse_id === WH && !r.is_rental && r.deleted_at === null,
+  (r) =>
+    r.warehouse_id === WH && !r.is_rental && r.deleted_at === null && r.order_catalog_visible !== false,
 ).map((r) => r.id);
 
 const CATEGORIES = [
@@ -171,6 +181,8 @@ function evaluating(rows: ReadonlyArray<Record<string, unknown>>) {
       if (m === 'eq') out = out.filter((r) => r[a[0] as string] === a[1]);
       else if (m === 'neq') out = out.filter((r) => r[a[0] as string] !== a[1]);
       else if (m === 'is') out = out.filter((r) => r[a[0] as string] === a[1]);
+      else if (m === 'gte')
+        out = out.filter((r) => r[a[0] as string] != null && String(r[a[0] as string]) >= String(a[1]));
       else if (m === 'in') out = out.filter((r) => (a[1] as unknown[]).includes(r[a[0] as string]));
       else if (m === 'or') out = out.filter((r) => split(a[0] as string).some((x) => term(r, x)));
       else if (m === 'order') orderBy.push(a[0] as string);

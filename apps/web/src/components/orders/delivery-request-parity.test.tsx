@@ -128,16 +128,17 @@ vi.mock('@/components/orders/send-delivery-request-button', async (importOrigina
 
 vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: (orgId: string) => cachedOrgTimezone(orgId),
-  // Per-org routing resolves 'valid' with the compiled pair — the state the
-  // L4L seed produces, so the page renders the button exactly as before the
-  // feature. The hidden states are covered by the overlays/order-page suites.
+  // Per-org routing resolves 'valid' with the compiled sample pair, standing
+  // in for a configured org, so the page renders the button exactly as before
+  // the feature. The hidden states are covered by the overlays/order-page
+  // suites.
   getOrgEmailRouting: async () => ({
     state: 'valid',
     recipients: {
-      to: 'dc4@learn4life.org',
-      cc: 'arosas@cvwest.org',
+      to: 'dc4@sampleorg.test',
+      cc: 'jstone@site1.test',
       toName: 'Fresno Warehouse DC4',
-      ccName: 'Andrew Rosas',
+      ccName: 'Jordan Stone',
     },
   }),
 }));
@@ -228,11 +229,11 @@ function fixture(over: Partial<RowFixture> = {}): RowFixture {
   return {
     requesterUserId: 'u1',
     requesterName: 'Jane Smith',
-    requesterEmail: 'jane@cvwest.org',
+    requesterEmail: 'jane@site1.test',
     requesterOrgLabel: null,
     neededBy: '2026-08-20T17:00:00Z',
     notes: 'Front office, ask for Jane',
-    profile: { full_name: 'Jane Smith', email: 'jane@cvwest.org' },
+    profile: { full_name: 'Jane Smith', email: 'jane@site1.test' },
     orgTimezone: 'America/Los_Angeles',
     ...over,
   };
@@ -456,9 +457,9 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
     expect(webDraft.body).toBe(phoneDraft.body);
     expect(webDraft.subject).toBe(phoneDraft.subject);
     expect(webDraft.to).toBe(phoneDraft.to);
-    // THE ACCEPTANCE GATE: the copy to Andrew, identical on both surfaces.
+    // THE ACCEPTANCE GATE: the copy to the warehouse lead, identical on both surfaces.
     expect(webDraft.cc).toBe(phoneDraft.cc);
-    expect(webDraft.cc).toBe('arosas@cvwest.org');
+    expect(webDraft.cc).toBe('jstone@site1.test');
     expect(webDraft.toName).toBe(phoneDraft.toName);
     expect(webDraft.ccName).toBe(phoneDraft.ccName);
   });
@@ -510,11 +511,11 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
   it('DEFECT 4 — an EMPTY requester_email: both surfaces name the same reachable contact', async () => {
     const f = fixture({
       requesterEmail: '',
-      profile: { full_name: 'Jane Smith', email: 'jane@cvwest.org' },
+      profile: { full_name: 'Jane Smith', email: 'jane@site1.test' },
     });
     const { web, phone } = await bothInputsFor(f);
     expect(web.requesterEmail).toBe(phone.requesterEmail);
-    expect(web.requesterEmail).toBe('jane@cvwest.org');
+    expect(web.requesterEmail).toBe('jane@site1.test');
     // The phone used to produce '' here, which the draft builder then dropped,
     // so DC4 received a request with no way to reply.
     expect(phone.requesterEmail).not.toBe('');
@@ -523,7 +524,7 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
   it('DEFECT 4 — a NULL requester_email (the internal self-submit majority) agrees too', async () => {
     const { web, phone } = await bothInputsFor(fixture({ requesterEmail: null }));
     expect(web.requesterEmail).toBe(phone.requesterEmail);
-    expect(web.requesterEmail).toBe('jane@cvwest.org');
+    expect(web.requesterEmail).toBe('jane@site1.test');
   });
 
   it('DEFECT 4 — with no profile either, both surfaces admit there is no contact', async () => {
@@ -545,7 +546,7 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
   it('across every combination of the two fields that drifted, the two inputs stay identical', async () => {
     const emails = [null, '', 'onbehalf@site.org'] as const;
     const zones = [null, '', 'UTC', 'America/New_York'] as const;
-    const profiles = [null, { full_name: 'Jane Smith', email: 'jane@cvwest.org' }] as const;
+    const profiles = [null, { full_name: 'Jane Smith', email: 'jane@site1.test' }] as const;
 
     let compared = 0;
     for (const requesterEmail of emails) {
@@ -594,7 +595,7 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
     const f = fixture({
       requesterUserId: null,
       requesterName: null,
-      requesterEmail: 'doua@example.org',
+      requesterEmail: 'lena@example.org',
       requesterOrgLabel: 'Clovis',
       profile: null,
     });

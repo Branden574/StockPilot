@@ -82,7 +82,7 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
           width: '2E',
           colorway: 'Black/White',
           jerseyNumber: '07',
-          playerName: 'A. Rosas',
+          playerName: 'J. Stone',
           groupHint: 'Nike Pegasus 41 FD2722',
           mappingConfidence: 0.72,
         }),
@@ -98,7 +98,7 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
     expect(l.width).toBe('2E');
     expect(l.colorway).toBe('Black/White');
     expect(l.jerseyNumber).toBe('07');
-    expect(l.playerName).toBe('A. Rosas');
+    expect(l.playerName).toBe('J. Stone');
     expect(l.groupHint).toBe('Nike Pegasus 41 FD2722');
     expect(l.mappingConfidence).toBe(0.72);
   });
@@ -148,12 +148,12 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
   });
 
   it('trims whitespace but preserves the printed size characters', async () => {
-    respond(po([baseLine({ size: '  XL  ', playerName: '  A. Rosas ' })]));
+    respond(po([baseLine({ size: '  XL  ', playerName: '  J. Stone ' })]));
 
     const out = await extractPoFromMedia(MEDIA);
 
     expect(out.lines[0]!.size).toBe('XL');
-    expect(out.lines[0]!.playerName).toBe('A. Rosas');
+    expect(out.lines[0]!.playerName).toBe('J. Stone');
   });
 
   it('clamps mappingConfidence to 0..1 and reads a non-numeric one as ZERO', async () => {

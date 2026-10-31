@@ -149,7 +149,7 @@ describe('AuditLogService.list deleted actors (0393)', () => {
         data: [
           { id: 'a1', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: null, deleted_users: { user_id: '2026-11-04T00:00:00+00:00' }, actor: null },
           { id: 'a2', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: null, deleted_users: null, actor: null },
-          { id: 'a3', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: 'u1', deleted_users: null, actor: { id: 'u1', full_name: 'Doua', email: null, avatar_url: null } },
+          { id: 'a3', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: 'u1', deleted_users: null, actor: { id: 'u1', full_name: 'Lena', email: null, avatar_url: null } },
         ],
         error: null,
         count: 3,

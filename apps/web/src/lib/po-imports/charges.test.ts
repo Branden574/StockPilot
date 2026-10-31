@@ -4,14 +4,15 @@ import { buildPoCharges, type PoChargeSourceLine } from './charges';
 
 const ORG = 'org-1';
 
-// Mirrors the owner's real Microix PO (PO-KVAII-001690): 4 charges + 1 item.
+// A synthetic PO in the shape of an imported purchase-system PO: 4 charges +
+// 1 item.
 function ownersLines(): PoChargeSourceLine[] {
   return [
-    { line_type: 'freight', description: 'Shipping', line_total: 475, line_number: 1, qty_ordered_original: 1 },
-    { line_type: 'tax', description: 'Sales tax 8.35%', line_total: 3999.23, line_number: 2, qty_ordered_original: 1 },
+    { line_type: 'freight', description: 'Shipping', line_total: 150, line_number: 1, qty_ordered_original: 1 },
+    { line_type: 'tax', description: 'Sales tax 8.25%', line_total: 2061.68, line_number: 2, qty_ordered_original: 1 },
     { line_type: 'service', description: 'White Glove Service', line_total: 900, line_number: 3, qty_ordered_original: 100, unit_cost: 9 },
     { line_type: 'fee', description: 'CA E-WASTE FEE UNDER 15 INCH', line_total: 400, line_number: 4, qty_ordered_original: 100, unit_cost: 4 },
-    { line_type: 'inventory', description: 'Acer Chromebook 511', line_total: 46995, line_number: 5 },
+    { line_type: 'inventory', description: 'Acer Chromebook 511', line_total: 24990, line_number: 5 },
   ];
 }
 
@@ -19,17 +20,17 @@ describe('buildPoCharges', () => {
   it('captures every non-inventory charge from the owner PO and sums them', () => {
     const { chargeRows, chargeTotal } = buildPoCharges(ownersLines(), ORG);
     expect(chargeRows).toHaveLength(4); // the inventory line is excluded
-    // Charges total: 475 + 3999.23 + 900 + 400 = 5774.23. Grand total with the
-    // $46,995 of goods = $52,769.23 (matches the Microix PO exactly).
-    expect(chargeTotal).toBeCloseTo(5774.23, 2);
-    expect(46995 + chargeTotal).toBeCloseTo(52769.23, 2);
+    // Charges total: 150 + 2061.68 + 900 + 400 = 3511.68. Grand total with the
+    // $24,990 of goods = $28,501.68 (matches the PO's printed total exactly).
+    expect(chargeTotal).toBeCloseTo(3511.68, 2);
+    expect(24990 + chargeTotal).toBeCloseTo(28501.68, 2);
   });
 
   it('preserves each charge label, type, amount, and provenance', () => {
     const { chargeRows } = buildPoCharges(ownersLines(), ORG);
     expect(chargeRows.map((c) => [c.charge_type, c.label, c.amount])).toEqual([
-      ['freight', 'Shipping', 475],
-      ['tax', 'Sales tax 8.35%', 3999.23],
+      ['freight', 'Shipping', 150],
+      ['tax', 'Sales tax 8.25%', 2061.68],
       ['service', 'White Glove Service', 900],
       ['fee', 'CA E-WASTE FEE UNDER 15 INCH', 400],
     ]);

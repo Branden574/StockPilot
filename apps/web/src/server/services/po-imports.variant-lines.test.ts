@@ -136,7 +136,7 @@ describe('createFromScan — variant columns reach po_import_lines', () => {
           width: '2E',
           colorway: 'Red/Black',
           jerseyNumber: '07',
-          playerName: 'A. Rosas',
+          playerName: 'J. Stone',
           groupHint: 'Falcons Home Jersey 2026',
           mappingConfidence: 0.62,
         }),
@@ -154,7 +154,7 @@ describe('createFromScan — variant columns reach po_import_lines', () => {
     expect(line.variant_width).toBe('2E');
     expect(line.variant_color).toBe('Red/Black');
     expect(line.jersey_number).toBe('07');
-    expect(line.player_name).toBe('A. Rosas');
+    expect(line.player_name).toBe('J. Stone');
     expect(line.group_hint).toBe('Falcons Home Jersey 2026');
     expect(line.mapping_confidence).toBe(0.62);
     // Advisory only, and never invented by the extractor.
@@ -265,7 +265,7 @@ describe('parseImport — variant columns reach po_import_lines', () => {
           variantFit: 'mens',
           variantColor: 'Black/White',
           jerseyNumber: '07',
-          playerName: 'A. Rosas',
+          playerName: 'J. Stone',
           groupHint: 'Nike Pegasus 41 FD2722',
           mappingConfidence: 0.9,
         }),
@@ -284,7 +284,7 @@ describe('parseImport — variant columns reach po_import_lines', () => {
     expect(line.variant_fit).toBe('mens');
     expect(line.variant_color).toBe('Black/White');
     expect(line.jersey_number).toBe('07');
-    expect(line.player_name).toBe('A. Rosas');
+    expect(line.player_name).toBe('J. Stone');
     expect(line.group_hint).toBe('Nike Pegasus 41 FD2722');
     expect(line.mapping_confidence).toBe(0.9);
   });

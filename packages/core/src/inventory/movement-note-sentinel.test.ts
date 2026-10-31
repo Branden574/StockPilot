@@ -7,8 +7,8 @@ import {
   userMovementNote,
 } from './movement-note-sentinel';
 
-/** A real receipt id from the prod ledger's shape (lowercase, hyphenated). */
-const SENTINEL = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+/** A receipt id in the prod ledger's shape (lowercase, hyphenated); synthetic. */
+const SENTINEL = 'a0000060-0000-4000-8000-000000000060';
 
 describe('isReceiptNoteSentinel', () => {
   it('masks a bare uuid — the sentinel post_receipt_v2 writes', () => {
@@ -37,7 +37,7 @@ describe('isReceiptNoteSentinel', () => {
     expect(isReceiptNoteSentinel('not-a-uuid')).toBe(false);
     expect(isReceiptNoteSentinel(SENTINEL.slice(0, -1))).toBe(false);
     expect(isReceiptNoteSentinel(`${SENTINEL}0`)).toBe(false);
-    expect(isReceiptNoteSentinel('zzzzzzzz-b114-4839-a100-a008d3f3fde0')).toBe(false);
+    expect(isReceiptNoteSentinel('zzzzzzzz-0000-4000-8000-000000000060')).toBe(false);
   });
 
   it('treats absent and empty notes as "nothing to hide", not as a sentinel', () => {
@@ -81,7 +81,7 @@ describe('isMovementNoteEditable', () => {
   it('refuses the post-0231 leak: reason is PO {number}, notes still the sentinel', () => {
     // The 80 prod rows this whole change exists for. The old reason-only test
     // called these editable, and saving would have destroyed the receipt link.
-    expect(isMovementNoteEditable('PO CVW-002201', SENTINEL)).toBe(false);
+    expect(isMovementNoteEditable('PO DEMO-002201', SENTINEL)).toBe(false);
     expect(isMovementNoteEditable('receipt_reversal', SENTINEL)).toBe(false);
   });
 
@@ -94,7 +94,7 @@ describe('isMovementNoteEditable', () => {
   });
 
   it('allows every ordinary row, including a PO row with a genuine note', () => {
-    expect(isMovementNoteEditable('PO CVW-002201', 'Pallet arrived damp')).toBe(true);
+    expect(isMovementNoteEditable('PO DEMO-002201', 'Pallet arrived damp')).toBe(true);
     expect(isMovementNoteEditable('Damaged in transit', null)).toBe(true);
     expect(isMovementNoteEditable(null, null)).toBe(true);
     expect(isMovementNoteEditable(null, 'Free-text note')).toBe(true);

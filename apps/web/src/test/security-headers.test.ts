@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import nextConfig from '../../next.config';
@@ -170,5 +173,47 @@ describe('the pre-existing header set is not regressed', () => {
     const policy = await csp();
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain("object-src 'none'");
+  });
+});
+
+/**
+ * B17: SECURITY.md and the ASVS mapping describe the policy this config
+ * sends, not a stricter one. SECURITY.md first claimed "CSP with
+ * strict-dynamic", then said the policy limits the origins a script can "send
+ * data to". With inline scripts allowed and no directive over navigation, an
+ * injected script sends data anywhere by navigating the page or opening a
+ * window; connect-src, img-src, media-src, frame-src and form-action cover
+ * requests, images, media, frames and form posts only. When a nonce policy
+ * replaces 'unsafe-inline', the first test fails: rewrite both documents with
+ * it.
+ */
+describe('SECURITY.md and the ASVS mapping say what this CSP does not stop (B17)', () => {
+  const ROOT = path.resolve(__dirname, '../../../..');
+  const doc = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\s+/g, ' ');
+  const DOCS = [
+    ['SECURITY.md', doc('SECURITY.md')],
+    ['docs/security/asvs-mapping.md', doc('docs/security/asvs-mapping.md')],
+  ] as const;
+
+  it('the policy allows inline scripts, has no nonce or strict-dynamic, and governs no navigation', async () => {
+    const directives = (await csp()).split(';').map((d) => d.trim());
+    const scriptSrc = directives.find((d) => d.startsWith('script-src '));
+    expect(scriptSrc).toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'strict-dynamic'");
+    expect(scriptSrc).not.toContain("'nonce-");
+    expect(directives.filter((d) => d.startsWith('navigate-to'))).toEqual([]);
+  });
+
+  // Mutation caught: either document saying the policy limits where a script
+  // can send data, or dropping the navigation caveat.
+  it('so neither document says it contains what an injected script sends, and both say how the data gets out', () => {
+    for (const [name, text] of DOCS) {
+      expect(text, name).not.toMatch(/\bsends? data to\b/i);
+      expect(text, name).toMatch(/does not stop an injected (?:inline )?script from running/);
+      expect(text, name).toMatch(
+        /sending data away, for example by navigating the page or opening a window/,
+      );
+      expect(text, name).toMatch(/no directive in (?:this|the) policy governs navigation/);
+    }
   });
 });
