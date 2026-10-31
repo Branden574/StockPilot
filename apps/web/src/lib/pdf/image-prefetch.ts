@@ -2,10 +2,10 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
-import { safeFetch } from '@/lib/ssrf-guard';
+import { fetchItemImage, itemImageFetchRoute } from '@/lib/item-image-fetch';
 
-const PER_IMAGE_TIMEOUT_MS = 8_000;
+/** How long one image or logo fetch may take before it is aborted. */
+export const PDF_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
 /** Largest image this helper will read. Checked on Content-Length first,
  *  then on the bytes actually streamed, so a host that omits or lies about
@@ -34,17 +34,14 @@ async function ensurePdfCompatibleBytes(
     rawBytes[1] === 0x50 &&
     rawBytes[2] === 0x4e &&
     rawBytes[3] === 0x47;
-  const isJpeg =
-    rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
+  const isJpeg = rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
   if (isPng) return { bytes: rawBytes, contentType: 'image/png' };
   if (isJpeg) return { bytes: rawBytes, contentType: 'image/jpeg' };
 
   // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG.
   try {
     const { default: sharp } = await import('sharp');
-    const jpegBytes = await sharp(rawBytes)
-      .jpeg({ quality: 80, mozjpeg: true })
-      .toBuffer();
+    const jpegBytes = await sharp(rawBytes).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
     return { bytes: jpegBytes, contentType: 'image/jpeg' };
   } catch (err) {
     // sharp failed — log which format tripped it so a blank image in a PDF
@@ -78,30 +75,9 @@ async function downscaleForPdf(rawBytes: Buffer, maxEdgePx: number): Promise<Buf
   }
 }
 
-/** The project's storage origin (the signed item-images URLs). */
-function storageOrigin(): string | null {
-  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!raw) return null;
-  try {
-    return new URL(raw.trim()).origin;
-  } catch {
-    return null;
-  }
-}
-
-/** Where a URL may be fetched from, or null when it may not be fetched. */
-export function pdfImageFetchRoute(url: string): 'storage' | 'external' | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  const origin = storageOrigin();
-  if (origin && parsed.origin === origin) return 'storage';
-  if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return 'external';
-  return null;
-}
+/** Where a URL may be fetched from, or null when it may not be fetched. One
+ *  implementation with the inventory export's fetcher: lib/item-image-fetch.ts. */
+export const pdfImageFetchRoute = itemImageFetchRoute;
 
 /**
  * What a log line may say about a URL. A storage URL keeps its first 80
@@ -144,41 +120,62 @@ async function readCappedBody(res: Response, maxBytes: number): Promise<Buffer> 
 
 /**
  * One image's bytes as a data URI, or a throw (see the note on the cached
- * functions). Storage URLs are fetched as before. Any other URL goes through
- * the SSRF-hardened safeFetch with the book-cover host allowlist (pinned IP,
- * every redirect hop re-validated): the legacy custom_fields.thumbnail_url
- * this helper is fed is checked only for type and length where it is stored
- * and is writable by staff, so a bare fetch() of it could reach internal
- * hosts. A host off the allowlist throws, and the row gets its placeholder.
+ * functions). A Storage read on the project origin is fetched with plain fetch,
+ * which never follows a redirect. Any other URL goes through the SSRF-hardened
+ * safeFetch with the book-cover host allowlist (pinned IP, every redirect hop
+ * re-validated): the legacy custom_fields.thumbnail_url this helper is fed is
+ * checked only for type and length where it is stored and is writable by
+ * staff, so a bare fetch() of it could reach internal hosts. A host off the
+ * allowlist throws, and the row gets its placeholder. The routing lives in
+ * lib/item-image-fetch.ts, shared with the export.
  */
 async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promise<string> {
+  const { body: rawBuf, contentType } = await fetchImageBody(url);
+  if (maxEdgePx !== null) {
+    const small = await downscaleForPdf(rawBuf, maxEdgePx);
+    if (!small) throw new Error('pdf-image undecodable bytes');
+    return `data:image/jpeg;base64,${small.toString('base64')}`;
+  }
+  const declaredCt = contentType ?? 'image/webp';
+  const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
+  if (!compat) throw new Error('pdf-image undecodable bytes');
+  const b64 = compat.bytes.toString('base64');
+  return `data:${compat.contentType};base64,${b64}`;
+}
+
+/** One image URL's body (under the byte cap) and declared type, fetched by its
+ *  route within PDF_IMAGE_TIMEOUT_MS. Throws on any failure. */
+async function fetchImageBody(url: string): Promise<{ body: Buffer; contentType: string | null }> {
   const route = pdfImageFetchRoute(url);
   if (!route) throw new Error('pdf-image url not fetchable');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), PDF_IMAGE_TIMEOUT_MS);
   try {
-    const res =
-      route === 'storage'
-        ? await fetch(url, { signal: controller.signal })
-        : ((await safeFetch(url, {
-            signal: controller.signal,
-            hostAllowlist: COVER_HOST_ALLOWLIST,
-          })) as unknown as Response);
+    const res = await fetchItemImage(url, controller.signal);
     if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
-    const rawBuf = await readCappedBody(res, PDF_IMAGE_MAX_BYTES);
-    if (maxEdgePx !== null) {
-      const small = await downscaleForPdf(rawBuf, maxEdgePx);
-      if (!small) throw new Error('pdf-image undecodable bytes');
-      return `data:image/jpeg;base64,${small.toString('base64')}`;
-    }
-    const declaredCt = res.headers.get('content-type') ?? 'image/webp';
-    const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
-    if (!compat) throw new Error('pdf-image undecodable bytes');
-    const b64 = compat.bytes.toString('base64');
-    return `data:${compat.contentType};base64,${b64}`;
+    const body = await readCappedBody(res, PDF_IMAGE_MAX_BYTES);
+    return { body, contentType: res.headers.get('content-type') };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** PNG or JPEG by the same signatures react-pdf's own decoder checks
+ *  (@react-pdf/image: the 8-byte PNG signature, JPEG's FF D8). */
+function pngOrJpeg(bytes: Buffer): 'png' | 'jpeg' | null {
+  const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length >= 8 && PNG_SIGNATURE.every((b, i) => bytes[i] === b)) return 'png';
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
+  return null;
+}
+
+/** A logo's bytes as a data: URI, unchanged, when they are PNG or JPEG.
+ *  Throws otherwise and on any fetch failure (see prefetchPdfLogo). */
+async function fetchLogoAsDataUri(url: string): Promise<string> {
+  const { body } = await fetchImageBody(url);
+  const kind = pngOrJpeg(body);
+  if (!kind) throw new Error('pdf-logo is not a PNG or JPEG');
+  return `data:image/${kind};base64,${body.toString('base64')}`;
 }
 
 /**
@@ -297,4 +294,52 @@ export async function prefetchImagesAsDataUris<K>(
     Array.from({ length: Math.min(PREFETCH_CONCURRENCY, list.length) }, () => worker()),
   );
   return out;
+}
+
+// Throws on failure like the image caches above, so a failure is never stored.
+// Keyed by the URL, and a new upload is a new URL (org-logo-uploader.tsx puts a
+// timestamp in the path), so a changed logo is fetched afresh.
+const getCachedLogoDataUri = unstable_cache(
+  async (url: string): Promise<string> => fetchLogoAsDataUri(url),
+  ['pdf-logo-data-uri-v1'],
+  { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
+);
+
+/**
+ * An organization's logo for a branded PDF header, as a data: URI react-pdf
+ * draws with no I/O, or null for no logo.
+ *
+ * organizations.logo_url is set by an owner or admin. The settings action
+ * (setOrgLogoUrlAction) holds it to the org's own file in the logo bucket, but
+ * the database does not, so a direct update can store any string. Handed to
+ * react-pdf, <Image src> fetched such a value with the global fetch (following
+ * redirects) or, for a string that is not an absolute URL, read it as a file
+ * on the server. Here it is fetched like an item image
+ * (lib/item-image-fetch.ts): a Storage read on the project origin by plain
+ * fetch that never follows a redirect, any other http(s) URL only from the
+ * cover hosts through the SSRF guard, anything else refused before a request.
+ * It gets PDF_IMAGE_TIMEOUT_MS and the PDF_IMAGE_MAX_BYTES cap. BrandedHeader
+ * draws nothing but such a data: URI.
+ *
+ * Only PNG and JPEG bytes are returned, unchanged, so a PNG or JPEG logo prints
+ * exactly as it did. react-pdf could not read WebP or AVIF, so those never
+ * printed. It did read SVG: an SVG logo, which the uploader accepted only from
+ * 2026-05-05 to 2026-05-09, printed before and prints no logo now, on purpose
+ * (SVG was dropped as a logo format for carrying script, and this keeps
+ * react-pdf's SVG parser off stored bytes). Any failure is no logo, never a
+ * failed document, and the next document tries again. With no logo the header
+ * starts the organization name at the left edge; before, a logo react-pdf
+ * could not draw still left an empty 36 pt square there.
+ */
+export async function prefetchPdfLogo(logoUrl: string | null | undefined): Promise<string | null> {
+  const url = logoUrl?.trim();
+  if (!url) return null;
+  try {
+    return await getCachedLogoDataUri(url);
+  } catch (err) {
+    console.warn(
+      `[pdf-image] logo prefetch failed for ${pdfImageLogLabel(url)}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
 }

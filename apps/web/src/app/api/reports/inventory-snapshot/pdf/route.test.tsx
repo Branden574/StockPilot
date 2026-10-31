@@ -23,9 +23,15 @@ vi.mock('@react-pdf/renderer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@react-pdf/renderer')>();
   return { ...actual, renderToStream: vi.fn(async () => Readable.from([]) as never) };
 });
+// The header logo: the document must get only what this answers.
+vi.mock('@/lib/pdf/image-prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pdf/image-prefetch')>()),
+  prefetchPdfLogo: vi.fn(async () => null),
+}));
 
 // Imported AFTER the mocks above so the route picks them up.
 import { renderToStream } from '@react-pdf/renderer';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { GET } from './route';
 
 /**
@@ -128,5 +134,68 @@ describe('GET /api/reports/inventory-snapshot/pdf — checks before the export b
     expect(res.status).toBe(403);
     expect(exportRateLimited).not.toHaveBeenCalled();
     expect(stub.fromCalls).toEqual([]);
+  });
+});
+
+/**
+ * The organization logo in the snapshot's header. logo_url is set by an owner
+ * or admin and the database does not hold it to the logo bucket, so the route
+ * resolves it through prefetchPdfLogo (a guarded fetch, bytes back) and the
+ * document gets only that answer, never the stored value.
+ */
+describe('GET /api/reports/inventory-snapshot/pdf — the header logo', () => {
+  const STORED = 'https://proj.supabase.co/storage/v1/object/public/org-logos/org-1/logo-1.png';
+  const LOGO_BYTES = 'data:image/png;base64,TE9HTw==';
+
+  function signInWithLogo() {
+    const stub = makeSupabaseStub({
+      'vw_inventory_valuation_by_warehouse.select': { data: [], error: null },
+      'vw_inventory_valuation_by_category.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'organizations.select': { data: { name: 'Acme', logo_url: STORED }, error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: 'admin',
+      supabase: stub.client,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS]),
+    } as never);
+  }
+
+  function renderedOrg(): { name: string; logoUrl: string | null } {
+    const element = vi.mocked(renderToStream).mock.calls[0]?.[0] as unknown as {
+      props: { org: { name: string; logoUrl: string | null } };
+    };
+    return element.props.org;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+  });
+
+  it('prints the stored logo from the bytes prefetchPdfLogo answers', async () => {
+    signInWithLogo();
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(LOGO_BYTES);
+    const res = await GET(
+      new NextRequest('https://test.local/api/reports/inventory-snapshot/pdf?photos=0'),
+    );
+    expect(res.status).toBe(200);
+    expect(prefetchPdfLogo).toHaveBeenCalledTimes(1);
+    expect(prefetchPdfLogo).toHaveBeenCalledWith(STORED);
+    expect(renderedOrg()).toEqual({ name: 'Acme', logoUrl: LOGO_BYTES });
+  });
+
+  it('prints no logo when prefetchPdfLogo answers none, whatever is stored', async () => {
+    signInWithLogo();
+    vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(null);
+    const res = await GET(
+      new NextRequest('https://test.local/api/reports/inventory-snapshot/pdf?photos=0'),
+    );
+    expect(res.status).toBe(200);
+    expect(renderedOrg()).toEqual({ name: 'Acme', logoUrl: null });
   });
 });

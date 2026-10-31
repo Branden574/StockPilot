@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ExportPreviewResponse } from '@/lib/download-export';
 import { getExportField } from '@/lib/exports/field-registry';
@@ -77,7 +78,9 @@ describe('ExportBuilderPreview — the sample table', () => {
   it('renders one column per selected field, under the export heading', () => {
     renderPreview();
     const table = screen.getByRole('table', { name: 'Export preview' });
-    const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
     expect(headers[0]).toBe('Cover');
     expect(headers[1]).toBe('Title');
     expect(headers[2]).toBe('ISBN');
@@ -116,8 +119,43 @@ describe('ExportBuilderPreview — the sample table', () => {
   });
 });
 
+/**
+ * A failed preview used to look exactly like one still loading ("Loading a
+ * sample of this export…" for ever), so a 429, an ended session or a network
+ * failure read as a slow server.
+ */
+describe('ExportBuilderPreview — a failed preview', () => {
+  it('says the sample could not load, and that the export still works, instead of loading for ever', () => {
+    renderPreview({ preview: null, failed: true });
+    expect(screen.queryByText('Loading a sample of this export…')).toBeNull();
+    const note = screen.getByRole('status');
+    expect(note.textContent).toBe(
+      'Could not load a sample of this export. You can still export the file.',
+    );
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('Try again asks for the sample again', async () => {
+    const onRetry = vi.fn();
+    renderPreview({ preview: null, failed: true, onRetry });
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the on-screen count while the sample is unavailable', () => {
+    renderPreview({ preview: null, failed: true, rowCount: 111 });
+    expect(screen.getByText('111 books on screen.')).toBeTruthy();
+  });
+
+  it('shows no failure while the preview is only loading', () => {
+    renderPreview({ preview: null, failed: false });
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+});
+
 describe('ExportBuilderPreview — readiness', () => {
-  it('reports ISBN and cover coverage in the brief\'s shape', () => {
+  it("reports ISBN and cover coverage in the brief's shape", () => {
     renderPreview();
     const panel = screen.getByRole('group', { name: 'Export readiness' });
     expect(panel.textContent).toContain('97 of 111 books have an ISBN');
@@ -131,7 +169,10 @@ describe('ExportBuilderPreview — readiness', () => {
   // says so.
   it('says the image check is unavailable when the count failed, never "0 have a cover"', () => {
     renderPreview({
-      preview: { ...PREVIEW, readiness: { ...PREVIEW.readiness, withImage: null, missingImage: null } },
+      preview: {
+        ...PREVIEW,
+        readiness: { ...PREVIEW.readiness, withImage: null, missingImage: null },
+      },
     });
     const panel = screen.getByRole('group', { name: 'Export readiness' });
     expect(panel.textContent).toContain('Image check unavailable');
