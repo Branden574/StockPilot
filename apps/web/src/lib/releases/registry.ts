@@ -57,8 +57,9 @@ export const RELEASES: Release[] = [
     //     Layout select's own words, Book catalog — two columns and Book
     //     catalog — three columns (the layouts walked and tested; never "the"
     //     before Book, which the on-record wording guard reads as the
-    //     recorded quantity's old name). That line is told only where the
-    //     Books module is on (below);
+    //     recorded quantity's old name). That line links to Items, as the
+    //     other two do, so whoever can export is told it in every
+    //     organization (below);
     //   - the photo line's why said "a very large file that was slow to
     //     download and to open" of "a list of copies that share one cover":
     //     the writer stored a shared photo once per row, so how much larger
@@ -75,7 +76,8 @@ export const RELEASES: Release[] = [
     //
     // Every user-visible change in #414 has a line (owner rule 2026-09-25),
     // except those #414's draft leaves out ("Not announced", and the
-    // integrator's decision on its question 5, under the owner's delegation):
+    // integrator's decision on its question 5, under the owner's delegation)
+    // and one the review of this publish found (the third below):
     //   - the header of the six branded PDFs no longer leaves an empty square
     //     before the organization's name for a logo it cannot print (WebP,
     //     AVIF, or one that does not load): the draft's entry 4, dropped
@@ -85,6 +87,18 @@ export const RELEASES: Release[] = [
     //   - an SVG logo no longer prints (possible only for one uploaded in a
     //     five-day window in May 2026 and never replaced; S18's kit counts
     //     them, expected 0);
+    //   - a logo stored at an address outside the project's own storage,
+    //     other than a book-cover service, no longer prints in those six
+    //     headers either, and the organization's name starts at the left
+    //     edge: react-pdf fetched any address itself, and prefetchPdfLogo now
+    //     fetches it like a cover, through the guard (#414's "Not announced"
+    //     says PNG and JPEG logos print as before, which holds for logos in
+    //     the project's storage). Expected for no organization: the uploader
+    //     has always stored the logo bucket's address, and the settings
+    //     action has refused any other since 2026-06-26. S18's kit counts
+    //     logos outside each organization's own folder of that bucket before
+    //     its push (expected 0), and any it finds is fixed with the owner
+    //     before that push;
     //   - export images are fetched through the SSRF guard, a security fix
     //     whose only visible effect is that a cover address on a host outside
     //     the book-cover services is left blank in an Excel or PDF export, as
@@ -93,7 +107,14 @@ export const RELEASES: Release[] = [
     // and the dialog's hooks warnings; the DEPLOY.md correction is for
     // whoever sets up a project. The sample line also covers a late failure
     // of an older sample request, which could leave the loading line on
-    // screen for good and is now ignored.
+    // screen for good and is now ignored. Left out for members who cannot
+    // export (review of this publish): Export on Items and Books and the
+    // bulk bar's Export open the dialog for them too, and the sample answers
+    // them 403, so they now see the failed sample's message where the loading
+    // line stayed before (Export file refuses them, as it did). That message
+    // says the file can still be exported, which is wrong for them, so it is
+    // not a line for them; the dialog's answer to them is a fault for a later
+    // change, not part of this release.
     //
     // Walked on production on build d8c556a672e3, 2026-10-31 09:33Z to
     // 09:53Z, in Demo Co as its admin, passed at 10:10Z: an Excel export of
@@ -111,13 +132,17 @@ export const RELEASES: Release[] = [
     // (none set) and a pick slip (no order in picking).
     //
     // Who is told: whoever can export (items:export, which the export and
-    // its sample both check; the Items page checks no permission or module).
-    // The long SKU line links to Books, so it also needs the Books module,
-    // which that page checks: an organization without Books is not told it,
-    // and its Items PDFs change only for a SKU or barcode too wide for its
-    // column, which the table sizes to the widest value up to 150 pt (about
-    // 34 characters). A member who cannot export is not told this release at
-    // all.
+    // its sample both check), every line, each linked to Items, which checks
+    // no permission or module. The long SKU line links to Items, not Books
+    // (review of this publish): its first words cover the Items PDF of every
+    // organization, as the table sizes a SKU, barcode or ISBN column to its
+    // widest value up to 150 pt, which holds about 25 capital letters or 30
+    // digits at the table's 8.5 pt, and breaks a longer value over lines;
+    // a Books link would need the Books module, which the Books page checks
+    // and which is on by default only for the charter school pack, and so
+    // would hide the line from every other organization. Its Book catalog
+    // sentence names layouts the dialog offers only in an export of Books.
+    // A member who cannot export is not told this release at all.
     status: 'published',
     title:
       'Excel exports store each photo once, and long SKUs print whole in PDF exports of Items and Books',
@@ -159,8 +184,8 @@ export const RELEASES: Release[] = [
           'A long SKU could print with a hyphen it does not have, a long run of digits could be cut off at the edge of its column, and in a catalog a long title could run into the next card or over the cover.',
         howItAffectsYou: 'Values that fit print exactly as before.',
         whatToDo: 'No action needed.',
-        link: { href: '/dashboard/books', label: 'Open Books' },
-        audience: { anyPermission: ['items:export'], modules: ['books'] },
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
       },
       {
         // ExportBuilderPreview's failed state and its Try again, which asks

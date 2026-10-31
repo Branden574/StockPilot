@@ -166,7 +166,11 @@ describe('the export fixes release', () => {
     expect(readerText(release()).join(' ')).not.toMatch(/mobile app|phone/i);
   });
 
-  it('tells each line to whoever can export, the Books line only where Books is on, and links where it leads', () => {
+  // The long SKU line covers the Items PDF too, so it is told in every
+  // organization and links to Items, as the other two lines do: a Books link
+  // would need the Books module and hide it from every organization without
+  // Books (review of this publish).
+  it('tells each line to whoever can export, with or without Books, and links each to Items', () => {
     expect(entry('export-excel-photo-once').audience).toEqual({ anyPermission: ['items:export'] });
     expect(entry('export-excel-photo-once').link).toEqual({
       href: '/dashboard/inventory',
@@ -174,12 +178,14 @@ describe('the export fixes release', () => {
     });
     expect(entry('export-pdf-long-identifiers').audience).toEqual({
       anyPermission: ['items:export'],
-      modules: ['books'],
     });
     expect(entry('export-pdf-long-identifiers').link).toEqual({
-      href: '/dashboard/books',
-      label: 'Open Books',
+      href: '/dashboard/inventory',
+      label: 'Open Items',
     });
+    expect(entry('export-pdf-long-identifiers').whatChanged).toMatch(
+      /^In a PDF export of Items or Books, /,
+    );
     expect(entry('export-sample-could-not-load').audience).toEqual({
       anyPermission: ['items:export'],
     });
@@ -194,8 +200,8 @@ describe('the export fixes release', () => {
         .find((r) => r.id === ID)
         ?.entries.map((e) => e.id) ?? [];
     expect(told(everyone)).toEqual(release().entries.map((e) => e.id));
-    // Whoever can export, where Books is off: the Excel and sample lines.
-    expect(told(exporter)).toEqual(['export-excel-photo-once', 'export-sample-could-not-load']);
+    // Whoever can export is told every line, where Books is off too.
+    expect(told(exporter)).toEqual(release().entries.map((e) => e.id));
     expect(told({ ...exporter, enabledModules: ['books'] })).toEqual(
       release().entries.map((e) => e.id),
     );
@@ -207,9 +213,10 @@ describe('the export fixes release', () => {
   });
 
   // Every audience names what its page and the export check: the export and
-  // its sample answer only whoever holds items:export, the Books page checks
-  // the Books module, and the Items page checks neither. Fails if a check
-  // changes.
+  // its sample answer only whoever holds items:export, and the Items page,
+  // where every line links, checks no permission or module. The Books page
+  // checks the Books module, on by default only for the charter school pack,
+  // which is why the long SKU line links to Items. Fails if a check changes.
   it('names in each audience the permission and the module the export and its page check', () => {
     expect(source('app/api/inventory/export/route.tsx')).toContain(
       "if (!can(ctx, 'items:export')) {",
@@ -217,15 +224,19 @@ describe('the export fixes release', () => {
     expect(source('app/api/inventory/export/preview/route.ts')).toContain(
       "if (!can(ctx, 'items:export')) {",
     );
-    const books = page('books/page.tsx');
-    expect(books).toContain("checkModuleAccess('books'),");
-    expect(books).toContain('return <ModuleUnavailable moduleId="books" access={moduleAccess} />;');
     const items = page('inventory/page.tsx');
     expect(items).toContain('requireOrgContext(),');
     expect(items).not.toMatch(
       /checkModuleAccess|ModuleUnavailable|assertPermission|assertModuleEnabled/,
     );
-    expect(MODULE_REGISTRY.books).toBeDefined();
+    for (const e of release().entries) {
+      expect(e.link?.href, e.id).toBe('/dashboard/inventory');
+      expect(e.audience, e.id).toEqual({ anyPermission: ['items:export'] });
+    }
+    const books = page('books/page.tsx');
+    expect(books).toContain("checkModuleAccess('books'),");
+    expect(books).toContain('return <ModuleUnavailable moduleId="books" access={moduleAccess} />;');
+    expect(MODULE_REGISTRY.books.defaultOnFor).toEqual(['charter_school']);
   });
 
   // An old phone build shows the title, the summary and the first linked line
@@ -245,17 +256,14 @@ describe('the export fixes release', () => {
     // Not told to a member who cannot export.
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).not.toBe(ID);
     expect(legacyAnnouncementsFor(RELEASES, member, {}).map((a) => a.id)).not.toContain(ID);
-    // On the phone, Open Items opens its Inventory screen; Books has no screen
-    // of its own there, so Open Books is never the button.
+    // On the phone, Open Items opens its Inventory screen, so the phone shows
+    // the button.
     expect(phone('src/components/onboarding/whats-new.tsx')).toContain(
       "const showCta = !!cta && rewriteWebPath(cta.href) !== '/';",
     );
-    const rewrite = phone('src/lib/web-path-rewrite.ts');
-    expect(rewrite).toContain(
+    expect(phone('src/lib/web-path-rewrite.ts')).toContain(
       "{ re: /\\/dashboard\\/inventory(\\?.*)?$/, to: () => '/inventory' },",
     );
-    expect(rewrite).not.toContain('\\/dashboard\\/books');
-    expect(rewrite).toContain("{ re: /^\\/dashboard(\\/.*)?$/, to: () => '/' },");
   });
 
   it("uses the screens' own words", () => {
@@ -441,10 +449,23 @@ describe('the export fixes release rests on the code', () => {
   // fit print exactly as before." (breakIdentifierLines)
   it('a PDF export breaks a long SKU, barcode or ISBN onto lines that fit and join back to the exact value, and leaves one that fits as it was', () => {
     const fontPt = REPORT_BODY_FONT_SIZE_PT;
-    // The widest the table makes a SKU, barcode or ISBN column (about 34
-    // characters), less its padding.
+    // The widest the table makes a SKU, barcode or ISBN column, less its
+    // padding.
     expect(IDENTIFIER_RESERVE_CAP_PT).toBe(150);
     const tableValuePt = IDENTIFIER_RESERVE_CAP_PT - REPORT_CELL_PADDING_PT * 2;
+    // What a line of that column holds, as the release's comment says: about
+    // 25 capital letters or 30 digits. The table also takes a half point of
+    // slack off (FIT_SLACK_PT) and breaks anything longer, such as a
+    // 32-character SKU.
+    expect(source('lib/pdf/inventory-export-pdf.tsx')).toContain('const FIT_SLACK_PT = 0.5;');
+    const tableLinePt = tableValuePt - 0.5;
+    expect(breakIdentifierLines('S'.repeat(25), tableLinePt, fontPt)).toBe('S'.repeat(25));
+    expect(breakIdentifierLines('S'.repeat(26), tableLinePt, fontPt)).toContain('\n');
+    expect(breakIdentifierLines('9'.repeat(30), tableLinePt, fontPt)).toBe('9'.repeat(30));
+    expect(breakIdentifierLines('9'.repeat(31), tableLinePt, fontPt)).toContain('\n');
+    expect(breakIdentifierLines('MATH-GRADE5-WORKBOOK-2026-ED2-XL', tableLinePt, fontPt)).toContain(
+      '\n',
+    );
     // The value column of a card in Book catalog — two columns (Letter,
     // portrait) and Book catalog — three columns (Letter, landscape).
     const widths = [tableValuePt, catalogValueWidthPt(612, 2), catalogValueWidthPt(792, 3)];
