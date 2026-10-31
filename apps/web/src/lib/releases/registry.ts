@@ -30,23 +30,41 @@ export const RELEASES: Release[] = [
   {
     id: 'small-fixes-8-2026-10',
     revision: 1,
-    // fix/small-fixes-8 (no migration, web and server only: no over-the-air
-    // update). Held as a DRAFT until the web deploy is live; the follow-up
-    // that publishes it sets the real publishedAt, moves it among the
-    // releases published by then, and re-reads these words against what
-    // shipped. A draft at the top, dated after every release (newest first).
+    // Small fixes slice 8: #374 (squash 919281a1c, merged 2026-10-31
+    // 08:04:49Z; no migration, web and server only, so no over-the-air
+    // update). Live in production web build 07ad9db5b89c (built 08:05:15Z,
+    // answering by 08:06Z). Held as a draft until that deploy was live and
+    // walked; published by docs/whats-new-small-fixes-8 at the top, the
+    // newest release, with its words re-read against 919281a1c.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8): the summary says
+    // "Also on the web" before the forms and the calendar, as a phone shows
+    // only the title and the summary and its own Purchase orders, Recurring
+    // POs and Schedule screens did not change; the Overdue line says that the
+    // dashboard's line no longer suggests updating the expected date (the
+    // edit page and the save change a draft only); the run line says where a
+    // purchase order that could not be sent is sent from, in the
+    // notification's own words, and that a template whose purchase order
+    // could not be saved is in the audit log (a System row, Recurring PO
+    // template · Run Skipped); the calendar line says an event's own page
+    // prints in the organization's zone too (it printed Pacific whatever the
+    // organization's), that the calendar shows every event that STARTS on a
+    // date it shows (an event read outside the grid has no cell), and that
+    // New event and Edit event refuse a time the clocks skip.
     //
     // Every user-visible change in the branch has a line (owner rule
     // 2026-09-25):
     //   - the purchase orders list's Overdue view (item E), where the
-    //     dashboard's overdue line leads;
+    //     dashboard's overdue line leads, and that line's shorter advice;
     //   - Edit purchase order naming a destination or supplier it cannot
     //     offer, and the save refusing a deleted destination (items A, D, C);
     //   - recurring templates naming a deleted destination or an archived
     //     supplier, in Edit, Make recurring and the list (items B, D);
     //   - the recurring run's notification naming a template it created
-    //     nothing for, and why (item C);
-    //   - the team calendar's last evening, times and today (item F);
+    //     nothing for, and why (item C), and the audit log's row for a
+    //     template whose purchase order could not be saved;
+    //   - the team calendar's last evening, times and today, and an event's
+    //     own page in the organization's zone (item F);
     //   - the weekly digest's dates (item G).
     //   - the purchase orders list's Placed day, now the organization's in
     //     both lists (item H), said in the Overdue view's line: the instant
@@ -57,20 +75,55 @@ export const RELEASES: Release[] = [
     //     Purchase orders now shows your own day"), so the line is worded as a
     //     change from that note ("not your own"); owner question 1 in the PR;
     //   - New and Edit event taking their times in the organization's zone
-    //     (slice 8 review), in the calendar line; and an unchanged Edit event
+    //     (slice 8 review), in the calendar line; an unchanged Edit event
     //     save keeping the event's time in the hour the clocks go back (a
     //     wall clock that happens twice; production's form moved it an hour
-    //     too), in the same line;
+    //     too), in the same line; and a time the clocks skip refused under
+    //     its field (new Date() moved it an hour unseen), in its How it
+    //     affects you;
     //   - ordering a draft to a deleted location refused, in the Edit
     //     purchase order line; a send-mode template whose purchase order
     //     could not be sent named, in the run line.
-    // Left out as wording or labels with no new behaviour (slice 8 review):
-    // the dashboard's overdue line no longer advises updating the ETA (an
-    // ordered purchase order's expected date cannot be changed); the audit
-    // log labels "Recurring PO template"; a supplier the recurring page could
-    // not read is "Supplier unknown". Left out as changing nothing a reader
-    // sees: the location pickers list every site past 1000 locations, and the
-    // calendar reads fewer old open-ended events (the same events show).
+    // Left out as labels with no new behaviour (slice 8 review): the audit
+    // log's older recurring template rows now read "Recurring PO template"
+    // (they read "Recurring Po Template"); a supplier the recurring page
+    // could not read is "Supplier unknown" (a failed read only). Left out as
+    // changing nothing for an organization with 1000 locations or fewer: the
+    // location lists read every page, so past 1000 locations a site whose
+    // name sorts after the first 1000 is offered (no count of any
+    // organization's locations was read for this release; if one is past
+    // 1000, tell it in a later release). Left out as changing nothing a reader
+    // sees: the calendar reads fewer old open-ended events (the same events
+    // show).
+    //
+    // Walked on production on build 07ad9db5b89c, 2026-10-31 08:18Z to
+    // 08:33Z, in Demo Co as its admin, with a read-only check to 08:44Z: the
+    // Overdue view from its tab, its Nothing overdue state, Export with no
+    // rows and one warehouse picked in the header (the dashboard's count
+    // agreeing); the Placed day for a viewer in Tokyo and in the folded row
+    // at 390 px, with no hydration error; Edit purchase order on every draft
+    // (no note, Cancel with no prompt); Recurring POs and New template (no
+    // note); the calendar on the organization's month and today, a chip's
+    // time matching its event's page, November's grid to Dec 12, and Times
+    // are in on New event and Edit event; Notification settings. Writes, each
+    // undone: an archived supplier named on a draft's Edit and on Make
+    // recurring (restored), and an event at 8:00 PM on the November grid's
+    // last date drawn in its cell (deleted). No defect. Not walked, so each
+    // rests on the code and its tests: the dashboard's overdue line, the
+    // Overdue view's count line and search (no overdue purchase order there),
+    // a template's list line, archived supplier and destination warning (no
+    // template there), a deleted destination on Edit purchase order and the
+    // refusal to order it (the app cannot set one up there), the recurring
+    // run and its notification, the digest preview's date (no email sent),
+    // Edit event in the hours the clocks change, and an organization outside
+    // Pacific time.
+    //
+    // Owner question 7 of #374 shipped as its default: Edit purchase order
+    // and the recurring forms open on No supplier for an archived one, so a
+    // save that does not choose one removes it, as the two lines say. A later
+    // decision keeps an archived supplier, shown as "Name (archived)"; that is
+    // not built. If it ships, its own release tells it and these two lines
+    // are reworded in place.
     //
     // The Overdue line's link is labelled for both platforms: the phone opens
     // the bare Purchase orders list for any /dashboard/purchase-orders?...
@@ -83,17 +136,23 @@ export const RELEASES: Release[] = [
     // the same and shows a plan notice to an organization without it); the
     // calendar line, whoever can open the calendar (schedule:read or
     // schedule:manage, Schedule on); the digest line, every member (the
-    // notification settings are each member's own).
-    status: 'draft',
+    // notification settings are each member's own). So every member is told:
+    // it is the first notice for each of them until it is read.
+    status: 'published',
     title: "An Overdue view for purchase orders, named destinations and suppliers, the calendar's last evening and the digest's date",
     summary:
-      "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and a recurring template that cannot create its purchase order says why. The team calendar shows events late on its last date, and a weekly digest preview is dated the day it was sent.",
-    publishedAt: '2026-10-31T17:00:00Z',
+      "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Also on the web, editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and the team calendar shows events late on its last date. The Recurring purchase orders notification now names a template that could not create its purchase order, and why. A weekly digest preview is dated the day it was sent.",
+    publishedAt: '2026-10-31T08:59:00Z',
     entries: [
       {
         // PurchaseOrdersService.listOverdue, on overdueCount's own filter; the
         // tab is ?status=overdue, which the dashboard has linked to since
-        // before #338 while the list fell back to All.
+        // before #338 while the list fell back to All. The dashboard's line,
+        // OVERDUE_PO_ATTENTION_DETAIL (lib/purchase-orders/tabs.ts), said
+        // "Chase your suppliers or update the ETA."; the edit page opens a
+        // draft only and the save changes a draft only, and a PO import makes
+        // a new one, so an ordered purchase order's expected date can't be
+        // changed.
         id: 'po-list-overdue-view',
         category: 'new',
         area: 'Purchase orders',
@@ -103,7 +162,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
         howItAffectsYou:
-          "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders.",
+          "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders. The dashboard's line no longer suggests updating the expected date, which can't be changed once a purchase order is ordered.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open purchase orders' },
         audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
@@ -122,7 +181,8 @@ export const RELEASES: Release[] = [
         // Said plainly (slice 8 review): the purchase order save accepts an
         // archived supplier, but the form cannot offer one, so any save that
         // does not choose a supplier, even one made to change something else,
-        // removes it. Owner question 7 in the PR asks whether to keep it.
+        // removes it. Owner question 7 of #374 shipped as this default (see
+        // the release's comment).
         howItAffectsYou:
           "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
         whatToDo: 'No action needed.',
@@ -149,7 +209,13 @@ export const RELEASES: Release[] = [
       {
         // RecurringPoTemplatesService.runDueTemplates (templatesSkipped) and
         // the cron's notice: owners and admins, and the template's creator
-        // while they hold purchase_orders:manage (slice 8 review).
+        // while they hold purchase_orders:manage (slice 8 review; no creator
+        // is told in a run that could not read their permissions, c005f208b).
+        // A send-mode template's purchase order that could not be sent:
+        // recurringRunNotice says "Open it in Purchase orders and send it."
+        // A template whose purchase order could not be saved: a System row,
+        // recurring_po_template.run_skipped, which the audit log shows as
+        // "Recurring PO template · Run Skipped" (lib/audit/format.ts).
         id: 'recurring-run-says-why',
         category: 'fixed',
         area: 'Recurring purchase orders',
@@ -158,22 +224,29 @@ export const RELEASES: Release[] = [
           "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft.",
         whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
         howItAffectsYou:
-          "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it names a purchase order that could not be sent, open it and send it.",
+          "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it says a purchase order could not be sent, open it in Purchase orders and send it. A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
       },
       {
         // The page read events between the server's (UTC) midnights; the
-        // calendar now gets the organization's zone and today.
+        // calendar now gets the organization's zone and today. An event's
+        // page printed Pacific whatever the organization's zone; it prints
+        // the organization's now (formatEventRange). An event read outside
+        // the grid has no cell, so the calendar shows each event that starts
+        // on a date it shows. A time the clocks skip is refused under its
+        // field ("That start time doesn't exist in <zone> (the clocks
+        // change). Pick another time.") and nothing is saved.
         id: 'calendar-last-evening-and-zone',
         category: 'fixed',
         area: 'Schedule',
         title: 'The team calendar shows events late in the day on its last date',
         whatChanged:
-          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar and each event's page place each event on its date and print its time in your organization's time zone, and the calendar marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
         whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
-        howItAffectsYou: 'Every event on a date the calendar shows is on it.',
+        howItAffectsYou:
+          "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
         audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },

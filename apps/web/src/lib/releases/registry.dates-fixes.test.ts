@@ -114,13 +114,21 @@ describe('the dates fixes release is published', () => {
     // it first, the ended-session-group-page-fixes release once it is read, and the member reads or sees it with
     // the newer releases. Claim kept: a member the public link release does not reach is told this one once the
     // newer releases that reach them are read.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: manage-order-items-and-app-fixes-2026-10 for both
+    // with nothing read, the reads and seen sets below without the release at the top, and the reads before
+    // ended-session-group-page-fixes-2026-10, unsubscribe-rack-question-fixes-2026-10 and redesign-2026-10 without
+    // it): the small-fixes-8 release is published at the top and reaches every member, so both are told it first,
+    // the manage-order-items-and-app-fixes release once it is read, and the member reads or sees it with the newer
+    // releases. Claim kept: a member the public link release does not reach is told this one once the newer
+    // releases that reach them are read.
     expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
-      'manage-order-items-and-app-fixes-2026-10',
+      'small-fixes-8-2026-10',
     );
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
-      'manage-order-items-and-app-fixes-2026-10',
+      'small-fixes-8-2026-10',
     );
     const redesignRead = [
+      'small-fixes-8-2026-10',
       'manage-order-items-and-app-fixes-2026-10',
       'ended-session-group-page-fixes-2026-10',
       'unsubscribe-rack-question-fixes-2026-10',
@@ -135,23 +143,35 @@ describe('the dates fixes release is published', () => {
       read_at: '2026-10-20T13:00:00Z',
     }));
     const redesignSeen = Object.fromEntries(redesignRead.map((r) => [r.release_id, true]));
-    // Added by docs/whats-new-2026-10-30 (2026-10-30): once the release at the top (its read sits first in
-    // redesignRead) is read, both are told the ended-session-group-page-fixes release.
+    // Added by docs/whats-new-small-fixes-8 (2026-10-31): once the release at the top (its read sits first in
+    // redesignRead) is read, both are told the manage-order-items-and-app-fixes release.
     expect(
       buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 1), null).latestUnread?.id,
-    ).toBe('ended-session-group-page-fixes-2026-10');
+    ).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(
       buildReleaseList(RELEASES, member, redesignRead.slice(0, 1), null).latestUnread?.id,
+    ).toBe('manage-order-items-and-app-fixes-2026-10');
+    // Added by docs/whats-new-2026-10-30 (2026-10-30): once the release at the top (its read sits first in
+    // redesignRead) is read, both are told the ended-session-group-page-fixes release.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: redesignRead.slice(0, 1)): the small-fixes-8
+    // release now sits first in redesignRead, above it, and both are read.
+    expect(
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 2), null).latestUnread?.id,
+    ).toBe('ended-session-group-page-fixes-2026-10');
+    expect(
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 2), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Once the release at the top (its read sits first in redesignRead) is read, both are told
     // the unsubscribe-rack-question-fixes release.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: redesignRead.slice(0, 1)): the
     // manage-order-items-and-app-fixes release now sits first in redesignRead, above it, and both are read.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: redesignRead.slice(0, 2)): the small-fixes-8
+    // release now sits first in redesignRead, above them, and all three are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 2), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 3), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 2), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 3), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Once the newest release (its read sits first in redesignRead) is read, both are told
     // redesign-2026-10, as before.
@@ -159,11 +179,13 @@ describe('the dates fixes release is published', () => {
     // above the redesign ones now sit first in redesignRead, and both are read.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: redesignRead.slice(0, 2)): the three releases
     // above the redesign ones now sit first in redesignRead, and all three are read.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: redesignRead.slice(0, 3)): the four releases
+    // above the redesign ones now sit first in redesignRead, and all four are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 3), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 4), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 3), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 4), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(buildReleaseList(RELEASES, member, redesignRead, null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -197,22 +219,32 @@ describe('the dates fixes release is published', () => {
     // nothing seen, and the seen sets below without the release at the top): the manage-order-items-and-app-fixes
     // release, published at the top, comes first until it is seen too, then the ended-session-group-page-fixes
     // release, and the seen sets below include it.
-    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]?.id).toBe(
-      'manage-order-items-and-app-fixes-2026-10',
-    );
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: manage-order-items-and-app-fixes-2026-10 first
+    // with nothing seen, and the seen sets below without the release at the top): the small-fixes-8 release,
+    // published at the top, comes first until it is seen too, then the manage-order-items-and-app-fixes release,
+    // and the seen sets below include it.
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]?.id).toBe('small-fixes-8-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        'small-fixes-8-2026-10': true,
+      })[0]?.id,
+    ).toBe('manage-order-items-and-app-fixes-2026-10');
+    expect(
+      legacyAnnouncementsFor(RELEASES, member, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
       })[0]?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
       })[0]?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
         'unsubscribe-rack-question-fixes-2026-10': true,
@@ -302,8 +334,9 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-10-25 (2026-10-25; was: the redesign and ai-search-finds-every-item releases at 0 to 3, the public link release at 12): the unsubscribe-rack-question-fixes release is published at the top, above the redesign releases, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-10-26 (2026-10-26; was: the unsubscribe-rack-question-fixes release at 0, slice(1, 5), the public link release at 13): the ended-session-group-page-fixes release is published at the top, above it, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: the ended-session-group-page-fixes release at 0, slice(2, 6), the public link release at 14): the manage-order-items-and-app-fixes release is published at the top, above it, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the slice 8 draft at 0): it is published in the same place, at the top, the newest release.
     expect(RELEASES[0]?.id).toBe('small-fixes-8-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe('ended-session-group-page-fixes-2026-10');

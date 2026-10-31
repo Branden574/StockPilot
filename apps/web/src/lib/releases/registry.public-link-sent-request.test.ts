@@ -107,7 +107,8 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // Re-pinned by docs/whats-new-2026-10-25 (2026-10-25; was: redesign-2026-10): the unsubscribe-rack-question-fixes release is published after it, at the top, and reaches every member, this reader included.
     // Re-pinned by docs/whats-new-2026-10-26 (2026-10-26; was: unsubscribe-rack-question-fixes-2026-10): the ended-session-group-page-fixes release is published after it, at the top, and reaches every member, this reader included.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: ended-session-group-page-fixes-2026-10): the manage-order-items-and-app-fixes release is published after it, at the top, and reaches every member, this reader included.
-    expect(list.latestUnread?.id).toBe('manage-order-items-and-app-fixes-2026-10');
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: manage-order-items-and-app-fixes-2026-10): the small-fixes-8 release is published after it, at the top, and reaches every member, this reader included.
+    expect(list.latestUnread?.id).toBe('small-fixes-8-2026-10');
     const rx2Read = {
       release_id: 'returns-exchange-2026-10',
       revision: 1,
@@ -131,7 +132,10 @@ describe('the public order link release (a sent request leaves nothing behind)',
     const topRead = { ...rx2Read, release_id: 'ended-session-group-page-fixes-2026-10' };
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: the ended-session-group-page-fixes release first with only RX-2's read, the same for whoever manages public links with nothing read or seen, the reads and seen sets that lead to the unsubscribe-rack-question-fixes and redesign releases without the release at the top, and the redesign reads and seen set without it): the manage-order-items-and-app-fixes release is published at the top and reaches every member, so it is the notice first for both readers, then the ended-session-group-page-fixes release, and it is read or seen with the newer releases and the order this test checks holds.
     const latestRead = { ...rx2Read, release_id: 'manage-order-items-and-app-fixes-2026-10' };
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the manage-order-items-and-app-fixes release first with only RX-2's read, the same for whoever manages public links with nothing read or seen, the reads and seen sets that lead to the ended-session-group-page-fixes, unsubscribe-rack-question-fixes and redesign releases without the release at the top, and the redesign reads and seen set without it): the small-fixes-8 release is published at the top and reaches every member, so it is the notice first for both readers, then the manage-order-items-and-app-fixes release, and it is read or seen with the newer releases and the order this test checks holds.
+    const slice8Read = { ...rx2Read, release_id: 'small-fixes-8-2026-10' };
     const redesignRead = [
+      'small-fixes-8-2026-10',
       'manage-order-items-and-app-fixes-2026-10',
       'ended-session-group-page-fixes-2026-10',
       'unsubscribe-rack-question-fixes-2026-10',
@@ -149,17 +153,26 @@ describe('the public order link release (a sent request leaves nothing behind)',
       ungroupRead,
     ];
     expect(buildReleaseList(RELEASES, everyone, [rx2Read], null).latestUnread?.id).toBe(
+      'small-fixes-8-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read, slice8Read], null).latestUnread?.id).toBe(
       'manage-order-items-and-app-fixes-2026-10',
     );
-    expect(buildReleaseList(RELEASES, everyone, [rx2Read, latestRead], null).latestUnread?.id).toBe(
-      'ended-session-group-page-fixes-2026-10',
-    );
     expect(
-      buildReleaseList(RELEASES, everyone, [rx2Read, latestRead, topRead], null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, [rx2Read, slice8Read, latestRead], null).latestUnread
+        ?.id,
+    ).toBe('ended-session-group-page-fixes-2026-10');
+    expect(
+      buildReleaseList(RELEASES, everyone, [rx2Read, slice8Read, latestRead, topRead], null)
+        .latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, everyone, [rx2Read, latestRead, topRead, newestRead], null)
-        .latestUnread?.id,
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [rx2Read, slice8Read, latestRead, topRead, newestRead],
+        null,
+      ).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(
       buildReleaseList(RELEASES, everyone, [rx2Read, ...redesignRead], null).latestUnread?.id,
@@ -216,17 +229,21 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // The ai-search-finds-every-item release does not reach them. Claim kept: it is the notice for whoever manages
     // public links once the newer releases that reach them are read.
     expect(buildReleaseList(RELEASES, linkManager, [], null).latestUnread?.id).toBe(
+      'small-fixes-8-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, linkManager, [slice8Read], null).latestUnread?.id).toBe(
       'manage-order-items-and-app-fixes-2026-10',
     );
-    expect(buildReleaseList(RELEASES, linkManager, [latestRead], null).latestUnread?.id).toBe(
-      'ended-session-group-page-fixes-2026-10',
-    );
     expect(
-      buildReleaseList(RELEASES, linkManager, [latestRead, topRead], null).latestUnread?.id,
+      buildReleaseList(RELEASES, linkManager, [slice8Read, latestRead], null).latestUnread?.id,
+    ).toBe('ended-session-group-page-fixes-2026-10');
+    expect(
+      buildReleaseList(RELEASES, linkManager, [slice8Read, latestRead, topRead], null).latestUnread
+        ?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, linkManager, [latestRead, topRead, newestRead], null).latestUnread
-        ?.id,
+      buildReleaseList(RELEASES, linkManager, [slice8Read, latestRead, topRead, newestRead], null)
+        .latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(buildReleaseList(RELEASES, linkManager, redesignRead, null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -246,21 +263,29 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // and this one once it is seen): the three redesign releases come first until they are seen too.
     const redesignSeen = Object.fromEntries(redesignRead.map((r) => [r.release_id, true]));
     expect(legacyAnnouncementsFor(RELEASES, linkManager, {})[0]?.id).toBe(
-      'manage-order-items-and-app-fixes-2026-10',
+      'small-fixes-8-2026-10',
     );
     expect(
       legacyAnnouncementsFor(RELEASES, linkManager, {
+        'small-fixes-8-2026-10': true,
+      })[0]?.id,
+    ).toBe('manage-order-items-and-app-fixes-2026-10');
+    expect(
+      legacyAnnouncementsFor(RELEASES, linkManager, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
       })[0]?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, linkManager, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
       })[0]?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, linkManager, {
+        'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
         'unsubscribe-rack-question-fixes-2026-10': true,
@@ -362,7 +387,8 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // Renamed by docs/whats-new-2026-10-25 (2026-10-25; was: "... ai-search-finds-every-item and three redesign releases at the top ..."): the unsubscribe-rack-question-fixes release is published above them, at the top. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and the hand-over release above that, dated after every release below it.
   // Renamed by docs/whats-new-2026-10-26 (2026-10-26; was: "... three redesign and unsubscribe-rack-question-fixes releases at the top ..."): the ended-session-group-page-fixes release is published above them, at the top. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and the hand-over release above that, dated after every release below it.
   // Renamed by docs/whats-new-2026-10-30 (2026-10-30; was: "... unsubscribe-rack-question-fixes and ended-session-group-page-fixes releases at the top ..."): the manage-order-items-and-app-fixes release is published above them, at the top. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and the hand-over release above that, dated after every release below it.
-  it("sits directly below returns RX-2's release, with returns RX-3's, RX-4's and the return history hand-over release above that, and the Ungroup, Group selected, Ungroup follow-ups, pages-keep-groups-whole, ai-search-finds-every-item, three redesign, unsubscribe-rack-question-fixes, ended-session-group-page-fixes and manage-order-items-and-app-fixes releases at the top (all published later), dated after every release below it, and no draft is left", () => {
+  // Renamed by docs/whats-new-small-fixes-8 (2026-10-31; was: "... ended-session-group-page-fixes and manage-order-items-and-app-fixes releases at the top ..."): the small-fixes-8 release is published above them, at the top. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and the hand-over release above that, dated after every release below it.
+  it("sits directly below returns RX-2's release, with returns RX-3's, RX-4's and the return history hand-over release above that, and the Ungroup, Group selected, Ungroup follow-ups, pages-keep-groups-whole, ai-search-finds-every-item, three redesign, unsubscribe-rack-question-fixes, ended-session-group-page-fixes, manage-order-items-and-app-fixes and small-fixes-8 releases at the top (all published later), dated after every release below it, and no draft is left", () => {
     // Re-pinned by the small fixes slice 8 draft (fix/small-fixes-8; was:
     // without it): dated after every release, it sits at the top, so every
     // position below it moves down by one, and it is the one draft.
@@ -372,8 +398,9 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // Re-pinned by docs/whats-new-2026-10-25 (2026-10-25; was: the redesign and ai-search-finds-every-item releases at 0 to 3, this one at 12, slice(13), the dates of RELEASES[5] to [11], slice(0, 5) and redesign-2026-10 the newest published): the unsubscribe-rack-question-fixes release is published at the top, above the redesign releases, so every position below it moves down by one, it is the newest published release, and it is dated later too.
     // Re-pinned by docs/whats-new-2026-10-26 (2026-10-26; was: the unsubscribe-rack-question-fixes release at 0, slice(1, 5), this one at 13, slice(14), the dates of RELEASES[6] to [12], slice(0, 6) and unsubscribe-rack-question-fixes-2026-10 the newest published): the ended-session-group-page-fixes release is published at the top, above it, so every position below it moves down by one, it is the newest published release, and it is dated later too.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: the ended-session-group-page-fixes release at 0, the unsubscribe-rack-question-fixes release at 1, slice(2, 6), this one at 14, slice(15), the dates of RELEASES[7] to [13], slice(0, 7) and ended-session-group-page-fixes-2026-10 the newest published): the manage-order-items-and-app-fixes release is published at the top, above it, so every position below it moves down by one, it is the newest published release, and it is dated later too.
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the slice 8 draft at 0): it is published in the same place, at the top, the newest release.
     expect(RELEASES[0]?.id).toBe('small-fixes-8-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe('ended-session-group-page-fixes-2026-10');
@@ -403,10 +430,10 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(RELEASES[15]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[15]?.status).toBe('published');
     expect(RELEASES[16]?.id).toBe(ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'manage-order-items-and-app-fixes-2026-10',
-    );
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['small-fixes-8-2026-10']);
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: manage-order-items-and-app-fixes-2026-10): the small-fixes-8 release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('small-fixes-8-2026-10');
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: ['small-fixes-8-2026-10']): the slice 8 release is published, so no draft is left.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
     for (const r of RELEASES.slice(17)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -427,8 +454,9 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(Date.parse(RELEASES[15]!.publishedAt)).toBeGreaterThan(
       Date.parse(release().publishedAt),
     );
+    // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the slice 8 draft at 0): it is published in the same place, at the top, the newest release.
     expect(RELEASES[0]?.id).toBe('small-fixes-8-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     for (const r of RELEASES.slice(1, 9)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
