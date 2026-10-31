@@ -239,9 +239,16 @@ async function notifyAdmins(
  * effectivePermissions). A creator later moved to staff or viewer, or whose
  * permission was taken away, cannot open the template the notice tells them
  * to edit, and the notice names the organization's other skipped templates
- * too, so they are not told (slice 8 review). A failed override read falls
- * back to the role defaults, as the request gate does
- * (loadEffectivePermissions), and is reported.
+ * too, so they are not told (slice 8 review).
+ *
+ * FAILS CLOSED. When the read of the creators' memberships or either override
+ * read fails, the failure is reported once and no creator is told this run
+ * (an empty list). A creator's notice is optional, and without the overrides
+ * the answer is unknown: the role's defaults would tell a manager whose
+ * permission an override took away. The owners and admins are told as
+ * always; notifyAdmins reads them by role before this. This is deliberately
+ * not the request gate's fallback to the role's defaults
+ * (loadEffectivePermissions).
  */
 async function creatorsWhoEditTemplates(
   admin: ReturnType<typeof createAdminClient>,
@@ -270,20 +277,18 @@ async function creatorsWhoEditTemplates(
       // in-list-bound: the same creators
       .in('user_id', creatorIds),
   ]);
-  const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
-  let roleOv: Array<PermissionOverride & { role: Role }> = [];
-  let userOv: Array<PermissionOverride & { user_id: string }> = [];
-  const overridesError = roleOvRes.error ?? userOvRes.error;
-  if (overridesError) {
-    void reportError(new Error(overridesError.message), {
+  const readError = membersRes.error ?? roleOvRes.error ?? userOvRes.error;
+  if (readError) {
+    void reportError(new Error(readError.message), {
       tag: 'cron.recurring-pos.creator_permissions',
       level: 'warning',
       extra: { orgId },
     });
-  } else {
-    roleOv = (roleOvRes.data ?? []) as typeof roleOv;
-    userOv = (userOvRes.data ?? []) as typeof userOv;
+    return [];
   }
+  const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
+  const roleOv = (roleOvRes.data ?? []) as Array<PermissionOverride & { role: Role }>;
+  const userOv = (userOvRes.data ?? []) as Array<PermissionOverride & { user_id: string }>;
   return members
     .filter((m) =>
       effectivePermissions(

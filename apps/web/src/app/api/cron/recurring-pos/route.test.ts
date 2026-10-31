@@ -140,9 +140,13 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     role: QueryResult | null;
     user: QueryResult | null;
   } = { role: null, user: null };
+  /** When set, the read of the creators' memberships (by user id) fails with
+   *  this error. The owners and admins read (by role) still answers. */
+  const creatorsRead: { error: QueryResult['error'] } = { error: null };
   beforeEach(() => {
     overrides.role = null;
     overrides.user = null;
+    creatorsRead.error = null;
   });
 
   /** organization_members as each read asks: by role (owners and admins),
@@ -153,6 +157,7 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
       .filter((x): x is [string, string[]] => x !== null);
     const byRole = ins.find(([col]) => col === 'role')?.[1];
     const byUser = ins.find(([col]) => col === 'user_id')?.[1];
+    if (byUser && creatorsRead.error) return { data: null, error: creatorsRead.error };
     const rows = MEMBERS.filter(
       (m) => m.accepted && (!byRole || byRole.includes(m.role)) && (!byUser || byUser.includes(m.user_id)),
     ).map((m) => ({ user_id: m.user_id, role: m.role }));
@@ -307,21 +312,96 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
       expect(told()).toEqual(['admin-1']);
     });
 
-    it("a failed override read falls back to the role's defaults, and is reported", async () => {
-      overrides.user = { data: null, error: { message: 'permission overrides unavailable' } };
-      await runWith({
-        ...EMPTY,
-        failures: 2,
-        templatesSkipped: [
-          { templateId: 'tpl-1', name: 'Annex Paper', reason: 'Its destination was deleted.', createdBy: 'manager-1' },
-          { templateId: 'tpl-2', name: 'Dock Tape', reason: 'Its destination was deleted.', createdBy: 'staff-1' },
-        ],
+    // A failed read used to fall back to the role's defaults, so a manager
+    // whose purchase_orders:manage an override had taken away was still told,
+    // and the notice names the organization's other skipped templates too.
+    // A creator's notice is optional, so when the creator's membership or
+    // either override cannot be read, no creator is told this run: the
+    // failure is reported once, and the owners and admins (read by role,
+    // before this) are told as always.
+    describe('fails closed: a failed read tells no creator this run', () => {
+      /** The same run each time: one skipped template, created by manager-1,
+       *  a manager, who holds purchase_orders:manage by the role's defaults. */
+      const runManagerTemplate = () => runWith(skipped('manager-1'));
+      const permissionReports = () =>
+        vi
+          .mocked(reportError)
+          .mock.calls.filter(([, context]) => context.tag === 'cron.recurring-pos.creator_permissions');
+      const notice = (userId: string) =>
+        createNotification.mock.calls.find(([a]) => (a as { userId: string }).userId === userId)?.[0];
+
+      it('with every read OK, the manager creator is told (unchanged)', async () => {
+        await runManagerTemplate();
+        expect(told()).toEqual(['admin-1', 'manager-1']);
+        expect(permissionReports()).toEqual([]);
       });
-      expect(told()).toEqual(['admin-1', 'manager-1']);
-      expect(reportError).toHaveBeenCalledWith(
-        expect.any(Error),
-        expect.objectContaining({ tag: 'cron.recurring-pos.creator_permissions' }),
+
+      it('with every read OK, a manager creator whose permission an override took away is not told', async () => {
+        overrides.user = {
+          data: [{ organization_id: 'org-1', user_id: 'manager-1', permission: 'purchase_orders:manage', granted: false }],
+          error: null,
+        };
+        await runManagerTemplate();
+        expect(told()).toEqual(['admin-1']);
+        expect(permissionReports()).toEqual([]);
+      });
+
+      it.each([
+        [
+          'the role override read',
+          () => {
+            overrides.role = { data: null, error: { message: 'role overrides unavailable' } };
+          },
+          'role overrides unavailable',
+        ],
+        [
+          'the member override read',
+          () => {
+            overrides.user = { data: null, error: { message: 'member overrides unavailable' } };
+          },
+          'member overrides unavailable',
+        ],
+        [
+          "the read of the creators' memberships",
+          () => {
+            creatorsRead.error = { message: 'memberships unavailable' };
+          },
+          'memberships unavailable',
+        ],
+      ])(
+        'when %s fails, the creator is not told, the owners and admins are, and it is reported once',
+        async (_read, fail, message) => {
+          fail();
+          const res = await runManagerTemplate();
+
+          expect(res.status).toBe(200);
+          expect(await res.json()).toMatchObject({ failures: 1, templatesSkipped: 1 });
+          expect(told()).toEqual(['admin-1']);
+          expect(notice('admin-1')).toEqual(
+            expect.objectContaining({
+              organizationId: 'org-1',
+              title: 'Recurring purchase orders need attention',
+              body: expect.stringContaining('"Annex Paper" created no purchase order.'),
+            }),
+          );
+          const reports = permissionReports();
+          expect(reports).toHaveLength(1);
+          expect((reports[0]?.[0] as Error).message).toBe(message);
+          expect(reports[0]?.[1]).toEqual(
+            expect.objectContaining({ level: 'warning', extra: expect.objectContaining({ orgId: 'org-1' }) }),
+          );
+        },
       );
+
+      it('when every read fails, it is still reported once', async () => {
+        overrides.role = { data: null, error: { message: 'role overrides unavailable' } };
+        overrides.user = { data: null, error: { message: 'member overrides unavailable' } };
+        creatorsRead.error = { message: 'memberships unavailable' };
+        await runManagerTemplate();
+
+        expect(told()).toEqual(['admin-1']);
+        expect(permissionReports()).toHaveLength(1);
+      });
     });
   });
 });
