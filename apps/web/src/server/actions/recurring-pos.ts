@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
@@ -101,6 +102,7 @@ export async function createRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -135,6 +137,7 @@ export async function updateRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -166,6 +169,7 @@ export async function setRecurringTemplateEnabledAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -196,6 +200,7 @@ export async function deleteRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -224,6 +229,7 @@ export async function seedRecurringTemplateFromPoAction(poId: string): Promise<
     // No audit (read-only), no revalidate.
     return ok(seed);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

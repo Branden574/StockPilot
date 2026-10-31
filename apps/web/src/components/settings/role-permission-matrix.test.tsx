@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PERMISSIONS, PERMISSION_META } from '@stockpilot/core';
+import { ORDER_ITEMS_ROLES_LOCK_NOTE_COPY, PERMISSIONS, PERMISSION_META } from '@stockpilot/core';
 
 /**
  * The Roles & permissions matrix (W-ST-07a / 07b) on the shared Checkbox:
@@ -118,5 +118,88 @@ describe('RolePermissionMatrix', () => {
 
     expect(a.getAttribute('aria-checked')).toBe(aBefore);
     expect(b.getAttribute('aria-checked')).not.toBe(bBefore);
+  });
+});
+
+/**
+ * Roles page lock (migration 0413, design 8.5). orders:manage_catalog_visibility
+ * is platform-managed: only StockPilot support sets a member's exception, from
+ * the platform console. Org owners and admins SEE it here, read-only, in both
+ * grids, with the note saying who manages it; no box for it saves anything
+ * (the org actions and the database refuse it too). Every other permission
+ * keeps working.
+ */
+describe('RolePermissionMatrix: the platform-managed Manage order items row', () => {
+  const KEY = 'orders:manage_catalog_visibility' as const;
+  const LABEL = PERMISSION_META[KEY].label;
+
+  it('is read-only in the role grid, at its role default, with the note', () => {
+    render(
+      <RolePermissionMatrix
+        // A role row for the key cannot exist (the database refuses it); if
+        // one ever did, the resolver ignores it, and so does the grid.
+        roleOverrides={[{ role: 'staff', permission: KEY, granted: true }]}
+        userOverrides={[]}
+        members={[]}
+      />,
+    );
+    const expected: Record<string, 'true' | 'false'> = {
+      Admin: 'true',
+      Manager: 'true',
+      Staff: 'false',
+      Viewer: 'false',
+    };
+    for (const [role, checked] of Object.entries(expected)) {
+      const box = screen.getByRole('checkbox', { name: `${role} — ${LABEL}` });
+      expect(box).toBeDisabled();
+      expect(box).toHaveAttribute('aria-checked', checked);
+      fireEvent.click(box);
+    }
+    expect(setRole).not.toHaveBeenCalled();
+    const grid = screen.getByRole('region', { name: 'Permissions by role' });
+    const row = within(grid)
+      .getByRole('rowheader', { name: new RegExp(LABEL) })
+      .closest('tr')!;
+    expect(within(row).getByText(ORDER_ITEMS_ROLES_LOCK_NOTE_COPY)).toBeInTheDocument();
+    expect(within(row).getByLabelText('Owner has this by default')).toBeInTheDocument();
+    // Its neighbours still save.
+    expect(screen.getByRole('checkbox', { name: label('Staff', FIRST) })).toBeEnabled();
+  });
+
+  it("is read-only in the per-user panel and shows StockPilot's exception", () => {
+    render(
+      <RolePermissionMatrix
+        roleOverrides={[]}
+        userOverrides={[
+          { user_id: 'u-mgr', permission: KEY, granted: false },
+          { user_id: 'u-staff', permission: KEY, granted: true },
+        ]}
+        members={[
+          { userId: 'u-mgr', name: 'Morgan', role: 'manager' },
+          { userId: 'u-staff', name: 'Sam', role: 'staff' },
+        ]}
+      />,
+    );
+    const panel = () => screen.getByRole('region', { name: /^Permissions for / });
+    let box = within(panel()).getByRole('checkbox', { name: `Morgan — ${LABEL}` });
+    expect(box).toBeDisabled();
+    expect(box).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(box);
+    expect(setUser).not.toHaveBeenCalled();
+    let row = box.closest('tr')!;
+    expect(within(row).getByText('Denied by StockPilot')).toBeInTheDocument();
+    expect(within(row).getByText(ORDER_ITEMS_ROLES_LOCK_NOTE_COPY)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Member'), { target: { value: 'u-staff' } });
+    box = within(panel()).getByRole('checkbox', { name: `Sam — ${LABEL}` });
+    expect(box).toBeDisabled();
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    row = box.closest('tr')!;
+    expect(within(row).getByText('Allowed by StockPilot')).toBeInTheDocument();
+    // Another permission for the same member still saves.
+    const other = within(panel()).getByRole('checkbox', {
+      name: `Sam — ${PERMISSION_META[FIRST].label}`,
+    });
+    expect(other).toBeEnabled();
   });
 });

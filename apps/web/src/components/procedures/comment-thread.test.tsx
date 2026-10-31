@@ -2,6 +2,8 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { hydrateAcrossClockShift } from '@/test/hydration';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
@@ -37,7 +39,14 @@ function rowOf(text: string): HTMLElement {
 
 describe('Procedure discussion', () => {
   it('says so when nobody has commented', () => {
-    render(<CommentThread procedureId="p1" comments={[]} canModerate={false} />);
+    render(
+      <CommentThread
+        procedureId="p1"
+        timeZone="America/Los_Angeles"
+        comments={[]}
+        canModerate={false}
+      />,
+    );
     expect(screen.getByText('No comments yet. Start the discussion.')).toBeInTheDocument();
   });
 
@@ -45,6 +54,7 @@ describe('Procedure discussion', () => {
     render(
       <CommentThread
         procedureId="p1"
+        timeZone="America/Los_Angeles"
         comments={[comment(), comment({ id: 'c2', body: 'Mine', is_own: true })]}
         canModerate={false}
       />,
@@ -59,7 +69,14 @@ describe('Procedure discussion', () => {
   });
 
   it('an admin may edit and delete anyone’s comment', () => {
-    render(<CommentThread procedureId="p1" comments={[comment()]} canModerate />);
+    render(
+      <CommentThread
+        procedureId="p1"
+        timeZone="America/Los_Angeles"
+        comments={[comment()]}
+        canModerate
+      />,
+    );
     const row = within(rowOf('Remember to photograph damaged cartons.'));
     expect(row.getByRole('button', { name: /Edit/ })).toBeInTheDocument();
     expect(row.getByRole('button', { name: /Delete/ })).toBeInTheDocument();
@@ -69,6 +86,7 @@ describe('Procedure discussion', () => {
     render(
       <CommentThread
         procedureId="p1"
+        timeZone="America/Los_Angeles"
         comments={[
           comment({ replies: [comment({ id: 'r1', body: 'Good point.', parent_id: 'c1' })] }),
         ]}
@@ -83,6 +101,7 @@ describe('Procedure discussion', () => {
     render(
       <CommentThread
         procedureId="p1"
+        timeZone="America/Los_Angeles"
         comments={[
           comment({
             deleted_at: new Date().toISOString(),
@@ -105,6 +124,7 @@ describe('Procedure discussion', () => {
     render(
       <CommentThread
         procedureId="p1"
+        timeZone="America/Los_Angeles"
         comments={[comment({ edited_at: new Date().toISOString() })]}
         canModerate={false}
       />,
@@ -114,7 +134,14 @@ describe('Procedure discussion', () => {
 
   it('Reply opens an inline composer with Cancel', async () => {
     const user = userEvent.setup();
-    render(<CommentThread procedureId="p1" comments={[comment()]} canModerate={false} />);
+    render(
+      <CommentThread
+        procedureId="p1"
+        timeZone="America/Los_Angeles"
+        comments={[comment()]}
+        canModerate={false}
+      />,
+    );
     await user.click(screen.getByRole('button', { name: /Reply/ }));
     expect(screen.getByPlaceholderText('Reply to Dana Whitcombe…')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -125,5 +152,67 @@ describe('Procedure discussion', () => {
     render(<CommentComposer procedureId="p1" />);
     expect(screen.getByPlaceholderText('Add a comment…')).toHaveAttribute('maxlength', '5000');
     expect(screen.getByRole('button', { name: /Post/ })).toBeDisabled();
+  });
+});
+
+/**
+ * B9 review: a comment's time tooltip was new Date(at).toLocaleString(). The
+ * procedure page renders the thread on the server first (UTC on Vercel), and
+ * the <time> carries suppressHydrationWarning for its relative words, so React
+ * kept the server's title without a word: a 6:30 PM Pacific comment read
+ * "10/25/2026, 1:30:00 AM", the next day, with no zone named. It is now the
+ * organization's time, the same on both sides.
+ */
+describe("Procedure discussion — a comment's time is the organization's", () => {
+  // 6:30 PM Pacific on 24 Oct is 01:30 UTC on 25 Oct.
+  const EVENING = '2026-10-25T01:30:00.000Z';
+  const NOW = Date.parse('2026-10-26T17:00:00.000Z');
+
+  function thread(timeZone: string) {
+    return (
+      <CommentThread
+        procedureId="p1"
+        timeZone={timeZone}
+        comments={[
+          comment({
+            created_at: EVENING,
+            replies: [
+              comment({ id: 'r1', body: 'Good point.', parent_id: 'c1', created_at: EVENING }),
+            ],
+          }),
+        ]}
+        canModerate={false}
+      />
+    );
+  }
+
+  it('the server (UTC) and a Pacific browser print the same tooltip, on a comment and its reply', async () => {
+    const run = await hydrateAcrossClockShift(() => thread('America/Los_Angeles'), {
+      serverNow: NOW,
+      browserNow: NOW + 60_000,
+    });
+    try {
+      const times = Array.from(run.container.querySelectorAll('time'));
+      expect(times).toHaveLength(2);
+      for (const time of times) {
+        expect(time).toHaveAttribute('title', 'Oct 24, 2026, 6:30 PM');
+        expect(time).toHaveAttribute('dateTime', EVENING);
+      }
+      expect(run.errors).toEqual([]);
+    } finally {
+      run.unmount();
+    }
+  });
+
+  it("follows the organization's zone, not the browser's", async () => {
+    const run = await hydrateAcrossClockShift(() => thread('America/New_York'), {
+      serverNow: NOW,
+      browserNow: NOW + 60_000,
+    });
+    try {
+      expect(run.container.querySelector('time')).toHaveAttribute('title', 'Oct 24, 2026, 9:30 PM');
+    } finally {
+      run.unmount();
+    }
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
 import { challengeFactorAction } from '@/server/actions/mfa';
 
@@ -131,7 +132,10 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
     let res: Awaited<ReturnType<typeof challengeFactorAction>>;
     try {
       res = await challengeFactorAction({ factorId, code });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already on its way to
+      // sign-in, so nothing is shown here.
+      if (isControlFlow(e)) return;
       // The request itself failed (a dropped connection, a deploy that no
       // longer has the action). It used to leave the modal spinning with
       // Cancel disabled and no way out but a reload; now it says so, and the

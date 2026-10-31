@@ -717,6 +717,61 @@ describe('Items page: a staff page is planned group-aware', () => {
     expect([...new Set(props.items.map((r) => r.id))]).toEqual(props.plannedPage.pageIds);
   });
 
+  // B5 (2026-10-25): after Group selected, the new group's header can be on
+  // another page than the one the records were picked on. The done message's
+  // "Show it" link opens the list with ?group=<id>; the page is planned to
+  // the one that draws that header, by the rule instant mode turns with.
+  describe('?group= opens the page that draws the group header', () => {
+    const G = '0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b';
+    function ninety() {
+      const rows: unknown[] = [];
+      for (let i = 1; i <= 90; i++) rows.push(plain(i));
+      h.planRows = { rows, total: rows.length, valueOnHand: 90 };
+      m.inventoryList.mockImplementation(rowsFor);
+      // r070 and r071 sort on page 3 of three.
+      m.forOrgAsMember.mockResolvedValue(
+        new Map([
+          ['r070', { id: G, name: 'Pair', version: 1 }],
+          ['r071', { id: G, name: 'Pair', version: 1 }],
+        ]),
+      );
+    }
+    const tableProps = () =>
+      m.tableProps.mock.calls[0]![0] as {
+        page: number;
+        plannedPage: { page: number; pageIds: string[] };
+      };
+
+    it('staff: the group page is read and handed to the table as the page on screen', async () => {
+      h.role = 'staff';
+      ninety();
+      render(await callPage({ group: G }));
+      const ids = (m.inventoryList.mock.calls[0]![0] as { ids: string[] }).ids;
+      expect(ids).toEqual(expect.arrayContaining(['r070', 'r071']));
+      expect(tableProps().plannedPage.page).toBe(3);
+      // The pager, the footer and the address the table writes say page 3.
+      expect(tableProps().page).toBe(3);
+    });
+
+    it('wins over ?page= (the link drops it; a hand-made URL may not)', async () => {
+      h.role = 'staff';
+      ninety();
+      render(await callPage({ group: G, page: '1' }));
+      expect(tableProps().page).toBe(3);
+    });
+
+    it.each([
+      ['a group no record of this view is in', '9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a'],
+      ['anything that is not a group id', 'r070'],
+    ])('%s: the requested page, as before', async (_label, group) => {
+      h.role = 'staff';
+      ninety();
+      render(await callPage({ group, page: '2' }));
+      expect(tableProps().plannedPage.page).toBe(2);
+      expect(tableProps().page).toBe(2);
+    });
+  });
+
   it('staff over the cap keeps fixed pages, as before', async () => {
     h.role = 'staff';
     h.planRows = null;

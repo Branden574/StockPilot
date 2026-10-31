@@ -95,7 +95,7 @@ export async function GET(
     }
     // The export budget is spent only once the caller may have this export
     // (a refused caller must not spend it or trip the abuse alert).
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const { id } = await params;

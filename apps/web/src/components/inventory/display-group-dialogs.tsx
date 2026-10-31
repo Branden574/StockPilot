@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import Link from 'next/link';
 import * as React from 'react';
 
 import { MissingPhoto } from '@/components/patterns/missing-photo';
@@ -35,6 +36,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
 import { groupChoiceRadioNames } from '@/lib/inventory/grouping-radio-names';
 import { applyGroupingAction, previewGroupingAction } from '@/server/actions/item-grouping';
 import type { GroupingReview, GroupingReviewRecord } from '@/server/services/item-grouping';
@@ -152,7 +154,9 @@ function useGroupingReview(
           loading: false,
         });
       },
-      () => {
+      (e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         // No answer at all: offline, a platform error, or a deployment that
         // no longer has this action. Reads only, so a second look is safe.
         if (mine !== seq.current) return;
@@ -194,7 +198,9 @@ async function sendGrouping(
   let r: Awaited<ReturnType<typeof applyGroupingAction>>;
   try {
     r = await applyGroupingAction(body);
-  } catch {
+  } catch (e) {
+    // A redirect (the session ended) goes up as it is: nothing is shown.
+    if (isControlFlow(e)) throw e;
     // No answer: it may or may not have applied. The SAME body and key stay
     // pending, so Save replays it if it did. Never the raw error.
     return { ok: false, message: GROUPING_ERROR_WORDS.internal, stale: false };
@@ -257,6 +263,11 @@ interface GroupSelectedDialogProps {
   onAddToSelection?: (ids: string[]) => void;
   /** Called once after a grouping applied or answered no-op. */
   onDone: (outcome: GroupingOutcome) => void;
+  /** B5: the address of the list page that draws a group's header. Given
+   *  only by a list paged on the server, which cannot tell which page that is
+   *  (a list holding every record turns to the page itself): the done message
+   *  then links to it ("Show it"), and following the link closes the dialog. */
+  showGroupHref?: (groupId: string) => string;
 }
 
 export function GroupSelectedDialog({
@@ -267,6 +278,7 @@ export function GroupSelectedDialog({
   initialGroupId = null,
   onAddToSelection,
   onDone,
+  showGroupHref,
 }: GroupSelectedDialogProps) {
   const [mode, setMode] = React.useState<'new' | 'existing'>(initialGroupId ? 'existing' : 'new');
   const [name, setName] = React.useState('');
@@ -430,6 +442,20 @@ export function GroupSelectedDialog({
               {outcome.outcome === 'noop'
                 ? GROUP_COPY.noop(outcome.group?.name ?? '')
                 : GROUP_COPY.done(outcome.group?.name ?? '')}
+              {outcome.group && showGroupHref ? (
+                <>
+                  {' '}
+                  <Link
+                    href={showGroupHref(outcome.group.id)}
+                    prefetch={false}
+                    aria-label={GROUP_COPY.showItFor(outcome.group.name)}
+                    className="underline underline-offset-2"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    {GROUP_COPY.showIt}
+                  </Link>
+                </>
+              ) : null}
             </p>
             <p className="text-muted-foreground text-xs">{GROUP_COPY.skuNote}</p>
           </div>

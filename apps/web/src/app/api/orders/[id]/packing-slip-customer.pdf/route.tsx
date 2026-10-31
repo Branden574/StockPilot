@@ -48,7 +48,7 @@ export async function GET(
     // The export budget is spent only on an order the caller can open, in a
     // state that has this slip (a refused caller must not spend the shared
     // budget or trip the export abuse alert).
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     // Warehouse address + contact powers the FROM block and the

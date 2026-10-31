@@ -182,7 +182,25 @@ export interface InstantModeState {
   rack: string;
   sort: InstantModeSort;
   page: number;
+  /** ?group=<display group id> (B5, 2026-10-25): show the page that draws this
+   *  group's header instead of `page`, when the group forms in the view (two
+   *  or more of its records in it); otherwise `page` stands. The "Show it" link
+   *  after Group selected carries it, and the table drops it from the address
+   *  once that page is on screen. Null (or absent) for every other URL. */
+  group?: string | null;
 }
+
+/** A display group id as the ?group= parameter carries it: one uuid, lower
+ *  case. Anything else (an array, a list, garbage) is no group, so the page
+ *  stands. */
+export function parseRevealGroupParam(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  return DISPLAY_GROUP_ID_RE.test(v) ? v : null;
+}
+
+/** item_display_groups.id is a uuid. */
+const DISPLAY_GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function coerceStatus(value: unknown): InstantModeState['status'] {
   // Mirrors the pages' lifecycleStatus coercion (exact string match,
@@ -236,6 +254,7 @@ export function instantStateFromPageParams(params: {
   loc?: string | string[];
   charter?: string | string[];
   rack?: string;
+  group?: string | string[];
 }): InstantModeState {
   return {
     q: typeof params.q === 'string' ? params.q : '',
@@ -249,6 +268,7 @@ export function instantStateFromPageParams(params: {
     rack: typeof params.rack === 'string' ? params.rack : '',
     sort: coerceSort(params.sort),
     page: coercePage(params.page),
+    group: parseRevealGroupParam(params.group),
   };
 }
 
@@ -270,6 +290,11 @@ export function instantStateFromSearchParams(params: {
     rack: params.get('rack') ?? '',
     sort: coerceSort(params.get('sort') ?? undefined),
     page: coercePage(params.get('page') ?? undefined),
+    // getAll, so a repeated ?group= is garbage here exactly as the page
+    // params' array is on the server.
+    group: parseRevealGroupParam(
+      params.getAll('group').length > 1 ? undefined : (params.get('group') ?? undefined),
+    ),
   };
 }
 
@@ -567,6 +592,50 @@ export function runAwarePages<
   return pages;
 }
 
+/**
+ * The 1-based page of `pages` (runAwarePages' packing) that draws a display
+ * group's header, or null when the group does not form a unit there: fewer
+ * than two of its records in the set (a lone record renders as a row with an
+ * "In group" chip, no header), or none at all. A formed unit is never cut, so
+ * its records are all on the one page found. Pure. (B5)
+ */
+export function pageHoldingDisplayGroup(
+  pages: ReadonlyArray<ReadonlyArray<{ id: string; display_group_id?: string | null }>>,
+  groupId: string,
+): number | null {
+  const records = new Set<string>();
+  let first = 0;
+  for (let i = 0; i < pages.length; i++) {
+    for (const r of pages[i] ?? []) {
+      if (r.display_group_id !== groupId) continue;
+      records.add(r.id);
+      if (first === 0) first = i + 1;
+    }
+  }
+  return records.size >= 2 ? first : null;
+}
+
+/**
+ * Instant mode's answer to "which page draws this group's header?" over the
+ * whole dataset and the view's state (every filter, the sort; the page is
+ * ignored): the same filter, sort and packing deriveInstantView pages with.
+ * Null when the group does not form in this view. (B5: after Group selected
+ * the table turns to this page.)
+ */
+export function findDisplayGroupPage<T extends InstantModeRow>(
+  rows: readonly T[],
+  state: InstantModeState,
+  view: 'items' | 'books',
+  pageSize: number,
+  groupId: string,
+): number | null {
+  const sorted = sortInstantRows(filterInstantRows(rows, state, view), state.sort);
+  return pageHoldingDisplayGroup(
+    runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' }),
+    groupId,
+  );
+}
+
 export interface InstantViewResult<T> {
   /** Filtered ITEM-ROW count (item-level — placement expansion happens
    *  after pagination, exactly like the server pages). Backs pagination:
@@ -651,7 +720,11 @@ export function deriveInstantView<T extends InstantModeRow>(
   // is this page.
   const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
-  const page = Math.min(Math.max(1, state.page), pageCount);
+  // ?group= (B5): the page that draws that group's header, when it forms in
+  // this view; planGroupAwarePage answers a server page the same way.
+  const requested =
+    (state.group ? pageHoldingDisplayGroup(pages, state.group) : null) ?? state.page;
+  const page = Math.min(Math.max(1, requested), pageCount);
   const pageItems = pages[page - 1] ?? [];
   let pageStartIndex = 0;
   for (let i = 0; i < page - 1; i++) pageStartIndex += pages[i]?.length ?? 0;
@@ -832,6 +905,10 @@ export interface PlannedServerPage {
  * filters; each row carries its display group), sort it exactly as instant
  * mode does and pack it with runAwarePages, so a staff member's page holds
  * the same units, in the same order, as a manager's. Pure.
+ *
+ * `revealGroupId` (?group=, B5): plan the page that draws that display
+ * group's header instead of `page`, when the group forms in the view; the
+ * rule deriveInstantView applies to instant mode.
  */
 export function planGroupAwarePage<T extends InstantModeRow>(
   rows: readonly T[],
@@ -839,11 +916,13 @@ export function planGroupAwarePage<T extends InstantModeRow>(
   page: number,
   pageSize: number,
   view: 'items' | 'books',
+  revealGroupId: string | null = null,
 ): PlannedServerPage {
   const sorted = sortInstantRows(rows, sort);
   const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
-  const clamped = Math.min(Math.max(1, Math.floor(page) || 1), pageCount);
+  const requested = (revealGroupId ? pageHoldingDisplayGroup(pages, revealGroupId) : null) ?? page;
+  const clamped = Math.min(Math.max(1, Math.floor(requested) || 1), pageCount);
   const pageItems = pages[clamped - 1] ?? [];
   let pageStartIndex = 0;
   for (let i = 0; i < clamped - 1; i++) pageStartIndex += pages[i]?.length ?? 0;

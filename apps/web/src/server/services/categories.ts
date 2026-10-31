@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   countingUnitSchema,
   DEFAULT_SUBCATEGORY_PROFILES,
+  hexColorSchema,
   SPORTS_ERROR_META,
   SPORTS_SUBCATEGORIES,
   trackingModeSchema,
@@ -24,14 +25,13 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { assertStoredColor } from './lib/stored-color';
 
 export const createCategorySchema = z.object({
   name: z.string().min(1).max(120).trim(),
   description: z.string().max(2000).optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color like #6366f1')
-    .optional(),
+  /** The `#rrggbb` form the app writes, the same for tags (core hex-color.ts). */
+  color: hexColorSchema.optional(),
   parentId: z.string().uuid().nullable().optional(),
   supportsSizes: z.boolean().optional(),
   /** Category-level tracking policy override. Gated on `sports:manage`. */
@@ -360,6 +360,7 @@ export class CategoriesService {
 
   async create(input: CreateCategoryInput) {
     assertPermission(this.ctx, 'categories:manage');
+    assertStoredColor(input.color);
     this.assertSportsWriteAllowed(input);
     if (input.trackingProfile) CategoriesService.assertProfileConsistent(input.trackingProfile);
     this.assertResolvedSportsStateValid({
@@ -402,6 +403,7 @@ export class CategoriesService {
 
   async update(id: string, patch: UpdateCategoryInput) {
     assertPermission(this.ctx, 'categories:manage');
+    assertStoredColor(patch.color);
     this.assertSportsWriteAllowed(patch);
     if (patch.trackingProfile) CategoriesService.assertProfileConsistent(patch.trackingProfile);
     // Merge over the row as it stands: a key the patch leaves alone still

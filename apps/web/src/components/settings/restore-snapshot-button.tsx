@@ -9,6 +9,7 @@ import { Loader2, TriangleAlert } from 'lucide-react';
 import { useStepUp } from '@/components/auth/step-up-modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
 import { useHydrated } from '@/lib/use-hydrated';
 import {
   restoreFromPointAction,
@@ -101,7 +102,9 @@ export function RestoreSnapshotButton({
               noAuditAccess: r.error.details?.reason === 'audit_log_hidden',
             },
       );
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       setSkuCheck({ state: 'failed' });
     }
   }

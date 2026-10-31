@@ -20,7 +20,7 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 // rejection tests below can assert the breadcrumb actually fires, not just
 // that the rejection was swallowed.
 const reportErrorMock = vi.fn(async (..._args: unknown[]) => undefined);
-vi.mock('@/lib/error-reporter', () => ({
+vi.mock('@/lib/error-reporter-core', () => ({
   reportError: (...args: unknown[]) => reportErrorMock(...args),
 }));
 
@@ -34,8 +34,8 @@ import {
 } from '@stockpilot/core';
 
 /** The routing DTO every render below hands the component — the compiled
- *  pair (what the server resolves for L4L, whose seed preserves today's
- *  values), so every existing pin stays on pre-feature behavior. */
+ *  sample pair, standing in for what the server resolves for a configured
+ *  org, so every existing pin stays on pre-feature behavior. */
 const TEST_ROUTING = {
   to: L4L_MAINTENANCE_RECIPIENTS.to,
   cc: L4L_MAINTENANCE_RECIPIENTS.cc,
@@ -83,7 +83,7 @@ const CONDENSED_BUT_FITS_INPUT: MaintenanceEmailContent = {
   priority: 'high',
   submittedAtDisplay: 'August 5, 2026 at 9:15 AM',
   requesterName: 'Jane Smith',
-  requesterEmail: 'jane.smith@learn4life.org',
+  requesterEmail: 'jane.smith@sampleorg.test',
   requesterPhone: '(555) 555-0199',
   siteName: 'Fresno Learning Center',
   department: 'Operations',
@@ -204,7 +204,7 @@ describe('Open in Outlook (component tests 7, 14)', () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
     const [url, target, features] = openSpy.mock.calls[0]!;
     expect(String(url)).toContain('outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=');
-    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@learn4life.org')));
+    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@sampleorg.test')));
     expect(target).toBe('_blank');
     expect(features).toBeUndefined(); // 'noopener' would return null even on success
     const handle = openSpy.mock.results[0]!.value as { opener: unknown };
@@ -284,7 +284,7 @@ describe('IMPORTANT 1 fix: recordMaintenanceDraftOpenedAction rejection is absor
     );
   });
 
-  it('blocked path (mailto fallback call site): recovery panel still renders, no unhandled rejection', async () => {
+  it('blocked path (mailto fallback): recovery panel renders, and there is no record call to reject (nothing is recorded there)', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
     recordAction.mockRejectedValueOnce(new Error('offline'));
     const unhandled: unknown[] = [];
@@ -300,10 +300,8 @@ describe('IMPORTANT 1 fix: recordMaintenanceDraftOpenedAction rejection is absor
     await new Promise((resolve) => setTimeout(resolve, 0));
     process.off('unhandledRejection', onUnhandledRejection);
     expect(unhandled).toEqual([]);
-    expect(reportErrorMock).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tag: 'maintenance.draft-opened.record' }),
-    );
+    expect(recordAction).not.toHaveBeenCalled();
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 });
 
@@ -343,24 +341,61 @@ describe('duplicate-draft protection (component test 11; brief section 21)', () 
 });
 
 describe('popup blocked (component test 8; brief section 19)', () => {
-  it('falls back: message, mailto once, all four recovery actions, still records ONE draft', async () => {
+  it('falls back: message, mailto once, all four recovery actions, and records NO draft (the browser cannot confirm the email app opened)', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
     expect(await screen.findByText('Outlook could not be opened automatically.')).toBeInTheDocument();
     expect(assignSpy).toHaveBeenCalledTimes(1);
-    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@learn4life\.org\?cc=arosas%40cvwest\.org/);
+    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@sampleorg\.test\?cc=jstone%40site1\.test/);
     for (const label of ['Try Outlook Again', 'Open in Default Email App', 'Copy Email Details']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
+    // "Email draft opened" (outlook_draft_opened_at, the 'draft_opened'
+    // status) is recorded only for an open the browser confirmed: a mailto:
+    // navigation with no registered handler is a silent no-op, and recording
+    // it would silence the 24 h unsent-draft reminder (it reminds 'saved'
+    // requests only) and show "Email draft opened" on an escalated exception.
+    expect(recordAction).not.toHaveBeenCalled();
+    // Second blocked click: no second mailto navigation, still no record.
+    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    expect(assignSpy).toHaveBeenCalledTimes(1);
+    expect(recordAction).not.toHaveBeenCalled();
+  });
+  it('the mailto fallback is not recorded even when the navigation throws, and a later Outlook tab that opens IS recorded', async () => {
+    openSpy.mockReturnValueOnce(null as unknown as Window);
+    assignSpy.mockImplementation(() => {
+      throw new Error('navigation refused');
+    });
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(
+      await screen.findByText('Outlook could not be opened automatically.'),
+    ).toBeInTheDocument();
+    expect(recordAction).not.toHaveBeenCalled();
+    // Try Outlook Again runs the same handler; this time the tab opens.
+    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    expect(openSpy).toHaveBeenCalledTimes(2);
     expect(recordAction).toHaveBeenCalledTimes(1);
     // Minor 4: the count alone lets a hardcoded foreign UUID survive —
     // pin the ARGUMENT too, so recording under the wrong request id fails.
     expect(recordAction).toHaveBeenCalledWith('r1');
-    // Second blocked click: no second mailto navigation, no second record.
-    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
-    expect(assignSpy).toHaveBeenCalledTimes(1);
-    expect(recordAction).toHaveBeenCalledTimes(1);
+  });
+  it('after the fallback, Open in Outlook on this page still asks first: the email app may have opened a draft', async () => {
+    openSpy.mockReturnValue(null as unknown as Window);
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(
+      await screen.findByText('Outlook could not be opened automatically.'),
+    ).toBeInTheDocument();
+    openSpy.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        'A maintenance email draft was already opened for this request. Sending multiple copies may create duplicate Zendesk tickets.',
+      ),
+    ).toBeInTheDocument();
   });
   it('never shows the success message when blocked', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
@@ -397,11 +432,11 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const written = vi.mocked(navigator.clipboard.writeText).mock.calls[0]![0] as string;
-    expect(written).toContain('TO: dc4@learn4life.org');
-    expect(written).toContain('CC: arosas@cvwest.org');
+    expect(written).toContain('TO: dc4@sampleorg.test');
+    expect(written).toContain('CC: jstone@site1.test');
     expect(
       await screen.findByText(
-        'Maintenance request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Maintenance request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     ).toBeInTheDocument();
   });
@@ -411,7 +446,7 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const area = await screen.findByRole('textbox');
     expect(area).toHaveAttribute('readonly');
-    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
+    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
   });
   it('Minor 5: copies the FULL body even when the open-link draft is condensed (mutation self-check: rebuilding clipboard from prepared.draft.body must fail this)', async () => {
     // CONDENSED_BUT_FITS_INPUT drives prepared.draft.condensed === true, so
@@ -463,7 +498,6 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
   ];
@@ -472,6 +506,8 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     for (const banned of BANNED_PHRASES) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   }
 
   it('success state: no forbidden phrase after a successful open', async () => {

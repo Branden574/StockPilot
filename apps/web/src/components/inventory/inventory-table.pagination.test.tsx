@@ -83,6 +83,43 @@ describe('Pagination jump-to-page popover', () => {
   });
 });
 
+// B9: the pager printed its figures raw ("Showing 1201–1250 of 52345") right
+// under the summary line, which formats the same total ("52,345 items").
+describe('Pagination figures', () => {
+  it('prints the row range, the total and the page count with thousands separators', () => {
+    render(
+      <Pagination
+        page={25}
+        pageSize={50}
+        total={52345}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+      />,
+    );
+    expect(screen.getByText(/^Showing/)).toHaveTextContent('Showing 1,201–1,250 of 52,345');
+    expect(screen.getByRole('button', { name: /jump to page/i })).toHaveTextContent(
+      'Page 25 of 1,047',
+    );
+  });
+
+  it('labels a jump-grid page past 999 the way the trigger prints it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Pagination
+        page={1000}
+        pageSize={50}
+        total={50_050}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /jump to page/i });
+    expect(trigger).toHaveTextContent('Page 1,000 of 1,001');
+    await user.click(trigger);
+    const current = await screen.findByRole('link', { current: 'page' });
+    expect(current).toHaveTextContent('1,000');
+    expect(current).toHaveAttribute('href', '/dashboard/inventory?page=1000');
+  });
+});
+
 describe('Pagination adjacent-page prefetch', () => {
   it('settled SERVER mode (no onNavigate, no pending instant): Prev and Next fully prefetch — the two adjacent pages only', async () => {
     const user = userEvent.setup();

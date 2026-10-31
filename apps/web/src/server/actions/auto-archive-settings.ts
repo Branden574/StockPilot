@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { autoArchiveSettingsSchema, type AutoArchiveSettings } from '@/server/services/auto-archive';
 import { ServiceError, withContext } from '@/server/services/context';
@@ -84,6 +85,7 @@ export async function setAutoArchiveSettingsAction(
     revalidatePath('/dashboard/settings/inventory-cleanup');
     return ok({ settings });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

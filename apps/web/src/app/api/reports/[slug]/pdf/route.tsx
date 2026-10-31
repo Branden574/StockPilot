@@ -4,7 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
+import { prefetchImagesAsDataUris, prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { REPORT_PDF_SECTIONS } from '@/lib/pdf/report-configs';
 import {
   ReportTablePdf,
@@ -111,7 +111,7 @@ export async function GET(
         throw new ServiceError('validation_error', 'Choose a charter.');
       }
     }
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const imagesSvc = new ItemImagesService(ctx);
@@ -133,7 +133,10 @@ export async function GET(
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     // ── Slug dispatch ───────────────────────────────────────────────
     let title = '';

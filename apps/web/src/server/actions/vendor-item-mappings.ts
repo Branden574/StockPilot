@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ServiceError } from '@/server/services/context';
 import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
 
@@ -26,6 +27,7 @@ export async function upsertVendorItemMappingAction(
     revalidatePath('/dashboard/admin/vendor-mappings');
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -40,6 +42,7 @@ export async function deleteVendorItemMappingAction(
     revalidatePath('/dashboard/admin/vendor-mappings');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

@@ -35,7 +35,9 @@
  *                      Mondays) in the workspace's time zone.
  * Rendering-only swap: empty-skip, membership/opt-in rechecks,
  * List-Unsubscribe headers, and digest_section_* gating all stay in the
- * cron/action wiring, byte-identical.
+ * cron/action wiring, byte-identical. The wiring hands in the footer's
+ * Unsubscribe link (`unsubscribeUrl`, B15): its signed one-click link for the
+ * recipient, the same URL as its List-Unsubscribe header.
  */
 
 import { formatCalendarDate, formatCycleCountNumber, resolveOrgTimezone } from '@stockpilot/core';
@@ -81,41 +83,57 @@ const DIGEST_PREVIEW_DEF = esEmailById('digest-preview');
 export const DIGEST_FROM = DIGEST_DEF.from;
 
 /**
- * Subject dateline format, unchanged from the legacy template
- * ("Monday, July 20, 2026") so cron subjects stay byte-identical
- * across the redesign.
+ * The digest's days are the ORGANIZATION's (small fixes slice 8): its
+ * subject's dateline, the "As of" pill, the plain text's dateline and a cycle
+ * count's "started" day. They were formatted with no zone, so in the
+ * server's (UTC on Vercel): the Monday 14:00 UTC run is already Tuesday from
+ * UTC+10 east, and a preview sent after 5 PM in Los Angeles is tomorrow in
+ * UTC. The zone goes through resolveOrgTimezone like every org-time surface:
+ * unset or unknown, it is the documented default.
  */
-export const DIGEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  weekday: 'long',
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-});
-
-const MONTH_DAY_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-});
-
-export function weeklyDigestSubject(now: Date = new Date()): string {
-  // Accept an explicit `now` so callers can lock the subject to the
-  // cron-start time even if rendering individual emails takes a long
-  // time. Default to the current wall clock for preview / one-shot use.
-  return DIGEST_DEF.subject({ date: DIGEST_DATE_FMT.format(now) });
+function formatInOrgZone(
+  at: Date,
+  opts: Intl.DateTimeFormatOptions,
+  timeZone: string | null | undefined,
+): string {
+  return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: resolveOrgTimezone(timeZone) }).format(at);
 }
 
-export function weeklyDigestPreviewSubject(now: Date = new Date()): string {
-  return DIGEST_PREVIEW_DEF.subject({ date: DIGEST_DATE_FMT.format(now) });
+/**
+ * Subject dateline ("Monday, July 20, 2026"), the legacy template's words, in
+ * the organization's zone.
+ */
+function digestDateline(now: Date, timeZone: string | null | undefined): string {
+  return formatInOrgZone(now, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }, timeZone);
+}
+
+/** "Jun 15", in the organization's zone. */
+function digestMonthDay(at: Date, timeZone: string | null | undefined): string {
+  return formatInOrgZone(at, { month: 'short', day: 'numeric' }, timeZone);
+}
+
+/**
+ * The Monday digest's subject. Accept an explicit `now` so callers can lock
+ * the subject to the cron-start time even if rendering individual emails
+ * takes a long time; `timeZone` is the organization's.
+ */
+export function weeklyDigestSubject(now: Date = new Date(), timeZone?: string | null): string {
+  return DIGEST_DEF.subject({ date: digestDateline(now, timeZone) });
+}
+
+export function weeklyDigestPreviewSubject(now: Date = new Date(), timeZone?: string | null): string {
+  return DIGEST_PREVIEW_DEF.subject({ date: digestDateline(now, timeZone) });
 }
 
 /**
  * Pill label: the day the digest's numbers were read ("As of Jun 15"), on the
- * same clock as the subject's dateline. The registry badge is the design's
- * date range ("Jun 8 – 14"); the payload is current state, not a week of
- * activity, so a range would say something the email does not show.
+ * same clock and in the same zone as the subject's dateline. The registry
+ * badge is the design's date range ("Jun 8 – 14"); the payload is current
+ * state, not a week of activity, so a range would say something the email
+ * does not show.
  */
-export function digestAsOfLabel(now: Date = new Date()): string {
-  return `As of ${MONTH_DAY_FMT.format(now)}`;
+export function digestAsOfLabel(now: Date = new Date(), timeZone?: string | null): string {
+  return `As of ${digestMonthDay(now, timeZone)}`;
 }
 
 /**
@@ -164,14 +182,22 @@ export function digestScheduleLabel(timeZone: string | null | undefined, sendAt:
 export interface WeeklyDigestRenderOptions {
   orgName: string;
   appUrl: string;
+  /** The Notifications settings page: the footer's "Manage email preferences". */
   settingsUrl: string;
+  /**
+   * The footer's "Unsubscribe": the sender's signed one-click link for this
+   * recipient (lib/email/member-unsubscribe.ts), which works signed out.
+   * Missing: the settings page, as before.
+   */
+  unsubscribeUrl?: string;
   /** Recipient's full name; missing → the design's "Hi —" fallback. */
   recipientName?: string | null;
   /** Preview variant: purple strip before the brand row, no motion. */
   preview?: boolean;
   /** Injectable clock for deterministic subjects/ranges in tests. */
   now?: Date;
-  /** organizations.timezone, for the send time the footer states. */
+  /** organizations.timezone: the days the email prints (its title, the "As
+   *  of" pill, a count's "started" day) and the send time the footer states. */
   timeZone?: string | null;
 }
 
@@ -270,7 +296,7 @@ export function renderWeeklyDigestHtml(
     .slice(0, IN_PROGRESS_ROW_CAP)
     .map((cc) => ({
       titleHtml: `Cycle count${cycleCountRefSuffix(cc.countNumber)} — ${escapeHtml(cc.scopeLabel)}`,
-      detailHtml: `${cc.countedLines}/${cc.totalLines} counted &middot; started ${MONTH_DAY_FMT.format(new Date(cc.startedAt))}`,
+      detailHtml: `${cc.countedLines}/${cc.totalLines} counted &middot; started ${digestMonthDay(new Date(cc.startedAt), opts.timeZone)}`,
     }));
   if (cycleCounts.length > IN_PROGRESS_ROW_CAP) {
     progressRows.push({
@@ -312,8 +338,8 @@ export function renderWeeklyDigestHtml(
       : 'All clear — nothing needs your attention this week.';
 
   const subject = preview
-    ? weeklyDigestPreviewSubject(now)
-    : weeklyDigestSubject(now);
+    ? weeklyDigestPreviewSubject(now, opts.timeZone)
+    : weeklyDigestSubject(now, opts.timeZone);
 
   // ── Compose ────────────────────────────────────────────────────────
   const rows: string[] = [];
@@ -325,7 +351,7 @@ export function renderWeeklyDigestHtml(
       [
         statusPill({
           variant: 'info',
-          label: digestAsOfLabel(now),
+          label: digestAsOfLabel(now, opts.timeZone),
           dot: false,
         }),
         headline({
@@ -388,12 +414,16 @@ export function renderWeeklyDigestHtml(
         digestScheduleLabel(opts.timeZone, digestSendAt(now, preview ? 'next' : 'this-week')),
       )}.`,
       // The digest archetype shortens the pref boilerplate (see the
-      // FOOTER_NOTES flag in components.ts) — passed explicitly so the
-      // bytes match archetype-digest.html:118.
-      note: 'Unsubscribing stops this notification type only.',
+      // FOOTER_NOTES flag in components.ts), passed explicitly. Its words
+      // differ from archetype-digest.html:118 on purpose (B15, integrator
+      // decision 2): the digest switch is an account setting, so the
+      // Unsubscribe link stops it in every workspace, and Gmail's own
+      // Unsubscribe button posts the link without showing our confirm page,
+      // so this line is all a one-click reader sees first.
+      note: 'Unsubscribing stops the weekly digest only, in every workspace you belong to.',
       urls: {
         manage: settingsUrl,
-        unsubscribe: settingsUrl,
+        unsubscribe: opts.unsubscribeUrl ?? settingsUrl,
         support: `${appUrl}/dashboard/support`,
       },
     }),
@@ -424,6 +454,12 @@ export interface WeeklyDigestTextOptions {
   orgName: string;
   appUrl: string;
   settingsUrl: string;
+  /** The signed one-click link (see WeeklyDigestRenderOptions). */
+  unsubscribeUrl?: string;
+  /** The moment the digest was built (the cron's start); default now. */
+  now?: Date;
+  /** organizations.timezone: the days the text prints. */
+  timeZone?: string | null;
 }
 
 export function weeklyDigestText(
@@ -431,7 +467,7 @@ export function weeklyDigestText(
   opts: WeeklyDigestTextOptions,
 ): string {
   const { orgName, appUrl, settingsUrl } = opts;
-  const date = DIGEST_DATE_FMT.format(new Date());
+  const date = digestDateline(opts.now ?? new Date(), opts.timeZone);
   const blocks: string[] = [`StockPilot weekly digest`, `${orgName} · ${date}`, ''];
 
   if (payload.lowStock.length > 0) {
@@ -469,7 +505,11 @@ export function weeklyDigestText(
   if (payload.openCycleCounts.length > 0) {
     blocks.push('CYCLE COUNTS IN PROGRESS');
     for (const cc of payload.openCycleCounts) {
-      const started = new Date(cc.startedAt).toLocaleDateString('en-US');
+      const started = formatInOrgZone(
+        new Date(cc.startedAt),
+        { year: 'numeric', month: 'numeric', day: 'numeric' },
+        opts.timeZone,
+      );
       const wh = cc.scopeLabel;
       const ref = formatCycleCountNumber(cc.countNumber);
       const pct =
@@ -483,5 +523,10 @@ export function weeklyDigestText(
     blocks.push(`  → ${appUrl}/dashboard/cycle-counts`, '');
   }
   blocks.push(`Manage preferences: ${settingsUrl}`);
+  // The signed link works signed out, so a text-only reader can unsubscribe
+  // too. The settings page is already the line above.
+  if (opts.unsubscribeUrl && opts.unsubscribeUrl !== settingsUrl) {
+    blocks.push(`Unsubscribe: ${opts.unsubscribeUrl}`);
+  }
   return blocks.join('\n');
 }

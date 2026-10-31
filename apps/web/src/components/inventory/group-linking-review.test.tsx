@@ -16,6 +16,8 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push: vi.fn() }
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/server/actions/product-group-linking', () => ({ linkFamilyAction }));
 
+import { hydrateAcrossClockShift } from '@/test/hydration';
+
 import { GroupLinkingReview, type ReviewSuggestion } from './group-linking-review';
 
 const SUGGESTION: ReviewSuggestion = {
@@ -119,5 +121,36 @@ describe('GroupLinkingReview', () => {
   it('says so when the destination list is capped', () => {
     renderReview(true);
     expect(screen.getByText(/Showing the first 1 groups\./)).toBeInTheDocument();
+  });
+
+  // B9: the cap was `n.toLocaleString()`, the RUNTIME's locale. The review
+  // page renders on the server (en-US: "2,000"), so a German browser hydrated
+  // "2.000" and React discarded the server HTML (error #418).
+  it('prints the cap in the app format, the same on the server and in a German browser', async () => {
+    const at = Date.parse('2026-10-24T18:00:00.000Z');
+    // The picker's cap (ProductGroupsService.listForPicker).
+    const groups = Array.from({ length: 2000 }, (_, i) => ({
+      id: `g-${i}`,
+      name: `Group ${i}`,
+      brand: null,
+      model: null,
+    }));
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <GroupLinkingReview
+          suggestions={[SUGGESTION]}
+          existingGroups={groups}
+          groupsTruncated
+          subcategoryKeys={['shoes']}
+        />
+      ),
+      { serverNow: at, browserNow: at, browserLocale: 'de-DE' },
+    );
+    try {
+      expect(run.errors).toEqual([]);
+      expect(run.container).toHaveTextContent('Showing the first 2,000 groups.');
+    } finally {
+      run.unmount();
+    }
   });
 });

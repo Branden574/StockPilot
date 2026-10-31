@@ -1,6 +1,7 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -183,6 +184,11 @@ describe('LocationsManager — header, groups and archive guard (redesign)', () 
     await user.click(screen.getByRole('button', { name: /archive dc4/i }));
     await user.click(await screen.findByRole('button', { name: 'Archive' }));
     expect(await screen.findByText('12 units of 3 items are still here.')).toBeInTheDocument();
+    // Announced: the guard's words are the dialog's alert line. A screen reader
+    // does not read a dialog's description again when it changes.
+    expect(within(screen.getByRole('dialog')).getByRole('alert')).toHaveTextContent(
+      '12 units of 3 items are still here.',
+    );
     await user.click(screen.getByRole('button', { name: 'Archive anyway' }));
     expect(vi.mocked(archiveLocationAction).mock.calls.map((c) => c[1])).toEqual([
       { acknowledgeStock: false },
@@ -196,5 +202,153 @@ describe('LocationsManager — header, groups and archive guard (redesign)', () 
     const edit = within(siteRow as HTMLElement).getByRole('button', { name: 'Edit' });
     const cell = edit.closest('td')!;
     expect(cell.className.split(/\s+/)).not.toContain('flex');
+  });
+});
+
+/**
+ * B9 review: once the actions passed the stock guard's details through, its
+ * refusal reached the dialog, but only as the dialog's description, which is
+ * not a live region, so a screen reader heard nothing after Archive except the
+ * button's new name. Every other refusal of archive or restore was only a
+ * toast, and a toast sits behind an open dialog (L112). Each refusal is now
+ * the dialog's role="alert" line, cleared on open and on each try, as in the
+ * warehouses, charters and bins managers.
+ */
+describe('LocationsManager — refusals are announced inside the dialog', () => {
+  const STOCK = {
+    ok: false,
+    error: {
+      code: 'validation_error',
+      message: '12 units of 3 items are still here.',
+      details: { locationHoldsStock: true },
+    },
+  };
+
+  beforeEach(async () => {
+    const actions = await import('@/server/actions/locations');
+    vi.mocked(actions.archiveLocationAction).mockReset();
+    vi.mocked(actions.restoreLocationAction).mockReset();
+    vi.mocked(toast.error).mockReset();
+  });
+
+  it('archive: any other refusal is an alert in the dialog, and the button stays Archive', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction)
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'internal_error', message: 'Could not verify this location is empty.' },
+      } as never)
+      .mockResolvedValueOnce({ ok: true, data: undefined } as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'Could not verify this location is empty.',
+      ),
+    );
+    // Nothing to acknowledge: not the stock guard, so no Archive anyway.
+    expect(within(dialog).queryByRole('button', { name: 'Archive anyway' })).toBeNull();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not verify this location is empty.');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(vi.mocked(archiveLocationAction).mock.calls.map((c) => c[1])).toEqual([
+      { acknowledgeStock: false },
+      { acknowledgeStock: false },
+    ]);
+  });
+
+  it('archive: the stock refusal is not a toast, only the alert', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction).mockResolvedValueOnce(STOCK as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await within(dialog).findByRole('button', { name: 'Archive anyway' });
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      '12 units of 3 items are still here.',
+    );
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+
+  it('archive: when Archive anyway is refused for another reason, the stock is not acknowledged again until its words are back', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction)
+      .mockResolvedValueOnce(STOCK as never)
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'internal_error', message: 'An internal error occurred. Please try again.' },
+      } as never)
+      .mockResolvedValueOnce(STOCK as never)
+      .mockResolvedValueOnce({ ok: true, data: undefined } as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Archive anyway' }));
+    // The new refusal replaces the guard's words, so the button goes back to
+    // Archive: it never acknowledges stock whose words are not on screen.
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'An internal error occurred. Please try again.',
+      ),
+    );
+    expect(within(dialog).queryByRole('button', { name: 'Archive anyway' })).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        '12 units of 3 items are still here.',
+      ),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Archive anyway' }));
+    expect(vi.mocked(archiveLocationAction).mock.calls.map((c) => c[1])).toEqual([
+      { acknowledgeStock: false },
+      { acknowledgeStock: true },
+      { acknowledgeStock: false },
+      { acknowledgeStock: true },
+    ]);
+  });
+
+  it('archive: reopening the dialog starts clean, with no old refusal and plain Archive', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction).mockResolvedValueOnce(STOCK as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const first = await screen.findByRole('dialog');
+    await user.click(within(first).getByRole('button', { name: 'Archive' }));
+    await within(first).findByRole('button', { name: 'Archive anyway' });
+    await user.click(within(first).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const again = await screen.findByRole('dialog');
+    expect(within(again).queryByRole('alert')).toBeNull();
+    expect(within(again).getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+  });
+
+  it('restore: a refusal is an alert in the restore dialog', async () => {
+    const { restoreLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(restoreLocationAction).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'A location with this name already exists.' },
+    } as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
+    await user.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'A location with this name already exists.',
+      ),
+    );
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'A location with this name already exists.',
+    );
   });
 });

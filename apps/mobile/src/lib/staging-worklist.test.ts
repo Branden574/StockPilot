@@ -51,7 +51,7 @@ function wireRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     sourceKind: 'staging',
     quantity: 10,
     sourceReceiptId: '44444444-4444-4444-8444-444444444444',
-    sourcePoNumber: 'CVW-002201',
+    sourcePoNumber: 'DEMO-002201',
     receiptNumber: 'RCV-1042',
     receivedAt: '2026-07-20T12:00:00.000Z',
     ageDays: 2,
@@ -153,10 +153,10 @@ describe('age + staleness match the web table', () => {
 
 describe('source cell parity with the web SourceCell', () => {
   it('joins PO and receipt with a spaced slash', () => {
-    expect(stagingSourceLabel('CVW-002201', 'RCV-1042')).toBe('CVW-002201 / RCV-1042');
+    expect(stagingSourceLabel('DEMO-002201', 'RCV-1042')).toBe('DEMO-002201 / RCV-1042');
   });
   it('shows whichever identifier exists on its own', () => {
-    expect(stagingSourceLabel('CVW-002201', null)).toBe('CVW-002201');
+    expect(stagingSourceLabel('DEMO-002201', null)).toBe('DEMO-002201');
     expect(stagingSourceLabel(null, 'RCV-1042')).toBe('RCV-1042');
   });
   it('shows the em dash when the row has no PO source at all', () => {
@@ -285,7 +285,7 @@ describe('parseStagingWorklist', () => {
     expect(out.canPlace).toBe(true);
     expect(out.rows).toHaveLength(1);
     const row = out.rows[0]!;
-    expect(row.sourcePoNumber).toBe('CVW-002201');
+    expect(row.sourcePoNumber).toBe('DEMO-002201');
     expect(row.receiptNumber).toBe('RCV-1042');
     expect(row.quantity).toBe(10);
     expect(row.ageDays).toBe(2);

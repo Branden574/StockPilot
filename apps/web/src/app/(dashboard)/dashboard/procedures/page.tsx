@@ -2,7 +2,7 @@ import { BookOpen, History } from 'lucide-react';
 import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
@@ -35,7 +35,7 @@ export default async function ProceduresListPage({
 }) {
   const moduleAccess = await checkModuleAccess('procedures');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="procedures" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="procedures" access={moduleAccess} />;
   }
   // Each parameter is read once, as its first value (a repeated `wh` used to
   // throw: CONFLICTS D21).

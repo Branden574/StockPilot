@@ -61,7 +61,11 @@ export default async function Sage50MigratePage() {
           </PageHeaderBackLink>
         }
       />
-      <Sage50ImportWizard warehouses={warehouses} />
+      <Sage50ImportWizard
+        warehouses={warehouses}
+        userId={ctx.userId}
+        organizationId={ctx.organizationId}
+      />
     </SettingsPage>
   );
 }

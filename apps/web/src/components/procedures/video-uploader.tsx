@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { uploadWithProgress } from '@/lib/upload-with-progress';
@@ -329,6 +330,8 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
         setPending((p) => p.map((x) => (x.key === key ? { ...x, status: 'done' } : x)));
         successCount += 1;
       } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         const msg = e instanceof Error ? e.message : 'Upload failed';
         setPending((p) =>
           p.map((x) => (x.key === key ? { ...x, status: 'error', error: msg } : x)),

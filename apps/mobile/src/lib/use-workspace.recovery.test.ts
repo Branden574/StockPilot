@@ -52,7 +52,11 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
-vi.mock('./sync', () => ({ syncNow: vi.fn(async () => {}) }));
+vi.mock('./sync', () => ({
+  syncNow: vi.fn(async () => {}),
+  syncAfterRunning: vi.fn(async () => {}),
+}));
+vi.mock('./cycle-count-sync', () => ({ cycleCountSync: { forceSync: vi.fn(async () => {}) } }));
 
 const gate = vi.hoisted(() => ({
   // The membership read answers with an error (offline: postgrest-js status 0).
@@ -135,7 +139,9 @@ afterEach(() => {
 describe('a failed warehouse read keeps the warehouses on screen', () => {
   it('the active warehouse and its list stay through a load whose warehouse read fails', async () => {
     await setActiveOrg('org-b');
-    store.set('workspace.activeOrgId', 'org-b');
+    // The one saved value (workspace-keys.ts; re-pinned by docket B10 from
+    // the older single key): B, chosen by u1.
+    store.set('workspace.savedOrg', JSON.stringify({ orgId: 'org-b', ownerId: 'u1' }));
     store.set('workspace.activeWarehouseId.org-b', 'wh-1');
     useWorkspace();
     await settled();

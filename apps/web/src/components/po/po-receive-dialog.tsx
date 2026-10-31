@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useUnsavedWork } from '@/lib/unsaved-work';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import { postReceiptAction } from '@/server/actions/receiving';
 
 import {
@@ -594,7 +594,7 @@ function LotCapture({
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="font-medium">Lot capture</span>
         <span className={cn('font-mono tabular-nums', valid ? 'text-success' : 'text-warning')}>
-          {sum.toLocaleString()} / {requiredQty.toLocaleString()}
+          {formatNumber(sum)} / {formatNumber(requiredQty)}
         </span>
       </div>
       <div className="space-y-2">
@@ -649,7 +649,7 @@ function LotCapture({
             size="sm"
             onClick={() => onChange([{ lotNumber: '', expirationDate: '', qtyBase: requiredQty }])}
           >
-            Single lot of {requiredQty}
+            Single lot of {formatNumber(requiredQty)}
           </Button>
         )}
       </div>

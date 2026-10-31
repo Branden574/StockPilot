@@ -7,6 +7,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useScrollStop } from '@/components/ui/use-scroll-stop';
 
 import { TEMPLATES, type LabelFormat, type Template } from './label-templates';
 
@@ -126,10 +127,7 @@ export function LabelSheet({
       {/* The sheet on screen sits on the recessed well, so its white labels
           read as paper in both themes. On paper the well draws nothing and
           the print rules below give the page to the labels alone. */}
-      <div
-        data-slot="label-sheet-preview"
-        className="border-border bg-sunk overflow-x-auto rounded-lg border p-4 sm:p-6 print:overflow-visible print:rounded-none print:border-0 print:bg-transparent print:p-0"
-      >
+      <PreviewWell>
         <div className="label-print-page">
           <div
             className={tpl.kind === 'thermal' ? 'label-grid label-grid--thermal' : 'label-grid'}
@@ -156,7 +154,7 @@ export function LabelSheet({
             ))}
           </div>
         </div>
-      </div>
+      </PreviewWell>
 
       {/*
         Print stylesheet: hides everything outside the label sheet and removes
@@ -210,6 +208,31 @@ export function LabelSheet({
         }
       `}</style>
     </>
+  );
+}
+
+/**
+ * The sheet's well on screen. A sheet is often wider than the screen (one
+ * Medium label is 4 inches, 384 px; a row of two is 780 px), so the well
+ * scrolls sideways on a phone, and on a tablet once a row holds two labels.
+ * While it does it is a region named "Label sheet preview" in the Tab order,
+ * so a keyboard can reach it and the arrow keys scroll it (the shared Table's
+ * rule, useScrollStop). While the sheet fits it is a plain box.
+ */
+function PreviewWell({ children }: { children: React.ReactNode }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const { overflows, stop } = useScrollStop(ref);
+  return (
+    <div
+      ref={ref}
+      data-slot="label-sheet-preview"
+      role={overflows ? 'region' : undefined}
+      aria-label={overflows ? 'Label sheet preview' : undefined}
+      tabIndex={stop ? 0 : undefined}
+      className="border-border bg-sunk overflow-x-auto rounded-lg border p-4 sm:p-6 print:overflow-visible print:rounded-none print:border-0 print:bg-transparent print:p-0"
+    >
+      {children}
+    </div>
   );
 }
 

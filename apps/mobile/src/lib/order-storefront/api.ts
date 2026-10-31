@@ -126,6 +126,11 @@ function parseViewer(raw: unknown): OrderStorefrontViewer {
     email: textOrNull(raw.email, 'viewer.email'),
     canOrderOnBehalf: bool(raw.canOrderOnBehalf, 'viewer.canOrderOnBehalf'),
     canApproveOrders: bool(raw.canApproveOrders, 'viewer.canApproveOrders'),
+    // Ordering visibility (0413, design 8.1): the storefront's Manage order
+    // items entry. Only an exact true opens it; a server without the feature
+    // (no key) or anything else reads as false, never as "show while
+    // unknown". Optional on the server side, so it never fails the answer.
+    canManageOrderItems: raw.canManageOrderItems === true,
   };
 }
 

@@ -711,8 +711,9 @@ export async function createItemsFromPoLines(
         // here too, or the copy reads undefined and the sibling lands ungrouped
         // — invisible to the roll-up and to the next import's matcher. One
         // literal, never a concatenation: PostgREST's typing reads the string.
+        // Its ordering visibility (0413) travels too: see the sibling create.
         .select(
-          'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
+          'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, order_catalog_visible',
         )
         .eq('organization_id', organizationId)
         .eq('id', decision.itemId)
@@ -797,7 +798,16 @@ export async function createItemsFromPoLines(
             // the first receipt clears the flag (migration 0277 trigger).
             // `source` only picks which variant-provenance audit event fires
             // (sports.variant.imported vs .created) — it changes no column.
-            { awaitingFirstReceipt: true, source: 'import' },
+            // A clone of a product hidden from new ordering stays hidden
+            // (0413, design 2.3); a shown source takes the default.
+            {
+              awaitingFirstReceipt: true,
+              source: 'import',
+              ...((existing as { order_catalog_visible?: boolean | null }).order_catalog_visible ===
+              false
+                ? { orderCatalogVisible: false }
+                : {}),
+            },
           );
           resolvedItemId = siblingItem.id as string;
           created++;

@@ -64,6 +64,7 @@ export default async function EditProcedurePage({ params }: { params: Promise<{ 
           mode="edit"
           categories={categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
           warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          userId={ctx.userId}
           organizationId={ctx.organizationId}
           defaults={{
             id: procedure.id,

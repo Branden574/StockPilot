@@ -1980,7 +1980,7 @@ describe('syncBookCratePlacement — a crate erasure needs permission (Maus)', (
     book_rack_number: '38',
     book_rack_row: 'B',
   };
-  const RACK_38B_ID = '3b2d8dcb-0000-0000-0000-000000000000';
+  const RACK_38B_ID = '0000038b-0000-0000-0000-000000000000';
   /** The rack "38-B" locations row: kind rack, its own position, NO crate columns. */
   const RACK_38B_LOC = { kind: 'rack', type: 'shelf', rack_number: '38', rack_row: 'B' };
   const YELLOW_6 = { crateColor: 'yellow', crateNumber: '6' };
@@ -2286,7 +2286,7 @@ describe('assertBookCratePlacementAllowed — granting the crate clear', () => {
     // orphan them all. `["yellow","6"]` — no rack, no version, no extra key.
     expect(bookCrateFingerprint('yellow', '6')).toBe('["yellow","6"]');
     const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
-      toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+      toLocationId: '0000038b-0000-0000-0000-000000000000',
       moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
       acknowledged: [{ itemId: BOOK_A, currentFingerprint: '["yellow","6"]' }],
     });
@@ -2324,7 +2324,7 @@ describe('assertBookCratePlacementAllowed — granting the crate clear', () => {
       },
     });
     const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
-      toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+      toLocationId: '0000038b-0000-0000-0000-000000000000',
       moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
       acknowledged: [{ itemId: BOOK_A, currentFingerprint: '["yellow","6"]' }],
     });
@@ -2343,7 +2343,7 @@ describe('assertBookCratePlacementAllowed — granting the crate clear', () => {
     });
     const err = (await svc
       .assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
-        toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+        toLocationId: '0000038b-0000-0000-0000-000000000000',
         moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
         acknowledged: [{ itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('orange', '6') }],
       })

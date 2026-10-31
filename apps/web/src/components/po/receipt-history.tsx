@@ -27,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatRelative } from '@/lib/utils';
+import { formatNumber, formatRelative } from '@/lib/utils';
 import { reverseReceiptAction } from '@/server/actions/receiving';
 
 import type { ReceiptLineRow, ReceiptRow } from '@/server/services/receiving';
@@ -220,13 +220,13 @@ function ReceiptEntry({
                     </p>
                   </TableCell>
                   <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums">
-                    {Number(l.qty_received_base).toLocaleString()}
+                    {formatNumber(Number(l.qty_received_base))}
                   </TableCell>
                   <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums">
-                    {Number(l.qty_accepted_base).toLocaleString()}
+                    {formatNumber(Number(l.qty_accepted_base))}
                   </TableCell>
                   <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums last:pr-3">
-                    {Number(l.qty_rejected_base).toLocaleString()}
+                    {formatNumber(Number(l.qty_rejected_base))}
                   </TableCell>
                 </TableRow>
               );
@@ -248,8 +248,7 @@ function ReceiptEntry({
           </div>
         )}
         <div className="border-border bg-sunk text-ink-2 border-t px-3 py-2 text-[12px] tabular-nums leading-[18px]">
-          Total accepted: {totalAccepted.toLocaleString()} · Rejected:{' '}
-          {totalRejected.toLocaleString()}
+          Total accepted: {formatNumber(totalAccepted)} · Rejected: {formatNumber(totalRejected)}
         </div>
       </div>
 

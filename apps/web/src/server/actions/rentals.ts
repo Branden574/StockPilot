@@ -1,8 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { unstable_rethrow } from 'next/navigation';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ServiceError, withContext } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
 
@@ -25,7 +25,7 @@ import {
  * rethrown so it still redirects instead of reading as a failure.
  */
 function toActionError<T>(e: unknown): ActionResult<T> {
-  unstable_rethrow(e);
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) {
     if (e.code === 'internal_error') {
       console.error('[rentals] action failed', e.internalDetail ?? e.message);

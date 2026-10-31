@@ -7,7 +7,7 @@
 
 # Framework patch-level verification — StockPilot (security program section 8)
 
-Date: 2026-08-07. Repo: /Users/brandenvincent-walker/Developer/InventorySystem (read-only). Monorepo: apps/web (Next.js on Vercel), apps/mobile (Expo/React Native).
+Date: 2026-08-07 (section 3 and the Node rows in sections 1, 4 and 5 updated 2026-10-25 for docket C15; everything else is as of 2026-08-07). Repo: /Users/brandenvincent-walker/Developer/InventorySystem (read-only). Monorepo: apps/web (Next.js on Vercel), apps/mobile (Expo/React Native).
 
 ## 1. Exact installed versions (from pnpm-lock.yaml + `pnpm -r why`)
 
@@ -22,7 +22,7 @@ Date: 2026-08-07. Repo: /Users/brandenvincent-walker/Developer/InventorySystem (
 | @supabase/auth-js (bundled) | 2.105.1 | via supabase-js | both |
 | expo | 53.0.27 (SDK 53) | ~53.0.0 | apps/mobile |
 | react-native | 0.79.6 | 0.79.6 | apps/mobile |
-| node (local dev) | v22.22.2 | engines: node >=20.11.0 (root package.json only) | machine |
+| node (local dev) | v22.22.2 | engines: node >=20.11.0 (root package.json only; 24.x since 2026-10-25, see section 3) | machine |
 
 Notes: `react-server-dom-webpack` (and -turbopack/-parcel) are NOT installed from npm — they appear in the lockfile only as an optional peer of next. The RSC runtime this app actually executes is Next.js's vendored copy inside the `next` package. That distinction drives the React verdict below.
 
@@ -51,9 +51,15 @@ Notes: `react-server-dom-webpack` (and -turbopack/-parcel) are NOT installed fro
 - Exposure: if an RN/Expo security issue lands tomorrow, the fix path is SDK upgrade -> EAS native build -> store review (JS-only fixes via OTA remain possible for our own code, but framework-level native fixes are NOT OTA-deliverable, and runtimeVersion=appVersion means a store release). Lead time is weeks, so the upgrade should start before it is urgent. react-native 0.79.7 (2025-10-21) exists on the current line as a trivial interim bump if an EAS build ships for other reasons.
 
 ## 3. Runtime — Node on Vercel
-- No Node pin: apps/web/vercel.json sets no runtime; apps/web/package.json has no engines; root engines (`node >=20.11.0`) is not the Vercel project root, so the project-settings value governs. Vercel default for NEW projects is 24.x; this project predates that — OWNER-VERIFY the actual setting (Project Settings -> Build and Deployment -> Node.js Version). If it reads 20.x, move it: Node 20 is EOL upstream (April 2026) and stopped receiving the July security fixes.
-- Vercel automatically rolls out minor/patch security updates to its managed runtime, so the production patch level within the chosen major is Vercel's responsibility.
-- Node security: the 2026-07-29 security release shipped v22.23.2 / v24.18.1 / v26.5.1 — 11 CVEs (3 high: HTTP/2 memory-limit evasion CVE-2026-56846, HTTP/2 use-after-free CVE-2026-56848, permission-model FS escape CVE-2026-58043) and bumped bundled undici (8.9.0/7.29.0/6.28.0 per line) + llhttp 9.4.3 — undici is the `fetch` implementation, directly relevant to server-side fetch. Local dev machine runs v22.22.2, which PREDATES this release — update local Node to 22.23.2+. CI uses setup-node `node-version: 22`, which resolves latest 22.x at run time — fine.
+
+Updated 2026-10-25 (docket C15). The 2026-08-07 version of this section asked the owner to verify the Vercel setting; the answer and the pins that now match it follow.
+
+- Production: the Vercel project's Node.js Version setting (Project Settings -> Build and Deployment -> Node.js Version) reads **24.x** (read-only `vercel project inspect`, 2026-10-24). That answers the OWNER-VERIFY: production is not on end-of-life Node 20 (EOL upstream April 2026, no July security fixes).
+- Nothing in the repo overrides that setting: apps/web/vercel.json sets no runtime, and apps/web/package.json, the package.json closest to the project's root directory, has no engines field. Vercel takes `engines.node` from that closest package.json over the project setting (`getNodeVersion` in @vercel/build-utils) and never reads the root package.json for it.
+- The repo's pins now name the same major. `.nvmrc` is `24` (it was 20.11.0), the root engines field is `"node": "24.x"` (it was `>=20.11.0`), and every actions/setup-node step in .github/workflows (CI's three jobs and the simulator smoke job) reads `.nvmrc` with `node-version-file` (it was `node-version: 22`). apps/web/src/test/node-version-pins.guard.test.ts fails if `.nvmrc`, the root engines field, any setup-node step, or an engines field added to apps/web names another major.
+- The phone build is separate on purpose. EAS builds run on the `node` pinned per build profile in apps/mobile/eas.json: 22.19.0 for simulator, preview and production (the development profile uses the build image's default). react-native 0.86.3 accepts `^22.13.0` and `^24.3.0`, so 22.19.0 stays valid. On EAS, pnpm prints one "Unsupported engine" warning for the root engines field and installs normally: pnpm refuses a project's Node engines only under `engine-strict`, which this repo does not set (checked in pnpm 9.12.3 by running it on Node 22, and in the 10.x and 11.x sources). Moving EAS to 24.x needs an EAS build that proves it. OTA updates are different: `eas update` bundles on the publishing Mac, so they move to that Mac's Node.
+- Vercel automatically rolls out minor/patch security updates to its managed runtime, so the production patch level within 24.x is Vercel's responsibility. setup-node resolves the newest 24.x on each CI run.
+- Node security: the 2026-07-29 security release shipped v22.23.2 / v24.18.1 / v26.5.1 — 11 CVEs (3 high: HTTP/2 memory-limit evasion CVE-2026-56846, HTTP/2 use-after-free CVE-2026-56848, permission-model FS escape CVE-2026-58043) and bumped bundled undici (8.9.0/7.29.0/6.28.0 per line) + llhttp 9.4.3 — undici is the `fetch` implementation, directly relevant to server-side fetch. The local dev machine runs v22.22.2, which PREDATES this release: move it to the newest 24.x (`nvm install` reads `.nvmrc`), the major production runs, rather than to a 22.x patch.
 
 ## 4. Verdict table
 
@@ -65,8 +71,8 @@ Notes: `react-server-dom-webpack` (and -turbopack/-parcel) are NOT installed fro
 | @supabase/ssr | 0.5.2 | 0.12.4 | No advisories | Upgrade-routine P3, deliberately (read 0.6-0.12 release notes) | Moderate (0.x cookie-API evolution) |
 | expo (mobile) | 53.0.27 (SDK 53) | 53.0.27 on line; SDK 57 current | No published advisory, BUT line is out of Expo's ~3-SDK support window — no future security patches; native fixes not OTA-deliverable | Upgrade-routine P2 with priority: schedule SDK 53 -> 55+/57 migration + EAS build now, before it becomes P1 | High (native modules, RN 0.79 -> 0.8x, store release required) |
 | react-native (mobile) | 0.79.6 | 0.79.7 on line | No (dev-server CVE-2025-11953 is dev-only) | Fold into SDK migration | High (with SDK jump) |
-| node (Vercel runtime) | project setting unknown — OWNER-VERIFY | 22.23.2 / 24.18.1 (2026-07-29 security release) | Vercel auto-patches within the major; risk only if project pins EOL 20.x | Owner-verify setting; move to 22.x/24.x if on 20.x | Low (Next 16 supports both) |
-| node (local dev) | 22.22.2 | 22.23.2 | Yes — predates 2026-07-29 release (3 HIGH CVEs, undici/llhttp bumps) | Upgrade-routine P2 (local only) | None |
+| node (Vercel runtime) | 24.x (project setting, verified 2026-10-24) | 24.18.1 (2026-07-29 security release) | No — Vercel auto-patches within the major, and the major is not EOL 20.x | None; .nvmrc, the root engines field and CI now name 24 too (section 3, 2026-10-25) | n/a |
+| node (local dev) | 22.22.2 | 24.18.1 on the production major (22.23.2 on 22) | Yes — predates 2026-07-29 release (3 HIGH CVEs, undici/llhttp bumps) | Upgrade-routine P2 (local only): newest 24.x, which `.nvmrc` names since 2026-10-25 | Low (a major move: run the suites once, as CI now does on 24) |
 
 ## 5. Bottom line
-Production web is in the best patch position it has ever been: next 16.3.0 is the newest stable in existence (released 2026-08-03), carries all nine July-2026 CVE fixes plus post-July RSC hardening, and no security-relevant newer patch exists for anything installed on the web side. The single largest real exposure is structural, not a pending patch: mobile sits on Expo SDK 53, which is past Expo's support window, and any framework-level security fix would require a multi-week SDK migration + EAS build + store review to deliver. Second watch item: the pre-announced Next.js monthly security release expected ~mid-August — plan a same-week patch window. Housekeeping: owner-verify the Vercel Node.js major (must not be 20.x), update local Node to 22.23.2+, and take react/react-dom to 19.2.8 with the next routine dependency pass.
+Production web is in the best patch position it has ever been: next 16.3.0 is the newest stable in existence (released 2026-08-03), carries all nine July-2026 CVE fixes plus post-July RSC hardening, and no security-relevant newer patch exists for anything installed on the web side. The single largest real exposure is structural, not a pending patch: mobile sits on Expo SDK 53, which is past Expo's support window, and any framework-level security fix would require a multi-week SDK migration + EAS build + store review to deliver. Second watch item: the pre-announced Next.js monthly security release expected ~mid-August — plan a same-week patch window. Housekeeping: owner-verify the Vercel Node.js major (must not be 20.x; done 2026-10-24, it is 24.x, and the repo's pins match it since 2026-10-25), update local Node (now to the newest 24.x), and take react/react-dom to 19.2.8 with the next routine dependency pass.

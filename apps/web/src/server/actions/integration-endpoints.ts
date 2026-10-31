@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ServiceError } from '@/server/services/context';
 import {
   IntegrationEndpointsService,
@@ -14,6 +15,7 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 const REVALIDATE = '/dashboard/settings/integrations';
 
 function fail(e: unknown): ActionResult<never> {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) {
     return err(e.code as Parameters<typeof err>[0], e.message);
   }

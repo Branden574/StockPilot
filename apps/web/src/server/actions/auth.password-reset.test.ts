@@ -132,14 +132,33 @@ describe('requestPasswordResetAction', () => {
 
   it('returns generic ok even when the email send fails', async () => {
     generateLink.mockResolvedValue({
-      data: { user: { id: 'u-1' }, properties: { action_link: 'https://sb/verify?token=abc' } },
+      data: {
+        user: { id: 'u-1' },
+        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: 'hash123' },
+      },
       error: null,
     });
     sendEmail.mockRejectedValue(new Error('resend down'));
 
     const res = await requestPasswordResetAction({ email: 'user@example.com' });
 
+    expect(sendEmail).toHaveBeenCalledTimes(1);
     expect(res.ok).toBe(true);
+  });
+
+  // Docket B39 review: never the raw action_link, whose session comes back in
+  // the URL fragment the app never uses. The public form still answers the
+  // same generic ok (lib/auth/password-reset-email.test.ts pins the report).
+  it('returns generic ok and sends nothing when GoTrue returns no hashed token', async () => {
+    generateLink.mockResolvedValue({
+      data: { user: { id: 'u-1' }, properties: { action_link: 'https://sb/verify?token=abc' } },
+      error: null,
+    });
+
+    const res = await requestPasswordResetAction({ email: 'user@example.com' });
+
+    expect(res.ok).toBe(true);
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 });
 

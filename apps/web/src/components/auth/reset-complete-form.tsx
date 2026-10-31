@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { completePasswordResetAction } from '@/server/actions/auth';
 
 import { completePasswordResetSchema, type CompletePasswordResetInput } from '@stockpilot/core';
@@ -29,6 +30,10 @@ export function ResetCompleteForm() {
   });
 
   const onSubmit = handleSubmit(async (values) => {
+    // Setting the new password signs the account out everywhere, this tab
+    // included: a sign-out on purpose, so what an interrupted run kept in this
+    // tab (lib/interrupted-run) goes before the request does.
+    purgeInterruptedRuns();
     const res = await completePasswordResetAction(values);
     if (!res.ok) {
       toast.error(res.error.message);

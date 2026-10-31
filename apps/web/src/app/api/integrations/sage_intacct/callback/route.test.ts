@@ -53,6 +53,10 @@ function userClient(
     },
     'organization_modules.select': { data: [{ module_id: 'integrations', enabled: true }], error: null },
     'organization_members.select': { data: [{ role: 'admin' }], error: null },
+    // Permission overrides, read by the real loader (docket S19). None by
+    // default, so the admin holds integrations:manage at its role default.
+    'role_permission_overrides.select': { data: [], error: null },
+    'user_permission_overrides.select': { data: [], error: null },
     // Account status (0308). Default = ACTIVE.
     'user_profiles.select': { data: [{ disabled_at: null }], error: null },
     ...overrides,
@@ -141,6 +145,83 @@ describe('GET /api/integrations/sage_intacct/callback', () => {
     expect(location(res).searchParams.get('error')).toBe('internal_error');
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(putConnectionSecret).not.toHaveBeenCalled();
+  });
+
+  // ── Effective permissions (docket S19) ─────────────────────────────────────
+  // The same gate as the QuickBooks callback: the member's EFFECTIVE set, the
+  // rule beginConnect applies. org_connections' write rule asks only for the
+  // admin role (0146), so an admin whose integrations:manage was revoked can
+  // write a pending row with a state of their choosing; a static check here
+  // then let them finish the connect.
+  it.each([
+    ['for them (a member override)', 'user_permission_overrides.select'],
+    ['for every admin (a role override)', 'role_permission_overrides.select'],
+  ])(
+    'refuses an admin whose integrations:manage was revoked %s, before exchanging the code or writing any secret',
+    async (_how, table) => {
+      vi.mocked(createClient).mockResolvedValueOnce(
+        userClient({
+          [table]: { data: [{ permission: 'integrations:manage', granted: false }], error: null },
+        }).client as never,
+      );
+
+      const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+      expect(res.status).toBe(302);
+      expect(location(res).searchParams.get('error')).toBe('forbidden');
+      expect(exchangeCode).not.toHaveBeenCalled();
+      expect(putConnectionSecret).not.toHaveBeenCalled();
+      expect(createAdminClient).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses with internal_error (not forbidden) when the permission overrides cannot be read', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'role_permission_overrides.select': {
+          data: null,
+          error: { message: 'db down', code: '57014' },
+        },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(res.status).toBe(302);
+    expect(location(res).searchParams.get('error')).toBe('internal_error');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(createAdminClient).not.toHaveBeenCalled();
+  });
+
+  it('the owner still finishes the connect when the overrides cannot be read (the lockout escape hatch)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'organization_members.select': { data: [{ role: 'owner' }], error: null },
+        'user_permission_overrides.select': { data: null, error: { message: 'db down' } },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(location(res).searchParams.get('connected')).toBe('sage_intacct');
+    expect(putConnectionSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it('a manager, who does not hold integrations:manage, is refused', async () => {
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'organization_members.select': { data: [{ role: 'manager' }], error: null },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(location(res).searchParams.get('error')).toBe('forbidden');
+    expect(exchangeCode).not.toHaveBeenCalled();
   });
 
   it('happy path: an ACTIVE user still completes the connect', async () => {

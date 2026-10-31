@@ -60,6 +60,7 @@ import {
   type PendingOrderSubmission,
 } from '@stockpilot/core';
 
+import { isControlFlow } from '@/lib/control-flow';
 import {
   createOrderRequestAction,
   getOrderSubmissionAction,
@@ -312,6 +313,10 @@ export function useOrderSubmission({
       try {
         result = orderCallResultForOrganization(await call(), organizationId);
       } catch (error) {
+        // A redirect (the session ended): the router is already on its way to
+        // sign-in. The pending record stays on this device, so the order is
+        // read again, never sent twice, when the person is back.
+        if (isControlFlow(error)) return;
         result = orderCallResultFromThrown(error);
       }
       apply(done(result));

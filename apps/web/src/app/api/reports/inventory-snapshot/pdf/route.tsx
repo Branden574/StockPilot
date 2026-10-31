@@ -4,7 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
+import { prefetchImagesAsDataUris, prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import {
   InventorySnapshotPdf,
   type SnapshotPdfRow,
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     assertPermission(ctx, 'reports:export');
     const reportsSvc = new ReportsService(ctx);
     reportsSvc.gate('inventory-valuation');
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     // ?photos=0 (or =false / =no) skips the image phase entirely.
@@ -136,7 +136,10 @@ export async function GET(req: NextRequest) {
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     // Capture a single "now" so the asOf shown in the PDF body matches
     // the date stamped on the filename. Two separate `new Date()` calls

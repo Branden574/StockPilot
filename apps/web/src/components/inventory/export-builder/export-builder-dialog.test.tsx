@@ -61,6 +61,7 @@ vi.mock('@/server/actions/export-presets', () => ({
 }));
 
 import { ExportBuilderDialog } from './export-builder-dialog';
+import { savePersonalPreset } from './export-builder-presets';
 
 function renderDialog(overrides: Partial<Parameters<typeof ExportBuilderDialog>[0]> = {}) {
   const onOpenChange = vi.fn();
@@ -112,13 +113,18 @@ describe('ExportBuilderDialog — chrome', () => {
     ).toBeTruthy();
   });
 
-  it('states the scope in the brief\'s words', async () => {
+  it("states the scope in the brief's words", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText('Exporting: 111 filtered books')).toBeTruthy());
   });
 
   it('states a selected scope with the count', () => {
-    renderDialog({ scope: 'selected', itemType: 'product', selectedIds: ['a', 'b'], rowCountHint: 2 });
+    renderDialog({
+      scope: 'selected',
+      itemType: 'product',
+      selectedIds: ['a', 'b'],
+      rowCountHint: 2,
+    });
     expect(screen.getByText('Exporting: 2 selected items')).toBeTruthy();
   });
 });
@@ -218,7 +224,10 @@ describe('ExportBuilderDialog — presets', () => {
     await user.click(screen.getByRole('option', { name: 'Books ISBN list' }));
     await user.click(screen.getByRole('button', { name: 'Export file' }));
     await waitFor(() => expect(downloadSpy).toHaveBeenCalled());
-    const req = downloadSpy.mock.calls[0]![0] as { fields: string[]; options: { presetName: string } };
+    const req = downloadSpy.mock.calls[0]![0] as {
+      fields: string[];
+      options: { presetName: string };
+    };
     expect(req.fields).toEqual(['name', 'isbn', 'sku', 'author', 'grade', 'quantity_on_hand']);
     expect(req.options.presetName).toBe('Books ISBN list');
   });
@@ -253,9 +262,7 @@ describe('ExportBuilderDialog — shared team presets', () => {
   });
 
   it('shows the VISIBLE dropped-fields note when an applied preset lost fields to the registry', async () => {
-    sharedState.presets = [
-      { ...teamPreset, droppedFieldKeys: ['lexile_level', 'binding_type'] },
-    ];
+    sharedState.presets = [{ ...teamPreset, droppedFieldKeys: ['lexile_level', 'binding_type'] }];
     const user = userEvent.setup();
     renderDialog();
     await user.click(await screen.findByRole('combobox', { name: /preset/i }));
@@ -279,7 +286,12 @@ describe('ExportBuilderDialog — shared team presets', () => {
   it('offers presets for THIS export only — an items preset never appears in the books dialog', async () => {
     sharedState.presets = [
       teamPreset,
-      { ...teamPreset, id: 'p2', name: 'Items only', config: { itemTypeKind: 'other', fieldKeys: ['name', 'sku'] } },
+      {
+        ...teamPreset,
+        id: 'p2',
+        name: 'Items only',
+        config: { itemTypeKind: 'other', fieldKeys: ['name', 'sku'] },
+      },
       { ...teamPreset, id: 'p3', name: 'Broken row', config: null },
     ];
     const user = userEvent.setup();
@@ -508,7 +520,9 @@ describe('ExportBuilderDialog — submission', () => {
     expect(screen.getByRole('status').textContent).toContain('Title');
 
     await user.click(screen.getByRole('button', { name: 'Export file' }));
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Too many exports'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('Too many exports'),
+    );
 
     const nonEmptyStatuses = screen
       .queryAllByRole('status')
@@ -583,6 +597,163 @@ describe('ExportBuilderDialog — preview fetch lifecycle', () => {
     expect(capturedSignal?.aborted).toBe(false);
     unmount();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
+describe('ExportBuilderDialog — a failed or superseded preview', () => {
+  const READY = {
+    total: 2,
+    truncated: false,
+    slug: 'books' as const,
+    sampleRows: [],
+    readiness: { rows: 2, withIsbn: 2, missingIsbn: 0, withImage: 2, missingImage: 0 },
+  };
+  const FAILED = 'Could not load a sample of this export. You can still export the file.';
+
+  function dialog(props: Partial<Parameters<typeof ExportBuilderDialog>[0]> = {}) {
+    return (
+      <ExportBuilderDialog
+        open
+        onOpenChange={vi.fn()}
+        scope="filtered"
+        itemType="book"
+        filters={{ q: 'algebra' }}
+        rowCountHint={111}
+        {...props}
+      />
+    );
+  }
+
+  it('says the sample could not load instead of loading for ever, and Try again asks again', async () => {
+    const user = userEvent.setup();
+    previewSpy.mockRejectedValueOnce(
+      new Error('Too many preview requests — please wait a moment.'),
+    );
+    render(dialog());
+    expect(await screen.findByText(FAILED)).toBeTruthy();
+    expect(screen.queryByText('Loading a sample of this export…')).toBeNull();
+    // Never a blocker: the export button stays usable.
+    expect(screen.getByRole('button', { name: 'Export file' }).hasAttribute('disabled')).toBe(
+      false,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+    expect(previewSpy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(FAILED)).toBeNull();
+  });
+
+  // An answer counts only for the request (and attempt) it answers. Without
+  // that, the old failure stays on screen while Try again is still loading,
+  // and each further click starts another request.
+  it('shows loading after Try again, not the failure it is retrying', async () => {
+    const user = userEvent.setup();
+    previewSpy.mockRejectedValueOnce(new Error('fetch failed'));
+    previewSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
+    render(dialog());
+    expect(await screen.findByText(FAILED)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(FAILED)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+  });
+
+  // Same rule for new filters: the sample, readiness and count of the old
+  // filters must not stand in for the new ones while their answer is out.
+  it('shows loading for new filters, not the sample of the old ones', async () => {
+    const { rerender } = render(dialog());
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+
+    previewSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
+    rerender(dialog({ filters: { q: 'geometry' } }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('group', { name: 'Export readiness' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Export preview' })).toBeNull();
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+  });
+
+  it('does not report a request that newer filters replaced as a failure', async () => {
+    // The first request is still out when the filters change; the abort
+    // rejects it, and that is not a failure.
+    previewSpy.mockImplementationOnce(
+      (_req: unknown, signal: unknown) =>
+        new Promise<never>((_resolve, reject) => {
+          (signal as AbortSignal).addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        }),
+    );
+    const { rerender } = render(dialog());
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    rerender(dialog({ filters: { q: 'geometry' } }));
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+    expect(previewSpy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(FAILED)).toBeNull();
+  });
+
+  it('asks once for the same filter values in a new object, and again only for new values', async () => {
+    const { rerender } = render(dialog());
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+    rerender(dialog({ filters: { q: 'algebra' } }));
+    rerender(dialog({ filters: { q: 'algebra' } }));
+    expect(previewSpy).toHaveBeenCalledTimes(1);
+
+    rerender(dialog({ filters: { q: 'geometry' } }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(previewSpy.mock.calls[1]![0]).toEqual({
+      scope: 'filtered',
+      itemType: 'book',
+      filters: { q: 'geometry' },
+    });
+  });
+
+  it('sends a selected export its ids, and asks again when the selection changes', async () => {
+    const { rerender } = render(
+      dialog({ scope: 'selected', filters: undefined, selectedIds: ['a', 'b'] }),
+    );
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    expect(previewSpy.mock.calls[0]![0]).toEqual({
+      scope: 'selected',
+      itemType: 'book',
+      ids: ['a', 'b'],
+    });
+    rerender(dialog({ scope: 'selected', filters: undefined, selectedIds: ['a', 'b'] }));
+    rerender(dialog({ scope: 'selected', filters: undefined, selectedIds: ['a', 'b', 'c'] }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect((previewSpy.mock.calls[1]![0] as { ids: string[] }).ids).toEqual(['a', 'b', 'c']);
+  });
+
+  it('starts a reopened dialog from a fresh sample, not the failure of the last open', async () => {
+    previewSpy.mockRejectedValueOnce(new Error('fetch failed'));
+    const { rerender } = render(dialog());
+    expect(await screen.findByText(FAILED)).toBeTruthy();
+
+    let answer: (value: typeof READY) => void = () => {};
+    previewSpy.mockImplementationOnce(
+      () =>
+        new Promise<typeof READY>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    rerender(dialog({ open: false }));
+    rerender(dialog({ open: true }));
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(FAILED)).toBeNull();
+    expect(screen.getByText('Loading a sample of this export…')).toBeTruthy();
+
+    answer(READY);
+    expect(await screen.findByRole('group', { name: 'Export readiness' })).toBeTruthy();
+  });
+
+  it('reads personal presets from this browser again each time it opens', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(dialog({ open: false }));
+    savePersonalPreset({ name: 'Shelf check', itemTypeKind: 'book', fieldKeys: ['name', 'isbn'] });
+    rerender(dialog({ open: true }));
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    expect(screen.getByRole('option', { name: 'Shelf check' })).toBeTruthy();
   });
 });
 
@@ -668,7 +839,10 @@ describe('ExportBuilderDialog — accessibility and small screens', () => {
     // closure below, so `T | null` narrows to `never` at the call site.
     let release!: () => void;
     downloadSpy.mockImplementationOnce(
-      async () => new Promise<void>((resolve) => { release = resolve; }),
+      async () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
     );
     const { onOpenChange } = renderDialog();
     await user.click(screen.getByRole('button', { name: 'Export file' }));

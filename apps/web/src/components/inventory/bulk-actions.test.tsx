@@ -321,6 +321,35 @@ describe('BulkActions', () => {
     });
   });
 
+  it('Add tags draws a stored colour that is not #rrggbb as the default grey (docket T14)', async () => {
+    // A tag's colour is plain text a manager can write through the Data API;
+    // only the #rrggbb form the app writes is ever drawn.
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[
+          { id: 't-x', name: 'Injected', color: '#000;position:fixed;inset:0;z-index:2147483647' },
+        ]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Add tags$/i }));
+    const dialog = await screen.findByRole('dialog');
+    const chip = within(dialog).getByRole('button', { name: /Injected/ });
+    const grey = /^(#94a3b8|rgb\(148, 163, 184\))$/i;
+    expect(chip.querySelector('span')!.style.backgroundColor).toMatch(grey);
+    await user.click(chip);
+    expect(chip.style.backgroundColor).toMatch(grey);
+    for (const el of [chip, ...chip.querySelectorAll('span')]) {
+      expect(el.getAttribute('style') ?? '').not.toContain('position');
+    }
+  });
+
   it('Remove tags dialog dispatches the bulk remove op', async () => {
     const user = userEvent.setup();
     render(

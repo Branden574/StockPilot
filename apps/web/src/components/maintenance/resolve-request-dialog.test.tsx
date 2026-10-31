@@ -137,7 +137,6 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
     'Zendesk comment',
@@ -182,6 +181,8 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('the forbidden sweep also holds across submitting and error states', async () => {
@@ -198,6 +199,8 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     await confirmClick;
     await waitFor(() => expect(toastSuccessMock).toHaveBeenCalled());
 
@@ -209,6 +212,8 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     for (const banned of FORBIDDEN) {
       expect(successCallText).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(successCallText).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
 
     // Error state.
     resolveAction.mockResolvedValueOnce({ error: { message: 'This request is already resolved.' } });
@@ -217,6 +222,8 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
     for (const banned of FORBIDDEN) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 

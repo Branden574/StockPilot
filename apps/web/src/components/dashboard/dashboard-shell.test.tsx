@@ -65,6 +65,11 @@ vi.mock('@/components/orders/order-status-config-provider', () => ({
 }));
 
 import {
+  INTERRUPTED_RUN_PREFIX,
+  INTERRUPTED_RUN_TTL_MS,
+  takeInterruptedRun,
+} from '@/lib/interrupted-run';
+import {
   recordRouterTransitionStart,
   resetRouterNavigationForTests,
 } from '@/lib/navigation/router-navigation';
@@ -367,5 +372,64 @@ describe('DashboardShell page lock', () => {
     expect(html.style.height).toBe('');
     html.className = '';
     html.removeAttribute('style');
+  });
+});
+
+/**
+ * B12 round 2: what an interrupted run kept in this tab (lib/interrupted-run:
+ * a new procedure's id, a Sage 50 import's summary with rows of its errors) is
+ * only ever for the account that wrote it. As the shell renders for an account
+ * it removes every record that is another user's, another organization's, too
+ * old or unreadable, and hands nothing out: this account's records stay for
+ * their own pages to take.
+ */
+describe('DashboardShell: what interrupted runs kept in this tab', () => {
+  const PREFIX = INTERRUPTED_RUN_PREFIX;
+  const record = (userId: string, organizationId: string, at: number) =>
+    JSON.stringify({ v: 1, userId, organizationId, at, payload: { id: 'p-1' } });
+
+  beforeEach(() => {
+    setViewport(true);
+    sessionStorage.clear();
+  });
+  afterEach(() => sessionStorage.clear());
+
+  it("removes another user's, another organization's, an old and an unreadable record, and keeps this account's", () => {
+    const now = Date.now();
+    sessionStorage.setItem(`${PREFIX}mine`, record('u1', 'o1', now - 60_000));
+    sessionStorage.setItem(`${PREFIX}other-user`, record('u2', 'o1', now));
+    sessionStorage.setItem(`${PREFIX}other-org`, record('u1', 'o2', now));
+    sessionStorage.setItem(
+      `${PREFIX}old`,
+      record('u1', 'o1', now - INTERRUPTED_RUN_TTL_MS - 60_000),
+    );
+    sessionStorage.setItem(`${PREFIX}unreadable`, '{not json');
+    sessionStorage.setItem('sp:unrelated', 'kept');
+
+    render(<DashboardShell {...baseProps}>body</DashboardShell>);
+
+    expect(Object.keys(sessionStorage).filter((k) => k.startsWith(PREFIX))).toEqual([
+      `${PREFIX}mine`,
+    ]);
+    expect(sessionStorage.getItem('sp:unrelated')).toBe('kept');
+    // Nothing was handed out: this account's record is there for its page, once.
+    const parse = (p: unknown) => p as { id: string };
+    expect(takeInterruptedRun('mine', { userId: 'u1', organizationId: 'o1' }, parse)).toEqual({
+      id: 'p-1',
+    });
+  });
+
+  it("an organization switch removes the previous organization's records", () => {
+    sessionStorage.setItem(`${PREFIX}mine`, record('u1', 'o1', Date.now()));
+    const view = render(<DashboardShell {...baseProps}>body</DashboardShell>);
+    expect(sessionStorage.getItem(`${PREFIX}mine`)).not.toBeNull();
+
+    view.rerender(
+      <DashboardShell {...baseProps} organizationId="o2">
+        body
+      </DashboardShell>,
+    );
+
+    expect(sessionStorage.getItem(`${PREFIX}mine`)).toBeNull();
   });
 });

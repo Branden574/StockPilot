@@ -197,11 +197,11 @@ array — none is an executable Zendesk API call, import, or network reference.*
 | `api/v1/maintenance-requests/route.test.ts:81` | Test — asserts no outbound fetch occurs |
 | `api/v1/maintenance-requests/route.ts:25` | Doc comment: "This route never calls anything Zendesk-shaped" |
 | `[id]/draft-opened/route.ts:14` | Doc comment: same boundary statement |
-| `packages/core/src/maintenance/email.ts:361` | Outbound EMAIL BODY copy (sent to `dc4@learn4life.org`, the live Zendesk intake): "Please reply to this email thread... same Zendesk ticket." — disclosure text inside the drafted email, not a program call |
+| `packages/core/src/maintenance/email.ts:361` | Outbound EMAIL BODY copy (sent to the DC4 intake, a live Zendesk intake; `dc4@sampleorg.test` in this repository's samples): "Please reply to this email thread... same Zendesk ticket." — disclosure text inside the drafted email, not a program call |
 | `apps/mobile/app/maintenance/[id].tsx:72` | User-facing DISCLOSURE copy: "Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here." |
 | `packages/core/src/maintenance/constants.test.ts:96` | Test — banned-vocabulary array |
 | `packages/core/src/maintenance/email.test.ts:244,251,817` | Test — asserts the body copy above / banned-phrase array |
-| `packages/core/src/maintenance/constants.ts:9` | Doc comment: "dc4@learn4life.org feeds a live Zendesk email intake" (explains why the address is a compile-time literal) |
+| `packages/core/src/maintenance/constants.ts:9` | Doc comment: "dc4@sampleorg.test feeds a live Zendesk email intake" (explains why the address is a compile-time literal) |
 
 **Verdict: no BLOCKED finding.** Zero executable Zendesk surface anywhere in the
 swept paths.
@@ -209,7 +209,7 @@ swept paths.
 ### Forbidden-phrase grep (GC 8)
 
 ```
-grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Andrew notified\|Ticket assigned\|Email sent" \
+grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Jordan notified\|Ticket assigned\|Email sent" \
   apps/web/src/components/maintenance apps/mobile/app/maintenance packages/core/src/maintenance
 ```
 
@@ -220,7 +220,7 @@ have to be written down somewhere to assert they are never rendered). Re-run sco
 to production source only, to confirm the actual production-code claim:
 
 ```
-grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Andrew notified\|Ticket assigned\|Email sent" \
+grep -rn "Ticket created\|Request submitted to Zendesk\|DC4 notified\|Jordan notified\|Ticket assigned\|Email sent" \
   apps/web/src/components/maintenance apps/mobile/app/maintenance packages/core/src/maintenance \
   --include="*.ts" --include="*.tsx" | grep -v "\.test\.ts"
 ```
@@ -259,8 +259,8 @@ target list, which returned zero matches. **No rewrite was required.**
 
 | Contract value | Literal pin (file:line) |
 |---|---|
-| `to` address `dc4@learn4life.org` | `packages/core/src/maintenance/constants.test.ts:23` — `expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@learn4life.org')` |
-| `cc` address `arosas@cvwest.org` | `packages/core/src/maintenance/constants.test.ts:24` — `expect(L4L_MAINTENANCE_EMAIL.cc).toBe('arosas@cvwest.org')` |
+| `to` address `dc4@sampleorg.test` | `packages/core/src/maintenance/constants.test.ts:23` — `expect(L4L_MAINTENANCE_EMAIL.to).toBe('dc4@sampleorg.test')` |
+| `cc` address `jstone@site1.test` | `packages/core/src/maintenance/constants.test.ts:24` — `expect(L4L_MAINTENANCE_EMAIL.cc).toBe('jstone@site1.test')` |
 | Compose base URL `https://outlook.cloud.microsoft/mail/deeplink/compose` | `packages/core/src/email/outlook-compose.test.ts:45` — `expect(OUTLOOK_COMPOSE_BASE).toBe('https://outlook.cloud.microsoft/mail/deeplink/compose')` |
 | `1800` (`DRAFT_URL_LIMIT`) | `packages/core/src/email/outlook-compose.test.ts:47` — `expect(DRAFT_URL_LIMIT).toBe(1800)` |
 | Subject prefix `[StockPilot Maintenance <MR-number>]` | `packages/core/src/maintenance/email.test.ts:109` — `expect(draft.subject).toBe('[StockPilot Maintenance MR-2026-000123] Air conditioner is not working in Room 204')` |
@@ -304,8 +304,9 @@ the page context and PROVEN patched (non-native source, probe URL captured,
 zero pages opened) BEFORE every click of `Open in Outlook`. `Open in Default
 Email App` (the mailto path) was never clicked. `/m/<token>` URLs were opened
 only in browser tabs. No compose window, mail client, or external request to
-outlook.cloud.microsoft / learn4life.org / cvwest.org ever occurred (session
-network log audited: zero matches for outlook|microsoft|mailto|learn4life|cvwest).
+outlook.cloud.microsoft or the customer's mail domains ever occurred (session
+network log audited: zero matches for outlook, microsoft, mailto or either
+customer mail domain).
 No email was sent or could have been sent.
 
 ## Environment prep (all local)
@@ -391,13 +392,13 @@ No email was sent or could have been sent.
    shown ("Outlook opened with your maintenance request...").
    Intercepted URL (share-link token REDACTED to its first 6 chars):
 
-   `https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E%3Fcc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000001%255D%2520Walk%2520E2E%253A%2520HVAC%2520compressor%2520rattling%2520loudly%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000001%250A%250AREQUESTER%250A%250AName%253A%2520Walk%2520Requester%250ASite%253A%2520Desert%2520Cove%2520High%2520-%2520DC4%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520rooftop%2520HVAC%2520compressor%2520above%2520Building%2520C%2520...%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttp%253A%252F%252Flocalhost%253A3000%252Fm%252Fbe79e0[REDACTED]%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000001`
+   `https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540sampleorg.test%253E%3Fcc%3DJordan%2520Stone%2520%253Cjstone%2540site1.test%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000001%255D%2520Walk%2520E2E%253A%2520HVAC%2520compressor%2520rattling%2520loudly%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000001%250A%250AREQUESTER%250A%250AName%253A%2520Walk%2520Requester%250ASite%253A%2520Desert%2520Cove%2520High%2520-%2520DC4%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520rooftop%2520HVAC%2520compressor%2520above%2520Building%2520C%2520...%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttp%253A%252F%252Flocalhost%253A3000%252Fm%252Fbe79e0[REDACTED]%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000001`
 
 10. **To is double-encoded** — PASS. The URL contains, verbatim:
-    `dc4%2540learn4life.org` (inside
-    `mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E`).
+    `dc4%2540sampleorg.test` (inside
+    `mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540sampleorg.test%253E`).
 11. **CC in the cc field** — PASS. Verbatim:
-    `cc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E`.
+    `cc%3DJordan%2520Stone%2520%253Cjstone%2540site1.test%253E`.
 12. **Subject param carries typed subject + MR number** — PASS. Verbatim:
     `subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000001%255D%2520Walk%2520E2E%253A%2520HVAC%2520compressor%2520rattling%2520loudly`.
 13. **Body carries the description** — PASS ("The rooftop HVAC compressor
@@ -539,7 +540,7 @@ recorded honestly; it does not reproduce under any normal usage.
    recording paths).
 2. **The real mailto path (`Open in Default Email App`).** Never clicked, on
    the same grounds: it navigates to a `mailto:` URL addressed to the REAL
-   dc4/arosas addresses and cannot be intercepted in-page. Covered by Task
+   DC4 and CC addresses and cannot be intercepted in-page. Covered by Task
    14's component tests of `prepareMaintenanceEmail`'s mailto URL and the
    manual-mailto handler.
 
@@ -683,13 +684,13 @@ All times UTC. Sequence per the ship checklist; no-send rules held throughout (z
 2. PR #73 opened; CI rollup ALL GREEN (Vercel, GitGuardian, Preview Comments); merged as 95ba14da (merge commit, repo convention).
 3. Deploy verified live via the new cron route (404 before, 401 after — auth guard working). Canonical domain stockpilotusa.com; curl 429s on other routes are the known bot-protection edge challenge, not the app.
 4. Mobile OTA published via `pnpm release:ota` (production channel) + Sentry source maps uploaded. Pre-flight confirmed EXPO_PUBLIC_SUPABASE_URL in the release env points at prod.
-5. L4L enable: NOT run by the controller — organization_modules row for 63c13e64-92a6-4ea4-9936-6a2c26a85b4a ("L4L North Region", prod-verified as the org owning the DC4 sites) was found already enabled at 18:04:45 UTC, ~7 minutes after the migration seeded it false. Enabled by the owner via the UI. arosas@cvwest.org confirmed an accepted admin; admin role defaults include submit/read_all/manage (configure is owner-only by design), so no per-user grant was needed.
+5. L4L enable: NOT run by the controller — organization_modules row for 63c13e64-92a6-4ea4-9936-6a2c26a85b4a ("L4L North Region", prod-verified as the org owning the DC4 sites) was found already enabled at 18:04:45 UTC, ~7 minutes after the migration seeded it false. Enabled by the owner via the UI. jstone@site1.test confirmed an accepted admin; admin role defaults include submit/read_all/manage (configure is owner-only by design), so no per-user grant was needed.
 6. Demo Co prod walk (module temp-enabled 18:52:30, SQL recorded):
    - Module nav + list page render; first-visit tour auto-offer appeared; tour started, advanced steps 1-4, gracefully skipped the rowless step-5 target and completed (runtime tour proof on prod).
    - Request created via the real form: MR-2026-000001, site North Campus, review screen shows subject/site/To/CC read-only.
    - Photo uploaded on the detail panel: Photos (1/8), zero errors, thumbnail served from a signed maintenance-photos URL with the org-prefixed path (prod mint→PUT→finalize proven).
    - List WITH a row renders — no error boundary, 1 table row, pager present (the Task 25 RSC pagination fix proven in production).
-   - Copy Email Details: clipboard payload verified (To dc4@learn4life.org, CC arosas@cvwest.org, MR number, subject, /m/ share link; 1,070 chars); honest "copied" toast; no window opened.
+   - Copy Email Details: clipboard payload verified (To dc4@sampleorg.test, CC jstone@site1.test, MR number, subject, /m/ share link; 1,070 chars); honest "copied" toast; no window opened.
    - Request CANCELLED (status Cancelled) BEFORE the module disable, per the final review's cron amendment.
    - Module disabled (SQL recorded): nav entry gone, route shows the module-not-enabled fallback.
 7. Not exercised in prod, by rule: Open in Outlook, the mailto path, any real send. Covered by string-level tests, the local intercepted walk, and Task 14 component tests. Owner hand-test on the live L4L tenant remains the final step (step 8): one real request, owner reviews the draft and decides whether to send.

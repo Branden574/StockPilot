@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { redirect } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LotTraceSearch } from './lot-trace-search';
@@ -91,5 +92,23 @@ describe('LotTraceSearch — the field and a failed call', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to fetch');
     expect(screen.getByRole('button', { name: 'Trace' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Searching…' })).toBeNull();
+  });
+
+  // A Server Action that redirected (the session ended) rejects with the
+  // redirect the router is already following to sign-in. Nothing is shown for
+  // it: the message used to read "NEXT_REDIRECT", on the way to sign-in.
+  it('shows nothing for a call answered with a redirect to sign-in', async () => {
+    let signInRedirect: unknown = null;
+    try {
+      redirect('/signin?redirect=%2Fdashboard%2Freports');
+    } catch (e) {
+      signInRedirect = e;
+    }
+    expect(signInRedirect).not.toBeNull();
+    traceMock.mockRejectedValue(signInRedirect);
+    await trace();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Trace' })).toBeEnabled());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/NEXT_REDIRECT/)).toBeNull();
   });
 });

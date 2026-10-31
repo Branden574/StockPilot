@@ -98,6 +98,23 @@ describe('BulkIsbnImport', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('treats an ISBN-10 and its ISBN-13 as one book: one row, one lookup, the first form kept', async () => {
+    // 0306406152 and 9780306406157 are the two forms of ONE book. As two rows
+    // they were looked up twice and Import created the book twice.
+    renderImport();
+    fireEvent.change(list(), { target: { value: `0-306-40615-2\n${ISBN_A}\n${ISBN_B}` } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('isbn-import-status')).toHaveTextContent('1 ready · 1 failed'),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Title for 0306406152')).toBeInTheDocument();
+    expect(screen.queryByLabelText(`Title for ${ISBN_A}`)).not.toBeInTheDocument();
+  });
+
   it('looks up each distinct ISBN once, then shows the status line and the editable rows', async () => {
     renderImport();
     fireEvent.change(list(), {

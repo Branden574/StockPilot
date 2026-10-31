@@ -1,4 +1,5 @@
 import {
+  ORDER_CATALOG_VISIBILITY_PERMISSION,
   ORDERS_LIST_EMPTY_BODY_COPY,
   ORDERS_LIST_EMPTY_OWN_BODY_COPY,
   ORDERS_LIST_EMPTY_TITLE_COPY,
@@ -66,6 +67,24 @@ export function showPlaceOrder(input: {
   ordersModuleEnabled: boolean;
 }): boolean {
   return input.ordersModuleEnabled && showWriteCtaForRole(input.role, input.permissions, 'orders:request');
+}
+
+/** The Orders list's "Manage order items" (ordering visibility, 0413; design
+ *  8.1): the Orders module on and the EFFECTIVE set, once loaded, holds
+ *  orders:manage_catalog_visibility. Strict on purpose: hidden while the set
+ *  is unknown and never decided by the role, because StockPilot can deny a
+ *  manager, admin or owner (and allow a staff member or viewer). Not gated by
+ *  orders:request, so a member allowed to manage who cannot place orders has
+ *  a way in. Cosmetic: the routes and the database refuse on their own. */
+export function showManageOrderItems(input: {
+  permissions: ReadonlySet<Permission> | undefined;
+  ordersModuleEnabled: boolean;
+}): boolean {
+  return (
+    input.ordersModuleEnabled &&
+    input.permissions !== undefined &&
+    input.permissions.has(ORDER_CATALOG_VISIBILITY_PERMISSION)
+  );
 }
 
 /** What the list shows when it has no rows: a read that FAILED is not "No

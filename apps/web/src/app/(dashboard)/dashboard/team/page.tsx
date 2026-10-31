@@ -14,7 +14,7 @@ import { createClient } from '@/lib/supabase/server';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { env } from '@/lib/env';
 
-import { can, resolveTerminology, type Role } from '@stockpilot/core';
+import { can, resolveOrgTimezone, resolveTerminology, type Role } from '@stockpilot/core';
 
 export default async function TeamPage() {
   const ctx = await requireOrgContext();
@@ -36,9 +36,11 @@ export default async function TeamPage() {
     ChartersService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
+    // The zone rides along with the terminology: the Disabled badge's time is
+    // the organization's, the same on the server and in the browser.
     supabase
       .from('organizations')
-      .select('terminology')
+      .select('terminology, timezone')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     // The heading follows a Settings > Navigation rename of Team (PLAN rule
@@ -160,6 +162,9 @@ export default async function TeamPage() {
         grantsByUser={grantsByUser}
         charterSingular={terminology.charter_singular}
         warehouseSingular={terminology.warehouse_singular}
+        // A row that did not arrive is the documented default zone, as the
+        // terminology above falls back to its defaults.
+        timeZone={resolveOrgTimezone(orgRow.data?.timezone as string | null | undefined)}
       />
     </div>
   );

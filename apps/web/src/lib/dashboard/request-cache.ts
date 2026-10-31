@@ -61,6 +61,14 @@ export interface OrgRow {
    * zero extra round-trips.
    */
   all_modules_comp?: boolean | null;
+  /**
+   * Ordering visibility (migration 0413): when a hide in this organization
+   * last changed at least one record; null when it never has. UNDEFINED means
+   * unknown (an answer that did not carry it), never "never hidden": a
+   * catalog load then runs its check for recently hidden items. Read off the
+   * same cached org row, so it costs no round trip.
+   */
+  order_catalog_last_hide_at?: string | null;
 }
 
 export const getOrgRowForRequest = cache(async (organizationId: string): Promise<OrgRow | null> => {
@@ -76,7 +84,7 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   const { data, error } = await supabase
     .from('organizations')
     .select(
-      'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
+      'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp, order_catalog_last_hide_at',
     )
     .eq('id', organizationId)
     .maybeSingle();
@@ -165,6 +173,55 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
 });
 
 /**
+ * The org's effective module set AND whether its `organization_modules` rows
+ * were read.
+ *
+ * checkModuleAccess (lib/modules/module-gate) must be able to tell "this
+ * module is off" from "the rows could not be read": supabase-js RESOLVES a
+ * failed query as `{ data: null, error }`, which the set alone turns into "no
+ * rows", the same answer as an organization that switched every module off.
+ * The set is still the fail-closed one (`modules` holds only what the comp
+ * flag, which WAS read, grants), so nothing reading it is widened; the flag
+ * only lets a page say "could not check" instead of "not enabled". The
+ * outcome travels with the set here, as readWarehousesForRequest does for
+ * warehouses. One cached read serves both helpers.
+ */
+export interface ModulesRead {
+  modules: Set<ModuleId>;
+  /** The `organization_modules` rows could not be read. */
+  rowsUnreadable: boolean;
+}
+
+export const readModulesForRequest = cache(async (organizationId: string): Promise<ModulesRead> => {
+  // Same source as getOrgRowForRequest above: the enabled module ids and the
+  // comp flag came back with the membership. The rule that turns them into
+  // the effective set is the SAME function either way.
+  const fromBundle = modulesFromMembership(
+    bundleMembership(await loadRequestContextBundle(), organizationId),
+  );
+  if (fromBundle) return { modules: fromBundle, rowsUnreadable: false };
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', organizationId)
+    .eq('enabled', true);
+  if (error) {
+    console.error('[getModulesForRequest] organization_modules query failed:', error);
+  }
+  // Comped "all modules" override: a platform admin granting full access
+  // flips on every non-core module. getOrgRowForRequest is request-cached, so
+  // this adds zero round-trips. Fails CLOSED — a null/false flag adds nothing.
+  // The rule itself lives in lib/modules/effective-modules so the API context
+  // cannot drift from it again.
+  const org = await getOrgRowForRequest(organizationId);
+  return {
+    modules: effectiveModules(data as Array<{ module_id: string }> | null, org?.all_modules_comp),
+    rowsUnreadable: Boolean(error),
+  };
+});
+
+/**
  * Enabled `organization_modules` for the org, as a Set of module ids.
  * Request-cached so the dashboard layout, `withContext()` (in
  * `server/services/context.ts`) AND every page's `checkModuleAccess()` gate
@@ -178,37 +235,15 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
  * through via the registry, while optional/premium modules are denied. So an
  * error fails CLOSED for optional modules and never widens entitlements.
  * The page gate relies on this: do not make an unreadable row set come back
- * as anything but "no rows". NOTE: the rows read itself does not throw (the
- * Supabase client surfaces failures as `{ error }`, not exceptions), but on
- * the legacy path the comp flag comes from getOrgRowForRequest, which THROWS
- * on a read error because it also feeds the MFA gate. That rejection reaches
- * the caller: the layout shows its error screen, and checkModuleAccess
- * catches it and denies.
+ * as anything but "no rows" (the gate reads readModulesForRequest above to
+ * learn that the rows were unreadable). NOTE: the rows read itself does not
+ * throw (the Supabase client surfaces failures as `{ error }`, not
+ * exceptions), but on the legacy path the comp flag comes from
+ * getOrgRowForRequest, which THROWS on a read error because it also feeds the
+ * MFA gate. That rejection reaches the caller: the layout shows its error
+ * screen, and checkModuleAccess catches it and denies.
  */
 export const getModulesForRequest = cache(
-  async (organizationId: string): Promise<Set<ModuleId>> => {
-    // Same source as getOrgRowForRequest above: the enabled module ids and the
-    // comp flag came back with the membership. The rule that turns them into
-    // the effective set is the SAME function either way.
-    const fromBundle = modulesFromMembership(
-      bundleMembership(await loadRequestContextBundle(), organizationId),
-    );
-    if (fromBundle) return fromBundle;
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', organizationId)
-      .eq('enabled', true);
-    if (error) {
-      console.error('[getModulesForRequest] organization_modules query failed:', error);
-    }
-    // Comped "all modules" override: a platform admin granting full access
-    // flips on every non-core module. getOrgRowForRequest is request-cached, so
-    // this adds zero round-trips. Fails CLOSED — a null/false flag adds nothing.
-    // The rule itself lives in lib/modules/effective-modules so the API context
-    // cannot drift from it again.
-    const org = await getOrgRowForRequest(organizationId);
-    return effectiveModules(data as Array<{ module_id: string }> | null, org?.all_modules_comp);
-  },
+  async (organizationId: string): Promise<Set<ModuleId>> =>
+    (await readModulesForRequest(organizationId)).modules,
 );

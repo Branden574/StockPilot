@@ -31,8 +31,9 @@ import { readFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordere
 import { loadOrderKits } from '@/server/loaders/orders-kits';
 import {
   CATALOG_ROW_CEILING,
-  loadCatalogItemsCached,
+  catalogLastHideAt,
   loadChartersForWarehouse,
+  loadOrderableCatalog,
   resolveCatalogScopeKey,
 } from '@/server/loaders/orders-new-catalog';
 import { loadPhoneThumbMapCached } from '@/server/loaders/orders-phone-catalog';
@@ -42,6 +43,7 @@ import {
   ServiceError,
   type ServiceContext,
 } from '@/server/services/context';
+import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
 
 /**
  * The phone storefront's reads (phone ordering PO-3, plan 3.1 and 3.8): what
@@ -290,7 +292,10 @@ export class OrderStorefrontService {
   /**
    * The warehouse the request names, through the perimeter, and the caller's
    * catalog there: the scope key from their own client, the rows from the
-   * shared 60 s cache (what loadCatalogItems does, in two steps).
+   * shared 60 s cache without any item hidden from new ordering since that
+   * entry was read (what loadCatalogItems does, in two steps). Kits, Frequently
+   * ordered and the photos all derive from this list, so a hidden item's card
+   * and photo URL are never sent (0413, design 5.1).
    *
    * The scope key STARTS WITH the perimeter read instead of after it: it is
    * the caller's own five helper reads through ctx.supabase (none takes the
@@ -310,7 +315,12 @@ export class OrderStorefrontService {
     return {
       warehouseId,
       catalog: scopeKey.then((key) =>
-        loadCatalogItemsCached(this.ctx.organizationId, warehouseId, key),
+        loadOrderableCatalog(
+          this.ctx.organizationId,
+          warehouseId,
+          key,
+          catalogLastHideAt(this.ctx),
+        ),
       ),
     };
   }
@@ -372,6 +382,10 @@ export class OrderStorefrontService {
         // The order screen's approve gate (security slice D), as the web page
         // states it: the effective orders:approve, never for a viewer.
         canApproveOrders: canOrderOnBehalf && this.ctx.role !== 'viewer',
+        // Manage order items (0413): the effective permission, in an
+        // organization the rollout switch has turned on. Always set here, so
+        // the phone shows the entry only when this is exactly true.
+        canManageOrderItems: canManageOrderItems(this.ctx),
       },
       kitsEnabled: this.ctx.enabledModules.has('bundles'),
       orgTimezone: typeof org?.timezone === 'string' ? org.timezone : null,

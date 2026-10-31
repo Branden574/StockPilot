@@ -371,7 +371,11 @@ export default function ScanPo() {
       const {
         data: { session: fresh },
       } = await supabase.auth.getSession();
-      const token = fresh?.access_token ?? session.access_token;
+      // The session this upload goes out under: the fresh one when there is
+      // one, else the screen's. Its token and its account travel together, so
+      // the workspace header is the one THIS session's account saved (api.ts
+      // orgHeader).
+      const sender = fresh ?? session;
 
       // RN fetch has no default timeout — a dead-air / captive-portal stall
       // would leave the promise unsettled and the progress bar stuck at 92%
@@ -398,7 +402,10 @@ export default function ScanPo() {
               ? [{ name: 'displayNames', value: JSON.stringify(displayNames) }]
               : []),
           ],
-          headers: { Authorization: `Bearer ${token}`, ...(await orgHeader()) },
+          headers: {
+            Authorization: `Bearer ${sender.access_token}`,
+            ...(await orgHeader(sender.user.id)),
+          },
           signal: ctrl.signal,
         });
       } finally {
@@ -569,7 +576,7 @@ export default function ScanPo() {
             <TextInput
               value={names[0] ?? ''}
               onChangeText={(v) => setName(0, v)}
-              placeholder="Example: August DC4 Book Order"
+              placeholder="Example: August Restock Order"
               placeholderTextColor={c.ink3}
               maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
               editable={!busy}
@@ -628,7 +635,7 @@ export default function ScanPo() {
                     <TextInput
                       value={names[i] ?? ''}
                       onChangeText={(v) => setName(i, v)}
-                      placeholder="Example: August DC4 Book Order"
+                      placeholder="Example: August Restock Order"
                       placeholderTextColor={c.ink3}
                       maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
                       editable={!busy}

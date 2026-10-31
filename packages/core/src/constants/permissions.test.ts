@@ -1,14 +1,22 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  can,
   canDistributeBundles,
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
+  isPlatformManagedPermission,
   PERMISSION_GROUP_ORDER,
   PERMISSION_META,
   PERMISSIONS,
+  PLATFORM_MANAGED_PERMISSIONS,
   ROLE_PERMISSIONS,
+  withoutPlatformManaged,
   type Permission,
 } from './permissions';
 
@@ -235,5 +243,156 @@ describe('canDistributeBundles', () => {
   it('a manager whose bundles:distribute was revoked is not offered it', () => {
     const revoked = effectivePermissions('manager', [{ permission: 'bundles:distribute', granted: false }]);
     expect(canDistributeBundles({ role: 'manager', permissions: revoked })).toBe(false);
+  });
+});
+
+// ── Ordering visibility (owner brief 2026-10-26, migration 0413) ───────────
+//
+// orders:manage_catalog_visibility is held by managers, admins and owners by
+// default, and only StockPilot support (the platform console) may allow it to,
+// deny it to or reset it for one member. Resolution for this key, for EVERY
+// role including the owner: explicit deny, then explicit allow, then the role
+// default. Role-level overrides of the key are ignored (the database refuses
+// them anyway: tg_platform_managed_permission_guard).
+describe('orders:manage_catalog_visibility (platform-managed)', () => {
+  const KEY = 'orders:manage_catalog_visibility' as const;
+  const deny = [{ permission: KEY, granted: false }] as const;
+  const allow = [{ permission: KEY, granted: true }] as const;
+
+  it('is a registered key with its label, group and description', () => {
+    expect(PERMISSIONS).toContain(KEY);
+    expect(PERMISSION_META[KEY]).toEqual({
+      group: 'Order requests',
+      label: 'Manage order items',
+      description:
+        "Choose which items and books appear in Place an Order. Does not allow editing stock, approving orders or changing anyone's access.",
+    });
+    expect(FULLY_GRANTABLE_PERMISSIONS.has(KEY)).toBe(true);
+  });
+
+  it('defaults: owner, admin and manager hold it; staff and viewer do not', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(hasPermission(role, KEY), role).toBe(true);
+      expect(effectivePermissions(role).has(KEY), role).toBe(true);
+    }
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(hasPermission(role, KEY), role).toBe(false);
+      expect(effectivePermissions(role).has(KEY), role).toBe(false);
+    }
+  });
+
+  it('PLATFORM_MANAGED_PERMISSIONS lists exactly this key', () => {
+    expect([...PLATFORM_MANAGED_PERMISSIONS]).toEqual([KEY]);
+    expect(isPlatformManagedPermission(KEY)).toBe(true);
+    expect(isPlatformManagedPermission('orders:approve')).toBe(false);
+    expect(isPlatformManagedPermission('nonexistent:perm')).toBe(false);
+  });
+
+  it('an explicit deny holds for the OWNER too, and takes away nothing else', () => {
+    const perms = effectivePermissions('owner', [], [...deny]);
+    expect(perms.has(KEY)).toBe(false);
+    expect(perms.size).toBe(PERMISSIONS.length - 1);
+  });
+
+  it('the owner stays immutable for every other key', () => {
+    const perms = effectivePermissions(
+      'owner',
+      [{ permission: 'items:read', granted: false }],
+      [
+        { permission: 'billing:manage', granted: false },
+        { permission: KEY, granted: true },
+      ],
+    );
+    expect(perms.size).toBe(PERMISSIONS.length);
+  });
+
+  it('a ROLE override of the key is ignored for every role (only the platform sets it, per user)', () => {
+    expect(effectivePermissions('owner', [...deny]).has(KEY)).toBe(true);
+    expect(effectivePermissions('admin', [...deny]).has(KEY)).toBe(true);
+    expect(effectivePermissions('manager', [...deny]).has(KEY)).toBe(true);
+    expect(effectivePermissions('staff', [...allow]).has(KEY)).toBe(false);
+    expect(effectivePermissions('viewer', [...allow]).has(KEY)).toBe(false);
+  });
+
+  it('an explicit deny removes the default from an admin and a manager', () => {
+    expect(effectivePermissions('admin', [], [...deny]).has(KEY)).toBe(false);
+    expect(effectivePermissions('manager', [], [...deny]).has(KEY)).toBe(false);
+  });
+
+  it('an explicit allow gives a staff member or viewer this ONE key and nothing else', () => {
+    for (const role of ['staff', 'viewer'] as const) {
+      const perms = effectivePermissions(role, [], [...allow]);
+      expect([...perms].sort(), role).toEqual([...ROLE_PERMISSIONS[role], KEY].sort());
+      expect(perms.has('orders:approve'), role).toBe(false);
+      expect(perms.has('members:update_role'), role).toBe(false);
+    }
+  });
+
+  it('the exception follows the member, not the role: a deny survives promotion, an allow survives demotion', () => {
+    for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
+      expect(effectivePermissions(role, [], [...deny]).has(KEY), `deny as ${role}`).toBe(false);
+      expect(effectivePermissions(role, [], [...allow]).has(KEY), `allow as ${role}`).toBe(true);
+    }
+  });
+
+  it('can() never answers yes for a platform-managed key from the static role defaults alone', () => {
+    // A context without an effective set cannot know whether a deny exists.
+    expect(can({ role: 'manager' }, KEY)).toBe(false);
+    expect(can({ role: 'owner' }, KEY)).toBe(false);
+    expect(can({ role: 'manager', permissions: effectivePermissions('manager') }, KEY)).toBe(true);
+    expect(
+      can({ role: 'manager', permissions: effectivePermissions('manager', [], [...deny]) }, KEY),
+    ).toBe(false);
+    // Every other key keeps the static fallback.
+    expect(can({ role: 'manager' }, 'orders:approve')).toBe(true);
+  });
+
+  it('withoutPlatformManaged drops the key from a fallback set (fail closed)', () => {
+    const fallback = withoutPlatformManaged(new Set<Permission>(ROLE_PERMISSIONS.manager));
+    expect(fallback.has(KEY)).toBe(false);
+    expect(fallback.has('orders:approve')).toBe(true);
+    expect(fallback.size).toBe(ROLE_PERMISSIONS.manager.length - 1);
+  });
+});
+
+// The SQL twin of PLATFORM_MANAGED_PERMISSIONS is public._platform_managed_permissions()
+// (0413), and its role defaults are role_default_permissions seed rows. Read
+// the newest definition from the migrations, so the two lists cannot drift.
+describe('platform-managed permissions: parity with the database', () => {
+  const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '../../../../supabase/migrations');
+  const files = readdirSync(MIGRATIONS)
+    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+    .sort();
+  const sqlOf = (f: string) => readFileSync(join(MIGRATIONS, f), 'utf8');
+
+  it('_platform_managed_permissions() returns exactly PLATFORM_MANAGED_PERMISSIONS', () => {
+    const defining = files.filter((f) =>
+      /create (or replace )?function public\._platform_managed_permissions\(\)/i.test(sqlOf(f)),
+    );
+    expect(defining.length).toBeGreaterThan(0);
+    const sql = sqlOf(defining[defining.length - 1]!);
+    const body = sql.slice(sql.search(/function public\._platform_managed_permissions\(\)/i));
+    const arr = /array\[([^\]]*)\]::text\[\]/i.exec(body);
+    expect(arr).not.toBeNull();
+    const keys = [...arr![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect(keys).toEqual([...PLATFORM_MANAGED_PERMISSIONS]);
+  });
+
+  it('each platform-managed key is seeded for exactly the non-owner roles that hold it by default', () => {
+    for (const key of PLATFORM_MANAGED_PERMISSIONS) {
+      const seeded = new Set<string>();
+      for (const f of files) {
+        const sql = sqlOf(f);
+        for (const block of sql.matchAll(/insert into public\.role_default_permissions[^;]*;/gi)) {
+          for (const row of block[0].matchAll(/\(\s*'(\w+)'\s*,\s*'([^']+)'\s*\)/g)) {
+            if (row[2] === key) seeded.add(row[1]!);
+          }
+        }
+      }
+      const expected = (['admin', 'manager', 'staff', 'viewer'] as const).filter((r) =>
+        ROLE_PERMISSIONS[r].includes(key),
+      );
+      expect([...seeded].sort(), key).toEqual([...expected].sort());
+    }
   });
 });

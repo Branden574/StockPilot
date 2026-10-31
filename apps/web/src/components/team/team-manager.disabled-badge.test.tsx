@@ -9,8 +9,10 @@
 // button (owner/admin), not by the per-row `canManage` exclusion that
 // hides ACTIONS on the owner's own row — a disabled owner must still be
 // visible to an admin.
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { hydrateAcrossClockShift } from '@/test/hydration';
 
 const pushMock = vi.fn();
 const refreshMock = vi.fn();
@@ -75,6 +77,7 @@ function renderTeam(
       grantsByUser={{}}
       charterSingular="Charter"
       warehouseSingular="Warehouse"
+      timeZone="America/Los_Angeles"
     />,
   );
 }
@@ -138,5 +141,68 @@ describe('TeamManager — disabled status badge', () => {
     expect(screen.getByText('Disabled Person')).toBeInTheDocument();
     // ...but the status badge is gated the same as the row actions.
     expect(screen.queryByText('Disabled')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * B9 review: the badge's tooltip was `Disabled ${new Date(at).toLocaleString()}`.
+ * The Team page renders this component on the server first (UTC on Vercel), and
+ * React keeps a server attribute that differs while it hydrates, so a 6:30 PM
+ * Pacific disable read "Disabled 10/25/2026, 1:30:00 AM", the next day, with no
+ * zone named. It is now the organization's time, the same on both sides.
+ */
+describe("TeamManager — the Disabled badge's time is the organization's", () => {
+  // 6:30 PM Pacific on 24 Oct is 01:30 UTC on 25 Oct.
+  const EVENING = '2026-10-25T01:30:00.000Z';
+  const NOW = Date.parse('2026-10-26T17:00:00.000Z');
+
+  function team(timeZone: string) {
+    return (
+      <TeamManager
+        currentUserRole="admin"
+        members={[baseMember({ id: 'm2', fullName: 'Disabled Person', disabledAt: EVENING })]}
+        pendingInvites={[]}
+        charters={[]}
+        warehouses={[]}
+        warehouseCharters={[]}
+        allCategories={[]}
+        grantsByUser={{}}
+        charterSingular="Charter"
+        warehouseSingular="Warehouse"
+        timeZone={timeZone}
+      />
+    );
+  }
+
+  it("the server (UTC) and a Pacific browser print the same tooltip, in the organization's zone", async () => {
+    const run = await hydrateAcrossClockShift(() => team('America/Los_Angeles'), {
+      serverNow: NOW,
+      browserNow: NOW + 60_000,
+    });
+    try {
+      expect(within(run.container).getByText('Disabled')).toHaveAttribute(
+        'title',
+        'Disabled Oct 24, 2026, 6:30 PM',
+      );
+      expect(run.errors).toEqual([]);
+    } finally {
+      run.unmount();
+    }
+  });
+
+  it("follows the organization's zone, not the browser's", async () => {
+    const run = await hydrateAcrossClockShift(() => team('America/New_York'), {
+      serverNow: NOW,
+      browserNow: NOW + 60_000,
+    });
+    try {
+      expect(within(run.container).getByText('Disabled')).toHaveAttribute(
+        'title',
+        'Disabled Oct 24, 2026, 9:30 PM',
+      );
+      expect(run.errors).toEqual([]);
+    } finally {
+      run.unmount();
+    }
   });
 });

@@ -39,6 +39,15 @@ type Size = 'sm' | 'md';
  * a caller that already passes minHeight 44 still draws a 44pt button in a
  * 44pt frame. A one-glyph label narrower than 44pt would be drawn 44pt wide
  * (no sm button is that narrow today).
+ *
+ * ONE LINE, OR `wrap`. The label is one line by default, so a short label in
+ * a row of buttons ellipsizes inside its own button instead of shoving its
+ * neighbour off the row. A label that is a sentence ("Release replacement
+ * before return is received") was cut that way to "Release replacement…" at
+ * larger text sizes, and short of its end even at the default size on a
+ * narrow phone (docket B10). Such a button passes `wrap`: the label takes as
+ * many lines as it needs, centred, and the button grows taller (minHeight,
+ * never height). A label that fits draws exactly as before.
  */
 export function Button({
   children,
@@ -49,6 +58,7 @@ export function Button({
   disabled = false,
   leading,
   trailing,
+  wrap = false,
   style,
   accessibilityLabel,
   accessibilityHint,
@@ -61,6 +71,9 @@ export function Button({
   disabled?: boolean;
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
+  /** A label that may need more than one line wraps, centred, instead of
+   *  being cut to one line (see ONE LINE, OR `wrap` above). */
+  wrap?: boolean;
   style?: ViewStyle;
   /** The spoken name when the visible label alone is ambiguous (a "Remove"
    *  on each of several photos). Defaults to the label's text. */
@@ -114,12 +127,13 @@ export function Button({
             <Text
               style={[
                 styles.label,
+                wrap ? styles.labelWrap : null,
                 {
                   color: tone.fg,
                   fontSize,
                 },
               ]}
-              numberOfLines={1}
+              numberOfLines={wrap ? undefined : 1}
               maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.control)}
             >
               {children}
@@ -219,5 +233,9 @@ const styles = StyleSheet.create({
     // two-button footer row instead of ellipsizing inside its own button.
     flexShrink: 1,
     minWidth: 0,
+  },
+  // A wrapped label's lines centre under each other, as the one line did.
+  labelWrap: {
+    textAlign: 'center',
   },
 });

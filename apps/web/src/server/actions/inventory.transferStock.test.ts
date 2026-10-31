@@ -316,7 +316,7 @@ describe('transferStockAction (destination union)', () => {
   // STAGING IS NOT A DESTINATION. UNPLACED IS — rack 100-A, 2026-07-23
   //
   // These two buckets were refused together, and lumping them cost 220 books.
-  // Andrew created a test rack, moved 242 units onto it, and then had to get
+  // A manager created a test rack, moved 242 units onto it, and then had to get
   // them off. The dialog offered exactly two ways: transfer to another REAL
   // rack, or "Remove from rack" — which is a WRITE-OFF. There was no way to
   // say "this stock is on hand but on no rack", because `unplaced` was

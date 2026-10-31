@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 
 import { uuidSchema } from '@stockpilot/core';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
@@ -11,6 +12,7 @@ import { MaintenanceShareLinksService } from '@/server/services/maintenance-shar
 type ActionResult<T> = ({ ok: true } & T) | { error: { message: string } };
 
 function fail(e: unknown): { error: { message: string } } {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) return { error: { message: e.message } };
   return { error: { message: 'Something went wrong. Please try again.' } };
 }

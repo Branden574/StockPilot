@@ -12,6 +12,7 @@ import {
   type UngroupSelectedOutcome,
 } from '@stockpilot/core';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
@@ -34,6 +35,7 @@ import {
  */
 
 function toResult(e: unknown): ActionResult<never> {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return err(e.code, e.message, e.details);
   }

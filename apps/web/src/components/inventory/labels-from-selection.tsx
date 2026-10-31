@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import { LABELS_MAX_ITEMS, readLabelsSelection } from '@/lib/inventory/labels-selection';
 import { loadLabelItemsAction, type LabelItem } from '@/server/actions/labels';
 
@@ -56,7 +57,9 @@ export function LabelsFromSelection({
             ? { kind: 'ready', items: res.data, selected: ids.length }
             : { kind: 'error', message: res.error.message, selected: ids.length },
         );
-      } catch {
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         if (!cancelled) {
           setState({
             kind: 'error',

@@ -203,6 +203,9 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
   const [total, setTotal] = React.useState(0);
   const [status, setStatus] = React.useState<'loading' | 'ready' | 'failed'>('loading');
   const [loadingMore, setLoadingMore] = React.useState(false);
+  // Bumped by Try again after a failed read: the page-1 fetch below runs
+  // again for the same tab, search and workspace.
+  const [attempt, setAttempt] = React.useState(0);
   // Monotonic fetch id — a slow page-1 response for a STALE tab/query must
   // not overwrite the list after a newer fetch already landed.
   const seqRef = React.useRef(0);
@@ -258,9 +261,9 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
     [activeOrgId, activeWarehouseId, tab, q],
   );
 
-  // Debounced page-1 fetch on tab / query / workspace change: the trailing
-  // 250ms collapses a burst of keystrokes into one request (same debounce
-  // the Items tab uses).
+  // Debounced page-1 fetch on tab / query / workspace change, and on Try
+  // again: the trailing 250ms collapses a burst of keystrokes into one
+  // request (same debounce the Items tab uses).
   React.useEffect(() => {
     const seq = ++seqRef.current;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced search: the sync set is the loading flag for a tab/query/workspace change; every data set is post-await
@@ -281,7 +284,7 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
       })();
     }, 250);
     return () => clearTimeout(t);
-  }, [fetchPage, activeOrgId]);
+  }, [fetchPage, activeOrgId, attempt]);
 
   async function loadMore() {
     if (loadingMore || status !== 'ready') return;
@@ -352,9 +355,16 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
         {status === 'loading' ? (
           <ActivityIndicator color={c.ink} style={{ paddingVertical: 28 }} />
         ) : status === 'failed' ? (
-          <Body muted size={13} style={styles.listNotice}>
-            Couldn&rsquo;t load {noun}. Check your connection and pull back in.
-          </Body>
+          // A failed read says so with a way to read again: it told the
+          // person to "pull back in", and nothing on this screen pulled.
+          <View style={styles.failed}>
+            <Body muted size={13} style={styles.failedText}>
+              Couldn&rsquo;t load {noun}. Check your connection and try again.
+            </Body>
+            <Button variant="outline" size="sm" onPress={() => setAttempt((n) => n + 1)}>
+              Try again
+            </Button>
+          </View>
         ) : rows.length === 0 ? (
           <Body muted size={13} style={styles.listNotice}>
             {q.trim()
@@ -632,6 +642,15 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
     textAlign: 'center',
   },
+  // The failed read: its sentence over Try again (the shared small Button,
+  // a 44pt target), centred like the other notices.
+  failed: {
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    alignItems: 'center',
+    gap: 12,
+  },
+  failedText: { textAlign: 'center' },
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',

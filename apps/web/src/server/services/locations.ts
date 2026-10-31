@@ -8,13 +8,21 @@ import {
   locationNameSitsOnRack,
   normalizeCrateColorForWrite,
   normalizeRackFields,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
   parseRackLabel,
+  type Role,
 } from '@stockpilot/core';
 import { z } from 'zod';
 
+import {
+  assertWarehouseAccess,
+  ForbiddenError,
+  roleSeesEveryWarehouse,
+} from '@/lib/auth/warehouse';
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertAnyPermission,
   assertPermission,
@@ -23,6 +31,18 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+
+/**
+ * The placement mint's refusal when the warehouse it would create the rack or
+ * crate in is one the caller (below manager) does not work in. The same words
+ * as InventoryService.transferStock's TRANSFER_WAREHOUSE_WRITE_REFUSED (the
+ * phone shows both verbatim), because it is the same rule: below manager, both
+ * ends of a move are in warehouses the caller writes (transfer_stock, 0365).
+ * Checked here BEFORE the mint instead of after it; a test pins the two
+ * sentences together. Declared here because inventory.ts imports this file.
+ */
+export const PLACEMENT_WAREHOUSE_WRITE_REFUSED =
+  'You can only move stock between warehouses you work in.';
 
 export const createLocationSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -130,25 +150,32 @@ export class LocationsService {
    *                       location / a PO's receiving destination should offer.
    *   - `excludeSystem` → only drops staging/unplaced (kept for callers that
    *                       still want racks in the list, e.g. put-away flows).
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable. It was one read, capped at PostgREST's 1000 rows of
+   * EVERY kind before the sites were picked out, so an organization with more
+   * than 1000 locations lost each site whose name sorts past them: the
+   * purchase order pickers could not offer it, and Edit purchase order named
+   * such a destination as one you can't pick (small fixes slice 8 review). One
+   * request still answers an organization under 1000 locations.
    */
   async list(opts: { includeArchived?: boolean; excludeSystem?: boolean; sitesOnly?: boolean } = {}) {
-    let query = this.ctx.supabase
-      .from('locations')
-      // rack_number/rack_row/crate_color/crate_number are FIRST-CLASS columns
-      // (migration 0188). They travel with every list() row so a caller can
-      // show what a rack/crate actually is without re-fetching — and, more
-      // importantly, without parsing metadata back out of `name`. "Blue #42"
-      // is a DEDUPE KEY, not a data source; never reverse-engineer a crate
-      // from it while these columns exist.
-      .select('id, parent_id, name, type, kind, notes, warehouse_id, rack_number, rack_row, crate_color, crate_number, deleted_at, created_at, updated_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('name', { ascending: true });
-    query = opts.includeArchived
-      ? query.not('deleted_at', 'is', null)
-      : query.is('deleted_at', null);
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    const rows = data ?? [];
+    const rows = await fetchAllRows((from, to) => {
+      const query = this.ctx.supabase
+        .from('locations')
+        // rack_number/rack_row/crate_color/crate_number are FIRST-CLASS columns
+        // (migration 0188). They travel with every list() row so a caller can
+        // show what a rack/crate actually is without re-fetching — and, more
+        // importantly, without parsing metadata back out of `name`. "Blue #42"
+        // is a DEDUPE KEY, not a data source; never reverse-engineer a crate
+        // from it while these columns exist.
+        .select('id, parent_id, name, type, kind, notes, warehouse_id, rack_number, rack_row, crate_color, crate_number, deleted_at, created_at, updated_at')
+        .eq('organization_id', this.ctx.organizationId);
+      return (opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null))
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to);
+    });
     if (opts.sitesOnly) return rows.filter(isSiteLocation);
     return opts.excludeSystem ? rows.filter(isUserFacingLocation) : rows;
   }
@@ -331,6 +358,18 @@ export class LocationsService {
     // that answers with the app's own ServiceError shape (and the MFA step-up)
     // before a round trip is spent.
     assertAnyPermission(this.ctx, ['stock:transfer', 'locations:manage']);
+    // THE WAREHOUSE, before anything is minted (B38). mint_placement_location
+    // checks only that the warehouse is the org's. Below manager the move that
+    // follows is refused unless the caller writes the destination's warehouse
+    // (transfer_stock, 0365), but by then the rack or crate existed, empty.
+    // Who gets here with a warehouse they cannot write: the phone's transfer
+    // route, which takes a new rack's warehouse from the SOURCE location
+    // (readable org-wide), so a stale or hand-made source in another
+    // warehouse; and on the web, a viewer granted stock:transfer. A staff
+    // member naming another warehouse on the web is refused before this: each
+    // place action first reads the warehouse under their own access
+    // (warehouses_select), which hides one they are not assigned to.
+    await this.assertMayPlaceInWarehouse(input.warehouseId);
     const name = crateAwareLocationName(input);
     const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
     const { data, error } = await this.ctx.supabase.rpc('mint_placement_location', {
@@ -364,6 +403,32 @@ export class LocationsService {
       throw new ServiceError('internal_error', 'mint_placement_location returned no row');
     }
     return row as Record<string, unknown>;
+  }
+
+  /**
+   * Whether the caller may put stock into this warehouse, the rule the move
+   * itself is held to (transfer_stock, 0365; user_can_access_warehouse 'write':
+   * manager and above everywhere, staff where assigned, a viewer nowhere).
+   * Managers and above skip the read: the role is the whole rule for them
+   * (roleSeesEveryWarehouse). Refusals are ServiceErrors, so the web actions
+   * and the phone's transfer route answer them as they answer the transfer's:
+   * the same sentence, a 403; a failed read of the caller's own access is a
+   * retryable conflict that claims no scope.
+   */
+  private async assertMayPlaceInWarehouse(warehouseId: string): Promise<void> {
+    if (roleSeesEveryWarehouse(this.ctx.role as Role)) return;
+    try {
+      await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+    } catch (e) {
+      if (!(e instanceof ForbiddenError)) throw e;
+      if (e.accessUnreadable) {
+        throw new ServiceError('conflict', ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
+      }
+      // A viewer writes no warehouse: transferStock's words for a caller below
+      // staff, since "warehouses you work in" would not be true of them.
+      if (this.ctx.role === 'viewer') throw new ServiceError('forbidden', 'Permission denied');
+      throw new ServiceError('forbidden', PLACEMENT_WAREHOUSE_WRITE_REFUSED);
+    }
   }
 
   /**

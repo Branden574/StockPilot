@@ -22,8 +22,8 @@ function row(overrides: Partial<ItemHistoryMovement> = {}): ItemHistoryMovement 
     movedQuantity: null,
     previousQuantity: 134,
     newQuantity: 144,
-    actorName: 'Peter Pete',
-    actorEmail: 'pmathis@cvsouth.org',
+    actorName: 'Pat Tester',
+    actorEmail: 'ptester@school.test',
     fromLocationName: null,
     toLocationName: null,
     note: null,
@@ -39,8 +39,8 @@ function row(overrides: Partial<ItemHistoryMovement> = {}): ItemHistoryMovement 
 
 describe('historyNote — rule 2: never render an internal token as a human note', () => {
   it('drops the machine-written reasons the receipt writers use', () => {
-    expect(historyNote('receipt_line', 'b26190be-b6fc-4475-b1c5-fed997bf5814')).toBeNull();
-    expect(historyNote('receipt_reversal', '5da7b8e2-7a17-4942-913a-93ba0aac1837')).toBeNull();
+    expect(historyNote('receipt_line', 'b0000018-0000-4000-8000-000000000018')).toBeNull();
+    expect(historyNote('receipt_reversal', '5000000f-0000-4000-8000-00000000000f')).toBeNull();
     expect(historyNote('duplicate_initial_count', null)).toBeNull();
   });
 
@@ -76,31 +76,31 @@ describe('historyNote — rule 2: never render an internal token as a human note
   });
 
   it("drops a bare 'PO {number}' reason — the PO is carried structurally", () => {
-    expect(historyNote('PO CVW-002201', '0bbed45a-857b-468c-ada4-353f31aff1a8')).toBeNull();
-    expect(historyNote('PO PO-1784742395548', null)).toBeNull();
+    expect(historyNote('PO DEMO-002201', '00000001-0000-4000-8000-000000000001')).toBeNull();
+    expect(historyNote('PO PO-1700000000202', null)).toBeNull();
   });
 
   it('never returns a raw UUID, from reason or from notes', () => {
-    expect(historyNote('5f3538ee-3fe8-4fe6-aecb-b88cde7e1c3a', null)).toBeNull();
-    expect(historyNote(null, '5f3538ee-3fe8-4fe6-aecb-b88cde7e1c3a')).toBeNull();
+    expect(historyNote('50000010-0000-4000-8000-000000000010', null)).toBeNull();
+    expect(historyNote(null, '50000010-0000-4000-8000-000000000010')).toBeNull();
   });
 
   it("keeps the operator's typed words, trimmed", () => {
-    expect(historyNote('incorrectly moved inventory ', null)).toBe('incorrectly moved inventory');
+    expect(historyNote('moved to the wrong rack ', null)).toBe('moved to the wrong rack');
     expect(historyNote('added incorrectly ', null)).toBe('added incorrectly');
-    expect(historyNote('Adding new stock into inventory. ', null)).toBe(
-      'Adding new stock into inventory.',
+    expect(historyNote('Added new stock to the shelf. ', null)).toBe(
+      'Added new stock to the shelf.',
     );
   });
 
   it('strips the internal reference parenthetical but keeps the prose in front of it', () => {
-    expect(historyNote('Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)', null)).toBe(
+    expect(historyNote('Order pick (order_request 5000000c-0000-4000-8000-00000000000c)', null)).toBe(
       'Order pick',
     );
-    expect(historyNote('Order cancelled (order_request 1d265b37-4b5c-49bb-bc12-07b0ad270cff)', null)).toBe(
+    expect(historyNote('Order cancelled (order_request 10000004-0000-4000-8000-000000000004)', null)).toBe(
       'Order cancelled',
     );
-    expect(historyNote('Return restock (return ecbd03b4-2fbe-4e0a-8507-021a9bd3feed)', null)).toBe(
+    expect(historyNote('Return restock (return e000001f-0000-4000-8000-00000000001f)', null)).toBe(
       'Return restock',
     );
   });
@@ -110,13 +110,13 @@ describe('historyNote — rule 2: never render an internal token as a human note
   // pick" while the Movements page printed the raw uuid. Given the page's
   // batched order-number map both now say the same words.
   it('renders the human order number when the caller resolved one', () => {
-    const labels = new Map([['51516354-4efe-40e5-89bd-95164cbef2f7', 'SO-000060']]);
+    const labels = new Map([['5000000c-0000-4000-8000-00000000000c', 'SO-000060']]);
     expect(
-      historyNote('Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)', null, labels),
+      historyNote('Order pick (order_request 5000000c-0000-4000-8000-00000000000c)', null, labels),
     ).toBe('Order pick (SO-000060)');
     expect(
       historyNote(
-        'Order cancelled (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)',
+        'Order cancelled (order_request 5000000c-0000-4000-8000-00000000000c)',
         null,
         labels,
       ),
@@ -132,7 +132,7 @@ describe('historyNote — rule 2: never render an internal token as a human note
 
   it('falls back to today’s stripped text when nothing resolves', () => {
     expect(
-      historyNote('Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)', null, new Map()),
+      historyNote('Order pick (order_request 5000000c-0000-4000-8000-00000000000c)', null, new Map()),
     ).toBe('Order pick');
   });
 
@@ -140,8 +140,8 @@ describe('historyNote — rule 2: never render an internal token as a human note
   // operator who typed BOTH lost the note silently. The owner asked for "when
   // where notes why everything".
   it('shows BOTH the typed reason and the typed note when both exist', () => {
-    expect(historyNote('incorrectly moved inventory', 'box was crushed on the pallet')).toBe(
-      'incorrectly moved inventory (note: box was crushed on the pallet)',
+    expect(historyNote('moved to the wrong rack', 'box was crushed on the pallet')).toBe(
+      'moved to the wrong rack (note: box was crushed on the pallet)',
     );
   });
 
@@ -152,7 +152,7 @@ describe('historyNote — rule 2: never render an internal token as a human note
   it('still shows the reason alone when the note is only a machine id', () => {
     // post_receipt_v2 stores receipts.id in notes; that must not become "(note:
     // <uuid>)" appended to real prose.
-    expect(historyNote('Found extra', 'b26190be-b6fc-4475-b1c5-fed997bf5814')).toBe('Found extra');
+    expect(historyNote('Found extra', 'b0000018-0000-4000-8000-000000000018')).toBe('Found extra');
   });
 
   it('falls back to notes only when they are human prose', () => {
@@ -264,11 +264,11 @@ describe('formatHistoryMovement — rule 5: say nothing you cannot support', () 
   });
 
   it('keeps the email only when it is a second fact', () => {
-    expect(formatHistoryMovement(row()).actorEmailLabel).toBe('pmathis@cvsouth.org');
+    expect(formatHistoryMovement(row()).actorEmailLabel).toBe('ptester@school.test');
     const emailOnly = formatHistoryMovement(
-      row({ actorName: 'pmathis@cvsouth.org', actorEmail: null }),
+      row({ actorName: 'ptester@school.test', actorEmail: null }),
     );
-    expect(emailOnly.actorLabel).toBe('pmathis@cvsouth.org');
+    expect(emailOnly.actorLabel).toBe('ptester@school.test');
     expect(emailOnly.actorEmailLabel).toBeNull();
   });
 });
@@ -288,30 +288,30 @@ describe('formatHistoryMovement — receiving provenance', () => {
     const f = formatHistoryMovement(
       row({
         movementType: 'receive_po',
-        receiptNumber: 'R-20260722-175600-e56648',
+        receiptNumber: 'R-20260722-175600-0a0a01',
         receiptStatus: 'posted',
-        poNumber: 'CVW-002201',
+        poNumber: 'DEMO-002201',
         poStatus: 'received',
       }),
     );
     // 'posted' is the ordinary case and adds nothing; the PO status is always
     // stated because stock received against a later-CANCELLED PO is exactly
     // what sent the owner to SQL.
-    expect(f.sourceLabel).toBe('Receipt R-20260722-175600-e56648 - PO CVW-002201 (received)');
+    expect(f.sourceLabel).toBe('Receipt R-20260722-175600-0a0a01 - PO DEMO-002201 (received)');
   });
 
   it('flags a non-posted receipt status', () => {
     const f = formatHistoryMovement(
       row({
         movementType: 'receive_po',
-        receiptNumber: 'R-20260722-162027-e33333',
+        receiptNumber: 'R-20260722-162027-0d0d04',
         receiptStatus: 'reversed',
-        poNumber: 'CVW-002201',
+        poNumber: 'DEMO-002201',
         poStatus: 'cancelled',
       }),
     );
     expect(f.sourceLabel).toBe(
-      'Receipt R-20260722-162027-e33333 (reversed) - PO CVW-002201 (cancelled)',
+      'Receipt R-20260722-162027-0d0d04 (reversed) - PO DEMO-002201 (cancelled)',
     );
   });
 
@@ -326,17 +326,17 @@ describe('formatHistoryMovement — rule 3: a reversal pair is recognisable', ()
       row({
         movementType: 'receive_po',
         quantityChange: 20,
-        receiptNumber: 'R-20260722-162027-e33333',
+        receiptNumber: 'R-20260722-162027-0d0d04',
         receiptStatus: 'reversed',
         reversalReason: 'wrong input',
         reversal: {
           role: 'reversed',
           counterpartMovementId: 'm-2',
-          counterpartReceiptNumber: 'R-20260722-162027-e33333-REV',
+          counterpartReceiptNumber: 'R-20260722-162027-0d0d04-REV',
         },
       }),
     );
-    expect(f.reversalLabel).toBe('Reversed later by R-20260722-162027-e33333-REV: wrong input');
+    expect(f.reversalLabel).toBe('Reversed later by R-20260722-162027-0d0d04-REV: wrong input');
     expect(f.tone).toBe('warn');
   });
 
@@ -345,17 +345,17 @@ describe('formatHistoryMovement — rule 3: a reversal pair is recognisable', ()
       row({
         movementType: 'correction',
         quantityChange: -20,
-        receiptNumber: 'R-20260722-162027-e33333-REV',
+        receiptNumber: 'R-20260722-162027-0d0d04-REV',
         receiptStatus: 'reversal',
         reversalReason: 'wrong input',
         reversal: {
           role: 'reversal',
           counterpartMovementId: 'm-1',
-          counterpartReceiptNumber: 'R-20260722-162027-e33333',
+          counterpartReceiptNumber: 'R-20260722-162027-0d0d04',
         },
       }),
     );
-    expect(f.reversalLabel).toBe('Reverses R-20260722-162027-e33333: wrong input');
+    expect(f.reversalLabel).toBe('Reverses R-20260722-162027-0d0d04: wrong input');
   });
 
   it('still states the role when the counterpart fell outside the loaded page', () => {

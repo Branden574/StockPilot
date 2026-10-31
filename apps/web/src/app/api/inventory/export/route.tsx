@@ -28,6 +28,7 @@ import {
 } from '@/lib/exports/export-request';
 import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { buildExportPdfRows, InventoryExportPdf } from '@/lib/pdf/inventory-export-pdf';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest) {
     // Compute-heavy (up to 10k rows -> in-memory xlsx/pdf render). Cap like
     // every other export route so one account can't sustain a serverless-cost
     // DoS; this also emits the security.export_rate_limited audit event.
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const json = await request.json().catch(() => null);
@@ -234,7 +235,10 @@ export async function POST(request: NextRequest) {
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     const layout = computeExportPdfLayout({
       fields,

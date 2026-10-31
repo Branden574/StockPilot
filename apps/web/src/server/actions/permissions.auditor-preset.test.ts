@@ -4,7 +4,7 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 
-import type { Permission } from '@stockpilot/core';
+import { isPlatformManagedPermission, type Permission } from '@stockpilot/core';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
@@ -139,6 +139,26 @@ describe('applyAuditorPresetAction', () => {
       expect(broadcastPermissionsChanged).not.toHaveBeenCalled();
     },
   );
+
+  it('never contains a platform-managed key (only StockPilot support grants those, per member)', () => {
+    expect(AUDITOR_PRESET_PERMISSIONS.filter((p) => isPlatformManagedPermission(p))).toEqual([]);
+  });
+
+  it('a database refusal of a platform-managed key is said as such, not as an internal error', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'role_permission_overrides.insert': {
+        data: null,
+        error: { message: 'x', code: '42501', hint: 'permission_platform_managed' },
+      },
+    });
+    const result = await applyAuditorPresetAction();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.message).toBe('This permission is managed by StockPilot support.');
+    }
+    expect(audit).not.toHaveBeenCalled();
+  });
 
   it('rejects an AAL1 session when the org requires MFA (forbidden, no write)', async () => {
     sessionState.mfaRequired = true;

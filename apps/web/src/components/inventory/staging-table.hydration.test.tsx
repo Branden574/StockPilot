@@ -22,8 +22,8 @@ const T0 = Date.parse('2026-10-05T21:00:00.000Z');
 
 const ROW: StagingTableProps['rows'][number] = {
   itemId: 'item-a',
-  name: 'Science Dimensions Earth & Space Science',
-  sku: 'SP-0WK2L-LY1',
+  name: 'Exploring Earth & Space Science: Level 8',
+  sku: 'SP-0DEM2-BK1',
   itemType: 'book',
   warehouseId: 'wh1',
   sourceLocationId: 'stg-1',

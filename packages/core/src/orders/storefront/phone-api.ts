@@ -51,6 +51,12 @@ export interface OrderStorefrontViewer {
   canOrderOnBehalf: boolean;
   /** The order screen's approve gate: orders:approve, never a viewer. */
   canApproveOrders: boolean;
+  /** May open Manage order items (ordering visibility, 0413): the effective
+   *  orders:manage_catalog_visibility and the rollout switch. The server
+   *  always sets it; it is optional so an answer from a server without the
+   *  feature still parses, and the phone shows the entry only when it is
+   *  exactly true (hidden while the answer loads). */
+  canManageOrderItems?: boolean;
 }
 
 /** One on-behalf requester of the last year (order_recent_requesters, 0391),
@@ -159,4 +165,86 @@ export interface OrderCatalogPhotosAnswer {
   photos: Record<string, string>;
   signedAt: string;
   expiresAt: string;
+}
+
+// ── Manage order items (ordering visibility, migration 0413) ───────────────
+//
+// GET /api/v1/orders/catalog-visibility?q&visibility&type&warehouseId&
+// categoryId&page (core parseOrderCatalogManageQuery), GET .../family/
+// [groupId] and POST /api/v1/orders/catalog-visibility. The web page reads the
+// same service. Only records the caller may READ are ever listed (Inventory's
+// row level security), hidden ones included so they can be shown again;
+// archived, deleted, rental and kit records are not manageable.
+
+/** One record in Manage order items. No cost, no stock figure. */
+export interface OrderCatalogManageRow {
+  id: string;
+  name: string;
+  sku: string;
+  /** A book's ISBN or an item's barcode; null when it has none. */
+  identifier: string | null;
+  /** 'book' for item_type book, 'item' for every other type. */
+  itemType: 'item' | 'book';
+  /** A sized record's size, or a book's author (books have no edition
+   *  field); null when neither applies. */
+  sizeOrEdition: string | null;
+  warehouseId: string;
+  warehouseName: string | null;
+  categoryName: string | null;
+  /** The product family (group_id) and its name, for "Select family". */
+  familyId: string | null;
+  familyName: string | null;
+  /** Not received yet: orderable from its first receipt, so it can be hidden
+   *  ahead of time. */
+  expected: boolean;
+  /** order_catalog_visible: true = Shown in Orders. */
+  visible: boolean;
+  /** When it was hidden (order_catalog_visibility_changed_at); null when shown. */
+  hiddenSince: string | null;
+  /** A signed thumbnail, or a book's stored cover; null for none. */
+  thumbUrl: string | null;
+}
+
+/** One page of Manage order items (core ORDER_CATALOG_MANAGE_PAGE_SIZE a page;
+ *  `total` is exact over everything the caller can read). */
+export interface OrderCatalogManageListAnswer {
+  organizationId: string;
+  /** Only ever answered to a caller who may manage (others get a refusal). */
+  viewer: { canManage: true };
+  /** 1-based. */
+  page: number;
+  pageSize: number;
+  total: number;
+  rows: OrderCatalogManageRow[];
+}
+
+/** Every record of one product family the caller can read (the explicit
+ *  "Select family" disclosure), at most core ORDER_CATALOG_FAMILY_MAX. */
+export interface OrderCatalogFamilyAnswer {
+  organizationId: string;
+  familyId: string;
+  familyName: string | null;
+  rows: OrderCatalogManageRow[];
+  /** The family has more readable records than are listed. */
+  truncated: boolean;
+}
+
+/** POST /api/v1/orders/catalog-visibility: Show or Hide exactly these ids
+ *  (1 to core ORDER_CATALOG_VISIBILITY_MAX_ITEMS). Keep `operationId` for a
+ *  retry of the same change: a retry answers every id as unchanged. */
+export interface OrderCatalogVisibilityWriteBody {
+  itemIds: string[];
+  visible: boolean;
+  operationId: string;
+}
+
+/** A Show or Hide that committed, all or nothing. */
+export interface OrderCatalogVisibilityWriteAnswer {
+  organizationId: string;
+  operationId: string;
+  visible: boolean;
+  /** Exactly the ids this call changed (one audit row each). */
+  changed: string[];
+  /** Ids already in that state (no audit row). */
+  unchanged: string[];
 }

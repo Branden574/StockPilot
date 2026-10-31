@@ -4,7 +4,7 @@ import * as React from 'react';
 import * as RechartsPrimitive from 'recharts';
 import type { LegendPayload, TooltipContentProps } from 'recharts';
 
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 // Recharts 3 generic param defaults — the public ValueType/NameType aren't
 // re-exported under those names from the package root, so alias them here from
@@ -129,6 +129,18 @@ function ChartContainer({
 }
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
+
+/**
+ * A tooltip figure in the app's format (formatNumber, a fixed en-US), never
+ * the browser's: `value.toLocaleString()` printed "1.234" in a German browser
+ * beside cards and axes that say "1,234". Recharts hands a number, a string,
+ * or a pair of them for a range series (low–high).
+ */
+function tooltipValueText(value: TooltipValue): string {
+  const one = (v: number | string) => (typeof v === 'number' ? formatNumber(v) : String(v));
+  if (typeof value === 'number' || typeof value === 'string') return one(value);
+  return value.map(one).join('–');
+}
 
 function ChartTooltipContent({
   active,
@@ -266,7 +278,7 @@ function ChartTooltipContent({
                     </div>
                     {item.value !== undefined && (
                       <span className="text-foreground font-mono font-medium tabular-nums">
-                        {item.value.toLocaleString()}
+                        {tooltipValueText(item.value)}
                       </span>
                     )}
                   </div>

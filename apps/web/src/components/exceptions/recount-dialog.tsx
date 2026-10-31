@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
 import { listCountAssigneesAction, startRecountAction } from '@/server/actions/exceptions';
 
 const UNASSIGNED = '__unassigned';
@@ -134,8 +135,10 @@ function RecountDialogBody({
         );
       },
       // The action request itself failed: the same as a failed read (the
-      // recount can still start unassigned), never "Loading..." forever.
-      () => {
+      // recount can still start unassigned), never "Loading..." forever. A
+      // redirect (the session ended) shows nothing: the router is navigating.
+      (e: unknown) => {
+        if (isControlFlow(e)) return;
         if (!cancelled) setMembers({ kind: 'failed', message: 'Team members could not be loaded.' });
       },
     );
@@ -165,7 +168,9 @@ function RecountDialogBody({
         assignedTo,
         idempotencyKey,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The action request itself failed (a dropped connection, a proxy
       // error, a deploy that no longer has this action): the answer is
       // unknown, so the KEY IS KEPT and Try again resends it. If the first

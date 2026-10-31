@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { reportError } from '@/lib/error-reporter';
+import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
@@ -32,12 +33,28 @@ export const dynamic = 'force-dynamic';
  * observable.
  */
 
+/** The most lines one request may carry; the longest array the body accepts. */
+const MAX_LINES = 100;
+
 const lineSchema = z.object({
   itemId: z.string().uuid(),
   // I14: integer-only quantities here too. Mirrors the internal create
   // schema so the public surface can't slip a fractional order past
   // the internal validators.
-  quantity: z.coerce.number().int().positive().max(10_000),
+  //
+  // Only a JSON number or a short string reaches the coercion. zod 3's
+  // z.coerce.number() calls Number(input) before it checks the type, and this
+  // body is unauthenticated and validated before the rate limiter. Number() on
+  // an array joins every nested element into one string: a deep nest of short
+  // arrays passes the over-long-array check, its cost grows faster than its
+  // size, and past a few thousand levels the join overflows the stack. Number()
+  // on an object whose valueOf and toString are not functions throws a
+  // TypeError. Either error escaped safeParse, and the route answered 500. The
+  // public cart sends a number (public-cart-rail.tsx); a numeric string still
+  // works, as it did with the plain coercion.
+  quantity: z
+    .union([z.number(), z.string().max(12)])
+    .pipe(z.coerce.number().int().positive().max(10_000)),
   notes: z.string().max(500).nullish(),
 });
 
@@ -48,7 +65,7 @@ const bodySchema = z.object({
   requesterEmail: z.string().trim().email().max(254),
   requesterOrgLabel: z.string().trim().max(160).nullish(),
   notes: z.string().max(2000).nullish(),
-  lines: z.array(lineSchema).min(1).max(100),
+  lines: z.array(lineSchema).min(1).max(MAX_LINES),
   // Rolling-deploy safety: default to 'pickup' when an old-bundle
   // client posts without the field. The DB column also defaults to
   // 'delivery' (migration 0109), so worst case a legacy submission
@@ -114,7 +131,31 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
   }
-  const parsed = bodySchema.safeParse(raw);
+  // GHSA-mrhx-c7xc-m3w5: zod 3 still parses every element of an over-long
+  // array, one issue per bad element (lib/oversized-array.ts), so a body with
+  // any array longer than MAX_LINES, at any depth, is refused before
+  // safeParse. The form (public-cart-rail.tsx) sends no array but `lines`.
+  // The words are the ones zod gives an over-long `lines`, which is what the
+  // form shows today for a cart of more than 100 items.
+  //
+  // Checking a body must never answer 500: this runs before the rate limiter,
+  // for anyone. The check walks without recursion and the schema hands
+  // Number() only a number or a short string (see `quantity`), so nothing here
+  // is known to throw. If a later change makes it throw, the body is refused
+  // like any other invalid body. Nothing is reported, because a report sent
+  // from here would be one per anonymous request, before any limit.
+  let parsed: ReturnType<typeof bodySchema.safeParse>;
+  try {
+    if (hasArrayLongerThan(raw, MAX_LINES)) {
+      return NextResponse.json(
+        { error: `Array must contain at most ${MAX_LINES} element(s)` },
+        { status: 400 },
+      );
+    }
+    parsed = bodySchema.safeParse(raw);
+  } catch {
+    return NextResponse.json({ error: 'validation_error' }, { status: 400 });
+  }
   if (!parsed.success) {
     return NextResponse.json(
       { error: parsed.error.issues[0]?.message ?? 'validation_error' },
@@ -499,10 +540,12 @@ export async function POST(req: NextRequest) {
   } else {
     // Legacy fallback (org token without a links row): the pre-0261 checks —
     // belongs to this org + warehouse, item_type='book', not soft-deleted,
-    // status='active'.
+    // status='active' — and, since 0413, not hidden from new ordering.
     const { data: items, error: itemsErr } = await admin
       .from('inventory_items')
-      .select('id, name, warehouse_id, unit_cost, item_type, status, deleted_at, is_bundle')
+      .select(
+        'id, name, warehouse_id, unit_cost, item_type, status, deleted_at, is_bundle, order_catalog_visible',
+      )
       .eq('organization_id', organizationId)
       // in-list-bound: a request's distinct items; lineSchema caps lines at 100
       .in('id', itemIds);
@@ -518,11 +561,14 @@ export async function POST(req: NextRequest) {
       status: string;
       deleted_at: string | null;
       is_bundle: boolean | null;
+      order_catalog_visible?: boolean | null;
     };
     for (const row of (items ?? []) as ItemRow[]) {
       noteKitStock(row);
       if (row.deleted_at) continue;
       if (row.status !== 'active') continue;
+      // Hidden from new ordering (0413, Manage order items).
+      if (row.order_catalog_visible === false) continue;
       if (row.item_type !== 'book') continue;
       if (row.warehouse_id !== body.warehouseId) continue;
       itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
@@ -588,12 +634,25 @@ export async function POST(req: NextRequest) {
     /* non-fatal */
   }
 
-  // 6. Insert header. Use the rollback-on-line-error pattern from
-  // OrderRequestsService.create — if line insert fails, delete the
-  // header so we don't leave orphans behind.
-  const { data: headerRow, error: headerErr } = await admin
-    .from('order_requests')
-    .insert({
+  // 6. Write the order: the header, the track token's side row (0389: the
+  // service-only order_request_secrets, never the order row every member
+  // reads) and the lines, in ONE transaction (0413 review fix round). They
+  // used to be three calls with compensating deletes, so a failure after the
+  // header (a hide that won the race, a side-row error) could strand it.
+  // Lines go in item-id order: the lock order of every gated writer of new
+  // demand (0413: the ordering-visibility gate takes each item's key-share
+  // lock as its line goes in, and a hide locks the same rows in id order), so
+  // a multi-line request never deadlocks with a bulk hide.
+  const linePayload = [...dedupedLines]
+    .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0))
+    .map((l) => ({
+      item_id: l.itemId,
+      quantity_requested: l.quantity,
+      unit_cost_at_request: itemMap.get(l.itemId)?.unitCost ?? 0,
+      notes: l.notes ?? null,
+    }));
+  const { data: headerRow, error: writeErr } = await admin.rpc('insert_order_request_with_lines', {
+    p_header: {
       organization_id: organizationId,
       warehouse_id: body.warehouseId,
       status: 'pending_confirmation',
@@ -609,61 +668,45 @@ export async function POST(req: NextRequest) {
       pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
-    })
-    .select('*')
-    .single();
-  if (headerErr || !headerRow) {
-    if (headerErr) {
-      await reportError(headerErr, { tag: 'public.order-requests.header-insert' });
+    },
+    p_lines: linePayload,
+    p_track_token: trackToken,
+  });
+  if (writeErr || !headerRow || typeof (headerRow as { id?: unknown }).id !== 'string') {
+    // The ordering-visibility gate (0413): an item hidden after the
+    // eligibility read above. The same 400 the pre-check gives, which never
+    // says why; not a fault. Nothing was written.
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_item_hidden') {
+      return NextResponse.json(
+        {
+          error: 'invalid_line',
+          message: link
+            ? 'This item is no longer available through this request form. Please remove it and submit again.'
+            : 'One of the books is no longer available.',
+        },
+        { status: 400 },
+      );
     }
+    // The database's line ceiling (10,000 units, integrator D2). The total
+    // cap above refuses first; this is the same 400 should it ever be reached.
+    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_lines_invalid') {
+      return NextResponse.json(
+        {
+          error: 'too_many_units',
+          message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
+        },
+        { status: 400 },
+      );
+    }
+    await reportError(writeErr ?? new Error('order write answered no row'), {
+      tag: 'public.order-requests.insert',
+    });
     return NextResponse.json(
       { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
       { status: 500 },
     );
   }
   const header = headerRow as OrderRequestRow;
-
-  // The track token's side row (0389), inside the same rollback path as the
-  // lines: without it the requester's tracking link would open nothing, so a
-  // failed write removes the header (the side row cascades with it).
-  const { error: secretErr } = await admin.from('order_request_secrets').insert({
-    order_request_id: header.id,
-    organization_id: organizationId,
-    public_track_token: trackToken,
-  });
-  if (secretErr) {
-    await admin.from('order_requests').delete().eq('id', header.id);
-    await reportError(secretErr, {
-      tag: 'public.order-requests.secret-insert',
-      extra: { headerId: header.id },
-    });
-    return NextResponse.json(
-      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
-      { status: 500 },
-    );
-  }
-
-  const linePayload = dedupedLines.map((l) => ({
-    order_request_id: header.id,
-    item_id: l.itemId,
-    quantity_requested: l.quantity,
-    unit_cost_at_request: itemMap.get(l.itemId)?.unitCost ?? 0,
-    notes: l.notes ?? null,
-  }));
-  const { error: lineErr } = await admin
-    .from('order_request_lines')
-    .insert(linePayload);
-  if (lineErr) {
-    await admin.from('order_requests').delete().eq('id', header.id);
-    await reportError(lineErr, {
-      tag: 'public.order-requests.line-insert',
-      extra: { headerId: header.id },
-    });
-    return NextResponse.json(
-      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
-      { status: 500 },
-    );
-  }
 
   // Zendesk shell: a new public order request opens a support ticket
   // (best-effort; dormant until a zendesk connection is active). NOTE: fires at

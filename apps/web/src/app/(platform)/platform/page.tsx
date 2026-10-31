@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
+import { formatDayInZone } from '@/lib/platform/dates';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   getPlatformMetrics,
@@ -145,7 +146,12 @@ export default async function PlatformOrgsPage({
               <TableHead>Billing</TableHead>
               <TableHead className="text-right">Members</TableHead>
               <TableHead className="text-right">Items</TableHead>
-              <TableHead className="text-right">Created</TableHead>
+              <TableHead
+                className="text-right"
+                title="The day each organization was created, in its own time zone."
+              >
+                Created
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -194,7 +200,7 @@ export default async function PlatformOrgsPage({
                       {o.itemCount}
                     </TableCell>
                     <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
-                      {new Date(o.createdAt).toLocaleDateString()}
+                      {formatDayInZone(o.createdAt, o.timezone)}
                     </TableCell>
                   </TableRow>
                 );

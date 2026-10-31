@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** After an employee places an internal order at `/dashboard/orders/new`, offer them a one-click assistant on the success screen that opens a fully prefilled, plain-text Outlook compose window addressed To `dc4@learn4life.org` and CC `arosas@cvwest.org` — carrying the canonical order number, the requester, the destination or pickup handoff, the needed-by date and every line item — falling back to `mailto:` then to the clipboard, never auto-sending, and never claiming a ticket was created.
+**Goal:** After an employee places an internal order at `/dashboard/orders/new`, offer them a one-click assistant on the success screen that opens a fully prefilled, plain-text Outlook compose window addressed To `dc4@sampleorg.test` and CC `jstone@site1.test` — carrying the canonical order number, the requester, the destination or pickup handoff, the needed-by date and every line item — falling back to `mailto:` then to the clipboard, never auto-sending, and never claiming a ticket was created.
 
 **Architecture:** three layers, all client-side by necessity.
 
@@ -22,9 +22,9 @@
 
 Binding on every task. Copied in substance from the owner brief, `docs/superpowers/specs/2026-08-01-delivery-request-assistant-audit.md` ("Audit §n" / "R n") and `.superpowers/sdd/delivery-request-requirements-addendum.md` ("Addendum").
 
-1. **Recipients are `To: dc4@learn4life.org` and `CC: arosas@cvwest.org`, defined ONCE as constants** (Task 2). Both addresses ride EVERY pathway: the Outlook URL, the mailto URL, the preview dialog and the clipboard text. Never both inside `to`. Never the CC in the body only.
+1. **Recipients are `To: dc4@sampleorg.test` and `CC: jstone@site1.test`, defined ONCE as constants** (Task 2). Both addresses ride EVERY pathway: the Outlook URL, the mailto URL, the preview dialog and the clipboard text. Never both inside `to`. Never the CC in the body only.
 2. **The recipients are NEVER overridable by any client-controlled input** — not URL query params, not localStorage, not order notes, not requester-entered form values, not API parameters, not destination-site data. The builder takes NO recipient argument; it reads the constant. Outlook owns the final draft after it opens; StockPilot must always GENERATE both correctly.
-3. **StockPilot NEVER auto-sends and NEVER claims a ticket was created.** Allowed: "A copy will also be sent to arosas@cvwest.org." FORBIDDEN: "This ticket will be assigned to him", "Ticket created", "Ticket #", any claim of Zendesk assignment or receipt. The system records only that a DRAFT WAS OPENED.
+3. **StockPilot NEVER auto-sends and NEVER claims a ticket was created.** Allowed: "A copy will also be sent to jstone@site1.test." FORBIDDEN: "This ticket will be assigned to him", "Ticket created", "Ticket #", any claim of Zendesk assignment or receipt. The system records only that a DRAFT WAS OPENED.
 4. **The order is already persisted before the assistant appears.** Nothing in this feature may create a second order, re-submit, or mutate the existing order. No writes to `order_requests` or `order_request_lines` at all. The only write of any kind is one best-effort `audit_logs` row (Task 10).
 5. **Plain-text body only.** No HTML, no markdown, no emoji, no box-drawing characters. `\n` line breaks, `\r\n` never authored by us.
 6. **Encode exactly once.** `URLSearchParams` for the Outlook query string and for the mailto query string; the mailto path segment carries the raw `to` address. Never `encodeURIComponent` a value that `URLSearchParams` will encode again.
@@ -297,7 +297,7 @@ The addendum's hardest security requirement: both addresses are defined ONCE and
 - Create: `apps/web/src/lib/site.test.ts`
 
 **Interfaces:**
-- Produces for Tasks 4, 5, 6, 7, 8, 10: `DELIVERY_REQUEST_EMAIL: { readonly to: 'dc4@learn4life.org'; readonly cc: 'arosas@cvwest.org' }` and `DELIVERY_REQUEST_CC_NOTICE: string`.
+- Produces for Tasks 4, 5, 6, 7, 8, 10: `DELIVERY_REQUEST_EMAIL: { readonly to: 'dc4@sampleorg.test'; readonly cc: 'jstone@site1.test' }` and `DELIVERY_REQUEST_CC_NOTICE: string`.
 - Consumes: nothing.
 
 **Steps:**
@@ -317,8 +317,8 @@ import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL } from './site';
  */
 describe('DELIVERY_REQUEST_EMAIL', () => {
   it('is the exact approved pair', () => {
-    expect(DELIVERY_REQUEST_EMAIL.to).toBe('dc4@learn4life.org');
-    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(DELIVERY_REQUEST_EMAIL.to).toBe('dc4@sampleorg.test');
+    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('jstone@site1.test');
   });
 
   it('has exactly two recipient keys — no third address sneaks in', () => {
@@ -338,14 +338,14 @@ describe('DELIVERY_REQUEST_EMAIL', () => {
     expect(() => {
       (DELIVERY_REQUEST_EMAIL as unknown as Record<string, string>).cc = 'attacker@evil.test';
     }).toThrow();
-    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('arosas@cvwest.org');
+    expect(DELIVERY_REQUEST_EMAIL.cc).toBe('jstone@site1.test');
   });
 });
 
 describe('DELIVERY_REQUEST_CC_NOTICE', () => {
   it('states what the CC does WITHOUT claiming Zendesk assignment', () => {
     expect(DELIVERY_REQUEST_CC_NOTICE).toBe(
-      'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.',
+      'The DC4 address creates the delivery-request ticket. A copy will also be sent to jstone@site1.test.',
     );
   });
 
@@ -374,9 +374,9 @@ Expected: FAIL — `No "DELIVERY_REQUEST_EMAIL" export is defined on the "./site
  * application. Nothing in StockPilot talks to that intake, so StockPilot can
  * never confirm a ticket exists and must never say that it does.
  *
- * `cc` is Andrew Rosas, who receives a direct copy. Existing Zendesk rules MAY
+ * `cc` is Jordan Stone, who receives a direct copy. Existing Zendesk rules MAY
  * use the CC to route or assign — but we cannot observe that, so no copy
- * anywhere may promise it. "A copy will also be sent to arosas@cvwest.org" is
+ * anywhere may promise it. "A copy will also be sent to jstone@site1.test" is
  * the allowed sentence; "this ticket will be assigned to him" is not.
  *
  * SECURITY: these values are compile-time literals on purpose. They are never
@@ -395,13 +395,13 @@ Expected: FAIL — `No "DELIVERY_REQUEST_EMAIL" export is defined on the "./site
  * option that needs a migration and it is deliberately deferred.
  */
 export const DELIVERY_REQUEST_EMAIL = Object.freeze({
-  to: 'dc4@learn4life.org',
-  cc: 'arosas@cvwest.org',
+  to: 'dc4@sampleorg.test',
+  cc: 'jstone@site1.test',
 } as const);
 
 /** Helper text shown wherever the recipients are displayed. Accuracy, not optimism. */
 export const DELIVERY_REQUEST_CC_NOTICE =
-  'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.';
+  'The DC4 address creates the delivery-request ticket. A copy will also be sent to jstone@site1.test.';
 ```
 
 - [ ] **Step 4: Run the test to verify it passes.**
@@ -448,27 +448,27 @@ describe('formatSiteAddressLines', () => {
   it('renders a full US address as street / city-region-postal / country', () => {
     expect(
       formatSiteAddressLines({
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: null,
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       }),
-    ).toEqual(['1295 Shaw Ave', 'Fresno, California 93612', 'United States']);
+    ).toEqual(['1200 Test Ave', 'Fresno, California 93612', 'United States']);
   });
 
   it('keeps line2 as its own line when present', () => {
     expect(
       formatSiteAddressLines({
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: 'Suite 200',
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       }),
-    ).toEqual(['1295 Shaw Ave', 'Suite 200', 'Fresno, California 93612', 'United States']);
+    ).toEqual(['1200 Test Ave', 'Suite 200', 'Fresno, California 93612', 'United States']);
   });
 
   it('returns NO lines at all for a null address — 4 of 16 sites have none', () => {
@@ -482,8 +482,8 @@ describe('formatSiteAddressLines', () => {
   });
 
   it('omits the city line entirely when city, region and postal are all missing', () => {
-    expect(formatSiteAddressLines({ line1: '1295 Shaw Ave', country: 'United States' })).toEqual([
-      '1295 Shaw Ave',
+    expect(formatSiteAddressLines({ line1: '1200 Test Ave', country: 'United States' })).toEqual([
+      '1200 Test Ave',
       'United States',
     ]);
   });
@@ -498,11 +498,11 @@ describe('formatSiteAddressLines', () => {
     expect(lines).toContain('Tulare, California 93274');
   });
 
-  it('passes a typo through verbatim instead of guessing — KVA Tulare really says "Calfornia"', () => {
+  it('passes a typo through verbatim instead of guessing — a stored site address may really say "Calfornia"', () => {
     // Data quality is the owner's to fix. Silently "correcting" a site address
     // in an outbound delivery instruction would be worse than reproducing it.
-    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '93274' })).toEqual([
-      'Fresno, Calfornia 93274',
+    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '00000' })).toEqual([
+      'Fresno, Calfornia 00000',
     ]);
   });
 
@@ -579,9 +579,10 @@ export function toPlainTextLine(value: string): string {
  * and printing "Address:" with nothing under it implies the system captured
  * something it did not.
  *
- * Values are reproduced verbatim, typos included (KVA Tulare's address really
- * says "Calfornia"). Silently correcting a site address inside a delivery
- * instruction would be a worse failure than reproducing the owner's data.
+ * Values are reproduced verbatim, typos included (a stored site address may
+ * hold a typo such as "Calfornia"). Silently correcting a site address inside
+ * a delivery instruction would be a worse failure than reproducing the
+ * owner's data.
  */
 export function formatSiteAddressLines(address: CharterAddress | null): string[] {
   if (!address) return [];
@@ -802,7 +803,7 @@ function makeDraftInput(overrides: Partial<DeliveryRequestInput> = {}): Delivery
       name: 'CVW Clovis',
       code: 'CVW-CLO',
       address: {
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         line2: null,
         city: 'Fresno',
         region: 'California',
@@ -810,8 +811,8 @@ function makeDraftInput(overrides: Partial<DeliveryRequestInput> = {}): Delivery
         country: 'United States',
       },
     },
-    requestedFor: 'Branden Vincent-Walker',
-    requesterEmail: 'branden@cvwest.org',
+    requestedFor: 'Carsten Hartley-Fowler',
+    requesterEmail: 'carsten@site1.test',
     neededByLocal: '2026-08-05T09:00',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
@@ -832,14 +833,14 @@ describe('buildDeliveryRequestDraft — recipients', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     expect(draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
     expect(draft.cc).toBe(DELIVERY_REQUEST_EMAIL.cc);
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 
   it('never puts either recipient in the body — the CC is a real field, not prose', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
-    expect(draft.body).not.toContain('dc4@learn4life.org');
-    expect(draft.body).not.toContain('arosas@cvwest.org');
+    expect(draft.body).not.toContain('dc4@sampleorg.test');
+    expect(draft.body).not.toContain('jstone@site1.test');
   });
 
   it('accepts NO recipient argument — there is no parameter for a caller to poison', () => {
@@ -858,8 +859,8 @@ describe('buildDeliveryRequestDraft — recipients', () => {
         },
       }),
     );
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 });
 
@@ -914,7 +915,7 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).toContain('Fulfillment method: Delivery');
     expect(body).toContain('FROM (WAREHOUSE)\nDC4');
     expect(body).toContain('DELIVERY DESTINATION\nCVW Clovis (CVW-CLO)');
-    expect(body).toContain('1295 Shaw Ave');
+    expect(body).toContain('1200 Test Ave');
     expect(body).toContain('Fresno, California 93612');
   });
 
@@ -1009,13 +1010,13 @@ describe('buildDeliveryRequestDraft — pickup body (owner decision: pickup gets
   it('names where to collect from and who is collecting', () => {
     const { body } = pickup();
     expect(body).toContain('PICKUP FROM\nDC4 will-call desk');
-    expect(body).toContain('COLLECTED BY\nBranden Vincent-Walker (branden@cvwest.org)');
+    expect(body).toContain('COLLECTED BY\nCarsten Hartley-Fowler (carsten@site1.test)');
   });
 
   it('prints NO destination block and no empty or invented address', () => {
     const { body } = pickup();
     expect(body).not.toContain('DELIVERY DESTINATION');
-    expect(body).not.toContain('1295 Shaw Ave');
+    expect(body).not.toContain('1200 Test Ave');
     expect(body).not.toContain('Address:');
   });
 
@@ -1116,8 +1117,8 @@ describe('buildDeliveryRequestDraft — plain text and safety', () => {
 describe('buildDeliveryRequestDraft — condensed mode', () => {
   it('keeps both recipients, the subject, the counts and the link', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
     expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — CVW Clovis');
     expect(draft.condensed).toBe(true);
     expect(draft.body).toContain('ITEMS (2 lines, 7 units)');
@@ -1136,7 +1137,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
   it('drops the per-line list and the address, which is what makes it short', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
     expect(draft.body).not.toContain('APP-POLO-W');
-    expect(draft.body).not.toContain('1295 Shaw Ave');
+    expect(draft.body).not.toContain('1200 Test Ave');
     expect(draft.body.length).toBeLessThan(
       buildDeliveryRequestDraft(makeDraftInput()).body.length,
     );
@@ -1179,8 +1180,8 @@ describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () 
 
   it('keeps both recipients at that size', () => {
     const draft = buildDeliveryRequestDraft(bigInput(), { condensed: true });
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 });
 ```
@@ -1474,8 +1475,8 @@ describe('buildOutlookComposeUrl', () => {
   it('carries to, cc, subject and body as REAL query parameters', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const url = new URL(buildOutlookComposeUrl(draft));
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('to')).toBe('dc4@sampleorg.test');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
     expect(url.searchParams.get('subject')).toBe(draft.subject);
     expect(url.searchParams.get('body')).toBe(draft.body);
   });
@@ -1483,12 +1484,12 @@ describe('buildOutlookComposeUrl', () => {
   it('carries the CC exactly ONCE', () => {
     const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
     expect(url.match(/[?&]cc=/g)).toHaveLength(1);
-    expect(new URL(url).searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
+    expect(new URL(url).searchParams.getAll('cc')).toEqual(['jstone@site1.test']);
   });
 
   it('never concatenates the CC into the to parameter', () => {
     const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
-    expect(url.searchParams.get('to')).not.toContain('arosas');
+    expect(url.searchParams.get('to')).not.toContain('jstone');
     expect(url.searchParams.get('to')).not.toContain(',');
   });
 
@@ -1520,29 +1521,29 @@ describe('buildOutlookComposeUrl', () => {
         ),
       ),
     );
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('to')).toBe('dc4@sampleorg.test');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
   });
 
   it('keeps the CC in condensed mode', () => {
     const url = new URL(
       buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true })),
     );
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
   });
 });
 
 describe('buildMailtoUrl', () => {
   it('puts the To address in the PATH and the cc in the query string', () => {
     const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(url.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
   });
 
   it('carries cc, subject and body, decodable back to the originals', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const url = buildMailtoUrl(draft);
     const params = new URLSearchParams(url.slice(url.indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
     expect(params.get('subject')).toBe(draft.subject);
     expect(params.get('body')).toBe(draft.body);
   });
@@ -1550,7 +1551,7 @@ describe('buildMailtoUrl', () => {
   it('carries the CC exactly once and never inside the To path segment', () => {
     const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
     expect(url.match(/[?&]cc=/g)).toHaveLength(1);
-    expect(url.slice(0, url.indexOf('?'))).toBe('mailto:dc4@learn4life.org');
+    expect(url.slice(0, url.indexOf('?'))).toBe('mailto:dc4@sampleorg.test');
   });
 
   it('keeps the CC in condensed mode and with everything optional missing', () => {
@@ -1559,7 +1560,7 @@ describe('buildMailtoUrl', () => {
       { condensed: true },
     );
     const params = new URLSearchParams(buildMailtoUrl(bare).slice(buildMailtoUrl(bare).indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
   });
 });
 
@@ -1567,8 +1568,8 @@ describe('buildClipboardText', () => {
   it('emits labelled TO / CC / SUBJECT / MESSAGE blocks', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const text = buildClipboardText(draft);
-    expect(text).toContain('TO: dc4@learn4life.org');
-    expect(text).toContain('CC: arosas@cvwest.org');
+    expect(text).toContain('TO: dc4@sampleorg.test');
+    expect(text).toContain('CC: jstone@site1.test');
     expect(text).toContain(`SUBJECT: ${draft.subject}`);
     expect(text).toContain('MESSAGE:');
     expect(text).toContain(draft.body);
@@ -1583,14 +1584,14 @@ describe('buildClipboardText', () => {
 
   it('names BOTH recipients — copy instructions that omit the CC are non-compliant', () => {
     const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(text).toContain('dc4@learn4life.org');
-    expect(text).toContain('arosas@cvwest.org');
+    expect(text).toContain('dc4@sampleorg.test');
+    expect(text).toContain('jstone@site1.test');
   });
 
   it('keeps both recipients in condensed mode', () => {
     const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true }));
-    expect(text).toContain('TO: dc4@learn4life.org');
-    expect(text).toContain('CC: arosas@cvwest.org');
+    expect(text).toContain('TO: dc4@sampleorg.test');
+    expect(text).toContain('CC: jstone@site1.test');
   });
 });
 
@@ -1599,8 +1600,8 @@ describe('prepareDeliveryRequest', () => {
     const prepared = prepareDeliveryRequest(makeDraftInput());
     expect(prepared.draft.condensed).toBe(false);
     expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
-    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 
   it('CONDENSES automatically when the full body would exceed the link limit', () => {
@@ -1629,7 +1630,7 @@ describe('prepareDeliveryRequest', () => {
     const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
     expect(prepared.draft.condensed).toBe(true);
     expect(prepared.clipboardText).toContain('SKU-BIG-99');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 
   it('keeps both recipients on a condensed 100-line order', () => {
@@ -1639,8 +1640,8 @@ describe('prepareDeliveryRequest', () => {
     );
     const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
     const url = new URL(prepared.outlookUrl);
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('to')).toBe('dc4@sampleorg.test');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
   });
 
   it('no user-controlled field can move the recipients, at any size or mode', () => {
@@ -1652,8 +1653,8 @@ describe('prepareDeliveryRequest', () => {
       }),
     );
     const url = new URL(prepared.outlookUrl);
-    expect(url.searchParams.getAll('to')).toEqual(['dc4@learn4life.org']);
-    expect(url.searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
+    expect(url.searchParams.getAll('to')).toEqual(['dc4@sampleorg.test']);
+    expect(url.searchParams.getAll('cc')).toEqual(['jstone@site1.test']);
   });
 });
 ```
@@ -1778,7 +1779,7 @@ Expected: PASS. Record the total assertion count — it is quoted in the Task 12
 
 - [ ] **Step 5: Prove there is no second recipient literal in the codebase.**
 
-Run: `grep -rn "dc4@learn4life.org\|arosas@cvwest.org" apps/web/src apps/mobile packages --include=*.ts --include=*.tsx | grep -v "site.test.ts" | grep -v "storefront-logic.test.ts"`
+Run: `grep -rn "dc4@sampleorg.test\|jstone@site1.test" apps/web/src apps/mobile packages --include=*.ts --include=*.tsx | grep -v "site.test.ts" | grep -v "storefront-logic.test.ts"`
 Expected: exactly one line — the definition in `apps/web/src/lib/site.ts`. Any other production hit is a duplicated constant and must be removed.
 
 - [ ] **Step 6: Commit.**
@@ -1846,15 +1847,15 @@ function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryReque
       name: 'CVW Clovis',
       code: 'CVW-CLO',
       address: {
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       },
     },
-    requestedFor: 'Branden Vincent-Walker',
-    requesterEmail: 'branden@cvwest.org',
+    requestedFor: 'Carsten Hartley-Fowler',
+    requesterEmail: 'carsten@site1.test',
     neededByLocal: '2026-08-05T09:00',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
@@ -1941,8 +1942,8 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     expect(open).toHaveBeenCalledTimes(1);
     const url = new URL(open.mock.calls[0]![0] as string);
     expect(url.origin + url.pathname).toBe('https://outlook.office.com/mail/deeplink/compose');
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('to')).toBe('dc4@sampleorg.test');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
     expect(url.searchParams.get('subject')).toContain('SO-000049');
     expect(url.searchParams.get('body')).toContain('CVW Clovis');
   });
@@ -1985,9 +1986,9 @@ describe('DeliveryRequestAction — popup blocked', () => {
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
     const mailto = String(assign.mock.calls[0]![0]);
-    expect(mailto.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+    expect(mailto.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
     const params = new URLSearchParams(mailto.slice(mailto.indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
   });
 
   it('surfaces the copy fallback and NAMES BOTH recipients in the instructions', async () => {
@@ -1999,8 +2000,8 @@ describe('DeliveryRequestAction — popup blocked', () => {
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     const fallback = await screen.findByTestId('delivery-request-fallback');
-    expect(fallback).toHaveTextContent('dc4@learn4life.org');
-    expect(fallback).toHaveTextContent('arosas@cvwest.org');
+    expect(fallback).toHaveTextContent('dc4@sampleorg.test');
+    expect(fallback).toHaveTextContent('jstone@site1.test');
     expect(screen.getByRole('button', { name: /Copy the details/i })).toBeInTheDocument();
   });
 
@@ -2032,8 +2033,8 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const copied = String(writeText.mock.calls[0]![0]);
-    expect(copied).toContain('TO: dc4@learn4life.org');
-    expect(copied).toContain('CC: arosas@cvwest.org');
+    expect(copied).toContain('TO: dc4@sampleorg.test');
+    expect(copied).toContain('CC: jstone@site1.test');
     expect(copied).toContain('SUBJECT: Delivery Request — StockPilot Order SO-000049');
     expect(copied).toContain('MESSAGE:');
   });
@@ -2051,7 +2052,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const msg = String(toastSuccess.mock.calls.at(-1)![0]);
     expect(msg).toBe(
-      'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+      'Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
     );
   });
 
@@ -2066,8 +2067,8 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
     const box = await screen.findByLabelText(/Delivery request text to copy manually/i);
-    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
-    expect((box as HTMLTextAreaElement).value).toContain('CC: arosas@cvwest.org');
+    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
+    expect((box as HTMLTextAreaElement).value).toContain('CC: jstone@site1.test');
     expect(toastError).toHaveBeenCalled();
   });
 
@@ -2401,7 +2402,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('Delivery Request — StockPilot Order SO-000049');
     expect(dialog).toHaveTextContent('CVW Clovis');
-    expect(dialog).toHaveTextContent('1295 Shaw Ave');
+    expect(dialog).toHaveTextContent('1200 Test Ave');
   });
 
   it('shows BOTH recipients under an EMAIL RECIPIENTS heading', async () => {
@@ -2411,8 +2412,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('EMAIL RECIPIENTS');
-    expect(dialog).toHaveTextContent('dc4@learn4life.org');
-    expect(dialog).toHaveTextContent('arosas@cvwest.org');
+    expect(dialog).toHaveTextContent('dc4@sampleorg.test');
+    expect(dialog).toHaveTextContent('jstone@site1.test');
   });
 
   it('carries the exact CC helper text and never claims assignment', async () => {
@@ -2422,7 +2423,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent(
-      'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.',
+      'The DC4 address creates the delivery-request ticket. A copy will also be sent to jstone@site1.test.',
     );
     expect(dialog.textContent?.toLowerCase()).not.toContain('assigned to');
   });
@@ -2451,8 +2452,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
 
     const url = new URL(open.mock.calls[0]![0] as string);
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('to')).toBe('dc4@sampleorg.test');
+    expect(url.searchParams.get('cc')).toBe('jstone@site1.test');
   });
 
   it('offers copy from inside the dialog, copying both recipients', async () => {
@@ -2465,7 +2466,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Copy the details/i }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(String(writeText.mock.calls[0]![0])).toContain('CC: arosas@cvwest.org');
+    expect(String(writeText.mock.calls[0]![0])).toContain('CC: jstone@site1.test');
   });
 
   it('shows the pickup body for a pickup order, with no destination', async () => {
@@ -2829,8 +2830,8 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       warehouseName: 'DC4',
       method: 'delivery' as const,
       deliverTo: 'CVW Clovis',
-      requestedFor: 'Branden Vincent-Walker',
-      requesterEmail: 'branden@cvwest.org',
+      requestedFor: 'Carsten Hartley-Fowler',
+      requesterEmail: 'carsten@site1.test',
       orgTimezone: 'America/Los_Angeles',
     },
     neededBy: '2026-08-05T09:00',
@@ -2838,7 +2839,7 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       id: 'ch-1',
       name: 'CVW Clovis',
       code: 'CVW-CLO',
-      address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
+      address: { line1: '1200 Test Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
     },
     orderUrlBase: 'https://app.stockpilotusa.com',
     submitting: false,
@@ -2876,8 +2877,8 @@ describe('ReviewModal success stage', () => {
         warehouseName: 'DC4',
         method: 'pickup',
         deliverTo: 'DC4 will-call desk',
-        requestedFor: 'Branden Vincent-Walker',
-        requesterEmail: 'branden@cvwest.org',
+        requestedFor: 'Carsten Hartley-Fowler',
+        requesterEmail: 'carsten@site1.test',
         orgTimezone: 'America/Los_Angeles',
       },
       destination: null,
@@ -3107,8 +3108,8 @@ describe('ReviewModal accessibility', () => {
             warehouseName: 'DC4',
             method: 'delivery',
             deliverTo: 'CVW Clovis',
-            requestedFor: 'Branden Vincent-Walker',
-            requesterEmail: 'branden@cvwest.org',
+            requestedFor: 'Carsten Hartley-Fowler',
+            requesterEmail: 'carsten@site1.test',
             orgTimezone: 'America/Los_Angeles',
           },
           neededBy: '',
@@ -3166,7 +3167,7 @@ describe('DeliveryRequestAction accessibility', () => {
     expect(live).toHaveAttribute('aria-atomic', 'true');
     await waitFor(() =>
       expect(live).toHaveTextContent(
-        'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     );
   });
@@ -3332,7 +3333,7 @@ git commit -m "fix(orders): trap and restore focus in the storefront review moda
 
 **NO MIGRATION.** `audit_logs` has columns `id, organization_id, user_id, event (text), metadata (jsonb), ip, user_agent, created_at` and no entity column — entity identity lives inside `metadata` as `entity_type` / `entity_id` (`audit.ts:325-340`). Prod `pg_constraint` for `public.audit_logs` returns only `audit_logs_pkey` and two FKs: **no CHECK, no enum on `event`**. Adding `'order.delivery_request_drafted'` is a pure TypeScript union edit, and it then renders for free in `<OrderTimeline orderId organizationId />` on the order detail page (`dashboard/orders/[id]/page.tsx:880`).
 
-**The metadata allow-list is a security boundary.** Safe: `orderId`, the actor (captured by `audit()` from the context, never passed by the client), `recipientType`, `includedCcRecipient`, `isCondensed`. **Never stored:** the compose URL, the message body, delivery instructions, the requester phone, the destination address, or the order notes. **Never recorded:** "ticket assigned to arosas@cvwest.org" — unconfirmable.
+**The metadata allow-list is a security boundary.** Safe: `orderId`, the actor (captured by `audit()` from the context, never passed by the client), `recipientType`, `includedCcRecipient`, `isCondensed`. **Never stored:** the compose URL, the message body, delivery instructions, the requester phone, the destination address, or the order notes. **Never recorded:** "ticket assigned to jstone@site1.test" — unconfirmable.
 
 **`audit()` needs a page-request context here, and it has one.** The gotcha at `audit.ts:294-350` is that API-route and Bearer callers must pass their `ServiceContext` explicitly, because the `withContext()` fallback throws `NEXT_REDIRECT` outside a page request and the event is silently dropped. This is a Server Action invoked from a page, so the fallback works — but write it as a normal action, not an API route, and never move it.
 
@@ -3400,7 +3401,7 @@ describe('recordDeliveryRequestDraftedAction', () => {
       'outlook.office.com',
       'mailto:',
       'DELIVERY REQUEST',
-      'Shaw Ave',
+      'Test Ave',
       'body',
       'compose_url',
       'notes',
@@ -3414,8 +3415,8 @@ describe('recordDeliveryRequestDraftedAction', () => {
     await recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false });
 
     const serialized = JSON.stringify(auditSpy.mock.calls[0]![0]);
-    expect(serialized).not.toContain('dc4@learn4life.org');
-    expect(serialized).not.toContain('arosas@cvwest.org');
+    expect(serialized).not.toContain('dc4@sampleorg.test');
+    expect(serialized).not.toContain('jstone@site1.test');
   });
 
   it('never claims a ticket was created or assigned', async () => {
@@ -3683,7 +3684,7 @@ Expected: on `feat/delivery-request-assistant`, ten local commits (Tasks 1-10), 
 
 ```bash
 git diff --stat main -- supabase/
-grep -rn "dc4@learn4life.org\|arosas@cvwest.org" apps/web/src apps/mobile packages --include=*.ts --include=*.tsx | grep -v ".test."
+grep -rn "dc4@sampleorg.test\|jstone@site1.test" apps/web/src apps/mobile packages --include=*.ts --include=*.tsx | grep -v ".test."
 grep -rn "orderRef" apps/web/src apps/mobile packages
 ```
 
@@ -3755,7 +3756,7 @@ Add rows recording that destination building, room, priority/urgency, site conta
 - [ ] **Step 5: Write section E — the Outlook strategy.** URL generation (`https://outlook.office.com/mail/deeplink/compose`, chosen over `outlook.live.com` because the org runs managed M365); encoding (`URLSearchParams`, exactly once, `to`/`cc`/`subject`/`body` as real parameters); plain-text formatting (blocks joined by a blank line, omitted blocks leave no trace, all user text passed through `toPlainTextLine` so no newline can forge a header); popup handling (`window.open` first statement in the handler, `null` or a throw drives the fallback); default-email fallback (`location.assign(mailto:)`, To in the path, cc in the query); clipboard fallback (labelled TO/CC/SUBJECT/MESSAGE, always the FULL body, plus a selectable textarea when the API is denied or absent); large-order handling (measured against `DRAFT_URL_LIMIT = 1800`, condensed variant, disclosed in the body AND on screen).
 - [ ] **Step 6: Write section F — Status accuracy.** State explicitly: StockPilot records only that a DRAFT WAS OPENED (`order.delivery_request_drafted`), never that a ticket was submitted. Quote the audit metadata allow-list. State that the "Your manager has been notified" sentence at `storefront-overlays.tsx:353-357` was re-verified in Task 8 and record the finding.
 - [ ] **Step 7: Write section G — Tests, each command and its REAL result,** copied from Task 11's verification report. **This section must also record the deviation from brief section 34:** no Playwright e2e was written, on the owner's explicit instruction (owner decision 3), because Playwright is not wired into CI (`.github/workflows/ci.yml:34-38,70-92` runs typecheck, vitest, build and pgTAP only), none of the five existing specs creates data, and `auth.setup.ts:15-48` skips without `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` and throws on an MFA account. Name the component tests that carry the coverage instead — open, popup-blocked, mailto, clipboard, clipboard-denied, duplicate-draft, condensed, pickup, keyboard, and the CC on every path.
-- [ ] **Step 8: Write section H — Limitations, plainly:** cannot confirm the employee pressed Send; cannot capture a Zendesk ticket number in this phase; attachments cannot be auto-added through a compose link; ticket status cannot sync without a future integration. Add the four this implementation found: the destination address is a best-effort render of owner-maintained data that contains at least one known typo (KVA Tulare says "Calfornia"); 4 of 16 sites have no address at all; whether Outlook Web honours the `cc` deep-link parameter in the org's tenant is unverified owner QA; and the success surface is React state, so the assistant is unreachable after a refresh.
+- [ ] **Step 8: Write section H — Limitations, plainly:** cannot confirm the employee pressed Send; cannot capture a Zendesk ticket number in this phase; attachments cannot be auto-added through a compose link; ticket status cannot sync without a future integration. Add the four this implementation found: the destination address is a best-effort render of owner-maintained data that contains at least one known typo (a stored site address says "Calfornia"); 4 of 16 sites have no address at all; whether Outlook Web honours the `cc` deep-link parameter in the org's tenant is unverified owner QA; and the success surface is React state, so the assistant is unreachable after a refresh.
 - [ ] **Step 9: Write section I — ONE recommended next phase, recommend only, do not implement.** The recommendation is the **durable second home on `/dashboard/orders/[id]`**: that page already loads the full `OrderRequestDetail` server-side, it survives refresh and navigation, and it is where a manager or the requester goes when the first draft was lost. Note what it additionally requires: R8 handling for the 5 of 41 prod delivery orders whose `delivery_charter_id` is NULL under a `NOT VALID` CHECK, and a decision on who may draft one (owner open question 8). Mention the alternatives considered and rejected for now — persisting a Zendesk ticket number, a direct Zendesk API integration, Microsoft Graph, auto packing slip, delivery status sync — and say why the durable entry point beats all of them on value per unit of risk.
 - [ ] **Step 10: Add the open questions section,** reproducing the four unresolved items from this plan's Global Constraints unchanged: the pickup subject format, whether the recipient pair is L4L-only or a product feature, the Zendesk intake contract, and the durable second home. None may be answered by an implementation detail.
 - [ ] **Step 11: Commit.**

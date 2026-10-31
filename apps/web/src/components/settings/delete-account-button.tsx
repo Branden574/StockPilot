@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { DELETE_ACCOUNT_DIALOG_COPY } from '@/components/settings/delete-account-copy';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { deleteOwnAccountAction } from '@/server/actions/profile';
 
 /**
@@ -40,6 +41,12 @@ export function DeleteAccountButton() {
   async function confirm() {
     setRefusal(null);
     setPending(true);
+    // Deleting the account ends this browser's session on purpose (the action
+    // signs it out, in every tab: the session cookies are the browser's, and
+    // no revoke is sent), so what an interrupted run kept in this tab and in
+    // the browser's other tabs (lib/interrupted-run) goes before the request
+    // does.
+    purgeInterruptedRuns();
     const res = await deleteOwnAccountAction({ confirm: 'DELETE' });
     setPending(false);
     if (!res.ok) {

@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { tagColor } from '@/components/tags/tag-color';
 import {
   LABELS_URL_FALLBACK_MAX,
   labelsItemsHref,
@@ -162,8 +163,12 @@ interface BulkActionsProps {
   onAddToSelection?: (ids: string[]) => void;
   /** Called when the review closes after a grouping applied, with the group
    *  the records are in, so the list opens it (design 5; completeness review
-   *  C3). */
-  onGrouped?: (groupId: string) => void;
+   *  C3), and the records the grouping put in it: a list holding every record
+   *  turns to the page that draws the header once its rows carry them (B5). */
+  onGrouped?: (groupId: string, changedItemIds: readonly string[]) => void;
+  /** B5: the address of the list page that draws a group's header, for the
+   *  review's "Show it" link (a list paged on the server only). */
+  showGroupHref?: (groupId: string) => string;
 }
 
 type ActiveDialog =
@@ -226,6 +231,7 @@ export function BulkActions({
   groupingView = 'items',
   onAddToSelection,
   onGrouped,
+  showGroupHref,
 }: BulkActionsProps) {
   const router = useRouter();
   // Group selected reviews the ids it was OPENED with (except when the review
@@ -233,8 +239,9 @@ export function BulkActions({
   // on close after a change, like Ungroup.
   const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
   const groupingDone = React.useRef(false);
-  // The group a grouping put the records in, opened on the list on close.
-  const groupedId = React.useRef<string | null>(null);
+  // The group a grouping put the records in, and the records it put there,
+  // opened on the list on close.
+  const grouped = React.useRef<{ id: string; changedItemIds: string[] } | null>(null);
   // Ungroup's dialog reviews the ids it was OPENED with (every selected
   // record, and where each was shown on the list then): a refresh after a
   // change can move the selection under it, and its result must stay on
@@ -618,7 +625,7 @@ export function BulkActions({
                 return;
               }
               groupingDone.current = false;
-              groupedId.current = null;
+              grouped.current = null;
               setGroupIds([...groupItemIds]);
             }}
             title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
@@ -784,10 +791,19 @@ export function BulkActions({
                 }
               : undefined
           }
+          showGroupHref={showGroupHref}
           onDone={(o) => {
             if (o.outcome === 'applied') {
               groupingDone.current = true;
-              groupedId.current = o.group?.id ?? null;
+              const id = o.group?.id ?? null;
+              grouped.current = id
+                ? {
+                    id,
+                    changedItemIds: o.changes
+                      .filter((c) => c.toGroupId === id)
+                      .map((c) => c.itemId),
+                  }
+                : null;
               router.refresh();
             }
           }}
@@ -797,8 +813,9 @@ export function BulkActions({
             if (groupingDone.current) {
               groupingDone.current = false;
               onClear();
-              if (groupedId.current) onGrouped?.(groupedId.current);
-              groupedId.current = null;
+              const g = grouped.current;
+              if (g) onGrouped?.(g.id, g.changedItemIds);
+              grouped.current = null;
             }
           }}
         />
@@ -1285,7 +1302,8 @@ function TagsDialog({
             <div className="flex flex-wrap gap-1.5">
               {tags.map((t) => {
                 const on = selected.has(t.id);
-                const swatch = t.color ?? '#94a3b8';
+                // The stored colour only in the #rrggbb form the app writes (docket T14).
+                const swatch = tagColor(t.color);
                 return (
                   <button
                     key={t.id}

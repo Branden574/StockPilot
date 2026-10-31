@@ -28,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import { readOrderReadinessAction } from '@/server/actions/order-readiness';
 import {
@@ -121,7 +122,9 @@ export function ApprovePartialDialog({
         preview.action === 'approve_partial'
           ? await approveOrderPartialAction({ id: orderId })
           : await resumeFulfillmentAction({ id: orderId });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // A server action that never answered (the network dropped, the
       // deploy changed under the tab): whether it committed is unknown, so
       // core's sentence says to look before trying again.
@@ -145,7 +148,8 @@ export function ApprovePartialDialog({
     let reread: OrderReadinessResult | null;
     try {
       reread = await readOrderReadinessAction({ id: orderId });
-    } catch {
+    } catch (e) {
+      if (isControlFlow(e)) return;
       reread = null;
     }
     setState({

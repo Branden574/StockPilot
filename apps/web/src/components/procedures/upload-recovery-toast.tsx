@@ -12,8 +12,11 @@ import { toast } from 'sonner';
  *
  * The failed files themselves were held in memory on the previous page
  * and are gone after the redirect; the user has to re-drop them into
- * this page's uploader. That's the trade-off for not touching
- * sessionStorage (per the brief).
+ * this page's uploader. That's the trade-off for not keeping the files
+ * themselves in sessionStorage (per the brief). The tab keeps only the
+ * new procedure's id while its batch runs, so a batch that a page load
+ * cut short (the session ended mid-batch) still lands here: see
+ * VIDEO_BATCH_RUN in procedure-form.tsx.
  */
 export function UploadRecoveryToast() {
   const router = useRouter();

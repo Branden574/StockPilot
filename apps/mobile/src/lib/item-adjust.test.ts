@@ -7,6 +7,7 @@ import {
   SCAN_ADJUST_REASON,
   submitItemAdjust,
 } from './item-adjust';
+import { OutboxWorkspaceLoadingError } from './outbox-scope';
 import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 // ./api reaches for expo-constants, AsyncStorage and the Supabase client at
@@ -485,6 +486,27 @@ describe('submitItemAdjust — offline (the item screen): queued only when nothi
     const message = (outcome as { alert: { message: string } }).alert.message;
     expect(message).toMatch(/No signed-in account/);
     expect(message).toMatch(/Nothing was changed\.$/);
+    expect(apiMock.api).not.toHaveBeenCalled();
+  });
+
+  // docket B10: the outbox also refuses while the saved workspace is another
+  // account's (the moment after a different account signs in). Said the same
+  // way, in the outbox's own sentence.
+  it('while the workspace is still loading it says so, and that nothing was changed', async () => {
+    const q = offlineQueue(false);
+    q.enqueue.mockRejectedValueOnce(new OutboxWorkspaceLoadingError());
+
+    const outcome = await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(outcome).toEqual({
+      kind: 'refused',
+      alert: {
+        title: 'Could not save offline',
+        message:
+          'There is no connection, and this adjustment could not be saved on the phone: ' +
+          'Your workspace is still loading. Try again in a moment. Nothing was changed.',
+      },
+    });
     expect(apiMock.api).not.toHaveBeenCalled();
   });
 

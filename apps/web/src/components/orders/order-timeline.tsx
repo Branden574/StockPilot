@@ -1,8 +1,10 @@
 import {
   createdAsReplacementLabel,
   describeHoldResult,
+  isOrderStatusKey,
   NEEDED_BY_REVISED_TIMELINE_LABEL,
   neededByLabel,
+  ORDER_STATUS_META,
   parseHoldOrderStockResult,
   resolveOrgTimezone,
   SHORTFALL_PO_TIMELINE_LABEL,
@@ -13,6 +15,7 @@ import {
 import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { PHYSICAL_SIGNATURE_RECORDED, signedOutcome } from '@/lib/orders/sign-outcome';
 import { orderTimelineActor } from '@/lib/people/deleted-person-labels';
 import { createClient } from '@/lib/supabase/server';
 
@@ -102,7 +105,26 @@ const STOCK_HELD_LABELS: Readonly<Record<string, string>> = {
   manual: 'Stock held',
 };
 
+/**
+ * B22: order_request.status_changed is written today only by a paper
+ * hand-over (OrderRequestsService.confirmPhysicalSignature, from the web's
+ * Physical signature and the phone's), with signatureMethod 'physical', the
+ * signer's name and the status the hand-over left; before and after are null.
+ * The legacy setStatus (removed 2026-05-15) wrote after.from and after.to.
+ */
+function isPaperHandOver(event: string, metadata: Record<string, unknown> | null): boolean {
+  return event === 'order_request.status_changed' && metadata?.signatureMethod === 'physical';
+}
+
+/** A status key in the app's words; a key no longer in use, spaced out. */
+function statusWord(key: string): string {
+  return isOrderStatusKey(key)
+    ? ORDER_STATUS_META[key].label
+    : prettyStatus(key).replace(/^\w/, (c) => c.toUpperCase());
+}
+
 function eventLabel(event: string, metadata: Record<string, unknown> | null): string {
+  if (isPaperHandOver(event, metadata)) return PHYSICAL_SIGNATURE_RECORDED;
   // Returns RX-2: an exchange replacement's own trail names its RMA.
   const rma = typeof metadata?.returnNumber === 'string' ? metadata.returnNumber : null;
   if (typeof metadata?.replacementForReturnId === 'string') {
@@ -148,7 +170,6 @@ function humanDetails(
 ): string[] {
   const md = metadata ?? {};
   const after = (md.after ?? {}) as Record<string, unknown>;
-  const before = (md.before ?? {}) as Record<string, unknown>;
   const lines: string[] = [];
 
   switch (event) {
@@ -188,11 +209,27 @@ function humanDetails(
         lines.push('What was handed over stays. The rest will not be sent.');
       }
       break;
-    case 'order_request.status_changed':
-      if (before.status || after.status) {
-        lines.push(`${prettyStatus(before.status)} → ${prettyStatus(after.status)}.`);
+    case 'order_request.status_changed': {
+      // B22: this read before.status and after.status, which no writer ever
+      // wrote (isPaperHandOver above), so every entry said only "Status
+      // changed". A paper hand-over says who signed the paper and, in the sign
+      // page's words, what the hand-over left; a status it cannot tell
+      // claims nothing more.
+      if (isPaperHandOver(event, md)) {
+        const signer = typeof md.signerName === 'string' ? md.signerName.trim() : '';
+        // A name that already ends a sentence ("Jr.") gets no second stop.
+        const stop = /[.!?]$/.test(signer) ? '' : '.';
+        lines.push(signer ? `Signed on paper by ${signer}${stop}` : 'Signed on paper.');
+        if (md.status === 'completed' || md.status === 'backordered') {
+          lines.push(signedOutcome(md.status).message);
+        }
+        break;
+      }
+      if (typeof after.from === 'string' && typeof after.to === 'string') {
+        lines.push(`${statusWord(after.from)} → ${statusWord(after.to)}.`);
       }
       break;
+    }
     case 'order_request.public_link_rotated':
       lines.push('The previous public order link stopped working and a new one was issued.');
       break;

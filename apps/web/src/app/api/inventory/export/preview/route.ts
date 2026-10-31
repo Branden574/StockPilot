@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { countRowsWithImages } from '@/lib/exports/export-images';
+import { inventoryExportPreviewRequestSchema } from '@/lib/exports/export-request';
 import {
   buildInventoryExportSourceRows,
   type InventoryExportFilters,
@@ -33,24 +33,6 @@ export const maxDuration = 30;
  */
 const EXPORT_PREVIEW_LIMIT = 10;
 
-const bodySchema = z.object({
-  scope: z.enum(['selected', 'filtered', 'all']),
-  itemType: z.enum(['product', 'book', 'asset', 'consumable', 'all']).default('all'),
-  ids: z.array(z.string().uuid()).max(10_000).optional(),
-  filters: z
-    .object({
-      q: z.string().optional(),
-      status: z.enum(['active', 'archived', 'discontinued', 'all']).optional(),
-      stock: z.enum(['low', 'out']).nullable().optional(),
-      expected: z.boolean().optional(),
-      sort: z.string().optional(),
-      categoryIds: z.array(z.string()).optional(),
-      locationIds: z.array(z.string()).optional(),
-      charterIds: z.array(z.string()).optional(),
-    })
-    .optional(),
-});
-
 export async function POST(request: NextRequest) {
   try {
     const ctx = await withApiContext(request);
@@ -67,10 +49,15 @@ export async function POST(request: NextRequest) {
     }
 
     const json = await request.json().catch(() => null);
-    const parsed = bodySchema.safeParse(json);
+    // The export's own schema (scope, item type, ids, filters): the preview
+    // accepts and refuses exactly the selection the export does.
+    const parsed = inventoryExportPreviewRequestSchema.safeParse(json);
     if (!parsed.success) {
       return NextResponse.json(
-        { error: 'validation_error', message: parsed.error.issues[0]?.message ?? 'Invalid request' },
+        {
+          error: 'validation_error',
+          message: parsed.error.issues[0]?.message ?? 'Invalid request',
+        },
         { status: 400 },
       );
     }

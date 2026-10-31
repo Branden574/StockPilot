@@ -54,6 +54,10 @@ export function alreadySignedMessage(status: string | null): string {
   return `Thanks. ${signedOutcome(status).message}`;
 }
 
+/** What a recorded paper signature is called: the web's Physical signature
+ *  toast and the order timeline's entry for it (B22) say the same words. */
+export const PHYSICAL_SIGNATURE_RECORDED = 'Physical signature recorded';
+
 /**
  * What the web's Physical signature says once a paper signature is recorded
  * (review 2026-10-05). It said "order hand-over complete" whatever the
@@ -65,7 +69,7 @@ export function alreadySignedMessage(status: string | null): string {
  */
 export function physicalSignatureRecordedMessage(status: string | null): string {
   if (status === 'completed' || status === 'backordered') {
-    return `Physical signature recorded. ${signedOutcome(status).message}`;
+    return `${PHYSICAL_SIGNATURE_RECORDED}. ${signedOutcome(status).message}`;
   }
-  return 'Physical signature recorded.';
+  return `${PHYSICAL_SIGNATURE_RECORDED}.`;
 }

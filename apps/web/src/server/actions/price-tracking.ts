@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { PriceTrackingService, type PriceObservationRow } from '@/server/services/price-tracking';
 import { ServiceError } from '@/server/services/context';
@@ -17,6 +18,7 @@ export async function fetchItemPriceAction(itemId: string): Promise<ActionResult
     await revalidateInventoryListForCurrentOrg();
     return ok(obs);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -30,6 +32,7 @@ export async function refreshBookPricesAction(): Promise<ActionResult<{ scanned:
     await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

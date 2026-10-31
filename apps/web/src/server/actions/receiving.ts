@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { ReceivingService } from '@/server/services/receiving';
@@ -32,6 +33,7 @@ export async function postReceiptAction(
     await revalidateInventoryListForCurrentOrg();
     return ok({ receiptId: receipt.id, receiptNumber: receipt.receipt_number });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -53,6 +55,7 @@ export async function reverseReceiptAction(
     await revalidateInventoryListForCurrentOrg();
     return ok({ reversalReceiptId: reversal.id });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

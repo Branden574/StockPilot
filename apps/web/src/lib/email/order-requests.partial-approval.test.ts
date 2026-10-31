@@ -85,7 +85,7 @@ function wire(holds: { data: unknown; error: { message: string } | null }): Supa
       data: { name: 'Fresno DC', code: 'DCIV', address: { city: 'Fresno' } },
       error: null,
     },
-    'user_profiles.select.maybeSingle': { data: { full_name: 'Morgan Diaz', email: 'morgan@l4l.org' }, error: null },
+    'user_profiles.select.maybeSingle': { data: { full_name: 'Morgan Diaz', email: 'morgan@example.org' }, error: null },
   });
   adminHolder.client = stub.client;
   return stub;

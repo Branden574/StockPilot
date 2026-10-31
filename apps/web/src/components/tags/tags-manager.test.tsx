@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { renderToString } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -76,7 +77,9 @@ describe('TagsManager', () => {
           classes.some((c) => c.endsWith('opacity-0')) ? ['pointer-fine:opacity-0'] : [],
         );
         if (classes.includes('pointer-fine:opacity-0')) {
-          expect(classes).toContain('pointer-fine:group-focus-within:opacity-100');
+          // The descendant selector `.group:focus-within &`, whose group is the row.
+          expect(classes).toContain('pointer-fine:[.group:focus-within_&]:opacity-100');
+          expect(el.closest('.group')).toBe(row);
           expect(classes).toContain('pointer-fine:group-hover:opacity-100');
         }
       }
@@ -136,5 +139,39 @@ describe('TagsManager', () => {
     render(<TagsManager initial={[]} />);
     expect(screen.getByText('No tags yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New tag/ })).toBeInTheDocument();
+  });
+});
+
+/**
+ * A tag's stored colour is plain text a manager can write through the Data
+ * API, and a style value reaches the server HTML as given, so an unchecked
+ * `;` added CSS declarations to the page (docket T14). A value that is not
+ * `#rrggbb` draws the default grey, and the editor opens on it.
+ */
+describe('a stored tag colour that is not #rrggbb (docket T14)', () => {
+  const INJECTED = '#000;position:fixed;inset:0;z-index:2147483647';
+  const BAD: TagManagerRow = { id: 't-bad', name: 'Injected', color: INJECTED, usage_count: 0 };
+
+  it('the row dot draws the default grey in the server HTML, never the stored text', () => {
+    const html = renderToString(<TagsManager initial={[ROWS[0]!, BAD]} />);
+    expect(html).not.toContain('position:');
+    expect(html).not.toContain('z-index');
+    expect([...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1])).toEqual([
+      'background-color:#f97316',
+      'background-color:#94a3b8',
+    ]);
+  });
+
+  it('Edit opens on the default colour, so a rename saves a colour the server accepts', async () => {
+    const user = userEvent.setup();
+    render(<TagsManager initial={[BAD]} />);
+    await user.click(screen.getByRole('button', { name: 'Injected' }));
+    const name = await screen.findByLabelText('Name');
+    await user.clear(name);
+    await user.type(name, 'Renamed');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(updateTagAction).toHaveBeenCalledWith('t-bad', { name: 'Renamed', color: '#94a3b8' }),
+    );
   });
 });

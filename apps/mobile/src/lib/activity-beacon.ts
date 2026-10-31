@@ -38,7 +38,7 @@ export function resetSeenBeaconForTests(): void {
  */
 export async function reportSeen(userId: string, now: number = Date.now()): Promise<void> {
   try {
-    const org = (await orgHeader())['X-Organization-Id'] ?? 'default';
+    const org = (await orgHeader(userId))['X-Organization-Id'] ?? 'default';
     const key = `${userId}:${org}`;
     if (!isSeenReportDue(now, lastReported.get(key))) return;
 

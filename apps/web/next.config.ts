@@ -123,6 +123,15 @@ const nextConfig: NextConfig = {
 
   typedRoutes: true,
   experimental: {
+    // Off, as it was in Next 16.3. Next 16.4 defaults this to 'security': under
+    // an AI agent (AI_AGENT or CLAUDECODE, set in every agent shell here)
+    // `next dev` and `next build` ask npm for Next.js advisories and, while one
+    // covers the installed version, stop every other run with exit code 1 and
+    // tell the agent to run `next upgrade`. Every `next dev` start outside CI
+    // also sends the installed version to npm. CI and Vercel builds were never
+    // stopped by it. Upgrades come from Dependabot and the advisory sweeps.
+    // src/test/next-agent-upgrade.test.ts pins both behaviours.
+    agentUpgrade: false,
     // Tree-shake the barrel-exporting packages we actually use. framer-motion
     // and recharts were removed from deps (no source imports them); keeping
     // them in the list would have been a no-op anyway.

@@ -22,6 +22,7 @@ import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
+import { goBackFromReturn } from '@/lib/return-path';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -35,8 +36,9 @@ import { useTheme } from '@/lib/use-theme';
  *
  * Reached by link only (the rewrite of /dashboard/support: What's New, a
  * notification), as before. Its top bar is now the other screens' bar: Back
- * (a `?return=` path, else back, else Home) and the menu, both named for
- * VoiceOver (redesign defect D28: no Back, and a menu with no name).
+ * (a `?return=` path inside the app, else back, else Home: goBackFromReturn)
+ * and the menu, both named for VoiceOver (redesign defect D28: no Back, and a
+ * menu with no name).
  */
 const CATEGORIES = [
   { value: 'bug', label: 'Bug' },
@@ -51,15 +53,7 @@ export default function SupportScreen() {
   const navigation = useNavigation();
   const router = useRouter();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
-  const goBack = () => {
-    if (typeof returnPath === 'string' && returnPath.length > 0) {
-      router.replace(returnPath as never);
-    } else if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/');
-    }
-  };
+  const goBack = () => goBackFromReturn(router, returnPath);
 
   const [category, setCategory] = React.useState<Category>('bug');
   const [subject, setSubject] = React.useState('');

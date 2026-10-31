@@ -35,10 +35,10 @@ interface RemoveFromRackDialogProps {
 
 /**
  * Remove (write off) stock from ONE rack, leaving the item's stock in every
- * other rack untouched — the tool Andrew reached for when he archived a whole
- * book to clear one rack (2026-07-23). It is NOT archive: it draws down a single
- * location through removeStockFromLocationAction → adjustStock, writing a proper
- * movement so the history reads truthfully.
+ * other rack untouched — the tool a DC4 manager reached for when they archived
+ * a whole book to clear one rack (2026-07-23). It is NOT archive: it draws
+ * down a single location through removeStockFromLocationAction → adjustStock,
+ * writing a proper movement so the history reads truthfully.
  *
  * A reason is MANDATORY (owner ask), the quantity defaults to the whole holding
  * and is capped there, and Remove is disabled until both are valid — so the

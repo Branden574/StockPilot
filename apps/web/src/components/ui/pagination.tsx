@@ -7,7 +7,7 @@ import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 /**
  * Numbered pagination matching the Items pager: "Showing X–Y of Z", Prev, a
@@ -85,13 +85,17 @@ export function Pagination({
   // Row-range text ("Showing 51–100 of 350") when we know the totals and
   // there is at least one row: a total of 0 prints no range (it read
   // "Showing 1–0 of 0"). The figures are in the ink at weight 400, the
-  // reference pager's (DESIGN-SPEC 6.9; FX8: they were 500).
+  // reference pager's (DESIGN-SPEC 6.9; FX8: they were 500), and formatted
+  // like every other count in the app ("12,345").
   const range =
     total != null && total > 0 && pageSize ? (
       <span>
-        Showing <span className="text-foreground">{(safePage - 1) * pageSize + 1}</span>–
-        <span className="text-foreground">{Math.min(safePage * pageSize, total)}</span> of{' '}
-        <span className="text-foreground">{total}</span>
+        Showing{' '}
+        <span className="text-foreground">{formatNumber((safePage - 1) * pageSize + 1)}</span>–
+        <span className="text-foreground">
+          {formatNumber(Math.min(safePage * pageSize, total))}
+        </span>{' '}
+        of <span className="text-foreground">{formatNumber(total)}</span>
       </span>
     ) : null;
 
@@ -115,7 +119,7 @@ export function Pagination({
                 aria-label="Jump to page"
                 className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2"
               >
-                Page {safePage} of {totalPages}
+                Page {formatNumber(safePage)} of {formatNumber(totalPages as number)}
               </button>
             </PopoverTrigger>
             <PopoverContent
@@ -132,7 +136,7 @@ export function Pagination({
             </PopoverContent>
           </Popover>
         ) : (
-          <span className="px-2 tabular-nums">Page {safePage}</span>
+          <span className="px-2 tabular-nums">Page {formatNumber(safePage)}</span>
         )}
 
         <PageBtn

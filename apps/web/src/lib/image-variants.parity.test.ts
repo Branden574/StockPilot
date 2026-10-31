@@ -21,8 +21,9 @@
  *          drop an oversize placeholder, fall back when the worker fails.
  *   ARM 3  reads the SOURCE: neither path may carry a number of its own, both
  *          must import the shared module, the `new Worker(new URL(…))`
- *          expression must keep the exact shape the bundler recognises, and the
- *          two backfill tools must agree with the shared thumbnail size.
+ *          expression must keep the exact shape the bundler recognises, the
+ *          one thumbnail backfill must make the shared thumbnail size, and
+ *          the phone's thumbnail numbers (core) must equal the web's.
  *   ARM 4  an engine that cannot encode WebP (WebKit answers a WebP request
  *          with a PNG): a camera photo becomes JPEG on both paths, anything
  *          that may be transparent does not, what comes back is labelled as
@@ -62,10 +63,12 @@
  *       worker: no context, throw) -> 1 failure each.
  *   24. HEIC / HEIF dropped from the camera formats -> 2 failures.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { ITEM_PHOTO_THUMB } from '@stockpilot/core';
 
 import { IMAGE_VARIANTS } from './image-variants.config';
 
@@ -813,17 +816,37 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     }
   });
 
-  it('both backfill tools make thumbnails of the shared size', () => {
-    const tools = [
-      path.join(WEB, 'scripts', 'backfill-item-thumbs.mjs'),
-      path.join(WEB, 'src', 'app', 'api', 'admin', 'backfill-item-thumbs', 'route.ts'),
-    ];
-    for (const tool of tools) {
-      const match = /\bconst THUMB_SIZE = (\d+);/.exec(stripComments(read(tool)));
-      expect(match, `${tool}: THUMB_SIZE declaration not found (was it renamed?)`).not.toBeNull();
-      expect(Number(match![1]), `${tool} disagrees with image-variants.config.ts`).toBe(
-        IMAGE_VARIANTS.thumb.maxDimension,
-      );
-    }
+  it("the phone makes its thumbnails at the web's size and quality (core ITEM_PHOTO_THUMB, B31)", () => {
+    // The phone cannot import this config (nor this config anything), so the
+    // phone's numbers live in core and this pins the two equal: the same
+    // drift the worker and the fallback once had, across the two apps.
+    expect(ITEM_PHOTO_THUMB.maxEdge).toBe(IMAGE_VARIANTS.thumb.maxDimension);
+    expect(ITEM_PHOTO_THUMB.quality).toBe(IMAGE_VARIANTS.thumb.quality);
+  });
+
+  it('the one backfill makes thumbnails of the shared size', () => {
+    // B31 retired the local scripts/backfill-item-thumbs.mjs, the second copy
+    // of this job: it asked Supabase for a 200 x 200 `cover` transform (a
+    // square crop, unlike the uploader's) and overwrote whatever sat at the
+    // name. A copy brought back would drift the same way, so it must not be.
+    expect(existsSync(path.join(WEB, 'scripts', 'backfill-item-thumbs.mjs'))).toBe(false);
+
+    // The admin route makes them on the server with lib/item-photo-thumbnail.ts,
+    // which reads the shared config and has no size or quality of its own
+    // (only the decode's pixel limit and the 0-1 to percent factor).
+    const route = stripComments(
+      read(path.join(WEB, 'src', 'app', 'api', 'admin', 'backfill-item-thumbs', 'route.ts')),
+    );
+    expect(route).toMatch(
+      /import \{ makeItemPhotoThumbnail \} from '@\/lib\/item-photo-thumbnail';/,
+    );
+    expect(codeOnly(route)).not.toMatch(/\bTHUMB_SIZE\b|\btransform\b/);
+    const maker = read(path.join(LIB, 'item-photo-thumbnail.ts'));
+    expect(stripComments(maker)).toMatch(
+      /import \{ IMAGE_VARIANTS \} from '\.\/image-variants\.config';/,
+    );
+    expect(codeOnly(maker)).toMatch(/IMAGE_VARIANTS\.thumb\.maxDimension/);
+    expect(codeOnly(maker)).toMatch(/IMAGE_VARIANTS\.thumb\.quality/);
+    expect(ownNumbers(maker)).toEqual(['50_000_000', '100']);
   });
 });

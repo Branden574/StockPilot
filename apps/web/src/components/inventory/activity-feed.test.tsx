@@ -91,12 +91,12 @@ describe('ActivityFeed', () => {
         id: 'a2',
         kind: 'audit',
         type: 'inventory.item.updated',
-        actor: 'Branden',
+        actor: 'Carsten',
         createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
       }),
     ];
     render(<ActivityFeed events={events} />);
-    expect(screen.getByText('Branden')).toBeInTheDocument();
+    expect(screen.getByText('Carsten')).toBeInTheDocument();
     // Some kind of "minutes ago" relative string from formatRelative.
     expect(screen.getByText(/ago|minute|now/i)).toBeInTheDocument();
   });

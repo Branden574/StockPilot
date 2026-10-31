@@ -24,6 +24,9 @@
  * URL fragments, credential path segments, and bare JWT-shaped strings.
  * Everything else — ids, org uuids, table names, file names — survives,
  * because an unreadable alert feed is its own outage.
+ *
+ * `redactCredentialUrls` (below) is the product-analytics variant: it keeps
+ * queries and fragments and replaces only the credentials in them.
  */
 
 import { CREDENTIAL_PATH_PREFIXES } from './share-paths';
@@ -114,6 +117,88 @@ function redactCredentialSegments(pathish: string): string {
 export function redactTokens(input: string): string {
   if (!input) return input;
   return input.replace(URL_RE, redactOneUrl).replace(JWT_RE, REDACTED);
+}
+
+/**
+ * Query and fragment keys whose value is a credential wherever they appear:
+ * Supabase Storage signed URLs and GoTrue /verify links (`token`), our
+ * /auth/confirm links (`token_hash`), and a session GoTrue hands back in a
+ * fragment. `token_type` and `type` are not on the list: they name, they grant
+ * nothing.
+ */
+const CREDENTIAL_PARAM_KEYS: ReadonlySet<string> = new Set([
+  'token',
+  'token_hash',
+  'access_token',
+  'refresh_token',
+  'provider_token',
+  'provider_refresh_token',
+]);
+
+/** How many return paths deep (a redirect inside a redirect) a value is read. */
+const MAX_NESTED_URLS = 3;
+
+function decodedOrRaw(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/** One `a=1&b=2` list, query or fragment, with only its credentials replaced. */
+function redactCredentialParams(list: string, depth: number): string {
+  return list
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq === -1) return pair;
+      const key = pair.slice(0, eq);
+      const value = pair.slice(eq + 1);
+      // An empty value has nothing to replace. That is also what a second pass
+      // sees: URL_RE stops at the `[` of a placeholder already there.
+      if (CREDENTIAL_PARAM_KEYS.has(decodedOrRaw(key).toLowerCase())) {
+        return value === '' ? pair : `${key}=${REDACTED}`;
+      }
+      // A value that is itself a path or URL: a return path such as
+      // /signin?redirect=/invite/<token>, as written or percent-encoded.
+      const decoded = decodedOrRaw(value);
+      if (depth >= MAX_NESTED_URLS || !decoded.includes('/')) return pair;
+      const redacted = redactCredentialsInUrl(decoded, depth + 1);
+      if (redacted === decoded) return pair;
+      return `${key}=${decoded === value ? redacted : encodeURIComponent(redacted)}`;
+    })
+    .join('&');
+}
+
+/** One URL-ish token with only its credential parts replaced. */
+function redactCredentialsInUrl(raw: string, depth: number): string {
+  const hashAt = raw.indexOf('#');
+  const beforeHash = hashAt === -1 ? raw : raw.slice(0, hashAt);
+  const fragment = hashAt === -1 ? null : raw.slice(hashAt + 1);
+  const qAt = beforeHash.indexOf('?');
+  const path = qAt === -1 ? beforeHash : beforeHash.slice(0, qAt);
+  const query = qAt === -1 ? null : beforeHash.slice(qAt + 1);
+  return (
+    redactCredentialSegments(path) +
+    (query === null ? '' : `?${redactCredentialParams(query, depth)}`) +
+    (fragment === null ? '' : `#${redactCredentialParams(fragment, depth)}`)
+  );
+}
+
+/**
+ * The analytics variant of `redactTokens` (docket B39 review): it replaces only
+ * the credentials in each URL and leaves every other character as it was, so a
+ * product event keeps its page, its query and its anchor. Replaced: the segment
+ * after a credential path prefix, the value of a credential key in a query or
+ * a fragment (CREDENTIAL_PARAM_KEYS), the same inside a query value that is
+ * itself a path or URL (the invite page's Sign in link is
+ * /signin?redirect=/invite/<token>), and a bare JWT. A string with none of
+ * these comes back unchanged, the same string.
+ */
+export function redactCredentialUrls(input: string): string {
+  if (!input) return input;
+  return input.replace(URL_RE, (raw) => redactCredentialsInUrl(raw, 0)).replace(JWT_RE, REDACTED);
 }
 
 /** `redactTokens` for a value of unknown type; non-strings pass through. */

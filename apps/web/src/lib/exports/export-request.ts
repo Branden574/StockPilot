@@ -23,18 +23,20 @@ import {
 /** A 30-column PDF is already unreadable; a 30-column CSV is plenty. */
 export const INVENTORY_EXPORT_MAX_FIELDS = 30;
 
-const filtersSchema = z.object({
-  q: z.string().optional(),
-  status: z.enum(['active', 'archived', 'discontinued', 'all']).optional(),
-  stock: z.enum(['low', 'out']).nullable().optional(),
-  // Mig 0277: true = the page's Expected chip view — export ONLY items
-  // awaiting their first receipt (matching the visible rows).
-  expected: z.boolean().optional(),
-  sort: z.string().optional(),
-  categoryIds: z.array(z.string()).optional(),
-  locationIds: z.array(z.string()).optional(),
-  charterIds: z.array(z.string()).optional(),
-}).strict();
+const filtersSchema = z
+  .object({
+    q: z.string().optional(),
+    status: z.enum(['active', 'archived', 'discontinued', 'all']).optional(),
+    stock: z.enum(['low', 'out']).nullable().optional(),
+    // Mig 0277: true = the page's Expected chip view — export ONLY items
+    // awaiting their first receipt (matching the visible rows).
+    expected: z.boolean().optional(),
+    sort: z.string().optional(),
+    categoryIds: z.array(z.string()).optional(),
+    locationIds: z.array(z.string()).optional(),
+    charterIds: z.array(z.string()).optional(),
+  })
+  .strict();
 
 const pdfOptionsSchema = z
   .object({
@@ -74,16 +76,29 @@ const optionsSchema = z
   .strict()
   .default({});
 
-export const inventoryExportRequestSchema = z.object({
-  format: z.enum(['csv', 'xlsx', 'pdf']),
-  scope: z.enum(['selected', 'filtered', 'all']),
-  itemType: z.enum(['product', 'book', 'asset', 'consumable', 'all']).default('all'),
-  ids: z.array(z.string().uuid()).max(10_000).optional(),
-  filters: filtersSchema.optional(),
-  /** Absent = use the registry defaults for this item type. */
-  fields: z.array(z.string()).min(1).max(INVENTORY_EXPORT_MAX_FIELDS).optional(),
-  options: optionsSchema,
-}).strict();
+export const inventoryExportRequestSchema = z
+  .object({
+    format: z.enum(['csv', 'xlsx', 'pdf']),
+    scope: z.enum(['selected', 'filtered', 'all']),
+    itemType: z.enum(['product', 'book', 'asset', 'consumable', 'all']).default('all'),
+    ids: z.array(z.string().uuid()).max(10_000).optional(),
+    filters: filtersSchema.optional(),
+    /** Absent = use the registry defaults for this item type. */
+    fields: z.array(z.string()).min(1).max(INVENTORY_EXPORT_MAX_FIELDS).optional(),
+    options: optionsSchema,
+  })
+  .strict();
+
+/**
+ * The export PREVIEW request (POST /api/inventory/export/preview): the export
+ * request's own scope, item type, ids and filters, strict like it. The preview
+ * used to copy the filters without .strict(), so it answered with a sample for
+ * a selection the export then refused with a 400; built from the same pieces,
+ * the two accept and refuse the same selection.
+ */
+export const inventoryExportPreviewRequestSchema = inventoryExportRequestSchema
+  .pick({ scope: true, itemType: true, ids: true, filters: true })
+  .strict();
 
 export type InventoryExportRequestParsed = z.output<typeof inventoryExportRequestSchema>;
 export type InventoryExportOptions = InventoryExportRequestParsed['options'];
@@ -165,10 +180,7 @@ export function resolveExportFields(input: ResolveExportFieldsInput): ResolveExp
   }
 
   if (!resolved.some((f) => IDENTIFYING_FIELD_KEYS.includes(f.key))) {
-    return fail(
-      400,
-      'Include at least one identifying field: Name, SKU, ISBN or Barcode.',
-    );
+    return fail(400, 'Include at least one identifying field: Name, SKU, ISBN or Barcode.');
   }
 
   const imagesRequested = resolved.some((f) => f.key === 'image');

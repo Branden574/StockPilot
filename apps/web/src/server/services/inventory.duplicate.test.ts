@@ -103,7 +103,7 @@ describe('InventoryService.duplicateItem', () => {
       originalSku: 'SP-ABC',
     });
     const svc = new InventoryService(ctx);
-    const newId = await svc.duplicateItem({
+    const { id: newId } = await svc.duplicateItem({
       originalId: '00000000-0000-0000-0000-000000000001',
       itemType: 'product',
       rackNumber: '38',

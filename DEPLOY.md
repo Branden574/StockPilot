@@ -14,7 +14,7 @@ Connect the repo at https://vercel.com/new and pick **the GitHub repo**, then:
 | Build command | (leave default — it runs `next build`) |
 | Install command | (leave default — Vercel runs `pnpm install` from repo root) |
 | Output directory | (leave default) |
-| Node version | 20.x (matches `.nvmrc` 20.11.0) |
+| Node version | 24.x (matches `.nvmrc` 24, the root engines field and CI; apps/web/package.json has no engines, so this setting is what Vercel runs) |
 
 Vercel auto-detects pnpm monorepos and hoists installs correctly. No `vercel.json` is required.
 
@@ -44,16 +44,16 @@ Set all of them for **Production**, **Preview**, and **Development** environment
 
 ## 3. Supabase auth redirect URLs
 
-In Supabase → **Authentication → URL Configuration**, add:
+In Supabase → **Authentication → URL Configuration**, set the production site and a local URL, and nothing else:
 
 ```
 Site URL:  https://your-vercel-domain.vercel.app
 Redirect URLs:
   https://your-vercel-domain.vercel.app/auth/callback
-  https://*.vercel.app/auth/callback   # for preview deploys
+  http://localhost:3000/auth/callback   # local development
 ```
 
-If you don't add the wildcard, magic-link sign-in on preview URLs will silently 401.
+Never add a wildcard host such as `https://*.vercel.app/auth/callback` for preview deploys: anyone with a Vercel account can deploy a site at an address it matches, and Supabase sends a sign-in link's session to any address on this list that the link names.
 
 ## 4. Database
 

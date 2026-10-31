@@ -99,8 +99,10 @@ select is((select ctx->'memberships'->1->'user_overrides' from una),
   'org C: her own user override in C, and only that one');
 select is(
   (select array_agg(k order by k) from jsonb_object_keys((select ctx->'memberships'->0->'organization' from una)) k),
-  array['all_modules_comp','dashboard_layout','id','logo_url','mfa_policy','name','nav_overrides','order_status_config','terminology','timezone'],
-  'the organization object has exactly these ten keys: no billing column, and mfa_policy is there');
+  -- Re-pinned by 0413 (was ten keys): plus order_catalog_last_hide_at, the
+  -- ordering-visibility hide mark catalog loads read to skip a query.
+  array['all_modules_comp','dashboard_layout','id','logo_url','mfa_policy','name','nav_overrides','order_catalog_last_hide_at','order_status_config','terminology','timezone'],
+  'the organization object has exactly these eleven keys: no billing column, mfa_policy is there, and the 0413 hide mark');
 select is(
   (select array_agg(k order by k) from jsonb_object_keys((select ctx->'profile' from una)) k),
   array['avatar_url','default_organization_id','disabled_at','email','full_name','id'],

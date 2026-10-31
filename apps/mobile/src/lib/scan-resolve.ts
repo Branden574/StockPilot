@@ -1,3 +1,5 @@
+import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
+
 /**
  * Resolves a scanned barcode/SKU value against the raw candidate rows
  * returned by an `.or(barcode.eq.X,sku.eq.X)` lookup.
@@ -66,4 +68,57 @@ export const SCAN_PICKER_COPY = {
 export function scanPickerSubtitle(matches: readonly { sku: string }[]): string {
   const skus = new Set(matches.map((m) => (m.sku ?? '').trim()));
   return skus.size > 1 ? SCAN_PICKER_COPY.manyRecords : SCAN_PICKER_COPY.sameSku;
+}
+
+/** One rack or crate holding as the picker's read returns it: an
+ *  item_stock_levels row with its location embedded (an object, or an array
+ *  of one). */
+export interface ScanHoldingRow {
+  item_id: string;
+  quantity: number | string | null;
+  locations:
+    | { name: string | null; kind: string | null }
+    | { name: string | null; kind: string | null }[]
+    | null;
+}
+
+/** The rack and crate holdings of each record, by record id. A row whose
+ *  location has no name is skipped. `kind` is carried: without it the
+ *  placement rule cannot tell a crate from a rack. */
+export function scanHoldingsByItem(
+  rows: readonly ScanHoldingRow[],
+): Map<string, RackHoldingLike[]> {
+  const byItem = new Map<string, RackHoldingLike[]>();
+  for (const row of rows) {
+    const loc = Array.isArray(row.locations) ? row.locations[0] : row.locations;
+    if (!loc?.name) continue;
+    const list = byItem.get(row.item_id) ?? [];
+    list.push({ name: loc.name, quantity: Number(row.quantity) || 0, kind: loc.kind ?? null });
+    byItem.set(row.item_id, list);
+  }
+  return byItem;
+}
+
+/**
+ * The placement picker's line for one record: where its stock is, by the one
+ * placement rule (core resolvePlacement), in the words the web lookup API and
+ * the Items list use. It was the record's raw rack text, which named one rack
+ * for stock split across two, a rack the stock had left for crated stock, and
+ * no rack at all for a book whose rack lives in its rack keys (B26). Null when
+ * no place is known.
+ */
+export function scanCandidatePlacementLabel(input: {
+  itemType: string | null;
+  customFields: Record<string, unknown> | null;
+  binLocation: string | null;
+  holdings: readonly RackHoldingLike[];
+}): string | null {
+  return formatPlacementLabel(
+    resolvePlacement({
+      itemType: input.itemType,
+      customFields: input.customFields,
+      binLocation: input.binLocation,
+      holdings: input.holdings,
+    }),
+  );
 }

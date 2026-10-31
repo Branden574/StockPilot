@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import {
   clampWhole,
   effectiveReplacementQuantity,
@@ -163,7 +164,9 @@ export function RequesterReturnSheetForm({
     let outcome: RequesterOptionsOutcome;
     try {
       outcome = await loadOptions();
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       outcome = { ok: false, message: RETURNS_COPY.requesterOptionsUnavailable };
     }
     loadingRef.current = false;
@@ -228,7 +231,9 @@ export function RequesterReturnSheetForm({
         lines: built.lines,
         idempotencyKey: keyRef.current,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       outcome = { ok: false, message: NETWORK_FAILED, reason: null };
     }
     setBusy(false);

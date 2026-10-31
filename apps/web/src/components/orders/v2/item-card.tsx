@@ -131,7 +131,7 @@ export function ItemCard({ item }: ItemCardProps) {
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
             loading="lazy"
-            className="bg-white object-contain opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
+            className="object-cover opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
             onLoad={(e) => (e.currentTarget as HTMLImageElement).classList.add('loaded')}
           />
         ) : null}

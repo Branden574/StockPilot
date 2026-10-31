@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { reportError } from '@/lib/error-reporter';
+import { keepAlive } from '@/server/services/lib/defer';
 
 /**
  * Server-side push notification sender.
@@ -133,9 +134,20 @@ export async function notifyUser(payload: PushPayload): Promise<number> {
           // Stale token — remove so we don't keep re-trying. The trailing
           // .then() is REQUIRED: a supabase-js builder is lazy and never sends
           // the request unless awaited or `.then`ed (`void builder` is a no-op).
-          void admin.from('push_tokens').delete().eq('id', t.id).then(
-            () => {},
-            () => {},
+          // Kept alive past the response (lib/defer.ts keepAlive), so the
+          // DELETE is not cut off when the caller has already answered
+          // (Promise.resolve: the builder's .then() is typed PromiseLike).
+          keepAlive(
+            Promise.resolve(
+              admin
+                .from('push_tokens')
+                .delete()
+                .eq('id', t.id)
+                .then(
+                  () => {},
+                  () => {},
+                ),
+            ),
           );
         } else {
           void reportError(new Error(ticket.message ?? 'push ticket failed'), {

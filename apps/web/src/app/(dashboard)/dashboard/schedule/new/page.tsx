@@ -4,11 +4,13 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { BundlesService } from '@/server/services/bundles';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone } from '@stockpilot/core';
 
 export const metadata = { title: 'New event · Schedule' };
 
@@ -28,6 +30,17 @@ export default async function NewScheduleEventPage({
   // bad input falls through to "today" inside the form.
   const initialDate =
     params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
+
+  // The form's date and time are a wall clock in the ORGANIZATION's zone, as
+  // the calendar and the event's page draw them (small fixes slice 8 review):
+  // a calendar date's "+ Add" lands on that date for every viewer. Read as
+  // the calendar reads it; a failed read is the default zone, reported.
+  const timeZoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'schedule.event_form.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   const [warehousesSvc, bundlesSvc, scheduleSvc] = await Promise.all([
     WarehousesService.forCurrentUser(),
@@ -62,6 +75,8 @@ export default async function NewScheduleEventPage({
       requesterName: e.requesterName,
     }));
 
+  const timeZone = await timeZoneRead;
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
@@ -74,6 +89,7 @@ export default async function NewScheduleEventPage({
           bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
           initialDate={initialDate}
           conflictCandidates={conflictCandidates}
+          timeZone={timeZone}
         />
       </DetailSection>
     </div>

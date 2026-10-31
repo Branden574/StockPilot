@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-14
 **Status:** Approved (brainstorm), implementation in phases
-**Owner:** branden574@gmail.com (sole platform admin via env allowlist)
+**Owner:** the platform owner (sole platform admin via env allowlist)
 
 ## Goal
 
@@ -89,4 +89,4 @@ A new top-level route group `apps/web/src/app/(platform)/platform/...` — **not
 
 ## Rollout
 
-Gated to `STOCKPILOT_PLATFORM_ADMIN_EMAILS` (only branden574@gmail.com). Invisible to everyone else; goes live on the real site only when that env var is set in Vercel production. No behavior changes for existing orgs until used.
+Gated to `STOCKPILOT_PLATFORM_ADMIN_EMAILS` (only the platform owner's address). Invisible to everyone else; goes live on the real site only when that env var is set in Vercel production. No behavior changes for existing orgs until used.

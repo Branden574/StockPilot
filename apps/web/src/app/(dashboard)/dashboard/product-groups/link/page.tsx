@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { can, SPORTS_SUBCATEGORIES } from '@stockpilot/core';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { GroupLinkingReview } from '@/components/inventory/group-linking-review';
 import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
@@ -36,7 +36,7 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 export default async function ProductGroupLinkPage() {
   const moduleAccess = await checkModuleAccess('sports');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="sports" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="sports" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   if (!can(ctx, 'sports:manage')) redirect('/dashboard');

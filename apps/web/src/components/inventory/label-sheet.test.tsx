@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The label sheet (P4.A1, matrix W-IT-07). The redesign themes only the
 // on-screen controls: they are labelled now (the Template, Format and Copies
@@ -100,5 +102,91 @@ describe('LabelSheet', () => {
     ).toBeInTheDocument();
     expect(container.querySelector('[data-state-kind="empty"]')).toHaveClass('print:hidden');
     expect(screen.queryByRole('button', { name: 'Print' })).not.toBeInTheDocument();
+  });
+});
+
+// The preview on a phone (R6). A sheet is often wider than the screen (one
+// Medium label is 4 inches, 384 px), so the preview well scrolls sideways at
+// 390 px, and with no tab stop, role or name a keyboard could not reach it
+// (axe scrollable-region-focusable, serious; WebKit's Tab went past it). As the
+// shared Table's wrapper does, the well is a region named "Label sheet preview"
+// in the Tab order only while it scrolls. happy-dom lays nothing out, so the
+// widths are given; the lab measured 390, 768, 1024 and 1280 px in Chromium and
+// WebKit, with axe.
+describe('LabelSheet: the preview while it scrolls sideways', () => {
+  let widths = { scroll: 0, client: 0 };
+  let resize: ResizeObserverCallback | null = null;
+
+  beforeEach(() => {
+    widths = { scroll: 0, client: 0 };
+    resize = null;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          resize = cb;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(() => widths.scroll);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => widths.client);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  const well = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('[data-slot="label-sheet-preview"]')!;
+
+  // Mutation caught: a stop, role or name on a sheet that fits (an extra,
+  // pointless Tab stop and landmark at 1280 px).
+  it('is a plain box while the sheet fits', () => {
+    widths = { scroll: 986, client: 986 };
+    const { container } = render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    for (const attr of ['role', 'aria-label', 'tabindex']) {
+      expect(well(container)).not.toHaveAttribute(attr);
+    }
+  });
+
+  // Mutation caught: the well without its tab stop or name while it overflows.
+  it('is a named region in the Tab order while it scrolls, right after Print', async () => {
+    widths = { scroll: 400, client: 356 }; // one 4-inch label in a 390 px phone's well
+    const user = userEvent.setup();
+    const { container } = render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    const region = screen.getByRole('region', { name: 'Label sheet preview' });
+    expect(region).toBe(well(container));
+    expect(region).toHaveAttribute('tabindex', '0');
+    screen.getByRole('button', { name: 'Print' }).focus();
+    await user.tab();
+    expect(region).toHaveFocus();
+  });
+
+  // Mutation caught: measuring once on mount only.
+  it('starts and stops being a stop as the sheet starts and stops fitting', () => {
+    widths = { scroll: 356, client: 356 }; // a thermal label fits
+    const { container } = render(<LabelSheet items={ITEMS} copies={1} template="thermal-50x30" />);
+    expect(well(container)).not.toHaveAttribute('tabindex');
+
+    widths = { scroll: 804, client: 474 }; // two Medium labels side by side at 768 px
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'medium' } });
+    act(() => resize?.([], {} as ResizeObserver));
+    expect(well(container)).toHaveAttribute('tabindex', '0');
+    expect(well(container)).toHaveAttribute('role', 'region');
+
+    widths = { scroll: 986, client: 986 };
+    act(() => resize?.([], {} as ResizeObserver));
+    for (const attr of ['role', 'aria-label', 'tabindex']) {
+      expect(well(container)).not.toHaveAttribute(attr);
+    }
+  });
+
+  it('the server HTML carries no measured attribute, so hydration matches', () => {
+    widths = { scroll: 400, client: 356 };
+    const html = renderToString(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    expect(html).toContain('data-slot="label-sheet-preview"');
+    expect(html).not.toContain('tabindex');
+    expect(html).not.toContain('role="region"');
   });
 });

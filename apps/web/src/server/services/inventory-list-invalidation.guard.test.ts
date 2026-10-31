@@ -112,15 +112,25 @@ const STOCK_RPCS: Record<string, string> = {
   // Ungroup (0399): a fresh SKU on each split record, bumping updated_at and
   // changing the SKU every list, search and label shows.
   split_item_sku: 'inventory_items.sku and updated_by on the split records (0399, through _item_grouping_split_apply)',
+  // Ordering visibility (0413): Show or Hide. A derived write (updated_at
+  // kept); its one caller is in ALLOWLIST below, with the reason.
+  set_order_catalog_visibility:
+    'inventory_items.order_catalog_visible and order_catalog_visibility_changed_at only, under stockpilot.derived_write (0413)',
 };
 
 /**
  * Members allowed to write stock WITHOUT invalidating: `file#Member` → why
- * invalidating would be wrong. Empty on purpose — as of 2026-09-22 every
- * writer invalidates. A stale entry (member gone, no longer writes, or now
- * invalidates) fails the suite so the list cannot rot.
+ * invalidating would be wrong. Every other writer invalidates. A stale entry
+ * (member gone, no longer writes, or now invalidates) fails the suite so the
+ * list cannot rot.
  */
-const ALLOWLIST: Record<string, string> = {};
+const ALLOWLIST: Record<string, string> = {
+  // Ordering visibility (0413, design 4.2 step 6). The header's reason for
+  // counting every inventory_items write is that updated_at moves; this is the
+  // writer where it does not (a pgTAP case pins it).
+  'order-catalog-visibility.ts#OrderCatalogVisibilityService.setVisibility':
+    'Writes only order_catalog_visible and its stamp under stockpilot.derived_write, so updated_at (the list\'s sort key and rendered column) does not move, and no Items or Books list renders either column. Expiring the org\'s list cache here would make every member\'s next Items load cold for a change the list does not show (brief 12).',
+};
 
 /**
  * Members that WRITE through a non-literal table name (or call a non-literal
@@ -725,13 +735,17 @@ describe('every service stock write invalidates the Items/Books list cache', () 
  *         updateTag) where no such scope exists;
  *       - a stock-writing service call that is not awaited (`void svc.x()`,
  *         a bare statement): it can finish after the request did;
- *       - a stock-writing service call inside after() or defer(): Next's
- *         after() flush drops a tag the request already recorded (same tag and
- *         profile), which a request that wrote stock before has;
+ *       - a stock-writing service call inside after() or defer(): it runs
+ *         after the answer was sent, so its failure can only be logged. On
+ *         next 16.3 its tag was also lost when the request had recorded the
+ *         same tag before (the after() flush matched tag and profile); 16.4
+ *         sends it again (vercel/next.js#99499, lib/inventory-list-cache.test.ts);
  *       - a stock-writing service call during render (app pages/layouts,
  *         server/loaders, components) or inside unstable_cache: revalidateTag
- *         throws there (revalidate.js: "during render", E7 / E306) and the
- *         never-throwing wrapper can only log it.
+ *         throws there (revalidate.js; since next 16.4 the errors come from
+ *         use-cache/use-cache-messages.js: "can't be called during render",
+ *         "can't be called inside a cached function") and the never-throwing
+ *         wrapper can only log it.
  *     Route handlers, crons and server actions that AWAIT the write before
  *     returning are the effective shape and need nothing more.
  *
@@ -1281,7 +1295,7 @@ describe('stock writes outside services, and invalidations Next would drop', () 
         .filter((c) => insideCallbackOf(c.call, new Set(['after', 'defer'])))
         .map((c) => `${c.where} ${c.label}`),
     );
-    expect(tails, 'after() drops a tag the request already recorded').toEqual([]);
+    expect(tails, 'a stock write in after() or defer() runs after the answer was sent').toEqual([]);
   });
 
   it('no stock-writing service call runs during a render or inside unstable_cache', () => {

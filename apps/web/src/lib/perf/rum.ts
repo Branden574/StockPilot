@@ -73,6 +73,10 @@ const NAVIGATION_TYPES = [
   'back-forward-cache',
   'prerender',
   'restore',
+  // A vital of a client-side navigation. Next 16.4 asks web-vitals v6 for these
+  // (`reportSoftNavs: true` on CLS, LCP, INP and FCP, next/dist/client/
+  // web-vitals.js), and a browser with the Soft Navigations API sends them.
+  'soft-navigation',
 ] as const;
 
 /** Every string that may appear as a VALUE, other than a route template under a route key. */
@@ -201,6 +205,24 @@ export interface WebVitalLike {
   delta?: unknown;
   rating?: unknown;
   navigationType?: unknown;
+  /**
+   * The URL of the navigation the metric belongs to (web-vitals v6). Read only
+   * for a soft navigation, and only through `toRouteTemplate`.
+   */
+  navigationURL?: unknown;
+}
+
+/**
+ * The route a soft navigation went to. web-vitals v6 finalizes a soft
+ * navigation's LCP, CLS and INP when the NEXT navigation starts, so by then
+ * the address bar is already on the next screen. The metric's own
+ * `navigationURL` names the screen it measured. Without one, the current
+ * location is the best guess (right for FCP, which is reported at once).
+ */
+function softNavigationRoute(navigationURL: unknown): string {
+  return typeof navigationURL === 'string' && navigationURL.length > 0
+    ? toRouteTemplate(navigationURL)
+    : toRouteTemplate(window.location.pathname);
 }
 
 /**
@@ -209,6 +231,11 @@ export interface WebVitalLike {
  * finalized when the tab is hidden, many soft navigations later, and filing
  * them under whatever screen happened to be open then would smear one page's
  * load across the whole app.
+ *
+ * A soft navigation's vitals (navigation_type 'soft-navigation') describe that
+ * navigation instead, so the same rule files them under the route it went to,
+ * never under the document's. Their navigation type keeps them apart from
+ * hard loads.
  */
 export function reportWebVital(metric: WebVitalLike | null | undefined): void {
   guarded(() => {
@@ -224,13 +251,17 @@ export function reportWebVital(metric: WebVitalLike | null | undefined): void {
       if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return null;
       return name === 'CLS' ? Math.round(n * 1000) / 1000 : Math.round(n);
     };
+    const navigationType = oneOf(NAVIGATION_TYPES, metric.navigationType);
     emit('perf_web_vital', {
       metric: name,
       value: round(metric.value),
       delta: round(metric.delta),
       rating: oneOf(RATINGS, metric.rating),
-      navigation_type: oneOf(NAVIGATION_TYPES, metric.navigationType),
-      route: landingRoute() ?? toRouteTemplate(window.location.pathname),
+      navigation_type: navigationType,
+      route:
+        navigationType === 'soft-navigation'
+          ? softNavigationRoute(metric.navigationURL)
+          : (landingRoute() ?? toRouteTemplate(window.location.pathname)),
     });
   });
 }

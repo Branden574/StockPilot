@@ -2,7 +2,7 @@ import { Sparkles } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ChatPanel } from '@/components/ai/chat-panel';
 import { PageHeader } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -18,7 +18,7 @@ export const metadata = {
 export default async function AiPage() {
   const moduleAccess = await checkModuleAccess('ai');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="ai" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="ai" access={moduleAccess} />;
   }
   // AI tools include stock-adjusting actions (gated server-side by the
   // underlying tool's assertPermission, but exposing the chat surface

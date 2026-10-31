@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
@@ -11,7 +12,7 @@ import { putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { exchangeCode } from '@/server/connectors/quickbooks/oauth';
 
-import { hasPermission, type Role } from '@stockpilot/core';
+import type { Permission, Role } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,8 @@ const SETTINGS_PATH = '/dashboard/settings/integrations';
  *     lookup uses the RLS-scoped user client, so a match proves both that the
  *     state is genuine AND that the user is a member of the owning org.
  *  2. Enforce the integrations module is enabled + the user holds
- *     `integrations:manage` for that org.
+ *     `integrations:manage` for that org (their effective set, overrides
+ *     applied).
  *  3. Exchange the auth `code` for tokens (capturing `realmId`).
  *  4. Write the token blob to Supabase Vault via the SERVICE-ROLE admin client
  *     (connector_secret_* are revoked from `authenticated`).
@@ -139,7 +141,12 @@ export async function GET(req: Request) {
       return redirectWithError('module_disabled');
     }
 
-    // 2b. The user must hold integrations:manage in this org.
+    // 2b. The user must hold integrations:manage in this org: their EFFECTIVE
+    //     set, the organization's overrides applied, as beginConnect checks it
+    //     (docket S19). Never the role's static defaults: org_connections' write
+    //     rule asks only for the admin role, so an admin whose integrations:manage
+    //     was revoked can write a pending row and its state themselves, and a
+    //     static check here let them finish the connect.
     const { data: member } = await supabase
       .from('organization_members')
       .select('role')
@@ -148,9 +155,17 @@ export async function GET(req: Request) {
       .not('accepted_at', 'is', null)
       .maybeSingle();
     const role = (member as { role: Role } | null)?.role;
-    if (!role || !hasPermission(role, 'integrations:manage')) {
-      return redirectWithError('forbidden');
+    if (!role) return redirectWithError('forbidden');
+    let permissions: Set<Permission>;
+    try {
+      permissions = await loadEffectivePermissions(supabase, organizationId, user.id, role);
+    } catch {
+      // The overrides could not be read (the loader logs and reports it). That
+      // authorizes nothing, and it is no revoke either: the transient code, as
+      // for an unreadable account status.
+      return redirectWithError('internal_error');
     }
+    if (!permissions.has('integrations:manage')) return redirectWithError('forbidden');
 
     // 3. Exchange the auth code for tokens + realmId.
     const tokens = await exchangeCode(code, realmId);

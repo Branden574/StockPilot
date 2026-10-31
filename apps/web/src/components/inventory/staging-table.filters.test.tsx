@@ -57,7 +57,7 @@ function makeRow(over: Partial<Row> & { itemId: string; name: string }): Row {
 
 // The worklist the acceptance criteria describe: A,B on PO-100; C on PO-200;
 // D unattributed + unplaced. Book B is 14d (stale) — the rest recent/none.
-const A = makeRow({ itemId: 'A', name: 'Acer Chromebook', sku: 'SP-9U4BK-0EK', sourcePoNumber: 'PO-100', receiptNumber: 'RCV-000031', receivedAt: '2026-08-10T00:00:00Z', ageDays: 3 });
+const A = makeRow({ itemId: 'A', name: 'Acer Chromebook', sku: 'SP-9DEM3-CB1', sourcePoNumber: 'PO-100', receiptNumber: 'RCV-000031', receivedAt: '2026-08-10T00:00:00Z', ageDays: 3 });
 const B = makeRow({ itemId: 'B', name: 'Persepolis', sku: 'SP-BOOK-1', itemType: 'book', sourcePoNumber: 'PO-100', receiptNumber: 'RCV-000032', receivedAt: '2026-08-01T00:00:00Z', ageDays: 14, barcode: '9780375714573', bookStorage: { rackNumber: '38', rackRow: 'A', crateColor: 'blue', crateNumber: '4', grade: null, rackLabel: '38-A', crateLabel: 'Blue 4' } });
 const C = makeRow({ itemId: 'C', name: 'Whiteboard markers', sku: 'SP-WBM-12', sourcePoNumber: 'PO-200', receiptNumber: 'RCV-000040', receivedAt: '2026-08-12T00:00:00Z', ageDays: 7, sourceLocationId: 'stg-2' });
 const D = makeRow({ itemId: 'D', name: 'Loose paperbacks', sku: 'SP-LP-9', itemType: 'book', sourceKind: 'unplaced', sourceLocationId: 'unp-1' });

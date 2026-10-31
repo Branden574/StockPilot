@@ -4,6 +4,10 @@ import { cache } from 'react';
 
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
+  getVerifiedSessionClaimsForRequest,
+  readVerifiedSessionClaims,
+} from '@/lib/auth/verified-claims';
+import {
   heldMembership,
   modulesFromMembership,
   orgRowFromMembership,
@@ -84,6 +88,19 @@ export interface ServiceContext {
    * fix, a6a5e10b: every warehouse-scoped mobile user read as unassigned).
    */
   cookieClient?: Awaited<ReturnType<typeof createClient>>;
+  /**
+   * True only for the context a scheduled job runs under (the cron
+   * `buildSystemContext` copies and the shared one in lib/system-context.ts).
+   * Such a context BORROWS an owner's or admin's `userId`, because service
+   * code needs a user to attribute writes to; the person did not act.
+   * `audit()` stamps `metadata.is_system` on every row written under it, so
+   * readers (the platform console's Last active, the anomaly monitor) can
+   * tell the job from the person. The request builders never set it.
+   *
+   * DESCRIPTIVE ONLY: it says who acted, never what is allowed. No check may
+   * be granted or skipped on it.
+   */
+  isSystem?: boolean;
 }
 
 /**
@@ -96,7 +113,6 @@ export interface ServiceContext {
  * awaited inside the try: either one failing lands in the catch and fails closed.
  */
 async function resolveMfaState(
-  supabase: Awaited<ReturnType<typeof createClient>>,
   role: Role,
   readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
   factorsRead: Promise<MfaFactor[]>,
@@ -125,18 +141,25 @@ async function resolveMfaState(
       return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
     }
     // SHORT-CIRCUIT: a user with NO verified factor can never be at AAL2, so
-    // skip the `auth.mfa.getAuthenticatorAssuranceLevel()` round-trip and
-    // fail closed directly (only reachable via the policy branch). Only when
-    // a verified factor exists do we spend the AAL round-trip to confirm the
-    // session actually stepped up. Same fail-closed outcome as before,
-    // fewer round-trips.
+    // skip the assurance-level read and fail closed directly (only reachable
+    // via the policy branch). Only when a verified factor exists do we read
+    // the level to confirm the session actually stepped up. Same fail-closed
+    // outcome as before, fewer reads.
     if (!hasVerifiedFactor) {
       return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
     }
-    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    // The access token's `aal` claim once its signature checks out (a local
+    // ES256 check, no Auth round trip), never the cookie decoded unchecked:
+    // getAuthenticatorAssuranceLevel() did that and read the stored user
+    // object, which auth-js logs as insecure on a server client. An
+    // unverifiable token is not AAL2. Request-cached: in a page render this
+    // is the read the dashboard layout started first thing, so a cold key
+    // set is fetched once, alongside the layout's reads, not again here after
+    // the factor list. In a Server Action it reads afresh.
+    const claims = await getVerifiedSessionClaimsForRequest();
     return {
       mfaRequired: true,
-      mfaSatisfied: data?.currentLevel === 'aal2',
+      mfaSatisfied: claims?.aal === 'aal2',
       mfaEnrolled: true,
     };
   } catch (err) {
@@ -194,7 +217,6 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // empty set = core-only nav, never a wider entitlement than the org has).
   const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
     resolveMfaState(
-      supabase,
       ctx.role,
       () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
       factorsRead,
@@ -384,17 +406,21 @@ export function serviceErrorStatus(code: ServiceError['code']): number {
  * — they shouldn't be calling MFA-mutating actions without an MFA
  * factor in the first place, and erring on the strict side keeps the
  * gate's semantics crisp.
+ *
+ * The level is the access token's `aal` claim, read only once the token's
+ * signature checks out (lib/auth/verified-claims). A token that cannot be
+ * verified (forged, expired, no session) is refused like an unreadable one.
  */
 export async function assertCurrentAal2(ctx: ServiceContext): Promise<void> {
-  const { data, error } = await ctx.supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (error || !data) {
+  const claims = await readVerifiedSessionClaims(ctx.supabase);
+  if (!claims) {
     throw new ServiceError(
       'forbidden',
       'Could not verify your two-factor authentication state. Sign in again and try once more.',
       { reason: 'aal2_required' },
     );
   }
-  if (data.currentLevel !== 'aal2') {
+  if (claims.aal !== 'aal2') {
     throw new ServiceError(
       'forbidden',
       'Re-authenticate with MFA before changing security settings.',

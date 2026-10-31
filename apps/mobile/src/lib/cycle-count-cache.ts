@@ -1,5 +1,10 @@
-import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
-import { getDb, queuedWrite, withDbTransaction } from './db';
+import { clearCountPayload } from './cycle-count-clear';
+import {
+  CACHED_CYCLE_COUNTS_LIST_SQL,
+  CYCLE_COUNT_CACHE_HEADER_SQL,
+  UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL,
+} from './cycle-count-snapshot-sql';
+import { currentCacheGeneration, getCacheOwner, getDb, queuedWrite, withDbTransaction } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
 import { markRejectedWithin } from './queue';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
@@ -66,9 +71,56 @@ export interface CycleCountSnapshot {
 }
 
 /**
+ * The cache and the account a count fetch is made for, noted BEFORE it is
+ * sent (app/cycle-count/[id].tsx), as the snapshot pull notes its own
+ * (sync.ts generationAtRequest). See cacheCycleCount.
+ */
+export interface CacheWriteScope {
+  /** db.ts currentCacheGeneration(): it moves when a wipe is asked for. */
+  generation: number;
+  /** The account whose session is stored on the device (session-scope.ts). */
+  userId: string | null;
+}
+
+/** Note the cache generation, then the account, before a fetch is sent. */
+export async function cacheWriteScope(): Promise<CacheWriteScope> {
+  const generation = currentCacheGeneration();
+  const { userId } = await liveOutboxScope();
+  return { generation, userId };
+}
+
+/**
  * Upsert a cycle count + lines into the local cache. Lines that are
  * locally dirty are NOT overwritten — those carry the user's pending
  * edit until the sync engine flushes it.
+ *
+ * ONLY INTO THE CACHE AND FOR THE ACCOUNT IT WAS FETCHED FOR (B18 reviews,
+ * 2026-10-25). The count screen stores what it just fetched, and the fetch
+ * can finish after a sign-out's wipe (the count is then written with no owner
+ * recorded, for whoever signs in next), after a workspace switch's (the
+ * workspace left's count is then cached under the new one), or after a
+ * session that ended without a wipe and another account's sign-in. So the
+ * write is discarded, and false returned, when the cache generation moved
+ * since `fetchedUnder` was noted (a wipe was asked for), the stored session
+ * is no longer that account's (or nobody's), or the count is not in the
+ * active workspace. The last because the screen fetches in the workspace it
+ * last rendered with, and a switch saves the new one and wipes before the
+ * screen is shown it (use-workspace.ts): a note taken in that window already
+ * carries the moved generation. Checked inside the queued transaction: a wipe
+ * asked for after it starts is queued behind it and clears what it wrote. A
+ * count discarded here is fetched again the next time the screen loads.
+ *
+ * Nor into a cache still recorded as ANOTHER account's (B18 final review of
+ * d973727f6): that account's rows are still in it, and this account's reset
+ * (sync.ts, cache-owner.ts) has not run yet, because its first sync waits for
+ * a pull of the previous account's still out, or because the reset's SQLite
+ * wipe failed (the next pull resets again). The reset would wipe the count
+ * anyway; stored until then, it was the previous account's to keep if that
+ * account signed in here again first, since its own pull keeps its own cache,
+ * and this account's unsent number then showed as that account's own pending
+ * edit. With NO owner recorded the count is stored: the pull that adopts the
+ * cache marks it unconfirmed, and its full pull keeps it only when it returns
+ * the count or the adopting account has unsent work on it (sync.ts).
  */
 export async function cacheCycleCount(
   header: {
@@ -103,10 +155,24 @@ export async function cacheCycleCount(
     /** offlineCaptureAt() of the server row (@stockpilot/core). */
     offlineCapturedAt?: string | null;
   }>,
-): Promise<void> {
+  /** Noted with cacheWriteScope() before the fetch was sent. */
+  fetchedUnder: CacheWriteScope,
+): Promise<boolean> {
   const db = await getDb();
   const now = Date.now();
+  let written = false;
   await withDbTransaction(db, async () => {
+    if (currentCacheGeneration() !== fetchedUnder.generation) return;
+    const { userId, orgId } = await liveOutboxScope();
+    if (!userId || userId !== fetchedUnder.userId) return;
+    if (!orgId || header.organizationId !== orgId) return;
+    const owner = await getCacheOwner();
+    if (owner && owner !== userId) return;
+    // A count a pull that found no owner recorded marked unconfirmed can
+    // carry another account's unsent edit, which the line writes below would
+    // keep; the header write then confirms the count, and the pull's own
+    // release no longer sees it (cycle-count-snapshot-sql.ts).
+    await db.runAsync(UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL, [header.id, userId]);
     // See CYCLE_COUNT_CACHE_HEADER_SQL: the number and notes survive a caller
     // that does not carry them.
     await db.runAsync(
@@ -178,7 +244,9 @@ export async function cacheCycleCount(
         ],
       );
     }
+    written = true;
   });
+  return written;
 }
 
 export async function getCycleCount(
@@ -272,6 +340,41 @@ export async function updateLocalLine(
   lineId: string,
   counted: number,
 ): Promise<{ outboxId: number; idempotencyKey: string } | null> {
+  return queueLineEdit(lineId, { kind: 'count', counted });
+}
+
+/**
+ * Clear a line's saved count on this phone (B4a), as the web count screen
+ * does when its box is emptied: the line is uncounted again, and a post skips
+ * it instead of applying a count the box no longer shows. Marks the line dirty
+ * and queues the clear (cycle-count-clear.ts) in one transaction, through the
+ * same outbox as a count, so one line's counts and clears reach the server in
+ * the order they were made.
+ *
+ * Only a line with a saved count is cleared, as on the web: with none there
+ * is nothing to clear, so nothing is queued and null comes back. That is read
+ * inside the transaction, where the edits of a line take turns, so a count of
+ * the same line whose write was still queued when the box was emptied is
+ * seen, and cleared.
+ */
+export async function clearLocalLine(
+  lineId: string,
+): Promise<{ outboxId: number; idempotencyKey: string } | null> {
+  return queueLineEdit(lineId, { kind: 'clear' });
+}
+
+/** One edit of a line's count on this phone: a count, or a clear of it. */
+type LineEdit = { kind: 'count'; counted: number } | { kind: 'clear' };
+
+/**
+ * THE one writer of a line edit, for updateLocalLine and clearLocalLine: the
+ * line's count and dirty flag, the earlier queued edits it supersedes and its
+ * own outbox row, in one transaction.
+ */
+async function queueLineEdit(
+  lineId: string,
+  edit: LineEdit,
+): Promise<{ outboxId: number; idempotencyKey: string } | null> {
   const db = await getDb();
   const line = await db.getFirstAsync<{
     id: string;
@@ -288,50 +391,29 @@ export async function updateLocalLine(
   const scope = await outboxWriteScope();
   const idempotencyKey = uuid();
   const now = Date.now();
+  // Set by the insert; still 0 when a clear found nothing to clear.
   let outboxId = 0;
   await withDbTransaction(db, async () => {
+    if (edit.kind === 'clear') {
+      // A clear needs a saved count to clear. Read here, not before the
+      // transaction: a count of this line saved a moment earlier may still
+      // be waiting its turn, and must be seen (and cleared).
+      const current = await db.getFirstAsync<{ counted: number | null }>(
+        'select counted from cycle_count_lines where id = ?',
+        [lineId],
+      );
+      if (!current || current.counted === null) return;
+    }
     await db.runAsync(
       `update cycle_count_lines
          set counted = ?, local_dirty = 1
        where id = ?`,
-      [counted, lineId],
+      [edit.kind === 'count' ? edit.counted : null, lineId],
     );
-    // ═══ ONE LIVE OUTBOX ROW PER LINE ═══
-    //
-    // Every edit used to append a fresh record_count row and the drain sent
-    // them oldest-first, so an operator who counted 5, then corrected to 7
-    // while offline, could have the 5 land AFTER the 7 when a retry
-    // reordered them — the correction was lost to the server. An edit
-    // supersedes every earlier queued edit for the same line; a row already
-    // 'sending' is in flight and must not be touched (the drain-side
-    // newest-wins check in cycle-count-sync covers that window).
-    //
-    // ACROSS ACCOUNTS TOO. Another account's queued count of this line is
-    // held until they sign in here again; sent then, the OLDER count would
-    // overwrite this newer one on the server. So it is superseded like any
-    // other earlier edit, but kept as a record for its owner (rejected, with
-    // the reason) instead of being deleted: held rows are never removed
-    // automatically. Only this account's own earlier edits (and legacy ones)
-    // are deleted. The owner is always named here (outboxWriteScope), so the
-    // two statements split the line's rows exactly, with no "nobody" case that
-    // could delete someone else's.
-    await db.runAsync(
-      `update pending_actions
-          set status = 'rejected', last_error = ?, last_attempt_at = ?
-        where kind = 'record_count'
-          and status in ('pending','failed')
-          and json_extract(payload_json, '$.lineId') = ?
-          and ${HELD_FOR_OTHER_SQL}`,
-      [REPLACED_BY_LATER_COUNT, now, lineId, scope.userId],
-    );
-    await db.runAsync(
-      `delete from pending_actions
-        where kind = 'record_count'
-          and status in ('pending','failed')
-          and json_extract(payload_json, '$.lineId') = ?
-          and ${OWNED_BY_USER_SQL}`,
-      [lineId, scope.userId],
-    );
+    // One live outbox row per line: this edit, a count or a clear, supersedes
+    // every earlier queued edit of it (supersedeQueuedCounts). The owner is
+    // always named here (outboxWriteScope).
+    await supersedeQueuedCounts(db, lineId, scope.userId, now);
     // Stamped with the workspace and account it was counted under: sent
     // under that organization, and only while that account is signed in.
     const result = await db.runAsync(
@@ -341,16 +423,22 @@ export async function updateLocalLine(
       [
         'record_count',
         idempotencyKey,
-        JSON.stringify({
-          cycleCountId: line.count_id,
-          lineId: line.id,
-          countedQuantity: counted,
-          // When the count was taken (server 0369): a count synced later is
-          // measured against the book at THIS moment, not at arrival, so a
-          // pick in between is not a phantom variance. Device clock; the
-          // server corrects its skew (cycle-count-record-body.ts).
-          capturedAt: new Date(now).toISOString(),
-        }),
+        JSON.stringify(
+          edit.kind === 'count'
+            ? {
+                cycleCountId: line.count_id,
+                lineId: line.id,
+                countedQuantity: edit.counted,
+                // When the count was taken (server 0369): a count synced
+                // later is measured against the quantity on record at THIS
+                // moment, not at arrival, so a pick in between is not a
+                // phantom variance. Device clock; the server corrects its
+                // skew (cycle-count-record-body.ts).
+                capturedAt: new Date(now).toISOString(),
+              }
+            : // No countedQuantity, ever (cycle-count-clear.ts).
+              clearCountPayload(line.count_id, line.id),
+        ),
         now,
         scope.orgId,
         scope.userId,
@@ -358,7 +446,113 @@ export async function updateLocalLine(
     );
     outboxId = result.lastInsertRowId as number;
   });
-  return { outboxId, idempotencyKey };
+  return outboxId > 0 ? { outboxId, idempotencyKey } : null;
+}
+
+/**
+ * ═══ ONE LIVE OUTBOX ROW PER LINE ═══
+ *
+ * A newer edit of a line supersedes every earlier queued edit of it. Runs
+ * INSIDE the caller's transaction (queueLineEdit for a count or a clear,
+ * mirrorRecordedCount).
+ *
+ * Every edit used to append a fresh record_count row and the drain sent
+ * them oldest-first, so an operator who counted 5, then corrected to 7
+ * while offline, could have the 5 land AFTER the 7 when a retry
+ * reordered them — the correction was lost to the server. An edit
+ * supersedes every earlier queued edit for the same line; a row already
+ * 'sending' is in flight and must not be touched (the drain-side
+ * newest-wins check in cycle-count-sync covers that window). A clear is
+ * an edit like a count (B4a): it supersedes the count it clears, and a
+ * count typed after it, or recorded by the AI shelf scan, supersedes the
+ * clear.
+ *
+ * ACROSS ACCOUNTS TOO. Another account's queued count of this line is
+ * held until they sign in here again; sent then, the OLDER count would
+ * overwrite this newer one on the server. So it is superseded like any
+ * other earlier edit, but kept as a record for its owner (rejected, with
+ * the reason) instead of being deleted: held rows are never removed
+ * automatically. Only this account's own earlier edits (and legacy ones)
+ * are deleted. The owner is always named (`userId`, never null), so the
+ * two statements split the line's rows exactly, with no "nobody" case that
+ * could delete someone else's.
+ */
+async function supersedeQueuedCounts(
+  db: Awaited<ReturnType<typeof getDb>>,
+  lineId: string,
+  userId: string,
+  now: number,
+): Promise<void> {
+  await db.runAsync(
+    `update pending_actions
+        set status = 'rejected', last_error = ?, last_attempt_at = ?
+      where kind = 'record_count'
+        and status in ('pending','failed')
+        and json_extract(payload_json, '$.lineId') = ?
+        and ${HELD_FOR_OTHER_SQL}`,
+    [REPLACED_BY_LATER_COUNT, now, lineId, userId],
+  );
+  await db.runAsync(
+    `delete from pending_actions
+      where kind = 'record_count'
+        and status in ('pending','failed')
+        and json_extract(payload_json, '$.lineId') = ?
+        and ${OWNED_BY_USER_SQL}`,
+    [lineId, userId],
+  );
+}
+
+/**
+ * The phone's copy of a count the SERVER HAS ALREADY RECORDED. The AI shelf
+ * scan records each line online (with its aiScanId), then copies the count
+ * here so the count screen shows it without waiting for a pull.
+ *
+ * NO OUTBOX ROW. The server has this count, so there is nothing to send: a
+ * queued copy replayed without the aiScanId (wiping the scan link) and doubled
+ * the requests against the route's rate limit (SP-036). The scan used to queue
+ * one through updateLocalLine and delete it straight after, which left a
+ * moment in which a drain could send it, and since docket B10 updateLocalLine
+ * refuses to queue at all while the saved workspace is another account's, so
+ * the scan said a count the server had saved "couldn't save". With no row to
+ * stamp, no workspace is needed.
+ *
+ * Every earlier queued edit of the line, a count or a clear (B4a), is
+ * superseded exactly as a typed count supersedes it (supersedeQueuedCounts):
+ * sent after the scan, an older count would overwrite this newer one on the
+ * server, and an older clear would uncount it. The line stays
+ * marked unsynced only while a row for it is still on its way ('sending').
+ * A line this phone does not hold is left alone, as updateLocalLine leaves it.
+ *
+ * `userId` is the account the server recorded the count for: the one whose
+ * session sent it.
+ */
+export async function mirrorRecordedCount(
+  lineId: string,
+  counted: number,
+  userId: string,
+): Promise<void> {
+  const db = await getDb();
+  const line = await db.getFirstAsync<{ id: string }>(
+    'select id from cycle_count_lines where id = ?',
+    [lineId],
+  );
+  if (!line) return;
+  const now = Date.now();
+  await withDbTransaction(db, async () => {
+    await supersedeQueuedCounts(db, lineId, userId, now);
+    await db.runAsync(
+      `update cycle_count_lines
+          set counted = ?,
+              local_dirty = case when exists (
+                select 1 from pending_actions
+                 where kind = 'record_count'
+                   and status in ('pending','failed','sending')
+                   and json_extract(payload_json, '$.lineId') = ?
+              ) then 1 else 0 end
+        where id = ?`,
+      [counted, lineId, lineId],
+    );
+  });
 }
 
 /**

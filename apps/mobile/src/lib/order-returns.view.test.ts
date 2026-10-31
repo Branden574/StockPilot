@@ -35,14 +35,14 @@ import {
  * RENDER DEBT comment above the returns section in the screen for the exact
  * checklist. Do not read a green run here as coverage of the cards.
  *
- * SO-000085 as prod holds it (read-only, 2026-08-17): three lines 1/1 each,
+ * SO-000085 as modelled here (from the 2026-08-17 report): three lines 1/1 each,
  * one CLOSED RMA whose single line restocked the Women's Polo S (applied), so
  * that order line carries returned_quantity 1; the swap for a Medium is in the
  * notes only.
  */
 const RAW_LINE: RawOrderReturnLineRow = {
   id: 'rl-1',
-  order_request_line_id: '5e840bc6-0000-0000-0000-000000000000',
+  order_request_line_id: '50000085-0000-0000-0000-000000000000',
   item_id: 'item-s',
   quantity: 1,
   disposition: 'restock',
@@ -50,18 +50,18 @@ const RAW_LINE: RawOrderReturnLineRow = {
 };
 
 const RAW_CLOSED: RawOrderReturnRow = {
-  id: '85d6084b-1111-2222-3333-444444444444',
-  return_number: 'RMA-20260817-EEF074',
+  id: '80000085-1111-2222-3333-444444444444',
+  return_number: 'RMA-20260817-D3F0A1',
   status: 'closed',
   reason_code: 'other',
-  notes: 'Size S New Hire shirt was swapped out for Ladies size M',
+  notes: 'Size S shirt was swapped out for a size M',
   created_at: '2026-08-17T17:10:00Z',
   closed_at: '2026-08-17T17:12:00Z',
   lines: [RAW_LINE],
 };
 
 const ORDER_LINES = [
-  { orderRequestLineId: '5e840bc6-0000-0000-0000-000000000000', name: "Women's Polo S" },
+  { orderRequestLineId: '50000085-0000-0000-0000-000000000000', name: "Women's Polo S" },
   { orderRequestLineId: 'line-m', name: "Women's Polo M" },
   { orderRequestLineId: 'line-xl', name: "Men's Polo XL" },
 ];
@@ -71,15 +71,15 @@ describe('parseOrderReturns — the raw read to the shared view', () => {
     expect(parseOrderReturns([RAW_CLOSED])).toEqual([
       {
         id: RAW_CLOSED.id,
-        returnNumber: 'RMA-20260817-EEF074',
+        returnNumber: 'RMA-20260817-D3F0A1',
         status: 'closed',
         reasonCode: 'other',
-        notes: 'Size S New Hire shirt was swapped out for Ladies size M',
+        notes: 'Size S shirt was swapped out for a size M',
         createdAt: '2026-08-17T17:10:00Z',
         closedAt: '2026-08-17T17:12:00Z',
         lines: [
           {
-            orderRequestLineId: '5e840bc6-0000-0000-0000-000000000000',
+            orderRequestLineId: '50000085-0000-0000-0000-000000000000',
             itemId: 'item-s',
             quantity: 1,
             disposition: 'restock',
@@ -206,9 +206,9 @@ describe('what the screen prints — through THIS module (what web pins against)
       },
     ]);
     const refs = returnRefsByLine([closed!, pending!, denied!]);
-    expect(refs.get('5e840bc6-0000-0000-0000-000000000000')?.applied).toEqual({
+    expect(refs.get('50000085-0000-0000-0000-000000000000')?.applied).toEqual({
       quantity: 1,
-      returnNumbers: ['RMA-20260817-EEF074'],
+      returnNumbers: ['RMA-20260817-D3F0A1'],
     });
     expect(refs.get('line-m')).toEqual({
       applied: { quantity: 0, returnNumbers: [] },

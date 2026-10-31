@@ -40,6 +40,7 @@ export default async function NewProcedurePage() {
           mode="create"
           categories={categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
           warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          userId={ctx.userId}
           organizationId={ctx.organizationId}
         />
       </div>

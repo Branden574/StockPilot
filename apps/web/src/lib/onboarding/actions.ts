@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { withContext } from '@/server/services/context';
 
 /**
@@ -66,7 +67,8 @@ export async function recordTourOutcomeAction(
     );
     if (writeError) return { ok: false };
     return { ok: true, userId: ctx.userId };
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     // Best-effort — losing a completion mark re-offers a tour, never breaks UI.
     return { ok: false };
   }
@@ -116,7 +118,8 @@ export async function getTourStateAction(): Promise<TourStateRead> {
       completed: (data?.completed_tours as TourStateSnapshot['completed']) ?? {},
       dismissed: (data?.dismissed_tours as TourStateSnapshot['dismissed']) ?? {},
     };
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     // Never answer "everything seen" (that would hide tours for good), and
     // no longer "nothing seen" either: say the read failed. The Help page
     // still shows nothing checked; the browser offers nothing this time and

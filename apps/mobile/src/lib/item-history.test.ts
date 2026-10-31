@@ -16,32 +16,32 @@ import {
 /**
  * The pure half of the native item-history sheet.
  *
- * The fixtures below are the OWNER'S REAL ROWS for SKU SP-0WK2L-LY1 in org
- * 63c13e64-92a6-4ea4-9936-6a2c26a85b4a, pulled from production and shaped
- * exactly as GET /api/v1/items/[id]/history answers them. They are the incident
- * itself: two manual adds by two different people minutes apart, a removal
- * reasoned "incorrectly moved inventory", a posted receipt on PO CVW-002201, a
- * received-then-reversed pair on a cancelled PO, an order pick recorded as a
- * transfer with a real negative delta, an opening count and a
- * duplicate_initial_count.
+ * The fixtures below model the owner's 2026-07-22 report for one SKU, shaped
+ * exactly as GET /api/v1/items/[id]/history answers them. The people, ids,
+ * item, notes, receipt and PO numbers are synthetic; the times and quantities
+ * keep the incident's shape. They tell the incident's story: two manual adds
+ * by two different people minutes apart, a removal reasoned "moved to the
+ * wrong rack", a posted receipt on PO DEMO-002201, a received-then-reversed
+ * pair on a cancelled PO, an order pick recorded as a transfer with a real
+ * negative delta, an opening count and a duplicate_initial_count.
  *
  * What is asserted is the WHOLE rendered sentence for each, because the bar the
  * owner set is "could I have answered my own question from this screen" — not
  * "does the parser return an object".
  */
 
-/** Movements on the 144-on-hand record (item a010364d…), newest first. */
-const REAL_ROWS = [
+/** Movements on the 144-on-hand record (item a0000016…), newest first. */
+const INCIDENT_ROWS = [
   {
-    id: '694b11bd-d358-4ee7-82f9-5ddc7b37bb63',
+    id: '60000012-0000-4000-8000-000000000012',
     at: '2026-07-22T23:15:20.420364+00:00',
     movementType: 'adjust',
     quantityChange: 10,
     movedQuantity: null,
     previousQuantity: 134,
     newQuantity: 144,
-    actorName: 'Peter Pete',
-    actorEmail: 'pmathis@cvsouth.org',
+    actorName: 'Pat Tester',
+    actorEmail: 'ptester@school.test',
     fromLocationName: null,
     toLocationName: null,
     note: 'Cycle count adjustment',
@@ -53,15 +53,15 @@ const REAL_ROWS = [
     reversal: null,
   },
   {
-    id: '3dfd0ea6-bdce-4154-9a55-06ce5c34a752',
+    id: '3000000a-0000-4000-8000-00000000000a',
     at: '2026-07-22T22:20:11.38873+00:00',
     movementType: 'transfer',
     quantityChange: 0,
     movedQuantity: 10,
     previousQuantity: 134,
     newQuantity: 134,
-    actorName: 'Andrew Rosas',
-    actorEmail: 'arosas@cvwest.org',
+    actorName: 'Jordan Stone',
+    actorEmail: 'jstone@site1.test',
     fromLocationName: 'Staging',
     toLocationName: '42-B',
     note: null,
@@ -73,18 +73,18 @@ const REAL_ROWS = [
     reversal: null,
   },
   {
-    id: 'd4b40f88-44de-4635-9290-d7ebcfb839f3',
+    id: 'd000001a-0000-4000-8000-00000000001a',
     at: '2026-07-22T21:42:19.250842+00:00',
     movementType: 'remove',
     quantityChange: -10,
     movedQuantity: null,
     previousQuantity: 144,
     newQuantity: 134,
-    actorName: 'Andrew Rosas',
-    actorEmail: 'arosas@cvwest.org',
+    actorName: 'Jordan Stone',
+    actorEmail: 'jstone@site1.test',
     fromLocationName: null,
     toLocationName: null,
-    note: 'incorrectly moved inventory',
+    note: 'moved to the wrong rack',
     receiptNumber: null,
     receiptStatus: null,
     poNumber: null,
@@ -93,18 +93,18 @@ const REAL_ROWS = [
     reversal: null,
   },
   {
-    id: '10950b2b-4918-41b6-bb85-6763e83d5c8b',
+    id: '10000002-0000-4000-8000-000000000002',
     at: '2026-07-22T21:16:28.910114+00:00',
     movementType: 'add',
     quantityChange: 10,
     movedQuantity: null,
     previousQuantity: 134,
     newQuantity: 144,
-    actorName: 'Peter Pete',
-    actorEmail: 'pmathis@cvsouth.org',
+    actorName: 'Pat Tester',
+    actorEmail: 'ptester@school.test',
     fromLocationName: null,
     toLocationName: null,
-    note: 'Adding new stock into inventory.',
+    note: 'Added new stock to the shelf.',
     receiptNumber: null,
     receiptStatus: null,
     poNumber: null,
@@ -115,15 +115,15 @@ const REAL_ROWS = [
   {
     // The order pick. movement_type='transfer' with a REAL negative delta and
     // no moved_quantity — five units left the building.
-    id: '59926af5-bf29-4740-9bd1-657ed3bbfe1f',
+    id: '5000000e-0000-4000-8000-00000000000e',
     at: '2026-07-06T22:21:08.621573+00:00',
     movementType: 'transfer',
     quantityChange: -5,
     movedQuantity: null,
     previousQuantity: 139,
     newQuantity: 134,
-    actorName: 'Daniel Hernandez',
-    actorEmail: 'dahernandez@cvwest.org',
+    actorName: 'Devon Keller',
+    actorEmail: 'dkeller@site1.test',
     fromLocationName: null,
     toLocationName: null,
     note: 'Order pick',
@@ -136,15 +136,15 @@ const REAL_ROWS = [
   },
   {
     // Pre-0231 transfer: net zero AND no recorded moved_quantity.
-    id: '25bfbf90-2755-4d86-b82f-30da1bf2c0e3',
+    id: '20000006-0000-4000-8000-000000000006',
     at: '2026-07-01T18:46:27.040704+00:00',
     movementType: 'transfer',
     quantityChange: 0,
     movedQuantity: null,
     previousQuantity: 139,
     newQuantity: 139,
-    actorName: 'Branden Vincent Walker',
-    actorEmail: 'branden574@gmail.com',
+    actorName: 'Carsten Hartley Fowler',
+    actorEmail: 'owner@example.com',
     fromLocationName: 'Staging',
     toLocationName: '42-B',
     note: 'Staging cleanup: stock mis-routed to Staging by the adjust bug, moved back to rack/Unplaced',
@@ -156,15 +156,15 @@ const REAL_ROWS = [
     reversal: null,
   },
   {
-    id: '248eb8a7-044c-4095-be2d-28de2fcc6899',
+    id: '20000005-0000-4000-8000-000000000005',
     at: '2026-07-01T17:12:33.730822+00:00',
     movementType: 'add',
     quantityChange: 90,
     movedQuantity: null,
     previousQuantity: 49,
     newQuantity: 139,
-    actorName: 'Peter Pete',
-    actorEmail: 'pmathis@cvsouth.org',
+    actorName: 'Pat Tester',
+    actorEmail: 'ptester@school.test',
     fromLocationName: null,
     toLocationName: null,
     note: null,
@@ -177,15 +177,15 @@ const REAL_ROWS = [
   },
   {
     // reason='duplicate_initial_count' — machine-written, so no note at all.
-    id: '4b0ea0e3-5d54-41da-9734-0cbd528f57fe',
+    id: '4000000b-0000-4000-8000-00000000000b',
     at: '2026-06-25T04:51:08.134623+00:00',
     movementType: 'initial',
     quantityChange: 49,
     movedQuantity: null,
     previousQuantity: 0,
     newQuantity: 49,
-    actorName: 'Andrew Rosas',
-    actorEmail: 'arosas@cvwest.org',
+    actorName: 'Jordan Stone',
+    actorEmail: 'jstone@site1.test',
     fromLocationName: null,
     toLocationName: 'DC4',
     note: null,
@@ -198,86 +198,86 @@ const REAL_ROWS = [
   },
 ] as const;
 
-/** Receiving movements on the 46-on-hand record (item 5f3538ee…). */
-const REAL_RECEIPT_ROWS = [
+/** Receiving movements on the 46-on-hand record (item 50000010…). */
+const INCIDENT_RECEIPT_ROWS = [
   {
     // The posted receipt. Note the PO is 'received' but the SAME PO number
     // appears below on rows that were reversed — status has to be stated.
-    id: '9be2a106-3342-41fc-a1df-3274876339c2',
+    id: '90000015-0000-4000-8000-000000000015',
     at: '2026-07-22T17:56:00.52597+00:00',
     movementType: 'receive_po',
     quantityChange: 20,
     movedQuantity: null,
     previousQuantity: 34,
     newQuantity: 54,
-    actorName: 'Andrew Rosas',
-    actorEmail: 'arosas@cvwest.org',
+    actorName: 'Jordan Stone',
+    actorEmail: 'jstone@site1.test',
     fromLocationName: null,
     toLocationName: 'Staging',
     note: null,
-    receiptNumber: 'R-20260722-175600-e56648',
+    receiptNumber: 'R-20260722-175600-0a0a01',
     receiptStatus: 'posted',
-    poNumber: 'CVW-002201',
+    poNumber: 'DEMO-002201',
     poStatus: 'received',
     reversalReason: null,
     reversal: null,
   },
   {
-    id: '65db542e-0236-405b-a392-aa5563ae5901',
+    id: '60000011-0000-4000-8000-000000000011',
     at: '2026-06-24T22:42:28.314144+00:00',
     movementType: 'correction',
     quantityChange: -90,
     movedQuantity: null,
     previousQuantity: 129,
     newQuantity: 39,
-    actorName: 'Branden Vincent Walker',
-    actorEmail: 'branden574@gmail.com',
+    actorName: 'Carsten Hartley Fowler',
+    actorEmail: 'owner@example.com',
     fromLocationName: null,
     toLocationName: null,
     note: null,
-    receiptNumber: 'R-20260624-224111-a00736-REV',
+    receiptNumber: 'R-20260624-224111-0b0b02-REV',
     receiptStatus: 'reversal',
-    poNumber: 'PO-1782340858804',
+    poNumber: 'PO-1700000000101',
     poStatus: 'cancelled',
     reversalReason: 'Wrong rack entered (testing)',
     // status='reversal' → this movement IS the undo.
     reversal: {
       role: 'reversal' as const,
-      counterpartMovementId: '2b9baffa-ca00-4245-b7bd-0a53e695f6be',
-      counterpartReceiptNumber: 'R-20260624-224111-a00736',
+      counterpartMovementId: '20000009-0000-4000-8000-000000000009',
+      counterpartReceiptNumber: 'R-20260624-224111-0b0b02',
     },
   },
   {
-    id: '2b9baffa-ca00-4245-b7bd-0a53e695f6be',
+    id: '20000009-0000-4000-8000-000000000009',
     at: '2026-06-24T22:41:11.339279+00:00',
     movementType: 'receive_po',
     quantityChange: 90,
     movedQuantity: null,
     previousQuantity: 39,
     newQuantity: 129,
-    actorName: 'Branden Vincent Walker',
-    actorEmail: 'branden574@gmail.com',
+    actorName: 'Carsten Hartley Fowler',
+    actorEmail: 'owner@example.com',
     fromLocationName: null,
     toLocationName: null,
     note: null,
-    receiptNumber: 'R-20260624-224111-a00736',
+    receiptNumber: 'R-20260624-224111-0b0b02',
     receiptStatus: 'reversed',
-    poNumber: 'PO-1782340858804',
+    poNumber: 'PO-1700000000101',
     poStatus: 'cancelled',
     reversalReason: 'Wrong rack entered (testing)',
     reversal: {
       role: 'reversed' as const,
-      counterpartMovementId: '65db542e-0236-405b-a392-aa5563ae5901',
-      counterpartReceiptNumber: 'R-20260624-224111-a00736-REV',
+      counterpartMovementId: '60000011-0000-4000-8000-000000000011',
+      counterpartReceiptNumber: 'R-20260624-224111-0b0b02-REV',
     },
   },
 ] as const;
 
 function pageOf(rows: readonly unknown[], extra: Record<string, unknown> = {}) {
   return {
-    itemId: 'a010364d-1fbb-41d0-89ce-69292483f92f',
-    itemName: 'Science Dimensions Earth & Space Science',
-    itemSku: 'SP-0WK2L-LY1',
+    itemId: 'a0000016-0000-4000-8000-000000000016',
+    itemName: 'Exploring Earth & Space Science: Level 8',
+    itemSku: 'SP-0DEM2-BK1',
     rows,
     total: rows.length,
     limit: ITEM_HISTORY_PAGE_SIZE,
@@ -289,8 +289,8 @@ function pageOf(rows: readonly unknown[], extra: Record<string, unknown> = {}) {
 
 describe('itemHistoryPath', () => {
   it('always states the window it wants', () => {
-    expect(itemHistoryPath('a010364d-1fbb-41d0-89ce-69292483f92f')).toBe(
-      '/api/v1/items/a010364d-1fbb-41d0-89ce-69292483f92f/history?limit=50&offset=0',
+    expect(itemHistoryPath('a0000016-0000-4000-8000-000000000016')).toBe(
+      '/api/v1/items/a0000016-0000-4000-8000-000000000016/history?limit=50&offset=0',
     );
     expect(itemHistoryPath('abc', { limit: 25, offset: 50 })).toBe(
       '/api/v1/items/abc/history?limit=25&offset=50',
@@ -312,13 +312,13 @@ describe('itemHistoryPath', () => {
 });
 
 describe('parseItemHistoryPage', () => {
-  it('reads the real payload verbatim', () => {
-    const page = parseItemHistoryPage(pageOf(REAL_ROWS, { total: 24, hasMore: true }));
-    expect(page.itemSku).toBe('SP-0WK2L-LY1');
-    expect(page.rows).toHaveLength(REAL_ROWS.length);
+  it('reads the payload verbatim', () => {
+    const page = parseItemHistoryPage(pageOf(INCIDENT_ROWS, { total: 24, hasMore: true }));
+    expect(page.itemSku).toBe('SP-0DEM2-BK1');
+    expect(page.rows).toHaveLength(INCIDENT_ROWS.length);
     expect(page.total).toBe(24);
     expect(page.hasMore).toBe(true);
-    expect(page.rows[0]?.actorName).toBe('Peter Pete');
+    expect(page.rows[0]?.actorName).toBe('Pat Tester');
     expect(page.rows[1]?.fromLocationName).toBe('Staging');
     expect(page.rows[1]?.movedQuantity).toBe(10);
   });
@@ -335,28 +335,28 @@ describe('parseItemHistoryPage', () => {
   it('drops only rows it could neither key nor place in time', () => {
     const page = parseItemHistoryPage(
       pageOf([
-        { ...REAL_ROWS[0] },
-        { ...REAL_ROWS[1], id: null },
-        { ...REAL_ROWS[2], at: '' },
+        { ...INCIDENT_ROWS[0] },
+        { ...INCIDENT_ROWS[1], id: null },
+        { ...INCIDENT_ROWS[2], at: '' },
         'not-a-row',
       ]),
     );
-    expect(page.rows.map((r) => r.id)).toEqual(['694b11bd-d358-4ee7-82f9-5ddc7b37bb63']);
+    expect(page.rows.map((r) => r.id)).toEqual(['60000012-0000-4000-8000-000000000012']);
   });
 
   it('never lets a missing count under-report the rows it is showing', () => {
     // A payload without `total` must not make the sheet claim fewer movements
     // than are already on screen.
-    const page = parseItemHistoryPage(pageOf(REAL_ROWS, { total: undefined }));
-    expect(page.total).toBe(REAL_ROWS.length);
-    const lying = parseItemHistoryPage(pageOf(REAL_ROWS, { total: 2 }));
-    expect(lying.total).toBe(REAL_ROWS.length);
+    const page = parseItemHistoryPage(pageOf(INCIDENT_ROWS, { total: undefined }));
+    expect(page.total).toBe(INCIDENT_ROWS.length);
+    const lying = parseItemHistoryPage(pageOf(INCIDENT_ROWS, { total: 2 }));
+    expect(lying.total).toBe(INCIDENT_ROWS.length);
   });
 
   it('only believes hasMore when the server actually said it', () => {
-    expect(parseItemHistoryPage(pageOf(REAL_ROWS, { hasMore: 'yes' })).hasMore).toBe(false);
-    expect(parseItemHistoryPage(pageOf(REAL_ROWS, { hasMore: 1 })).hasMore).toBe(false);
-    expect(parseItemHistoryPage(pageOf(REAL_ROWS, { hasMore: true })).hasMore).toBe(true);
+    expect(parseItemHistoryPage(pageOf(INCIDENT_ROWS, { hasMore: 'yes' })).hasMore).toBe(false);
+    expect(parseItemHistoryPage(pageOf(INCIDENT_ROWS, { hasMore: 1 })).hasMore).toBe(false);
+    expect(parseItemHistoryPage(pageOf(INCIDENT_ROWS, { hasMore: true })).hasMore).toBe(true);
   });
 
   it('drops a reversal marker whose role it does not understand', () => {
@@ -364,7 +364,7 @@ describe('parseItemHistoryPage', () => {
     // we cannot interpret would be a guess — exactly what this rebuild removed.
     const page = parseItemHistoryPage(
       pageOf([
-        { ...REAL_RECEIPT_ROWS[2], reversal: { role: 'maybe', counterpartReceiptNumber: 'R-1' } },
+        { ...INCIDENT_RECEIPT_ROWS[2], reversal: { role: 'maybe', counterpartReceiptNumber: 'R-1' } },
       ]),
     );
     expect(page.rows[0]?.reversal).toBeNull();
@@ -372,7 +372,7 @@ describe('parseItemHistoryPage', () => {
 
   it('keeps an absent actor absent', () => {
     const page = parseItemHistoryPage(
-      pageOf([{ ...REAL_ROWS[0], actorName: null, actorEmail: null }]),
+      pageOf([{ ...INCIDENT_ROWS[0], actorName: null, actorEmail: null }]),
     );
     expect(page.rows[0]?.actorName).toBeNull();
     expect(page.rows[0]?.actorEmail).toBeNull();
@@ -382,25 +382,25 @@ describe('parseItemHistoryPage', () => {
 
 describe('paging', () => {
   it('starts the next window past the rows actually delivered', () => {
-    const page = parseItemHistoryPage(pageOf(REAL_ROWS, { offset: 50, hasMore: true }));
-    expect(nextHistoryOffset(page)).toBe(50 + REAL_ROWS.length);
+    const page = parseItemHistoryPage(pageOf(INCIDENT_ROWS, { offset: 50, hasMore: true }));
+    expect(nextHistoryOffset(page)).toBe(50 + INCIDENT_ROWS.length);
   });
 
   it('never tells the same movement twice when a write shifts the window', () => {
     // Newest-first paging: a movement written between page 1 and page 2 pushes
     // every later row down one, so page 2 re-delivers page 1's last row. Told
     // twice, a receipt reads as stock that arrived twice.
-    const first = parseItemHistoryPage(pageOf(REAL_ROWS.slice(0, 4))).rows;
-    const second = parseItemHistoryPage(pageOf(REAL_ROWS.slice(3))).rows;
+    const first = parseItemHistoryPage(pageOf(INCIDENT_ROWS.slice(0, 4))).rows;
+    const second = parseItemHistoryPage(pageOf(INCIDENT_ROWS.slice(3))).rows;
     const merged = appendHistoryMovements(first, second);
-    expect(merged.map((m) => m.id)).toEqual(REAL_ROWS.map((m) => m.id));
+    expect(merged.map((m) => m.id)).toEqual(INCIDENT_ROWS.map((m) => m.id));
     expect(new Set(merged.map((m) => m.id)).size).toBe(merged.length);
   });
 
   it('preserves the order rows arrived in', () => {
-    const rows = parseItemHistoryPage(pageOf(REAL_ROWS)).rows;
+    const rows = parseItemHistoryPage(pageOf(INCIDENT_ROWS)).rows;
     expect(appendHistoryMovements([], rows).map((m) => m.at)).toEqual(
-      REAL_ROWS.map((m) => m.at),
+      INCIDENT_ROWS.map((m) => m.at),
     );
   });
 });
@@ -506,18 +506,18 @@ describe('formatHistoryWhen', () => {
   });
 });
 
-describe('the owner’s real history, as the sheet renders it', () => {
-  const rows = parseItemHistoryPage(pageOf(REAL_ROWS)).rows.map(formatHistoryMovement);
-  const receipts = parseItemHistoryPage(pageOf(REAL_RECEIPT_ROWS)).rows.map(formatHistoryMovement);
+describe('the owner’s reported history, as the sheet renders it', () => {
+  const rows = parseItemHistoryPage(pageOf(INCIDENT_ROWS)).rows.map(formatHistoryMovement);
+  const receipts = parseItemHistoryPage(pageOf(INCIDENT_RECEIPT_ROWS)).rows.map(formatHistoryMovement);
 
   it('names the two manual adds, three minutes apart, and who made each', () => {
     const add = rows[3]!;
     expect(add.title).toBe('Stock added');
     expect(add.deltaLabel).toBe('+10');
     expect(add.onHandLabel).toBe('134 -> 144 on hand');
-    expect(add.actorLabel).toBe('Peter Pete');
-    expect(add.actorEmailLabel).toBe('pmathis@cvsouth.org');
-    expect(add.noteLabel).toBe('Adding new stock into inventory.');
+    expect(add.actorLabel).toBe('Pat Tester');
+    expect(add.actorEmailLabel).toBe('ptester@school.test');
+    expect(add.noteLabel).toBe('Added new stock to the shelf.');
     expect(add.tone).toBe('pos');
   });
 
@@ -525,8 +525,8 @@ describe('the owner’s real history, as the sheet renders it', () => {
     const removal = rows[2]!;
     expect(removal.title).toBe('Stock removed');
     expect(removal.deltaLabel).toBe('-10');
-    expect(removal.actorLabel).toBe('Andrew Rosas');
-    expect(removal.noteLabel).toBe('incorrectly moved inventory');
+    expect(removal.actorLabel).toBe('Jordan Stone');
+    expect(removal.noteLabel).toBe('moved to the wrong rack');
     expect(removal.onHandLabel).toBe('144 -> 134 on hand');
   });
 
@@ -548,7 +548,7 @@ describe('the owner’s real history, as the sheet renders it', () => {
     expect(pick.deltaLabel).toBe('-5');
     expect(pick.movedLabel).toBeNull();
     expect(pick.noteLabel).toBe('Order pick');
-    expect(pick.actorLabel).toBe('Daniel Hernandez');
+    expect(pick.actorLabel).toBe('Devon Keller');
     expect(pick.tone).toBe('neg');
   });
 
@@ -574,11 +574,11 @@ describe('the owner’s real history, as the sheet renders it', () => {
     expect(posted.title).toBe('Stock received');
     expect(posted.deltaLabel).toBe('+20');
     expect(posted.sourceLabel).toBe(
-      'Receipt R-20260722-175600-e56648 - PO CVW-002201 (received)',
+      'Receipt R-20260722-175600-0a0a01 - PO DEMO-002201 (received)',
     );
     expect(posted.routeLabel).toBe('-> Staging');
     expect(posted.reversalLabel).toBeNull();
-    // reason was the machine-composed 'PO CVW-002201' — the number is already
+    // reason was the machine-composed 'PO DEMO-002201' — the number is already
     // in sourceLabel, so it is not echoed as prose.
     expect(posted.noteLabel).toBeNull();
   });
@@ -591,15 +591,15 @@ describe('the owner’s real history, as the sheet renders it', () => {
     // Equal and opposite: without the link they read as 90 units that arrived
     // and 90 unrelated units that vanished.
     expect(received.reversalLabel).toBe(
-      'Reversed later by R-20260624-224111-a00736-REV: Wrong rack entered (testing)',
+      'Reversed later by R-20260624-224111-0b0b02-REV: Wrong rack entered (testing)',
     );
     expect(undo.reversalLabel).toBe(
-      'Reverses R-20260624-224111-a00736: Wrong rack entered (testing)',
+      'Reverses R-20260624-224111-0b0b02: Wrong rack entered (testing)',
     );
     expect(received.tone).toBe('warn');
     expect(undo.tone).toBe('warn');
     expect(received.sourceLabel).toBe(
-      'Receipt R-20260624-224111-a00736 (reversed) - PO PO-1782340858804 (cancelled)',
+      'Receipt R-20260624-224111-0b0b02 (reversed) - PO PO-1700000000101 (cancelled)',
     );
   });
 
@@ -610,7 +610,7 @@ describe('the owner’s real history, as the sheet renders it', () => {
       parseItemHistoryPage(
         pageOf([
           {
-            ...REAL_ROWS[0],
+            ...INCIDENT_ROWS[0],
             movementType: 'return',
             note: 'Order cancelled',
           },

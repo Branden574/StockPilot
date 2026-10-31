@@ -28,6 +28,1993 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'export-fixes-2026-10',
+    revision: 1,
+    // The export part of docket C9: #414 (squash 75f5b0fe1, merged 2026-10-31
+    // 09:26Z; web only, no migration and no phone code, so no over-the-air
+    // update). Live in production web build d8c556a672e3 (built 09:26:29Z,
+    // answering by 09:27:52Z). #414 kept its draft only in its PR body, never
+    // here; docs/whats-new-small-fixes-8 publishes it above
+    // small-fixes-8-2026-10, so one web deploy publishes both, at the top, the
+    // newest release, with its words re-read against 75f5b0fe1.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8):
+    //   - the title began "Smaller Excel exports with photos": only an export
+    //     in which rows share a photo is smaller, so it says what changed,
+    //     each photo stored once;
+    //   - the summary says "On the web", as a phone shows only the title and
+    //     the summary and the phone has no export; it names Items and Books
+    //     for the PDFs, and leaves the catalog cards to the long SKU line
+    //     (the draft said "keep catalog cards tidy");
+    //   - the title said long SKUs print whole "in PDFs" and the long SKU
+    //     line "in PDF exports": only the Items and Books export breaks a
+    //     SKU, barcode or ISBN itself (breakIdentifierLines, which only
+    //     lib/pdf/inventory-export-pdf.tsx uses); pick slips, packing slips
+    //     and report PDFs still wrap a SKU their own way, so both name Items
+    //     and Books. The line now says "too long for its space", as a value
+    //     that fits is not broken; "on lines of its own" is now "over two or
+    //     more lines"; and "the two- and three-across book catalogs" are the
+    //     Layout select's own words, Book catalog — two columns and Book
+    //     catalog — three columns (the layouts walked and tested; never "the"
+    //     before Book, which the on-record wording guard reads as the
+    //     recorded quantity's old name). That line links to Items, as the
+    //     other two do, so whoever can export is told it in every
+    //     organization (below);
+    //   - the photo line's why said "a very large file that was slow to
+    //     download and to open" of "a list of copies that share one cover":
+    //     the writer stored a shared photo once per row, so how much larger
+    //     the file was depends on how many rows shared it, and nothing was
+    //     measured (no two Demo Co rows share a photo); it now says the file
+    //     could be much larger than it needed to be. Its "Nothing else in the
+    //     file changes" is gone: a cover address outside the book-cover
+    //     services is now left blank in an export (the guarded fetch, left
+    //     out below), so it says the export is made the same way as before;
+    //   - the sample line names the dialog by its title, Customize export,
+    //     and quotes its message and the loading line it kept showing, as
+    //     export-builder-preview.tsx writes them; it names the dialog's
+    //     button, Export file, which the sample never turns off.
+    //
+    // Every user-visible change in #414 has a line (owner rule 2026-09-25),
+    // except those #414's draft leaves out ("Not announced", and the
+    // integrator's decision on its question 5, under the owner's delegation)
+    // and one the review of this publish found (the third below):
+    //   - the header of the six branded PDFs no longer leaves an empty square
+    //     before the organization's name for a logo it cannot print (WebP,
+    //     AVIF, or one that does not load): the draft's entry 4, dropped
+    //     (question 5), because B48, which converts WebP and AVIF logos for
+    //     PDFs, will announce the logos printing again, which covers the same
+    //     headers;
+    //   - an SVG logo no longer prints (possible only for one uploaded in a
+    //     five-day window in May 2026 and never replaced; S18's kit counts
+    //     them, expected 0);
+    //   - a logo stored at an address outside the project's own storage,
+    //     other than a book-cover service, no longer prints in those six
+    //     headers either, and the organization's name starts at the left
+    //     edge: react-pdf fetched any address itself, and prefetchPdfLogo now
+    //     fetches it like a cover, through the guard (#414's "Not announced"
+    //     says PNG and JPEG logos print as before, which holds for logos in
+    //     the project's storage). Expected for no organization: the uploader
+    //     has always stored the logo bucket's address, and the settings
+    //     action has refused any other since 2026-06-26. S18's kit counts
+    //     logos outside each organization's own folder of that bucket before
+    //     its push (expected 0), and any it finds is fixed with the owner
+    //     before that push;
+    //   - export images are fetched through the SSRF guard, a security fix
+    //     whose only visible effect is that a cover address on a host outside
+    //     the book-cover services is left blank in an Excel or PDF export, as
+    //     it already was on order slips and report PDFs.
+    // Left out as changing nothing on screen: the sample's request schema
+    // and the dialog's hooks warnings; the DEPLOY.md correction is for
+    // whoever sets up a project. The sample line also covers a late failure
+    // of an older sample request, which could leave the loading line on
+    // screen for good and is now ignored. Left out for members who cannot
+    // export (review of this publish): Export on Items and Books and the
+    // bulk bar's Export open the dialog for them too, and the sample answers
+    // them 403, so they now see the failed sample's message where the loading
+    // line stayed before (Export file refuses them, as it did). That message
+    // says the file can still be exported, which is wrong for them, so it is
+    // not a line for them; the dialog's answer to them is a fault for a later
+    // change, not part of this release.
+    //
+    // Walked on production on build d8c556a672e3, 2026-10-31 09:33Z to
+    // 09:53Z, in Demo Co as its admin, passed at 10:10Z: an Excel export of
+    // 30 Items with 22 photos holds 22 images, each in its own row and
+    // matching that row's photo; a long title and a long SKU stay inside
+    // their cards in Book catalog — two columns and three columns and print
+    // whole in the table, with no hyphen added; with the sample request
+    // blocked, the dialog says “Could not load a sample of this export. You
+    // can still export the file.” with Try again, Export file still exports,
+    // and Try again loads the sample once unblocked; an Items PDF prints its
+    // 22 photos. The one write (a Books item with a long title and SKU) was
+    // archived. Not walkable there, so each rests on the code and its tests:
+    // two rows sharing one photo (no two Demo Co rows share one), a cover
+    // address from a book-cover service (none there), an organization logo
+    // (none set) and a pick slip (no order in picking).
+    //
+    // Who is told: whoever can export (items:export, which the export and
+    // its sample both check), every line, each linked to Items, which checks
+    // no permission or module. The long SKU line links to Items, not Books
+    // (review of this publish): its first words cover the Items PDF of every
+    // organization, as the table sizes a SKU, barcode or ISBN column to its
+    // widest value up to 150 pt, which holds about 25 capital letters or 30
+    // digits at the table's 8.5 pt, and breaks a longer value over lines;
+    // a Books link would need the Books module, which the Books page checks
+    // and which is on by default only for the charter school pack, and so
+    // would hide the line from every other organization. Its Book catalog
+    // sentence names layouts the dialog offers only in an export of Books.
+    // A member who cannot export is not told this release at all.
+    status: 'published',
+    title:
+      'Excel exports store each photo once, and long SKUs print whole in PDF exports of Items and Books',
+    summary:
+      'On the web, Excel exports store each photo once, PDF exports of Items and Books print long SKUs and barcodes whole, and the Customize export dialog says when its sample could not load.',
+    publishedAt: '2026-10-31T10:34:00Z',
+    entries: [
+      {
+        // toInventoryXlsx keys each photo by its type and a SHA-256 of its
+        // bytes (workbookImages) and adds it to the workbook once, then places
+        // it on every row that shows it (lib/inventory-export-xlsx.ts).
+        id: 'export-excel-photo-once',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Excel exports store each photo once',
+        whatChanged:
+          'When several rows of an Excel export share one photo, the file now holds that photo once instead of once for every row. Every row still shows its own photo.',
+        whyItMatters:
+          'A photo shared by many rows was stored again for every one of them, so the file could be much larger than it needed to be.',
+        howItAffectsYou:
+          'An Excel export in which rows share photos is smaller, and you export it the same way as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // breakIdentifierLines (lib/pdf/identifier-lines.ts) for the SKU,
+        // barcode and ISBN columns of the table and the catalog's identifier
+        // values; the catalog's card widths come from the page
+        // (lib/pdf/inventory-export-pdf.tsx). A value that fits comes back
+        // unchanged.
+        id: 'export-pdf-long-identifiers',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Long SKUs and barcodes print whole in PDF exports of Items and Books',
+        whatChanged:
+          'In a PDF export of Items or Books, a SKU, barcode or ISBN too long for its space now prints whole over two or more lines, with no hyphen added where a line ends. With Layout set to Book catalog — two columns or Book catalog — three columns, a long title or value also stays inside its own card and clear of the cover.',
+        whyItMatters:
+          'A long SKU could print with a hyphen it does not have, a long run of digits could be cut off at the edge of its column, and in a catalog a long title could run into the next card or over the cover.',
+        howItAffectsYou: 'Values that fit print exactly as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // ExportBuilderPreview's failed state and its Try again, which asks
+        // for the sample again (export-builder-dialog.tsx); Export file is
+        // turned off only while exporting or when the choices are invalid.
+        id: 'export-sample-could-not-load',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The Customize export dialog says when its sample could not load',
+        whatChanged:
+          'The Customize export dialog, reached from Export on Items and Books, shows a sample of your export. If the sample cannot load, the dialog now says “Could not load a sample of this export. You can still export the file.” and offers Try again.',
+        whyItMatters:
+          'Before, a sample that failed to load kept saying “Loading a sample of this export…” with no end.',
+        howItAffectsYou: 'You can still choose Export file while the sample cannot load.',
+        whatToDo: 'If you see the message, choose Try again, or choose Export file as usual.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:export'] },
+      },
+    ],
+  },
+  {
+    id: 'small-fixes-8-2026-10',
+    revision: 1,
+    // Small fixes slice 8: #374 (squash 919281a1c, merged 2026-10-31
+    // 08:04:49Z; no migration, web and server only, so no over-the-air
+    // update). Live in production web build 07ad9db5b89c (built 08:05:15Z,
+    // answering by 08:06Z). Held as a draft until that deploy was live and
+    // walked; published by docs/whats-new-small-fixes-8 at the top, the
+    // newest release, with its words re-read against 919281a1c.
+    //
+    // Re-read at publish (docs/whats-new-small-fixes-8): the summary says
+    // "Also on the web" before the forms and the calendar, as a phone shows
+    // only the title and the summary and its own Purchase orders, Recurring
+    // POs and Schedule screens did not change; the Overdue line says that the
+    // dashboard's line no longer suggests updating the expected date (the
+    // edit page and the save change a draft only); the run line names the
+    // button that orders a draft whose sending failed, Mark as ordered, on
+    // the web (the notification says "send it", but a draft's page has no
+    // Send, the auto-send is the same status change and the phone shows a
+    // draft read-only), calls the template's mode Auto-send, as its form and
+    // list do, says that a template's creator is told only of a template
+    // whose purchase order could not be saved (the cron adds no other
+    // creator), and that such a template is in the audit log (a System row,
+    // Recurring PO template · Run Skipped); the calendar line says an event's
+    // own page prints in the organization's zone too (it printed Pacific
+    // whatever the organization's), that this zone is not your own (it
+    // reverses a published note, below), that the calendar shows every event
+    // that STARTS on a date it shows (an event read outside the grid has no
+    // cell), and that New event and Edit event refuse a time the clocks skip.
+    //
+    // Every user-visible change in the branch has a line (owner rule
+    // 2026-09-25):
+    //   - the purchase orders list's Overdue view (item E), where the
+    //     dashboard's overdue line leads, and that line's shorter advice;
+    //   - Edit purchase order naming a destination or supplier it cannot
+    //     offer, and the save refusing a deleted destination (items A, D, C);
+    //   - recurring templates naming a deleted destination or an archived
+    //     supplier, in Edit, Make recurring and the list (items B, D);
+    //   - the recurring run's notification naming a template it created
+    //     nothing for, and why (item C), and the audit log's row for a
+    //     template whose purchase order could not be saved;
+    //   - the team calendar's last evening, times and today, and an event's
+    //     own page in the organization's zone (item F). The calendar placed
+    //     each event and today's mark on the viewer's own day once drawn in
+    //     the browser (#331), so this reverses the published
+    //     weekly-digest-and-fixes-2026-10 entry calendar-today (2026-10-06:
+    //     "Today's mark and each event are now placed by your own day."), and
+    //     the line is worded as a change from that note ("not your own"), as
+    //     the Placed line is (review of this publish);
+    //   - the weekly digest's dates (item G).
+    //   - the purchase orders list's Placed day, now the organization's in
+    //     both lists (item H), said in the Overdue view's line: the instant
+    //     list printed the viewer's day, a different one for a viewer outside
+    //     the organization's zone in the evening (slice 8 review). This
+    //     reverses the published redesign-web-fixes-2026-10 entry
+    //     web-times-in-your-time-zone (2026-10-20: "the Placed date on
+    //     Purchase orders now shows your own day"), so the line is worded as a
+    //     change from that note ("not your own"); owner question 1 in the PR;
+    //   - New and Edit event taking their times in the organization's zone
+    //     (slice 8 review), in the calendar line; an unchanged Edit event
+    //     save keeping the event's time in the hour the clocks go back (a
+    //     wall clock that happens twice; production's form moved it an hour
+    //     too), in the same line; and a time the clocks skip refused under
+    //     its field (new Date() moved it an hour unseen), in its How it
+    //     affects you;
+    //   - ordering a draft to a deleted location refused, in the Edit
+    //     purchase order line; a send-mode template whose purchase order
+    //     could not be sent named, in the run line.
+    // Left out as labels with no new behaviour (slice 8 review): the audit
+    // log's older recurring template rows now read "Recurring PO template"
+    // (they read "Recurring Po Template"); a supplier the recurring page
+    // could not read is "Supplier unknown" (a failed read only). Left out as
+    // changing nothing for an organization with 1000 locations or fewer: the
+    // location lists read every page, so past 1000 locations a site whose
+    // name sorts after the first 1000 is offered (no count of any
+    // organization's locations was read for this release; if one is past
+    // 1000, tell it in a later release). Left out as changing nothing a reader
+    // sees: the calendar reads fewer old open-ended events (the same events
+    // show).
+    //
+    // Walked on production on build 07ad9db5b89c, 2026-10-31 08:18Z to
+    // 08:33Z, in Demo Co as its admin, with a read-only check to 08:44Z: the
+    // Overdue view from its tab, its Nothing overdue state, Export with no
+    // rows and one warehouse picked in the header (the dashboard's count
+    // agreeing); the Placed day for a viewer in Tokyo and in the folded row
+    // at 390 px, with no hydration error; Edit purchase order on every draft
+    // (no note, Cancel with no prompt); Recurring POs and New template (no
+    // note); the calendar on the organization's month and today, a chip's
+    // time matching its event's page, November's grid to Dec 12, and Times
+    // are in on New event and Edit event; Notification settings. Writes, each
+    // undone: an archived supplier named on a draft's Edit and on Make
+    // recurring (restored), and an event at 8:00 PM on the November grid's
+    // last date drawn in its cell (deleted). No defect. Not walked, so each
+    // rests on the code and its tests: the dashboard's overdue line, the
+    // Overdue view's count line and search (no overdue purchase order there),
+    // a template's list line, archived supplier and destination warning (no
+    // template there), a deleted destination on Edit purchase order and the
+    // refusal to order it (the app cannot set one up there), the recurring
+    // run and its notification, the digest preview's date (no email sent),
+    // Edit event in the hours the clocks change, and an organization outside
+    // Pacific time.
+    //
+    // Owner question 7 of #374 shipped as its default: Edit purchase order
+    // and the recurring forms open on No supplier for an archived one, so a
+    // save that does not choose one removes it, as the two lines say. A later
+    // decision keeps an archived supplier, shown as "Name (archived)"; that is
+    // not built. If it ships, its own release tells it and these two lines
+    // are reworded in place. registry.small-fixes-8.test.ts pins the code the
+    // two lines rest on (an archived supplier named, not offered, and both
+    // forms opening on No supplier), so that change fails it until they are.
+    //
+    // The Overdue line's link is labelled for both platforms: the phone opens
+    // the bare Purchase orders list for any /dashboard/purchase-orders?...
+    // (apps/mobile web-path-rewrite), which has no Overdue view yet.
+    //
+    // Who is told: the Overdue view, whoever can open the purchase orders list
+    // (purchase_orders:read, Purchase orders on), linked to the view; the
+    // purchase order and recurring lines, whoever can edit them
+    // (purchase_orders:manage, Purchase orders on; the Recurring page checks
+    // the same and shows a plan notice to an organization without it); the
+    // calendar line, whoever can open the calendar (schedule:read or
+    // schedule:manage, Schedule on); the digest line, every member (the
+    // notification settings are each member's own). So every member is told:
+    // it is the first notice for each of them until it is read.
+    status: 'published',
+    title: "An Overdue view for purchase orders, named destinations and suppliers, the calendar's last evening and the digest's date",
+    summary:
+      "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Also on the web, editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and the team calendar shows events late on its last date. The Recurring purchase orders notification now names a template that could not create its purchase order, and why. A weekly digest preview is dated the day it was sent.",
+    publishedAt: '2026-10-31T08:59:00Z',
+    entries: [
+      {
+        // PurchaseOrdersService.listOverdue, on overdueCount's own filter; the
+        // tab is ?status=overdue, which the dashboard has linked to since
+        // before #338 while the list fell back to All. The dashboard's line,
+        // OVERDUE_PO_ATTENTION_DETAIL (lib/purchase-orders/tabs.ts), said
+        // "Chase your suppliers or update the ETA."; the edit page opens a
+        // draft only and the save changes a draft only, and a PO import makes
+        // a new one, so an ordered purchase order's expected date can't be
+        // changed.
+        id: 'po-list-overdue-view',
+        category: 'new',
+        area: 'Purchase orders',
+        title: 'The purchase orders list has an Overdue view',
+        whatChanged:
+          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date now shows the day in your organization's time zone, not your own, so everyone sees the same date.",
+        whyItMatters:
+          "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
+        howItAffectsYou:
+          "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders. The dashboard's line no longer suggests updating the expected date, which can't be changed once a purchase order is ordered.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open purchase orders' },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // PoForm `unoffered` and the edit page's reads; the save's refusal is
+        // PurchaseOrdersService.resolveDestinationWarehouseId.
+        id: 'po-edit-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: "Editing a draft purchase order names a destination or supplier you can't pick",
+        whatChanged:
+          "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location, or ordering a draft that goes to one, is refused, naming the location.",
+        whyItMatters:
+          'A draft could be ordered to a destination or a supplier nobody could see on the form.',
+        // Said plainly (slice 8 review): the purchase order save accepts an
+        // archived supplier, but the form cannot offer one, so any save that
+        // does not choose a supplier, even one made to change something else,
+        // removes it. Owner question 7 of #374 shipped as this default (see
+        // the release's comment); a test pins the code this rests on, so a
+        // change that offers an archived supplier rewords this line and the
+        // recurring one in place.
+        howItAffectsYou:
+          "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringTemplatesPanel (Edit, Make recurring, the list) and the
+        // Recurring page's reads.
+        id: 'recurring-template-names-unoffered-choices',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'Recurring templates name a deleted destination or an archived supplier',
+        whatChanged:
+          "Editing a recurring purchase order template whose destination was deleted after it was saved showed an empty Destination box, and saving was then refused by a name the form never showed. Editing a template now names a deleted destination or an archived supplier under the box and opens on None or No supplier, and Make recurring names an archived supplier the same way. The list shows an archived supplier by name, and says when a template's destination stops it from creating purchase orders.",
+        whyItMatters:
+          'A template whose destination was deleted showed an empty Destination box, and nothing on the page said where it was ordering to.',
+        howItAffectsYou:
+          "Choose another destination or supplier from the list and save the template. If you save it without choosing, even to change something else, it is saved with none. An archived supplier isn't in the list, so saving the template removes it.",
+        whatToDo:
+          'If a template in the list says it creates no purchase order, edit it and choose another destination.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // RecurringPoTemplatesService.runDueTemplates (templatesSkipped) and
+        // the cron's notice: owners and admins, and the template's creator
+        // while they hold purchase_orders:manage (slice 8 review; no creator
+        // is told in a run that could not read their permissions, c005f208b).
+        // The creators are those of templatesSkipped only, the templates
+        // whose purchase order could not be saved (cron notifyAdmins);
+        // templatesSendFailed and templatesWithNothingOrderable hold names
+        // only, so the line tells no other line's creator (review of this
+        // publish). A send-mode template (Auto-send, as its form and list
+        // say) whose purchase order could not be sent: recurringRunNotice
+        // says "Open it in Purchase orders and send it.", but a draft's page
+        // has no Send: its actions are Edit, Mark as ordered and Cancel PO
+        // (po-actions.tsx), the auto-send is the same status change
+        // (updateStatus 'ordered'), and the phone shows a draft read-only
+        // ("Review and order this draft on the web."), so the line names Mark
+        // as ordered, on the web. Rewording the notice is code, outside this
+        // publish. A template whose purchase order could not be saved: a
+        // System row, recurring_po_template.run_skipped, which the audit log
+        // shows as "Recurring PO template · Run Skipped" (lib/audit/format.ts).
+        id: 'recurring-run-says-why',
+        category: 'fixed',
+        area: 'Recurring purchase orders',
+        title: 'A recurring template that cannot create its purchase order says why',
+        whatChanged:
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.",
+        whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
+        howItAffectsYou:
+          "The notification goes to your organization's owners and admins. For a template whose purchase order could not be saved, it also goes to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered. A template whose purchase order could not be saved is also recorded in the audit log, for people who can view it.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // The page read events between the server's (UTC) midnights; the
+        // calendar now gets the organization's zone and today. An event's
+        // page printed Pacific whatever the organization's zone; it prints
+        // the organization's now (formatEventRange). An event read outside
+        // the grid has no cell, so the calendar shows each event that starts
+        // on a date it shows. A time the clocks skip is refused under its
+        // field ("That start time doesn't exist in <zone> (the clocks
+        // change). Pick another time.") and nothing is saved. The calendar
+        // placed each event and today's mark on the viewer's own day (#331),
+        // as the published calendar-today note (2026-10-06) told calendar
+        // readers, so the line says "not your own" (review of this publish).
+        id: 'calendar-last-evening-and-zone',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar shows events late in the day on its last date',
+        whatChanged:
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar and each event's page place each event on its date and print its time in your organization's time zone, not your own, and the calendar marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
+        whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
+        howItAffectsYou:
+          "Every event that starts on a date the calendar shows is on it. If you enter a time that doesn't exist in your organization's time zone, in the hour the clocks go forward, New event and Edit event say so under the field and save nothing until you choose another time.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        // lib/email/es/families/digest.ts formatted its days with no zone (UTC
+        // on Vercel); the cron and the preview now pass the workspace's.
+        id: 'digest-dated-in-workspace-zone',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'A weekly digest preview is dated the day it was sent',
+        whatChanged:
+          "A weekly inventory digest preview sent in the evening in US time zones, from 5 PM Pacific time (4 PM in winter), was dated the next day, in its subject and its As of date. The digest's dates now follow your workspace's time zone, in the preview and in the Monday email.",
+        whyItMatters: 'The preview named a day that had not started yet where you were.',
+        howItAffectsYou: "The preview and the Monday digest carry your workspace's date.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+    ],
+  },
+  {
+    id: 'manage-order-items-and-app-fixes-2026-10',
+    revision: 1,
+    // Ordering visibility on the web and in the mobile app, two photo fixes on
+    // the web, and the phone parts of the changes merged since the redesign's
+    // phone update, which reached phones in one over-the-air update.
+    // Web, all live in production web build 360f0fbb6f4d (64054fb3d, answering
+    // /api/version from 15:29Z on 2026-10-30):
+    // - #411, d617de0d7 (2026-10-27 00:32:31Z, migration 0413 pushed just
+    //   before it; build c55567b25dc6 live from 00:35:43Z): Manage order items
+    //   on the web, the refusal of a hidden item on every ordering path, and
+    //   the server side of the phone's Manage order items screen;
+    // - #412, 3fe75cd1f (01:11:15Z): Place an order and New rental photos fill
+    //   their box again;
+    // - B31 #408, 72e079523 (01:38:55Z): its web files are the thumbnail
+    //   backfill route (not run), a helper, comments and tests, so the web
+    //   lists show nothing new until phones send small copies;
+    // - #380, f2406ef60 (02:54:55Z) and #395, c6d9817ab (03:05:22Z): nothing a
+    //   reader sees on the web (see "Left out" below);
+    // - #413, 64054fb3d (2026-10-30 15:27:40Z): the Grid's white square.
+    // Phone: ONE over-the-air update for runtime 1.4.0, EAS update group
+    // 6f6f09d9-01bd-424a-ac37-75e535c60d8c, published 2026-10-30 15:33Z from
+    // 64054fb3d. Its served bundles hash the same as the local build, and its
+    // source map holds app/order/manage-items.tsx, src/lib/location-filter.ts
+    // and the item photo thumbnail code. Opened from closed, the app checks
+    // for it and loads it then (apps/mobile/src/lib/use-ota-updates.ts; if
+    // that fails, the next time it opens), hence "close the app completely and
+    // open it again" in each phone entry. It carries the phone parts of #411,
+    // B31 #408 and #380, and of B16 #389 (0dc89dbcd, 2026-10-25 15:03:50Z), RL1
+    // #382 (0132fbd25, 2026-10-26 03:04:48Z), B26 #396 (0ad683600, 2026-10-25
+    // 21:27:52Z), B5+B28 #397 (fcd993bee, 2026-10-26 02:02:23Z), B29 #399
+    // (9cc13c0d8, 02:58:47Z) and T14 #405 (0c80a7e5a, 03:23:27Z). The web
+    // halves of #389, #396 and #397 were told in
+    // unsubscribe-rack-question-fixes-2026-10 and
+    // ended-session-group-page-fixes-2026-10 and are not told again; #399's
+    // web half was never told and is told here. B10 (#403) is not merged and
+    // is not in this update. Phones have the update: EAS insights at
+    // 2026-10-31 04:37Z showed an iOS launch of the update group and no
+    // failed launch. This release needs a web deploy only.
+    // The summary says "on the web" and "in the mobile app", because a phone
+    // shows only the title and the summary, with the first linked entry the
+    // reader can reach as its button (logic.ts legacyAnnouncementsFor): Open
+    // Manage order items for whoever may manage order items, which opens the
+    // phone's own screen (apps/mobile/src/lib/web-path-rewrite.ts:58), else
+    // Open Maintenance for whoever the maintenance entry reaches (:134 opens
+    // the phone's Maintenance); anyone else gets no button.
+    // Walks and checks:
+    // - #411 on production, 2026-10-27 00:37Z to 00:50Z on build c55567b25dc6,
+    //   in Demo Co, headless Chrome signed in as an admin, behind a guard that
+    //   let through only the sign-in, one hide and one show: Manage order items
+    //   beside Place order on Orders; the page with 25 rows, Showing 1-25 of
+    //   59, its filters and totals, and search by name and by SKU; Hide asked
+    //   "Hide 1 item from Orders?" and ORDER_ITEMS_HIDE_CONFIRM_BODY_COPY,
+    //   saved "Hidden 1 item." and the row read Hidden from Orders and Hidden
+    //   since the day;
+    //   the record left Place an order's catalog and its search by name and by
+    //   SKU; Show saved "Shown 1 item." and the record was offered again with
+    //   Add to cart; its item page and its row on Items were unchanged; the
+    //   page in dark mode. 93 checks passed; the 5 that failed were the walk's
+    //   own (a compare step that read the wrong record, and a Show made from
+    //   the Hidden view, which the row then leaves) and passed when run again.
+    //   Nothing was left hidden. The new deployment's logs to 01:03Z: 1,379
+    //   requests, all 200, with no 5xx, no 4xx and no order_item_hidden.
+    // - The phone parts, 2026-10-27 03:27Z to 03:56Z, on an EAS simulator
+    //   build of c6d9817ab (its phone code differs from 64054fb3d only in
+    //   comments and fallback-only constants), with web build 522f18fe46bc, in
+    //   Demo Co as the demo account. On an iPhone: Manage order items from the
+    //   Orders checklist button and from the top of Place an order, Hide and
+    //   Show with their confirmations and saved words, Hidden since, the
+    //   record gone from storefront search by name and by SKU, from its
+    //   category and from All items, and back after Show, the Items list and
+    //   item screen unchanged, and the item's Activity row; B31's New item
+    //   with a JPEG and a see-through PNG from the library, Replace photo with
+    //   a rotated portrait and with a GIF (stored as a JPEG; each photo with
+    //   its small copy beside it), and the web Items list showing the phone's
+    //   photo. On a second iPhone: the Location filter on Items and Books (the
+    //   two sites only; an item listed under its Location with its stock at
+    //   the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+    //   its saved rack text)), the new-rack question for a member who can
+    //   create racks (Cancel saved nothing), the Move stock sheet loaded with
+    //   Unplaced first and no note, a count of 3 emptied and read back
+    //   uncounted from the server, 2,5 typed over the uncounted line saving
+    //   nothing, 47,5 and 47.2.3 saving nothing and named under Check the
+    //   counts, and a Post with no variance that changed no stock. On an iPad: Open in
+    //   Default Email App with no mail account (the new sentence, and no Open
+    //   another draft? on a second tap), Back on Settings, Support, the AI
+    //   screen, the Books tab and ten list screens with return values from
+    //   outside the app (each went Home inside StockPilot) and with in-app ones
+    //   (back to Settings), a purchase order
+    //   file and an order's proof photo opened with a fresh link, and Clear
+    //   under Offline cache keeping the photos. On the web: the Items and
+    //   Books lists loading each stored small copy directly, New rental's
+    //   photo after #412, the Manage order items page read-only, and the
+    //   icons, menus, dialogs and selects after #395. On 2026-10-30, on build
+    //   360f0fbb6f4d, the B31 test item's Items cell loaded its stored small
+    //   copy and its Grid card drew the photo with object-fit contain (a square
+    //   photo); the item was then archived. The hidden record was shown again
+    //   and the count was closed.
+    // Not walked, so each rests on the code checks in its entry: Show selected
+    // and Hide selected, Select family, an Expected record, the phone's
+    // offline refusal, a cart line marked after a hide, the refusal of an
+    // order sent as an item is hidden, Add items on an order, a raise on a
+    // placed order, Frequently ordered, kits, exchanges, public request links
+    // and the customer portal, a staff requester; Place an order's photos
+    // after #412 (the walk's shots of it predate it) and a Grid photo that is
+    // not square after #413; the phone's Location filter listing an item whose
+    // stock is all on a rack, in a crate or in Unplaced (the walked item's
+    // stock was at the site itself, which the old filter listed too); a GIF on
+    // New item and Take photo on the Scan tab (no camera); the new-rack words
+    // for a member who cannot create racks, and the Move stock note; the
+    // Multiple placements found sheet (the simulator has no camera); Sync
+    // first while a clear is unsent; the AI shelf scan review; an Outlook tab
+    // the browser blocks; a file opened after its link ran out (it takes an
+    // hour); a sign-out and an account change (the phone's Sign out ends every
+    // session of the account, and would have signed the other walkers out).
+    // #413's own title says the Grid photos fill their square. They do not:
+    // the Grid draws each photo with CardPhoto, still objectFit contain
+    // (components/inventory/inventory-table.tsx:4263-4264), and #413 removed
+    // the tile's white (patterns/grid-card.tsx:120-123) and changed a fallback
+    // the Grid never reaches with a photo (:123). photos-no-white-backing says
+    // what is true at 64054fb3d; if CardPhoto is changed to cover, reword that
+    // entry in place, with no new revision.
+    // Manage order items also needs the server switch ORDER_ITEMS_MANAGE_ORGS
+    // (server/services/order-catalog-visibility.ts:86-95), which the code
+    // cannot show: it was set for every organization at the #411 rollout, and
+    // the integrator confirms it before this merges. Where it is off, the page
+    // says Manage order items isn't turned on for the organization yet, and
+    // the phone's checklist button on Orders still shows (it checks only the
+    // permission and the module, apps/mobile/src/lib/orders-list.ts:72-87).
+    // Merged to fit twelve entries: the two web photo fixes into
+    // photos-no-white-backing, the two #389 phone fixes into one, the web and
+    // phone maintenance fixes into one, and who has Manage order items into
+    // the last sentence of manage-order-items.
+    // Left out on purpose: #411's console column, dialog and audit label
+    // (platform staff only); the lock note and the exception labels on Roles &
+    // permissions (an owner or admin reads them on the page itself);
+    // 10,000 units a line (Place an order already capped it); Add items
+    // saving in one step; copies made by a PO import or a restore point
+    // keeping the hidden state; the locked page after access is taken away;
+    // the step-up before a change (every privileged action has it); the
+    // catalog read again on return (a timing, so a speed claim). #412 on the
+    // public order page (people outside StockPilot, and its photos already
+    // filled their box). #408's backfill route (not run, operators only), the
+    // upright small copy of a rotated photo and the PNG copy that keeps
+    // transparency. #380's email links for one plain address (members'
+    // addresses always are one, and the walk saw every one still a link),
+    // background work kept alive after the response (nothing on screen, not
+    // checked in production), the photo routes' request limits, SECURITY.md
+    // and the dependency audit. #395's 22 dependency updates (the web
+    // walker's icons, menus, dialogs, selects and labels all passed). #399's
+    // daily check for unlinked escalations (operators only) and its photo
+    // changes (nothing visible). #405's colour check (every saved colour was
+    // already a #rrggbb colour) and its category names in dark text (RL1's).
+    // RL1 #382's other phone parts: the Group review's name box above the
+    // keyboard (walked), VoiceOver names on the Group review's choices, scan
+    // to count refusing 1e3, New count saying when its items did not load,
+    // and Pick books only where Books is on.
+    // Still to be told, in a later release, because this one holds twelve
+    // entries: RL1 #382's web part (never told), #389's three web changes
+    // promised in unsubscribe-rack-question-fixes-2026-10, and B12's Sage 50
+    // import promised in ended-session-group-page-fixes-2026-10.
+    // Who is told: every member (photos-no-white-backing,
+    // app-sign-out-removes-saved-photos and app-back-stays-in-the-app have no
+    // audience); each other entry names the permission, and the module where
+    // there is one, that its page or action checks, quoted in its comment. If
+    // the phone update is rolled back while the web stays, the phone entries
+    // are no longer true: withdraw this release (status 'withdrawn' and a
+    // withdrawnNote).
+    status: 'published',
+    title:
+      'Choose which items and books appear in Place an order, photo fixes on the web, and mobile app fixes',
+    summary:
+      'Managers, admins and owners can now choose which items and books appear in Place an order, on the web and in the mobile app; a hidden item is not offered to anyone for new orders. On the web, photos on Place an order and New rental fill their box again. In the mobile app, the Location filter on Items matches the web, emptying a count box clears its count, and signing out removes the photos the app kept. Close the app completely and open it again to load the update.',
+    publishedAt: '2026-10-30T16:32:00Z',
+    entries: [
+      {
+        // platform: web and phone. From: #411. Checked at 64054fb3d: the buttons,
+        // (dashboard)/dashboard/orders/page.tsx:131 and :173-175, and on Place an order
+        // components/orders/storefront/orders-storefront.tsx:445-448; the phone's checklist
+        // button, apps/mobile/src/screens/orders.tsx:298-302 (an icon, named Manage order items
+        // for VoiceOver only), and Manage order items at the top of Place an order,
+        // components/order-storefront/catalog-screen.tsx:420-427. What is listed,
+        // server/services/order-catalog-visibility.ts:54-58 and :229-231 (active, not a rental,
+        // not a kit, through the reader's own Inventory scope; Expected records listed); the
+        // words, core orders/catalog-visibility.ts:46 (25 a page), :174 (search), :176-179,
+        // :198-199 (Select family, 500 at once) and :220 (Hidden since). A change writes only
+        // the two visibility columns, 0413_order_catalog_visibility.sql:666-668; Show,
+        // catalog-visibility.ts:235-236. Not offered: server/loaders/orders-new-catalog.ts:887-890,
+        // orders/add-items-dialog.tsx:255-258, apps/mobile/src/components/add-order-items-sheet.tsx
+        // :136-138, public links 0413:73-74 and the portal services/portal.ts:329-333. Still
+        // listed, services/inventory.ts:535-539; placed orders, 0413:59-60. Hide confirms,
+        // orders/manage-items/manage-order-items.tsx:494 (a single Show does not, so only Hide
+        // is promised) and apps/mobile/app/order/manage-items.tsx:426-427. Activity, 0413:688-695
+        // with services/activity.ts:590, read under activity_logs:read (0279:86-89). Duplicate,
+        // 0413:2497-2498. Kits, catalog-visibility.ts:172-173. The phone never queues a change,
+        // apps/mobile/src/lib/order-catalog-visibility/write.ts:25 and :67. Who has it by
+        // default, core constants/permissions.ts:143-179 (staff :197 and viewer :222 do not);
+        // only StockPilot support allows or denies it for one person, :64-72, with
+        // catalog-visibility.ts:272-273 and :314-315 ("Managed by StockPilot support"). The
+        // platform console that does it is not described. Walked: the web on production and
+        // the phone on the simulator (the buttons, the page, Hide and Show with their
+        // confirmations, Hidden since and the Activity row). Code only: Show selected and Hide
+        // selected, Select family, an Expected record, the offline refusal, Duplicate of a
+        // hidden item, public request links and the customer portal. Audience: the page checks
+        // the Orders module (orders/manage-items/page.tsx:82 checkModuleAccess('orders')) and
+        // the permission (order-catalog-visibility.ts:206 can(this.ctx,
+        // ORDER_CATALOG_VISIBILITY_PERMISSION)).
+        id: 'manage-order-items',
+        category: 'new',
+        area: 'Orders',
+        title: 'Choose which items and books appear in Place an order',
+        whatChanged:
+          "On the web, Orders and Place an order have a new Manage order items button. In the mobile app, tap the checklist button at the top of Orders, or Manage order items at the top of Place an order. It lists the active items and books you can see, other than rentals and kits, 25 to a page, each marked Shown in Orders or Hidden from Orders, and a hidden one shows the date it was hidden. Search by name, SKU, barcode or ISBN, filter by type, warehouse or category, and hide or show one record, or up to 500 you select at once. Select family lets you add a product's other sizes or editions.",
+        whyItMatters:
+          "You can stop new orders for an item or book without archiving it or changing its stock, location, charter or other details. Items not received yet are listed as Expected, so you can hide one before it arrives. Showing an item again lets it back only where it was allowed before; it does not make it public or change anyone's access.",
+        howItAffectsYou:
+          "A hidden item is not offered in Place an order or in Add items on an order, to anyone, you included, and not on public request links or in the customer portal. It still appears on Items, Books, its item page and in reports, and orders already placed go ahead. Hide asks you to confirm. Each change is recorded in the item's Activity for people who can view the audit log. A copy made with Duplicate keeps the original's setting. Kits are not listed here: a kit is offered only while every part can be ordered. In the mobile app, a change needs a connection and is never saved for later.",
+        whatToDo:
+          'On the web, open Orders and choose Manage order items. In the mobile app, close the app completely and open it again to load the latest update, then tap the checklist button at the top of Orders. Managers, admins and owners have Manage order items by default; to change that for one person, ask StockPilot support.',
+        link: { href: '/dashboard/orders/manage-items', label: 'Open Manage order items' },
+        audience: { anyPermission: ['orders:manage_catalog_visibility'], modules: ['orders'] },
+      },
+      {
+        // platform: web and phone. From: #411. Checked at 64054fb3d: who hides, core
+        // constants/permissions.ts:143-179; the web catalog, server/loaders/orders-new-catalog.ts
+        // :887-890 (offered to nobody, a manager included; the grid, the aisles and search read
+        // it), Frequently ordered, orders-frequently-ordered.ts:27-28; the phone's storefront is
+        // the server's answer, server/services/order-storefront.ts:292-298, so the phone has left
+        // hidden items out since #411, and its Add items sheet filter
+        // (apps/mobile/src/components/add-order-items-sheet.tsx:136-138) came with this update;
+        // Add items on the web, orders/add-items-dialog.tsx:255-258, and on the server,
+        // services/order-requests.ts:2094; every writer, 0413_order_catalog_visibility.sql:47-60;
+        // exchanges, 0413:75-77; kits, core orders/catalog-visibility.ts:172-173. No mark in
+        // Place an order: the row is dropped at the source (orders-new-catalog.ts:890). The cart,
+        // core orders/storefront/stale-cart.ts:43-49 and :144, phone-copy.ts:96 and :102, the web
+        // storefront-cart.tsx:246-248 and :312; lowered only on the web, whose marked line keeps
+        // a stepper capped at its quantity (storefront-cart.tsx:248-254), while the phone's has
+        // Remove only (stale-cart.ts:146 stepper false; apps/mobile/src/components/
+        // order-storefront/cart-panel.tsx:175 and :192), and the hidden item has no card left to
+        // change it from (orders-new-catalog.ts:890, the phone's catalog too); Submit waits,
+        // orders-storefront.tsx:1288-1289 with copy.ts:162, and the phone's checkout.ts:131;
+        // hidden while sending, 0413:61-63 and orders-storefront.tsx:935-937; a placed order's
+        // line, order-requests.ts:2718-2737.
+        // Walked: the hidden record gone from Place an order's catalog and search on production
+        // (web) and on the simulator (search by name and SKU, its category and All items), and
+        // back after Show. Code only: a marked cart line, the refusal while sending, Add items,
+        // a raise on a placed order, Frequently ordered, kits, exchanges and a staff requester.
+        // Audience: who may place orders, the Orders nav's own requirement (core
+        // modules/registry.ts:417-418 requires 'orders:request'), with the Orders module, as
+        // order-page-add-full-kit-removed-2026-09-27 pins for Orders entries.
+        id: 'order-items-hidden-from-place-an-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Items hidden from Orders are not offered in Place an order',
+        whatChanged:
+          'Managers, admins and owners can now hide items and books from new orders. On the web and in the mobile app, a hidden item is not offered in Place an order, in its search, categories or Frequently ordered, or in Add items on an order. Place an order does not mark it as hidden; it is simply not listed. A kit is offered only while every part can be ordered, and a hidden item is not offered as the replacement in a new exchange.',
+        whyItMatters:
+          'Your organization decides which items can be ordered, and no new order can include a hidden item, whoever places it.',
+        howItAffectsYou:
+          "A hidden item already in your cart is marked: its line reads “An item no longer listed here” and “Can't be ordered from here anymore. Remove it.” You can remove that line, or lower it on the web, but not raise it, and the order cannot be sent until you remove it. If an item is hidden just as you send, the order is not placed, that line is marked and the rest of your cart is kept. On an order already placed, a hidden item's line can be lowered or removed but not raised, and the order goes ahead as before. The item stays on Items and Books for everyone who could see it before.",
+        whatToDo:
+          "No action needed. If a line in your cart says it can't be ordered from here anymore, remove it and send the order. In the mobile app, close the app completely and open it again to load the latest update.",
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        // platform: web (#412 and #413 changed no phone file). From: #412 and #413. Checked at
+        // 64054fb3d: Place an order, components/orders/storefront/storefront.css:924-931
+        // (object-fit cover and no background; #412 removed contain and the white), every photo
+        // on the page is SfPhoto inside .sf-ph (storefront-cards.tsx:171-187: the cards, the
+        // Compact view, Frequently ordered, kits, the cart storefront-cart.tsx:260, Quick view
+        // and the review); a card's box is 4:3 (storefront.css:1032-1035), so cover trims a photo
+        // of another shape. New rental, orders/v2/item-card.tsx:134 (object-cover; it was bg-white
+        // object-contain), rendered only by rentals/rental-create-form.tsx through
+        // catalog-grid.tsx. The Grid, patterns/grid-card.tsx:120-123 (#413 removed the tile's
+        // bg-white), whose photo is CardPhoto (inventory-grid.tsx:220 and :253, built in
+        // inventory/inventory-table.tsx), still objectFit contain (:4263-4264): shown whole,
+        // with the card's colour around it (grid-card.tsx:112 bg-background, group cards
+        // inventory-grid.tsx:259 bg-sunk; app/globals.css:128 and :213), which in light mode is a
+        // pale off-white (:128 60 23.1% 97.5%, :108 #f4f3ee). Hovering a Grid photo still shows
+        // it on white: CardPhoto wraps it in ImageHoverPreview (inventory-table.tsx:4241), whose
+        // popup is bg-white object-contain (components/ui/image-hover-preview.tsx:366). The Grid
+        // is on Items, Books and Rentals items (inventory-grid.tsx:10). Since the new look: both
+        // whites came with #369 (31f4b3e61), before which Place an order and New rental used
+        // cover. Tests: storefront-tokens.guard.test.ts:312-324, item-card.test.tsx:66-77.
+        // Walked: New rental's photo after #412 (the web walker, 2026-10-27). Code only: Place
+        // an order after #412, a Grid photo that is not square after #413, dark mode and the
+        // hover preview. No audience: the Grid reaches everyone who can read items
+        // (items-books-grid's audience is items:read), and the other two pages reach who may
+        // order or rent.
+        id: 'photos-no-white-backing',
+        category: 'fixed',
+        area: 'Orders, Rentals and Inventory',
+        title:
+          'Photos on Place an order and New rental fill their box again, and Grid photos lose their white square',
+        whatChanged:
+          "On the web, item photos on Place an order fill their box again, from the item cards to the cart and the review, and so do the item photos on New rental. In the Grid view of Items, Books and Rentals items, a photo no longer sits on a white square: a photo that is not square is still shown whole, and the space around it takes the card's own colour.",
+        whyItMatters:
+          'Since the new look, these photos were drawn on white, so a photo whose shape was different from its box had white bars beside it, in dark mode too.',
+        howItAffectsYou:
+          "On Place an order and New rental, a photo whose shape is different from its box is trimmed at its edges to fill it, as before the new look, and a photo with a see-through background no longer has white behind it. In the Grid, photos are not trimmed, so the space around a photo that is not square is now the card's colour: dark in dark mode, and a pale off-white in light mode. Hovering over a Grid photo still shows its preview on white. The photos themselves are not changed.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: phone (the Items and Books tabs). From: B28 #397. Checked at 64054fb3d:
+        // apps/mobile/app/(drawer)/(tabs)/inventory.tsx:429 primary_location_id (before,
+        // fcd993bee^ :208 item_stock_levels!inner and :351 a type list); books.tsx:414 the same
+        // (it already filtered by Location); the choices, onlySiteLocations at inventory.tsx:323
+        // and books.tsx:320, apps/mobile/src/lib/location-filter.ts:32-38 with core
+        // inventory/location-groups.ts:34-37 and :57-59; the web, services/inventory.ts:1349-1352
+        // and services/locations.ts:171; the item page's LOCATION row,
+        // apps/mobile/src/lib/placement-rows.ts:170. Walked: Items and Books offered the two
+        // Demo Co sites only, and Items under a site listed an item whose Location is that site
+        // with its stock at the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+        // its saved rack text), which the old filter listed too. Code only: an item whose stock
+        // is all on a rack, in a crate or in Unplaced. Audience: items:read, in every role's
+        // defaults, which the lists need.
+        id: 'app-location-filter-matches-web',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          "In the mobile app, the Location filter on Items matches each item's Location, as on the web",
+        whatChanged:
+          'In the mobile app, choosing a site under Location in the Items filters now lists the items whose Location is that site, as the web lists and the mobile Books list already do. Before, it listed only items with stock recorded at the site itself. On Items and Books the filter now offers the same locations as the web: sites only, never a rack, shelf, crate, bin, area, Staging or Unplaced.',
+        whyItMatters:
+          'Stock that nobody has placed waits in Unplaced, and placed stock sits on a rack or in a crate, so the old filter found only items whose stock had been left at the site itself, while the web listed every item whose Location is that site. The locations offered were chosen by type, so a site could be missing and an area could be offered.',
+        howItAffectsYou:
+          "An item is listed under a site when that site is the Location shown on its page, wherever its stock is. An item with no Location is not listed under any site. To see where an item's stock is, open the item.",
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: phone (the web already cleared an emptied box,
+        // components/cycle-counts/cycle-count-detail.tsx:904-907). From: RL1 #382. Checked at
+        // 64054fb3d: apps/mobile/app/cycle-count/[id].tsx:304-327 (an emptied box clears the
+        // line), :668-671 (Check the counts, with apps/mobile/src/lib/count-box-words.ts:19-24),
+        // :679-701 (a clear waits like a count; Sync first); one rule for a box, core
+        // cycle-counts/count-text.ts:25 (a plain number; the comma is not a decimal point, :21);
+        // the clear's route, api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts:26-72 and
+        // services/cycle-counts.ts:1790-1792. Before (0132fbd25^): parseFloat, and no clear. The
+        // AI shelf scan review writes a typed count as typed, cycle-count/ai-scan/[id].tsx:90-105
+        // (before, 0132fbd25^ :95 Math.floor). Walked: a count of 3 emptied and read back
+        // uncounted from the server, 2,5 over the uncounted line saving nothing, 47,5 and
+        // 47.2.3 named under Check the counts, and a Post with no variance. Code only: Sync
+        // first while a clear is unsent, and the AI review.
+        // Audience: recording a count needs stock:adjust and the Cycle counts module
+        // (services/cycle-counts.ts:1563-1564 and :1790-1792).
+        id: 'app-emptied-count-box-clears-line',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "In the mobile app, emptying a count box clears that line's count",
+        whatChanged:
+          'On a cycle count in the mobile app, emptying a count box that holds a saved count now clears that count, as emptying the box does on the web. The line is uncounted again, so a post skips it instead of applying the old number. The clear is kept on your phone like a count until it is sent, and until then Post says Sync first, as it does for a count.',
+        whyItMatters:
+          'Before, an emptied box kept the count saved earlier, and Post applied that number to stock while the box showed nothing.',
+        howItAffectsYou:
+          'To leave a line uncounted, empty its box. A box that holds something that is not a number, such as 2,5 or 1.2.3, now saves nothing, where it used to save part of it, 2 or 1.2. Post names such a line under “Check the counts” and posts nothing until its box holds a count or is empty. A comma is not read as a decimal point. On the AI shelf scan review, a count you type, such as 2.5, is now saved as typed; it used to be rounded down, to 2.',
+        whatToDo:
+          'Type decimals with a point, such as 2.5. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
+      },
+      {
+        // platform: phone (the upload); the small copies then show in lists on the web and in
+        // the app. From: B31 #408. Checked at 64054fb3d: every phone item photo goes through
+        // apps/mobile/src/lib/item-photo-upload.ts:166-194 (the photo, then its small copy),
+        // from app/item/new.tsx:744, app/item/[id].tsx:1629 (with src/lib/item-photo-replace.ts
+        // :91-99) and app/(drawer)/(tabs)/scan.tsx:883; the copy, core
+        // inventory/item-photo-thumb.ts:17-22 (200 px, the web's own, image-variants.config.ts
+        // :41-42); a failed copy never costs the photo, item-photo-upload.ts:58-64 and :127-158;
+        // a GIF becomes a JPEG, :78-79 and :110-120. Before (72e079523^): a GIF was sent as
+        // image/gif, which the bucket refuses (0046_rls_with_check_hardening.sql:204-206); New
+        // item skipped it, and the item screen said Upload failed. The lists,
+        // apps/mobile/src/lib/image-cache.ts:145-168, server/loaders/inventory-list.ts:1577-1615
+        // and inventory-table.tsx:4162 and :4237. The backfill has not run, so nothing is said
+        // about older photos but that the update does not change them. Walked on the
+        // simulator: New item, Replace photo with a rotated portrait and with a GIF, and the
+        // web Items list showing the phone's photo; the web walker saw each stored small copy
+        // load directly. Code only: a GIF on New item and Take photo on the Scan tab. No speed
+        // or data claim: none was measured. Audience: item photos are written under
+        // item_image_item_writable (0381_item_images_item_scope.sql:177-194: staff or
+        // items:update), so items:update.
+        id: 'app-photos-small-copy-and-gif',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'In the mobile app, a GIF from your photo library is saved as an item photo, and photos get a small copy for lists',
+        whatChanged:
+          "In the mobile app, after the latest update, a GIF you choose from your photo library, with Library on New item or Choose from library when you add or replace an item's photo, is saved as a still JPEG photo. Every item photo you add in the app, there or with Take photo on the Scan tab, is now saved with a small copy beside it, as a photo added on the web is. Lists such as Items and Books, on the web and in the app, show that small copy.",
+        whyItMatters:
+          'Before, a GIF could be refused: New item saved the item without it, and adding or replacing a photo on an item showed Upload failed. A photo added in the app also had no small copy, so lists worked from the full-size photo.',
+        howItAffectsYou:
+          'Photos added in the app now show in lists the same way as photos added on the web. If the small copy cannot be made, the photo is still saved, without it. Photos added before you updated are not changed by the update, and adding photos on the web is unchanged.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        // platform: phone. From: #380. Checked at 64054fb3d: apps/mobile/src/lib/auth-context.tsx
+        // :488 and sign-out-flow.ts:289 (the sign-out wipes the photos too), photo-cache-wipe.ts
+        // :9-25 and :82-83; another account's first sync, sync.ts:370-373 and cache-owner.ts
+        // :168-178 (the same account keeps them); an ended session clears only the order
+        // caches, auth-context.tsx:265-268; Offline cache and a workspace switch call
+        // deleteOrgData only (offline-cache.ts:37, use-workspace.ts:256 and :380). Walked:
+        // Clear under Offline cache kept the photos. Code only: the sign-out and an account
+        // change (the phone's Sign out ends every session of the account,
+        // sign-out-flow.ts:279, and would have signed the other walkers out). No audience:
+        // every phone user signs out.
+        id: 'app-sign-out-removes-saved-photos',
+        category: 'improved',
+        area: 'Account',
+        title: 'In the mobile app, signing out also removes the photos the app kept on the phone',
+        whatChanged:
+          "In the mobile app, after the latest update, signing out also removes the photos the app keeps on the phone, such as item photos and proof of delivery photos. Before, it removed only the app's saved copy of your workspace data. When a different account signs in on the phone, the previous account's photos are removed when the app first syncs for it, even if the previous account did not sign out.",
+        whyItMatters:
+          "Signing out left the photos in the app's storage on the phone, so on a shared phone the photos the previous person had opened stayed there.",
+        howItAffectsYou:
+          'After signing out, photos load again the first time each one is shown. If your session ends and you sign in again with the same account without signing out, your photos stay. Switching workspace, and Clear under Offline cache in Settings, keep them too.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone (the Scan tab, core modules/registry.ts:323-329, mobile only; the
+        // lookup API's label change has no screen). From: B26 #396. Checked at 64054fb3d:
+        // apps/mobile/app/(drawer)/(tabs)/scan.tsx:1373 and :1390 (before, 0ad683600^ :1357 the
+        // bin text only); :402-428 (rack and crate holdings above 0; a failed read keeps an
+        // empty list, :416-419); apps/mobile/src/lib/scan-resolve.ts:52-53 and :110-124; core
+        // inventory/placement-resolution.ts:161-186 and :248-267, rack-holdings.ts:50. Code
+        // only: the simulator has no camera, and the Scan tab reads codes only from it; pinned
+        // by scan-resolve.test.ts and placement-resolution.test.ts. Audience: the Scan tab has
+        // no permission (modules/registry.ts:328), and items:read is in every role's defaults.
+        id: 'app-scan-picker-shows-where-stock-is',
+        category: 'fixed',
+        area: 'Scan',
+        title: "In the mobile app, Multiple placements found says where each record's stock is",
+        whatChanged:
+          "In the mobile app, when a scanned code matches more than one record, each row of the Multiple placements found sheet now says where that record's stock is. Stock on more than one rack or crate, or in a crate, is listed by rack or crate with its quantity, such as 31-B ×5 · 77-Z ×3. Otherwise the row shows the rack and crate saved on the record, such as Rack 12-A, or its bin or rack text.",
+        whyItMatters:
+          "Each row used to show only the record's bin or rack text, so stock split across racks showed one rack, and a book whose page shows its rack could still say No bin set.",
+        howItAffectsYou:
+          'Choosing a row shows that record as before, and a code that matches one record still shows it directly. A row says No bin set when no place is known. If the app cannot read where the stock is, a row shows the rack and crate saved on the record, or its bin or rack text.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: phone. From: #380. Checked at 64054fb3d:
+        // apps/mobile/src/lib/stored-file-link.ts:24 (one hour), :27 (five minutes' margin) and
+        // :49-66 (a fresh link reused, else a new one); purchase orders,
+        // src/components/po-attachments.tsx:187-206 with the words at :192-198; orders,
+        // app/order/[id].tsx:1358, :2518-2550 (:2535 a photo falls back to the link it has and the
+        // copy on the phone, CachedImage keyed by the storage path, so the words at :2536-2543
+        // come only for a file that is not a photo, or a photo the screen holds no link for;
+        // po-attachments.tsx:192-199 says them for every purchase order file with no link), the
+        // proof of delivery card :3598. Before (f2406ef60^): links made once at load
+        // (po-attachments.tsx:146-148, order/[id].tsx:1349) and "Pull to refresh and try again"
+        // (:546, :2512); app/po/[id].tsx has no pull to refresh. Walked: a purchase order file and
+        // an order's proof photo opened with a fresh link. Code only: after an hour, a new link,
+        // the offline words and a photo opened from the copy on the phone. Audience: modules only,
+        // as an order's proof of delivery shows to anyone who can read the order, drivers
+        // included, so no one permission covers it.
+        id: 'app-proof-and-po-files-open-after-an-hour',
+        category: 'fixed',
+        area: 'Orders and purchase orders',
+        title:
+          'In the mobile app, proof of delivery and purchase order files still open after the screen has been open an hour',
+        whatChanged:
+          'In the mobile app, after the latest update, tapping a proof of delivery photo or file on an order, or a file on a purchase order, opens it even when the screen has been open for more than an hour. When the link the screen holds for that file is about to run out, the app gets a new one as you tap.',
+        whyItMatters:
+          'The links to these files are made when the screen loads and last an hour. After that, a file such as a PDF opened on an error page, and a photo that was not already on the phone did not appear.',
+        howItAffectsYou:
+          'If the app needs a new link and cannot get one, for example when the phone is offline, a purchase order file, or a proof of delivery file that is not a photo, does not open and the app says “No download link is available right now. Check your connection and try again.” It used to end with Pull to refresh and try again, though the purchase order screen has no pull to refresh. A proof of delivery photo opens from the copy on the phone if it was shown before; otherwise it may not appear until the phone is back online.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['orders', 'purchase_orders'] },
+      },
+      {
+        // platform: phone (the web half was told in web-asks-before-new-rack). From: B16 #389.
+        // Checked at 64054fb3d: the question, apps/mobile/app/item/new.tsx:95-115 (Save anyway
+        // unless the yes creates the rack, :111) and :852 (who is blocked, core
+        // inventory/new-rack-confirmation.ts:69-76); the words, core
+        // inventory/rack-near-match.ts:255-257 and :302-306, and
+        // apps/mobile/src/lib/create-rack-check.ts:85-87 and :106; the staff defaults, core
+        // constants/permissions.ts:197-221 (items:create and stock:transfer, no
+        // locations:manage); no rack and the stock left in Unplaced,
+        // services/inventory.ts:9210-9219 and :3563-3564, then the app's warning,
+        // apps/mobile/src/lib/item-create.ts:674 and core inventory/placement-warning.ts:35-41.
+        // Before (0dc89dbcd^): Create rack and save for everyone. The Move stock note,
+        // apps/mobile/src/lib/move-stock-form.ts:114-120 and
+        // src/components/move-stock-modal.tsx:483-487, :686 (no move while it shows) and
+        // :946-949; before, a failed read was an empty list (0dc89dbcd^ :472-475). Opened from
+        // app/item/[id].tsx:2001-2010 and app/(drawer)/staging.tsx:414-421. Walked: the question
+        // for a member who can create racks (unchanged; Cancel saved nothing) and the sheet
+        // loaded with no note. Code only, with create-rack-check.test.ts and
+        // move-stock-destinations-read-wiring.test.ts: the blocked wording and the note.
+        // Audience: New item and New book need items:create; the sheet opens only with
+        // stock:transfer (app/item/[id].tsx:572 canTransfer, staging.tsx:89-92).
+        id: 'app-new-rack-question-and-move-stock-note',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'In the mobile app, the new-rack question says what saving will do, and Move stock says when racks did not load',
+        whatChanged:
+          'In the mobile app, when New item or New book would put stock onto a rack that does not exist yet, and you cannot create racks (the Manage locations permission) or move stock (Transfer stock), the question now reads “Rack 1-B does not exist”, names the missing permission, says that saving does not put the units on a rack, and its button is Save anyway instead of Create rack and save. When the Move stock sheet cannot load the racks and crates the stock could go to, it now says “Could not load the racks and crates to move into. Close this and try again.” and offers no move.',
+        whyItMatters:
+          'For these members the question used to say that continuing creates the rack and moves the units into it, with Create rack and save, but their stock never reached a new rack: the item was saved with its stock off the rack. The Move stock sheet used to treat a failed load as a warehouse with no racks: it could ask whether to create a rack that already exists, Unplaced was missing from the list, and someone who cannot create racks was told there was nothing to move into.',
+        howItAffectsYou:
+          'The Staff role has no Manage locations permission by default, so Staff see this wording. Save anyway saves the item and creates no rack, and the app then says the stock could not be placed on that rack, as before. A rack with a similar name is still offered, such as Use 17-B instead, and Cancel still saves nothing. If you can create racks and move stock, the question works as before. The Move stock sheet, opened with Transfer / put away on an item or with Place on Staging, works as before when the racks and crates load.',
+        whatToDo:
+          "Check the rack the question names. After Save anyway, the item's stock waits in Unplaced until someone who can move stock puts it on a rack, for example with Place on Staging. If the Move stock note appears, close the sheet and try again. Close the app completely and open it again to load the latest update.",
+        audience: { anyPermission: ['items:create', 'stock:transfer'] },
+      },
+      {
+        // platform: web (the blocked tab, live since #399's web deploy on 2026-10-26, never
+        // told) and phone (the sentence). From: B29 #399. Checked at 64054fb3d: the web,
+        // components/maintenance/maintenance-email-action.tsx:206 and :218-236 (recorded only
+        // when the tab opens), :261-278 (the blocked path: not recorded, the email app tried)
+        // and :86 with :392 (the headline); before (9cc13c0d8^1) the blocked path recorded the
+        // draft. The status words, core maintenance/constants.ts:141-142 and
+        // services/maintenance-requests.ts:1117. The reminder,
+        // api/cron/maintenance-draft-reminders/route.ts:92 and :143-145 (Saved, a day old, once),
+        // :195-201 (the setting) and :207-228 (one in-app notification to the person who saved
+        // it); the setting, settings/notification-preferences-form.tsx:126. The escalation's
+        // words, core warehouse/exception-escalation.ts:401. The phone,
+        // apps/mobile/src/lib/maintenance-email-actions.ts:303, :313 and :320-321 with
+        // app/maintenance/[id].tsx:1412 and :1415; the phone records a draft only once it opened,
+        // before and after (src/lib/outlook-transport.ts:249-253). Walked on the simulator: Open
+        // in Default Email App with no mail account showed the new sentence and was not counted.
+        // Code only, with maintenance-email-action.test.tsx:344-363: the blocked web tab, and
+        // the Outlook sentence on the phone. Audience: as the linked page checks it,
+        // dashboard/maintenance/page.tsx:97 (the module) and :107-110 (submit, read_all or
+        // manage).
+        id: 'maintenance-email-draft-open-fixes',
+        category: 'fixed',
+        area: 'Maintenance',
+        title:
+          'A blocked Outlook tab no longer marks a maintenance request Email draft opened, and the mobile app names the right app',
+        whatChanged:
+          'On the web, when you choose Open in Outlook on a maintenance request and your browser blocks the Outlook tab, the request is no longer marked Email draft opened. As before, the page says “Outlook could not be opened automatically.” and tries your email app instead. In the mobile app, after the latest update, when Open in Default Email App cannot open your email app, the screen now says “Your email app could not be opened automatically.” Before, it said Outlook could not be opened, though the phone had not tried Outlook.',
+        whyItMatters:
+          'On the web, the request was marked Email draft opened as soon as the browser blocked the tab, before anything showed that a draft had opened, so the reminder about a draft that was never opened did not come, and an exception escalated to that request showed Email draft opened. In the mobile app, the message named the wrong app.',
+        howItAffectsYou:
+          'A request is marked Email draft opened when the Outlook tab opens, or, in the mobile app, when Outlook or your email app opens; in the app, a draft that did not open is not counted, as before. While a request still reads Saved, the person who saved it gets one in-app reminder to finish it, a day or more after saving, unless they turned off Maintenance draft reminders in Settings, Notifications on the web. On the web, if the Outlook tab was blocked and your email app opened the draft instead, the request still reads Saved and the reminder can still come.',
+        whatToDo:
+          "No action needed. If you already sent the email from your email app, you can ignore the reminder. If the app's message appears, try again or use Copy Email Details. In the mobile app, close the app completely and open it again to load the latest update.",
+        link: { href: '/dashboard/maintenance', label: 'Open Maintenance' },
+        audience: {
+          anyPermission: [
+            'maintenance_requests:submit',
+            'maintenance_requests:read_all',
+            'maintenance_requests:manage',
+          ],
+          modules: ['maintenance_requests'],
+        },
+      },
+      {
+        // platform: phone (the web is unchanged here). From: T14 #405. Checked at 64054fb3d:
+        // apps/mobile/src/lib/return-path.ts:38-45 (an in-app path only) and :86-93 (else back,
+        // else Home); the screens that read a return place, (drawer)/settings.tsx:230,
+        // (drawer)/support.tsx:56, (drawer)/ai.tsx:53, (drawer)/(tabs)/books.tsx:884 and
+        // src/components/data-list-screen.tsx:97 (every list screen). Before (0c80a7e5a^1): each
+        // passed the value to router.replace, which opens a value with a scheme or a leading //
+        // with Linking.openURL (return-path.ts:11-17). Settings' own links,
+        // (drawer)/settings.tsx:297 and :324. Walked on the simulator: values from outside the
+        // app (https:, //host, tel:, sms:, mailto:, another app's scheme) went Home inside
+        // StockPilot on each screen tried, and in-app ones went back to Settings. No audience:
+        // Settings and Support are every member's.
+        id: 'app-back-stays-in-the-app',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'In the mobile app, a link can no longer make Back open a website or another app',
+        whatChanged:
+          'In the mobile app, after the latest update, when a link opens Settings, Support, the AI Assistant, the Books tab or a list screen, such as Notifications, Locations, Categories, Tags, Team or Purchase orders, and names a place for Back to go to, Back goes there only when it is inside the app. Otherwise Back goes to the previous screen, or to Home.',
+        whyItMatters:
+          'Back went wherever the link said. A link made outside StockPilot, for example in an email or a text message, could make Back open a website, a call or text to a phone number, or another app, so a tap on Back could take you out of StockPilot.',
+        howItAffectsYou:
+          'Back works as before inside the app: from Settings, Workspaces and Notifications still go back to Settings, and a screen with no screen before it still goes back to Home.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
+    id: 'ended-session-group-page-fixes-2026-10',
+    revision: 1,
+    // Five changes merged on 2026-10-25 and 2026-10-26, told here for their web
+    // parts, all live in production from web build e1ff7c74ac73 (0132fbd25,
+    // answering /api/version from 03:06:59Z on 2026-10-26) and in the build
+    // after it, 16fdedffc309 (0c80a7e5a, from 03:25:34Z):
+    // - B12 #386, a7ac4a055 (2026-10-25 16:24:41Z; build 524da5521dd1 live from
+    //   16:26:52Z): a button pressed after the session ended goes to sign-in and
+    //   back to its page, and a new procedure's video upload, a Sage 50 import
+    //   and Place an order keep their place across that trip;
+    // - B22 #392, db31281b3 (16:36:38Z; build 07e093d4d495 from 16:38:01Z): the
+    //   public order tracking page's steps for a pickup and its Signed for step,
+    //   and what a paper signature did on the order timeline;
+    // - B38 #393, e48103218 (16:55:04Z; build a36d60d4af1a from 16:56:37Z): the
+    //   web Staging page places stock that is in no warehouse;
+    // - B26 #396, 0ad683600 (21:27:52Z; build bb67687f5eed from 21:29:28Z), its
+    //   web and server part: a replaced PO import's date, either ISBN form in
+    //   Bulk ISBN import, scanned clothing line names (made on the server, so a
+    //   scan started in the mobile app gets them too) and the shared-SKU check.
+    //   The phone's Multiple placements sheet ships with the next phone update
+    //   and is told then;
+    // - B5+B28 #397, fcd993bee (2026-10-26 02:02:23Z; build cc04b6cbc342 from
+    //   02:04:15Z), its web part: Group selected shows the new group on its
+    //   page, and a duplicated book's stock waits in Unplaced. The phone's
+    //   Location filter on Items and Books ships with the next phone update and
+    //   is told then.
+    // No migration, and nothing told here waits for a phone update. The summary
+    // says "On the web", because a phone shows only the title and the summary,
+    // with the first linked entry the reader can reach as its button
+    // (logic.ts legacyAnnouncementsFor): Open Staging for whoever the Staging
+    // entry reaches, which opens the phone's own Staging, where those rows still
+    // cannot be placed, as the summary says (web-path-rewrite.ts maps
+    // /dashboard/inventory/staging to /staging). The other three links have no
+    // phone twin and fall through to home, so a phone shows no button for them.
+    // Walks and checks after the deploys, in Demo Co on production, headless
+    // Chrome signed in as the demo account behind a guard that let through only
+    // the writes each walk declared:
+    // - B12, 2026-10-25 17:00Z to 17:11Z on build a36d60d4af1a (it holds #386,
+    //   #392 and #393): with the session's cookies removed, Save view on Items
+    //   was answered by the proxy (200 with a redirect to sign-in naming the
+    //   page), the browser went to sign-in with no error and, after signing in,
+    //   was back on Items with no view created (walk 1); Sign in pressed on a
+    //   stale sign-in page after the browser had signed in from another tab
+    //   landed on the dashboard, with one sign-in recorded (walk 3); an export
+    //   dialog's failed save still showed its error (walk 6); a new procedure's
+    //   video upload met by an ended session went to sign-in with no error and
+    //   left the tab's note for that procedure (walk 14); signing out removed
+    //   the note in that tab and at once in another open tab (walks 10 and 16),
+    //   and New procedure then opened empty after signing in again (walk 10);
+    //   the Edit procedure page showed the notice when opened from its recovery
+    //   address (walk 7's ending). The test procedures were deleted. Logs from
+    //   16:26:52Z to 21:38Z, over that day's four builds: no 5xx, no error
+    //   lines, and no redirect to sign-in but the walks'. Not walked: a real
+    //   sign-out in another tab (the walks removed the cookies, which sends the
+    //   proxy the same signed-out request), the page-load gates' own redirect
+    //   (none occurred in that window), the return after two-factor sign-in, a
+    //   several-step save cut part way, the hand-off from New procedure to Edit
+    //   procedure after signing in, a reload during the upload, a session that
+    //   had already ended at Create procedure, and Place an order (walk 4 was
+    //   not run). Each rests on the code checks in its entry and the tests
+    //   named there.
+    // - B26, 2026-10-25 21:45Z to 21:56Z on build bb67687f5eed: a synthetic
+    //   invoice scanned with AI named its four "25 - Small : Carolina Blue"
+    //   style lines Carolina Blue - S, M, L and XL, kept its ISBN lines,
+    //   3-Ring Binder and 16:9 Widescreen Monitor as printed, and dropped the 10
+    //   from a "10 - Copy Paper" line ordered as 10 (the scanned import was then
+    //   cancelled); Bulk ISBN import of the ISBN-10 of a book stocked under its
+    //   ISBN-13 made one ready row and answered "Created 0 · 1 already existed
+    //   (matched by ISBN/SKU)." with no record created, and one book given in
+    //   both forms made one row, looked up once. The ISBN lookup was answered by
+    //   a stand-in, as Demo Co's ISBNs are invented. Not walked: the replaced
+    //   import's date (Demo Co has no file imported again, and making one
+    //   cancels an approved purchase order), the shared-SKU refusal (Demo Co has
+    //   no SKU shared by two live records), the AI Assistant's import, a member
+    //   who works in some warehouses only, a barcode saved with hyphens, and the
+    //   sizes shown together on Items (no items were created from the scan).
+    // - B5+B28, 2026-10-26 02:21Z to 02:35Z on build beeab1d07d6f (it holds
+    //   fcd993bee), as an admin: Group selected on page 2 of Items turned the
+    //   list to page 1, where the new group's header is, opened the group and
+    //   scrolled to it, and Back returned to page 2; from page 1 it turned to
+    //   page 2; on Books the header was already on the page and was opened and
+    //   scrolled to; no done message showed Show it, as an admin's lists hold
+    //   every record; the test groups were removed. Duplicate on a book with 1
+    //   unit showed the Quantity field with the Unplaced hint as its description
+    //   and the confirmation "Its stock is in Unplaced, awaiting put-away."; the
+    //   copy held 1 unit in the warehouse's Unplaced and 0 at the site, its
+    //   ledger read the opening unit at the site and then a transfer to Unplaced
+    //   with on hand unchanged, Staging listed it, and the original was
+    //   unchanged; the copy was then written off and archived. Logs from 21:29Z
+    //   on 2026-10-25 to 03:08Z: no 5xx, no 4xx, no error or warning lines. Not
+    //   walked: a staff or viewer list (the Show it link), Add to group on a
+    //   Same SKU chip, the Grid, a page turn on Books, the two Duplicate warnings
+    //   and a duplicate by staff.
+    // - B22 and B38, 2026-10-26 03:44Z to 03:54Z on build 16fdedffc309, reads
+    //   only: seven orders whose paper signatures were recorded from 2026-10-05
+    //   to 2026-10-12, before #392, each showed one "Physical signature
+    //   recorded" entry with "Signed on paper by" and the name as stored, then
+    //   "The order is marked completed." (six) or "What was handed over is
+    //   recorded. The rest stays on backorder." (the one short hand-over). The
+    //   tracking page could not be opened for a Demo Co order (each is a
+    //   member's order, which the app links to the order page, and the tracking
+    //   key is readable by the server only), so its steps were worked out from
+    //   the live orders with the page's own rules: a pickup at Staged and the
+    //   handed-over pickups read as the entry says; no Demo Co delivery was in
+    //   transit or delivered and none is backordered after a hand-over, so those
+    //   states are code-checked only; the live page loaded and its code carries
+    //   the new words. On Staging, the 26 rows, all in Demo Co's one warehouse,
+    //   kept an enabled Place, and their Place dialog had no To warehouse box;
+    //   Place selected on two rows of that warehouse showed no warehouse box and
+    //   no note. Demo Co has one warehouse and no stock in no warehouse, so
+    //   placing such a row, the join note, the picker and the two-warehouse
+    //   refusal are code-checked only, with the tests named in the entry.
+    //   Nothing was changed.
+    // Left out on purpose: B12's "Sign out and back in" on the two error pages,
+    // now a button instead of a link (it looks the same); that the redirect to
+    // sign-in is added to the browser's history, so Back from sign-in returns
+    // to the page and to sign-in again (the PR's open question; not walked);
+    // background reads on an idle page may follow the redirect too (inferred,
+    // not observed). B22's orders completed before signatures were recorded,
+    // which show no Signed for step; old status entries from May now reading
+    // like "Approved → Packaging." (none confirmed in production); and the
+    // portal's order list and the completion email, which still say delivered
+    // for a pickup (#392 changed neither). B38's refusal words for rows of two
+    // warehouses losing "(or have none)", and the warehouse access check a new
+    // rack or crate now passes before it is created (the PR's question 7: not
+    // announced). B26's charter fix (the state it guards cannot occur: Admin
+    // refuses to unlink a charter a live record uses, and the foreign key is
+    // ON DELETE RESTRICT, 0008_warehouse_charters.sql:79-89) and the charter
+    // check's read-failure message. B5+B28's refusal of a duplicate asked for
+    // with another type (a stale tab), Show it after a grouping that changed
+    // nothing, a malformed ?group= being ignored, and older copies reading No
+    // rack on Items.
+    // Told later, in the release for the phone parts of #396 and #397 (the next
+    // phone update), because this one already has twelve entries, the most a
+    // release holds (releaseSchema, packages/core/src/schemas/releases.ts):
+    // B12's Sage 50 import across an ended session. An import of more than 250
+    // items cut between groups now goes to sign-in, and Migrate from Sage 50
+    // shows the summary of what was sent when signed in again on that tab
+    // within the hour (components/settings/sage50-import-wizard.tsx:97-107,
+    // :215-225 and :374-379; sage50-import-wizard.session-ended.test.tsx). It
+    // reaches only owners and admins with Integrations (integrations:manage)
+    // and was not walked.
+    // Who is told: every member (ended-session-goes-to-sign-in has no
+    // audience); each other entry names the permission, and the module where
+    // there is one, that its page or action checks, quoted in its comment.
+    status: 'published',
+    title:
+      'On the web, an ended session takes you to sign-in and back, and Group selected shows the new group on its page',
+    summary:
+      "On the web, pressing most buttons after your session has ended now takes you to sign-in and back to your page, instead of showing an error, and Group selected shows the new group on its page. Also on the web, an order's timeline says what a paper signature did, Staging can place stock that is in no warehouse yet (the mobile app still cannot), the order tracking page shows when an order was signed for, and Bulk ISBN import skips a book you already have under its other ISBN.",
+    publishedAt: '2026-10-26T15:14:00Z',
+    entries: [
+      {
+        // platform: web (the mobile app calls /api with a token, which the proxy leaves to the
+        // route, proxy.ts:31-44). From: B12 #386. Checked at 0132fbd25: a signed-out Server
+        // Action on /dashboard, /platform or /onboarding is answered with 200 and
+        // x-action-redirect to sign-in naming the page, lib/supabase/middleware.ts:15, :43-45,
+        // :69-74 and :203-207; actions pass the redirect on, lib/control-flow.ts:33-35,
+        // server/actions/tags.ts:22-23 and saved-views.ts:26-27, and client catches stay
+        // silent, control-flow.ts:38-40 and reports/lot-trace-search.tsx:49. "Most": code that
+        // calls /api itself is not answered this way (ai/chat-panel.tsx:460,
+        // dashboard/command-palette.tsx:113). Back on the page: auth/sign-in-form.tsx:29 and :80,
+        // two-factor :66-70 and mfa-challenge-form.tsx:37 and :64, the page-load gates
+        // lib/auth/session.ts:349-363. A stale sign-in page: middleware.ts:214-218. Before
+        // (e84d123d9): middleware.ts:146-150 and :157-161 answered with a 307, which Next
+        // 16.4.3's action client turns into "An unexpected response was received from the
+        // server." (middleware.test.ts:275-280); "Something went wrong" was the answer of 15
+        // action modules (exceptions.ts:103). The old sign-in page showed neither: its submit
+        // awaits signInAction with no catch (sign-in-form.tsx:51, also before #386), and Next's
+        // action reducer only rejects the promise (server-action-reducer.js:332-335), so the
+        // page stayed as it was. Several steps: inventory/item-form.tsx:1532, :1556,
+        // :1566 and :1602. Carts kept: orders/v2/cart-context.tsx:136 and :184-185, used by Place
+        // an order (orders-storefront.tsx:241) and New rental (rental-create-form.tsx:517).
+        // Other errors as before: action-catch.behaviour.test.ts:104-136. No reason given after
+        // a button press: middleware.ts:206 sets only redirect, and the notice is for
+        // reason=session_ended only (sign-in-form.tsx:32). Walked: walks 1, 3 and 6. Code and
+        // tests only: the page-load gates, two-factor and a several-step save cut part way. No
+        // audience: every member's buttons pass the proxy.
+        id: 'ended-session-goes-to-sign-in',
+        category: 'fixed',
+        area: 'Account',
+        title: 'After your session ends, a button takes you to sign-in and back to your page',
+        whatChanged:
+          'On the web, when your session has ended, for example because you signed out in another tab or it expired, pressing most buttons that save or load something on a dashboard page now takes you to the sign-in page, with no error message. After you sign in you are back on the page you were on. If you press Sign in on an old sign-in page after you have already signed in from another tab, you now go to the dashboard.',
+        whyItMatters:
+          'Before, the button showed an error, such as “Something went wrong” or “An unexpected response was received from the server”, and the page stayed where it was. Nothing could be saved until you reloaded the page and signed in. Pressing Sign in on an old sign-in page left you on that page.',
+        howItAffectsYou:
+          'A button that saves in one step saved nothing, so repeat it once you are back. A button that saves in several steps, such as Create item with tags or photos on New item, may have saved its first step, so check the page before you repeat it. What you had typed in an open dialog or form is not kept; the cart on Place an order and on New rental is kept in your browser. Other errors, such as a refused save, show as before. After a button press, the sign-in page does not say why you were sent there.',
+        whatToDo: 'Sign in again when the page asks, then repeat what you were doing.',
+      },
+      {
+        // platform: web (the phone's Group review is unchanged: #397 changed no phone grouping
+        // file). From: B5 #397. Checked at 0132fbd25: Group selected and the chip's Add to group,
+        // inventory/bulk-actions.tsx:614-633 and inventory-table.tsx:2215-2228, with core
+        // inventory/grouping-contract.ts:1276, :1351, :1356-1357 and :1385-1386; the list opens,
+        // turns and scrolls, inventory-table.tsx:2018-2035, :2057-2068 and :2109-2123, the turn a
+        // history push (:913-915), so Back steps back; a list holds every record for owners,
+        // admins and managers, server/loaders/inventory-list.ts:195, on Items' product list
+        // (inventory/page.tsx:540 and :976-979, so not ?type=all) and on Books
+        // (books/page.tsx:355-369); the dashboard's low stock links carry type=all
+        // (dashboard/widgets/recent-activity.tsx:69, widgets/shift-command.tsx:58); Show it,
+        // display-group-dialogs.tsx:439-461 and inventory-table.tsx:2128-2137 (no link on a list
+        // that holds every record, without a plan, or with a search); no plan over
+        // INSTANT_MODE_MAX_ROWS = 2000 (lib/inventory/instant-mode.ts:72,
+        // services/inventory.ts:1528-1529); the page it opens, inventory/page.tsx:808,
+        // books/page.tsx:578, instant-mode.ts:924 and inventory-table.tsx:2081-2104. Why: a
+        // group is packed whole at its first record's place, instant-mode.ts:519-521 and
+        // :581-592. The grouping itself is unchanged (no grouping action, service or migration
+        // in #397). Walked as an admin: the turn, the opening, the scroll and Back on Items, and
+        // the opening on Books. Code and tests only (inventory-table.reveal-group.test.tsx and
+        // inventory/page.chain.test.tsx): Show it for staff and viewers, Add to group, the Grid,
+        // a turn on Books, the search and 2,000 cases, and type=all. Audience: Group selected
+        // and Add to group show only with items:update (inventory/page.tsx:472 and
+        // books/page.tsx:345 canUngroup, inventory-table.tsx:1716 and :2227), as in
+        // group-selected-2026-10; no module, Items is core.
+        id: 'group-selected-shows-the-group',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'After Group selected, the list shows the new group on its page',
+        whatChanged:
+          "On the web, after Group selected, or Add to group on a Same SKU chip, the list opens the new group and scrolls to its header. If the list holds every record, as it does for owners, admins and managers on most lists, it also turns to the page where the header is, and the browser's Back button returns you to the page you were on. If the list loads one page at a time, as it does for staff and viewers, the message after grouping ends with a Show it link that opens the page where the header is.",
+        whyItMatters:
+          "A group's header sits where the first of its records sorts, and the list is cut into pages one header at a time. So after grouping, the header could be on a different page from the one you grouped on, and the list only opened the group on the page you were on, where you might not see it.",
+        howItAffectsYou:
+          "Only what the list shows changes; the group, its records and their stock are as before. Show it keeps your filters and sort. There is no Show it link while text is in the search box, or when the page cannot be worked out, as on a list of more than 2,000 records; the list then stays on your page. Owners, admins and managers see the link, not the turn, on Items showing every item type, which is how the dashboard's low stock links open it.",
+        whatToDo:
+          'No action needed. If a Show it link appears after grouping, choose it to see the group.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        // platform: web (the phone has no order timeline; a paper signature recorded in the
+        // mobile app reaches it, apps/mobile/app/order/[id].tsx:1966 posting to
+        // api/v1/orders/[id]/transition/route.ts:173-181). From: B22 #392. Checked at 0132fbd25:
+        // the one writer, services/order-requests.ts:4109-4117 (signatureMethod 'physical',
+        // signerName and status), unchanged since 878036a2b (2026-07-09), so older entries hold
+        // the same fields; the label, components/orders/order-timeline.tsx:115-117 and :127 with
+        // lib/orders/sign-outcome.ts:59; the two lines, order-timeline.tsx:218-227 and
+        // sign-outcome.ts:22 and :29; before, the plain label, order-timeline.tsx:60; the person
+        // who recorded it, :395 and :400-405; who sees the timeline, :347-351. Walked: seven
+        // Demo Co orders whose paper signatures were recorded before #392 each read Physical
+        // signature recorded, Signed on paper by and the stored name, and their outcome.
+        // Audience: the timeline needs activity_logs:read (orders/[id]/page.tsx:1975
+        // can(ctx, 'activity_logs:read')) and the order the Orders module
+        // (services/order-requests.ts:1380 assertModuleEnabled), as in
+        // order-signature-timeline-2026-10.
+        id: 'order-timeline-paper-signature',
+        category: 'improved',
+        area: 'Orders',
+        title: "A paper signature says what it did on the order's timeline",
+        whatChanged:
+          "On the web, the order's timeline entry for a Physical signature, whether it was recorded on the web or in the mobile app, now reads “Physical signature recorded”. Under it, one line says “Signed on paper by” followed by the signer's name as it was entered, and the next says either “The order is marked completed.” or “What was handed over is recorded. The rest stays on backorder.” Before, the entry said only “Status changed”. Only people who can view the audit log see the order's timeline.",
+        whyItMatters:
+          'The timeline did not show what a paper hand-over did, or whether the order was completed or still had items on backorder.',
+        howItAffectsYou:
+          "Paper signatures recorded before this change read the same way, because their timeline entries already held the signer's name and the order's status. The entry still names the person who recorded the signature.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['activity_logs:read'], modules: ['orders'] },
+      },
+      {
+        // platform: web (the mobile app places orders through /api with a token, which the proxy
+        // leaves to the route). From: B12 #386. Checked at 0132fbd25: the request is stored before
+        // the action is called, components/orders/storefront/order-submission.ts:10-12 and
+        // :391-407; a redirect leaves it stored, :316-319, and server/actions/order-requests.ts:130
+        // passes the redirect on for create, status and withdraw (:219, :258 and :281); back on
+        // the page it is adopted, order-submission.ts:462-472 and :342-366, restored as
+        // unconfirmed, core orders/place-order.ts:1245-1248, and a status read that finds
+        // nothing placed leaves it so, :1032-1033 and :1240-1244; the review opens,
+        // orders-storefront.tsx:344-353, on "Your order request is not confirmed"
+        // (place-order.ts:1299) with See my orders, Don't send it and Check and finish
+        // (storefront-overlays.tsx:584-608); Don't send it unlocks the cart (place-order.ts:1321).
+        // The page's name and button, core orders/storefront/copy.ts:29 and :156. Not walked
+        // (walk 4 was not run); the redirect catch has no test of its own (the static
+        // action-catch.guard.test.ts holds it), the restore on load is the reload path pinned by
+        // orders-storefront.submit-once.test.tsx:322-357, and the browser's handling of the
+        // proxy's redirect was walked on production with Save view and a procedure upload.
+        // Audience: orders/new/page.tsx:32 can(ctx, 'orders:request') and :38 the Orders
+        // module, as in order-submit-once-2026-10.
+        id: 'place-order-ended-session',
+        category: 'fixed',
+        area: 'Orders',
+        title:
+          'If your session ends when you submit an order request, you sign in and then finish it',
+        whatChanged:
+          "On the Place an order page on the web, when your session has ended and you press Submit order request, you now go to the sign-in page with no error. After you sign in you are back on Place an order with your cart locked and the review open on “Your order request is not confirmed”, which offers See my orders, Don't send it and Check and finish.",
+        whyItMatters:
+          'The request is saved in your browser before it is sent, and Check and finish sends the same request again, so signing in does not lose it and it is placed once.',
+        howItAffectsYou:
+          "As after a reload, the page remembers your request and checks it when it opens. If the order was placed, you see it. If not, the review stays open until you choose: Check and finish sends the same request again, and Don't send it unlocks your cart.",
+        whatToDo:
+          "After you sign in, choose Check and finish to send the request, or Don't send it.",
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        // platform: web (the mobile app still cannot place these rows,
+        // apps/mobile/src/lib/staging-worklist.ts:494-499 and
+        // src/components/move-stock-modal.tsx:959-964; #393 changed no phone file). From: B38
+        // #393. Checked at 0132fbd25: the dash, components/inventory/staging-table.tsx:688 and
+        // :784-796 (before, e48103218^ :681 and :829 disabled Place); Place for these rows,
+        // lib/locations/place-warehouse.ts:74 through staging-table.tsx:700; the To warehouse
+        // box, place-from-staging-dialog.tsx:803-820, opening on the item's warehouse when it is
+        // offered, place-warehouse.ts:61-62 and staging-table.tsx:844; that warehouse's racks
+        // and crates or a new one, the dialog's :174-178, :823 and :349-373; Place selected,
+        // bulk-place-dialog.tsx:180, :633-636, :642-658 and :659-670 with
+        // place-warehouse.ts:95-102, :117-118 and :123-127. Why: stock for an item with no
+        // warehouse lands in the no-warehouse Staging (0373_draw_provenance.sql:659-668),
+        // picking never draws Staging (0373:708, core orders/put-away.ts:9), and Put away points
+        // to these rows (0390_approval_follows_permission.sql:1042 and :1056, core
+        // orders/readiness.ts:796 and :841). Who can choose: staging-table-section.tsx:85-113
+        // and services/warehouses.ts:180-189 (the active warehouses the person can read; staff
+        // their assigned ones, 0310_rls_blocks_disabled_accounts.sql:616-621). The disabled
+        // Place, place-warehouse.ts:79 and staging-table.tsx:857-864. The filter,
+        // services/inventory.ts:9428 (a row with no warehouse never matches one warehouse). The
+        // phone, as above. Walked: rows with a warehouse kept Place and their dialog. Code and
+        // tests only (Demo Co has one warehouse and no stock in no warehouse): placing such a
+        // row, the picker, the join note and the refusal (staging-table.org-bucket.test.tsx,
+        // place-from-staging-dialog.org-bucket.test.tsx, bulk-place-dialog.org-bucket.test.tsx,
+        // lib/locations/place-warehouse.test.ts). Audience: the linked page answers 404 without
+        // items:read (staging/page.tsx:40) and shows Place with stock:transfer (:46), which the
+        // database refuses below staff (0371_holdings_staff_scope.sql:370-372), so the page's
+        // permission with the roles that can place, as team-disabled-time-org-zone pairs them;
+        // no module, inventory is core.
+        id: 'staging-place-stock-without-warehouse',
+        category: 'fixed',
+        area: 'Staging',
+        title: 'On the web, Staging can place stock that is not in any warehouse yet',
+        whatChanged:
+          "On the web Staging page, a row with a dash in the Warehouse column, which is stock in no warehouse yet, now offers Place; before, its Place button was disabled. Place asks for the warehouse first, in a To warehouse box that opens on the item's own warehouse when you can place there, then lists that warehouse's racks and crates or creates a new one in it. Place selected takes these rows too: they join the warehouse of the other selected rows, and the dialog says so, or you choose one when none of the selected rows has a warehouse. Rows from two warehouses are still refused.",
+        whyItMatters:
+          "Stock added while its item had no warehouse went into Staging with no warehouse, and the Staging page gave no way to place it. Picking cannot take Staging stock until it is placed, and where Orders is on, an order's Put away pointed to exactly these rows, so an order waiting on this stock could not be picked.",
+        howItAffectsYou:
+          'Rows that already have a warehouse place as before. Placing still needs the Transfer stock permission. Staff can choose only the warehouses they are assigned to; owners, admins and managers can choose any active warehouse. If there is no warehouse for you to choose, Place stays disabled for these rows and its hover text reads No warehouse to place it in. The mobile app still cannot place these rows; use the web app for them.',
+        whatToDo:
+          'Open Staging and place the rows with a dash in the Warehouse column. These rows are in no warehouse, so if the warehouse filter at the top shows one warehouse, choose All warehouses in it first. If you use Orders, check afterwards that orders waiting on this stock can be picked.',
+        link: { href: '/dashboard/inventory/staging', label: 'Open Staging' },
+        audience: { roles: ['owner', 'admin', 'manager', 'staff'], anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web (the mobile app has no Duplicate). From: B28 #397. Checked at 0132fbd25:
+        // the move, services/inventory.ts:3869-3876 (a book with a quantity above 0) through
+        // transferStock to the warehouse's Unplaced, :3991-3999 and :4009-4020, which asserts
+        // stock:transfer (:7098); a failed move, :4001-4004 and :4021-4029; stock the caller
+        // cannot see, :748-767 and :3974-3983; the label stays, :3727-3735; a product copy still
+        // goes onto its rack, :3776-3780 and :3840-3862. The words,
+        // components/inventory/duplicate-item-dialog.tsx:155-158 (the confirmation), :53-58 (the
+        // two warnings), :266 (Quantity) and :275-281 (the hint, the field's aria-describedby).
+        // Before: the copy took the original's primary location
+        // (0299_duplicate_inventory_item_variants.sql:196) and its opening stock was seeded there
+        // (0199_seed_initial_level.sql:25-33), and Staging lists only staging and unplaced
+        // holdings (services/inventory.ts:9421-9427). Walked as an admin: the field, the hint,
+        // the confirmation, 1 unit in Unplaced and 0 at the site, the transfer in the ledger,
+        // the Staging row and the original unchanged. Code and tests only
+        // (inventory.duplicate-place.test.ts, duplicate-item-dialog.book-unplaced.test.tsx): the
+        // two warnings, a duplicate by staff, the Movements tab on screen, and older copies left
+        // as they are (#397 has no migration or script). Audience: Duplicate shows with
+        // items:create (item-detail.tsx:535 canDuplicateItem) and only book records change, so
+        // the Books module (core modules/registry.ts books).
+        id: 'duplicated-book-stock-waits-in-unplaced',
+        category: 'fixed',
+        area: 'Inventory',
+        title: "On the web, a duplicated book's stock waits in Unplaced for put-away",
+        whatChanged:
+          "On the web, when you duplicate a book with a quantity above 0, the copy's stock now goes to Unplaced in its warehouse and is listed on Staging. The rack and crate you type stay on the copy as its label. The confirmation adds “Its stock is in Unplaced, awaiting put-away.” In the Duplicate book window the field is now named Quantity, and its hint says the stock waits in Unplaced until it is put away. For books and products, the hint is now the field's description, so screen readers read it with the field. A product copy still goes onto the rack you type.",
+        whyItMatters:
+          "The copy's stock used to stay at the original's site, so it was not listed on Staging for put-away. Stock added to a new item without a rack already waits in Unplaced.",
+        howItAffectsYou:
+          "The copy's on-hand total does not change, and its Movements list the move from the site to Unplaced as a Transfer. Moving the stock needs the Transfer stock permission. If it cannot be moved, the copy is still made and the warning says the stock is still at the site. If StockPilot cannot see all of the copy's stock, for example when some is in a warehouse you do not work in, the warning says it may not have reached Unplaced. Copies made before this change are not moved.",
+        whatToDo:
+          "No action needed. To put the copy's stock away, use Place on Staging. If a warning appears, check where the stock is before picking.",
+        audience: { anyPermission: ['items:create'], modules: ['books'] },
+      },
+      {
+        // platform: web (a public page: /r/track, proxy.ts:26; nothing in the mobile app links
+        // it). From: B22 #392. Checked at 0132fbd25: the steps,
+        // components/orders/track-form.tsx:84-101 (In transit only for a delivery, :93-95;
+        // Signed for, :64 and :96-98; the last step, :99) with core
+        // customization/order-status.ts:136 and :145-154 (Handed over for a completed pickup)
+        // and track-form.tsx:127 (Delivered for a delivery); the heading,
+        // :242 and :249-252; the time, :293 and :381-393; Backordered, :125; signed_at is
+        // stamped at every hand-over and completed_at only when nothing is owed
+        // (0395_order_stock_guards.sql:489-500); the look-up runs only from Find my order
+        // (:140-167, :215); the route sends signed_at and never the signer
+        // (api/v1/public/order-requests/[id]/route.ts:87-91 and :271-289); the order page's
+        // Dates list, orders/[id]/page.tsx:171. Before (a7ac4a055): one fixed list for every
+        // order, track-form.tsx:51-69, and signedAt never drawn. Tests:
+        // track-form.steps.test.tsx:98-251. The tracking page could not be opened for a Demo Co
+        // order (no public orders there); its steps were worked out from live orders with the
+        // page's own rules, and the delivery states are code-checked only. Audience: the orders
+        // this page tracks are placed through public order links, which need the
+        // public_requests module (api/v1/public/order-requests/route.ts:416-428 answers 404
+        // without it).
+        id: 'order-tracking-signed-for-pickup-steps',
+        category: 'improved',
+        area: 'Orders',
+        title: 'The order tracking page shows Signed for, and a pickup ends Handed over',
+        whatChanged:
+          "The public Track your order page, where people follow an order they placed through a public order link, now shows each order's own steps. A delivery reads Submitted, Approved, Packed, Staged, In transit, Signed for, Delivered. A pickup has no In transit step and reads Submitted, Approved, Packed, Staged, Signed for, Handed over; once a pickup is completed, its status also reads Handed over instead of Delivered. Signed for shows the time the order was signed for. After a part hand-over, the status reads Backordered, Signed for is done and the last step is still to come.",
+        whyItMatters:
+          'A pickup showed an In transit step it never goes through, so that step stayed open, and its last step said Delivered for an order that is picked up. The page also did not show when an order was signed for.',
+        howItAffectsYou:
+          'Nothing changes in how you hand over an order. People who follow an order see the new steps the next time they look it up on the page. The page shows when the order was signed for, never who signed or whether the signature was on paper. On the order page, the Dates list still says Signed.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['public_requests'] },
+      },
+      {
+        // platform: web (the mobile app has no bulk ISBN import). From: B26 #396. Checked at
+        // 0132fbd25: the page's list, components/books/bulk-isbn-import.tsx:160-179 (one row and
+        // one lookup for both forms) and :319-322 (the message); the server,
+        // services/inventory.ts:4880-4896 (every key of a book's barcode, against the caller's
+        // readable records, with no deleted or status filter, :4877-4879); the keys, core
+        // books/isbn.ts:79-93 (digits and X only, so a hyphenated barcode never equals one);
+        // the AI Assistant, services/books-import.ts:309-326, :351 (not deleted) and :389. Before:
+        // exact strings (git diff e48103218..0ad683600). Walked: an ISBN-10 for a book stocked
+        // under its ISBN-13 was skipped with the message and no record, and one book in both
+        // forms made one row. Code only: the AI Assistant, a member who works in some
+        // warehouses, a hyphenated barcode, a deleted record. Audience: the linked page
+        // redirects without items:import (books/import/page.tsx:28), and the Books module gates
+        // the Books page that holds its button (books/page.tsx:152-161).
+        id: 'bulk-isbn-import-either-isbn-form',
+        category: 'fixed',
+        area: 'Books',
+        title: 'Bulk ISBN import skips a book you already have under its other ISBN',
+        whatChanged:
+          "On Books, Bulk ISBN import now treats a book's ISBN-10 and its ISBN-13 as the same book. If the list gives 0306406152 for a book you already have as 9780306406157, or the other way round, that line is skipped and the message after Import says how many already existed. A list that gives one book in both forms makes one row and one lookup. The AI Assistant's bulk ISBN import follows the same rule.",
+        whyItMatters:
+          'The import compared each ISBN exactly as written, so the same book was added again as a second record whenever the list gave the other form of its ISBN, and one list holding both forms made two records.',
+        howItAffectsYou:
+          'It compares against the barcode of every record you can see, in any warehouse, not only the one you pick for the import. On the page, archived records and deleted records still in Settings, Recovery count as already there; the AI Assistant compares records that are not deleted. A record matches by the ISBN digits in its barcode field, so a barcode saved with hyphens is not matched.',
+        whatToDo:
+          'No action needed. After you press Import, the message says how many books were created and how many already existed.',
+        link: { href: '/dashboard/books/import', label: 'Open Bulk ISBN import' },
+        audience: { anyPermission: ['items:import'], modules: ['books'] },
+      },
+      {
+        // platform: web and the server (a scan started in the mobile app gets the names too,
+        // apps/mobile/app/scan-po/index.tsx:393). From: B26 #396. Checked at 0132fbd25: the rule
+        // runs on every scan, lib/po-scan/extract.ts:480-491 (bound :245, 500 characters);
+        // lib/po-scan/apparel-names.ts:93 and :145-149 (the count only when it equals the
+        // quantity and a spaced dash or a colon and a space follows), :153-164 (the line's own
+        // size, the only size, the same token), :180-181, :22-77 (XS to 6XL), :206 (an ISBN
+        // vendor number) and :208 (the bound). Shown together on Items: core
+        // inventory/size-run.ts:27-30 and :97-100, inventory-table.tsx:1747-1748 and :1759-1777.
+        // The names seed Create items and stay editable, po-imports/create-items-modal.tsx:223-228
+        // and :575. Walked: the four sizes, the ISBN lines, the binder and monitor names and the
+        // dropped count, on a synthetic invoice. Not walked: items created from a scan shown as
+        // one size run. Audience: the imports pages need purchase_orders:manage
+        // (purchase-orders/imports/layout.tsx:23) and the PO imports module
+        // (imports/new/page.tsx:21); createFromScan asserts both (services/po-imports.ts:984-985).
+        id: 'po-scan-clothing-line-names',
+        category: 'improved',
+        area: 'PO imports',
+        title: 'Scanned clothing lines are named so their sizes group as a size run',
+        whatChanged:
+          "When a scanned purchase order prints a clothing line as “25 - Small : Carolina Blue”, the line is now named “Carolina Blue - S”: the size moves to the end as its short code, and the leading 25 is dropped because it is the quantity ordered. Items whose names share a start and end in a size are shown together on Items as one size run. You see the names on the import's page after Scan with AI.",
+        whyItMatters:
+          'The scan kept each line as printed, so the sizes of one shirt had different names, each starting with its own count, and did not group. The workaround was to rename every item by hand before receiving.',
+        howItAffectsYou:
+          'A size moves only when the scan also read that size for the line, it is the only size in the name, and it is an adult size from XS to 6XL; youth, shoe and number sizes stay as printed. A leading number is dropped only when it equals the quantity and a spaced dash, or a colon and a space, follows it, so 3-Ring Binder and 16:9 Monitor keep their numbers. A line whose vendor number is an ISBN, and a name that would pass 500 characters, stay as printed.',
+        whatToDo:
+          "No action needed. Check the names on the import's page before you approve it. When you create items from the lines, each name starts from these descriptions and you can still change it.",
+        link: { href: '/dashboard/purchase-orders/imports/new', label: 'New PO import' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
+      },
+      {
+        // platform: web (the mobile app does not edit a SKU). From: B26 #396. Checked at
+        // 0132fbd25: the check runs before the first write, services/inventory.ts:5414-5434
+        // before :5436-5442, through assertSkuGroupCanMove, :5111-5155, whose words are :5144
+        // and :5151 and which names no record (:5105-5109); the race left, :5518-5531, and its
+        // message, :5565-5569 (the PR keeps a database fix as still to do); the edit form's
+        // note, inventory/item-form.tsx:2961-2968. Before: the edited record was written first
+        // (git diff e48103218..0ad683600). Tests: inventory.sku-rekey-preflight.test.ts. Not
+        // walked: Demo Co has no SKU shared by two live records. Audience: InventoryService.update
+        // asserts items:update (:5157-5158) and the edit page redirects without it
+        // (inventory/[id]/edit/page.tsx:48-50); no module, Items is core.
+        id: 'sku-change-checks-all-records',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'Changing a SKU that other records share is checked for every record before it saves',
+        whatChanged:
+          "When you change the SKU on a record that other records share, StockPilot now checks all of those records before it saves anything. If two records would end up with the same SKU in the same charter and rack, nothing is saved and the message says why, for example: Two records can't share a SKU there, so nothing was changed. The message names the SKUs but no record, because you may not be able to open the other one.",
+        whyItMatters:
+          'Changing a shared SKU also changes it on the other records. Your record was saved first, so when another record could not follow, yours sat on the new SKU while the others kept the old one.',
+        howItAffectsYou:
+          'A save refused by this check changes no record. If someone saves a record into one of those spots at the very same moment, a save can still stop part way, and the message then says this record has the new SKU and the other records kept the old one. The edit form already says how many other records you can see share the SKU and that saving the shared fields changes all of them.',
+        whatToDo:
+          'No action needed. If a save is refused, use a different SKU, or leave the SKU as it is.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        // platform: web (the mobile app's own PO import page still says "Replaced by a later
+        // import of this file." and "This file was imported again later", with no date,
+        // apps/mobile/app/po-import/[id].tsx:676 and :706; #396 changed only the web notice), so
+        // the title and whatChanged say "On the web". From: B26 #396. Checked at 0132fbd25: the
+        // notice,
+        // components/po-imports/po-import-lineage-notice.tsx:48-54 (only with a later import),
+        // :60, :63 and :64-72 (the date in the organization's zone, the time in its hover),
+        // pinned by po-import-lineage-notice.test.tsx:100-103; the zone,
+        // purchase-orders/imports/[id]/page.tsx:48-54 and :149 (an unreadable row falls back to
+        // core's default); before, formatRelative (lib/utils.ts:16-35). The list's upload dates,
+        // imports/page.tsx:307-321 (po-imports-upload-date-and-uploader). Workspace timezone,
+        // settings/org-timezone-editor.tsx:93, owners and admins only
+        // (settings/organization/page.tsx:17). Not walked: Demo Co has no file imported again,
+        // and making one cancels an approved purchase order; its import pages rendered after the
+        // zone read with no error. Audience: the imports pages need purchase_orders:manage
+        // (purchase-orders/imports/layout.tsx:23) and the PO imports module
+        // (imports/page.tsx:64-67).
+        id: 'po-import-reimport-date',
+        category: 'improved',
+        area: 'PO imports',
+        title:
+          "On the web, a replaced PO import says the day it was imported again, in your organization's time zone",
+        whatChanged:
+          "On the web, on a PO import that a later import of the same file replaced, the notice “Replaced by a later import of this file” now says “This file was imported again on” followed by a date, such as Sep 9, 2026. The date is the day in your organization's time zone, and pointing at it shows the date with its time. It used to say how long ago, such as 2 weeks ago.",
+        whyItMatters:
+          'A time such as 2 weeks ago names no day, so it could not be checked against a calendar. The PO imports list already shows its upload dates this way.',
+        howItAffectsYou:
+          "The day follows your organization's time zone, not the server's or your browser's. Owners and admins can change that zone under Workspace timezone in Settings, Organization.",
+        whatToDo:
+          'No action needed. If the date is not the day you expect, an owner or admin can check the Workspace timezone in Settings, Organization.',
+        link: { href: '/dashboard/purchase-orders/imports', label: 'Open PO imports' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
+      },
+      {
+        // platform: web (the mobile app does not create procedures). From: B12 #386. Checked at
+        // 0132fbd25: the note is begun and kept before each step,
+        // components/procedures/procedure-form.tsx:339, :192, :218 and :255, a redirect leaves it
+        // (:280, :373 and :393); back on New procedure the form takes it and opens the Edit
+        // procedure page, :164-169 and :63, which shows the notice
+        // (upload-recovery-toast.tsx:31, procedures/[id]/edit/page.tsx:52); the note's tab,
+        // account and hour, lib/interrupted-run.ts:68-69, :98 and :221-240; only the id,
+        // procedure-form.tsx:56-59; finished videos are recorded one by one, :255-265; a session
+        // already ended at Create procedure keeps nothing, :342-349; signing out removes it,
+        // dashboard/user-menu.tsx:221 and interrupted-run.ts:450-453, in another tab of the
+        // browser too (listenForPurges, :466-476), and so does a revoke of this session from
+        // another device (realtime/session-revocation-listener.tsx:74); the run then writes
+        // nothing more, so New procedure opens empty after signing in (walk 10). Only a session
+        // that runs out by itself keeps it (interrupted-run.ts:38-53), so the entry says "runs
+        // out" and "not a sign-out", and sends a signed-out reader to Procedures
+        // (procedures/page.tsx, a card per procedure, and Edit on its page,
+        // procedures/[id]/page.tsx:82-86). Before (e84d123d9): an
+        // error for each video, procedure-form.tsx:221, and no note. Walked: the sign-in with no
+        // error and the note kept (walk 14), its removal on sign-out in that tab and another
+        // (walks 10 and 16), and the notice on the Edit procedure page opened from its recovery
+        // address (walk 7's ending). Code and tests only (procedure-form.session-ended.test.tsx
+        // :160-189, :191-229 and :496): the hand-off after signing in, a reload, and a session
+        // already ended at Create procedure. Audience: procedures/new/page.tsx:15 and
+        // procedures/[id]/edit/page.tsx:19 can(ctx, 'categories:manage'), and the Procedures
+        // module (services/procedure-videos.ts:197-198).
+        id: 'new-procedure-upload-ended-session',
+        category: 'fixed',
+        area: 'Procedures',
+        title:
+          "If your session runs out while a new procedure's videos upload, signing in takes you to that procedure",
+        whatChanged:
+          "On the web, when you press Create procedure with videos added and your session runs out while they upload (it expired, not a sign-out), you now go to the sign-in page with no error. Sign in again on the same tab within an hour and you are taken to the Edit procedure page for that procedure, with the notice “Some video uploads didn't finish. Re-drop the missing files.” Reloading the page during the upload does the same.",
+        whyItMatters:
+          'Before, each remaining video showed “An unexpected response was received from the server”, and a reload showed an empty New procedure form, so filling it in again made a second procedure.',
+        howItAffectsYou:
+          "Videos that finished are already on the procedure. The video files themselves are not kept, so drop the missing ones in again. The tab keeps only the procedure's id, for your account. Signing out, in this tab, in another tab of this browser or from another device, removes it, and New procedure then opens empty after you sign in: open Procedures and finish the one already saved instead of filling the form in again. If your session has already ended when you press Create procedure, nothing is saved and New procedure opens empty after you sign in.",
+        whatToDo:
+          'Drop the missing video files into that page again. If New procedure opens empty instead, open Procedures and finish the procedure already saved there.',
+        audience: { anyPermission: ['categories:manage'], modules: ['procedures'] },
+      },
+    ],
+  },
+  {
+    id: 'unsubscribe-rack-question-fixes-2026-10',
+    revision: 1,
+    // Four changes merged on 2026-10-25, all live in production web build
+    // 8008cab0e0c0 (e84d123d9: /api/version answered it from 15:41:34Z, built
+    // 15:39:59Z):
+    // - S14 #388, 75809d577 (14:28:30Z): no page on another origin can sign a
+    //   browser out or spend its export budget, and the confirmation page names
+    //   the account a browser is already signed in to;
+    // - B15 #390, d42b7f5b2 (14:47:38Z): members unsubscribe from the weekly
+    //   digest and schedule reminder emails without signing in;
+    // - B16 #389, 0dc89dbcd (15:03:50Z), its web half only: adding an item asks
+    //   before it creates a rack. The phone half (New item's words for a member
+    //   who cannot create racks, and Move stock's note when the racks and crates
+    //   cannot load) ships with the next phone update and is told then; phones
+    //   already asked before a new rack (#249, fixes-and-improvements-2026-09-25);
+    // - B9 #391, e84d123d9 (15:39:38Z): Archive anyway, number formats, one-unit
+    //   order emails, the settings error state and two hover times in the
+    //   organization's zone.
+    // No migration, and nothing for phones to wait for: every change is the
+    // web's or the emails'. The summary says "On the web" before the web-only
+    // changes, because a phone shows only the title and the summary, and the one
+    // linked page (notification settings) has no phone twin, so a phone shows
+    // no button (whats-new.tsx showCta, web-path-rewrite.ts).
+    // Walks and checks after the deploys, 2026-10-25:
+    // - S14, on production after #388's deploy (14:48Z to 14:51Z, Chromium,
+    //   signed in to Demo Co): a cross-site click on the sign-out route while
+    //   signed in landed on the dashboard, still signed in; the user menu's Sign
+    //   out still signed out; an export asked for with another site's Fetch
+    //   Metadata got 403 with the "Start this download from StockPilot" words,
+    //   while the Reorder forecast CSV downloaded from its own page; three phone
+    //   (Bearer) calls passed; a confirmation link opened while signed in named
+    //   the signed-in account in the notice's words. The logs showed one refusal
+    //   per probe and no 5xx. Not walked: a browser tab opening an export link
+    //   from webmail (the probe sent a browser's cross-site headers), the PDFs,
+    //   slips and exports that open in a new tab or by fetch (all same-origin
+    //   from StockPilot's pages), Safari and Firefox (both send Sec-Fetch-Site
+    //   over https in the versions the app supports, cross-site-request.ts:35-40),
+    //   and a reset or email change completed since the deploy
+    //   (auth/confirm/route.test.ts).
+    // - B15: not walkable. A member's real link exists only in a sent email (the
+    //   digest preview or the two scheduled jobs), and the walk sent none, so no
+    //   link was opened or pressed in production. After the deploy the signing
+    //   value's name was present for production, so the emails carry the signed
+    //   link, and a cookie-less one-click POST to /unsubscribe with an unsigned
+    //   link got the app's own "This link isn't valid" page (400), so a mail
+    //   provider's POST reaches the app. The page, the switches, the 90 days and
+    //   the footer words rest on the code checks in the entry and on
+    //   unsubscribe/route.members.test.ts, route.settings-parity.test.tsx and
+    //   lib/email/member-unsubscribe.test.ts.
+    // - B16 and B9, Demo Co on production, 15:57Z to 16:19Z, headless Chrome as
+    //   the demo account, behind a guard that let through only requests the
+    //   server refuses before any write, each read back: New item with 3 units
+    //   on a missing rack asked "Create new rack 91-ZZ?", naming the warehouse
+    //   and the 3 units, and Go back saved nothing and kept the form; a near miss
+    //   of 31-B asked about 31-A and offered "Use 31-B instead"; Duplicate onto a
+    //   missing rack asked the same question; archiving a rack that holds 17
+    //   units showed the refusal inside the window with Archive anyway (Cancel
+    //   pressed); the Items and Movements pagers printed en-US numbers; in a
+    //   German browser the Movement volume tooltip, a PO's Receipts, the receive
+    //   window and Settings, AI printed en-US numbers, with no hydration error.
+    //   Nothing was created, changed or archived. Not walked, because they write
+    //   or Demo Co has no data for them: Create rack and save, a suggestion
+    //   pressed, Save anyway for a member who cannot create racks, a size run,
+    //   Add more sizes (no sized item on a missing rack), New book, Duplicate's
+    //   warning, Archive anyway pressed, a list of 1,000 rows or more, a disabled
+    //   member, a procedure comment, the order emails and a failing settings
+    //   page. Each rests on the code checks in its entry and the tests named
+    //   there.
+    // Left out on purpose: S14's refusal of API writes another page sends (no
+    // change for StockPilot's pages or the phone), the fixed landing for each
+    // confirmation type, the sign and release-state refusals and the new log
+    // lines; B15's Gmail sentence (no walk saw Gmail's own button or the
+    // DKIM-signed headers), Yahoo, the plain-text line, the rate limits and the
+    // audit row; B9's pager on a public request link's page (public_links:manage
+    // only), the location actions' failure message, and what only platform staff
+    // see (the console's dates, Last active, the scheduled-job audit mark).
+    // Told later, in the release for B16's phone half (the next phone update),
+    // because this one already has twelve entries, the most a release holds
+    // (releaseSchema, packages/core/src/schemas/releases.ts): three more #389
+    // changes. A refused sports item or size run no longer leaves an empty
+    // product group (services/inventory.ts:3218-3252 and :4164-4208 now run
+    // before the group is created); Duplicate says "Something went wrong. Please
+    // try again." in place of the raw error (server/actions/duplicate-item.ts:49-52);
+    // and a save whose rack lookup fails is refused before any write
+    // (services/inventory.ts:8698-8701) with the generic internal error message.
+    // Who is told: every member (five entries have no audience: the two S14
+    // entries, B15's, the browser-language counts and the settings error); each
+    // other entry names the permission, and the module where there is one, that
+    // its page or action checks, quoted in its comment.
+    status: 'published',
+    title:
+      'Unsubscribe without signing in, a question before a new rack on the web, and other websites cannot sign you out',
+    summary:
+      'The Unsubscribe link in the weekly inventory digest and schedule reminder emails now opens a page that works without signing in. On the web, adding an item asks before its stock goes onto a rack that does not exist yet, a link on another website can no longer sign you out or start an export with your account, archiving a location that still holds stock offers Archive anyway, and page numbers print with commas. Order emails now say 1 unit and 1 line.',
+    publishedAt: '2026-10-25T17:01:00Z',
+    entries: [
+      {
+        // platform: web (the emails and the page they open). From: B15 #390. Checked at
+        // e84d123d9: the footer link, es/families/digest.ts:409, families/schedule.ts:258 and
+        // api/cron/schedule-reminders/route.ts:423, the preview actions/digest.ts:108-112; no
+        // sign-in, proxy.ts:32-44 does not match /unsubscribe; the page names the email,
+        // unsubscribe/route.ts:207 and :222; opening changes nothing, :381-383; pressing turns it
+        // off, :430, :350 and :357-358; the settings page's own switches,
+        // member-email-unsubscribe.ts:96-100 and :117-119 (actions/digest.ts:39,
+        // actions/notification-preferences.ts:96); every workspace, digest.ts:406 and
+        // schedule.ts:145; the push switch untouched, member-email-unsubscribe.ts:27-29 and
+        // schedule-reminders/route.ts:386; 90 days, lib/email/member-unsubscribe.ts:77 and
+        // :214-216; a forwarded email, unsubscribe/route.ts:240. Before: the footer and
+        // List-Unsubscribe pointed at the settings page (d42b7f5b2^ digest.ts:396 and
+        // weekly-digest/route.ts:374), which needs a session (lib/auth/session.ts:336). No
+        // audience: the linked page checks only the session (settings/notifications/page.tsx:15
+        // requireSession, :52 requireOrgContext), as OPEN_TO_EVERY_MEMBER in registry.test.ts
+        // records, and any member may turn the digest on.
+        id: 'unsubscribe-digest-and-reminder-emails',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'Unsubscribe from the weekly digest and schedule reminder emails without signing in',
+        whatChanged:
+          'The Unsubscribe link at the bottom of the weekly inventory digest, the digest preview and schedule reminder emails now opens a StockPilot page that works without signing in. The page says which email it stops, and pressing Unsubscribe there turns that email off. Opening the link changes nothing by itself.',
+        whyItMatters:
+          'The link used to open your notification settings, which need you to sign in, so reading the email while signed out, on a phone for example, led to the sign-in page first.',
+        howItAffectsYou:
+          "Unsubscribing turns off the same switch as Settings, Notifications: Email me a weekly inventory digest, or Schedule reminders under Email notifications. It is an account setting, so the email stops in every workspace you belong to, as the email's footer and the page say. Schedule reminders in the app and on your phone are not changed. A link works for 90 days after its email was sent; an older one opens a page that changes nothing. The link needs no sign-in, so anyone you forward the email to could use it to turn that email off for you.",
+        whatToDo:
+          'No action needed. To get an email again, turn it back on in Settings, Notifications. For an email older than 90 days, use the Unsubscribe link in a newer one.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+      {
+        // platform: web (the phone half ships with the next phone update). From: B16 #389.
+        // Checked at e84d123d9: refused before any write, services/inventory.ts:3268 and
+        // :3278-3281 (stock on a typed rack only), a size run once :4204-4207, Duplicate
+        // :3714-3721 (not books, duplicate-item-dialog.tsx:119); in that warehouse,
+        // services/locations.ts:412-415; the words, core inventory/rack-near-match.ts:301-306;
+        // a suggestion only for a near miss, at most three, :126 and :170-191; Go back,
+        // placement-confirm-dialog.tsx:255-257; Create rack and save, new-rack-question.ts:23
+        // and inventory.ts:8832-8835; who cannot create racks or move stock, core
+        // inventory/new-rack-confirmation.ts:73-74, Save anyway new-rack-question.ts:31, the
+        // warning core inventory/placement-warning.ts:38-41; New book's Bin / shelf,
+        // item-form.tsx:1507 and :2206-2207; Add more sizes uses the item's own rack,
+        // add-sized-variants-button.tsx:123; the edit page and Set rack do not ask,
+        // item-form.tsx:1212 and inventory.ts:8453. Walked: the question, a near miss and Go back
+        // on New item, and the question on Duplicate. Audience: who can add items,
+        // inventory/new/page.tsx:42 and books/new/page.tsx:57 can(ctx, 'items:create'), and
+        // item-detail.tsx:535 for Duplicate.
+        id: 'web-asks-before-new-rack',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'On the web, adding an item asks before it creates a new rack',
+        whatChanged:
+          "On the web, when the stock of an item you add would go onto a rack that does not exist in that warehouse, saving stops and asks “Create new rack 1-B?”, with the number of units that would move onto it. This covers New item (once for a whole size run), New book (the rack named in Bin / shelf), Add more sizes (which uses the item's own rack) and Duplicate (not for books). When a rack in that warehouse has a similar name, the question offers it, such as “Use 17-B instead”, which saves onto that rack and creates no new one.",
+        whyItMatters:
+          "Adding an item on the web never asked about the rack. For anyone who can create racks and move stock, a mistyped rack number became a new rack, and the item's stock was moved onto it. For anyone else, the item was saved with its stock off the rack.",
+        howItAffectsYou:
+          'Go back saves nothing and keeps what you typed. Create rack and save creates the rack and puts the stock on it. If you cannot create racks (the Manage locations permission) or move stock (Transfer stock), the question reads “Rack 1-B does not exist”, says why, and its button is Save anyway: the item is saved, its stock is not put on a rack, and a warning names the rack. A rack that already exists is used with no question, and an item saved with no stock is not asked about. Changing the rack of an item you already have, on its edit page or with Set rack, does not ask.',
+        whatToDo:
+          'No action needed. When the question appears, check the rack it names before you create it.',
+        audience: { anyPermission: ['items:create'] },
+      },
+      {
+        // platform: web (the phone sends a Bearer token and is never judged,
+        // cross-site-request.ts:182 and export-rate-limit.ts:90). From: S14 #388. Checked at
+        // e84d123d9: auth/session-ended/route.ts:48-49 sends a live session that another
+        // origin sent there to the dashboard (before, the GET signed out with no check); every
+        // route that answers with a CSV, XLSX, ZIP or PDF passes its request to
+        // exportRateLimited, which refuses another origin's request with
+        // CROSS_SITE_EXPORT_MESSAGE before the hourly budget, export-rate-limit.ts:20-21, :90-95
+        // and :98 (40 an hour); same-origin and the person's own act (none) pass,
+        // cross-site-request.ts:115-118. No page calls it: the report pages, the order print page
+        // and the labels page are dashboard pages that still open from another site's link. The
+        // barcode image (api/v1/items/[id]/barcode) does not call it either, and purchase order
+        // attachments are signed storage links (server/services/po-attachments.ts:70), hence an
+        // export or PDF StockPilot makes and a report's PDF or CSV, not a printout or a report.
+        // The refusal is the route's JSON answer, which carries the words, hence "answers" and
+        // a short error that contains the message. No audience: anyone signed in could be signed
+        // out, and the exports span many permissions.
+        id: 'other-websites-cannot-sign-you-out-or-download',
+        category: 'fixed',
+        area: 'Web app',
+        title:
+          'Links on other websites can no longer sign you out or start downloads with your account',
+        whatChanged:
+          "On the web, a link or page on another website can no longer sign you out of StockPilot. A link that would have signed you out now opens your dashboard, and you stay signed in. A link to an export or PDF StockPilot makes, such as a CSV export, a report's PDF or CSV, a purchase order PDF or a pick slip, no longer downloads when it is opened from a page on another website, such as webmail or a chat app in your browser. It answers “Start this download from StockPilot. A link on another website can't start it.” instead.",
+        whyItMatters:
+          'Before, any website could sign you out of StockPilot with a link, and a page on another website could start StockPilot exports and PDFs with your signed-in account. Each one counted toward the exports you can run in an hour, so another website could use them up and stop your own exports and PDFs for up to an hour.',
+        howItAffectsYou:
+          "Signing out, and downloading from StockPilot's own pages, work as they did. If you open a link to one of these files from webmail or a chat app in your browser, you see a short error that contains that message instead of the file. Nothing changes in the mobile app.",
+        whatToDo:
+          'No action needed. If a download link says to start the download from StockPilot, open the page in StockPilot and download it from there.',
+      },
+      {
+        // platform: the emails. From: B9 #391. Checked at e84d123d9: lib/email/es/count.ts:11
+        // (the singular only for exactly one); es/registry.ts:405 (Reserved ... across ...) and
+        // :511 (1 line is being picked and packed); lib/email/order-requests.ts:695 (The
+        // reserved unit went back); es/families/fulfillment.ts:303 and :307 (The remaining unit
+        // is, was or were delivered). Sent to the order's requester
+        // (services/order-requests.ts:5151 resolveRecipient). Not walked: an email in Demo Co
+        // needs an order placed; the email tests pin the words. Audience as web-orders-fixes:
+        // orders:request or orders:approve, with the Orders module.
+        id: 'order-emails-one-unit-one-line',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order emails say 1 unit and 1 line',
+        whatChanged:
+          'Order emails now say 1 unit and 1 line where they said 1 units and 1 lines, for example Reserved 1 unit across 1 line, and the verb follows the count, as in 1 line is being picked and packed. A sentence about a single unit now reads The reserved unit went back to stock, or The remaining unit is backordered.',
+        whyItMatters:
+          'An order of one unit or one line read 1 units or 1 lines, and a single backordered unit read The remaining 1 units are backordered.',
+        howItAffectsYou:
+          'Only the words that go with a count of exactly one changed. Every other count reads as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: web (no phone screen archives a location; the only caller is
+        // locations-manager.tsx:172). From: B9 #391. Checked at e84d123d9: the refusal's
+        // details now reach the window, server/actions/locations.ts:31 (before, :18 dropped them
+        // from the guard's first day, 44f9e5a65, so Archive anyway never appeared); the words,
+        // services/locations.ts:704-706 and core inventory/stock-writeoff.ts:169 and :233-234;
+        // the window, locations-manager.tsx:179, :373 and :375, other refusals :182-183, a
+        // restore :199 and :392, read out by ui/destructive-confirm.tsx:199 (role alert);
+        // Archive anyway only sets deleted_at, services/locations.ts:554. Walked: the refusal
+        // and Archive anyway on a rack holding stock (Cancel pressed). Audience: Archive and
+        // Restore show only with locations:manage, locations/page.tsx:41 can(ctx,
+        // 'locations:manage') and locations-manager.tsx:306; no module, locations is core.
+        id: 'location-archive-anyway',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Archive anyway now appears for a location that still holds stock',
+        whatChanged:
+          'On the Locations page, when you archive a location that still holds stock, the window now says how many units are there and names up to three of the items, and its button becomes Archive anyway. If an archive or a restore is refused for any other reason, the reason also shows inside the window, where a screen reader reads it out.',
+        whyItMatters:
+          'Before, the stock message showed only as a passing notice and Archive anyway never appeared, so a location that still held stock could not be archived on the web.',
+        howItAffectsYou:
+          'Archive anyway does not move the stock. As the window says, it stays counted in on hand, attached to the archived location, which is hidden from pick lists and item forms. To avoid that, move the stock or write it off before you archive. You can restore an archived location from the Archived view.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: ui/pagination.tsx:94-98 and :122
+        // (the range, the total and Page N of M through formatNumber), inventory-table.tsx:3348,
+        // :3385 and :3239; formatNumber is en-US, lib/utils.ts:12-13. Pages: Items, Books
+        // (books-inventory-table.tsx:20), Rentals items (rentals/items/page.tsx:249), Movements
+        // (movements/page.tsx:287 and :352, 50 to a page at :41), PO imports
+        // (purchase-orders/imports/page.tsx:365) and a location's page
+        // (location-verification.tsx:192-196). Maintenance's pager prints Page N only
+        // (maintenance/page.tsx:335-340), so it is not named. Walked: Items and Movements, in
+        // en-US form; no Demo Co list reaches 1,000 rows. Audience: items:read, in every role's
+        // defaults, which these lists need.
+        id: 'pager-numbers-with-commas',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Page numbers under lists print with commas',
+        whatChanged:
+          "On Items, Books, Rentals items, Movements, PO imports and a location's page, the row range, total and page numbers under the list now print with commas, for example Showing 1–50 of 12,345.",
+        whyItMatters:
+          'These numbers printed without commas, such as 12345, while the item totals on Items and Books already had them.',
+        howItAffectsYou: 'Only the way these numbers are printed changes. Paging works as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web (the page an emailed link opens). From: S14 #388. Checked at e84d123d9:
+        // auth/confirm/route.ts:165-175 (the signed-in account), :178-183 (the notice's words)
+        // and :214 (one template for every link type); the links members get open this page,
+        // lib/auth/password-reset-email.ts:48 (recovery) and server/services/email-change.ts:147
+        // (email_change); pressing verifies the link and sets its session, :268. Team invites
+        // open their own invite page, which #388 did not change, and members get no emailed
+        // sign-in link, so neither is named. Walked: the notice on a sign-in link's page opened
+        // signed in, in production. No audience: every member can reset a password or change
+        // their email.
+        id: 'reset-and-email-change-pages-name-your-account',
+        category: 'improved',
+        area: 'Account',
+        title: 'Password reset and email change pages name the account you are signed in to',
+        whatChanged:
+          "When you open a password reset or email change link from StockPilot in a browser that is already signed in, the page now names the email address that browser is signed in as. It adds: “If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.”",
+        whyItMatters:
+          "Before, pressing the button signed the browser in to the account the link belongs to, in place of any account it was already signed in to, without saying so. On a shared computer, or with a link you did not ask for, you could end up working in someone else's account without noticing.",
+        howItAffectsYou:
+          'When you open your own link while signed in, for example to confirm an email change, the notice names your own address. That is expected: press the button to continue as before. In a browser that is not signed in to StockPilot, the page looks as it did.',
+        whatToDo:
+          'No action needed. If the page names an account you did not expect, or you did not ask for the link, close the page without pressing the button.',
+      },
+      {
+        // platform: web. From: B16 #389. Checked at e84d123d9: duplicate-item-dialog.tsx:129-136
+        // (a warning when placementFailed, otherwise the success notice) and :137-139 (the
+        // copy's page opens); server/actions/duplicate-item.ts:27 and :35;
+        // services/inventory.ts:3777-3800 and :3812; the words, core
+        // inventory/placement-warning.ts:38-41. Before: an unconditional success notice. Not
+        // walked: it needs Save anyway by a member who cannot create racks. Audience:
+        // item-detail.tsx:535 can(ctx, 'items:create') shows Duplicate.
+        id: 'duplicate-says-when-stock-not-placed',
+        category: 'fixed',
+        area: 'Inventory',
+        title: "On the web, Duplicate says when the copy's stock did not reach its rack",
+        whatChanged:
+          "On the web, when the stock of a duplicated item could not be put on the rack you entered, Duplicate now shows a warning that names the rack and says the stock is still where it started. Before, it showed only Duplicated and the item's name.",
+        whyItMatters:
+          'The copy was saved with the new rack as its label while its stock could still be where it was first recorded, and nothing said so.',
+        howItAffectsYou:
+          'When the stock reaches the rack, Duplicate says Duplicated as before. Either way the copy is saved and its page opens.',
+        whatToDo:
+          "No action needed. If the warning appears, check where the copy's stock is before you pick it.",
+        audience: { anyPermission: ['items:create'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: po/receipt-history.tsx:223 and
+        // :251; po-receive-dialog.tsx:540 and :595-597 (Lot capture, lot-tracked lines only);
+        // ui/chart.tsx:281, reached only by movement-volume-widget.tsx:66 (the other charts pass
+        // their own formatter, chart.tsx:240); embeddings-backfill-panel.tsx:89-90 under
+        // settings/ai/page.tsx:63; formatNumber is en-US. receipt-history.test.tsx hydrates in
+        // de-DE with no error. Walked in a German browser: en-US numbers and no hydration error
+        // (no count reached 1,000). Other client code still prints in the browser's language,
+        // hence More counts. No audience: the counts sit on pages with different gates.
+        id: 'counts-same-in-every-browser-language',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'More counts print the same in every browser language',
+        whatChanged:
+          "These counts now use the same format, such as 1,500, whatever language your browser is set to: the quantities in a purchase order's Receipts section, the Lot capture count in the receive window, the Movement volume chart's tooltip on the Overview, and the count of items embedded under Semantic search embeddings in Settings, AI.",
+        whyItMatters:
+          "In a browser set to another language, such as German, these counts used that language's format (1.500). The Receipts section and Settings, AI are drawn on the server first, so the difference also made the browser draw that part of the page again.",
+        howItAffectsYou: 'Only the format of these numbers changes.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: settings/error.tsx (new) :59, :70,
+        // :74, :76 and :82, below settings/layout.tsx:35-38, whose settings menu stays; before,
+        // (dashboard)/error.tsx:51 replaced the whole settings area. Not walked: a settings page
+        // cannot be made to fail in production; settings/error.test.tsx covers it. No audience:
+        // every member can open a settings page.
+        id: 'settings-page-error-keeps-menu',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'A settings page that cannot load keeps the settings menu',
+        whatChanged:
+          "If one settings page cannot load, the page's own space now shows its title, “We couldn't load this settings page”, an error id and Try again, and the settings menu stays on screen.",
+        whyItMatters:
+          'Before, the settings menu and the page were both replaced by “Something broke loading this page”, so reaching another settings page meant going back to Settings first.',
+        howItAffectsYou:
+          'The other settings pages stay in the settings menu while one page is failing, and Try again loads the failed page again.',
+        whatToDo: 'Press Try again. If it keeps failing, send the error id to support.',
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: team/page.tsx:43 and :167 (the
+        // organization's zone, resolveOrgTimezone) and team-manager.tsx:443-446
+        // (formatOrgDateTime), pinned by team-manager.disabled-badge.test.tsx:185. The zone is the
+        // stored one, which the create form takes from the creator's browser
+        // (create-organization-form.tsx:49, actions/organization.ts:60) and the platform console
+        // defaults to Pacific (actions/platform-admin.ts:36); an unreadable row falls back to
+        // Pacific (core time/org-timezone.ts:42 and :97-99). An organization that never opened
+        // the setting need not be on the column's UTC default (0001_init.sql:34), so no sentence
+        // says it is. Owners and admins change it under Workspace timezone
+        // (org-timezone-editor.tsx:93, settings/organization/page.tsx:17,
+        // actions/organization.ts:284), which shows UTC for a stored zone outside its list
+        // (org-timezone-editor.tsx:70-72), hence "can change" and not "the zone shown there".
+        // Not walked: Demo Co has no disabled member. Audience: the
+        // page needs members:invite (team/page.tsx:28 can(ctx, 'members:invite')), and only
+        // owners and admins see the badge (team-manager.tsx:304 and :438).
+        id: 'team-disabled-time-org-zone',
+        category: 'fixed',
+        area: 'Team',
+        title: "The Disabled time on the Team page uses your organization's time zone",
+        whatChanged:
+          "On the Team page, pointing at a member's Disabled badge shows when they were disabled in your organization's time zone, for example Disabled Oct 24, 2026, 6:30 PM.",
+        whyItMatters:
+          "It showed the server's time (UTC) without saying so, so an evening disable in the Pacific read as early the next morning.",
+        howItAffectsYou:
+          "The time uses your organization's time zone, which owners and admins can change under Workspace timezone in Settings, Organization.",
+        whatToDo:
+          'No action needed. If the time is not your local time, set Workspace timezone in Settings, Organization.',
+        audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
+      },
+      {
+        // platform: web. From: B9 #391. Checked at e84d123d9: procedures/[id]/page.tsx:32 and
+        // :138 (the organization's zone), comment-thread.tsx:136 (formatOrgDateTime in the hover
+        // title) and :145 (how long ago, unchanged). The zone, and who can change it, as in
+        // team-disabled-time-org-zone's comment. Not walked: Demo Co has no procedure
+        // comment. Audience as web-procedures-fixes: the Procedures module
+        // (services/procedures.ts:283 assertModuleEnabled) and items:update (the sidebar
+        // entry's requires).
+        id: 'procedure-comment-times-org-zone',
+        category: 'fixed',
+        area: 'Procedures',
+        title: "Comment times in a procedure's Discussion use your organization's time zone",
+        whatChanged:
+          "In a procedure's Discussion, pointing at a comment's time shows its date and time in your organization's time zone, for example Oct 24, 2026, 6:30 PM.",
+        whyItMatters:
+          "It showed the server's time (UTC) without saying so, so an evening comment in the Pacific read as early the next morning.",
+        howItAffectsYou:
+          "The comment still shows how long ago it was posted. The time uses your organization's time zone, which owners and admins can change under Workspace timezone in Settings, Organization.",
+        whatToDo:
+          'No action needed. If the time is not your local time, an owner or admin can set the time zone in Settings, Organization.',
+        audience: { anyPermission: ['items:update'], modules: ['procedures'] },
+      },
+    ],
+  },
+  {
     id: 'redesign-2026-10',
     revision: 1,
     // The full-app redesign (PR #369, redesign/full-app at 036002d43): every web
@@ -4705,7 +6692,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Short lines are caught before an order leaves',
         whatChanged:
-          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
+          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. Black pens: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
         whyItMatters:
           'Mark picking complete could leave a line with nothing picked without saying so, and the order could be out for delivery minutes later with that line still missing.',
         howItAffectsYou:

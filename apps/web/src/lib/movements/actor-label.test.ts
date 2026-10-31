@@ -6,8 +6,8 @@ import { movementActorLabel } from './actor-label';
 describe('movementActorLabel', () => {
   it('shows the full name, else the email', () => {
     expect(
-      movementActorLabel({ user_id: 'u1', actor: { fullName: 'Marissa Lopez', email: 'm@x.org' } }),
-    ).toBe('Marissa Lopez');
+      movementActorLabel({ user_id: 'u1', actor: { fullName: 'Rebecca Lowry', email: 'm@x.org' } }),
+    ).toBe('Rebecca Lowry');
     expect(movementActorLabel({ user_id: 'u1', actor: { fullName: null, email: 'm@x.org' } })).toBe(
       'm@x.org',
     );
@@ -32,9 +32,9 @@ describe('movementActorLabel', () => {
     expect(
       movementActorLabel({
         user_id: 'u1',
-        actor: { fullName: 'Doua', email: null },
+        actor: { fullName: 'Lena', email: null },
         actorDeleted: true,
       }),
-    ).toBe('Doua');
+    ).toBe('Lena');
   });
 });

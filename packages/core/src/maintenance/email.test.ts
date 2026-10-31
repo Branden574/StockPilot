@@ -50,7 +50,7 @@ const FULL_INPUT: MaintenanceEmailInput = {
   priority: 'high',
   submittedAtDisplay: 'August 5, 2026 at 9:15 AM',
   requesterName: 'Jane Smith',
-  requesterEmail: 'jane.smith@learn4life.org',
+  requesterEmail: 'jane.smith@sampleorg.test',
   requesterPhone: '(555) 555-0199',
   siteName: 'Fresno Learning Center',
   department: 'Operations',
@@ -115,9 +115,9 @@ const MODERATE_INPUT: MaintenanceEmailInput = {
 describe('buildMaintenanceEmailDraft — recipients and subject', () => {
   const draft = buildMaintenanceEmailDraft(FULL_INPUT);
 
-  it('(1) To is the literal DC4 address; (2) CC is the literal Andrew address', () => {
-    expect(draft.to).toBe('dc4@learn4life.org');
-    expect(draft.cc).toBe('arosas@cvwest.org');
+  it('(1) To is the literal DC4 address; (2) CC is the literal CC address', () => {
+    expect(draft.to).toBe('dc4@sampleorg.test');
+    expect(draft.cc).toBe('jstone@site1.test');
   });
 
   it('(3) subject keeps the requester wording; (4) subject includes the request number, never the UUID', () => {
@@ -133,8 +133,8 @@ describe('buildMaintenanceEmailDraft — recipients and subject', () => {
   });
 
   it('recipients never appear in the BODY (they enter at the compose layer only)', () => {
-    expect(draft.body).not.toContain('dc4@learn4life.org');
-    expect(draft.body).not.toContain('arosas@cvwest.org');
+    expect(draft.body).not.toContain('dc4@sampleorg.test');
+    expect(draft.body).not.toContain('jstone@site1.test');
   });
 });
 
@@ -265,12 +265,13 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
       'Ticket assigned',
       'Email sent',
     ]) {
       expect(body).not.toContain(phrase);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(body).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 });
 
@@ -280,8 +281,8 @@ describe('prepareMaintenanceEmail — transport', () => {
   it('(19) Outlook URL: cloud.microsoft base, single mailtouri, name-addr chips', () => {
     expect(prepared.outlookUrl.startsWith(`${OUTLOOK_COMPOSE_BASE}?mailtouri=`)).toBe(true);
     const { to, params } = decodeCompose(prepared.outlookUrl);
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
   it('(14)(16) special characters encode once — decode recovers the exact body, %20 never +', () => {
     const { params } = decodeCompose(prepared.outlookUrl);
@@ -290,11 +291,11 @@ describe('prepareMaintenanceEmail — transport', () => {
     expect(prepared.outlookUrl).not.toContain('+');
   });
   it('(20) mailto URL is bare-address RFC 6068 with cc/subject/body params', () => {
-    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=')).toBe(true);
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=')).toBe(true);
   });
   it('(21) clipboard carries labelled TO and CC blocks', () => {
-    expect(prepared.clipboardText).toContain('TO: dc4@learn4life.org');
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('TO: dc4@sampleorg.test');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
   it('measured reality: a MAXIMALLY-detailed request (every optional field populated at once, matching the brief\'s own worked example) legitimately condenses', () => {
     // Discovered by measuring the brief's section-15 illustrative body
@@ -319,7 +320,7 @@ describe('prepareMaintenanceEmail — transport', () => {
     // Still carries the full requester/location/description detail — only
     // the fields that were genuinely absent from the input are missing:
     expect(moderate.draft.body).toContain('Building: Main Building');
-    expect(moderate.draft.body).toContain('Email: jane.smith@learn4life.org');
+    expect(moderate.draft.body).toContain('Email: jane.smith@sampleorg.test');
     expect(moderate.draft.body).not.toContain('RELATED STOCKPILOT RECORD');
     expect(moderate.draft.body).not.toContain('PHOTOS');
   });
@@ -464,8 +465,8 @@ describe('display-name throw safety (Task 4 forward-note) — requester/site can
     const { to, params } = decodeCompose(prepared.outlookUrl);
     // The To/Cc chips are STILL the frozen constants — unsafe requester/site
     // text never reaches a display-name slot, it can only land in the body:
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
     expect(prepared.draft.body).toContain(`Name: ${unsafe}`);
   });
 
@@ -484,8 +485,8 @@ describe('type-level: the builder accepts NO recipient input', () => {
     const withCc: MaintenanceEmailInput = { ...FULL_INPUT, cc: 'attacker@evil.test' };
     // Runtime confirmation that even if such a key were smuggled in via `any`,
     // the builder ignores it and still uses only the frozen constant:
-    expect(buildMaintenanceEmailDraft(withTo as MaintenanceEmailInput).to).toBe('dc4@learn4life.org');
-    expect(buildMaintenanceEmailDraft(withCc as MaintenanceEmailInput).cc).toBe('arosas@cvwest.org');
+    expect(buildMaintenanceEmailDraft(withTo as MaintenanceEmailInput).to).toBe('dc4@sampleorg.test');
+    expect(buildMaintenanceEmailDraft(withCc as MaintenanceEmailInput).cc).toBe('jstone@site1.test');
   });
 });
 
@@ -768,22 +769,22 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
     // derived from OUTLOOK_COMPOSE_BASE or from calling the module under
     // test to build the expectation):
     expect(prepared.outlookUrl).toBe(
-      'https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E%3Fcc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000123%255D%2520Air%2520conditioner%2520is%2520not%2520working%2520in%2520Room%2520204%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000123%250A%250AREQUESTER%250A%250AName%253A%2520Jane%2520Smith%250ASite%253A%2520Fresno%2520Learning%2520Center%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520air%2520conditioner%2520has%2520been%2520blowing%2520warm%2520air%2520since%2520yesterday%2520afternoon.%250AThe%2520room%2520is%2520becoming%2520too%2520warm%2520for%2520normal%2520use.%250A%250AThis%2520message%2520was%2520shortened%2520because%2520the%2520full%2520request%2520details%2520did%2520not%2520fit%2520in%2520a%2520compose%2520link.%2520The%2520complete%2520request%2520is%2520in%2520StockPilot%2520under%2520the%2520request%2520number%2520above.%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttps%253A%252F%252Fstockpilotusa.com%252Fm%252Fabcdef1234567890%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000123',
+      'https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540sampleorg.test%253E%3Fcc%3DJordan%2520Stone%2520%253Cjstone%2540site1.test%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000123%255D%2520Air%2520conditioner%2520is%2520not%2520working%2520in%2520Room%2520204%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000123%250A%250AREQUESTER%250A%250AName%253A%2520Jane%2520Smith%250ASite%253A%2520Fresno%2520Learning%2520Center%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520air%2520conditioner%2520has%2520been%2520blowing%2520warm%2520air%2520since%2520yesterday%2520afternoon.%250AThe%2520room%2520is%2520becoming%2520too%2520warm%2520for%2520normal%2520use.%250A%250AThis%2520message%2520was%2520shortened%2520because%2520the%2520full%2520request%2520details%2520did%2520not%2520fit%2520in%2520a%2520compose%2520link.%2520The%2520complete%2520request%2520is%2520in%2520StockPilot%2520under%2520the%2520request%2520number%2520above.%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttps%253A%252F%252Fstockpilotusa.com%252Fm%252Fabcdef1234567890%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000123',
     );
     const { to, params } = decodeCompose(prepared.outlookUrl);
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
     expect(params.subject).toBe(prepared.draft.subject);
     expect(params.body).toBe(prepared.draft.body);
 
     expect(prepared.mailtoUrl).toBe(
-      'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=%5BStockPilot%20Maintenance%20MR-2026-000123%5D%20Air%20conditioner%20is%20not%20working%20in%20Room%20204&body=MAINTENANCE%20REQUEST%0A%0AStockPilot%20Request%3A%20MR-2026-000123%0A%0AREQUESTER%0A%0AName%3A%20Jane%20Smith%0ASite%3A%20Fresno%20Learning%20Center%0A%0AISSUE%20DESCRIPTION%0A%0AThe%20air%20conditioner%20has%20been%20blowing%20warm%20air%20since%20yesterday%20afternoon.%0AThe%20room%20is%20becoming%20too%20warm%20for%20normal%20use.%0A%0AThis%20message%20was%20shortened%20because%20the%20full%20request%20details%20did%20not%20fit%20in%20a%20compose%20link.%20The%20complete%20request%20is%20in%20StockPilot%20under%20the%20request%20number%20above.%0A%0APHOTOS%0AView%20request%20photos%3A%0Ahttps%3A%2F%2Fstockpilotusa.com%2Fm%2Fabcdef1234567890%0A%0AGenerated%20from%20StockPilot.%0AStockPilot%20Request%3A%20MR-2026-000123',
+      'mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=%5BStockPilot%20Maintenance%20MR-2026-000123%5D%20Air%20conditioner%20is%20not%20working%20in%20Room%20204&body=MAINTENANCE%20REQUEST%0A%0AStockPilot%20Request%3A%20MR-2026-000123%0A%0AREQUESTER%0A%0AName%3A%20Jane%20Smith%0ASite%3A%20Fresno%20Learning%20Center%0A%0AISSUE%20DESCRIPTION%0A%0AThe%20air%20conditioner%20has%20been%20blowing%20warm%20air%20since%20yesterday%20afternoon.%0AThe%20room%20is%20becoming%20too%20warm%20for%20normal%20use.%0A%0AThis%20message%20was%20shortened%20because%20the%20full%20request%20details%20did%20not%20fit%20in%20a%20compose%20link.%20The%20complete%20request%20is%20in%20StockPilot%20under%20the%20request%20number%20above.%0A%0APHOTOS%0AView%20request%20photos%3A%0Ahttps%3A%2F%2Fstockpilotusa.com%2Fm%2Fabcdef1234567890%0A%0AGenerated%20from%20StockPilot.%0AStockPilot%20Request%3A%20MR-2026-000123',
     );
 
     expect(prepared.clipboardText).toBe(
       [
-        'TO: dc4@learn4life.org',
-        'CC: arosas@cvwest.org',
+        'TO: dc4@sampleorg.test',
+        'CC: jstone@site1.test',
         `SUBJECT: ${EXPECTED_SUBJECT}`,
         '',
         'MESSAGE:',
@@ -815,7 +816,7 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
         'REQUESTER',
         '',
         'Name: Jane Smith',
-        'Email: jane.smith@learn4life.org',
+        'Email: jane.smith@sampleorg.test',
         'Phone: (555) 555-0199',
         'Site: Fresno Learning Center',
         'Department: Operations',
@@ -837,15 +838,15 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
     );
 
     const { to, params } = decodeCompose(prepared.outlookUrl);
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
     expect(params.subject).toBe(EXPECTED_SUBJECT);
     expect(params.body).toBe(prepared.draft.body);
-    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=')).toBe(
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=')).toBe(
       true,
     );
     expect(prepared.clipboardText).toBe(
-      ['TO: dc4@learn4life.org', 'CC: arosas@cvwest.org', `SUBJECT: ${EXPECTED_SUBJECT}`, '', 'MESSAGE:', prepared.draft.body].join(
+      ['TO: dc4@sampleorg.test', 'CC: jstone@site1.test', `SUBJECT: ${EXPECTED_SUBJECT}`, '', 'MESSAGE:', prepared.draft.body].join(
         '\n',
       ),
     );
@@ -891,8 +892,8 @@ describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GAT
       const prepared = prepareMaintenanceEmail(input);
       expect(prepared.outlookMobileUrl.startsWith('ms-outlook://compose?')).toBe(true);
       const params = decodeMobileCompose(prepared.outlookMobileUrl);
-      expect(params.cc).toBe('arosas@cvwest.org');
-      expect(params.to).toBe('dc4@learn4life.org');
+      expect(params.cc).toBe('jstone@site1.test');
+      expect(params.to).toBe('dc4@sampleorg.test');
       // Identical recipients to the draft the web path sends — one builder,
       // one source of truth, two transports:
       expect(params.cc).toBe(prepared.draft.cc);
@@ -930,8 +931,8 @@ describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GAT
     const prepared = prepareMaintenanceEmail(FULL_INPUT);
     expect(prepared.outlookUrl.startsWith(`${OUTLOOK_COMPOSE_BASE}?mailtouri=`)).toBe(true);
     const { to, params } = decodeCompose(prepared.outlookUrl);
-    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(params.cc).toBe('Jordan Stone <jstone@site1.test>');
     // The native URL is an ADDITION, never a rename of the web one:
     expect(prepared.outlookMobileUrl).not.toBe(prepared.outlookUrl);
   });
@@ -940,12 +941,12 @@ describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GAT
     const unsafe = 'Evil <injected@attacker.test>, "quoted"; @nope';
     const prepared = prepareMaintenanceEmail({ ...FULL_INPUT, requesterName: unsafe, siteName: unsafe });
     const params = decodeMobileCompose(prepared.outlookMobileUrl);
-    expect(params.to).toBe('dc4@learn4life.org');
-    expect(params.cc).toBe('arosas@cvwest.org');
+    expect(params.to).toBe('dc4@sampleorg.test');
+    expect(params.cc).toBe('jstone@site1.test');
     // The unsafe text is BODY content (exactly as on the web path) and must
     // never appear in the RECIPIENT segment — everything before `&subject=`:
     const recipients = prepared.outlookMobileUrl.slice(0, prepared.outlookMobileUrl.indexOf('&subject='));
-    expect(recipients).toBe('ms-outlook://compose?to=dc4%40learn4life.org&cc=arosas%40cvwest.org');
+    expect(recipients).toBe('ms-outlook://compose?to=dc4%40sampleorg.test&cc=jstone%40site1.test');
     expect(recipients).not.toContain('injected');
     expect(prepared.draft.body).toContain(`Name: ${unsafe}`);
   });
@@ -1021,7 +1022,7 @@ describe('prepareMaintenanceEmail — the transport option: fit against the url 
     for (const line of [
       'Category: Heating or air conditioning',
       'Priority: High',
-      'Email: jane.smith@learn4life.org',
+      'Email: jane.smith@sampleorg.test',
       'Building: Main Building',
     ]) {
       expect(native.draft.body).toContain(line);
@@ -1085,10 +1086,10 @@ describe('prepareMaintenanceEmail — the transport option: fit against the url 
 
   it('the mandatory CC survives the native-fitted draft on every transport it could open', () => {
     const native = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-native' });
-    expect(decodeMobileCompose(native.outlookMobileUrl).cc).toBe('arosas@cvwest.org');
-    expect(native.mailtoUrl.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
-    expect(decodeCompose(native.outlookUrl).params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
-    expect(native.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(decodeMobileCompose(native.outlookMobileUrl).cc).toBe('jstone@site1.test');
+    expect(native.mailtoUrl.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test')).toBe(true);
+    expect(decodeCompose(native.outlookUrl).params.cc).toBe('Jordan Stone <jstone@site1.test>');
+    expect(native.clipboardText).toContain('CC: jstone@site1.test');
   });
 });
 
@@ -1166,16 +1167,16 @@ describe('per-org recipients — the builder composes with what it is HANDED', (
       }),
     });
     // The cc follows the input — a builder still reading the constant would
-    // return 'arosas@cvwest.org' here and this kills that mutant.
-    expect(base.draft.cc).toBe('arosas@cvwest.org');
+    // return 'jstone@site1.test' here and this kills that mutant.
+    expect(base.draft.cc).toBe('jstone@site1.test');
     expect(flipped.draft.cc).toBe('copy@other-tenant.invalid');
     // Every transport carries the flipped cc; none carries the constant one.
     expect(flipped.outlookUrl).toContain(encodeURIComponent(encodeURIComponent('copy@other-tenant.invalid')));
-    expect(flipped.outlookUrl).not.toContain(encodeURIComponent(encodeURIComponent('arosas@cvwest.org')));
+    expect(flipped.outlookUrl).not.toContain(encodeURIComponent(encodeURIComponent('jstone@site1.test')));
     expect(flipped.mailtoUrl).toContain('copy%40other-tenant.invalid');
-    expect(flipped.mailtoUrl).not.toContain('arosas');
+    expect(flipped.mailtoUrl).not.toContain('jstone');
     expect(flipped.clipboardText).toContain('copy@other-tenant.invalid');
-    expect(flipped.clipboardText).not.toContain('arosas@cvwest.org');
+    expect(flipped.clipboardText).not.toContain('jstone@site1.test');
     // The body is recipient-independent — only the routing moved.
     expect(flipped.draft.body).toBe(base.draft.body);
     expect(flipped.draft.subject).toBe(base.draft.subject);

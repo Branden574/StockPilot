@@ -138,9 +138,70 @@ describe('platform audit', () => {
     expect(within(rows[2]).getAllByText('—').length).toBe(2);
   });
 
+  /**
+   * God Admin's Order items access changes (migration 0413) are written by
+   * platform_set_permission_exception itself with detail {permission, before,
+   * after, target_role}. The row names the action and the change, so a review
+   * can see who was moved from what to what without opening the raw detail.
+   */
+  it('labels an Order items access change and shows what it changed from and to', async () => {
+    h.list.mockResolvedValue([
+      row({
+        id: 'p1',
+        action: 'permission_exception_changed',
+        detail: {
+          permission: 'orders:manage_catalog_visibility',
+          before: 'default',
+          after: 'deny',
+          target_role: 'manager',
+        },
+      }),
+      row({
+        id: 'p2',
+        action: 'permission_exception_changed',
+        detail: { permission: 'orders:manage_catalog_visibility', before: 'odd', after: 1 },
+      }),
+    ]);
+    await renderPage();
+    const region = screen.getByRole('region', { name: 'Platform audit' });
+    const [, first, second] = within(region).getAllByRole('row') as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(within(first).getByText('Order items access changed')).toBeInTheDocument();
+    expect(within(first).getByText('Follow role default → Deny')).toBeInTheDocument();
+    expect(first).toHaveTextContent('ada@acme.test');
+    // A detail this build cannot read prints the label alone, never a guess.
+    expect(within(second).getByText('Order items access changed')).toBeInTheDocument();
+    expect(second).not.toHaveTextContent('→');
+  });
+
   it('keeps the empty words', async () => {
     h.list.mockResolvedValue([]);
     await renderPage();
     expect(screen.getByText('No platform-admin actions recorded yet.')).toBeInTheDocument();
+  });
+
+  it('prints When in UTC and says so, whatever the server or the row (B9)', async () => {
+    // A bare toLocaleString() on the server named no zone, so a 6:30 PM
+    // Pacific action read "10/25/2026, 1:30:00 AM" with nothing to say whose
+    // clock that was. The trail spans organizations, so it states UTC.
+    const original = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      h.list.mockResolvedValue([row({ createdAt: '2026-10-25T01:30:00Z' })]);
+      await renderPage();
+      const region = screen.getByRole('region', { name: 'Platform audit' });
+      const [, first] = within(region).getAllByRole('row') as [HTMLElement, HTMLElement];
+      expect(first.firstElementChild).toHaveTextContent(/^25 Oct 2026, 01:30 UTC$/);
+      expect(within(region).getByRole('columnheader', { name: 'When' })).toHaveAttribute(
+        'title',
+        'In UTC.',
+      );
+    } finally {
+      if (original === undefined) delete process.env.TZ;
+      else process.env.TZ = original;
+    }
   });
 });

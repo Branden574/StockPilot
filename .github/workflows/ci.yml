@@ -20,9 +20,12 @@ jobs:
       # Reads pnpm version from package.json#packageManager.
       - uses: pnpm/action-setup@v6.1.0
 
+      # Node comes from .nvmrc in every job: the major the Vercel project runs
+      # in production (24.x). apps/web/src/test/node-version-pins.guard.test.ts
+      # fails if a workflow, .nvmrc or the root engines field drifts from it.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Guard against committed .env secrets
@@ -53,7 +56,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -83,7 +86,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Install dependencies

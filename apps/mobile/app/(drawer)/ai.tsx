@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { goBackFromReturn } from '@/lib/return-path';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -34,8 +35,8 @@ export default function AIAssistantScreen() {
   }
 
   const examples = [
-    'What\'s low at L4L North Region right now?',
-    'Draft a PO for the books category from Ingram.',
+    'What\'s low at our main warehouse right now?',
+    'Draft POs for items that are running low.',
     'How many Chromebooks did we receive this month?',
     'Which suppliers have the longest lead times?',
   ];
@@ -49,15 +50,7 @@ export default function AIAssistantScreen() {
               icon={ArrowLeft}
               accessibilityLabel="Back"
               minTap
-              onPress={() => {
-                if (typeof returnPath === 'string' && returnPath.length > 0) {
-                  router.replace(returnPath as never);
-                } else if (router.canGoBack()) {
-                  router.back();
-                } else {
-                  router.replace('/');
-                }
-              }}
+              onPress={() => goBackFromReturn(router, returnPath)}
             />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>

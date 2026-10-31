@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { CountProgressBar } from '@/components/cycle-counts/count-progress-bar';
 import { CycleCountHistorySearch } from '@/components/cycle-counts/cycle-count-history-search';
 import {
@@ -72,7 +72,7 @@ export default async function CycleCountsPage({
 }) {
   const moduleAccess = await checkModuleAccess('cycle_counts');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="cycle_counts" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="cycle_counts" access={moduleAccess} />;
   }
   // Visibility gates on cycle_counts:read (staff+ by default, grantable to
   // viewers for read-only audit access). stock:adjust holders keep access

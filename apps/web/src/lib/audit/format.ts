@@ -26,6 +26,7 @@ const SUBJECT_OVERRIDES: Record<string, string> = {
   cycle_count: 'Cycle count',
   bundle: 'Bundle',
   order_request: 'Order request',
+  recurring_po_template: 'Recurring PO template',
 };
 
 const ENTITY_OVERRIDES: Record<string, string> = {
@@ -36,6 +37,7 @@ const ENTITY_OVERRIDES: Record<string, string> = {
   vendor_item_mapping: 'Vendor item mapping',
   uom_conversion: 'UoM conversion',
   warehouse_charters: 'Warehouse charters',
+  recurring_po_template: 'Recurring PO template',
 };
 
 function titleCase(s: string): string {

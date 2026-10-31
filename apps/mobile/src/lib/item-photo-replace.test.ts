@@ -260,6 +260,55 @@ describe('replacePrimaryPhoto — the new row is written before anything is dest
   });
 });
 
+describe("replacePrimaryPhoto: the new photo's thumbnail (B31)", () => {
+  const THUMB = 'org-1/items/item-1/new-thumb.jpg';
+
+  it('writes the thumbnail path on the new row', async () => {
+    const { client, log } = makeFakeClient({ insert: { data: { id: 'new-row' }, error: null } });
+    const res = await replacePrimaryPhoto({
+      supabase: asClient(client),
+      ...ARGS,
+      newThumbPath: THUMB,
+    });
+    expect(res.ok).toBe(true);
+    expect(log[0]!.detail.row).toEqual({
+      organization_id: 'org-1',
+      item_id: 'item-1',
+      storage_path: ARGS.newPath,
+      thumb_path: THUMB,
+      is_primary: true,
+    });
+  });
+
+  it('writes no thumbnail path when none was stored (older behaviour, still accepted)', async () => {
+    const { client, log } = makeFakeClient({ insert: { data: { id: 'new-row' }, error: null } });
+    await replacePrimaryPhoto({ supabase: asClient(client), ...ARGS, newThumbPath: null });
+    expect(log[0]!.detail.row).toMatchObject({ thumb_path: null });
+    const { client: c2, log: l2 } = makeFakeClient({
+      insert: { data: { id: 'new-row' }, error: null },
+    });
+    await replacePrimaryPhoto({ supabase: asClient(c2), ...ARGS });
+    expect(l2[0]!.detail.row).toMatchObject({ thumb_path: null });
+  });
+
+  it('a failed insert removes the new photo AND its thumbnail, and nothing else', async () => {
+    const { client, log } = makeFakeClient({
+      insert: { data: null, error: { message: 'new row violates row-level security policy' } },
+      oldRows: { data: [{ id: 'old-1', storage_path: 'org-1/items/item-1/old.jpg' }], error: null },
+    });
+    const res = await replacePrimaryPhoto({
+      supabase: asClient(client),
+      ...ARGS,
+      newThumbPath: THUMB,
+    });
+    expect(res.ok).toBe(false);
+    const removes = log.filter((l) => l.op === 'storage.remove');
+    expect(removes).toHaveLength(1);
+    expect(removes[0]!.detail.paths).toEqual([ARGS.newPath, THUMB]);
+    expect(log.filter((l) => l.op === 'delete')).toHaveLength(0);
+  });
+});
+
 /**
  * WIRING PIN — the screen must actually USE the helper.
  *

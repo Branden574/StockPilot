@@ -67,6 +67,13 @@ const poDestination = vi.fn(async (_filters: Record<string, unknown>) => ({
   error: null as { message: string } | null,
 }));
 const locationsList = vi.fn(async (_opts: unknown) => [] as Array<Record<string, unknown>>);
+/** locations read by id (what a template holds that the form does not offer). */
+const locationRows = vi.fn((_ids: string[]) => ({
+  data: [] as Array<Record<string, unknown>> | null,
+  error: null as { message: string } | null,
+}));
+const listForLookups = vi.fn(async () => [] as Array<{ id: string; name: string }>);
+const namesByIds = vi.fn(async (_ids: readonly string[]) => [] as Array<{ id: string; name: string; deleted_at: string | null }>);
 const templatesList = vi.fn(async () => [
   {
     id: 'tpl-1',
@@ -111,6 +118,21 @@ vi.mock('@/lib/supabase/server', () => ({
         };
         return q;
       }
+      if (table === 'locations') {
+        let ids: string[] = [];
+        const q = {
+          select: () => q,
+          eq: () => q,
+          in: (_column: string, values: string[]) => {
+            ids = values;
+            return q;
+          },
+          order: () => q,
+          range: () => q,
+          then: (resolve: (v: unknown) => unknown) => Promise.resolve(locationRows(ids)).then(resolve),
+        };
+        return q;
+      }
       if (table === 'purchase_orders') {
         const filters: Record<string, unknown> = {};
         const q = {
@@ -137,7 +159,7 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ list: inventoryList, lineLabelsByIds })) },
 }));
 vi.mock('@/server/services/suppliers', () => ({
-  SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups: vi.fn(async () => []) })) },
+  SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups, namesByIds })) },
 }));
 vi.mock('@/server/services/locations', () => ({
   LocationsService: { forCurrentUser: vi.fn(async () => ({ list: locationsList })) },
@@ -147,7 +169,10 @@ vi.mock('@/server/services/recurring-pos', () => ({
     list = templatesList;
   },
 }));
-vi.mock('@/server/services/lib/fetch-by-ids', () => ({ reportDegradedRead: vi.fn() }));
+vi.mock('@/server/services/lib/fetch-by-ids', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/fetch-by-ids')>()),
+  reportDegradedRead: vi.fn(),
+}));
 vi.mock('@/server/services/lib/paginate', () => ({
   fetchAllRows: vi.fn(async (build: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: unknown }>) => {
     const res = await build(0, 999);
@@ -280,9 +305,11 @@ describe('Recurring POs page', () => {
     expect(poDestination).toHaveBeenCalledWith(
       expect.objectContaining({ organization_id: 'org-1', id: PO }),
     );
-    // The destination and its location, in one read (through RLS).
+    // The destination and its location, in one read (through RLS), with the
+    // purchase order's supplier (small fixes slice 8: the form may not offer
+    // that either).
     expect(String(poDestination.mock.calls[0]?.[0].select)).toMatch(
-      /^destination_location_id, destination:locations!destination_location_id \(name, deleted_at\)$/,
+      /^destination_location_id, supplier_id, destination:locations!destination_location_id \(name, deleted_at\)$/,
     );
     expect(findProps(tree, RecurringTemplatesSeedLoader)?.seedDestination).toEqual({
       locationId: STAGING,
@@ -368,5 +395,124 @@ describe('Recurring POs page', () => {
     const back = header?.back as React.ReactElement<{ href: string; children: React.ReactNode }>;
     expect(back.props.href).toBe('/dashboard/purchase-orders');
     expect(back.props.children).toBe('← Purchase orders');
+  });
+});
+
+// 6. A template can hold a destination deleted after it was saved, or an
+//    archived supplier, and the purchase order Make recurring starts from an
+//    archived supplier. The form showed them blank. The page now reads what
+//    they are (small fixes slice 8, items B and D) so the form can name them
+//    and keep none, and the list can say a template creates nothing.
+describe('Recurring POs page: what templates hold that the form does not offer', () => {
+  const SITE = '00000000-0000-0000-0000-0000000000e1';
+  const GONE = '00000000-0000-0000-0000-0000000000e2';
+  const SUP_ACTIVE = '00000000-0000-0000-0000-0000000000f1';
+  const SUP_ARCHIVED = '00000000-0000-0000-0000-0000000000f2';
+  const SUP_FROM_PO = '00000000-0000-0000-0000-0000000000f3';
+
+  beforeEach(() => {
+    locationsList.mockResolvedValue([
+      { id: SITE, name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1' },
+    ]);
+    listForLookups.mockResolvedValue([{ id: SUP_ACTIVE, name: 'TechSource Distributors' }]);
+    templatesList.mockResolvedValueOnce([
+      { id: 'tpl-ok', name: 'Fine', supplier_id: SUP_ACTIVE, destination_location_id: SITE, line_items: [] },
+      { id: 'tpl-gone', name: 'Annex Paper', supplier_id: SUP_ARCHIVED, destination_location_id: GONE, line_items: [] },
+    ] as never);
+    locationRows.mockImplementation((ids: string[]) => ({
+      data: [
+        { id: GONE, name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: '2026-10-05T00:00:00Z' },
+      ].filter((r) => ids.includes(r.id)),
+      error: null,
+    }));
+    namesByIds.mockImplementation(async (ids: readonly string[]) =>
+      [
+        { id: SUP_ARCHIVED, name: 'Acme Paper', deleted_at: '2026-10-01T00:00:00Z' },
+        { id: SUP_FROM_PO, name: 'Paper Co', deleted_at: '2026-10-02T00:00:00Z' },
+      ].filter((r) => ids.includes(r.id)),
+    );
+  });
+
+  it('reads only what the form does not offer, and passes it named', async () => {
+    const tree = await page();
+    const props = findProps(tree, RecurringTemplatesSeedLoader);
+
+    expect(locationRows).toHaveBeenCalledWith([GONE]);
+    expect(namesByIds).toHaveBeenCalledWith([SUP_ARCHIVED]);
+    expect(props?.unofferedDestinations).toEqual({
+      [GONE]: { name: 'Old Annex', why: 'deleted', saveRefuses: 'deleted' },
+    });
+    expect(props?.unofferedSuppliers).toEqual({ [SUP_ARCHIVED]: { name: 'Acme Paper', why: 'archived' } });
+    expect(props?.suppliers).toEqual([{ id: SUP_ACTIVE, name: 'TechSource Distributors' }]);
+  });
+
+  it('Make recurring: the purchase order\'s archived supplier is read and named too', async () => {
+    poDestination.mockResolvedValueOnce({
+      data: { destination_location_id: null, supplier_id: SUP_FROM_PO, destination: null } as never,
+      error: null,
+    });
+    const tree = await page({ from: PO });
+
+    expect(namesByIds).toHaveBeenCalledWith([SUP_ARCHIVED, SUP_FROM_PO]);
+    expect(findProps(tree, RecurringTemplatesSeedLoader)?.unofferedSuppliers).toEqual({
+      [SUP_ARCHIVED]: { name: 'Acme Paper', why: 'archived' },
+      [SUP_FROM_PO]: { name: 'Paper Co', why: 'archived' },
+    });
+  });
+
+  it('with the Suppliers module off nothing is listed: an active supplier is offered after all', async () => {
+    listForLookups.mockResolvedValueOnce([]);
+    namesByIds.mockImplementationOnce(async () => [
+      { id: SUP_ACTIVE, name: 'TechSource Distributors', deleted_at: null },
+      { id: SUP_ARCHIVED, name: 'Acme Paper', deleted_at: '2026-10-01T00:00:00Z' },
+    ]);
+    const props = findProps(await page(), RecurringTemplatesSeedLoader);
+
+    expect(props?.suppliers).toEqual([{ id: SUP_ACTIVE, name: 'TechSource Distributors' }]);
+    expect(props?.unofferedSuppliers).toEqual({ [SUP_ARCHIVED]: { name: 'Acme Paper', why: 'archived' } });
+  });
+
+  // The select's list can lack a destination the form does offer: a live site
+  // linked to a warehouse that the list did not return (LocationsService.list
+  // was one unpaged read, capped at 1000 rows of every kind). Before the fold
+  // the form named it as one "you can't pick here" and the save cleared it.
+  it('an offered site the list did not return is offered after all, for a template and for Make recurring', async () => {
+    const FROM_PO_SITE = '00000000-0000-0000-0000-0000000000e4';
+    // The list returned neither the template's site nor the purchase order's.
+    locationsList.mockResolvedValueOnce([]);
+    locationRows.mockImplementation((ids: string[]) => ({
+      data: [
+        { id: SITE, name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: null },
+        { id: GONE, name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: '2026-10-05T00:00:00Z' },
+        { id: FROM_PO_SITE, name: 'Yard', kind: null, type: 'warehouse', warehouse_id: 'wh-2', deleted_at: null },
+      ].filter((r) => ids.includes(r.id)),
+      error: null,
+    }));
+    poDestination.mockResolvedValueOnce({
+      data: { destination_location_id: FROM_PO_SITE, destination: { name: 'Yard', deleted_at: null } },
+      error: null,
+    });
+    const props = findProps(await page({ from: PO }), RecurringTemplatesSeedLoader);
+
+    expect(locationRows).toHaveBeenCalledWith([SITE, GONE, FROM_PO_SITE]);
+    expect(props?.locations).toEqual([
+      { id: SITE, name: 'Main Warehouse' },
+      { id: FROM_PO_SITE, name: 'Yard' },
+    ]);
+    // The deleted one is still named, and still not offered.
+    expect(props?.unofferedDestinations).toEqual({
+      [GONE]: { name: 'Old Annex', why: 'deleted', saveRefuses: 'deleted' },
+    });
+  });
+
+  it('failed reads name nothing, are reported, and the page still renders', async () => {
+    locationRows.mockImplementation(() => ({ data: null, error: { message: 'statement timeout' } }));
+    namesByIds.mockRejectedValueOnce(new Error('statement timeout'));
+    const props = findProps(await page(), RecurringTemplatesSeedLoader);
+
+    expect(props?.unofferedDestinations).toEqual({ [GONE]: { name: null, why: 'unknown' } });
+    expect(props?.unofferedSuppliers).toEqual({ [SUP_ARCHIVED]: { name: null, why: 'unknown' } });
+    expect(reportDegradedRead).toHaveBeenCalledWith('recurring_pos.page.unoffered_destinations', expect.anything(), { ids: 1 });
+    expect(reportDegradedRead).toHaveBeenCalledWith('recurring_pos.page.unoffered_suppliers', expect.anything(), { ids: 1 });
   });
 });

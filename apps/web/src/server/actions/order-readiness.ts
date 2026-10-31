@@ -24,6 +24,7 @@ import {
   type ShortfallSupplierName,
 } from '@stockpilot/core';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import type { ShortfallPoLoad } from '@/lib/orders/shortfall-po';
 import { isModuleEnabled, ServiceError, withContext, type ServiceContext } from '@/server/services/context';
@@ -64,7 +65,8 @@ export async function readOrderReadinessAction(
   let ctx: ServiceContext;
   try {
     ctx = await withContext();
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     return { state: 'failed', message: READ_FAILED_MESSAGE };
   }
   if (!can(ctx, 'orders:approve')) return { state: 'failed', message: READINESS_FORBIDDEN_COPY };
@@ -113,6 +115,7 @@ export async function draftShortfallPosAction(
     }
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError && e.code !== 'internal_error') return err(e.code, e.message, e.details);
     if (!(e instanceof ServiceError)) void reportError(e, { tag: 'actions.orders.shortfall_po' });
     return err('internal_error', SHORTFALL_PO_FAILED_COPY, { reason: 'failed' });
@@ -160,7 +163,8 @@ export async function loadShortfallPoAction(input: z.input<typeof loadShortfallS
   let ctx: ServiceContext;
   try {
     ctx = await withContext();
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     return NOTHING_LOADED;
   }
   const allowed = canDraftShortfallPo({

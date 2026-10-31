@@ -1,13 +1,12 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
-
-import type { ModuleId } from '@stockpilot/core';
-
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
-import { ReturnHistoryService, buildReturnChainEvents, handOverOf, type ChainDecision } from './return-history';
+import { buildReturnChainEvents, handOverOf, type ChainDecision } from './return-history';
 
 /**
  * D-H1 (the audit of the RX-4 Demo Co walk): the history shows a hand-over at
@@ -212,23 +211,54 @@ describe("buildReturnChainEvents: the original order's hand-over", () => {
   });
 });
 
-describe('ReturnHistoryService.chain', () => {
-  it("reads the original order's signature and lists its hand-over there, as the workbench does", async () => {
-    const RET = '11111111-1111-4111-8111-111111111111';
-    const ORDER = '22222222-2222-4222-8222-222222222222';
-    const SIGNED = '2026-10-10T16:00:00.5+00:00';
-    const stub = makeSupabaseStub({
-      'returns.select': {
-        data: [{ id: RET, order_request_id: ORDER, order_request: { order_number: 32, completed_at: '2026-10-10T18:30:00.25+00:00', signed_at: SIGNED }, lines: [] }],
-        error: null,
-      },
-      'return_decisions.select': { data: [], error: null },
-      'stock_movements.select': { data: [], error: null },
-    });
-    const ctx = makeServiceContext(stub.client, { role: 'manager', enabledModules: new Set<ModuleId>(['returns'] as ModuleId[]) });
-    const events = await new ReturnHistoryService(ctx as never).chain(RET);
-    expect(events).toEqual([{ at: SIGNED, kind: 'handed_over', label: 'Handed over (SO-000032)', actorName: null }]);
-    const select = String(stub.chainArgsAll.get('returns.select')?.[0]?.[0]?.[0] ?? '');
-    expect(select).toMatch(/order_request:order_requests!order_request_id \([^)]*\bsigned_at\b[^)]*\)/);
+/**
+ * B22: the RMA's history has one builder in use, buildReturnWorkbench
+ * (returns-workbench.ts). Every surface reads it: the web RMA page, the web
+ * actions and every /api/v1/returns write route return the workbench, and the
+ * phone reads GET /api/v1/returns/[id]. The standalone ReturnHistoryService.chain
+ * (plan RX-1) had no caller from the day it was added (dab3a07d2, #322, where
+ * the workbench already built the chain from the reads it had made), and it
+ * was never given the RX-2 exchange inputs: it read no item, quantity or order
+ * of an exchange decision and passed no replacement, so for an exchange it
+ * said "warehouse will review" for a chosen size, named no replacement order
+ * and left out the replacement's pick and hand-over. It was removed, not wired.
+ */
+describe('the RMA history has one builder in use (B22)', () => {
+  const WEB_SRC = path.resolve(__dirname, '../..');
+
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      if (name === 'node_modules' || name.startsWith('.')) continue;
+      const full = path.join(dir, name);
+      if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
+      else if (/\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name)) out.push(full);
+    }
+    return out;
+  }
+
+  it('return-history exports no standalone chain reader', async () => {
+    const mod = await import('./return-history');
+    expect(Object.keys(mod)).not.toContain('ReturnHistoryService');
+  });
+
+  it('only the workbench builds the chain, with the exchange names, the replacement and its picks', () => {
+    const files = sourceFiles(WEB_SRC);
+    expect(files.length).toBeGreaterThan(500);
+    const callsBuilder = (f: string) =>
+      /\bbuildReturnChainEvents\(/.test(
+        readFileSync(f, 'utf8').replace(/export function buildReturnChainEvents\(/g, ''),
+      );
+    const callers = files.filter(callsBuilder).map((f) => path.relative(WEB_SRC, f));
+    expect(callers).toEqual(['server/services/returns-workbench.ts']);
+    const workbench = readFileSync(
+      path.join(WEB_SRC, 'server/services/returns-workbench.ts'),
+      'utf8',
+    );
+    const call = workbench.slice(workbench.indexOf('buildReturnChainEvents({'));
+    const args = call.slice(0, call.indexOf('});'));
+    expect(args).toMatch(/\bexchangeNames:/);
+    expect(args).toMatch(/\breplacementPicks\b/);
+    expect(args).toMatch(/\breplacement:/);
   });
 });

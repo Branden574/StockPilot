@@ -23,7 +23,10 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { reportError } from '@/lib/error-reporter';
+import { isControlFlow } from '@/lib/control-flow';
+// The isomorphic reporter: this module is in a browser bundle, and
+// @/lib/error-reporter is server-only (see error-reporter-core.ts).
+import { reportError } from '@/lib/error-reporter-core';
 import { recordMaintenanceDraftOpenedAction } from '@/server/actions/maintenance-requests';
 
 import { useMaintenanceShareLink } from './share-link-context';
@@ -235,6 +238,8 @@ function MaintenanceEmailActionInner({
           if ('ok' in r) setOpenCount(r.openCount);
         })
         .catch((e: unknown) => {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
           // Best-effort breadcrumb only: a lost draft-opened row means the
           // server's open-count silently undercounts (the duplicate-draft
           // dialog in handlePrimaryClick may under-warn next time), which is
@@ -252,15 +257,23 @@ function MaintenanceEmailActionInner({
     // App) is surfaced regardless. The panel reappears on every blocked
     // click, but the automatic mailto: navigation itself fires only once
     // per mount.
+    //
+    // NOT RECORDED (B29): recordMaintenanceDraftOpenedAction used to run here,
+    // BEFORE the navigation and whatever it did, so "Email draft opened"
+    // (outlook_draft_opened_at, status 'draft_opened') was stored for a
+    // draft nothing confirmed. That status silences the 24 h unsent-draft
+    // reminder (cron/maintenance-draft-reminders reminds 'saved' requests
+    // only) and an escalated exception shows "Email draft opened". The
+    // server records only an open the browser confirmed (the window.open
+    // handle above), as the phone records only after the OS opened an app,
+    // and as this page's own Open in Default Email App and Copy Email Details
+    // never did. The LOCAL count still goes up: a mail app may have opened a
+    // draft from this navigation, so another Open in Outlook on this page
+    // asks first (brief section 21).
     setFallbackReason('blocked');
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
       setOpenCount((n) => n + 1);
-      // Same best-effort .catch() as the success-path call above — a
-      // rejected promise here is otherwise an unhandled rejection.
-      void recordMaintenanceDraftOpenedAction(requestId).catch((e: unknown) => {
-        void reportError(e, { tag: 'maintenance.draft-opened.record', level: 'warning' });
-      });
       try {
         window.location.assign(prepared.mailtoUrl);
       } catch {

@@ -41,7 +41,13 @@ function alignClass(align: InventoryExportField['align']): string {
 export interface ExportBuilderPreviewProps {
   state: ExportBuilderState;
   itemTypeKind: 'book' | 'other';
+  /** null while the sample loads, and when it failed (see `failed`). */
   preview: ExportPreviewResponse | null;
+  /** The preview request failed. Without this a failure read as loading for
+   *  ever. It never blocks the export. */
+  failed?: boolean;
+  /** Asks for the sample again after a failure. */
+  onRetry?: () => void;
   rowCount: number | null;
 }
 
@@ -49,6 +55,8 @@ export function ExportBuilderPreview({
   state,
   itemTypeKind,
   preview,
+  failed = false,
+  onRetry,
   rowCount,
 }: ExportBuilderPreviewProps) {
   const fields = state.fieldKeys
@@ -63,7 +71,22 @@ export function ExportBuilderPreview({
   return (
     <div className="flex flex-col gap-3">
       <div className="border-border overflow-x-auto rounded-lg border">
-        {preview === null ? (
+        {preview === null && failed ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3">
+            <p role="status" className="text-[13px] text-[var(--ed-ink-2)]">
+              Could not load a sample of this export. You can still export the file.
+            </p>
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="text-muted-foreground hover:text-foreground focus-visible:ring-ring text-[13px] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2"
+              >
+                Try again
+              </button>
+            ) : null}
+          </div>
+        ) : preview === null ? (
           <p className="text-muted-foreground p-3 text-[13px]">Loading a sample of this export…</p>
         ) : (
           <table aria-label="Export preview" className="w-full text-[12.5px]">

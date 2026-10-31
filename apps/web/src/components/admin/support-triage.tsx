@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { FilterChip } from '@/components/patterns/chip';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
@@ -179,6 +181,7 @@ function TicketCard({
   const hydrated = useHydrated();
   const panelId = `ticket-${ticket.id}-details`;
   const notesId = `ticket-${ticket.id}-notes`;
+  const replyMailto = plainAddressMailtoUrl(ticket.email, { subject: `Re: ${ticket.subject}` });
 
   async function save() {
     const sent = draft;
@@ -289,11 +292,20 @@ function TicketCard({
                 ))}
               </select>
             </label>
-            <Button asChild variant="outline" className="ml-auto">
-              <a href={`mailto:${ticket.email}?subject=Re: ${encodeURIComponent(ticket.subject)}`}>
-                Reply by email
-              </a>
-            </Button>
+            {/* A link only for one plain address (core plainAddressMailtoUrl):
+                the stored text built the link before, so an address such as
+                "a@b.com?bcc=x@y.z" opened a reply copied to someone the
+                ticket never names. Anything else gets no link; the address
+                stays readable in the ticket's summary line above. */}
+            {replyMailto ? (
+              <Button asChild variant="outline" className="ml-auto">
+                <a href={replyMailto}>Reply by email</a>
+              </Button>
+            ) : (
+              <p className="text-muted-foreground ml-auto text-[12.5px] leading-[18.75px]">
+                No email link: the stored address is not one plain address.
+              </p>
+            )}
           </div>
 
           <div>

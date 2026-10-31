@@ -382,10 +382,14 @@ describe('Procedures and Movements keep every word', () => {
   });
 
   it('categories and tags: a colourless swatch is the muted ink3 mark; the tally dash stays', () => {
-    expect(flatCode(CATEGORIES)).toContain('const swatch = category.color ?? c.ink3;');
+    // A stored colour is drawn only in the #rrggbb form the app writes; any
+    // other text draws the same mark as no colour (docket T14).
+    expect(flatCode(CATEGORIES)).toContain(
+      'const swatch = safeHexColor(category.color) ?? c.ink3;',
+    );
     expect(flatCode(CATEGORIES)).toContain("{category.itemCount ?? '—'}");
     expect(flatCode(CATEGORIES)).toContain('backgroundColor: c.sunk');
-    expect(flatCode(TAGS)).toContain('const swatch = tag.color ?? c.ink3;');
+    expect(flatCode(TAGS)).toContain('const swatch = safeHexColor(tag.color) ?? c.ink3;');
     expect(flatCode(TAGS)).toContain('borderColor: c.hair2');
   });
 });

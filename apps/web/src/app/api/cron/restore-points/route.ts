@@ -107,6 +107,7 @@ async function buildSystemContext(
     supabase: admin as unknown as ServiceContext['supabase'],
     mfaRequired: false,
     mfaSatisfied: true,
+    isSystem: true,
     enabledModules,
   };
 }

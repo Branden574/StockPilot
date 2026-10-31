@@ -15,9 +15,9 @@ import type { RenderedEsEmail } from './security';
 // Registry sample world (ES.W) adapted to real merge params.
 const SEED = {
   org: 'L4L North Region',
-  inviterName: 'Branden Vincent Walker',
-  inviterEmail: 'branden@l4lnorth.com',
-  inviteeEmail: 'theo@l4lnorth.com',
+  inviterName: 'Carsten Hartley Fowler',
+  inviterEmail: 'carsten@north.example',
+  inviteeEmail: 'theo@north.example',
   acceptUrl: 'https://stockpilotusa.com/i/HvwVujKfQx22Chars',
   expiresOn: 'Wed, Jun 3',
   customerOrg: 'Harbor & Pine Outfitters',
@@ -71,14 +71,14 @@ describe('team-invite (renderTeamInviteEmail)', () => {
     const res = render();
     assertNoLeakage(res);
     assertWeight(res);
-    expect(res.html).toContain('Branden invited you.');
+    expect(res.html).toContain('Carsten invited you.');
     expect(res.html).toContain('Join L4L North Region.');
-    expect(res.html).toContain('Branden Vincent Walker (branden@l4lnorth.com)');
+    expect(res.html).toContain('Carsten Hartley Fowler (carsten@north.example)');
     // ROLE_LABELS-driven role line inside the workspace card.
     expect(res.html).toContain('Warehouse User');
     expect(res.html).toContain('Manages inventory only for assigned warehouse(s).');
     // Inviter initials avatar (first + last word).
-    expect(res.html).toContain('>BW</div>');
+    expect(res.html).toContain('>CF</div>');
     expect(res.html).toContain('Pending · expires in 7 days');
     expect(res.html).toContain('>Accept invitation &rarr;</a>');
     expect(res.html).toContain('>What is StockPilot?</a>');
@@ -93,7 +93,7 @@ describe('team-invite (renderTeamInviteEmail)', () => {
     expect(res.subject).toBe('You’re invited to join L4L North Region on StockPilot');
     expect(res.preheader).toBe(
       def.preheader({
-        inviterFirst: 'Branden',
+        inviterFirst: 'Carsten',
         roleWithArticle: 'a Warehouse User',
         window: '7 days',
       }),
@@ -111,7 +111,7 @@ describe('team-invite (renderTeamInviteEmail)', () => {
     const res = render();
     assertEssentialFooter(res.html);
     expect(res.html).toContain(
-      'because branden@l4lnorth.com invited this address to a StockPilot workspace',
+      'because carsten@north.example invited this address to a StockPilot workspace',
     );
   });
 
@@ -123,7 +123,7 @@ describe('team-invite (renderTeamInviteEmail)', () => {
     const res = renderTeamInviteEmail({
       email: 'exceptionally.long.invitee.address@very-long-subdomain.example-warehouse-operations.com',
       org: `${LONG_ORG} <script>x</script>`,
-      inviterName: 'Branden',
+      inviterName: 'Carsten',
       role: 'viewer',
       acceptUrl: SEED.acceptUrl,
       expiresOn: SEED.expiresOn,
@@ -133,9 +133,9 @@ describe('team-invite (renderTeamInviteEmail)', () => {
     expect(res.html).not.toContain('<script>');
     expect(res.html).toContain('Pacific Intermountain Distribution &amp; Logistics');
     // No inviter email → footer names the inviter by name instead.
-    expect(res.html).toContain('because Branden invited this address');
+    expect(res.html).toContain('because Carsten invited this address');
     // Single-word inviter → single-letter initials, first word reused.
-    expect(res.html).toContain('>B</div>');
+    expect(res.html).toContain('>C</div>');
     expect(res.html).toContain('Read-Only Auditor');
   });
 });
@@ -189,7 +189,7 @@ describe('invite-reminder (renderInviteReminderEmail)', () => {
     const res = renderInviteReminderEmail({
       email: SEED.inviteeEmail,
       org: LONG_ORG,
-      inviterName: 'ops@l4lnorth.com',
+      inviterName: 'ops@north.example',
       role: 'admin',
       acceptUrl: SEED.acceptUrl,
       expiresOn: SEED.expiresOn,
@@ -302,7 +302,7 @@ describe('portal-invite (renderPortalInviteEmail)', () => {
     const res = render();
     // Byte-equal to the registry sample-world sender.
     expect(res.from).toBe('L4L North Region via StockPilot <portal@stockpilotusa.com>');
-    expect(res.replyTo).toBe('branden@l4lnorth.com');
+    expect(res.replyTo).toBe('carsten@north.example');
   });
 
   it('quotes RFC-5322-unsafe display names and strips injection characters', () => {
@@ -318,7 +318,7 @@ describe('portal-invite (renderPortalInviteEmail)', () => {
     const res = render();
     expect(res.html).toContain('No StockPilot account is required.');
     expect(res.html).toContain('>Contact the sender</a>');
-    expect(res.html).toContain('mailto:branden@l4lnorth.com');
+    expect(res.html).toContain('mailto:carsten@north.example');
     expect(res.html).not.toContain('>Unsubscribe</a>');
     expect(res.html).not.toContain('Manage email preferences');
     // Essential-footer boilerplate must not leak onto external mail.
@@ -344,6 +344,29 @@ describe('portal-invite (renderPortalInviteEmail)', () => {
       linkExpiry: '14 days',
     });
     expect(res.html).toContain('and works for 14 days; after that, request a fresh one');
+  });
+
+  // SECURITY (B6): the contact link was `mailto:${supplierReplyTo}` from the
+  // stored address, so text such as "a@b.com?bcc=x@y.z" opened a message
+  // copied to someone the email never names. Only one plain address is
+  // linked (core plainAddressMailtoUrl); anything else falls back to support.
+  it('links Contact the sender only for one plain address, else support', () => {
+    for (const supplierReplyTo of [
+      'sender@example.com?bcc=eve@evil.test',
+      'sender@example.com,eve@evil.test',
+      'sen\u200Dder@example.com',
+      'sender@example.\uFF43om',
+    ]) {
+      const res = renderPortalInviteEmail({
+        email: SEED.customerEmail,
+        supplierOrg: SEED.org,
+        customerOrg: SEED.customerOrg,
+        portalUrl: SEED.portalUrl,
+        supplierReplyTo,
+      });
+      expect(res.html, supplierReplyTo).not.toContain('mailto:');
+      expect(res.html, supplierReplyTo).toContain('>Contact the sender</a>');
+    }
   });
 
   it('stress: long supplier + hostile customer org + no reply-to stay safe', () => {

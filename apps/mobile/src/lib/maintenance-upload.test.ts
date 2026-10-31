@@ -254,31 +254,22 @@ describe('uploadMaintenancePhoto', () => {
     expect(putOptions.headers['Content-Type']).toBe('image/png');
   });
 
-  it('a missing/failed thumb never fails the whole upload (best-effort — the master is what matters)', async () => {
-    manipulatorMock.manipulateAsync.mockRejectedValueOnce(new Error('manipulator crashed'));
-    const onProgress = vi.fn();
+  // B29: the maintenance server makes the thumbnail from the cleaned photo at
+  // finalize and writes it over whatever was sent (2026-09-27), so the phone
+  // no longer makes or sends one, exactly as exception evidence. The mint
+  // still answers a thumbSignedUrl (phones on older updates still use it).
+  // Mutation caught: putting thumbUploadUrl back on the maintenance endpoints.
+  it('makes and sends no thumbnail of its own, though the mint still names a thumbnail URL', async () => {
+    expect(MINT.thumbSignedUrl).toBeTruthy();
     await expect(
-      uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, onProgress),
+      uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, vi.fn()),
     ).resolves.toEqual({ id: 'att-1' });
+    expect(manipulatorMock.manipulateAsync).not.toHaveBeenCalled();
     expect(fsMock.uploadAsync).not.toHaveBeenCalled();
-    expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalled();
-  });
-
-  // F1-4 extraction: the maintenance server still takes a client-made
-  // thumbnail (the evidence server makes its own). Mutation caught: dropping
-  // thumbUploadUrl from the maintenance endpoints.
-  it('still sends the client-made 400px thumbnail to the mint\'s thumbSignedUrl', async () => {
-    await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, vi.fn());
-    expect(manipulatorMock.manipulateAsync).toHaveBeenCalledWith(
-      'file:///resized.jpg',
-      [{ resize: { width: 400 } }],
-      expect.objectContaining({ format: manipulatorMock.SaveFormat.JPEG }),
-    );
-    expect(fsMock.uploadAsync).toHaveBeenCalledWith(
-      MINT.thumbSignedUrl,
-      'file:///thumb.jpg',
-      expect.objectContaining({ httpMethod: 'PUT', headers: { 'Content-Type': 'image/jpeg' } }),
-    );
+    // The one PUT is the photo itself.
+    expect(fsMock.createUploadTask).toHaveBeenCalledTimes(1);
+    expect(fsMock.createUploadTask.mock.calls[0]![0]).toBe(MINT.signedUrl);
+    expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the literal filename "photo" when no fileName is given', async () => {

@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
@@ -13,9 +13,12 @@ import { LocationsService } from '@/server/services/locations';
 import { PoImportsService } from '@/server/services/po-imports';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
+import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 
-import { poImportUploaderLabel } from '@stockpilot/core';
+import { poImportUploaderLabel, resolveOrgTimezone } from '@stockpilot/core';
 
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the imports list draws. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -25,13 +28,30 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   // service refuses every read (assertModuleEnabled), which used to take this
   // page to the error screen; an old link or notification now lands on the
   // module-off panel, as the list does. The module set is the request-cached
-  // read the dashboard layout already made, so this adds no query.
+  // read the dashboard layout already made, so this adds no query. When that
+  // read failed, the page says it could not check and offers Try again, and
+  // still reads nothing.
   const moduleAccess = await checkModuleAccess('po_imports');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="po_imports" access={moduleAccess} />;
   }
 
   const { id } = await params;
+  // The lineage notice dates a later import of this file as a calendar day,
+  // and whose day it is matters: in the server's zone (UTC on Vercel) an
+  // evening import in California lands on the next date. So the org's zone,
+  // from the request-cached org row (the same read the imports list makes for
+  // its Uploaded column). Started before the reads below rather than awaited
+  // ahead of them, and an unreadable row falls back to the documented default
+  // zone instead of taking the review down (getOrgRowForRequest throws on a
+  // read error).
+  const ctx = await requireOrgContext();
+  const timezoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'po_imports.detail.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
   const svc = await PoImportsService.forCurrentUser();
 
   let header, lines, lineage;
@@ -42,23 +62,34 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
     throw e;
   }
 
-  const [suppliers, warehouses, items, charters, locations, categories, resolutions, uploaders] =
-    await Promise.all([
-      (await SuppliersService.forCurrentUser()).listForLookups(),
-      (await WarehousesService.forCurrentUser()).listNames(),
-      // Uncapped lean listing — list({ limit: 500 }) silently truncated the
-      // match dropdown for >500-item orgs.
-      (await InventoryService.forCurrentUser()).listForMatching(),
-      (await ChartersService.forCurrentUser()).list(),
-      (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),
-      (await CategoriesService.forCurrentUser()).list(),
-      // Task 14: the group/variant verdict per line. Read-only — it resolves
-      // identity, it never links or merges anything.
-      svc.resolveLineResults(id),
-      // Who uploaded it. Never throws: a failed lookup is reported and the
-      // label reads "—".
-      svc.uploaderProfiles([header.uploaded_by]),
-    ]);
+  const [
+    suppliers,
+    warehouses,
+    items,
+    charters,
+    locations,
+    categories,
+    resolutions,
+    uploaders,
+    timeZone,
+  ] = await Promise.all([
+    (await SuppliersService.forCurrentUser()).listForLookups(),
+    (await WarehousesService.forCurrentUser()).listNames(),
+    // Uncapped lean listing — list({ limit: 500 }) silently truncated the
+    // match dropdown for >500-item orgs.
+    (await InventoryService.forCurrentUser()).listForMatching(),
+    (await ChartersService.forCurrentUser()).list(),
+    (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),
+    (await CategoriesService.forCurrentUser()).list(),
+    // Task 14: the group/variant verdict per line. Read-only — it resolves
+    // identity, it never links or merges anything.
+    svc.resolveLineResults(id),
+    // Who uploaded it. Never throws: a failed lookup is reported and the
+    // label reads "—".
+    svc.uploaderProfiles([header.uploaded_by]),
+    // Never throws (see above).
+    timezoneRead,
+  ]);
 
   // Prefill the expected-delivery picker from the AI-extracted ship/delivery
   // date stored in parsed_json (scan imports only). Only a clean YYYY-MM-DD is
@@ -115,7 +146,7 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
       {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
           it changes how everything below it should be read, so it must not
           be reachable only after scrolling past the line table. */}
-      <PoImportLineageNotice lineage={lineage} />
+      <PoImportLineageNotice lineage={lineage} timeZone={timeZone} />
       {header.superseded_at && lineage.successors.length === 0 && (
         // superseded_at is stamped, but the successor row is gone (deleted,
         // or invisible under RLS). Say so plainly rather than offering a

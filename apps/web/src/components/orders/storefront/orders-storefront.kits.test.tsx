@@ -167,11 +167,11 @@ async function openPage(
         kitsEnabled={kitsEnabled}
         chartersForWarehouse={[]}
         canActOnBehalf={false}
-        viewerName="Lillian"
-        viewerEmail="lillian@example.test"
+        viewerName="Juniper"
+        viewerEmail="juniper@example.test"
         orgTimezone="America/Los_Angeles"
         deliveryRecipients={null}
-        viewerUserId="user-lillian"
+        viewerUserId="user-juniper"
         organizationId="org-l4l"
         canApproveOrders={false}
       />,

@@ -300,6 +300,30 @@ describe('detectMassMutations', () => {
     ];
     expect(detectMassMutations(rows, 1)).toEqual([]);
   });
+
+  it("never counts a scheduled job's rows as the person whose id it borrows (B9)", () => {
+    // The nightly auto-archive and auto-delete write one row per item under
+    // an owner's or admin's id, stamped is_system. 30 of them are the org's
+    // own retention setting at work, not that person mass-archiving.
+    const job = (event: string) =>
+      auditRow({
+        event,
+        organization_id: 'org-1',
+        user_id: 'user-a',
+        metadata: { reason: 'auto_zero_stock', is_system: true },
+      });
+    const rows = [
+      ...Array.from({ length: 20 }, () => job('inventory.item.archived')),
+      ...Array.from({ length: 10 }, () => job('inventory.item.deleted')),
+    ];
+    expect(detectMassMutations(rows, 25)).toEqual([]);
+
+    // The same person's own archives still count, and only theirs.
+    const own = Array.from({ length: 25 }, () => arch('org-1', 'user-a'));
+    expect(detectMassMutations([...rows, ...own], 25)).toEqual([
+      { organizationId: 'org-1', userId: 'user-a', count: 25 },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

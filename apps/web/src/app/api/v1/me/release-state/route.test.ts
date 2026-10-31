@@ -14,7 +14,14 @@ vi.mock('@/server/services/releases', () => ({ recordReleaseState: vi.fn() }));
 
 const ctx = { organizationId: 'org-1', userId: 'user-1', role: 'staff' } as never;
 
-function req(body: unknown, headers: Record<string, string> = {}) {
+/**
+ * What the web app's own fetch sends (lib/updates/update-store.ts): a browser
+ * puts its page's origin on every write. Pass other headers to replace them,
+ * or {} for a write with neither.
+ */
+const PAGE = { Origin: 'https://stockpilotusa.com', 'Sec-Fetch-Site': 'same-origin' };
+
+function req(body: unknown, headers: Record<string, string> = PAGE) {
   return new Request('https://stockpilotusa.com/api/v1/me/release-state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
@@ -66,11 +73,36 @@ describe('POST /api/v1/me/release-state', () => {
     expect(withApiContext).not.toHaveBeenCalled();
   });
 
-  it('accepts same-origin, no Origin at all, and a Bearer caller whatever its Origin', async () => {
+  it.each([
+    ['Sec-Fetch-Site cross-site, with no Origin', { 'Sec-Fetch-Site': 'cross-site' }],
+    [
+      'Sec-Fetch-Site same-site from a sibling subdomain',
+      { 'Sec-Fetch-Site': 'same-site', Origin: 'https://evil.stockpilotusa.com' },
+    ],
+    ['Sec-Fetch-Site none (no page made it)', { 'Sec-Fetch-Site': 'none' }],
+    [
+      'a Basic Authorization header, which is not a bearer',
+      { Authorization: 'Basic dXNlcjpwYXNz', Origin: 'https://evil.example' },
+    ],
+  ])('refuses %s with the same 403 (the shared rule, docket S14)', async (_name, headers) => {
+    const res = await POST(req({ action: 'read_all' }, headers));
+    expect(res.status).toBe(403);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(recordReleaseState).not.toHaveBeenCalled();
+  });
+
+  it('refuses a cookie POST with neither Origin nor Sec-Fetch-Site with the same 403 (fail closed, docket S14)', async () => {
+    const res = await POST(req({ action: 'read_all' }, {}));
+    expect(res.status).toBe(403);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(recordReleaseState).not.toHaveBeenCalled();
+  });
+
+  it("accepts the page's own post, a matching Origin alone, and a Bearer caller whatever its headers", async () => {
+    expect((await POST(req({ action: 'read_all' }))).status).toBe(200);
     expect(
       (await POST(req({ action: 'read_all' }, { Origin: 'https://stockpilotusa.com' }))).status,
     ).toBe(200);
-    expect((await POST(req({ action: 'read_all' }))).status).toBe(200);
     expect(
       (
         await POST(
@@ -80,6 +112,9 @@ describe('POST /api/v1/me/release-state', () => {
           ),
         )
       ).status,
+    ).toBe(200);
+    expect(
+      (await POST(req({ action: 'read_all' }, { Authorization: 'Bearer token' }))).status,
     ).toBe(200);
   });
 

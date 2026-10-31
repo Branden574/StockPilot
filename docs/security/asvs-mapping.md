@@ -209,8 +209,10 @@ data-processing register.
 
 ### V9 — Communication — **Met**
 
-TLS throughout, HSTS with preload, CSP using `strict-dynamic`, hardened response
-headers. Certificate expiry monitored daily. Every server-side fetch of a
+TLS throughout, HSTS with preload, hardened response headers, and a CSP that
+names the origins scripts, images, media, requests and frames may use (it still
+allows inline and eval'd scripts, and governs no navigation: see the V14 gap).
+Certificate expiry monitored daily. Every server-side fetch of a
 user-supplied URL passes the SSRF guard, which classifies IP literals and
 re-resolves on each redirect hop so a redirect to a private or metadata address is
 refused.
@@ -226,7 +228,17 @@ installed from an **immutable version with an inline sha256 pin**, so neither an
 upstream branch compromise nor a swapped release asset can execute code in CI.
 Dependabot with a documented remediation record
 ([`dependency-hardening-2026-08.md`](dependency-hardening-2026-08.md)) and
-version-scoped `pnpm.overrides`. `--frozen-lockfile` in CI.
+version-scoped `pnpm.overrides`. `--frozen-lockfile` in CI. A dependency audit
+in the Security Scan (job "Dependency audit": `pnpm audit --prod` read by
+`scripts/dependency-audit/report.mjs`) on every push and pull request to main,
+weekly and by hand: it fails on a critical advisory in a production dependency
+unless `scripts/dependency-audit/allow-list.json` dismisses it with the severity
+it was reviewed at, a reason and a review date, reports high ones, and fails
+closed when the registry does not answer. An entry dismisses only what was
+reviewed: an advisory re-scored above the entry's severity fails the job again,
+and an entry whose reason is that no fixed version exists lapses once the
+advisory lists one. The job holds no secret and installs nothing. It is not a required
+check, so a new advisory against an unchanged dependency does not block a merge.
 
 _Gap, and it is the top open supply-chain item_: **pnpm 9.12.3 executes package
 lifecycle scripts by default.** Migrating to pnpm 10.x with an
@@ -285,9 +297,34 @@ The rate limiter itself is the Postgres atomic counter added in migration 0048,
 whose `increment_rate_limit` function was closed to anon by 0318 — see
 `supabase/tests/0318_secdef_grants.test.sql`.
 
+A cookie-authenticated write that a browser did not send from this origin is
+refused (anti-CSRF on route handlers, INV-E5), and so is one that carries neither
+`Origin` nor `Sec-Fetch-Site` (fail closed): `withApiContext` answers it as
+signed out before the session is read, and a sweep holds every route that can
+write to that rule or to a reviewed exemption.
+
+A `GET` that spends something of the person's is refused when another origin's
+page made the browser send it: `/auth/session-ended` then clears only a session
+that is already gone, and an export is answered 403 before the per-user export
+budget, its audit row and its alert. The emailed-link page names the account the
+browser is already signed in as, and each link type lands on a fixed page.
+
+_Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
+`apps/web/src/lib/auth/api-context.cross-site.test.ts`,
+`apps/web/src/test/cookie-write-routes.guard.test.ts`,
+`apps/web/src/app/auth/session-ended/route.test.ts`,
+`apps/web/src/lib/export-rate-limit.test.ts`,
+`apps/web/src/app/api/export-routes.limit-order.test.ts`,
+`apps/web/src/lib/auth/confirm-landing.test.ts`.
+
 _Gap_: no generic sweep asserting that **every** route is gated — coverage is
-per-route. A sweep over the cron routes specifically is feasible and is listed as a
-follow-up in the [`README`](README.md). No formal API schema or contract test.
+per-route (the INV-E5 sweep checks only that a write route reaches
+`withApiContext`, not what it permits). A sweep over the cron routes specifically
+is feasible and is listed as a follow-up in the [`README`](README.md). No formal API
+schema or contract test. A cookie `GET` another origin's page made as an image,
+script or frame is still answered (only its per-minute read limit is spent), and
+an emailed sign-in link still signs a signed-out browser in to the link's account
+when its person presses on (INV-E5, "Not covered").
 
 ### V14 — Configuration — **Partial**
 
@@ -303,6 +340,17 @@ confirmation, the Vercel Node.js major version (which must not be an
 end-of-life 20.x), and the Supabase backup tier. `SECURITY.md` and
 [`framework-patch-verification.md`](framework-patch-verification.md) both flag
 these as owner-verify items, and they remain owner-verify.
+
+_Gap_: the CSP's `script-src` still allows `'unsafe-inline'` and `'unsafe-eval'`
+(`apps/web/next.config.ts`), because Next.js's inline bootstrap script carries no
+nonce, so the policy does not stop an injected inline script from running. Nor
+does it stop such a script from sending data away, for example by navigating the
+page or opening a window to an address carrying the data: no directive in the
+policy governs navigation, and `connect-src`, `img-src`, `media-src`, `frame-src`
+and `form-action` limit requests, images, media, frames and form posts only. It is
+not a `strict-dynamic` policy: adding that directive on its own makes browsers
+ignore `'unsafe-inline'`, which blocked the bootstrap script and broke the
+dashboard. A per-request nonce policy is planned.
 
 ## 2. Summary
 

@@ -1021,9 +1021,10 @@ export class ItemImagesService {
     // Three outcomes, and the middle one is load-bearing:
     //   - no object at that path (head === null): the client skipped the
     //     thumb PUT. That is NORMAL — the web uploader already sends
-    //     thumbPath: null when its thumb PUT fails, and mobile uploads the
-    //     master only. Record the row with NO thumb and let the existing
-    //     master fallback render it. Never fail the upload over a thumb.
+    //     thumbPath: null when its thumb PUT fails (the phone never comes
+    //     through here: it writes its own rows, with its own thumbnail since
+    //     B31). Record the row with NO thumb and let the existing master
+    //     fallback render it. Never fail the upload over a thumb.
     //   - object present but not an allowed image: the same verify-or-delete
     //     shape as the master — remove BOTH objects, write no row, so we
     //     never leave an unverified object with a row pointing at it.

@@ -445,7 +445,7 @@ function WarehouseDialog({
               <Label htmlFor="wh-name">Name</Label>
               <Input
                 id="wh-name"
-                placeholder="San Diego Main"
+                placeholder={`Main ${termSingular.toLowerCase()}`}
                 {...register('name', { required: true, maxLength: 120 })}
               />
               {errors.name && <p className="text-destructive text-[12px]">Name is required.</p>}
@@ -454,7 +454,7 @@ function WarehouseDialog({
               <Label htmlFor="wh-code">Code</Label>
               <Input
                 id="wh-code"
-                placeholder="SD-MAIN"
+                placeholder="MAIN"
                 {...register('code', { required: true, maxLength: 32 })}
               />
               {errors.code && <p className="text-destructive text-[12px]">Code is required.</p>}

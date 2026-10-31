@@ -76,6 +76,8 @@ const ITEM_EXPECTED = '33333333-3333-4333-8333-333333333332';
 const ITEM_DELETED = '33333333-3333-4333-8333-333333333333';
 const ITEM_NOT_ALLOWED = '77777777-7777-4777-8777-777777777777';
 const ITEM_OTHER_ORG = '88888888-8888-4888-8888-888888888888';
+/** Allowlisted, active and received, but hidden from new ordering (0413). */
+const ITEM_HIDDEN = '99999999-9999-4999-8999-999999999999';
 
 /** An inventory row with the columns portalCatalog + portalSubmitOrder read. */
 function item(id: string, over: Row = {}): Row {
@@ -90,6 +92,7 @@ function item(id: string, over: Row = {}): Row {
     status: 'active',
     awaiting_first_receipt: false,
     deleted_at: null,
+    order_catalog_visible: true,
     ...over,
   };
 }
@@ -104,6 +107,7 @@ function makeDb(): Record<string, Row[]> {
       item(ITEM_DELETED, { deleted_at: '2026-07-01T00:00:00Z' }),
       item(ITEM_NOT_ALLOWED),
       item(ITEM_OTHER_ORG, { organization_id: OTHER_ORG }),
+      item(ITEM_HIDDEN, { order_catalog_visible: false }),
     ],
     // The allowlist deliberately includes the three item-level exclusions and
     // a cross-org row: if any of them surfaces, the catalog gate has widened
@@ -115,6 +119,7 @@ function makeDb(): Record<string, Row[]> {
       { customer_id: CUSTOMER, item_id: ITEM_EXPECTED },
       { customer_id: CUSTOMER, item_id: ITEM_DELETED },
       { customer_id: CUSTOMER, item_id: ITEM_OTHER_ORG },
+      { customer_id: CUSTOMER, item_id: ITEM_HIDDEN },
       { customer_id: OTHER_CUSTOMER, item_id: ITEM_NOT_ALLOWED },
     ],
     // ITEM_B has no entry (quotable); ITEM_NOT_ALLOWED has one, proving a
@@ -136,8 +141,15 @@ function makeDb(): Record<string, Row[]> {
  * a transient failure — `{ data: null, error: { message } }` — which is the
  * exact shape a swallow-the-error reader turns into a silent empty rowset.
  */
-function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string> = {}) {
+function makeAdmin(
+  db: Record<string, Row[]>,
+  failTables: Record<string, string> = {},
+  insertErrors: Record<string, { message: string; code?: string; hint?: string; details?: string }> = {},
+  rpcErrors: Record<string, { message: string; code?: string; hint?: string; details?: string }> = {},
+) {
   const fromCalls: string[] = [];
+  const rpcCalls: Array<{ fn: string; args: Row }> = [];
+  const deletes: Array<{ table: string; rows: Row[] }> = [];
   const inserts: Array<{ table: string; rows: Row[] }> = [];
   // Records the size of every `.in()` call, per table — lets a test prove a
   // large id list actually got chunked into multiple bounded calls, rather
@@ -149,6 +161,8 @@ function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string>
     const preds: Array<(r: Row) => boolean> = [];
     let written: Row[] | null = null;
     let window: [number, number] | null = null;
+    let insertError: { message: string; code?: string; hint?: string; details?: string } | null = null;
+    let isDelete = false;
 
     const rows = (): Row[] => {
       if (written) return written;
@@ -183,12 +197,19 @@ function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string>
           ...r,
         }));
         inserts.push({ table, rows: added });
+        if (insertErrors[table]) {
+          insertError = insertErrors[table]!;
+          return builder;
+        }
         (db[table] ??= []).push(...added);
         written = added;
         return builder;
       },
       update: () => builder,
-      delete: () => builder,
+      delete: () => {
+        isDelete = true;
+        return builder;
+      },
       maybeSingle: async () =>
         failTables[table]
           ? { data: null, error: { message: failTables[table] } }
@@ -197,12 +218,21 @@ function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string>
         failTables[table]
           ? { data: null, error: { message: failTables[table] } }
           : { data: rows()[0] ?? null, error: null },
-      then: (resolve: (v: { data: Row[] | null; error: { message: string } | null }) => void) =>
-        resolve(
-          failTables[table]
-            ? { data: null, error: { message: failTables[table]! } }
-            : { data: rows(), error: null },
-        ),
+      then: (resolve: (v: { data: Row[] | null; error: { message: string } | null }) => void) => {
+        if (isDelete) {
+          const gone = rows();
+          deletes.push({ table, rows: gone });
+          db[table] = (db[table] ?? []).filter((r) => !gone.includes(r));
+          return resolve({ data: null, error: null });
+        }
+        return resolve(
+          insertError
+            ? { data: null, error: insertError }
+            : failTables[table]
+              ? { data: null, error: { message: failTables[table]! } }
+              : { data: rows(), error: null },
+        );
+      },
     };
     return builder;
   }
@@ -213,9 +243,32 @@ function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string>
         fromCalls.push(table);
         return chain(table);
       },
+      // insert_order_request_with_lines (0413 review fix round): the header
+      // and its lines in ONE transaction. A refusal writes nothing at all; a
+      // success records both inserts the way the database would.
+      rpc: async (fn: string, args: Row) => {
+        rpcCalls.push({ fn, args });
+        if (fn !== 'insert_order_request_with_lines') {
+          return { data: null, error: { message: `no such function ${fn}` } };
+        }
+        if (rpcErrors[fn]) return { data: null, error: rpcErrors[fn]! };
+        const header: Row = { id: 'order_requests-1', ...(args.p_header as Row) };
+        const lines = (args.p_lines as Row[]).map((l, i) => ({
+          id: `order_request_lines-${i + 1}`,
+          order_request_id: header.id,
+          ...l,
+        }));
+        inserts.push({ table: 'order_requests', rows: [header] });
+        inserts.push({ table: 'order_request_lines', rows: lines });
+        (db.order_requests ??= []).push(header);
+        (db.order_request_lines ??= []).push(...lines);
+        return { data: header, error: null };
+      },
     },
     fromCalls,
+    rpcCalls,
     inserts,
+    deletes,
     inCallSizes,
   };
 }
@@ -559,5 +612,152 @@ describe('portalSubmitOrder — a kit’s pre-assembled stock is refused', () =>
     await expect(
       portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
     ).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0413 ordering visibility: an item hidden from new ordering is not in the
+// customer's catalog, and checkout refuses it (the catalog is checkout's set).
+// The database gate refuses its line even when a hide lands between that read
+// and the insert; the header is removed and the customer sees the same
+// sentence, which never says why. Showing it again does not touch any
+// allowlist.
+// ---------------------------------------------------------------------------
+describe('portal and items hidden from new ordering', () => {
+  it('the catalog leaves out an allowlisted item hidden from ordering, in both modes', async () => {
+    for (const ctx of [ctxNoCharge, ctxPriced]) {
+      const ids = (await portalCatalog(ctx)).map((r) => r.itemId);
+      expect(ids).toContain(ITEM_A);
+      expect(ids).not.toContain(ITEM_HIDDEN);
+    }
+  });
+
+  it('checkout refuses it before anything is written', async () => {
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_HIDDEN, quantity: 1 }] }),
+    ).rejects.toThrow('One of the items is no longer available to order.');
+    expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
+  });
+
+  it('a gate refusal inside the one write says the same sentence and leaves nothing to clean up', async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: {
+        message: 'This item is no longer available for new orders.',
+        code: 'P0001',
+        hint: 'order_item_hidden',
+        details: ITEM_B,
+      },
+    });
+    adminRef.current = admin.client;
+    await expect(
+      portalSubmitOrder(ctxNoCharge, {
+        lines: [
+          { itemId: ITEM_B, quantity: 1 },
+          { itemId: ITEM_A, quantity: 2 },
+        ],
+      }),
+    ).rejects.toThrow('One of the items is no longer available to order.');
+    // The database rolled the header back with the refused line (and with it
+    // the header's "New order request" notification), so the service neither
+    // wrote a header of its own nor needs a compensating delete.
+    expect(admin.inserts).toEqual([]);
+    expect(admin.deletes).toEqual([]);
+  });
+
+  it('writes the header and its lines in ONE insert_order_request_with_lines call', async () => {
+    await portalSubmitOrder(ctxPriced, {
+      lines: [
+        { itemId: ITEM_B, quantity: 1 },
+        { itemId: ITEM_A, quantity: 2 },
+      ],
+      notes: 'Dock 2',
+    });
+    expect(admin.rpcCalls).toHaveLength(1);
+    const call = admin.rpcCalls[0]!;
+    expect(call.fn).toBe('insert_order_request_with_lines');
+    expect(call.args.p_header).toEqual({
+      organization_id: ORG,
+      warehouse_id: WAREHOUSE,
+      status: 'pending_approval',
+      source: 'portal',
+      customer_id: CUSTOMER,
+      requester_user_id: 'auth-1',
+      requester_email: 'buyer@school.example.com',
+      requester_name: 'Harbor Elementary',
+      notes: 'Dock 2',
+      fulfillment_type: 'pickup',
+    });
+    expect(call.args.p_lines).toEqual([
+      { item_id: ITEM_A, quantity_requested: 2, unit_cost_at_request: 4.25, unit_price_at_request: 12.5 },
+      { item_id: ITEM_B, quantity_requested: 1, unit_cost_at_request: 4.25, unit_price_at_request: null },
+    ]);
+    expect(call.args.p_track_token).toBeUndefined();
+    // No client write of an order row or line: only reads went through from().
+    expect(admin.fromCalls).not.toContain('order_requests');
+    expect(admin.fromCalls).not.toContain('order_request_lines');
+  });
+
+  // Integrator D2: one ceiling for a line on every path that adds demand,
+  // 10,000 units (placement's per-item cap). The cart is summed per item
+  // first, so two entries of one item count together.
+  it('a line above 10,000 units, summed per item, is refused in words before anything is written', async () => {
+    await expect(
+      portalSubmitOrder(ctxNoCharge, {
+        lines: [
+          { itemId: ITEM_A, quantity: 6_000 },
+          { itemId: ITEM_A, quantity: 4_001 },
+        ],
+      }),
+    ).rejects.toThrow('A line can have at most 10,000 units.');
+    expect(admin.rpcCalls).toEqual([]);
+    expect(admin.inserts).toEqual([]);
+  });
+
+  it('exactly 10,000 units of one item go through', async () => {
+    await portalSubmitOrder(ctxNoCharge, {
+      lines: [
+        { itemId: ITEM_A, quantity: 6_000 },
+        { itemId: ITEM_A, quantity: 4_000 },
+      ],
+    });
+    const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
+    expect(lines).toEqual([expect.objectContaining({ item_id: ITEM_A, quantity_requested: 10_000 })]);
+  });
+
+  it("the database's own line-ceiling refusal reads the same, not as a fault", async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: {
+        message: 'order_lines_invalid',
+        code: '22023',
+        hint: 'order_lines_invalid',
+        details: 'quantity',
+      },
+    });
+    adminRef.current = admin.client;
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).rejects.toThrow('A line can have at most 10,000 units.');
+  });
+
+  it('any other refusal of the one write is the generic sentence, reported', async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: { message: 'connection reset', code: '08006' },
+    });
+    adminRef.current = admin.client;
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).rejects.toThrow('Order could not be submitted. Please try again.');
+    expect(admin.inserts).toEqual([]);
+  });
+
+  it('inserts the lines in item-id order (the lock order every gated writer uses)', async () => {
+    await portalSubmitOrder(ctxNoCharge, {
+      lines: [
+        { itemId: ITEM_B, quantity: 1 },
+        { itemId: ITEM_A, quantity: 2 },
+      ],
+    });
+    const lines = admin.inserts.find((i) => i.table === 'order_request_lines')?.rows ?? [];
+    expect(lines.map((l) => l.item_id)).toEqual([ITEM_A, ITEM_B]);
   });
 });

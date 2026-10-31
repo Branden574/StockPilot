@@ -2,7 +2,7 @@ import { Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { MaintenanceSearch } from '@/components/maintenance/maintenance-search';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
 import { PageTour } from '@/components/onboarding/page-tour';
@@ -95,7 +95,7 @@ export default async function MaintenancePage({
   searchParams: Promise<{ scope?: string; status?: string; q?: string; page?: string }>;
 }) {
   const access = await checkModuleAccess('maintenance_requests');
-  if (!access.enabled) return <ModuleNotEnabled moduleId="maintenance_requests" canManage={access.canManage} />;
+  if (!access.enabled) return <ModuleUnavailable moduleId="maintenance_requests" access={access} />;
 
   // withContext() resolves requireOrgContext() internally (React-cached, so
   // this costs no extra round trip beyond checkModuleAccess's own call) and

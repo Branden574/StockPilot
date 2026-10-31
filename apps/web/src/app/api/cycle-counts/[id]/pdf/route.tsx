@@ -8,6 +8,7 @@ import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -46,7 +47,7 @@ export async function GET(
     );
     // The export budget is spent only once the caller may have this export
     // (a refused caller must not spend it or trip the abuse alert).
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const ccSvc = new CycleCountsService(ctx);
@@ -190,7 +191,10 @@ export async function GET(
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     const stream = await renderToStream(
       <CycleCountSheetPdf
