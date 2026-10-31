@@ -20,6 +20,7 @@ import {
 } from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
+  forbiddenOrInternalResponse,
   internalErrorResponse,
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
@@ -283,7 +284,11 @@ function serviceErrorToResponse(e: unknown, organizationId: string): NextRespons
             : 500;
     return NextResponse.json({ error: e.code, message: e.message }, { status });
   }
-  return internalErrorResponse(e, 'cycle_counts.ai_scan', { organizationId });
+  // The count's warehouse gate (assertSessionAccess) refuses with a
+  // ForbiddenError: a 403 with its own words, or a 503 to retry when the
+  // caller's own warehouse access could not be read. Not an unexpected error
+  // (S16 review round 1, as distribute).
+  return forbiddenOrInternalResponse(e, 'cycle_counts.ai_scan', { organizationId });
 }
 
 function safeJsonParse(s: string): unknown {
