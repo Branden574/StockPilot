@@ -39,12 +39,17 @@ import 'server-only';
  * read without its owner columns counts as a deleted member's. The one gap
  * it cannot close: a deleted member's ticket whose organization was deleted
  * too names neither and reads as a public ticket, so its kept address is
- * still emailed. One path reaches it today: the platform console's
- * organization delete with "also delete orphaned users" (deleteOrganization
- * in server/actions/platform-admin.ts) deletes the organization first, which
- * empties organization_id, and then each orphaned account, which empties
- * submitted_by. No other column of a ticket says reliably that it was filed
- * in the app, so nothing here guesses; the marker below closes the gap.
+ * still emailed. Only the platform console reaches it today. Its
+ * organization delete (removeOrgAction in server/actions/platform-admin.ts)
+ * is the one code path that deletes an organization with a history (the
+ * other two roll back an organization their own function created a moment
+ * before), and it empties organization_id. With "also delete orphaned users"
+ * it then deletes each orphaned account, which empties submitted_by; a
+ * member who deleted their account before the organization went, or
+ * deletes it later, ends the same way. No other column of a ticket says
+ * reliably that it was filed in the app (page_url, user_agent,
+ * attachment_path and priority do not), so nothing here guesses; the marker
+ * below closes the gap. kept-address.guard.test.ts pins the path named here.
  *
  * WHAT REPLACES IT. Explicit markers, set in the database by the account
  * deletion's own trigger before the foreign keys empty the owner columns, so

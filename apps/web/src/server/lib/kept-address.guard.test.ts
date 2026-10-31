@@ -6,14 +6,17 @@ import { describe, expect, it } from 'vitest';
 import {
   OWNER_COLUMNS,
   OWNER_TABLES,
+  blankSqlComments,
   constObjectStringValues,
   findCalls,
+  findFromChains,
   findNewRowAssignments,
   findSqlWrites,
   findTriggerFunctions,
   findTsWrites,
   latestFunctionBodies,
   mayHoldWrite,
+  type FromChain,
   type OwnerTable,
   type SqlWrite,
   type TriggerOnOwnerTable,
@@ -50,7 +53,11 @@ import {
  *     together, or neither;
  *   - no migration INSERTs, MERGEs or COPYs into either table, or UPDATEs an
  *     owner column, and no function a trigger on either table runs assigns
- *     NEW's owner column (or NEW itself).
+ *     NEW's owner column (or NEW itself);
+ *   - the gap kept-address.ts admits (a deleted member's ticket whose
+ *     organization was deleted too reads as public) still has only the path
+ *     its note names, the platform console's organization delete (GAP_NOTE
+ *     below).
  * A REVIEWED entry that no longer matches anything fails too.
  *
  * IF THIS FAILS. A new way to write one of these tables or its owner columns
@@ -128,6 +135,41 @@ const REVIEWED_DYNAMIC: Reviewed[] = [
     why: "Its table parameter is typed 'categories' | 'suppliers'.",
   },
 ];
+
+/**
+ * THE GAP NOTE (push security review, 2026-10-26). kept-address.ts names the
+ * one path that makes a deleted member's ticket read as public: the platform
+ * console's organization delete, the only code that empties a ticket's
+ * organization_id. These keep that note true: the function it names deletes
+ * the organization and then the orphaned accounts; every other organization
+ * delete rolls back an organization its own function inserted a moment
+ * before (which has no tickets yet); no organization is deleted through a
+ * table the scan cannot read; and no migration deletes or truncates
+ * organizations.
+ */
+const GAP_NOTE = {
+  file: 'apps/web/src/server/lib/kept-address.ts',
+  names: 'removeOrgAction in server/actions/platform-admin.ts',
+  path: { file: 'apps/web/src/server/actions/platform-admin.ts', enclosing: 'removeOrgAction' },
+};
+
+/** The other organization deletes, each a rollback of its own insert. */
+const ORG_ROLLBACKS: Reviewed[] = [
+  {
+    file: 'apps/web/src/server/actions/organization.ts',
+    enclosing: 'createOrganizationAction',
+    why: 'Deletes the organization it inserted when the owner membership insert fails.',
+  },
+  {
+    file: 'apps/web/src/server/actions/platform-admin.ts',
+    enclosing: 'createOrgForCustomerAction',
+    why: 'Deletes the organization it inserted when the owner membership insert fails.',
+  },
+];
+
+/** Deletes through `.from(<not a literal>)` checked by hand to never reach
+ *  organizations (none today). */
+const REVIEWED_DYNAMIC_DELETES: Reviewed[] = [];
 
 // ── The scan ────────────────────────────────────────────────────────────────
 
@@ -327,7 +369,219 @@ function ownerWriteFindings(scan: Scan): string[] {
   return out;
 }
 
+// ── The gap note's path ─────────────────────────────────────────────────────
+
+interface OrgScan {
+  /** kept-address.ts as written. */
+  noteText: string;
+  /** Every `.from(…)` chain in the scanned sources. */
+  chains: FromChain[];
+  /** Every `deleteUser(…)` call (GoTrue's account delete). */
+  deleteUserCalls: TsCall[];
+  /** Migration statements that delete or truncate organizations. */
+  sql: Array<{ file: string; line: number; kind: 'delete' | 'truncate' }>;
+}
+
+const ORGANIZATIONS_REF = String.raw`(?:only\s+)?(?:"?public"?\s*\.\s*)?"?organizations"?(?![\w$"])`;
+
+/** DELETE FROM and TRUNCATE of organizations in one migration, comments left out. */
+function findSqlOrgDeletes(file: string, text: string): OrgScan['sql'] {
+  const code = blankSqlComments(text);
+  const out: OrgScan['sql'] = [];
+  const lineOf = (offset: number) => code.slice(0, offset).split('\n').length;
+  for (const m of code.matchAll(
+    new RegExp(String.raw`\bdelete\s+from\s+${ORGANIZATIONS_REF}`, 'gi'),
+  )) {
+    out.push({ file, line: lineOf(m.index ?? 0), kind: 'delete' });
+  }
+  const truncate = new RegExp(
+    String.raw`\btruncate\s+(?:table\s+)?(?:[^;]*?[\s,])?${ORGANIZATIONS_REF}`,
+    'gi',
+  );
+  for (const m of code.matchAll(truncate)) {
+    out.push({ file, line: lineOf(m.index ?? 0), kind: 'truncate' });
+  }
+  return out;
+}
+
+function scanOrgDeletes(): OrgScan {
+  const chains: FromChain[] = [];
+  const deleteUserCalls: TsCall[] = [];
+  for (const file of ROOTS.flatMap((r) => sourceFiles(r))) {
+    const text = readFileSync(path.join(REPO, file), 'utf8');
+    chains.push(...findFromChains(file, text));
+    deleteUserCalls.push(...findCalls(file, text, 'deleteUser'));
+  }
+  const sql = readdirSync(path.join(REPO, MIGRATIONS))
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .flatMap((f) =>
+      findSqlOrgDeletes(`${MIGRATIONS}/${f}`, readFileSync(path.join(REPO, MIGRATIONS, f), 'utf8')),
+    );
+  return {
+    noteText: readFileSync(path.join(REPO, GAP_NOTE.file), 'utf8'),
+    chains,
+    deleteUserCalls,
+    sql,
+  };
+}
+
+function orgDeleteFindings(scan: OrgScan): string[] {
+  const out: string[] = [];
+  const at = (w: { file: string; line: number }) => `${w.file}:${w.line}`;
+  const where = `${GAP_NOTE.path.file} ${GAP_NOTE.path.enclosing}()`;
+
+  if (!scan.noteText.includes(GAP_NOTE.names)) {
+    out.push(`${GAP_NOTE.file}: its gap note no longer names ${GAP_NOTE.names}`);
+  }
+  const deletes = scan.chains.filter(
+    (c) => c.table === 'organizations' && c.methods.includes('delete'),
+  );
+  if (!deletes.some((d) => matches(GAP_NOTE.path, d))) {
+    out.push(`${where}: no longer deletes an organization, so the gap note names the wrong path`);
+  }
+  if (!scan.deleteUserCalls.some((c) => matches(GAP_NOTE.path, c))) {
+    out.push(
+      `${where}: no longer deletes the orphaned accounts, so the gap note names the wrong path`,
+    );
+  }
+
+  const rollbacksSeen = new Set<Reviewed>();
+  for (const d of deletes) {
+    if (matches(GAP_NOTE.path, d)) continue;
+    const rollback = ORG_ROLLBACKS.find((r) => matches(r, d));
+    if (!rollback) {
+      out.push(
+        `${at(d)} a new organization delete (${d.enclosing || 'top level'}): it empties the ` +
+          "organization_id of that organization's support tickets, so add it to the gap note in " +
+          'kept-address.ts, or list it in ORG_ROLLBACKS if it only rolls back its own insert',
+      );
+      continue;
+    }
+    rollbacksSeen.add(rollback);
+    const inserted = scan.chains.some(
+      (c) =>
+        matches(rollback, c) &&
+        c.table === 'organizations' &&
+        c.methods[0] === 'insert' &&
+        c.line < d.line,
+    );
+    if (!inserted) {
+      out.push(`${at(d)} ${d.enclosing}() deletes an organization it did not insert first`);
+    }
+  }
+  for (const r of ORG_ROLLBACKS) {
+    if (!rollbacksSeen.has(r))
+      out.push(`ORG_ROLLBACKS ${r.file} ${r.enclosing}(): no longer found`);
+  }
+
+  const dynamicSeen = new Set<Reviewed>();
+  for (const c of scan.chains.filter((x) => x.table === null && x.methods.includes('delete'))) {
+    const reviewed = REVIEWED_DYNAMIC_DELETES.find((r) => matches(r, c));
+    if (reviewed) dynamicSeen.add(reviewed);
+    else {
+      out.push(
+        `${at(c)} .delete() through .from(${c.tableExpression}), a table the scan cannot read: ` +
+          'check it can never be organizations and list it in REVIEWED_DYNAMIC_DELETES',
+      );
+    }
+  }
+  for (const r of REVIEWED_DYNAMIC_DELETES) {
+    if (!dynamicSeen.has(r)) {
+      out.push(`REVIEWED_DYNAMIC_DELETES ${r.file} ${r.enclosing}(): no longer found`);
+    }
+  }
+
+  for (const s of scan.sql) {
+    out.push(
+      `${at(s)} a migration ${s.kind}s organizations: add it to the gap note in kept-address.ts`,
+    );
+  }
+  return out;
+}
+
 // ── The tests ───────────────────────────────────────────────────────────────
+
+describe('the gap note names the one path that empties a ticket organization (B23 push review)', () => {
+  let scanned: OrgScan | null = null;
+  const repo = (): OrgScan => (scanned ??= scanOrgDeletes());
+
+  it(
+    'names removeOrgAction, and every other organization delete rolls back its own insert',
+    () => {
+      expect(orgDeleteFindings(repo())).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  describe('self-test: a planted organization delete is caught', () => {
+    const PLANTED_TS = `
+      export async function purgeTrialOrgs(admin: Admin, ids: string[]) {
+        await admin.from('organizations').delete().in('id', ids);
+      }
+      export async function createOrganizationAction(admin: Admin, id: string) {
+        await admin
+          .from('organizations')
+          .delete()
+          .eq('id', id);
+      }
+      export async function purgeAny(admin: Admin, table: string, id: string) {
+        await admin.from(table).delete().eq('id', id);
+      }
+    `;
+    const PLANTED_SQL = `
+      -- delete from public.organizations where false; (a comment: not a statement)
+      create or replace function public.purge_trial_orgs()
+      returns void language sql security definer set search_path = public as $$
+        delete from public.organizations o where o.created_at < now() - interval '30 days';
+      $$;
+      truncate public.audit_logs, public.organizations cascade;
+    `;
+
+    it(
+      'reports a new delete, a rollback that inserted nothing, an unread table and migrations',
+      () => {
+        const file = 'apps/web/src/server/actions/organization.ts';
+        const planted = findFromChains(file, PLANTED_TS);
+        const sql = findSqlOrgDeletes('supabase/migrations/9999_planted.sql', PLANTED_SQL);
+        const found = orgDeleteFindings({
+          ...repo(),
+          chains: [...repo().chains.filter((c) => c.file !== file), ...planted],
+          sql: [...repo().sql, ...sql],
+        });
+        expect(found).toEqual([
+          `${file}:3 a new organization delete (purgeTrialOrgs): it empties the organization_id of that organization's support tickets, so add it to the gap note in kept-address.ts, or list it in ORG_ROLLBACKS if it only rolls back its own insert`,
+          `${file}:6 createOrganizationAction() deletes an organization it did not insert first`,
+          `${file}:12 .delete() through .from(table), a table the scan cannot read: check it can never be organizations and list it in REVIEWED_DYNAMIC_DELETES`,
+          'supabase/migrations/9999_planted.sql:5 a migration deletes organizations: add it to the gap note in kept-address.ts',
+          'supabase/migrations/9999_planted.sql:7 a migration truncates organizations: add it to the gap note in kept-address.ts',
+        ]);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'reports a gap note that stops naming the path, and a path that stops deleting',
+      () => {
+        const found = orgDeleteFindings({
+          ...repo(),
+          noteText: repo().noteText.replace(
+            GAP_NOTE.names,
+            'deleteOrganization in platform-admin.ts',
+          ),
+          chains: repo().chains.filter((c) => !matches(GAP_NOTE.path, c)),
+          deleteUserCalls: [],
+        });
+        expect(found).toEqual([
+          `${GAP_NOTE.file}: its gap note no longer names ${GAP_NOTE.names}`,
+          `${GAP_NOTE.path.file} removeOrgAction(): no longer deletes an organization, so the gap note names the wrong path`,
+          `${GAP_NOTE.path.file} removeOrgAction(): no longer deletes the orphaned accounts, so the gap note names the wrong path`,
+        ]);
+      },
+      TIMEOUT,
+    );
+  });
+});
 
 describe('kept-address owner columns (B23 guard)', () => {
   let scanned: Scan | null = null;
