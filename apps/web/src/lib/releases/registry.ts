@@ -88,7 +88,7 @@ export const RELEASES: Release[] = [
     title: "An Overdue view for purchase orders, named destinations and suppliers, the calendar's last evening and the digest's date",
     summary:
       "On the web, the purchase orders list has an Overdue view, where the dashboard's overdue line now leads. Editing a draft purchase order or a recurring template names a destination or supplier you can't pick there, instead of keeping it out of sight, and a recurring template that cannot create its purchase order says why. The team calendar shows events late on its last date, and a weekly digest preview is dated the day it was sent.",
-    publishedAt: '2026-10-27T17:00:00Z',
+    publishedAt: '2026-10-31T17:00:00Z',
     entries: [
       {
         // PurchaseOrdersService.listOverdue, on overdueCount's own filter; the
@@ -191,6 +191,583 @@ export const RELEASES: Release[] = [
         howItAffectsYou: "The preview and the Monday digest carry your workspace's date.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+    ],
+  },
+  {
+    id: 'manage-order-items-and-app-fixes-2026-10',
+    revision: 1,
+    // Ordering visibility on the web and in the mobile app, two photo fixes on
+    // the web, and the phone parts of the changes merged since the redesign's
+    // phone update, which reached phones in one over-the-air update.
+    // Web, all live in production web build 360f0fbb6f4d (64054fb3d, answering
+    // /api/version from 15:29Z on 2026-10-30):
+    // - #411, d617de0d7 (2026-10-27 00:32:31Z, migration 0413 pushed just
+    //   before it; build c55567b25dc6 live from 00:35:43Z): Manage order items
+    //   on the web, the refusal of a hidden item on every ordering path, and
+    //   the server side of the phone's Manage order items screen;
+    // - #412, 3fe75cd1f (01:11:15Z): Place an order and New rental photos fill
+    //   their box again;
+    // - B31 #408, 72e079523 (01:38:55Z): its web files are the thumbnail
+    //   backfill route (not run), a helper, comments and tests, so the web
+    //   lists show nothing new until phones send small copies;
+    // - #380, f2406ef60 (02:54:55Z) and #395, c6d9817ab (03:05:22Z): nothing a
+    //   reader sees on the web (see "Left out" below);
+    // - #413, 64054fb3d (2026-10-30 15:27:40Z): the Grid's white square.
+    // Phone: ONE over-the-air update for runtime 1.4.0, EAS update group
+    // 6f6f09d9-01bd-424a-ac37-75e535c60d8c, published 2026-10-30 15:33Z from
+    // 64054fb3d. Its served bundles hash the same as the local build, and its
+    // source map holds app/order/manage-items.tsx, src/lib/location-filter.ts
+    // and the item photo thumbnail code. Opened from closed, the app checks
+    // for it and loads it then (apps/mobile/src/lib/use-ota-updates.ts; if
+    // that fails, the next time it opens), hence "close the app completely and
+    // open it again" in each phone entry. It carries the phone parts of #411,
+    // B31 #408 and #380, and of B16 #389 (0dc89dbcd, 2026-10-25 15:03:50Z), RL1
+    // #382 (0132fbd25, 2026-10-26 03:04:48Z), B26 #396 (0ad683600, 2026-10-25
+    // 21:27:52Z), B5+B28 #397 (fcd993bee, 2026-10-26 02:02:23Z), B29 #399
+    // (9cc13c0d8, 02:58:47Z) and T14 #405 (0c80a7e5a, 03:23:27Z). The web
+    // halves of #389, #396 and #397 were told in
+    // unsubscribe-rack-question-fixes-2026-10 and
+    // ended-session-group-page-fixes-2026-10 and are not told again; #399's
+    // web half was never told and is told here. B10 (#403) is not merged and
+    // is not in this update. Phones have the update: EAS insights at
+    // 2026-10-31 04:37Z showed an iOS launch of the update group and no
+    // failed launch. This release needs a web deploy only.
+    // The summary says "on the web" and "in the mobile app", because a phone
+    // shows only the title and the summary, with the first linked entry the
+    // reader can reach as its button (logic.ts legacyAnnouncementsFor): Open
+    // Manage order items for whoever may manage order items, which opens the
+    // phone's own screen (apps/mobile/src/lib/web-path-rewrite.ts:58), else
+    // Open Maintenance for whoever the maintenance entry reaches (:134 opens
+    // the phone's Maintenance); anyone else gets no button.
+    // Walks and checks:
+    // - #411 on production, 2026-10-27 00:37Z to 00:50Z on build c55567b25dc6,
+    //   in Demo Co, headless Chrome signed in as an admin, behind a guard that
+    //   let through only the sign-in, one hide and one show: Manage order items
+    //   beside Place order on Orders; the page with 25 rows, Showing 1-25 of
+    //   59, its filters and totals, and search by name and by SKU; Hide asked
+    //   "Hide 1 item from Orders?" and ORDER_ITEMS_HIDE_CONFIRM_BODY_COPY,
+    //   saved "Hidden 1 item." and the row read Hidden from Orders and Hidden
+    //   since the day;
+    //   the record left Place an order's catalog and its search by name and by
+    //   SKU; Show saved "Shown 1 item." and the record was offered again with
+    //   Add to cart; its item page and its row on Items were unchanged; the
+    //   page in dark mode. 93 checks passed; the 5 that failed were the walk's
+    //   own (a compare step that read the wrong record, and a Show made from
+    //   the Hidden view, which the row then leaves) and passed when run again.
+    //   Nothing was left hidden. The new deployment's logs to 01:03Z: 1,379
+    //   requests, all 200, with no 5xx, no 4xx and no order_item_hidden.
+    // - The phone parts, 2026-10-27 03:27Z to 03:56Z, on an EAS simulator
+    //   build of c6d9817ab (its phone code differs from 64054fb3d only in
+    //   comments and fallback-only constants), with web build 522f18fe46bc, in
+    //   Demo Co as the demo account. On an iPhone: Manage order items from the
+    //   Orders checklist button and from the top of Place an order, Hide and
+    //   Show with their confirmations and saved words, Hidden since, the
+    //   record gone from storefront search by name and by SKU, from its
+    //   category and from All items, and back after Show, the Items list and
+    //   item screen unchanged, and the item's Activity row; B31's New item
+    //   with a JPEG and a see-through PNG from the library, Replace photo with
+    //   a rotated portrait and with a GIF (stored as a JPEG; each photo with
+    //   its small copy beside it), and the web Items list showing the phone's
+    //   photo. On a second iPhone: the Location filter on Items and Books (the
+    //   two sites only; an item listed under its Location with its stock at
+    //   the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+    //   its saved rack text)), the new-rack question for a member who can
+    //   create racks (Cancel saved nothing), the Move stock sheet loaded with
+    //   Unplaced first and no note, a count of 3 emptied and read back
+    //   uncounted from the server, 2,5 typed over the uncounted line saving
+    //   nothing, 47,5 and 47.2.3 saving nothing and named under Check the
+    //   counts, and a Post with no variance that changed no stock. On an iPad: Open in
+    //   Default Email App with no mail account (the new sentence, and no Open
+    //   another draft? on a second tap), Back on Settings, Support, the AI
+    //   screen, the Books tab and ten list screens with return values from
+    //   outside the app (each went Home inside StockPilot) and with in-app ones
+    //   (back to Settings), a purchase order
+    //   file and an order's proof photo opened with a fresh link, and Clear
+    //   under Offline cache keeping the photos. On the web: the Items and
+    //   Books lists loading each stored small copy directly, New rental's
+    //   photo after #412, the Manage order items page read-only, and the
+    //   icons, menus, dialogs and selects after #395. On 2026-10-30, on build
+    //   360f0fbb6f4d, the B31 test item's Items cell loaded its stored small
+    //   copy and its Grid card drew the photo with object-fit contain (a square
+    //   photo); the item was then archived. The hidden record was shown again
+    //   and the count was closed.
+    // Not walked, so each rests on the code checks in its entry: Show selected
+    // and Hide selected, Select family, an Expected record, the phone's
+    // offline refusal, a cart line marked after a hide, the refusal of an
+    // order sent as an item is hidden, Add items on an order, a raise on a
+    // placed order, Frequently ordered, kits, exchanges, public request links
+    // and the customer portal, a staff requester; Place an order's photos
+    // after #412 (the walk's shots of it predate it) and a Grid photo that is
+    // not square after #413; the phone's Location filter listing an item whose
+    // stock is all on a rack, in a crate or in Unplaced (the walked item's
+    // stock was at the site itself, which the old filter listed too); a GIF on
+    // New item and Take photo on the Scan tab (no camera); the new-rack words
+    // for a member who cannot create racks, and the Move stock note; the
+    // Multiple placements found sheet (the simulator has no camera); Sync
+    // first while a clear is unsent; the AI shelf scan review; an Outlook tab
+    // the browser blocks; a file opened after its link ran out (it takes an
+    // hour); a sign-out and an account change (the phone's Sign out ends every
+    // session of the account, and would have signed the other walkers out).
+    // #413's own title says the Grid photos fill their square. They do not:
+    // the Grid draws each photo with CardPhoto, still objectFit contain
+    // (components/inventory/inventory-table.tsx:4263-4264), and #413 removed
+    // the tile's white (patterns/grid-card.tsx:120-123) and changed a fallback
+    // the Grid never reaches with a photo (:123). photos-no-white-backing says
+    // what is true at 64054fb3d; if CardPhoto is changed to cover, reword that
+    // entry in place, with no new revision.
+    // Manage order items also needs the server switch ORDER_ITEMS_MANAGE_ORGS
+    // (server/services/order-catalog-visibility.ts:86-95), which the code
+    // cannot show: it was set for every organization at the #411 rollout, and
+    // the integrator confirms it before this merges. Where it is off, the page
+    // says Manage order items isn't turned on for the organization yet, and
+    // the phone's checklist button on Orders still shows (it checks only the
+    // permission and the module, apps/mobile/src/lib/orders-list.ts:72-87).
+    // Merged to fit twelve entries: the two web photo fixes into
+    // photos-no-white-backing, the two #389 phone fixes into one, the web and
+    // phone maintenance fixes into one, and who has Manage order items into
+    // the last sentence of manage-order-items.
+    // Left out on purpose: #411's console column, dialog and audit label
+    // (platform staff only); the lock note and the exception labels on Roles &
+    // permissions (an owner or admin reads them on the page itself);
+    // 10,000 units a line (Place an order already capped it); Add items
+    // saving in one step; copies made by a PO import or a restore point
+    // keeping the hidden state; the locked page after access is taken away;
+    // the step-up before a change (every privileged action has it); the
+    // catalog read again on return (a timing, so a speed claim). #412 on the
+    // public order page (people outside StockPilot, and its photos already
+    // filled their box). #408's backfill route (not run, operators only), the
+    // upright small copy of a rotated photo and the PNG copy that keeps
+    // transparency. #380's email links for one plain address (members'
+    // addresses always are one, and the walk saw every one still a link),
+    // background work kept alive after the response (nothing on screen, not
+    // checked in production), the photo routes' request limits, SECURITY.md
+    // and the dependency audit. #395's 22 dependency updates (the web
+    // walker's icons, menus, dialogs, selects and labels all passed). #399's
+    // daily check for unlinked escalations (operators only) and its photo
+    // changes (nothing visible). #405's colour check (every saved colour was
+    // already a #rrggbb colour) and its category names in dark text (RL1's).
+    // RL1 #382's other phone parts: the Group review's name box above the
+    // keyboard (walked), VoiceOver names on the Group review's choices, scan
+    // to count refusing 1e3, New count saying when its items did not load,
+    // and Pick books only where Books is on.
+    // Still to be told, in a later release, because this one holds twelve
+    // entries: RL1 #382's web part (never told), #389's three web changes
+    // promised in unsubscribe-rack-question-fixes-2026-10, and B12's Sage 50
+    // import promised in ended-session-group-page-fixes-2026-10.
+    // Who is told: every member (photos-no-white-backing,
+    // app-sign-out-removes-saved-photos and app-back-stays-in-the-app have no
+    // audience); each other entry names the permission, and the module where
+    // there is one, that its page or action checks, quoted in its comment. If
+    // the phone update is rolled back while the web stays, the phone entries
+    // are no longer true: withdraw this release (status 'withdrawn' and a
+    // withdrawnNote).
+    status: 'published',
+    title:
+      'Choose which items and books appear in Place an order, photo fixes on the web, and mobile app fixes',
+    summary:
+      'Managers, admins and owners can now choose which items and books appear in Place an order, on the web and in the mobile app; a hidden item is not offered to anyone for new orders. On the web, photos on Place an order and New rental fill their box again. In the mobile app, the Location filter on Items matches the web, emptying a count box clears its count, and signing out removes the photos the app kept. Close the app completely and open it again to load the update.',
+    publishedAt: '2026-10-30T16:32:00Z',
+    entries: [
+      {
+        // platform: web and phone. From: #411. Checked at 64054fb3d: the buttons,
+        // (dashboard)/dashboard/orders/page.tsx:131 and :173-175, and on Place an order
+        // components/orders/storefront/orders-storefront.tsx:445-448; the phone's checklist
+        // button, apps/mobile/src/screens/orders.tsx:298-302 (an icon, named Manage order items
+        // for VoiceOver only), and Manage order items at the top of Place an order,
+        // components/order-storefront/catalog-screen.tsx:420-427. What is listed,
+        // server/services/order-catalog-visibility.ts:54-58 and :229-231 (active, not a rental,
+        // not a kit, through the reader's own Inventory scope; Expected records listed); the
+        // words, core orders/catalog-visibility.ts:46 (25 a page), :174 (search), :176-179,
+        // :198-199 (Select family, 500 at once) and :220 (Hidden since). A change writes only
+        // the two visibility columns, 0413_order_catalog_visibility.sql:666-668; Show,
+        // catalog-visibility.ts:235-236. Not offered: server/loaders/orders-new-catalog.ts:887-890,
+        // orders/add-items-dialog.tsx:255-258, apps/mobile/src/components/add-order-items-sheet.tsx
+        // :136-138, public links 0413:73-74 and the portal services/portal.ts:329-333. Still
+        // listed, services/inventory.ts:535-539; placed orders, 0413:59-60. Hide confirms,
+        // orders/manage-items/manage-order-items.tsx:494 (a single Show does not, so only Hide
+        // is promised) and apps/mobile/app/order/manage-items.tsx:426-427. Activity, 0413:688-695
+        // with services/activity.ts:590, read under activity_logs:read (0279:86-89). Duplicate,
+        // 0413:2497-2498. Kits, catalog-visibility.ts:172-173. The phone never queues a change,
+        // apps/mobile/src/lib/order-catalog-visibility/write.ts:25 and :67. Who has it by
+        // default, core constants/permissions.ts:143-179 (staff :197 and viewer :222 do not);
+        // only StockPilot support allows or denies it for one person, :64-72, with
+        // catalog-visibility.ts:272-273 and :314-315 ("Managed by StockPilot support"). The
+        // platform console that does it is not described. Walked: the web on production and
+        // the phone on the simulator (the buttons, the page, Hide and Show with their
+        // confirmations, Hidden since and the Activity row). Code only: Show selected and Hide
+        // selected, Select family, an Expected record, the offline refusal, Duplicate of a
+        // hidden item, public request links and the customer portal. Audience: the page checks
+        // the Orders module (orders/manage-items/page.tsx:82 checkModuleAccess('orders')) and
+        // the permission (order-catalog-visibility.ts:206 can(this.ctx,
+        // ORDER_CATALOG_VISIBILITY_PERMISSION)).
+        id: 'manage-order-items',
+        category: 'new',
+        area: 'Orders',
+        title: 'Choose which items and books appear in Place an order',
+        whatChanged:
+          "On the web, Orders and Place an order have a new Manage order items button. In the mobile app, tap the checklist button at the top of Orders, or Manage order items at the top of Place an order. It lists the active items and books you can see, other than rentals and kits, 25 to a page, each marked Shown in Orders or Hidden from Orders, and a hidden one shows the date it was hidden. Search by name, SKU, barcode or ISBN, filter by type, warehouse or category, and hide or show one record, or up to 500 you select at once. Select family lets you add a product's other sizes or editions.",
+        whyItMatters:
+          "You can stop new orders for an item or book without archiving it or changing its stock, location, charter or other details. Items not received yet are listed as Expected, so you can hide one before it arrives. Showing an item again lets it back only where it was allowed before; it does not make it public or change anyone's access.",
+        howItAffectsYou:
+          "A hidden item is not offered in Place an order or in Add items on an order, to anyone, you included, and not on public request links or in the customer portal. It still appears on Items, Books, its item page and in reports, and orders already placed go ahead. Hide asks you to confirm. Each change is recorded in the item's Activity for people who can view the audit log. A copy made with Duplicate keeps the original's setting. Kits are not listed here: a kit is offered only while every part can be ordered. In the mobile app, a change needs a connection and is never saved for later.",
+        whatToDo:
+          'On the web, open Orders and choose Manage order items. In the mobile app, close the app completely and open it again to load the latest update, then tap the checklist button at the top of Orders. Managers, admins and owners have Manage order items by default; to change that for one person, ask StockPilot support.',
+        link: { href: '/dashboard/orders/manage-items', label: 'Open Manage order items' },
+        audience: { anyPermission: ['orders:manage_catalog_visibility'], modules: ['orders'] },
+      },
+      {
+        // platform: web and phone. From: #411. Checked at 64054fb3d: who hides, core
+        // constants/permissions.ts:143-179; the web catalog, server/loaders/orders-new-catalog.ts
+        // :887-890 (offered to nobody, a manager included; the grid, the aisles and search read
+        // it), Frequently ordered, orders-frequently-ordered.ts:27-28; the phone's storefront is
+        // the server's answer, server/services/order-storefront.ts:292-298, so the phone has left
+        // hidden items out since #411, and its Add items sheet filter
+        // (apps/mobile/src/components/add-order-items-sheet.tsx:136-138) came with this update;
+        // Add items on the web, orders/add-items-dialog.tsx:255-258, and on the server,
+        // services/order-requests.ts:2094; every writer, 0413_order_catalog_visibility.sql:47-60;
+        // exchanges, 0413:75-77; kits, core orders/catalog-visibility.ts:172-173. No mark in
+        // Place an order: the row is dropped at the source (orders-new-catalog.ts:890). The cart,
+        // core orders/storefront/stale-cart.ts:43-49 and :144, phone-copy.ts:96 and :102, the web
+        // storefront-cart.tsx:246-248 and :312; lowered only on the web, whose marked line keeps
+        // a stepper capped at its quantity (storefront-cart.tsx:248-254), while the phone's has
+        // Remove only (stale-cart.ts:146 stepper false; apps/mobile/src/components/
+        // order-storefront/cart-panel.tsx:175 and :192), and the hidden item has no card left to
+        // change it from (orders-new-catalog.ts:890, the phone's catalog too); Submit waits,
+        // orders-storefront.tsx:1288-1289 with copy.ts:162, and the phone's checkout.ts:131;
+        // hidden while sending, 0413:61-63 and orders-storefront.tsx:935-937; a placed order's
+        // line, order-requests.ts:2718-2737.
+        // Walked: the hidden record gone from Place an order's catalog and search on production
+        // (web) and on the simulator (search by name and SKU, its category and All items), and
+        // back after Show. Code only: a marked cart line, the refusal while sending, Add items,
+        // a raise on a placed order, Frequently ordered, kits, exchanges and a staff requester.
+        // Audience: who may place orders, the Orders nav's own requirement (core
+        // modules/registry.ts:417-418 requires 'orders:request'), with the Orders module, as
+        // order-page-add-full-kit-removed-2026-09-27 pins for Orders entries.
+        id: 'order-items-hidden-from-place-an-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Items hidden from Orders are not offered in Place an order',
+        whatChanged:
+          'Managers, admins and owners can now hide items and books from new orders. On the web and in the mobile app, a hidden item is not offered in Place an order, in its search, categories or Frequently ordered, or in Add items on an order. Place an order does not mark it as hidden; it is simply not listed. A kit is offered only while every part can be ordered, and a hidden item is not offered as the replacement in a new exchange.',
+        whyItMatters:
+          'Your organization decides which items can be ordered, and no new order can include a hidden item, whoever places it.',
+        howItAffectsYou:
+          "A hidden item already in your cart is marked: its line reads “An item no longer listed here” and “Can't be ordered from here anymore. Remove it.” You can remove that line, or lower it on the web, but not raise it, and the order cannot be sent until you remove it. If an item is hidden just as you send, the order is not placed, that line is marked and the rest of your cart is kept. On an order already placed, a hidden item's line can be lowered or removed but not raised, and the order goes ahead as before. The item stays on Items and Books for everyone who could see it before.",
+        whatToDo:
+          "No action needed. If a line in your cart says it can't be ordered from here anymore, remove it and send the order. In the mobile app, close the app completely and open it again to load the latest update.",
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        // platform: web (#412 and #413 changed no phone file). From: #412 and #413. Checked at
+        // 64054fb3d: Place an order, components/orders/storefront/storefront.css:924-931
+        // (object-fit cover and no background; #412 removed contain and the white), every photo
+        // on the page is SfPhoto inside .sf-ph (storefront-cards.tsx:171-187: the cards, the
+        // Compact view, Frequently ordered, kits, the cart storefront-cart.tsx:260, Quick view
+        // and the review); a card's box is 4:3 (storefront.css:1032-1035), so cover trims a photo
+        // of another shape. New rental, orders/v2/item-card.tsx:134 (object-cover; it was bg-white
+        // object-contain), rendered only by rentals/rental-create-form.tsx through
+        // catalog-grid.tsx. The Grid, patterns/grid-card.tsx:120-123 (#413 removed the tile's
+        // bg-white), whose photo is CardPhoto (inventory-grid.tsx:220 and :253, built in
+        // inventory/inventory-table.tsx), still objectFit contain (:4263-4264): shown whole,
+        // with the card's colour around it (grid-card.tsx:112 bg-background, group cards
+        // inventory-grid.tsx:259 bg-sunk; app/globals.css:128 and :213), which in light mode is a
+        // pale off-white (:128 60 23.1% 97.5%, :108 #f4f3ee). Hovering a Grid photo still shows
+        // it on white: CardPhoto wraps it in ImageHoverPreview (inventory-table.tsx:4241), whose
+        // popup is bg-white object-contain (components/ui/image-hover-preview.tsx:366). The Grid
+        // is on Items, Books and Rentals items (inventory-grid.tsx:10). Since the new look: both
+        // whites came with #369 (31f4b3e61), before which Place an order and New rental used
+        // cover. Tests: storefront-tokens.guard.test.ts:312-324, item-card.test.tsx:66-77.
+        // Walked: New rental's photo after #412 (the web walker, 2026-10-27). Code only: Place
+        // an order after #412, a Grid photo that is not square after #413, dark mode and the
+        // hover preview. No audience: the Grid reaches everyone who can read items
+        // (items-books-grid's audience is items:read), and the other two pages reach who may
+        // order or rent.
+        id: 'photos-no-white-backing',
+        category: 'fixed',
+        area: 'Orders, Rentals and Inventory',
+        title:
+          'Photos on Place an order and New rental fill their box again, and Grid photos lose their white square',
+        whatChanged:
+          "On the web, item photos on Place an order fill their box again, from the item cards to the cart and the review, and so do the item photos on New rental. In the Grid view of Items, Books and Rentals items, a photo no longer sits on a white square: a photo that is not square is still shown whole, and the space around it takes the card's own colour.",
+        whyItMatters:
+          'Since the new look, these photos were drawn on white, so a photo whose shape was different from its box had white bars beside it, in dark mode too.',
+        howItAffectsYou:
+          "On Place an order and New rental, a photo whose shape is different from its box is trimmed at its edges to fill it, as before the new look, and a photo with a see-through background no longer has white behind it. In the Grid, photos are not trimmed, so the space around a photo that is not square is now the card's colour: dark in dark mode, and a pale off-white in light mode. Hovering over a Grid photo still shows its preview on white. The photos themselves are not changed.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: phone (the Items and Books tabs). From: B28 #397. Checked at 64054fb3d:
+        // apps/mobile/app/(drawer)/(tabs)/inventory.tsx:429 primary_location_id (before,
+        // fcd993bee^ :208 item_stock_levels!inner and :351 a type list); books.tsx:414 the same
+        // (it already filtered by Location); the choices, onlySiteLocations at inventory.tsx:323
+        // and books.tsx:320, apps/mobile/src/lib/location-filter.ts:32-38 with core
+        // inventory/location-groups.ts:34-37 and :57-59; the web, services/inventory.ts:1349-1352
+        // and services/locations.ts:171; the item page's LOCATION row,
+        // apps/mobile/src/lib/placement-rows.ts:170. Walked: Items and Books offered the two
+        // Demo Co sites only, and Items under a site listed an item whose Location is that site
+        // with its stock at the site itself (Smart Speaker: FROM Receiving Dock · 70; RACK D7 is
+        // its saved rack text), which the old filter listed too. Code only: an item whose stock
+        // is all on a rack, in a crate or in Unplaced. Audience: items:read, in every role's
+        // defaults, which the lists need.
+        id: 'app-location-filter-matches-web',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          "In the mobile app, the Location filter on Items matches each item's Location, as on the web",
+        whatChanged:
+          'In the mobile app, choosing a site under Location in the Items filters now lists the items whose Location is that site, as the web lists and the mobile Books list already do. Before, it listed only items with stock recorded at the site itself. On Items and Books the filter now offers the same locations as the web: sites only, never a rack, shelf, crate, bin, area, Staging or Unplaced.',
+        whyItMatters:
+          'Stock that nobody has placed waits in Unplaced, and placed stock sits on a rack or in a crate, so the old filter found only items whose stock had been left at the site itself, while the web listed every item whose Location is that site. The locations offered were chosen by type, so a site could be missing and an area could be offered.',
+        howItAffectsYou:
+          "An item is listed under a site when that site is the Location shown on its page, wherever its stock is. An item with no Location is not listed under any site. To see where an item's stock is, open the item.",
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: phone (the web already cleared an emptied box,
+        // components/cycle-counts/cycle-count-detail.tsx:904-907). From: RL1 #382. Checked at
+        // 64054fb3d: apps/mobile/app/cycle-count/[id].tsx:304-327 (an emptied box clears the
+        // line), :668-671 (Check the counts, with apps/mobile/src/lib/count-box-words.ts:19-24),
+        // :679-701 (a clear waits like a count; Sync first); one rule for a box, core
+        // cycle-counts/count-text.ts:25 (a plain number; the comma is not a decimal point, :21);
+        // the clear's route, api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts:26-72 and
+        // services/cycle-counts.ts:1790-1792. Before (0132fbd25^): parseFloat, and no clear. The
+        // AI shelf scan review writes a typed count as typed, cycle-count/ai-scan/[id].tsx:90-105
+        // (before, 0132fbd25^ :95 Math.floor). Walked: a count of 3 emptied and read back
+        // uncounted from the server, 2,5 over the uncounted line saving nothing, 47,5 and
+        // 47.2.3 named under Check the counts, and a Post with no variance. Code only: Sync
+        // first while a clear is unsent, and the AI review.
+        // Audience: recording a count needs stock:adjust and the Cycle counts module
+        // (services/cycle-counts.ts:1563-1564 and :1790-1792).
+        id: 'app-emptied-count-box-clears-line',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "In the mobile app, emptying a count box clears that line's count",
+        whatChanged:
+          'On a cycle count in the mobile app, emptying a count box that holds a saved count now clears that count, as emptying the box does on the web. The line is uncounted again, so a post skips it instead of applying the old number. The clear is kept on your phone like a count until it is sent, and until then Post says Sync first, as it does for a count.',
+        whyItMatters:
+          'Before, an emptied box kept the count saved earlier, and Post applied that number to stock while the box showed nothing.',
+        howItAffectsYou:
+          'To leave a line uncounted, empty its box. A box that holds something that is not a number, such as 2,5 or 1.2.3, now saves nothing, where it used to save part of it, 2 or 1.2. Post names such a line under “Check the counts” and posts nothing until its box holds a count or is empty. A comma is not read as a decimal point. On the AI shelf scan review, a count you type, such as 2.5, is now saved as typed; it used to be rounded down, to 2.',
+        whatToDo:
+          'Type decimals with a point, such as 2.5. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
+      },
+      {
+        // platform: phone (the upload); the small copies then show in lists on the web and in
+        // the app. From: B31 #408. Checked at 64054fb3d: every phone item photo goes through
+        // apps/mobile/src/lib/item-photo-upload.ts:166-194 (the photo, then its small copy),
+        // from app/item/new.tsx:744, app/item/[id].tsx:1629 (with src/lib/item-photo-replace.ts
+        // :91-99) and app/(drawer)/(tabs)/scan.tsx:883; the copy, core
+        // inventory/item-photo-thumb.ts:17-22 (200 px, the web's own, image-variants.config.ts
+        // :41-42); a failed copy never costs the photo, item-photo-upload.ts:58-64 and :127-158;
+        // a GIF becomes a JPEG, :78-79 and :110-120. Before (72e079523^): a GIF was sent as
+        // image/gif, which the bucket refuses (0046_rls_with_check_hardening.sql:204-206); New
+        // item skipped it, and the item screen said Upload failed. The lists,
+        // apps/mobile/src/lib/image-cache.ts:145-168, server/loaders/inventory-list.ts:1577-1615
+        // and inventory-table.tsx:4162 and :4237. The backfill has not run, so nothing is said
+        // about older photos but that the update does not change them. Walked on the
+        // simulator: New item, Replace photo with a rotated portrait and with a GIF, and the
+        // web Items list showing the phone's photo; the web walker saw each stored small copy
+        // load directly. Code only: a GIF on New item and Take photo on the Scan tab. No speed
+        // or data claim: none was measured. Audience: item photos are written under
+        // item_image_item_writable (0381_item_images_item_scope.sql:177-194: staff or
+        // items:update), so items:update.
+        id: 'app-photos-small-copy-and-gif',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'In the mobile app, a GIF from your photo library is saved as an item photo, and photos get a small copy for lists',
+        whatChanged:
+          "In the mobile app, after the latest update, a GIF you choose from your photo library, with Library on New item or Choose from library when you add or replace an item's photo, is saved as a still JPEG photo. Every item photo you add in the app, there or with Take photo on the Scan tab, is now saved with a small copy beside it, as a photo added on the web is. Lists such as Items and Books, on the web and in the app, show that small copy.",
+        whyItMatters:
+          'Before, a GIF could be refused: New item saved the item without it, and adding or replacing a photo on an item showed Upload failed. A photo added in the app also had no small copy, so lists worked from the full-size photo.',
+        howItAffectsYou:
+          'Photos added in the app now show in lists the same way as photos added on the web. If the small copy cannot be made, the photo is still saved, without it. Photos added before you updated are not changed by the update, and adding photos on the web is unchanged.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        // platform: phone. From: #380. Checked at 64054fb3d: apps/mobile/src/lib/auth-context.tsx
+        // :488 and sign-out-flow.ts:289 (the sign-out wipes the photos too), photo-cache-wipe.ts
+        // :9-25 and :82-83; another account's first sync, sync.ts:370-373 and cache-owner.ts
+        // :168-178 (the same account keeps them); an ended session clears only the order
+        // caches, auth-context.tsx:265-268; Offline cache and a workspace switch call
+        // deleteOrgData only (offline-cache.ts:37, use-workspace.ts:256 and :380). Walked:
+        // Clear under Offline cache kept the photos. Code only: the sign-out and an account
+        // change (the phone's Sign out ends every session of the account,
+        // sign-out-flow.ts:279, and would have signed the other walkers out). No audience:
+        // every phone user signs out.
+        id: 'app-sign-out-removes-saved-photos',
+        category: 'improved',
+        area: 'Account',
+        title: 'In the mobile app, signing out also removes the photos the app kept on the phone',
+        whatChanged:
+          "In the mobile app, after the latest update, signing out also removes the photos the app keeps on the phone, such as item photos and proof of delivery photos. Before, it removed only the app's saved copy of your workspace data. When a different account signs in on the phone, the previous account's photos are removed when the app first syncs for it, even if the previous account did not sign out.",
+        whyItMatters:
+          "Signing out left the photos in the app's storage on the phone, so on a shared phone the photos the previous person had opened stayed there.",
+        howItAffectsYou:
+          'After signing out, photos load again the first time each one is shown. If your session ends and you sign in again with the same account without signing out, your photos stay. Switching workspace, and Clear under Offline cache in Settings, keep them too.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone (the Scan tab, core modules/registry.ts:323-329, mobile only; the
+        // lookup API's label change has no screen). From: B26 #396. Checked at 64054fb3d:
+        // apps/mobile/app/(drawer)/(tabs)/scan.tsx:1373 and :1390 (before, 0ad683600^ :1357 the
+        // bin text only); :402-428 (rack and crate holdings above 0; a failed read keeps an
+        // empty list, :416-419); apps/mobile/src/lib/scan-resolve.ts:52-53 and :110-124; core
+        // inventory/placement-resolution.ts:161-186 and :248-267, rack-holdings.ts:50. Code
+        // only: the simulator has no camera, and the Scan tab reads codes only from it; pinned
+        // by scan-resolve.test.ts and placement-resolution.test.ts. Audience: the Scan tab has
+        // no permission (modules/registry.ts:328), and items:read is in every role's defaults.
+        id: 'app-scan-picker-shows-where-stock-is',
+        category: 'fixed',
+        area: 'Scan',
+        title: "In the mobile app, Multiple placements found says where each record's stock is",
+        whatChanged:
+          "In the mobile app, when a scanned code matches more than one record, each row of the Multiple placements found sheet now says where that record's stock is. Stock on more than one rack or crate, or in a crate, is listed by rack or crate with its quantity, such as 31-B ×5 · 77-Z ×3. Otherwise the row shows the rack and crate saved on the record, such as Rack 12-A, or its bin or rack text.",
+        whyItMatters:
+          "Each row used to show only the record's bin or rack text, so stock split across racks showed one rack, and a book whose page shows its rack could still say No bin set.",
+        howItAffectsYou:
+          'Choosing a row shows that record as before, and a code that matches one record still shows it directly. A row says No bin set when no place is known. If the app cannot read where the stock is, a row shows the rack and crate saved on the record, or its bin or rack text.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: phone. From: #380. Checked at 64054fb3d:
+        // apps/mobile/src/lib/stored-file-link.ts:24 (one hour), :27 (five minutes' margin) and
+        // :49-66 (a fresh link reused, else a new one); purchase orders,
+        // src/components/po-attachments.tsx:187-206 with the words at :192-198; orders,
+        // app/order/[id].tsx:1358, :2518-2550 (:2535 a photo falls back to the link it has and the
+        // copy on the phone, CachedImage keyed by the storage path, so the words at :2536-2543
+        // come only for a file that is not a photo, or a photo the screen holds no link for;
+        // po-attachments.tsx:192-199 says them for every purchase order file with no link), the
+        // proof of delivery card :3598. Before (f2406ef60^): links made once at load
+        // (po-attachments.tsx:146-148, order/[id].tsx:1349) and "Pull to refresh and try again"
+        // (:546, :2512); app/po/[id].tsx has no pull to refresh. Walked: a purchase order file and
+        // an order's proof photo opened with a fresh link. Code only: after an hour, a new link,
+        // the offline words and a photo opened from the copy on the phone. Audience: modules only,
+        // as an order's proof of delivery shows to anyone who can read the order, drivers
+        // included, so no one permission covers it.
+        id: 'app-proof-and-po-files-open-after-an-hour',
+        category: 'fixed',
+        area: 'Orders and purchase orders',
+        title:
+          'In the mobile app, proof of delivery and purchase order files still open after the screen has been open an hour',
+        whatChanged:
+          'In the mobile app, after the latest update, tapping a proof of delivery photo or file on an order, or a file on a purchase order, opens it even when the screen has been open for more than an hour. When the link the screen holds for that file is about to run out, the app gets a new one as you tap.',
+        whyItMatters:
+          'The links to these files are made when the screen loads and last an hour. After that, a file such as a PDF opened on an error page, and a photo that was not already on the phone did not appear.',
+        howItAffectsYou:
+          'If the app needs a new link and cannot get one, for example when the phone is offline, a purchase order file, or a proof of delivery file that is not a photo, does not open and the app says “No download link is available right now. Check your connection and try again.” It used to end with Pull to refresh and try again, though the purchase order screen has no pull to refresh. A proof of delivery photo opens from the copy on the phone if it was shown before; otherwise it may not appear until the phone is back online.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['orders', 'purchase_orders'] },
+      },
+      {
+        // platform: phone (the web half was told in web-asks-before-new-rack). From: B16 #389.
+        // Checked at 64054fb3d: the question, apps/mobile/app/item/new.tsx:95-115 (Save anyway
+        // unless the yes creates the rack, :111) and :852 (who is blocked, core
+        // inventory/new-rack-confirmation.ts:69-76); the words, core
+        // inventory/rack-near-match.ts:255-257 and :302-306, and
+        // apps/mobile/src/lib/create-rack-check.ts:85-87 and :106; the staff defaults, core
+        // constants/permissions.ts:197-221 (items:create and stock:transfer, no
+        // locations:manage); no rack and the stock left in Unplaced,
+        // services/inventory.ts:9210-9219 and :3563-3564, then the app's warning,
+        // apps/mobile/src/lib/item-create.ts:674 and core inventory/placement-warning.ts:35-41.
+        // Before (0dc89dbcd^): Create rack and save for everyone. The Move stock note,
+        // apps/mobile/src/lib/move-stock-form.ts:114-120 and
+        // src/components/move-stock-modal.tsx:483-487, :686 (no move while it shows) and
+        // :946-949; before, a failed read was an empty list (0dc89dbcd^ :472-475). Opened from
+        // app/item/[id].tsx:2001-2010 and app/(drawer)/staging.tsx:414-421. Walked: the question
+        // for a member who can create racks (unchanged; Cancel saved nothing) and the sheet
+        // loaded with no note. Code only, with create-rack-check.test.ts and
+        // move-stock-destinations-read-wiring.test.ts: the blocked wording and the note.
+        // Audience: New item and New book need items:create; the sheet opens only with
+        // stock:transfer (app/item/[id].tsx:572 canTransfer, staging.tsx:89-92).
+        id: 'app-new-rack-question-and-move-stock-note',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'In the mobile app, the new-rack question says what saving will do, and Move stock says when racks did not load',
+        whatChanged:
+          'In the mobile app, when New item or New book would put stock onto a rack that does not exist yet, and you cannot create racks (the Manage locations permission) or move stock (Transfer stock), the question now reads “Rack 1-B does not exist”, names the missing permission, says that saving does not put the units on a rack, and its button is Save anyway instead of Create rack and save. When the Move stock sheet cannot load the racks and crates the stock could go to, it now says “Could not load the racks and crates to move into. Close this and try again.” and offers no move.',
+        whyItMatters:
+          'For these members the question used to say that continuing creates the rack and moves the units into it, with Create rack and save, but their stock never reached a new rack: the item was saved with its stock off the rack. The Move stock sheet used to treat a failed load as a warehouse with no racks: it could ask whether to create a rack that already exists, Unplaced was missing from the list, and someone who cannot create racks was told there was nothing to move into.',
+        howItAffectsYou:
+          'The Staff role has no Manage locations permission by default, so Staff see this wording. Save anyway saves the item and creates no rack, and the app then says the stock could not be placed on that rack, as before. A rack with a similar name is still offered, such as Use 17-B instead, and Cancel still saves nothing. If you can create racks and move stock, the question works as before. The Move stock sheet, opened with Transfer / put away on an item or with Place on Staging, works as before when the racks and crates load.',
+        whatToDo:
+          "Check the rack the question names. After Save anyway, the item's stock waits in Unplaced until someone who can move stock puts it on a rack, for example with Place on Staging. If the Move stock note appears, close the sheet and try again. Close the app completely and open it again to load the latest update.",
+        audience: { anyPermission: ['items:create', 'stock:transfer'] },
+      },
+      {
+        // platform: web (the blocked tab, live since #399's web deploy on 2026-10-26, never
+        // told) and phone (the sentence). From: B29 #399. Checked at 64054fb3d: the web,
+        // components/maintenance/maintenance-email-action.tsx:206 and :218-236 (recorded only
+        // when the tab opens), :261-278 (the blocked path: not recorded, the email app tried)
+        // and :86 with :392 (the headline); before (9cc13c0d8^1) the blocked path recorded the
+        // draft. The status words, core maintenance/constants.ts:141-142 and
+        // services/maintenance-requests.ts:1117. The reminder,
+        // api/cron/maintenance-draft-reminders/route.ts:92 and :143-145 (Saved, a day old, once),
+        // :195-201 (the setting) and :207-228 (one in-app notification to the person who saved
+        // it); the setting, settings/notification-preferences-form.tsx:126. The escalation's
+        // words, core warehouse/exception-escalation.ts:401. The phone,
+        // apps/mobile/src/lib/maintenance-email-actions.ts:303, :313 and :320-321 with
+        // app/maintenance/[id].tsx:1412 and :1415; the phone records a draft only once it opened,
+        // before and after (src/lib/outlook-transport.ts:249-253). Walked on the simulator: Open
+        // in Default Email App with no mail account showed the new sentence and was not counted.
+        // Code only, with maintenance-email-action.test.tsx:344-363: the blocked web tab, and
+        // the Outlook sentence on the phone. Audience: as the linked page checks it,
+        // dashboard/maintenance/page.tsx:97 (the module) and :107-110 (submit, read_all or
+        // manage).
+        id: 'maintenance-email-draft-open-fixes',
+        category: 'fixed',
+        area: 'Maintenance',
+        title:
+          'A blocked Outlook tab no longer marks a maintenance request Email draft opened, and the mobile app names the right app',
+        whatChanged:
+          'On the web, when you choose Open in Outlook on a maintenance request and your browser blocks the Outlook tab, the request is no longer marked Email draft opened. As before, the page says “Outlook could not be opened automatically.” and tries your email app instead. In the mobile app, after the latest update, when Open in Default Email App cannot open your email app, the screen now says “Your email app could not be opened automatically.” Before, it said Outlook could not be opened, though the phone had not tried Outlook.',
+        whyItMatters:
+          'On the web, the request was marked Email draft opened as soon as the browser blocked the tab, before anything showed that a draft had opened, so the reminder about a draft that was never opened did not come, and an exception escalated to that request showed Email draft opened. In the mobile app, the message named the wrong app.',
+        howItAffectsYou:
+          'A request is marked Email draft opened when the Outlook tab opens, or, in the mobile app, when Outlook or your email app opens; in the app, a draft that did not open is not counted, as before. While a request still reads Saved, the person who saved it gets one in-app reminder to finish it, a day or more after saving, unless they turned off Maintenance draft reminders in Settings, Notifications on the web. On the web, if the Outlook tab was blocked and your email app opened the draft instead, the request still reads Saved and the reminder can still come.',
+        whatToDo:
+          "No action needed. If you already sent the email from your email app, you can ignore the reminder. If the app's message appears, try again or use Copy Email Details. In the mobile app, close the app completely and open it again to load the latest update.",
+        link: { href: '/dashboard/maintenance', label: 'Open Maintenance' },
+        audience: {
+          anyPermission: [
+            'maintenance_requests:submit',
+            'maintenance_requests:read_all',
+            'maintenance_requests:manage',
+          ],
+          modules: ['maintenance_requests'],
+        },
+      },
+      {
+        // platform: phone (the web is unchanged here). From: T14 #405. Checked at 64054fb3d:
+        // apps/mobile/src/lib/return-path.ts:38-45 (an in-app path only) and :86-93 (else back,
+        // else Home); the screens that read a return place, (drawer)/settings.tsx:230,
+        // (drawer)/support.tsx:56, (drawer)/ai.tsx:53, (drawer)/(tabs)/books.tsx:884 and
+        // src/components/data-list-screen.tsx:97 (every list screen). Before (0c80a7e5a^1): each
+        // passed the value to router.replace, which opens a value with a scheme or a leading //
+        // with Linking.openURL (return-path.ts:11-17). Settings' own links,
+        // (drawer)/settings.tsx:297 and :324. Walked on the simulator: values from outside the
+        // app (https:, //host, tel:, sms:, mailto:, another app's scheme) went Home inside
+        // StockPilot on each screen tried, and in-app ones went back to Settings. No audience:
+        // Settings and Support are every member's.
+        id: 'app-back-stays-in-the-app',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'In the mobile app, a link can no longer make Back open a website or another app',
+        whatChanged:
+          'In the mobile app, after the latest update, when a link opens Settings, Support, the AI Assistant, the Books tab or a list screen, such as Notifications, Locations, Categories, Tags, Team or Purchase orders, and names a place for Back to go to, Back goes there only when it is inside the app. Otherwise Back goes to the previous screen, or to Home.',
+        whyItMatters:
+          'Back went wherever the link said. A link made outside StockPilot, for example in an email or a text message, could make Back open a website, a call or text to a phone number, or another app, so a tap on Back could take you out of StockPilot.',
+        howItAffectsYou:
+          'Back works as before inside the app: from Settings, Workspaces and Notifications still go back to Settings, and a screen with no screen before it still goes back to Home.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
       },
     ],
   },
