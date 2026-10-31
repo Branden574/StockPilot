@@ -263,7 +263,10 @@ function names(value: string | undefined): boolean {
   return value !== undefined && value !== 'null' && value !== 'undefined';
 }
 
-function matches(r: Reviewed, w: { file: string; enclosing: string }): boolean {
+function matches(
+  r: { file: string; enclosing: string },
+  w: { file: string; enclosing: string },
+): boolean {
   return r.file === w.file && r.enclosing === w.enclosing;
 }
 
