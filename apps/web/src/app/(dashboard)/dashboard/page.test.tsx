@@ -18,6 +18,10 @@ const calls = vi.hoisted(() => ({
   profile: { onboarding_dismissed_at: null as string | null },
   /** The viewer's role and effective permissions (requireOrgContext). */
   viewer: { role: 'owner', permissions: new Set<string>() },
+  /** Order requests waiting for approval in the organization (pendingCount). */
+  pendingApprovals: vi.fn(async () => 0),
+  /** Those of them the viewer could approve (approvablePendingCount). */
+  approvableApprovals: vi.fn(async () => 0),
   /** Orders staged for pickup or in transit (awaitingSignatureCount). */
   awaitingSignature: vi.fn(async () => 0),
   /** The viewer's organization (the Demo Co check). */
@@ -55,7 +59,8 @@ vi.mock('@/server/services/cycle-counts', () => ({
 vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: {
     forCurrentUser: async () => ({
-      pendingCount: async () => 0,
+      pendingCount: () => calls.pendingApprovals(),
+      approvablePendingCount: () => calls.approvableApprovals(),
       awaitingSignatureCount: () => calls.awaitingSignature(),
     }),
   },
@@ -140,6 +145,7 @@ vi.mock('@/components/onboarding/demo-scenarios', () => ({
   DemoScenarios: () => null,
 }));
 
+import { effectivePermissions } from '@stockpilot/core';
 import { getThirtyDayMetrics } from '@/server/services/movements';
 
 import DashboardHome from './page';
@@ -179,6 +185,8 @@ beforeEach(() => {
   calls.reads.length = 0;
   calls.profile.onboarding_dismissed_at = null;
   calls.viewer = { role: 'owner', permissions: new Set<string>() };
+  calls.pendingApprovals.mockResolvedValue(0);
+  calls.approvableApprovals.mockResolvedValue(0);
   calls.awaitingSignature.mockResolvedValue(0);
   calls.orgId = 'org-1';
   summaryGate = null;
@@ -336,6 +344,125 @@ describe('/dashboard: the waiting for signature card follows orders:approve (F10
       await startBody()
     ).done;
     expect(attention().map((i) => i.id)).not.toContain('orders-awaiting-signature');
+  });
+});
+
+// B11 Part 1 (2026-10-31): since 0390 approving an order follows
+// orders:approve alone (has_permission decides, and an override wins either
+// way), but the "awaiting your approval" card was still gated on the role
+// (isManagerOrAbove). A staff member granted orders:approve never saw it; a
+// manager whose orders:approve was revoked saw it and landed on My requests,
+// where none of the counted requests can be approved. The card, and the count
+// behind it, now follow orders:approve, the gate of the list it opens
+// (orders/page.tsx canApprove), as the signature card does (F10). Each
+// permission set comes from core's effectivePermissions, the resolution
+// requireOrgContext uses, so granted, revoked and default are real overrides.
+//
+// Review of Part 1 (2026-10-31), two more people:
+//   - a viewer granted orders:approve. The app refuses every write for a
+//     viewer (assertWarehouseAccess), so neither app offers them Approve or
+//     Deny (manager-actions-panel.tsx `approves`, the phone's
+//     orderManagerActions). The card would lead nowhere, so they get none;
+//   - a staff approver limited to some warehouses. approve() and deny() ask
+//     write access to the request's warehouse, so the card counts the
+//     requests in their warehouses (approvablePendingCount), not the
+//     organization's (pendingCount, which the Insights page still reads).
+describe('/dashboard: the pending approvals card follows orders:approve (0390)', () => {
+  type Item = { id: string; href?: string; title?: string; detail?: string };
+  const attention = () =>
+    ((widgetProps.mock.calls[0]![0] as { attentionItems: Item[] }).attentionItems ?? []) as Item[];
+  const approvalsCard = () => attention().find((i) => i.id === 'order-approvals');
+  /** `inOrg` requests wait for approval in the organization; `approvable` of
+   *  them are ones the viewer could approve (all of them unless a test says
+   *  otherwise, as for an owner, admin or manager). */
+  const waiting = (inOrg: number, approvable = inOrg) => {
+    calls.pendingApprovals.mockResolvedValue(inOrg);
+    calls.approvableApprovals.mockResolvedValue(approvable);
+  };
+  /** How many pending-approval counts the page read, of either kind. */
+  const countReads = () =>
+    calls.pendingApprovals.mock.calls.length + calls.approvableApprovals.mock.calls.length;
+  const grantedApprover = (role: 'staff' | 'viewer') => ({
+    role,
+    permissions: effectivePermissions(role, [], [{ permission: 'orders:approve', granted: true }]),
+  });
+
+  it('a staff member granted orders:approve sees the count, linked to the pending list', async () => {
+    calls.viewer = grantedApprover('staff');
+    waiting(3);
+    await (
+      await startBody()
+    ).done;
+    expect(countReads()).toBe(1);
+    expect(approvalsCard()?.title).toBe('3 order requests awaiting your approval');
+    expect(approvalsCard()?.href).toBe('/dashboard/orders?status=pending_approval');
+  });
+
+  it('a manager whose orders:approve was revoked gets no card, and the count is never read', async () => {
+    calls.viewer = {
+      role: 'manager',
+      permissions: effectivePermissions(
+        'manager',
+        [],
+        [{ permission: 'orders:approve', granted: false }],
+      ),
+    };
+    waiting(3);
+    await (
+      await startBody()
+    ).done;
+    expect(attention().map((i) => i.id)).not.toContain('order-approvals');
+    expect(countReads()).toBe(0);
+  });
+
+  it('a manager by default still sees it', async () => {
+    calls.viewer = { role: 'manager', permissions: effectivePermissions('manager') };
+    waiting(1);
+    await (
+      await startBody()
+    ).done;
+    expect(approvalsCard()?.title).toBe('1 order request awaiting your approval');
+    expect(approvalsCard()?.href).toBe('/dashboard/orders?status=pending_approval');
+  });
+
+  it('says the requests wait for someone who can approve orders, not for a manager', async () => {
+    calls.viewer = { role: 'manager', permissions: effectivePermissions('manager') };
+    waiting(2);
+    await (
+      await startBody()
+    ).done;
+    expect(approvalsCard()?.detail).toBe(
+      'Requests are blocked until someone who can approve orders moves them forward.',
+    );
+  });
+
+  it('a viewer granted orders:approve gets no card, and the count is never read', async () => {
+    calls.viewer = grantedApprover('viewer');
+    waiting(3);
+    await (
+      await startBody()
+    ).done;
+    expect(attention().map((i) => i.id)).not.toContain('order-approvals');
+    expect(countReads()).toBe(0);
+  });
+
+  it('a staff approver limited to some warehouses is told only the requests they could approve', async () => {
+    calls.viewer = grantedApprover('staff');
+    waiting(5, 3);
+    await (
+      await startBody()
+    ).done;
+    expect(approvalsCard()?.title).toBe('3 order requests awaiting your approval');
+    expect(calls.pendingApprovals).not.toHaveBeenCalled();
+  });
+
+  it('a staff approver gets no card when none of the waiting requests is theirs to approve', async () => {
+    calls.viewer = grantedApprover('staff');
+    waiting(2, 0);
+    await (
+      await startBody()
+    ).done;
+    expect(attention().map((i) => i.id)).not.toContain('order-approvals');
   });
 });
 
