@@ -139,7 +139,7 @@ describe('BundlesService.update: components', () => {
  *   A.upsert{a} -> B.upsert{b} -> A.delete(not a) -> B.delete(not b),
  * left NO components: a rolled-back probe as the QA manager under RLS on the
  * local stack returned 0, and assemble_bundle, which had no "no components"
- * refusal until 0404, then made kits from nothing. The old delete-then-insert
+ * refusal until 0415, then made kits from nothing. The old delete-then-insert
  * gave the union. A save now reads its set back after the delete and, unless
  * every item of it is there, writes the set again: an upsert only, never
  * another delete, so the last statement of the two saves is always one of
@@ -394,7 +394,7 @@ describe('BundlesService.create: components', () => {
 });
 
 /**
- * 0404: assemble_bundle and distribute_bundle build no kit from a bundle whose
+ * 0415: assemble_bundle and distribute_bundle build no kit from a bundle whose
  * components are all optional (bundle_no_required_components). The service
  * refuses that set when it is saved, before anything is written, so a bundle
  * is not left in a state no kit can be built from.

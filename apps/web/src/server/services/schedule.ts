@@ -528,7 +528,7 @@ export class ScheduleService {
     ) {
       // The kit, quantity and warehouse the event was just SAVED with: what
       // the person sees on the event, and what distribute_bundle checks the
-      // Schedule's call against (0404: a caller without bundles:distribute is
+      // Schedule's call against (0415: a caller without bundles:distribute is
       // let through only for a completed event naming this kit, quantity and
       // warehouse). The old `patch.bundleId ?? before` read a kit cleared in
       // this same save as "unchanged" and handed out the old one.
@@ -600,7 +600,7 @@ export class ScheduleService {
               // Status flip already succeeded. Capture the failure
               // so we can surface a soft error to the UI after
               // emitting audit events. distribute_bundle's refusals are
-              // codes (0365, 0404) or the permission hint (0404); the
+              // codes (0365, 0415) or the permission hint (0415); the
               // manager reads the sentence instead.
               autoDistFailed = {
                 message:

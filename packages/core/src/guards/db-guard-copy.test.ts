@@ -48,7 +48,7 @@ describe('the 0395 refusal words', () => {
       'receipt_post=stock:adjust',
       'receipt_reverse=stock:adjust',
       'kit_assemble=bundles:manage',
-      // 0404: distribute_bundle answers to the permission the Bundles page,
+      // 0415: distribute_bundle answers to the permission the Bundles page,
       // the phone and the API assert before every distribution.
       'kit_distribute=bundles:distribute',
     ]);

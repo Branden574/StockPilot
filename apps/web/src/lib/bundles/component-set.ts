@@ -14,7 +14,7 @@ export function componentItemsDistinct(components: ReadonlyArray<{ itemId: strin
 }
 
 /**
- * A kit needs at least one required component (0404): assemble_bundle and
+ * A kit needs at least one required component (0415): assemble_bundle and
  * distribute_bundle refuse to build kits from a bundle whose components are
  * all optional (bundle_no_required_components), because such a kit could be
  * made from nothing. The form, the action schema and BundlesService refuse

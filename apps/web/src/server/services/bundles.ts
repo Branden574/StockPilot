@@ -181,7 +181,7 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /** A component set naming one item twice is refused before anything is
  *  written: (bundle_id, item_id) is the table's key, so the second row would
  *  fail the insert, or the upsert, part way through (L10). So is a set with no
- *  required component: since 0404 no kit can be built from it. */
+ *  required component: since 0415 no kit can be built from it. */
 function assertComponentSet(
   components: ReadonlyArray<{ itemId: string; isOptional?: boolean }>,
 ): void {
@@ -206,24 +206,24 @@ export const BUNDLE_PHANTOM_DELETED =
   "This kit's stock item was deleted, so no more can be assembled.";
 export const BUNDLE_COMPONENT_NOT_VISIBLE =
   "A component of this kit isn't in your inventory view, so the kit can't be built from it.";
-/** 0404: assemble_bundle and distribute_bundle build no kit from a bundle
+/** 0415: assemble_bundle and distribute_bundle build no kit from a bundle
  *  whose components are all optional, or that has none. */
 export const BUNDLE_NO_REQUIRED_COMPONENTS =
   "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.";
-/** 0404: a component naming another organization's item is refused by name
+/** 0415: a component naming another organization's item is refused by name
  *  (the component policy no longer lets one be saved). */
 export const BUNDLE_COMPONENT_NOT_IN_ORG =
   "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component.";
-/** 0404: a distribution linked to an event outside the kit's organization (or
+/** 0415: a distribution linked to an event outside the kit's organization (or
  *  to one deleted meanwhile) is refused before anything is drawn. */
 export const BUNDLE_SCHEDULE_EVENT_NOT_FOUND =
   "The linked schedule event wasn't found in this organization, so nothing was distributed. Link another event, or none.";
-/** 0404: a component naming the kit's own item (the item its pre-assembled
+/** 0415: a component naming the kit's own item (the item its pre-assembled
  *  kits are counted on) is refused when kits are built from components;
  *  assembling one used to count kits that were never put together. */
 export const BUNDLE_COMPONENT_IS_KIT_ITEM =
   "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component.";
-/** 0404: a kit whose pre-assembled stock is recorded on an item that is not
+/** 0415: a kit whose pre-assembled stock is recorded on an item that is not
  *  its own kit item (another organization's, a regular item, or one another
  *  bundle names) is refused before anything moves. Only the database links a
  *  kit item, so only support can repair one. */
@@ -232,7 +232,7 @@ export const BUNDLE_PHANTOM_NOT_KIT_ITEM =
 
 /**
  * The refusals assemble_bundle() and distribute_bundle() raise by name (0365,
- * 0404), as the ServiceError whose sentence the web modal and the phone show
+ * 0415), as the ServiceError whose sentence the web modal and the phone show
  * (the phone reaches distribute through the API, which forwards the
  * message), or null for any other error. ScheduleService's completion shows
  * the same sentence.
@@ -671,8 +671,8 @@ export class BundlesService {
    * The two statements are separate calls, so two saves of one bundle can
    * interleave: A upserts {a}, B upserts {b}, A deletes everything but a, B
    * deletes everything but b, and the bundle has NO components (review
-   * 2026-10-05, a rolled-back probe as a manager under RLS). Before 0404,
-   * assemble_bundle then made kits from nothing; since 0404 it refuses a
+   * 2026-10-05, a rolled-back probe as a manager under RLS). Before 0415,
+   * assemble_bundle then made kits from nothing; since 0415 it refuses a
    * bundle with no required component (bundle_no_required_components), so
    * the race would stop kits instead, and this read-back keeps the saved set.
    * The second write is an upsert ONLY, never another delete: the last
@@ -920,7 +920,7 @@ export class BundlesService {
       if (msg.includes('phantom_deleted')) {
         throw new ServiceError('validation_error', BUNDLE_PHANTOM_DELETED);
       }
-      // 0365 component_not_visible; 0404 bundle_no_required_components,
+      // 0365 component_not_visible; 0415 bundle_no_required_components,
       // component_is_kit_item, phantom_not_kit_item and component_not_in_org
       // (a 42501 with no hint, so before 'forbidden').
       const named = kitRefusal(msg);
@@ -966,7 +966,7 @@ export class BundlesService {
       p_idempotency_key: input.idempotencyKey ?? null,
     });
     if (error) {
-      // 0404: distribute_bundle refuses a direct call without
+      // 0415: distribute_bundle refuses a direct call without
       // bundles:distribute itself (42501 forbidden, hint permission), as
       // assertPermission above does.
       const guard = dbGuardRefusal(error, 'kit_distribute');
@@ -990,7 +990,7 @@ export class BundlesService {
         throw new ServiceError('validation_error', 'This bundle is archived or inactive.');
       }
       // 0365: a required component the caller's inventory view cannot see
-      // used to be skipped, and the kit went out without it. 0404: a bundle
+      // used to be skipped, and the kit went out without it. 0415: a bundle
       // with no required component, a component of another organization, the
       // kit's own item as a component, a kit item that is not the kit's own
       // and an event outside this organization are refused by name.

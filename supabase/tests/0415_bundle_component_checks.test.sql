@@ -1,16 +1,28 @@
--- supabase/tests/0404_bundle_component_checks.test.sql
--- pgTAP proof for migration 0404 (docket S4, with S9's bundle component
+-- supabase/tests/0415_bundle_component_checks.test.sql
+-- pgTAP proof for migration 0415 (docket S4, with S9's bundle component
 -- organization check): kits are made only from their own organization's
 -- items, never from nothing, and only by the people the app lets make or hand
--- them out. Run against the pre-0404 schema (head 0401, scratch stack,
--- 2026-10-24) it fails 38 of its 74: every refusal (X1-X4, X8, O1, O3,
+-- them out.
+--
+-- The migration was numbered 0404 until 0413 and 0414 shipped first; its file
+-- is byte for byte the one reviewed as 0404, so the text it writes still says
+-- 0404 and the checks that read that text expect it: the lines it adds to the
+-- three bodies end in '-- 0404' (R1 counts them, and the M and A sections
+-- strip them to rebuild the old bodies), its preflight and lock prelude are
+-- the blocks tagged $pre404$ and $lock404$ (the A section finds them by those
+-- tags among the statements the CLI recorded under version 0415), and its two
+-- comments say 0404 (P2, P4).
+--
+-- Run against the schema without it (head 0401, scratch stack, 2026-10-24,
+-- when it was 0404; again at head 0414 on 2026-10-31, as 0415, with the same
+-- result) it fails 38 of its 74: every refusal (X1-X4, X8, O1, O3,
 -- I1-I5, K1, K3, K4, D1, C1, C3, C4, C6, B1, B2), every text, posture and
--- replay check that names what 0404 adds (R1, R3, P1-P4, A1-A5, H1, H2, G1)
+-- replay check that names what 0415 adds (R1, R3, P1-P4, A1-A5, H1, H2, G1)
 -- and M8 and M13 (no guard to drop). What passes there too is meant to: the
--- normal paths (X5-X7, I6, K2, C2, C5, D2, D3, B3, B4), the answers 0404
+-- normal paths (X5-X7, I6, K2, C2, C5, D2, D3, B3, B4), the answers 0415
 -- keeps (O2, K5, K6), the fixture and census checks (F1-F4, R2, H3, G2, G3,
 -- Z1), and the M section's other checks, which run the old text on purpose.
--- Run against the first 0404 (e32a220e6, before the review of 2026-10-24
+-- Run against its first version (e32a220e6, before the review of 2026-10-24
 -- added the kit item checks and the bundles guard) it fails 18: the review's
 -- refusals (I1-I5, C6, B1, B2), M13, and the checks that pin the added text
 -- (R1, R3, P1, P4, A2-A4, H1, G1). With one review term removed at a time
@@ -28,8 +40,8 @@
 --   two    a manager of both organizations    outB  a manager of B only
 --
 -- F.  The fixture is what the matrices assume.
--- R.  One change per body: md5(prosrc) is 0404's, removing the lines tagged
---     '-- 0404' gives the pre-0404 body exactly, arguments and results are
+-- R.  One change per body: md5(prosrc) is 0415's, removing the lines tagged
+--     '-- 0404' gives the pre-0415 body exactly, arguments and results are
 --     unchanged, and the ledger.* fingerprint 0383 and 0385 pin moves by those
 --     two bodies alone.
 -- P.  Posture: SECURITY mode, SET clauses, owner and EXECUTE of the restated
@@ -41,13 +53,13 @@
 --     still assembled and handed out as before (with a shortage too), and
 --     pre-assembled kits still go out from a bundle with no component.
 -- O.  Organization checks inside the kit functions: a component of another
---     organization is refused by whoever can see it (before 0404 the kit went
+--     organization is refused by whoever can see it (before 0415 the kit went
 --     out without it: M3); one the caller cannot see answers as before; a
 --     named event must be the kit organization's.
 -- I.  The kit's own item: a kit whose own item is also one of its components,
 --     or whose kit item is not its own (a regular item, one of its
 --     components, another bundle's, another organization's), is refused
---     before anything moves (before 0404: kits from nothing, M10-M12 and
+--     before anything moves (before 0415: kits from nothing, M10-M12 and
 --     M15); normal kits still assemble into and hand out from their own.
 -- B.  The bundles guard: an API role never sets or changes a kit item, nor
 --     moves a bundle to another organization (M13); every other bundle write
@@ -63,10 +75,10 @@
 --     writes follow bundles:manage, a foreign component row (or one naming
 --     the kit's item) can still be deleted, other roles unchanged.
 -- M.  Each fix, removed inside an undone subtransaction, lets its probe
---     through again (the pre-0404 behavior, reproduced on the old text).
+--     through again (the pre-0415 behavior, reproduced on the old text).
 -- A.  The migration's own preflight and lock prelude, replayed from the
 --     statements the CLI recorded: the preflight refuses a second run, passes
---     on the pre-0404 state, and names a planted drift; the prelude takes the
+--     on the pre-0415 state, and names a planted drift; the prelude takes the
 --     three table locks.
 -- H.  The four policies' text: 0140's with the terms added and nothing else.
 -- G.  No function here raises 40001 or 40P01, distribute_bundle's body is the
@@ -79,76 +91,76 @@
 -- pg_temp.attempt (always undone), which switches role and claims with
 -- set_config inside a subtransaction (the 0387 helpers, as 0395 uses them),
 -- so pgTAP's own statements never run as an API role. begin/rollback: nothing
--- leaks. Namespace 04040000.
+-- leaks. Namespace 04150000.
 
 begin;
 
 select plan(74);
 
-\set orgA    '\'04040000-0000-0000-0000-00000000000a\''
-\set orgB    '\'04040000-0000-0000-0000-00000000000b\''
-\set own     '\'04040000-0000-0000-0000-0000000000a0\''
-\set adm     '\'04040000-0000-0000-0000-0000000000a1\''
-\set admM    '\'04040000-0000-0000-0000-0000000000a2\''
-\set mgr     '\'04040000-0000-0000-0000-0000000000a3\''
-\set mgrM    '\'04040000-0000-0000-0000-0000000000a4\''
-\set mgrD    '\'04040000-0000-0000-0000-0000000000a5\''
-\set mgrDS   '\'04040000-0000-0000-0000-0000000000a6\''
-\set stf     '\'04040000-0000-0000-0000-0000000000a7\''
-\set vwr     '\'04040000-0000-0000-0000-0000000000a8\''
-\set two     '\'04040000-0000-0000-0000-0000000000a9\''
-\set mgrS    '\'04040000-0000-0000-0000-0000000000aa\''
-\set outB    '\'04040000-0000-0000-0000-0000000000b1\''
-\set whA     '\'04040000-0000-0000-0000-0000000000d1\''
-\set whA2    '\'04040000-0000-0000-0000-0000000000d2\''
-\set whB     '\'04040000-0000-0000-0000-0000000000d3\''
-\set itA1    '\'04040000-0000-0000-0000-0000000000e1\''
-\set itA2    '\'04040000-0000-0000-0000-0000000000e2\''
-\set itO     '\'04040000-0000-0000-0000-0000000000e3\''
-\set itPh    '\'04040000-0000-0000-0000-0000000000e4\''
-\set itB     '\'04040000-0000-0000-0000-0000000000e5\''
-\set itU     '\'04040000-0000-0000-0000-0000000000e6\''
-\set itSf    '\'04040000-0000-0000-0000-0000000000e7\''
-\set itBk    '\'04040000-0000-0000-0000-0000000000e8\''
-\set itSh    '\'04040000-0000-0000-0000-0000000000e9\''
-\set bnOk    '\'04040000-0000-0000-0000-0000000000f1\''
-\set bnEmpty '\'04040000-0000-0000-0000-0000000000f2\''
-\set bnOpt   '\'04040000-0000-0000-0000-0000000000f3\''
-\set bnX     '\'04040000-0000-0000-0000-0000000000f4\''
-\set bnXo    '\'04040000-0000-0000-0000-0000000000f5\''
-\set bnPh    '\'04040000-0000-0000-0000-0000000000f6\''
-\set bnSelf  '\'04040000-0000-0000-0000-0000000000f7\''
-\set bnRepC  '\'04040000-0000-0000-0000-0000000000f8\''
-\set bnRepU  '\'04040000-0000-0000-0000-0000000000f9\''
-\set bnShA   '\'04040000-0000-0000-0000-0000000000fa\''
-\set bnShB   '\'04040000-0000-0000-0000-0000000000fb\''
-\set bnFor   '\'04040000-0000-0000-0000-0000000000fc\''
-\set evDone  '\'04040000-0000-0000-0000-000000000101\''
-\set evOpen  '\'04040000-0000-0000-0000-000000000102\''
-\set evOther '\'04040000-0000-0000-0000-000000000103\''
-\set evDel   '\'04040000-0000-0000-0000-000000000104\''
-\set evB     '\'04040000-0000-0000-0000-000000000105\''
-\set evNone  '\'04040000-0000-0000-0000-0000000001ff\''
-\set dFix    '\'04040000-0000-0000-0000-000000000201\''
+\set orgA    '\'04150000-0000-0000-0000-00000000000a\''
+\set orgB    '\'04150000-0000-0000-0000-00000000000b\''
+\set own     '\'04150000-0000-0000-0000-0000000000a0\''
+\set adm     '\'04150000-0000-0000-0000-0000000000a1\''
+\set admM    '\'04150000-0000-0000-0000-0000000000a2\''
+\set mgr     '\'04150000-0000-0000-0000-0000000000a3\''
+\set mgrM    '\'04150000-0000-0000-0000-0000000000a4\''
+\set mgrD    '\'04150000-0000-0000-0000-0000000000a5\''
+\set mgrDS   '\'04150000-0000-0000-0000-0000000000a6\''
+\set stf     '\'04150000-0000-0000-0000-0000000000a7\''
+\set vwr     '\'04150000-0000-0000-0000-0000000000a8\''
+\set two     '\'04150000-0000-0000-0000-0000000000a9\''
+\set mgrS    '\'04150000-0000-0000-0000-0000000000aa\''
+\set outB    '\'04150000-0000-0000-0000-0000000000b1\''
+\set whA     '\'04150000-0000-0000-0000-0000000000d1\''
+\set whA2    '\'04150000-0000-0000-0000-0000000000d2\''
+\set whB     '\'04150000-0000-0000-0000-0000000000d3\''
+\set itA1    '\'04150000-0000-0000-0000-0000000000e1\''
+\set itA2    '\'04150000-0000-0000-0000-0000000000e2\''
+\set itO     '\'04150000-0000-0000-0000-0000000000e3\''
+\set itPh    '\'04150000-0000-0000-0000-0000000000e4\''
+\set itB     '\'04150000-0000-0000-0000-0000000000e5\''
+\set itU     '\'04150000-0000-0000-0000-0000000000e6\''
+\set itSf    '\'04150000-0000-0000-0000-0000000000e7\''
+\set itBk    '\'04150000-0000-0000-0000-0000000000e8\''
+\set itSh    '\'04150000-0000-0000-0000-0000000000e9\''
+\set bnOk    '\'04150000-0000-0000-0000-0000000000f1\''
+\set bnEmpty '\'04150000-0000-0000-0000-0000000000f2\''
+\set bnOpt   '\'04150000-0000-0000-0000-0000000000f3\''
+\set bnX     '\'04150000-0000-0000-0000-0000000000f4\''
+\set bnXo    '\'04150000-0000-0000-0000-0000000000f5\''
+\set bnPh    '\'04150000-0000-0000-0000-0000000000f6\''
+\set bnSelf  '\'04150000-0000-0000-0000-0000000000f7\''
+\set bnRepC  '\'04150000-0000-0000-0000-0000000000f8\''
+\set bnRepU  '\'04150000-0000-0000-0000-0000000000f9\''
+\set bnShA   '\'04150000-0000-0000-0000-0000000000fa\''
+\set bnShB   '\'04150000-0000-0000-0000-0000000000fb\''
+\set bnFor   '\'04150000-0000-0000-0000-0000000000fc\''
+\set evDone  '\'04150000-0000-0000-0000-000000000101\''
+\set evOpen  '\'04150000-0000-0000-0000-000000000102\''
+\set evOther '\'04150000-0000-0000-0000-000000000103\''
+\set evDel   '\'04150000-0000-0000-0000-000000000104\''
+\set evB     '\'04150000-0000-0000-0000-000000000105\''
+\set evNone  '\'04150000-0000-0000-0000-0000000001ff\''
+\set dFix    '\'04150000-0000-0000-0000-000000000201\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,   '0404-own@test.local',   '{}'::jsonb),
-  (:adm,   '0404-adm@test.local',   '{}'::jsonb),
-  (:admM,  '0404-admm@test.local',  '{}'::jsonb),
-  (:mgr,   '0404-mgr@test.local',   '{}'::jsonb),
-  (:mgrM,  '0404-mgrm@test.local',  '{}'::jsonb),
-  (:mgrD,  '0404-mgrd@test.local',  '{}'::jsonb),
-  (:mgrDS, '0404-mgrds@test.local', '{}'::jsonb),
-  (:stf,   '0404-stf@test.local',   '{}'::jsonb),
-  (:vwr,   '0404-vwr@test.local',   '{}'::jsonb),
-  (:two,   '0404-two@test.local',   '{}'::jsonb),
-  (:mgrS,  '0404-mgrs@test.local',  '{}'::jsonb),
-  (:outB,  '0404-outb@test.local',  '{}'::jsonb)
+  (:own,   '0415-own@test.local',   '{}'::jsonb),
+  (:adm,   '0415-adm@test.local',   '{}'::jsonb),
+  (:admM,  '0415-admm@test.local',  '{}'::jsonb),
+  (:mgr,   '0415-mgr@test.local',   '{}'::jsonb),
+  (:mgrM,  '0415-mgrm@test.local',  '{}'::jsonb),
+  (:mgrD,  '0415-mgrd@test.local',  '{}'::jsonb),
+  (:mgrDS, '0415-mgrds@test.local', '{}'::jsonb),
+  (:stf,   '0415-stf@test.local',   '{}'::jsonb),
+  (:vwr,   '0415-vwr@test.local',   '{}'::jsonb),
+  (:two,   '0415-two@test.local',   '{}'::jsonb),
+  (:mgrS,  '0415-mgrs@test.local',  '{}'::jsonb),
+  (:outB,  '0415-outb@test.local',  '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0404 Kits A', '0404-kits-a'),
-  (:orgB, '0404 Kits B', '0404-kits-b');
+  (:orgA, '0415 Kits A', '0415-kits-a'),
+  (:orgB, '0415 Kits B', '0415-kits-b');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,   'owner',   now()),
   (:orgA, :adm,   'admin',   now()),
@@ -164,9 +176,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgB, :two,   'manager', now()),
   (:orgB, :outB,  'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA,  :orgA, '0404 Main',  'WH-0404A',  'active'),
-  (:whA2, :orgA, '0404 Annex', 'WH-0404A2', 'active'),
-  (:whB,  :orgB, '0404 Bee',   'WH-0404B',  'active');
+  (:whA,  :orgA, '0415 Main',  'WH-0415A',  'active'),
+  (:whA2, :orgA, '0415 Annex', 'WH-0415A2', 'active'),
+  (:whB,  :orgB, '0415 Bee',   'WH-0415B',  'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf, :whA, true),
   (:orgA, :vwr, :whA, true);
@@ -190,38 +202,38 @@ insert into public.organization_modules (organization_id, module_id, tier, enabl
 -- kits), itSh the kit item two bundles name, itBk a kit item of B.
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, is_bundle) values
-  (:itA1, :orgA, :whA, '0404-A1',          'Kit part one 0404',              100, 'active', 'none', false),
-  (:itA2, :orgA, :whA, '0404-A2',          'Kit part two 0404',              100, 'active', 'none', false),
-  (:itO,  :orgA, :whA, '0404-O',           'Optional part 0404',              10, 'active', 'none', false),
-  (:itPh, :orgA, :whA, '__BUNDLE__0404ph', 'Pre-assembled kit 0404',           3, 'active', 'none', true),
-  (:itB,  :orgB, :whB, '0404-B',           'Org B part 0404',                 10, 'active', 'none', false),
-  (:itU,  :orgA, :whA, '0404-U',           'Unrelated item 0404',              5, 'active', 'none', false),
-  (:itSf, :orgA, :whA, '__BUNDLE__0404sf', 'Self kit stock 0404',             20, 'active', 'none', true),
-  (:itSh, :orgA, :whA, '__BUNDLE__0404sh', 'Shared kit stock 0404',            6, 'active', 'none', true),
-  (:itBk, :orgB, :whB, '__BUNDLE__0404bk', 'Org B kit stock 0404',             4, 'active', 'none', true);
+  (:itA1, :orgA, :whA, '0415-A1',          'Kit part one 0415',              100, 'active', 'none', false),
+  (:itA2, :orgA, :whA, '0415-A2',          'Kit part two 0415',              100, 'active', 'none', false),
+  (:itO,  :orgA, :whA, '0415-O',           'Optional part 0415',              10, 'active', 'none', false),
+  (:itPh, :orgA, :whA, '__BUNDLE__0415ph', 'Pre-assembled kit 0415',           3, 'active', 'none', true),
+  (:itB,  :orgB, :whB, '0415-B',           'Org B part 0415',                 10, 'active', 'none', false),
+  (:itU,  :orgA, :whA, '0415-U',           'Unrelated item 0415',              5, 'active', 'none', false),
+  (:itSf, :orgA, :whA, '__BUNDLE__0415sf', 'Self kit stock 0415',             20, 'active', 'none', true),
+  (:itSh, :orgA, :whA, '__BUNDLE__0415sh', 'Shared kit stock 0415',            6, 'active', 'none', true),
+  (:itBk, :orgB, :whB, '__BUNDLE__0415bk', 'Org B kit stock 0415',             4, 'active', 'none', true);
 
 -- bnOk: 1 x A1 + 2 x A2, and 1 x O optional. bnEmpty: no component. bnOpt:
 -- the optional part only. bnX and bnXo carry a component row naming B's item
 -- (required in bnX, optional in bnXo), planted as the superuser the way a
--- pre-0404 REST insert left one. bnPh: no component, 3 kits pre-assembled.
+-- pre-0415 REST insert left one. bnPh: no component, 3 kits pre-assembled.
 -- The kit item cases, planted the same way (the review's probes, 2026-10-24):
 -- bnSelf names its own kit item itSf as a required component (path a);
 -- bnRepC's kit item is its own required component A2 (path b); bnRepU's is
 -- itU, which no kit uses; bnShA and bnShB both name itSh; bnFor's is B's kit
 -- item itBk.
 insert into public.bundles (id, organization_id, name, sku, is_active, preassembly_enabled, phantom_item_id) values
-  (:bnOk,    :orgA, 'Kit 0404',                    'KIT-0404-OK', true, true, null),
-  (:bnEmpty, :orgA, 'Empty kit 0404',              'KIT-0404-E',  true, true, null),
-  (:bnOpt,   :orgA, 'Optional-only kit 0404',      'KIT-0404-O',  true, true, null),
-  (:bnX,     :orgA, 'Planted kit 0404',            'KIT-0404-X',  true, true, null),
-  (:bnXo,    :orgA, 'Planted optional kit 0404',   'KIT-0404-XO', true, true, null),
-  (:bnPh,    :orgA, 'Pre-assembled kit 0404',      'KIT-0404-PH', true, true, :itPh),
-  (:bnSelf,  :orgA, 'Self kit 0404',               'KIT-0404-SF', true, true, :itSf),
-  (:bnRepC,  :orgA, 'Component kit item 0404',     'KIT-0404-RC', true, true, :itA2),
-  (:bnRepU,  :orgA, 'Unrelated kit item 0404',     'KIT-0404-RU', true, true, :itU),
-  (:bnShA,   :orgA, 'Sharing kit A 0404',          'KIT-0404-SA', true, true, :itSh),
-  (:bnShB,   :orgA, 'Sharing kit B 0404',          'KIT-0404-SB', true, true, :itSh),
-  (:bnFor,   :orgA, 'Foreign kit item 0404',       'KIT-0404-FK', true, true, :itBk);
+  (:bnOk,    :orgA, 'Kit 0415',                    'KIT-0415-OK', true, true, null),
+  (:bnEmpty, :orgA, 'Empty kit 0415',              'KIT-0415-E',  true, true, null),
+  (:bnOpt,   :orgA, 'Optional-only kit 0415',      'KIT-0415-O',  true, true, null),
+  (:bnX,     :orgA, 'Planted kit 0415',            'KIT-0415-X',  true, true, null),
+  (:bnXo,    :orgA, 'Planted optional kit 0415',   'KIT-0415-XO', true, true, null),
+  (:bnPh,    :orgA, 'Pre-assembled kit 0415',      'KIT-0415-PH', true, true, :itPh),
+  (:bnSelf,  :orgA, 'Self kit 0415',               'KIT-0415-SF', true, true, :itSf),
+  (:bnRepC,  :orgA, 'Component kit item 0415',     'KIT-0415-RC', true, true, :itA2),
+  (:bnRepU,  :orgA, 'Unrelated kit item 0415',     'KIT-0415-RU', true, true, :itU),
+  (:bnShA,   :orgA, 'Sharing kit A 0415',          'KIT-0415-SA', true, true, :itSh),
+  (:bnShB,   :orgA, 'Sharing kit B 0415',          'KIT-0415-SB', true, true, :itSh),
+  (:bnFor,   :orgA, 'Foreign kit item 0415',       'KIT-0415-FK', true, true, :itBk);
 insert into public.bundle_components (bundle_id, item_id, quantity, is_optional) values
   (:bnOk,   :itA1, 1, false),
   (:bnOk,   :itA2, 2, false),
@@ -245,13 +257,13 @@ insert into public.bundle_components (bundle_id, item_id, quantity, is_optional)
 -- distribution dFix. evB: B's completed event.
 insert into public.schedule_events
   (id, organization_id, title, starts_at, warehouse_id, status, bundle_id, bundle_quantity, bundle_warehouse_id, created_by, updated_by) values
-  (:evDone,  :orgA, 'Kit day 0404',         now() - interval '1 hour',  :whA, 'completed',   :bnOk,  1,    :whA, :mgr,  :mgr),
-  (:evOpen,  :orgA, 'Open kit day 0404',    now() + interval '1 hour',  :whA, 'in_progress', :bnOk,  1,    :whA, :mgr,  :mgr),
-  (:evOther, :orgA, 'Other kit day 0404',   now() - interval '2 hours', :whA, 'completed',   :bnOpt, 1,    :whA, :mgr,  :mgr),
-  (:evDel,   :orgA, 'Deleted kit day 0404', now() - interval '3 hours', :whA, 'completed',   null,   null, null, :mgr,  :mgr),
-  (:evB,     :orgB, 'Org B day 0404',       now() - interval '1 hour',  :whB, 'completed',   null,   null, null, :outB, :outB);
+  (:evDone,  :orgA, 'Kit day 0415',         now() - interval '1 hour',  :whA, 'completed',   :bnOk,  1,    :whA, :mgr,  :mgr),
+  (:evOpen,  :orgA, 'Open kit day 0415',    now() + interval '1 hour',  :whA, 'in_progress', :bnOk,  1,    :whA, :mgr,  :mgr),
+  (:evOther, :orgA, 'Other kit day 0415',   now() - interval '2 hours', :whA, 'completed',   :bnOpt, 1,    :whA, :mgr,  :mgr),
+  (:evDel,   :orgA, 'Deleted kit day 0415', now() - interval '3 hours', :whA, 'completed',   null,   null, null, :mgr,  :mgr),
+  (:evB,     :orgB, 'Org B day 0415',       now() - interval '1 hour',  :whB, 'completed',   null,   null, null, :outB, :outB);
 insert into public.bundle_distributions (id, organization_id, bundle_id, warehouse_id, quantity, schedule_event_id, notes, distributed_by)
-values (:dFix, :orgA, :bnOk, :whA, 1, :evDel, '0404 fixture', :mgr);
+values (:dFix, :orgA, :bnOk, :whA, 1, :evDel, '0415 fixture', :mgr);
 
 -- ══ Helpers (0387's, as 0395 uses them) ═══════════════════════════════════
 -- pg_temp.hint drops supautils' generic "Grant the required privileges ..."
@@ -311,23 +323,23 @@ create function pg_temp.perm(p_who text, p_perm text) returns text language plpg
 declare v boolean;
 begin
   perform set_config('request.jwt.claim.sub', (select p.id::text from persona p where p.who = p_who), true);
-  v := public.has_permission('04040000-0000-0000-0000-00000000000a', p_perm);
+  v := public.has_permission('04150000-0000-0000-0000-00000000000a', p_perm);
   perform set_config('request.jwt.claim.sub', '', true);
   return p_who || ':' || p_perm || '=' || v::text;
 end $$;
--- A definition with every line tagged '-- 0404' removed: the pre-0404
+-- A definition with every line tagged '-- 0404' removed: the pre-0415
 -- function, recreated inside an undone subtransaction by the M and A checks.
 create function pg_temp.stripped(p_sig text) returns text language sql stable as $$
   select regexp_replace(pg_get_functiondef(to_regprocedure(p_sig)), E'\n[^\n]*-- 0404[^\n]*', '', 'g')
 $$;
 
--- The pre-0404 state, statement by statement: the three bodies without
--- their 0404 lines, the four policies as 0140 wrote them, neither guard
+-- The pre-0415 state, statement by statement: the three bodies without
+-- their '-- 0404' lines, the four policies as 0140 wrote them, neither guard
 -- (nor the bundles guard's function). 'pol_components_no_kit' is not a
--- pre-0404 state: it is 0404's component policy without its kit item term
+-- pre-0415 state: it is 0415's component policy without its kit item term
 -- alone, for M14.
-create temp table pre404 (k text primary key, stmt text not null);
-insert into pre404 (k, stmt) values
+create temp table pre415 (k text primary key, stmt text not null);
+insert into pre415 (k, stmt) values
   ('fn_assemble',   pg_temp.stripped('ledger.assemble_bundle(uuid,numeric,uuid,text)')),
   ('fn_distribute', pg_temp.stripped('ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)')),
   ('fn_wrapper',    pg_temp.stripped('public.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)')),
@@ -367,10 +379,11 @@ insert into pre404 (k, stmt) values
 create function pg_temp.pre(p_keys text[]) returns text language sql stable as $$
   select string_agg(p.stmt, E';\n' order by k.o)
     from unnest(p_keys) with ordinality k(key, o)
-    join pre404 p on p.k = k.key
+    join pre415 p on p.k = k.key
 $$;
 
--- The statements the CLI recorded for 0404 that contain p_tag (0392's).
+-- The statements the CLI recorded for a migration version (0415 here) that
+-- contain p_tag (0392's). The tags are the file's own, $pre404$ and $lock404$.
 create function pg_temp.mig(p_version text, p_tag text) returns text language sql stable as $$
   select coalesce(string_agg(st, E';\n'), '')
     from supabase_migrations.schema_migrations m, unnest(m.statements) st
@@ -381,7 +394,7 @@ create function pg_temp.mig_count(p_version text, p_tag text) returns bigint lan
     from supabase_migrations.schema_migrations m, unnest(m.statements) st
    where m.version = p_version and position(p_tag in st) > 0
 $$;
--- 0404's preflight run again after p_prep, ALWAYS undone: 'ok', or
+-- 0415's preflight run again after p_prep, ALWAYS undone: 'ok', or
 -- '<sqlstate>:<hint>:' and the names its message reports, sorted.
 create function pg_temp.try_pre(p_prep text) returns text language plpgsql as $$
 declare v_state text; v_msg text; v_hint text;
@@ -390,7 +403,7 @@ begin
     if p_prep is not null then
       execute p_prep;
     end if;
-    execute pg_temp.mig('0404', '$pre404$');
+    execute pg_temp.mig('0415', '$pre404$');
     raise exception using errcode = 'XX404', message = 'undo';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
@@ -445,17 +458,17 @@ select is(
   (select string_agg(i.sku || '=' || i.quantity_on_hand::int || '/' || coalesce((select sum(l.quantity)::int from public.item_stock_levels l where l.item_id = i.id), 0), ' ' order by i.sku collate "C")
      from public.inventory_items i where i.id in (:itA1, :itA2, :itO, :itPh, :itB, :itU, :itSf, :itSh, :itBk))
   || ' ' || public.module_enabled(:orgA, 'bundles')::text || '/' || public.module_enabled(:orgA, 'schedule')::text,
-  '0404-A1=100/100 0404-A2=100/100 0404-B=10/10 0404-O=10/10 0404-U=5/5 '
-  '__BUNDLE__0404bk=4/4 __BUNDLE__0404ph=3/3 __BUNDLE__0404sf=20/20 __BUNDLE__0404sh=6/6 true/true',
+  '0415-A1=100/100 0415-A2=100/100 0415-B=10/10 0415-O=10/10 0415-U=5/5 '
+  '__BUNDLE__0415bk=4/4 __BUNDLE__0415ph=3/3 __BUNDLE__0415sf=20/20 __BUNDLE__0415sh=6/6 true/true',
   'F2: stock on record equals the holdings for every fixture item, B''s included, and the Bundles and Schedule modules are on for A');
 select is(
   (select string_agg(b.sku || '=' || coalesce((select string_agg(i.sku || case when c.is_optional then '?' else '' end, '+' order by i.sku collate "C")
                                                  from public.bundle_components c join public.inventory_items i on i.id = c.item_id
                                                 where c.bundle_id = b.id), '-'), ' ' order by b.sku collate "C")
      from public.bundles b where b.organization_id = :orgA),
-  'KIT-0404-E=- KIT-0404-FK=0404-A1 KIT-0404-O=0404-O? KIT-0404-OK=0404-A1+0404-A2+0404-O? KIT-0404-PH=- '
-  'KIT-0404-RC=0404-A2 KIT-0404-RU=0404-A1 KIT-0404-SA=0404-A1 KIT-0404-SB=0404-A2 KIT-0404-SF=0404-A1+__BUNDLE__0404sf '
-  'KIT-0404-X=0404-A1+0404-B KIT-0404-XO=0404-A1+0404-B?',
+  'KIT-0415-E=- KIT-0415-FK=0415-A1 KIT-0415-O=0415-O? KIT-0415-OK=0415-A1+0415-A2+0415-O? KIT-0415-PH=- '
+  'KIT-0415-RC=0415-A2 KIT-0415-RU=0415-A1 KIT-0415-SA=0415-A1 KIT-0415-SB=0415-A2 KIT-0415-SF=0415-A1+__BUNDLE__0415sf '
+  'KIT-0415-X=0415-A1+0415-B KIT-0415-XO=0415-A1+0415-B?',
   'F3: the kits are as described: none of bnEmpty and bnPh''s components, bnOpt''s only optional, the planted rows naming B''s item, and bnSelf''s naming its own kit item');
 select is(
   (select string_agg(b.sku || '->' || coalesce(i.sku || '(' || case when i.is_bundle then 'kit' else 'item' end
@@ -463,34 +476,34 @@ select is(
                      ' ' order by b.sku collate "C")
      from public.bundles b left join public.inventory_items i on i.id = b.phantom_item_id
     where b.organization_id = :orgA),
-  'KIT-0404-E->- KIT-0404-FK->__BUNDLE__0404bk(kit,B) KIT-0404-O->- KIT-0404-OK->- KIT-0404-PH->__BUNDLE__0404ph(kit) '
-  'KIT-0404-RC->0404-A2(item) KIT-0404-RU->0404-U(item) KIT-0404-SA->__BUNDLE__0404sh(kit) KIT-0404-SB->__BUNDLE__0404sh(kit) '
-  'KIT-0404-SF->__BUNDLE__0404sf(kit) KIT-0404-X->- KIT-0404-XO->-',
+  'KIT-0415-E->- KIT-0415-FK->__BUNDLE__0415bk(kit,B) KIT-0415-O->- KIT-0415-OK->- KIT-0415-PH->__BUNDLE__0415ph(kit) '
+  'KIT-0415-RC->0415-A2(item) KIT-0415-RU->0415-U(item) KIT-0415-SA->__BUNDLE__0415sh(kit) KIT-0415-SB->__BUNDLE__0415sh(kit) '
+  'KIT-0415-SF->__BUNDLE__0415sf(kit) KIT-0415-X->- KIT-0415-XO->-',
   'F4: the kit items are as planted: bnPh''s and bnSelf''s their own, bnRepC''s its own component, bnRepU''s an item no kit uses, bnShA and bnShB one between them, bnFor''s a kit item of B');
 
 -- Everything below must leave this unchanged (Z1): every attempt is undone.
 create function pg_temp.state() returns text language sql stable as $$
   select (select md5(string_agg(i.id::text || ':' || i.quantity_on_hand::text || ':' || coalesce(i.deleted_at::text, ''), ',' order by i.id))
             from public.inventory_items i
-           where i.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+           where i.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select coalesce(sum(l.quantity), 0)::text from public.item_stock_levels l
-                  where l.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where l.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select count(*) from public.stock_movements m
-                  where m.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where m.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select md5(string_agg(d.id::text || coalesce(d.schedule_event_id::text, ''), ',' order by d.id)) from public.bundle_distributions d
-                  where d.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where d.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select md5(string_agg(b.id::text || b.organization_id::text || b.name || b.is_active::text || coalesce(b.phantom_item_id::text, ''), ',' order by b.id))
                    from public.bundles b
-                  where b.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where b.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select md5(string_agg(c.bundle_id::text || c.item_id::text || c.quantity::text || c.is_optional::text, ',' order by c.bundle_id, c.item_id))
                    from public.bundle_components c join public.bundles b on b.id = c.bundle_id
-                  where b.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where b.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select md5(string_agg(e.id::text || e.status, ',' order by e.id)) from public.schedule_events e
-                  where e.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where e.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select count(*) from public.notifications n
-                  where n.organization_id in ('04040000-0000-0000-0000-00000000000a', '04040000-0000-0000-0000-00000000000b'))
+                  where n.organization_id in ('04150000-0000-0000-0000-00000000000a', '04150000-0000-0000-0000-00000000000b'))
       || '|' || (select md5(string_agg(m.module_id || m.enabled::text, ',' order by m.module_id)) from public.organization_modules m
-                  where m.organization_id = '04040000-0000-0000-0000-00000000000a')
+                  where m.organization_id = '04150000-0000-0000-0000-00000000000a')
 $$;
 create temp table snap as select pg_temp.state() as v;
 
@@ -505,7 +518,7 @@ select is(
   E'ledger.assemble_bundle(uuid,numeric,uuid,text)=0002b48757da651a90a38dd50eb7df15|a2967a282fbdf76c10c2808f35760973|23\n'
   'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)=ebe22d594c11813464c7d50accae54a7|d78bf6b0471c49981b6a8df064e6b895|30\n'
   'public.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)=4b731f8a78341906009971d042f5ed56|f0ef2bde4103221457cf632769ce36c7|22',
-  'R1: each restated body has 0404''s text, and removing its lines tagged -- 0404 (23, 30 and 22) gives the pre-0404 body exactly (the 0373 bodies a2967a28 and d78bf6b0, the 0359 wrapper f0ef2bde): the added lines are the only change');
+  'R1: each restated body has 0415''s text, and removing its lines tagged -- 0404 (23, 30 and 22) gives the pre-0415 body exactly (the 0373 bodies a2967a28 and d78bf6b0, the 0359 wrapper f0ef2bde): the added lines are the only change');
 select is(
   (select string_agg(pg_get_function_arguments(p.oid) || ' -> ' || pg_get_function_result(p.oid), E'\n' order by v.n)
      from (values (1, 'ledger.assemble_bundle(uuid,numeric,uuid,text)'),
@@ -517,7 +530,7 @@ select is(
   'p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_allow_shortage boolean, p_schedule_event_id uuid DEFAULT NULL::uuid, p_notes text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text -> uuid',
   'R2: arguments, defaults and results are unchanged (installed phones call the wrapper by name with these arguments)');
 -- 0383 Z2 and 0385 Z2 pin a fingerprint of every ledger.* function (their
--- query, verbatim). 0404 re-pins both; this shows the new value moves from the
+-- query, verbatim). 0415 re-pins both; this shows the new value moves from the
 -- old one by the two restated bodies alone.
 create function pg_temp.ledger_fp() returns text language sql stable as $$
   select md5(string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, ''), E'\n' order by p.oid::regprocedure::text)) || '|' || count(*)
@@ -538,7 +551,7 @@ end $$;
 select is(
   pg_temp.ledger_fp() || ' / ' || pg_temp.ledger_fp_after(pg_temp.pre(array['fn_assemble', 'fn_distribute'])),
   'cfc031524c8052a69fceab91be550768|18 / 1c283e932202295a91e5c118f0873689|18',
-  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is cfc03152|18 after 0404, and with the two restated ledger bodies taken back to their pre-0404 text it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
+  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is cfc03152|18 after 0415, and with the two restated ledger bodies taken back to their pre-0415 text it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(
@@ -561,6 +574,9 @@ select is(
   'public.tg_ledger_only_guard()|false|v|{search_path=public}|postgres|false|false|true\n'
   'public.tg_bundles_guard()|false|v|{search_path=public}|postgres|false|false|false',
   'P1: the three restated functions stay SECURITY INVOKER with search_path pinned, owned by postgres, executable by authenticated and service_role and not anon; item_in_org (the organization check) is SECURITY DEFINER, so its answer does not depend on what the caller can read; the distributions guard (0359''s, unchanged) is executable by neither authenticated nor anon; the new bundles guard is SECURITY INVOKER (a DEFINER trigger sees postgres) and executable by no API role, since a trigger fires without EXECUTE (B1 and B4 show it firing and not holding)');
+-- P2 and P4 read the migration's two comments, its own text byte for byte as
+-- reviewed when it was numbered 0404 (renumbered 0415 because 0413 and 0414
+-- shipped first, its content unchanged), so they still name it by that number.
 select is(
   position('Since 0404 an API role''s direct call needs bundles:distribute, or, for the Schedule''s completion of an event that hands out this kit, schedule:manage'
            in coalesce(obj_description('public.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure, 'pg_proc'), '')) > 0,
@@ -582,7 +598,7 @@ select is(
   E'bundles_set_updated_at|O|CREATE TRIGGER bundles_set_updated_at BEFORE UPDATE ON public.bundles FOR EACH ROW EXECUTE FUNCTION tg_set_updated_at()\n'
   'trg_zz_bundles_guard|O|CREATE TRIGGER trg_zz_bundles_guard BEFORE INSERT OR UPDATE ON public.bundles FOR EACH ROW EXECUTE FUNCTION tg_bundles_guard()\n'
   '0a2a910add90216935f356f942c5f2b4|BEFORE INSERT OR UPDATE guard on bundles (0404): for an API role a bundle never moves to another organization, an insert names no kit item (phantom_item_id), and an update changes the kit item only inside a ledger RPC (assemble_bundle''s body, when it creates the kit item). Foreign key actions run as the table owner and service_role is not held. SECURITY INVOKER on purpose (a DEFINER trigger sees postgres and never enforces).',
-  'P4: bundles carries the new guard as a BEFORE row trigger on insert and update, sorted after bundles_set_updated_at, running the body 0404 wrote (md5 0a2a910a) with its comment');
+  'P4: bundles carries the new guard as a BEFORE row trigger on insert and update, sorted after bundles_set_updated_at, running the body 0415 wrote (md5 0a2a910a) with its comment (its reviewed text, which names it 0404)');
 
 -- ══ X. No kit from nothing; kits as before ════════════════════════════════
 select is(
@@ -598,9 +614,9 @@ select is(
   'X2: handing out kits built from such a bundle is refused the same way, with or without allowing a shortage');
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$do $d$ begin perform * from public.assemble_bundle(%L, 1, %L); exception when others then perform set_config('t0404.err', sqlerrm, true); end $d$$q$, :bnOpt, :whA),
+    format($q$do $d$ begin perform * from public.assemble_bundle(%L, 1, %L); exception when others then perform set_config('t0415.err', sqlerrm, true); end $d$$q$, :bnOpt, :whA),
     null,
-    format($q$select current_setting('t0404.err', true)
+    format($q$select current_setting('t0415.err', true)
                      || '|' || (select quantity_on_hand::int from public.inventory_items where id = %L)::text
                      || '|' || (select coalesce(sum(quantity), 0)::int from public.item_stock_levels where item_id = %L)::text
                      || '|' || (select count(*) from public.stock_movements where item_id = %L and movement_type like 'bundle%%')::text
@@ -610,9 +626,9 @@ select is(
   'X3: the optional part the refused assembly had already drawn is put back with the refusal, even when the caller catches it: its stock, holdings and movements are as before and no kit item was created');
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$do $d$ begin perform public.distribute_bundle(%L, 1, %L, false); exception when others then perform set_config('t0404.err', sqlerrm, true); end $d$$q$, :bnOpt, :whA),
+    format($q$do $d$ begin perform public.distribute_bundle(%L, 1, %L, false); exception when others then perform set_config('t0415.err', sqlerrm, true); end $d$$q$, :bnOpt, :whA),
     null,
-    format($q$select current_setting('t0404.err', true)
+    format($q$select current_setting('t0415.err', true)
                      || '|' || (select quantity_on_hand::int from public.inventory_items where id = %L)::text
                      || '|' || (select count(*) from public.stock_movements where item_id = %L and movement_type like 'bundle%%')::text
                      || '|' || (select count(*) from public.bundle_distributions where bundle_id = %L)::text$q$,
@@ -680,18 +696,18 @@ select is(
        format($q$select (select quantity_on_hand::int from public.inventory_items where id = %L)::text
                         || '|' || (select quantity_on_hand::int from public.inventory_items where id = %L)::text$q$, :itSf, :itA1)),
   'P0001:-:component_is_kit_item / P0001:-:component_is_kit_item / ok:1:18|100',
-  'I1: a kit whose own item is also one of its components is refused (P0001 component_is_kit_item) whenever kits are built from components, assembling or handing out (21 kits need one more than the 20 pre-assembled); its pre-assembled kits still go out (2 here, nothing else drawn). Before 0404 assembling 10 raised the kit item''s on-hand by 10 with its holdings unchanged (M11)');
+  'I1: a kit whose own item is also one of its components is refused (P0001 component_is_kit_item) whenever kits are built from components, assembling or handing out (21 kits need one more than the 20 pre-assembled); its pre-assembled kits still go out (2 here, nothing else drawn). Before 0415 assembling 10 raised the kit item''s on-hand by 10 with its holdings unchanged (M11)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 10, %L)', :bnRepC, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('select public.distribute_bundle(%L, 1, %L, false)', :bnRepC, :whA)),
   'P0001:-:phantom_not_kit_item / P0001:-:phantom_not_kit_item',
-  'I2: a kit whose kit item is one of its own components (a regular item) is refused before anything is drawn or added (P0001 phantom_not_kit_item). Before 0404 assembling 10 raised that component''s on-hand by 10 with its holdings unchanged (M10)');
+  'I2: a kit whose kit item is one of its own components (a regular item) is refused before anything is drawn or added (P0001 phantom_not_kit_item). Before 0415 assembling 10 raised that component''s on-hand by 10 with its holdings unchanged (M10)');
 select is(
   pg_temp.attempt('authenticated', :mgrS, format($q$select public.adjust_stock(%L, 50, 'adjust')$q$, :itU)) || ' / '
   || pg_temp.attempt('authenticated', :mgrS, format('select * from public.assemble_bundle(%L, 50, %L)', :bnRepU, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgrS, format('select public.distribute_bundle(%L, 5, %L, false)', :bnRepU, :whA)),
   '42501:permission:forbidden / P0001:-:phantom_not_kit_item / P0001:-:phantom_not_kit_item',
-  'I3: a manager without stock:adjust, refused an adjustment of an item, is also refused raising or lowering it as a kit''s item: assembling and handing out a kit whose kit item is that item are refused (before 0404 they moved its on-hand by 50 and by 5 and drew no component on the way out: M12)');
+  'I3: a manager without stock:adjust, refused an adjustment of an item, is also refused raising or lowering it as a kit''s item: assembling and handing out a kit whose kit item is that item are refused (before 0415 they moved its on-hand by 50 and by 5 and drew no component on the way out: M12)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 1, %L)', :bnShA, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('select public.distribute_bundle(%L, 1, %L, false)', :bnShA, :whA)) || ' / '
@@ -703,7 +719,7 @@ select is(
   || pg_temp.attempt('authenticated', :two, format('select public.distribute_bundle(%L, 1, %L, false)', :bnFor, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('select public.distribute_bundle(%L, 1, %L, false)', :bnFor, :whA)),
   'P0001:-:phantom_not_kit_item / P0001:-:phantom_not_kit_item / P0001:-:phantom_not_kit_item',
-  'I5: a kit whose kit item is another organization''s is refused, for a manager of both organizations and for a manager of A only, who cannot read it (item_in_org does not depend on what the caller can read). Before 0404 only the warehouse check kept B''s item out');
+  'I5: a kit whose kit item is another organization''s is refused, for a manager of both organizations and for a manager of A only, who cannot read it (item_in_org does not depend on what the caller can read). Before 0415 only the warehouse check kept B''s item out');
 select is(
   pg_temp.attempt('authenticated', :mgr,
     format('select * from public.assemble_bundle(%L, 1, %L); select * from public.assemble_bundle(%L, 1, %L)', :bnOk, :whA, :bnOk, :whA), null,
@@ -764,14 +780,14 @@ select is(
 -- ══ D. bundle_distributions is written only by distribute_bundle ══════════
 select is(
   pg_temp.each(array['stf', 'mgr', 'own'],
-    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'raw 0404')$q$, :orgA, :bnOk, :whA)),
+    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'raw 0415')$q$, :orgA, :bnOk, :whA)),
   'stf=42501:Post or reverse a receipt, adjust, transfer or count instead of writing the table.:ledger_only, '
   'mgr=42501:Post or reverse a receipt, adjust, transfer or count instead of writing the table.:ledger_only, '
   'own=42501:Post or reverse a receipt, adjust, transfer or count instead of writing the table.:ledger_only',
   'D1: a signed-in user''s raw insert into bundle_distributions is refused (42501 ledger_only), staff included: a distribution can no longer be recorded with no stock drawn');
 select is(
   pg_temp.attempt('service_role', null,
-    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'admin 0404')$q$, :orgA, :bnOk, :whA)) || ' / '
+    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'admin 0415')$q$, :orgA, :bnOk, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format($q$update public.bundle_distributions set notes = 'changed' where id = %L$q$, :dFix)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('delete from public.bundle_distributions where id = %L', :dFix)),
   'ok:1 / ok:0 / ok:0',
@@ -804,19 +820,19 @@ select is(
   '42501:-:new row violates row-level security policy for table "bundle_components" / ok:0 / ok:0',
   'C3: a manager without bundles:manage no longer adds, changes or removes components through the API, as the app already refused');
 select is(
-  pg_temp.attempt('authenticated', :mgrM, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0404')$q$, :orgA)) || ' / '
-  || pg_temp.attempt('authenticated', :mgrM, format($q$update public.bundles set name = 'Renamed 0404' where id = %L$q$, :bnOk)) || ' / '
+  pg_temp.attempt('authenticated', :mgrM, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0415')$q$, :orgA)) || ' / '
+  || pg_temp.attempt('authenticated', :mgrM, format($q$update public.bundles set name = 'Renamed 0415' where id = %L$q$, :bnOk)) || ' / '
   || pg_temp.attempt('authenticated', :admM, format('delete from public.bundles where id = %L', :bnEmpty)),
   '42501:-:new row violates row-level security policy for table "bundles" / '
   '42501:-:new row violates row-level security policy for table "bundles" / ok:0',
   'C4: without bundles:manage a manager no longer creates, renames or archives a bundle, and an admin no longer deletes one');
 select is(
-  pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0404')$q$, :orgA)) || ' / '
-  || pg_temp.attempt('authenticated', :mgr, format($q$update public.bundles set name = 'Renamed 0404' where id = %L$q$, :bnOk)) || ' / '
+  pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0415')$q$, :orgA)) || ' / '
+  || pg_temp.attempt('authenticated', :mgr, format($q$update public.bundles set name = 'Renamed 0415' where id = %L$q$, :bnOk)) || ' / '
   || pg_temp.attempt('authenticated', :adm, format('delete from public.bundles where id = %L', :bnEmpty)) || ' / '
-  || pg_temp.attempt('authenticated', :stf, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0404')$q$, :orgA)) || ' / '
+  || pg_temp.attempt('authenticated', :stf, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0415')$q$, :orgA)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('delete from public.bundles where id = %L', :bnEmpty)) || ' / '
-  || pg_temp.attempt('authenticated', :outB, format($q$update public.bundles set name = 'Renamed 0404' where id = %L$q$, :bnOk)),
+  || pg_temp.attempt('authenticated', :outB, format($q$update public.bundles set name = 'Renamed 0415' where id = %L$q$, :bnOk)),
   'ok:1 / ok:1 / ok:1 / 42501:-:new row violates row-level security policy for table "bundles" / ok:0 / ok:0',
   'C5: with it nothing changes: a manager creates and renames, an admin deletes; staff, a manager deleting and another organization''s manager are refused as before');
 select is(
@@ -835,22 +851,22 @@ select is(
   pg_temp.attempt('authenticated', :mgr, format('update public.bundles set phantom_item_id = %L where id = %L', :itU, :bnOk)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('update public.bundles set phantom_item_id = null where id = %L', :bnPh)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('update public.bundles set phantom_item_id = %L where id = %L', :itPh, :bnShA)) || ' / '
-  || pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name, phantom_item_id) values (%L, 'Raw kit 0404', %L)$q$, :orgA, :itU)) || ' / '
+  || pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name, phantom_item_id) values (%L, 'Raw kit 0415', %L)$q$, :orgA, :itU)) || ' / '
   || pg_temp.attempt('authenticated', :own, format('update public.bundles set phantom_item_id = %L where id = %L', :itA1, :bnRepU)),
   '42501:-:A bundle''s kit item is set only by assembling kits. / 42501:-:A bundle''s kit item is set only by assembling kits. / '
   '42501:-:A bundle''s kit item is set only by assembling kits. / 42501:-:A bundle''s kit item is set only by assembling kits. / '
   '42501:-:A bundle''s kit item is set only by assembling kits.',
-  'B1: no signed-in user, the owner included, sets or changes a kit''s kit item through the API: pointing a kit at an item, clearing one, repointing one, or creating a bundle that names one (before 0404 a manager did each: M13)');
+  'B1: no signed-in user, the owner included, sets or changes a kit''s kit item through the API: pointing a kit at an item, clearing one, repointing one, or creating a bundle that names one (before 0415 a manager did each: M13)');
 select is(
   pg_temp.attempt('authenticated', :two, format('update public.bundles set organization_id = %L where id = %L', :orgB, :bnOk)) || ' / '
   || pg_temp.attempt('authenticated', :two, format('update public.bundles set organization_id = %L where id = %L', :orgB, :bnEmpty)),
   '42501:-:A bundle cannot be moved to another organization. / 42501:-:A bundle cannot be moved to another organization.',
-  'B2: a manager of both organizations no longer moves a bundle into the other one, with its components or without (before 0404 the move took the component rows across: M13)');
+  'B2: a manager of both organizations no longer moves a bundle into the other one, with its components or without (before 0415 the move took the component rows across: M13)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$update public.bundles set name = 'Renamed 0404', phantom_item_id = phantom_item_id, organization_id = organization_id where id = %L$q$, :bnPh)) || ' / '
+    format($q$update public.bundles set name = 'Renamed 0415', phantom_item_id = phantom_item_id, organization_id = organization_id where id = %L$q$, :bnPh)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('update public.bundles set is_active = false, archived_at = now() where id = %L', :bnPh)) || ' / '
-  || pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name, phantom_item_id) values (%L, 'Raw kit 0404', null)$q$, :orgA)),
+  || pg_temp.attempt('authenticated', :mgr, format($q$insert into public.bundles (organization_id, name, phantom_item_id) values (%L, 'Raw kit 0415', null)$q$, :orgA)),
   'ok:1 / ok:1 / ok:1',
   'B3: every other bundle write is as before: a rename that sends the kit item and the organization back unchanged (as a full-row write would), an archive, a create that names no kit item');
 select is(
@@ -859,64 +875,64 @@ select is(
   || pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 1, %L)', :bnOk, :whA), null,
        format($q$select (b.phantom_item_id is not null)::text || '/' || i.is_bundle::text || '/' || i.sku
                     from public.bundles b join public.inventory_items i on i.id = b.phantom_item_id where b.id = %L$q$, :bnOk)),
-  'ok:1 / ok:1 / ok:1:true/true/__BUNDLE__04040000',
+  'ok:1 / ok:1 / ok:1:true/true/__BUNDLE__04150000',
   'B4: the admin client (service_role) is not held, and assemble_bundle, inside its ledger call, still links the kit item it creates (the only writer of the column: G3); the kit item''s delete (SET NULL) runs as the table owner, since a signed-in user cannot delete items (0359)');
 
 -- ══ M. Each fix, removed, lets its probe through again ════════════════════
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 5, %L)', :bnEmpty, :whA),
-    (select stmt from pre404 where k = 'fn_assemble'),
+    (select stmt from pre415 where k = 'fn_assemble'),
     format($q$select (select i.quantity_on_hand::int from public.bundles b join public.inventory_items i on i.id = b.phantom_item_id where b.id = %L)::text
                      || '|' || (select count(*) from public.stock_movements where reference_id = %L)::text$q$, :bnEmpty, :bnEmpty)),
   'ok:1:5|1',
-  'M1: without its 0404 lines, assemble_bundle makes 5 kits from an empty bundle: the kit item gains 5 and the only movement is that gain (the 2026-10-05 probe)');
+  'M1: without the lines 0415 added, assemble_bundle makes 5 kits from an empty bundle: the kit item gains 5 and the only movement is that gain (the 2026-10-05 probe)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select public.distribute_bundle(%L, 1, %L, false)', :bnEmpty, :whA),
-    (select stmt from pre404 where k = 'fn_distribute'),
+    (select stmt from pre415 where k = 'fn_distribute'),
     format($q$select (select count(*) from public.bundle_distributions where bundle_id = %L)::text
                      || '|' || (select count(*) from public.stock_movements where reference_id = %L)::text$q$, :bnEmpty, :bnEmpty)),
   'ok:1:1|0',
   'M2: without them, distribute_bundle records a distribution of an empty bundle with nothing drawn');
 select is(
   pg_temp.attempt('authenticated', :two, format('select * from public.assemble_bundle(%L, 1, %L)', :bnXo, :whA),
-    (select stmt from pre404 where k = 'fn_assemble')) || ' / '
+    (select stmt from pre415 where k = 'fn_assemble')) || ' / '
   || pg_temp.attempt('authenticated', :two, format('select public.distribute_bundle(%L, 1, %L, true)', :bnX, :whA),
-    (select stmt from pre404 where k = 'fn_distribute'),
+    (select stmt from pre415 where k = 'fn_distribute'),
     format($q$select (select string_agg(d.shortage_recorded::text, ',') from public.bundle_distributions d where d.bundle_id = %L)
                      || '|' || (select quantity_on_hand::int from public.inventory_items where id = %L)::text$q$, :bnX, :itB)),
   'ok:1 / ok:1:true|10',
   'M3: without them, a manager of both organizations still makes A''s kit naming B''s item (the optional one skipped) and hands it out (the required one recorded as short): B''s stock was never drawn, only because it sits in B''s warehouse, and the kit went out without it');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select public.distribute_bundle(%L, 1, %L, false, %L)', :bnOk, :whA, :evB),
-    (select stmt from pre404 where k = 'fn_distribute'),
+    (select stmt from pre415 where k = 'fn_distribute'),
     format('select count(*)::text from public.bundle_distributions where schedule_event_id = %L and organization_id = %L', :evB, :orgA)),
   'ok:1:1',
   'M4: without them, A''s distribution takes B''s event: the one distribution bundle_distributions_event_uniq keeps for that event is now A''s, so B''s own completion would hit 23505 and hand out nothing');
 select is(
   pg_temp.attempt('authenticated', :mgrD, format('select public.distribute_bundle(%L, 1, %L, false)', :bnOk, :whA),
-    (select stmt from pre404 where k = 'fn_wrapper')),
+    (select stmt from pre415 where k = 'fn_wrapper')),
   'ok:1',
-  'M5: without the wrapper''s 0404 lines, a manager whose bundles:distribute is revoked hands out kits by calling it directly');
+  'M5: without the lines 0415 added to the wrapper, a manager whose bundles:distribute is revoked hands out kits by calling it directly');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('insert into public.bundle_components (bundle_id, item_id, quantity) values (%L, %L, 1)', :bnOk, :itB),
-    (select stmt from pre404 where k = 'pol_components')) || ' / '
+    (select stmt from pre415 where k = 'pol_components')) || ' / '
   || pg_temp.attempt('authenticated', :mgrM, format('insert into public.bundle_components (bundle_id, item_id, quantity) values (%L, %L, 1)', :bnEmpty, :itA1),
-    (select stmt from pre404 where k = 'pol_components')),
+    (select stmt from pre415 where k = 'pol_components')),
   'ok:1 / ok:1',
   'M6: with 0140''s component policy, a manager adds another organization''s item to a kit, and a manager without bundles:manage changes components');
 select is(
-  pg_temp.attempt('authenticated', :mgrM, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0404')$q$, :orgA),
-    (select stmt from pre404 where k = 'pol_insert')) || ' / '
-  || pg_temp.attempt('authenticated', :mgrM, format($q$update public.bundles set name = 'Renamed 0404' where id = %L$q$, :bnOk),
-    (select stmt from pre404 where k = 'pol_update')) || ' / '
+  pg_temp.attempt('authenticated', :mgrM, format($q$insert into public.bundles (organization_id, name) values (%L, 'Raw kit 0415')$q$, :orgA),
+    (select stmt from pre415 where k = 'pol_insert')) || ' / '
+  || pg_temp.attempt('authenticated', :mgrM, format($q$update public.bundles set name = 'Renamed 0415' where id = %L$q$, :bnOk),
+    (select stmt from pre415 where k = 'pol_update')) || ' / '
   || pg_temp.attempt('authenticated', :admM, format('delete from public.bundles where id = %L', :bnEmpty),
-    (select stmt from pre404 where k = 'pol_delete')),
+    (select stmt from pre415 where k = 'pol_delete')),
   'ok:1 / ok:1 / ok:1',
   'M7: with 0140''s bundle policies, a manager without bundles:manage creates and renames bundles and an admin without it deletes one');
 select is(
   pg_temp.attempt('authenticated', :stf,
-    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'raw 0404')$q$, :orgA, :bnOk, :whA),
-    (select stmt from pre404 where k = 'trigger')),
+    format($q$insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values (%L, %L, %L, 1, 'raw 0415')$q$, :orgA, :bnOk, :whA),
+    (select stmt from pre415 where k = 'trigger')),
   'ok:1',
   'M8: without the guard, a staff member records a distribution through the API with no stock drawn');
 select is(
@@ -932,30 +948,30 @@ create function pg_temp.oh(p_item uuid) returns text language sql stable as $$
 $$;
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 10, %L)', :bnRepC, :whA),
-    (select stmt from pre404 where k = 'fn_assemble'),
+    (select stmt from pre415 where k = 'fn_assemble'),
     format('select pg_temp.oh(%L)', :itA2)),
   'ok:1:110/100',
-  'M10: without its 0404 lines, assemble_bundle makes 10 kits of a kit whose kit item is its own component A2 from nothing: the loop draws 10 of A2, then the copy of A2 read before the loop is written back plus 10, so A2''s on-hand rises by 10 and its holdings do not (the review''s Q2)');
+  'M10: without the lines 0415 added, assemble_bundle makes 10 kits of a kit whose kit item is its own component A2 from nothing: the loop draws 10 of A2, then the copy of A2 read before the loop is written back plus 10, so A2''s on-hand rises by 10 and its holdings do not (the review''s Q2)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 10, %L)', :bnSelf, :whA),
-    (select stmt from pre404 where k = 'fn_assemble'),
+    (select stmt from pre415 where k = 'fn_assemble'),
     format($q$select pg_temp.oh(%L) || '|' || pg_temp.oh(%L)$q$, :itSf, :itA1)),
   'ok:1:30/20|90/90',
   'M11: without them, a kit naming its own kit item as a component does the same: 10 kits draw A1 and 10 of the kit item, and the kit item ends at 30 on hand against 20 held (the review''s Q7)');
 select is(
   pg_temp.attempt('authenticated', :mgrS, format('select * from public.assemble_bundle(%L, 50, %L)', :bnRepU, :whA),
-    (select stmt from pre404 where k = 'fn_assemble'),
+    (select stmt from pre415 where k = 'fn_assemble'),
     format($q$select pg_temp.oh(%L) || '|' || pg_temp.oh(%L)$q$, :itU, :itA1)) || ' / '
   || pg_temp.attempt('authenticated', :mgrS, format('select public.distribute_bundle(%L, 5, %L, false)', :bnRepU, :whA),
-    (select stmt from pre404 where k = 'fn_distribute'),
+    (select stmt from pre415 where k = 'fn_distribute'),
     format($q$select pg_temp.oh(%L) || '|' || pg_temp.oh(%L)$q$, :itU, :itA1)),
   'ok:1:55/55|50/50 / ok:1:0/0|100/100',
   'M12: without them, a manager without stock:adjust moves an item no kit uses through a kit pointed at it: assembling 50 adds 50 to it, and handing out 5 drains it to 0 without drawing the kit''s component (the review''s Q3b and Q3c)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('update public.bundles set phantom_item_id = %L where id = %L', :itU, :bnOk),
-    (select stmt from pre404 where k = 'bundles_guard')) || ' / '
+    (select stmt from pre415 where k = 'bundles_guard')) || ' / '
   || pg_temp.attempt('authenticated', :two, format('update public.bundles set organization_id = %L where id = %L', :orgB, :bnOk),
-    (select stmt from pre404 where k = 'bundles_guard'),
+    (select stmt from pre415 where k = 'bundles_guard'),
     format($q$select count(*)::text from public.bundle_components c join public.bundles b on b.id = c.bundle_id
                 join public.inventory_items i on i.id = c.item_id
                where b.id = %L and i.organization_id <> b.organization_id$q$, :bnOk)),
@@ -963,9 +979,9 @@ select is(
   'M13: without the bundles guard, a manager points a kit at any item (the policies ask for nothing more), and a manager of both organizations moves a kit into the other, its 3 component rows now naming another organization''s items (the review''s Q3 and Q5a)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('insert into public.bundle_components (bundle_id, item_id, quantity) values (%L, %L, 1)', :bnPh, :itPh),
-    (select stmt from pre404 where k = 'pol_components_no_kit')),
+    (select stmt from pre415 where k = 'pol_components_no_kit')),
   'ok:1',
-  'M14: with 0404''s component policy short of its kit item term alone, a manager adds a kit''s own kit item as one of its components (the review''s Q7 insert)');
+  'M14: with 0415''s component policy short of its kit item term alone, a manager adds a kit''s own kit item as one of its components (the review''s Q7 insert)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
     format('select * from public.assemble_bundle(%L, 1, %L); select public.distribute_bundle(%L, 1, %L, false)', :bnShA, :whA, :bnShB, :whA),
@@ -973,13 +989,13 @@ select is(
     format($q$select (select quantity_on_hand::int from public.inventory_items where id = %L)::text || '|' || pg_temp.oh(%L) || '|' || pg_temp.oh(%L)$q$,
            :itSh, :itA1, :itA2)),
   'ok:1:6|99/99|100/100',
-  'M15: without the 0404 lines, two kits naming one kit item share its stock: bnShA''s assembly (drawing A1) is handed out as a bnShB kit, and bnShB''s own component A2 is never drawn');
+  'M15: without the lines 0415 added, two kits naming one kit item share its stock: bnShA''s assembly (drawing A1) is handed out as a bnShB kit, and bnShB''s own component A2 is never drawn');
 
 -- ══ A. The migration's own preflight and lock prelude ══════════════════════
 select is(
-  pg_temp.mig_count('0404', '$pre404$')::text || '/' || pg_temp.mig_count('0404', '$lock404$')::text,
+  pg_temp.mig_count('0415', '$pre404$')::text || '/' || pg_temp.mig_count('0415', '$lock404$')::text,
   '1/1',
-  'A1: the CLI recorded 0404''s preflight and lock prelude exactly once each (this section runs that text)');
+  'A1: the CLI recorded 0415''s preflight and lock prelude exactly once each (this section runs that text)');
 select is(
   pg_temp.try_pre(null),
   '55000:bundle_checks_preflight:bundle_components.bundle_components_write drifted, bundles.bundles_delete drifted, '
@@ -989,11 +1005,11 @@ select is(
   'public.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text) drifted, '
   'public.tg_bundles_guard() already exists, '
   'trg_zz_bundle_distributions_guard already exists, trg_zz_bundles_guard already exists',
-  'A2: run again after 0404, the preflight stops before changing anything (55000) and names every body, policy, trigger and function 0404 changed or created');
+  'A2: run again after 0415, the preflight stops before changing anything (55000) and names every body, policy, trigger and function 0415 changed or created');
 select is(
   pg_temp.try_pre(pg_temp.pre(array['fn_assemble', 'fn_distribute', 'fn_wrapper', 'pol_components', 'pol_insert', 'pol_update', 'pol_delete', 'trigger', 'bundles_guard'])),
   'ok',
-  'A3: on the pre-0404 state (the bodies without their 0404 lines, 0140''s policies, neither guard nor the bundles guard''s function) the preflight passes: its pins are that state''s, which the R and H checks tie to the restated text');
+  'A3: on the pre-0415 state (the bodies without the lines 0415 added, 0140''s policies, neither guard nor the bundles guard''s function) the preflight passes: its pins are that state''s, which the R and H checks tie to the restated text');
 select is(
   pg_temp.try_pre(pg_temp.pre(array['fn_assemble', 'fn_distribute', 'fn_wrapper', 'pol_components', 'pol_insert', 'pol_update', 'pol_delete', 'trigger', 'bundles_guard'])
                   || $p$;
@@ -1015,7 +1031,7 @@ $f$$p$) || ' / '
   '55000:bundle_checks_preflight:public.tg_bundles_guard() already exists, trg_zz_bundles_guard already exists',
   'A4: on that state, one planted drift stops it and is named: a helper body, a body''s SET clause, a policy''s text, the distributions guard already there, the bundles guard and its function already there');
 select is(
-  pg_temp.locks_after(null) || ' / ' || pg_temp.locks_after(pg_temp.mig('0404', '$lock404$')),
+  pg_temp.locks_after(null) || ' / ' || pg_temp.locks_after(pg_temp.mig('0415', '$lock404$')),
   'none / bundle_components=AccessExclusiveLock, bundle_distributions=ShareRowExclusiveLock, bundles=AccessExclusiveLock',
   'A5: the lock prelude takes, at once, what the policy changes and the trigger take later (ACCESS EXCLUSIVE on bundles and bundle_components, SHARE ROW EXCLUSIVE on bundle_distributions), so no later statement waits holding a lock');
 

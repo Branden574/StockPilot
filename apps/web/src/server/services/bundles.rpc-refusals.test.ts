@@ -100,14 +100,14 @@ describe('BundlesService.distribute — 0365 refusals', () => {
 });
 
 /**
- * 0404: no kit from nothing, nor from another organization's item, nor
+ * 0415: no kit from nothing, nor from another organization's item, nor
  * against another organization's event, nor with the kit's own item as a
  * component or a kit item that is not the kit's own; and distribute_bundle
  * refuses a direct call without bundles:distribute itself (42501 forbidden,
  * hint permission). Each arrives as a sentence the modal and the phone show,
  * never the code.
  */
-describe('0404 refusals', () => {
+describe('0415 refusals', () => {
   const sentences = {
     bundle_no_required_components:
       "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.",

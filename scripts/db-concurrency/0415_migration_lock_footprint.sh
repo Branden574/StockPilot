@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0404 (bundle component checks). The push runs
+# Lock footprint of migration 0415 (bundle component checks). The push runs
 # the whole file as one batch, so every table lock a statement takes is held
 # until the file commits. ALTER POLICY takes ACCESS EXCLUSIVE on its table
 # (bundle_components, bundles), and on this image (supautils 3.4.0) supautils
@@ -12,8 +12,9 @@
 # reads bundle_components and inserts into bundle_distributions, so a file
 # that waited for one of these while holding another could deadlock with it.
 # The file takes every lock in one NOWAIT prelude (`do $lock404$ ... end
-# $lock404$;`, the 0390 and 0395 one) and never waits holding one. This
-# proves:
+# $lock404$;`, the 0390 and 0395 one) and never waits holding one. (The tag
+# keeps the number the file was reviewed under: it was 0404 until 0413 and
+# 0414 shipped first, and its content is unchanged.) This proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
 #       catalogs (the preflight, the functions, the comments and the guard
@@ -54,11 +55,11 @@
 #
 # The migration sessions ALWAYS roll back, so the script changes nothing but
 # its own fixture rows (removed at the start, the end and by the EXIT trap).
-# It needs the pre-0404 head. LOCAL stack only (docker container
+# It needs the pre-0415 head. LOCAL stack only (docker container
 # supabase_db_stockpilot by default; CONTAINER=<name> for another local
 # stack). Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0404_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0415_migration_lock_footprint.sh
 # (MIG=<path> runs it against the file under another number after a rebase.)
 
 set -uo pipefail
@@ -70,11 +71,11 @@ MIG="${MIG:-$(find "$REPO/supabase/migrations" -name '*_bundle_component_checks.
 TMP="$(mktemp -d)"
 BG=()
 
-ORG='04043333-0000-0000-0000-00000000000a'
-MGR='04043333-0000-0000-0000-0000000000a1'
-WH='04043333-0000-0000-0000-0000000000c1'
-ITEM='04043333-0000-0000-0000-0000000000c2'
-BN='04043333-0000-0000-0000-0000000000d1'
+ORG='04153333-0000-0000-0000-00000000000a'
+MGR='04153333-0000-0000-0000-0000000000a1'
+WH='04153333-0000-0000-0000-0000000000c1'
+ITEM='04153333-0000-0000-0000-0000000000c2'
+BN='04153333-0000-0000-0000-0000000000d1'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -126,23 +127,23 @@ STATE_SQL="select md5(string_agg(x, '|' order by x)) from (
    where tgrelid in ('public.bundle_distributions'::regclass, 'public.bundles'::regclass) and not tgisinternal
   union all
   select 'tg_bundles_guard:' || (to_regprocedure('public.tg_bundles_guard()') is not null)::text) s"
-echo "local head $HEAD_NOW; 0404 guard trigger present: $HAS_GUARD; file $(basename "$MIG")"
+echo "local head $HEAD_NOW; 0415 guard trigger present: $HAS_GUARD; file $(basename "$MIG")"
 if [ "$HAS_GUARD" != "0" ]; then
-  echo "needs the pre-0404 head (supabase db reset --local --version <the migration before it>)"
+  echo "needs the pre-0415 head (supabase db reset --local --version <the migration before it>)"
   exit 1
 fi
 STATE_BEFORE="$(q "$STATE_SQL")"
 
 cleanup_rows
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0404-lock-mgr@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0404 Lock Org', '0404-lock');
+insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0415-lock-mgr@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0415 Lock Org', '0415-lock');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$MGR', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0404 Lock Main', 'WH-0404-LK', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0415 Lock Main', 'WH-0415-LK', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$ITEM', '$ORG', '$WH', 'Lock kit part', 'SKU-0404-LK', 10, 'active');
+  ('$ITEM', '$ORG', '$WH', 'Lock kit part', 'SKU-0415-LK', 10, 'active');
 insert into public.bundles (id, organization_id, name, sku, is_active, preassembly_enabled) values
-  ('$BN', '$ORG', '0404 Lock kit', 'KIT-0404-LK', true, true);
+  ('$BN', '$ORG', '0415 Lock kit', 'KIT-0415-LK', true, true);
 insert into public.bundle_components (bundle_id, item_id, quantity, is_optional) values ('$BN', '$ITEM', 1, false);
 SQL
 
@@ -225,16 +226,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0404-lock-file-%'"
+ where a.application_name like '0415-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0404-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0415-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\nrollback;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0404-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0415-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   # Sample the file's locks while it runs: whenever it is paused between
@@ -274,7 +275,7 @@ run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|
 }
 run_behind bundle-row "select 1 from public.bundles where id = '$BN' for update;" 9 fail
 run_behind component-reader "select count(*) from public.bundle_components;" 9 fail
-run_behind distribution-insert "insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values ('$ORG', '$BN', '$WH', 1, '0404 lock holder');" 9 fail
+run_behind distribution-insert "insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values ('$ORG', '$BN', '$WH', 1, '0415 lock holder');" 9 fail
 if [ "$POLICY_GRANT_TABLES" -gt 0 ]; then
   run_behind auth-reader "select count(*) from auth.users;" 9 fail
 else
@@ -285,11 +286,11 @@ run_behind 3b-short-bundle-row "select 1 from public.bundles where id = '$BN' fo
 # ── 4. The distribution shape, already holding its bundle row ─────────────
 DIST_FIRST="select 1 from public.bundles where id = '$BN' for update;"
 DIST_REST="select count(*) from public.bundle_components where bundle_id = '$BN';
-insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values ('$ORG', '$BN', '$WH', 1, '0404 lock shape');"
-printf "set application_name = '0404-lock-shape';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\nrollback;\nselect 'SHAPE_DONE';\n" "$DIST_FIRST" "$DIST_REST" \
+insert into public.bundle_distributions (organization_id, bundle_id, warehouse_id, quantity, notes) values ('$ORG', '$BN', '$WH', 1, '0415 lock shape');"
+printf "set application_name = '0415-lock-shape';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\nrollback;\nselect 'SHAPE_DONE';\n" "$DIST_FIRST" "$DIST_REST" \
   | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/4.s.out" 2>&1 &
 sp=$!
-if ! wait_sleeping 0404-lock-shape; then
+if ! wait_sleeping 0415-lock-shape; then
   bad "4: the distribution never reached pg_sleep"
   wait "$sp"
 else
@@ -316,14 +317,14 @@ fi
 
 # ── 5. While the file holds its locks, new readers wait only for the hold ─
 {
-  echo "set application_name = '0404-lock-migration-5';"
+  echo "set application_name = '0415-lock-migration-5';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/5m.out" 2> "$TMP/5m.err" &
 BG+=("$!")
-if ! wait_sleeping 0404-lock-migration-5; then
+if ! wait_sleeping 0415-lock-migration-5; then
   bad "5: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/5m.err")"
 else
   for target in public.bundles public.bundle_components; do
@@ -355,10 +356,10 @@ sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s
 if grep -q 'do \$lock404\$' "$TMP/no-prelude.sql" || ! grep -q "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql"; then
   bad "6: could not build the no-prelude control file"
 else
-  printf "set application_name = '0404-lock-control';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\nrollback;\nselect 'SHAPE_DONE';\n" "$DIST_FIRST" "$DIST_REST" \
+  printf "set application_name = '0415-lock-control';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\nrollback;\nselect 'SHAPE_DONE';\n" "$DIST_FIRST" "$DIST_REST" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/6.s.out" 2>&1 &
   sp=$!
-  if wait_sleeping 0404-lock-control; then
+  if wait_sleeping 0415-lock-control; then
     { echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/6.m.out" 2> "$TMP/6.m.err"
     wait "$sp"
     S40="$(grep -c '40P01' "$TMP/6.s.out" || true)"

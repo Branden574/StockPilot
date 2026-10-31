@@ -227,7 +227,7 @@ describe('ScheduleService distributed flag', () => {
   describe('the completion audit', () => {
     const eventId = uuid(1, 'e');
     // The row the update saves and returns: the event keeps its kit, quantity
-    // and warehouse, which is what the completion hands out (0404).
+    // and warehouse, which is what the completion hands out (0415).
     const savedKit = { bundle_id: 'bundle-1', bundle_quantity: 2, bundle_warehouse_id: 'wh-1' };
     function completeWith(
       rpc: { data: null; error: { message: string; code?: string; hint?: string } | null },
@@ -314,7 +314,7 @@ describe('ScheduleService distributed flag', () => {
       expect(completedExtra()).toEqual({ autoDistributed: true });
     });
 
-    // The completion hands out what the event was saved with (0404's gate
+    // The completion hands out what the event was saved with (0415's gate
     // checks the call against that row). `patch.bundleId ?? before` read a
     // kit cleared in the same save as unchanged and handed out the old one.
     it('hands out the kit, quantity and warehouse the event was saved with', async () => {
@@ -339,7 +339,7 @@ describe('ScheduleService distributed flag', () => {
       expect(completedExtra()).toEqual({ autoDistributed: false });
     });
 
-    // 0404: the refusals are codes or the permission hint; the manager reads
+    // 0415: the refusals are codes or the permission hint; the manager reads
     // a sentence, never the code.
     it.each([
       [

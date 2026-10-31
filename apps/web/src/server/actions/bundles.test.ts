@@ -48,7 +48,7 @@ describe('bundle actions: duplicate components', () => {
   });
 });
 
-/** 0404: the database builds no kit from a bundle whose components are all
+/** 0415: the database builds no kit from a bundle whose components are all
  *  optional, so the forms refuse that set before the service is called. */
 describe('bundle actions: at least one required component', () => {
   const B = '22222222-2222-4222-8222-222222222222';

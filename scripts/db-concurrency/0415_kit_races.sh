@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0404 (bundle component checks): a kit is
+# Two-session proof for migration 0415 (bundle component checks): a kit is
 # never built from nothing, even when a save that makes every component
 # Optional commits while the kit call is running. pgTAP runs in ONE session,
 # so it cannot show what assemble_bundle and distribute_bundle do while
 # another session commits between their statements.
 #
-# 0404 counts the required components inside the component loop, in the same
+# 0415 counts the required components inside the component loop, in the same
 # statement that draws them, and refuses after the loop when it met none
 # (bundle_no_required_components). So the count is always of the set the call
 # actually drew from, whatever another session commits around it:
@@ -16,7 +16,7 @@
 #      commits. When the distribution goes on, every statement after the
 #      bundle row reads the saved set: the distribution is refused
 #      bundle_no_required_components, the optional part it drew is put back,
-#      and no distribution is recorded. Before 0404 it went out made of the
+#      and no distribution is recorded. Before 0415 it went out made of the
 #      optional part only.
 #   2. The same for an assembly: refused, nothing drawn, no kit item created
 #      and the bundle still links none.
@@ -30,11 +30,11 @@
 #      (a component save never waits for a running kit call).
 #
 # Runs against a LOCAL stack only (docker container supabase_db_stockpilot by
-# default; CONTAINER=<name> for another local stack) with 0404 applied.
-# Fixtures are committed under the 04044444-... namespace and removed at the
+# default; CONTAINER=<name> for another local stack) with 0415 applied.
+# Fixtures are committed under the 04154444-... namespace and removed at the
 # start, at the end and by the EXIT trap. Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0404_kit_races.sh
+# Usage: bash scripts/db-concurrency/0415_kit_races.sh
 
 set -uo pipefail
 
@@ -42,16 +42,16 @@ CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 TMP="$(mktemp -d)"
 
-ORG='04044444-0000-0000-0000-00000000000a'
-MGR='04044444-0000-0000-0000-0000000000a1'
-MGR2='04044444-0000-0000-0000-0000000000a2'
-WH='04044444-0000-0000-0000-0000000000b1'
-R1='04044444-0000-0000-0000-000000000101'; O1='04044444-0000-0000-0000-000000000102'
-R2='04044444-0000-0000-0000-000000000201'; O2='04044444-0000-0000-0000-000000000202'
-R3='04044444-0000-0000-0000-000000000301'; O3='04044444-0000-0000-0000-000000000302'
-K1='04044444-0000-0000-0000-0000000001b1'
-K2='04044444-0000-0000-0000-0000000002b1'
-K3='04044444-0000-0000-0000-0000000003b1'
+ORG='04154444-0000-0000-0000-00000000000a'
+MGR='04154444-0000-0000-0000-0000000000a1'
+MGR2='04154444-0000-0000-0000-0000000000a2'
+WH='04154444-0000-0000-0000-0000000000b1'
+R1='04154444-0000-0000-0000-000000000101'; O1='04154444-0000-0000-0000-000000000102'
+R2='04154444-0000-0000-0000-000000000201'; O2='04154444-0000-0000-0000-000000000202'
+R3='04154444-0000-0000-0000-000000000301'; O3='04154444-0000-0000-0000-000000000302'
+K1='04154444-0000-0000-0000-0000000001b1'
+K2='04154444-0000-0000-0000-0000000002b1'
+K3='04154444-0000-0000-0000-0000000003b1'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -106,7 +106,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 if [ "$(q "select count(*) from pg_trigger where tgname = 'trg_zz_bundle_distributions_guard'")" != "1" ]; then
-  echo "0404 is not applied on this stack"; exit 1
+  echo "0415 is not applied on this stack"; exit 1
 fi
 cleanup || exit 1
 T_START=$(now_ms)
@@ -144,24 +144,24 @@ optional_only() { q "select bool_and(is_optional)::text || '/' || count(*) from 
 # Each kit: one required part (R) and one optional part (O), 10 of each.
 if ! "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR',  '0404-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0404-2s-mgr2@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0404 Two Session Org', '0404-two-session');
+  ('$MGR',  '0415-2s-mgr@test.local',  '{}'::jsonb),
+  ('$MGR2', '0415-2s-mgr2@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0415 Two Session Org', '0415-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR', 'manager', now()),
   ('$ORG', '$MGR2', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0404 2S Main', 'WH-0404-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0415 2S Main', 'WH-0415-2S', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status) values
-  ('$R1', '$ORG', '$WH', 'X0404-R1', 'Race one part',      10, 'active'),
-  ('$O1', '$ORG', '$WH', 'X0404-O1', 'Race one extra',     10, 'active'),
-  ('$R2', '$ORG', '$WH', 'X0404-R2', 'Race two part',      10, 'active'),
-  ('$O2', '$ORG', '$WH', 'X0404-O2', 'Race two extra',     10, 'active'),
-  ('$R3', '$ORG', '$WH', 'X0404-R3', 'Race three part',    10, 'active'),
-  ('$O3', '$ORG', '$WH', 'X0404-O3', 'Race three extra',   10, 'active');
+  ('$R1', '$ORG', '$WH', 'X0415-R1', 'Race one part',      10, 'active'),
+  ('$O1', '$ORG', '$WH', 'X0415-O1', 'Race one extra',     10, 'active'),
+  ('$R2', '$ORG', '$WH', 'X0415-R2', 'Race two part',      10, 'active'),
+  ('$O2', '$ORG', '$WH', 'X0415-O2', 'Race two extra',     10, 'active'),
+  ('$R3', '$ORG', '$WH', 'X0415-R3', 'Race three part',    10, 'active'),
+  ('$O3', '$ORG', '$WH', 'X0415-O3', 'Race three extra',   10, 'active');
 insert into public.bundles (id, organization_id, name, sku, is_active, preassembly_enabled) values
-  ('$K1', '$ORG', 'Race kit one',   'KIT-0404-R1', true, true),
-  ('$K2', '$ORG', 'Race kit two',   'KIT-0404-R2', true, true),
-  ('$K3', '$ORG', 'Race kit three', 'KIT-0404-R3', true, true);
+  ('$K1', '$ORG', 'Race kit one',   'KIT-0415-R1', true, true),
+  ('$K2', '$ORG', 'Race kit two',   'KIT-0415-R2', true, true),
+  ('$K3', '$ORG', 'Race kit three', 'KIT-0415-R3', true, true);
 insert into public.bundle_components (bundle_id, item_id, quantity, is_optional) values
   ('$K1', '$R1', 1, false), ('$K1', '$O1', 1, true),
   ('$K2', '$R2', 1, false), ('$K2', '$O2', 1, true),

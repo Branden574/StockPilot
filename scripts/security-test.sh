@@ -765,7 +765,8 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
-  # Kit checks (0404, docket S4 with S9's component organization check):
+  # Kit checks (0415, written as 0404; docket S4 with S9's component
+  # organization check):
   # assemble_bundle and distribute_bundle build no kit from a bundle with no
   # required component and refuse a component of another organization, whoever
   # can see it; a distribution's event must be the kit organization's (its one
@@ -782,7 +783,9 @@ PGTAP_TESTS=(
   # raw API write of phantom_item_id and a move to another organization. Each
   # fix is removed in an undone subtransaction to show its probe pass again,
   # and the migration's own preflight is replayed from the recorded statements.
-  supabase/tests/0404_bundle_component_checks.test.sql
+  # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
+  # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
+  supabase/tests/0415_bundle_component_checks.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1290,7 +1293,7 @@ WEB_TESTS=(
   src/server/services/db-guard-refusal.wiring.test.ts
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
-  # 0404: the kit refusals (no required component, another organization's
+  # 0415: the kit refusals (no required component, another organization's
   # item or event, a missing bundles:distribute, a component that is the kit's
   # own item, a kit item that is not the kit's own) reach the Bundles page, the
   # phone and the Schedule's completion as sentences; a component set with no

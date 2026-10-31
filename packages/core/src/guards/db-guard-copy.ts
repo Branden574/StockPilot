@@ -18,7 +18,7 @@
  *                                   holding, is never soft-deleted.
  *   permission             (42501)  a ledger function called without the
  *                                   permission the app checks first
- *                                   (distribute_bundle since 0404).
+ *                                   (distribute_bundle since 0415).
  */
 import { PERMISSION_META, type Permission } from '../constants/permissions';
 
@@ -55,7 +55,7 @@ export const ITEM_HOLDS_STOCK_COPY =
   'This item still holds stock, so it cannot be deleted. It can be deleted once it has no stock on record and none on any location: adjust its stock to zero or write it off first.';
 
 /**
- * The ledger actions 0395 gates (and distribute_bundle, gated by 0404), each
+ * The ledger actions 0395 gates (and distribute_bundle, gated by 0415), each
  * with the permission the app asks first.
  */
 export type DbPermissionAction =

@@ -29,7 +29,7 @@ const componentInputSchema = z.object({
 });
 
 /** One row per item (L10): (bundle_id, item_id) is the table's key. At least
- *  one component is required, not optional (0404: no kit from nothing). */
+ *  one component is required, not optional (0415: no kit from nothing). */
 const componentsSchema = z
   .array(componentInputSchema)
   .min(1)

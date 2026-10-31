@@ -186,7 +186,7 @@ describe('BundleForm checkboxes and lines (redesign: the shared Checkbox)', () =
     });
   });
 
-  // 0404: the database builds no kit from a bundle whose components are all
+  // 0415: the database builds no kit from a bundle whose components are all
   // optional, so the form says so before anything is sent.
   it('refuses a kit whose components are all optional, and says what to do', async () => {
     render(<BundleForm initial={initial} />);

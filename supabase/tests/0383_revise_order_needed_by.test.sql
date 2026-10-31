@@ -875,12 +875,12 @@ select is(
   -- (restated body 69e46c81; return_line_sources and return_line_restock_legs):
   -- production (head 0393, own rows 8b442829|14) with the five RX-1 rows
   -- substituted gives 1c283e93|18, equal to the local stack (2026-10-05).
-  -- Re-pinned by 0404 (kit checks; was 1c283e932202295a91e5c118f0873689|18):
+  -- Re-pinned by 0415 (kit checks, written as 0404; was 1c283e932202295a91e5c118f0873689|18):
   -- ledger.assemble_bundle and ledger.distribute_bundle gained their tagged
   -- organization, required-component and kit item lines (header, owner and
   -- ACL unchanged; 50660ce2 before the review's kit item checks).
-  -- revise_order_needed_by calls neither. 0404's pgTAP R3 takes those two
-  -- bodies back to their pre-0404 text and gets 1c283e93|18 exactly, so
+  -- revise_order_needed_by calls neither. 0415's pgTAP R3 takes those two
+  -- bodies back to their pre-0415 text and gets 1c283e93|18 exactly, so
   -- nothing else in ledger moved.
   'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
