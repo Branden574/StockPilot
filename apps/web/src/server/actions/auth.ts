@@ -15,7 +15,10 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
-import { isBannedUserAuthError } from '@/server/actions/auth-error-classify';
+import {
+  classifyPasswordUpdateError,
+  isBannedUserAuthError,
+} from '@/server/actions/auth-error-classify';
 import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 
 import {
@@ -401,11 +404,20 @@ function normalizeTotpCode(raw: unknown): string | null {
   return /^\d{6}$/.test(code) ? code : null;
 }
 
+/**
+ * The reset form's request for the authenticator code. It answers a press
+ * that came without one, and GoTrue's own refusal for want of AAL2, with
+ * `details.reason: 'aal2_required'`, which makes the form show its code box.
+ */
+const RESET_CODE_ASK =
+  'Enter the 6-digit code from your authenticator app to finish resetting your password.';
+
 export async function completePasswordResetAction(
   // `totpCode` is additive and optional: the emailed recovery link and the
   // form both keep working without it, and it is read off the raw input rather
-  // than through completePasswordResetSchema so this fix stays inside the
-  // action layer. See the MFA step-up block below for why it exists.
+  // than through completePasswordResetSchema, so the shared schema stays as it
+  // is. The reset form sends it once this action asks for it (docket B50). See
+  // the MFA step-up block below for why it exists.
   input: CompletePasswordResetInput & { totpCode?: string },
 ): Promise<ActionResult<{ next: string }>> {
   const parsed = completePasswordResetSchema.safeParse(input);
@@ -425,7 +437,8 @@ export async function completePasswordResetAction(
   const supabase = await createClient();
 
   // Snapshot the user BEFORE updateUser/signOut so we can attribute the
-  // audit row to a real userId even after the global signOut.
+  // audit row to a real userId even after the global signOut. If this one
+  // read fails, the update's own answer names the account (resetUser below).
   const {
     data: { user: preUser },
   } = await supabase.auth.getUser();
@@ -466,11 +479,7 @@ export async function completePasswordResetAction(
       if (!code) {
         // `details.reason` lets the reset form reveal its code field instead of
         // showing a dead end. Same vocabulary as the API gate's aal2_required.
-        return err(
-          'forbidden',
-          'Enter the 6-digit code from your authenticator app to finish resetting your password.',
-          { reason: 'aal2_required' },
-        );
+        return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });
       }
       const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
         factorId: totpFactorId,
@@ -496,8 +505,56 @@ export async function completePasswordResetAction(
     }
   }
 
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
-  if (error) return err('internal_error', error.message);
+  const { data: updated, error } = await supabase.auth.updateUser({
+    password: parsed.data.password,
+  });
+  if (error) {
+    // GoTrue's refusals of the new password, in plain words (docket B50). Read
+    // by GoTrue's code only (auth-error-classify.ts); any other refusal keeps
+    // GoTrue's own words, as before. Nothing below has run: nobody is signed
+    // out and the old password still works.
+    const refusal = classifyPasswordUpdateError(error);
+    if (refusal?.kind === 'aal') {
+      // GoTrue still wants AAL2, so the code step above did not run (as when
+      // the factor list could not be read). Ask for the code, so the form
+      // shows its box; a code sent with this press was never checked, so say
+      // that.
+      return err(
+        'forbidden',
+        normalizeTotpCode(input.totpCode)
+          ? 'Could not check your code just now. Try again.'
+          : RESET_CODE_ASK,
+        { reason: 'aal2_required' },
+      );
+    }
+    if (refusal?.kind === 'same') {
+      return err('validation_error', 'Choose a password that is different from your current one.');
+    }
+    if (refusal?.kind === 'weak') {
+      return err(
+        'validation_error',
+        refusal.breached
+          ? 'This password has appeared in a known data breach. Choose a different one.'
+          : 'This password does not meet the password rules. Choose a stronger one.',
+      );
+    }
+    if (refusal?.kind === 'session_gone') {
+      // The link's session is gone (spent, expired, or ended by a reset
+      // finished in another tab). The words follow the sign-in card's
+      // LINK_FAILED_NOTICE (lib/auth/auth-page-notices.ts).
+      return err(
+        'unauthenticated',
+        'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
+      );
+    }
+    return err('internal_error', error.message);
+  }
+
+  // The account the new password was set for. A failed first read (a GoTrue
+  // 5xx) leaves preUser null while the rest of the press can still go
+  // through; the update's own answer names the same account, so the revoke
+  // broadcast and the audit row below still go out (docket B50 review).
+  const resetUser = preUser ?? updated?.user ?? null;
 
   // SECURITY: after an email-recovery password update, force a fresh
   // sign-in rather than auto-elevating the recovery session into the
@@ -510,18 +567,18 @@ export async function completePasswordResetAction(
   // Evict live devices NOW, not at access-token expiry (≤1h): the whole
   // point of resetting a password is that existing sessions may be in
   // hostile hands. Same broadcast contract as device management.
-  if (preUser) {
-    await broadcastToChannel(`user:${preUser.id}:sessions`, 'revoked', { keepId: null });
+  if (resetUser) {
+    await broadcastToChannel(`user:${resetUser.id}:sessions`, 'revoked', { keepId: null });
   }
 
   // Audit the successful recovery-based reset.
-  if (preUser) {
-    const { organizationId } = await resolveDefaultOrgAndRole(preUser.id);
+  if (resetUser) {
+    const { organizationId } = await resolveDefaultOrgAndRole(resetUser.id);
     await emitAuthAudit({
       event: 'user.password.reset_completed',
-      userId: preUser.id,
+      userId: resetUser.id,
       organizationId,
-      extra: { email: preUser.email ?? null },
+      extra: { email: resetUser.email ?? null },
     });
   }
 

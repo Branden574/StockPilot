@@ -332,4 +332,199 @@ describe('completePasswordResetAction', () => {
     expect(res.ok).toBe(true);
     expect(updateUser).toHaveBeenCalledWith({ password: RESET_VALUE });
   });
+
+  // B50 review. The action reads the account once, at the start, to name it in
+  // the revoke broadcast and the audit row. When that one read fails (GoTrue
+  // answers 5xx; auth-js returns no user and an AuthRetryableFetchError) and
+  // the rest of the press goes through, the password changed and every session
+  // ended, but no live device was told and no row was written. The update's
+  // own answer names the same account.
+  it.each([
+    ['an account with no authenticator', false],
+    ['an account with an authenticator, on the press that carries the code', true],
+  ])(
+    'when the first account read fails and the reset goes through, the revoke and the audit row still name the account: %s',
+    async (_label, withAuthenticator) => {
+      getUser.mockResolvedValueOnce({
+        data: { user: null },
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      if (withAuthenticator) {
+        listFactors.mockResolvedValue({
+          data: { totp: [{ id: 'f1', status: 'verified' }] },
+          error: null,
+        });
+        getAuthenticatorAssuranceLevel.mockResolvedValue({
+          data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+        });
+      }
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u2', email: 'reset-user@example.com' } },
+        error: null,
+      });
+
+      const res = await completePasswordResetAction(
+        withAuthenticator ? { ...INPUT, totpCode: '123456' } : INPUT,
+      );
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(verify).toHaveBeenCalledTimes(withAuthenticator ? 1 : 0);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(broadcastToChannel).toHaveBeenCalledWith('user:u2:sessions', 'revoked', {
+        keepId: null,
+      });
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u2',
+          metadata: expect.objectContaining({ entity_id: 'u2', email: 'reset-user@example.com' }),
+        }),
+      );
+    },
+  );
+
+  // ── B50: GoTrue's refusals of the new password, in plain words ──────────
+  // Read by GoTrue's structured code (auth-error-classify.ts), never by its
+  // message. A refusal it does not name keeps today's answer (the test above
+  // with only a message stays internal_error).
+  describe("GoTrue's refusals of the new password (B50)", () => {
+    const ASK =
+      'Enter the 6-digit code from your authenticator app to finish resetting your password.';
+    const AAL_REFUSAL = {
+      code: 'insufficient_aal',
+      message: 'AAL2 session is required to update email or password when MFA is enabled.',
+    };
+
+    function enrolledAtAal1() {
+      listFactors.mockResolvedValue({
+        data: { totp: [{ id: 'f1', status: 'verified' }] },
+        error: null,
+      });
+      getAuthenticatorAssuranceLevel.mockResolvedValue({
+        data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+      });
+    }
+
+    function expectNothingSignedOut() {
+      expect(signOut).not.toHaveBeenCalled();
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+    }
+
+    // The factor list is the only way the action knows to ask. When it cannot
+    // be read, GoTrue still refuses the update; that refusal now asks too, so
+    // the form shows its box on this press rather than the next.
+    it('asks for the code when GoTrue refuses the update for want of AAL2', async () => {
+      listFactors.mockResolvedValue({ data: null, error: { message: 'gotrue down' } });
+      updateUser.mockResolvedValue({ error: AAL_REFUSAL });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: ASK, details: { reason: 'aal2_required' } },
+      });
+      expectNothingSignedOut();
+    });
+
+    it('a code sent while the factor list cannot be read gets the could-not-check words', async () => {
+      listFactors.mockResolvedValue({ data: null, error: { message: 'gotrue down' } });
+      updateUser.mockResolvedValue({ error: AAL_REFUSAL });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: 'Could not check your code just now. Try again.',
+          details: { reason: 'aal2_required' },
+        },
+      });
+      expect(challenge).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expectNothingSignedOut();
+    });
+
+    it('a code accepted, then the same password refused, says so in plain words', async () => {
+      enrolledAtAal1();
+      updateUser.mockResolvedValue({
+        error: {
+          code: 'same_password',
+          message: 'New password should be different from the old password.',
+        },
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: 'Choose a password that is different from your current one.',
+        },
+      });
+      expect(verify.mock.invocationCallOrder[0]!).toBeLessThan(
+        updateUser.mock.invocationCallOrder[0]!,
+      );
+      expectNothingSignedOut();
+    });
+
+    it('a breached password is refused in plain words, and a weak one by the rules', async () => {
+      updateUser.mockResolvedValueOnce({
+        error: {
+          code: 'weak_password',
+          message: 'Password is known to be weak and easy to guess, please choose a different one.',
+          reasons: ['pwned'],
+        },
+      });
+      const breached = await completePasswordResetAction(INPUT);
+      expect(breached).toEqual({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: 'This password has appeared in a known data breach. Choose a different one.',
+        },
+      });
+
+      updateUser.mockResolvedValueOnce({
+        error: {
+          code: 'weak_password',
+          message: 'Password should contain at least one character of each kind.',
+          reasons: ['characters'],
+        },
+      });
+      const weak = await completePasswordResetAction(INPUT);
+      expect(weak).toEqual({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: 'This password does not meet the password rules. Choose a stronger one.',
+        },
+      });
+      expectNothingSignedOut();
+    });
+
+    // A spent or expired link, or a reset finished in another tab that signed
+    // this one out: the SDK answers with its own session-missing error, which
+    // carries no code.
+    it('a press with no session says the link expired', async () => {
+      getUser.mockResolvedValue({ data: { user: null } });
+      listFactors.mockResolvedValue({ data: null, error: { message: 'Auth session missing!' } });
+      updateUser.mockResolvedValue({
+        error: { name: 'AuthSessionMissingError', message: 'Auth session missing!', status: 400 },
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message:
+            'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
+        },
+      });
+      expectNothingSignedOut();
+    });
+  });
 });
