@@ -1030,6 +1030,17 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S34: a member's session never leaves with an analytics request. PostHog's
+  # SDK sends to /ingest on our own origin, so the browser attaches every
+  # cookie of this host. app/ingest/[...path]/route.ts builds each request to
+  # PostHog from a list of headers: never a cookie, Authorization only as a
+  # PostHog project key (Bearer phc_), PostHog's two hosts only (a path that
+  # leaves /ingest/ or hides a slash is refused), no Set-Cookie back. The
+  # guard fails if a /ingest rewrite (which forwards the browser's headers as
+  # they came) or a proxy matcher for /ingest comes back; it carries the
+  # "Security invariant" marker.
+  src/test/ingest-proxy.guard.test.ts
+  'src/app/ingest/[...path]/route.test.ts'
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
