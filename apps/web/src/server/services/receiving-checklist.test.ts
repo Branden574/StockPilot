@@ -868,14 +868,21 @@ describe('ReceivingService.postReceipt refuses below manager', () => {
   };
 
   // Mutation caught: gating the post on stock:adjust only (staff hold it).
-  it('staff with stock:adjust get the manager sentence and the RPC is never called', async () => {
+  // The refusal carries no details: the phone's receipts route forwards a
+  // refusal's details, and every installed PO screen (since #185) alerts
+  // details.reason in place of the sentence whenever it is a string, through
+  // a mapper that knows only the ledger's tokens. A reason of 'manager_posts'
+  // was shown as the alert's text (review 2026-11-01).
+  it('staff with stock:adjust get the manager sentence, with no reason, and the RPC is never called', async () => {
     const s = makeSupabaseStub({ 'rpc:post_receipt_v2': { data: { id: RCPT }, error: null } });
     const svc = new ReceivingService(ctxFor(s.client, { role: 'staff' }));
-    await expect(svc.postReceipt(input)).rejects.toMatchObject({
-      code: 'forbidden',
-      message: RECEIVE_POST_MANAGER_ONLY_COPY,
-      details: { reason: 'manager_posts' },
-    });
+    const refusal = await svc.postReceipt(input).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refusal).toBeInstanceOf(ServiceError);
+    expect(refusal).toMatchObject({ code: 'forbidden', message: RECEIVE_POST_MANAGER_ONLY_COPY });
+    expect((refusal as ServiceError).details).toBeUndefined();
     expect(s.rpcCalls).toHaveLength(0);
   });
 

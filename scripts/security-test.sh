@@ -1483,11 +1483,13 @@ WEB_TESTS=(
   # database text), and audits only a real change. The routes answer cookie
   # and Bearer callers, never cached, a PO the caller cannot see is a 404,
   # and internal errors carry no details. ReceivingService.postReceipt
-  # refuses anyone below manager before the ledger does; the PO page shows
-  # Receive only on that same gate.
+  # refuses anyone below manager before the ledger does, with the sentence
+  # and no reason (an installed phone shows a details.reason in place of the
+  # sentence); the PO page shows Receive only on that same gate.
   src/server/services/receiving-checklist.test.ts
   src/app/api/v1/receiving-checks/routes.test.ts
   'src/app/api/v1/po/[id]/receipts/route.test.ts'
+  'src/app/api/v1/po/[id]/receipts/route.phone-contract.test.ts'
   'src/app/(dashboard)/dashboard/purchase-orders/[id]/po-detail-receive-gate.test.tsx'
 )
 

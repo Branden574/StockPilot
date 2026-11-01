@@ -118,20 +118,19 @@ describe('POST /api/v1/po/[id]/receipts', () => {
     });
   });
 
-  // F4-1: below manager the service refuses before the RPC; the phone shows
-  // the server's sentence and keeps its key (the default arm).
-  it('answers the manager refusal as a 403 with its sentence and reason', async () => {
+  // F4-1: below manager the service refuses before the RPC, with the
+  // sentence and no details; the phone shows the sentence and keeps its key
+  // (the mapper's default arm). A details.reason would be shown in place of
+  // the sentence (route.phone-contract.test.ts runs the real service).
+  it('answers the manager refusal as a 403 with its sentence and no details', async () => {
     postReceipt.mockRejectedValue(
-      new ServiceError('forbidden', 'Only a manager can post a receipt.', {
-        reason: 'manager_posts',
-      }),
+      new ServiceError('forbidden', 'Only a manager can post a receipt.'),
     );
     const res = await post(validBody);
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({
       error: 'forbidden',
       message: 'Only a manager can post a receipt.',
-      details: { reason: 'manager_posts' },
     });
   });
 
