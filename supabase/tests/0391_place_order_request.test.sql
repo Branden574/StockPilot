@@ -398,10 +398,14 @@ select is(
           || '|' || (s.request_hash ~ '^[0-9a-f]{32}$')::text || '|' || coalesce(s.refusal::text, 'null')
      from public.order_submissions s, ans a where a.tag = 'P1' and s.key = pg_temp.k(1)::uuid)
   || '|' || (select string_agg(u.who, ',' order by u.who) from public.notifications n
-               join (values (:own::uuid, 'own'), (:adm::uuid, 'adm'), (:mgr::uuid, 'mgr'), (:mgr2::uuid, 'mgr2'), (:mgrNo::uuid, 'mgrNo'), (:dis::uuid, 'dis')) u(id, who) on u.id = n.user_id
+               join (values (:own::uuid, 'own'), (:adm::uuid, 'adm'), (:mgr::uuid, 'mgr'), (:mgr2::uuid, 'mgr2'), (:mgrNo::uuid, 'mgrNo'), (:dis::uuid, 'dis'),
+                            (:stfAp::uuid, 'stfAp')) u(id, who) on u.id = n.user_id
               where n.type = 'order_request.created' and n.link = '/dashboard/orders/' || (select a.r::jsonb#>>'{order,id}' from ans a where a.tag = 'P1')),
-  'placed|web|true|true|true|null|adm,mgr,mgrNo,own',
-  'P2: one placed row for the key (the placer, the order, the hash, the surface) and one "New order request" notification per owner, admin and manager, the revoked manager included (role-based alerts), not the manager who turned it off nor the disabled one');
+  -- The notice audience migration (S36a) moved the alert from the role list to
+  -- orders:approve with write access to the order's warehouse: the revoked
+  -- manager is no longer told, and the staff member granted it in whA is.
+  'placed|web|true|true|true|null|adm,mgr,own,stfAp',
+  'P2: one placed row for the key (the placer, the order, the hash, the surface) and one "New order request" notification per member who may approve it in its warehouse (the granted staff member included, the revoked manager not), not the manager who turned it off nor the disabled one');
 select is(
   (select string_agg(k, ',' order by k) from jsonb_object_keys((select a.r::jsonb->'order' from ans a where a.tag = 'P1')) k)
   || '|' || (select (a.r::jsonb#>>'{order,line_count}') || '/' || (a.r::jsonb#>>'{order,unit_count}') || '/'
@@ -905,8 +909,14 @@ select is(
   E'_dispatch_push_for_notification()|17f00da160feb6a7d6609cca4fb6337e|true|{"search_path=public, net, extensions"}|postgres\n'
   -- Re-pinned by 0395 (was a223ae83810149728156b8e299c7425e): the approved notification
   -- says when only part is held (0395 R4); placing an order is unchanged.
-  '_notify_order_request_changes()|438e676429dda6fb9d2b8faee8d6dd59|true|{search_path=public}|postgres\n'
-  '_notify_recipients(uuid)|679e6193e3dbe5644055e835e8209043|true|{search_path=public}|postgres\n'
+  -- Re-pinned by the notice audience migration (S36a; was 438e676429dda6fb9d2b8faee8d6dd59):
+  -- the New order request alert follows orders:approve and warehouse write, and the
+  -- requester is pinged only while a member (that suite's T7a); P2 above pins the alert.
+  '_notify_order_request_changes()|ca103ffa6669cdb7b885099c9a794fb5|true|{search_path=public}|postgres\n'
+  -- Re-pinned by the notice audience migration (S36a; was 679e6193e3dbe5644055e835e8209043):
+  -- one added line leaves an Act-as seat out (that suite's T7b); placing an order no
+  -- longer calls it.
+  '_notify_recipients(uuid)|7b53d7d107211e42620800cb1de7d476|true|{search_path=public}|postgres\n'
   '_validate_order_request_status_transition()|dee8cd4782ec83abdb31a2b48fcd4ef2|false|{search_path=public}|postgres\n'
   'assign_order_request_number()|03097df3cded3d0ea42676855abc6a25|true|{search_path=public}|postgres\n'
   -- 0390 re-pin (was 7a2302dec888970054738b0dad420fd3): slice D's one gate edit.
@@ -948,7 +958,11 @@ select is(
   -- Re-pinned by 0395 (was 1683653e88f385f3b905640f92f3e6ac|8): only the md5s of
   -- _notify_order_request_changes and cancel_order_request moved (0395 R4, R1);
   -- the same rows with their old md5s give the old value.
-  '102d4154cf2075ebab96bc46f1a3bd00|8',
+  -- Re-pinned by the notice audience migration (S36a; was
+  -- 102d4154cf2075ebab96bc46f1a3bd00|8): only the md5 of
+  -- _notify_order_request_changes moved (Z1 above); the same rows with its old
+  -- md5 (438e6764) put back give the old value.
+  '9749cc5b9ebc0f3442831683e9b4a1a6|8',
   'Z2: the set fingerprint of the first eight (0385 Z1 form, grants included) equals production''s at build start (it moved from the plan''s 5992f083...|8 only by 0390''s cancel_order_request edit)');
 select is(
   (select string_agg(x.relname || '=' || x.v, E'\n' order by x.relname) from (

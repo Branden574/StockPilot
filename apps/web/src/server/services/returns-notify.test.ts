@@ -72,6 +72,23 @@ describe('the staff audience (effective returns:manage, warehouse read, actor ex
     expect(ids.sort()).toEqual(['admin', 'mgr', 'owner', 'staff-granted'].sort());
   });
 
+  it('reads accepted members only, never a support Act-as seat (docket S36)', async () => {
+    const stub = admin({
+      'organization_members.select': { data: [], error: null },
+      'role_permission_overrides.select': { data: [], error: null },
+      'user_permission_overrides.select': { data: [], error: null },
+      'user_warehouse_assignments.select': { data: [], error: null },
+    });
+    await resolveReturnStaffAudience({ organizationId: ORG, warehouseId: WH, actorUserId: null });
+    const chain = stub.chains.get('organization_members.select')!;
+    const args = stub.chainArgs.get('organization_members.select')!;
+    expect(args[chain.indexOf('eq')]).toEqual(['organization_id', ORG]);
+    expect(args[chain.indexOf('not')]).toEqual(['accepted_at', 'is', null]);
+    // An Act-as seat is a real owner membership for 45 minutes: it would
+    // pass every other rule here and tell the platform admin's own account.
+    expect(args[chain.indexOf('is')]).toEqual(['impersonation_expires_at', null]);
+  });
+
   it('never throws: a failed read is reported and nobody is notified', async () => {
     admin({ 'organization_members.select': { data: null, error: { message: 'boom' } } });
     await expect(resolveReturnStaffAudience({ organizationId: ORG, warehouseId: WH, actorUserId: null })).resolves.toEqual([]);

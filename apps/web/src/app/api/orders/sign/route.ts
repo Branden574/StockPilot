@@ -433,9 +433,14 @@ export async function POST(req: NextRequest) {
 
   // WHO the requester is, resolved ONCE (see resolveRequesterContact): the
   // row's own columns for an external/on-behalf-of order, else the member's
-  // user_profiles row. Every requester-facing notice below uses THIS, never
-  // the raw column — internal requesters have a NULL email column.
-  const requester = await resolveRequesterContact(admin, order);
+  // user_profiles row, and that one only while they are a current member of
+  // the order's organization (docket S36). Every requester-facing notice
+  // below uses THIS, never the raw column — internal requesters have a NULL
+  // email column.
+  const requester = await resolveRequesterContact(admin, order, {
+    tag: 'orders.sign.requester_member_check',
+    orderId: order.id,
+  });
   // A3: a requester who deleted their account is never emailed again. The
   // phone pre-fills the signer email with the address the order kept (every
   // installed bundle does), so a signer email equal to that kept address gets
@@ -446,6 +451,21 @@ export async function POST(req: NextRequest) {
     (order.requester_email ?? '').trim().toLowerCase() !== '' &&
     parsed.data.signerEmail.trim().toLowerCase() ===
       (order.requester_email ?? '').trim().toLowerCase();
+  // Docket S36, the same rule for a requester who is no longer a member: their
+  // own address was withheld from every requester notice, and the sign page
+  // offers it as the default signer email, so a signer email equal to it gets
+  // no signer receipt either (otherwise the order would still reach that
+  // address, as a receipt instead of a notice). When that address could not
+  // be read (withheldEmailUnknown; resolveRequesterContact reported it under
+  // the tag above), no signer email can be told apart from it, so no signer
+  // receipt goes out: a receipt lost to a read error is acceptable (every
+  // email here is best-effort), one to a former member's own address is not.
+  const signerMayBeWithheldRequester =
+    requester.withheldEmailUnknown ||
+    (requester.withheldEmail !== null &&
+      parsed.data.signerEmail.trim().toLowerCase() ===
+        requester.withheldEmail.trim().toLowerCase());
+  const signerGetsNoReceipt = signerIsDeletedRequester || signerMayBeWithheldRequester;
 
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the
@@ -513,7 +533,7 @@ export async function POST(req: NextRequest) {
       // transactional receipt (matching the completed path's semantics).
       const signerIsRequester =
         parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
-      if (!signerIsDeletedRequester && (!signerIsRequester || requesterEmailOptedOut)) {
+      if (!signerGetsNoReceipt && (!signerIsRequester || requesterEmailOptedOut)) {
         try {
           // es `partial-receipt` template: external-recipient receipt from
           // "<supplier> via StockPilot" — the signer may not be a StockPilot
@@ -582,7 +602,7 @@ export async function POST(req: NextRequest) {
           name: requester.name,
         });
       }
-      if (!signerIsDeletedRequester && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
+      if (!signerGetsNoReceipt && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
         recipients.set(parsed.data.signerEmail.toLowerCase(), {
           email: parsed.data.signerEmail,
           name: parsed.data.signerName,

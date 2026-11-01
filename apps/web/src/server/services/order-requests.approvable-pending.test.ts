@@ -37,8 +37,9 @@ import { OrderRequestsService } from './order-requests';
  *     every write for a viewer).
  *
  * approvablePendingCount() counts the pending requests the caller could act
- * on, by approve()'s own two gates. pendingCount() keeps counting the
- * organization's, for the Insights page and the daily briefing.
+ * on, by approve()'s own two gates. Since docket S36 Today's briefing and the
+ * morning briefing count by it too, and the organization-wide pendingCount()
+ * is gone (for the cron's owner context this count is the organization's).
  *
  * These run the REAL warehouse helpers (lib/auth/warehouse) against the stub,
  * and the stub answers the count by the query's own filters
@@ -246,20 +247,11 @@ describe('approvablePendingCount: the pending requests the caller could approve'
     }
   });
 
-  it('a failed count is an error, as it is for pendingCount()', async () => {
+  it('a failed count is an error, never a count of nothing', async () => {
     const person = PEOPLE.find((p) => p.label === 'manager')!;
     const stub = stubFor(person, {
       'order_requests.select': { data: null, error: { message: 'boom' } },
     });
     await expect(svc(stub, person).approvablePendingCount()).rejects.toBeInstanceOf(ServiceError);
-  });
-});
-
-describe('pendingCount is unchanged', () => {
-  it('still counts every pending request in the organization, whoever asks (the Insights page and the daily briefing read it)', async () => {
-    const person = PEOPLE.find((p) => p.label === 'staff approver in one warehouse')!;
-    const stub = stubFor(person);
-    expect(await svc(stub, person).pendingCount()).toBe(PENDING_IN_ORG.length);
-    expect(stub.fromCalls).toEqual(['order_requests']);
   });
 });

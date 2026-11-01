@@ -18,7 +18,7 @@ const calls = vi.hoisted(() => ({
   profile: { onboarding_dismissed_at: null as string | null },
   /** The viewer's role and effective permissions (requireOrgContext). */
   viewer: { role: 'owner', permissions: new Set<string>() },
-  /** Order requests waiting for approval in the organization (pendingCount). */
+  /** The organization-wide pendingCount, removed in docket S36: the page must never ask it. */
   pendingApprovals: vi.fn(async () => 0),
   /** Those of them the viewer could approve (approvablePendingCount). */
   approvableApprovals: vi.fn(async () => 0),
@@ -366,7 +366,8 @@ describe('/dashboard: the waiting for signature card follows orders:approve (F10
 //   - a staff approver limited to some warehouses. approve() and deny() ask
 //     write access to the request's warehouse, so the card counts the
 //     requests in their warehouses (approvablePendingCount), not the
-//     organization's (pendingCount, which the Insights page still reads).
+//     organization's (pendingCount, since removed: the briefing counts by
+//     approvablePendingCount too).
 describe('/dashboard: the pending approvals card follows orders:approve (0390)', () => {
   type Item = { id: string; href?: string; title?: string; detail?: string };
   const attention = () =>

@@ -28,10 +28,22 @@ vi.mock('@/lib/error-reporter', () => ({
   isNextControlFlowError: () => false,
 }));
 vi.mock('@/lib/supabase/admin', async () => {
-  const { makeSupabaseStub: stub } = await import('@/test/supabase-mock');
+  const { makeSupabaseStub: stub, servedLikePostgrest } = await import('@/test/supabase-mock');
   return {
     createAdminClient: () =>
-      stub({ 'notification_preferences.select.maybeSingle': prefsResult.value as never }).client,
+      stub({
+        'notification_preferences.select.maybeSingle': prefsResult.value as never,
+        // S36: the live requester is still a current member of the order's
+        // organization (order-requests.member-email.test.ts covers the rest).
+        'organization_members.select.maybeSingle': servedLikePostgrest([
+          {
+            organization_id: 'org-test',
+            user_id: 'u-live',
+            accepted_at: '2026-01-05T00:00:00Z',
+            impersonation_expires_at: null,
+          },
+        ]),
+      }).client,
   };
 });
 

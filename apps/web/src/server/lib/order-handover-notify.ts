@@ -29,6 +29,14 @@ import type { FulfillmentLineItem } from '@/lib/email/es/families/fulfillment';
  * suppression, and preference semantics are UNCHANGED: the
  * `email_order_completed` opt-out computed by the callers is honored via the
  * same `requesterEmail && !emailOptedOut` gate as before.
+ *
+ * Docket S36: `requesterEmail` comes from resolveRequesterContact
+ * (server/lib/requester-contact.ts) on both paths, and must come from nowhere
+ * else. It hands out a member's own address only while they are a current
+ * member of the order's organization, and an address the order recorded for an
+ * outside person as before, so the three requester emails here (a
+ * replacement's partial hand-over, a partial hand-over, backordered items
+ * shipped) follow the rule of every in-app notice and push.
  */
 
 /** Short "Apr 29"-style date for stat cards / delivery lines. */

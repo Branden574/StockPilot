@@ -103,11 +103,14 @@ export async function resolveReturnStaffAudience(args: {
   try {
     const admin = createAdminClient();
     const [membersRes, roleOvRes, userOvRes, assignRes] = await Promise.all([
+      // Never a support Act-as seat (a real owner membership for its 45
+      // minutes): the platform admin's own account is not told (docket S36).
       admin
         .from('organization_members')
         .select('user_id, role')
         .eq('organization_id', organizationId)
-        .not('accepted_at', 'is', null),
+        .not('accepted_at', 'is', null)
+        .is('impersonation_expires_at', null),
       admin
         .from('role_permission_overrides')
         .select('role, permission, granted')

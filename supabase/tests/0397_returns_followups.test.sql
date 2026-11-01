@@ -758,7 +758,10 @@ select is(
        -- and the order_requests trigger bodies it relies on.
        ('public.is_org_member(uuid)',                             '76492a6556e9f6a7c33d942aa9726f9f'),
        ('public.module_enabled(uuid,text)',                       'df3260cbcd15f986798e5377d1e95dce'),
-       ('public._notify_replacement_order_changes()',             '543131721dbd9c04bb954b447e389972'),
+       -- Re-pinned by the notice audience migration (S36a; was
+       -- 543131721dbd9c04bb954b447e389972): the requester is pinged only while
+       -- still a member of the organization; every requester here is one.
+       ('public._notify_replacement_order_changes()',             '6bdc770d07726e3ee527562d395427e3'),
        ('public.tg_order_requests_replacement_status()',          '38b9236c6e628e63f39eac5d8d1c83ff'),
        ('public._validate_order_request_status_transition()',     'dee8cd4782ec83abdb31a2b48fcd4ef2'),
        ('public.tg_order_requests_workflow_guard()',              '55bceafc13d599f8d77d6a4180c28140')

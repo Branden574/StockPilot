@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
  * resolveMaintenanceAudience/notifyMaintenanceEvent are the FIRST readers of
@@ -70,7 +70,11 @@ function buildAdmin(opts: {
   moduleError?: { message: string } | null;
   membersError?: { message: string } | null;
   prefRows?: Array<Record<string, unknown>>;
+  /** The notification_preferences read fails. */
+  prefError?: { message: string } | null;
   disabledUserIds?: string[];
+  /** People no longer members of the organization (removed, or left). */
+  formerMemberIds?: string[];
 }) {
   const stub = makeSupabaseStub({
     'organization_members.select': opts.membersError
@@ -81,13 +85,28 @@ function buildAdmin(opts: {
     'organization_modules.select': opts.moduleError
       ? { data: null, error: opts.moduleError }
       : { data: { settings: { notifyAudience: opts.notifyAudience ?? {} } }, error: null },
-    'notification_preferences.select': { data: opts.prefRows ?? [], error: null },
+    'notification_preferences.select': opts.prefError
+      ? { data: null, error: opts.prefError }
+      : { data: opts.prefRows ?? [], error: null },
     // createNotification's own disabled-account gate — every recipient
     // shares this canned response (the mock doesn't filter by id), so a
     // test that needs a SPECIFIC user disabled uses disabledUserIds only
     // for documentation; createNotification's real per-row check happens
     // against whatever this key returns for every .eq('id', userId) call.
     'user_profiles.select': { data: { disabled_at: null }, error: null },
+    // createNotification's membership point read (docket S36): every
+    // recipient is a current member of ORG unless listed in formerMemberIds.
+    // Its own filters are pinned in notifications.test.ts.
+    'organization_members.select.maybeSingle': (call: MockCall) => {
+      const eq = (col: string) =>
+        call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1];
+      const userId = eq('user_id') as string | undefined;
+      const current =
+        eq('organization_id') === ORG &&
+        userId !== undefined &&
+        !(opts.formerMemberIds ?? []).includes(userId);
+      return { data: current ? [{ user_id: userId }] : [], error: null };
+    },
     'notifications.insert': { data: { id: 'notif-x' }, error: null },
   });
   adminHolder.client = stub.client;
@@ -512,6 +531,38 @@ describe('notifyMaintenanceEvent — insert shape, link, and NO push call', () =
     expect(stub.chainsAll.has('notifications.insert')).toBe(false);
   });
 
+  // loadPrefFlags' catch branch, both halves of its comment: a preference
+  // read that fails is not a mute (fail open, reported), and
+  // createNotification's own checks still decide who may get a notice at all
+  // (fail closed, docket S36), so a former member gets nothing.
+  it('a preference read that fails notifies (fail open, reported), but never a former member: createNotification still checks', async () => {
+    const stub = buildAdmin({
+      prefError: { message: 'connection reset' },
+      formerMemberIds: ['former-1'],
+    });
+
+    for (const targetUserId of ['requester-1', 'former-1']) {
+      await notifyMaintenanceEvent({
+        organizationId: ORG,
+        event: 'resolved',
+        requestId: 'req-12',
+        requestHandle: 'MR-2026-000012',
+        subject: 'x',
+        actorUserId: 'manager-1',
+        targetUserId,
+      });
+    }
+
+    const inserts = (stub.chainArgsAll.get('notifications.insert') ?? []).map(
+      (callArgs) => callArgs[0]![0] as Record<string, unknown>,
+    );
+    expect(inserts.map((row) => row.user_id)).toEqual(['requester-1']);
+    expect(vi.mocked(reportError).mock.calls.map((c) => (c[1] as { tag: string }).tag)).toEqual([
+      'maintenance_notify.load_prefs',
+      'maintenance_notify.load_prefs',
+    ]);
+  });
+
   it("'resolved' is UNAFFECTED by every OTHER maintenance pref being false — proves the column read is push_maintenance_resolved specifically, not an aliased/shared key", async () => {
     const stub = buildAdmin({
       prefRows: [
@@ -539,6 +590,25 @@ describe('notifyMaintenanceEvent — insert shape, link, and NO push call', () =
       (callArgs) => callArgs[0]![0] as Record<string, unknown>,
     );
     expect(inserts).toHaveLength(1);
+  });
+
+  it("'resolved' and 'draft_reminder' write nothing for a requester who is no longer a member of the organization (docket S36)", async () => {
+    for (const event of ['resolved', 'draft_reminder'] as const) {
+      const stub = buildAdmin({ prefRows: [], formerMemberIds: ['requester-1'] });
+
+      await notifyMaintenanceEvent({
+        organizationId: ORG,
+        event,
+        requestId: 'req-14',
+        requestHandle: 'MR-2026-000014',
+        subject: 'Broken chair',
+        actorUserId: 'manager-1',
+        targetUserId: 'requester-1',
+      });
+
+      // No row, so the 0028 trigger pushes nothing to the former member.
+      expect(stub.chainsAll.has('notifications.insert')).toBe(false);
+    }
   });
 
   it('title literal: "Maintenance request MR-2026-000123 marked resolved"', async () => {

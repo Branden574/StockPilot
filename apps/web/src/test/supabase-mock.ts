@@ -125,6 +125,15 @@ export function servedLikePostgrest(
         case 'is':
           out = out.filter((r) => (r[col] ?? null) === value);
           break;
+        case 'not': {
+          // Only the negated IS (`.not('accepted_at', 'is', null)`); any other
+          // negation is not evaluated here, so it throws like an unknown method.
+          const operand = call.args[i]?.[2];
+          if (value !== 'is')
+            throw new Error(`servedLikePostgrest cannot evaluate .not(…, '${String(value)}', …)`);
+          out = out.filter((r) => (r[col] ?? null) !== operand);
+          break;
+        }
         case 'gt':
           out = out.filter((r) => r[col] !== null && r[col] !== undefined && cmp(value, r[col]));
           break;

@@ -7082,7 +7082,8 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(e.whyItMatters).not.toContain('the notice in the app');
     const service = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
     expect(service).toContain("defer(() => this.notifyEmail(row, 'completed'));");
-    expect(service).toContain(': await resolveRequesterContact(admin, {');
+    // S36 added the member-check report argument, so the call spans lines.
+    expect(service).toMatch(/: await resolveRequesterContact\(\s*admin,\s*\{/);
     const notify = readFileSync(resolve(__dirname, '../../server/lib/order-handover-notify.ts'), 'utf8');
     expect(notify).toContain('if (args.requesterUserId) {');
     expect(notify).toContain('if (args.requesterEmail && !args.emailOptedOut) {');

@@ -83,6 +83,7 @@ import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
 } from '@/server/lib/order-handover-notify';
+import { ownAddressVerdict } from '@/server/lib/current-member';
 import { requesterEmailOptedOut, resolveRequesterContact } from '@/server/lib/requester-contact';
 
 import { audit } from './audit';
@@ -1327,35 +1328,24 @@ export class OrderRequestsService {
     return { rows, total: total || rows.length };
   }
 
-  async pendingCount(): Promise<number> {
-    const { count, error } = await this.ctx.supabase
-      .from('order_requests')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', 'pending_approval');
-    if (error) throw new ServiceError('internal_error', error.message);
-    return count ?? 0;
-  }
-
   /**
    * The pending requests this caller could approve or deny: the Overview's
-   * "N order requests awaiting your approval" (B11). approve() and deny() ask
-   * orders:approve, then write access to the request's warehouse
-   * (requireWarehouseAccess 'write', assertWarehouseAccess's rule), so this
-   * counts by the same two:
+   * "N order requests awaiting your approval" (B11), and the briefing's
+   * approvals line (docket S36). approve() and deny() ask orders:approve,
+   * then write access to the request's warehouse (requireWarehouseAccess
+   * 'write', assertWarehouseAccess's rule), so this counts by the same two:
    *   - without orders:approve, or a viewer (the app refuses every write for a
    *     viewer, whatever their warehouses): none, and nothing is read;
    *   - an owner, admin or manager (every warehouse by role, so no access is
-   *     read), or a member with the all-warehouses flag: the organization's,
-   *     as pendingCount() counts them;
+   *     read), or a member with the all-warehouses flag: every pending request
+   *     in the organization;
    *   - anyone else: those in the warehouses they are assigned to. None when
    *     they have none, or when their access could not be read (that answer
    *     lists no warehouse, and approve() then refuses too).
-   * pendingCount() stays the organization's count, for the Insights page and
-   * the daily briefing. getWarehouseAccess is request-cached, so on the
-   * Overview this shares the read the overdue purchase order count makes. The
-   * Orders module and the MFA step-up are the caller's to ask, as for
-   * pendingCount(). A failed count read throws, as pendingCount()'s does.
+   * The daily briefing's owner-role system context gets the organization's
+   * count. getWarehouseAccess is request-cached, so on the Overview this
+   * shares the read the overdue purchase order count makes. The Orders module
+   * and the MFA step-up are the caller's to ask. A failed count read throws.
    */
   async approvablePendingCount(): Promise<number> {
     if (this.ctx.role === 'viewer' || !can(this.ctx, 'orders:approve')) return 0;
@@ -4252,17 +4242,23 @@ export class OrderRequestsService {
       // A3 unchanged: a requester who deleted their account is never emailed
       // again, not even at the address the order kept. The RPC returns the
       // whole row, so the marker is on it (requesterAccountDeleted reads it
-      // only for a narrow row).
+      // only for a narrow row). Docket S36: a member's own address only while
+      // they are a current member of the order's organization.
       const admin = createAdminClient();
       const requesterGone = await this.requesterAccountDeleted(row);
       const contact = requesterGone
         ? { email: null, name: null }
-        : await resolveRequesterContact(admin, {
-            requester_user_id: row.requester_user_id ?? null,
-            requester_name: row.requester_name ?? null,
-            requester_email: row.requester_email ?? null,
-            requester_deleted_at: row.requester_deleted_at ?? null,
-          });
+        : await resolveRequesterContact(
+            admin,
+            {
+              organization_id: row.organization_id ?? this.ctx.organizationId,
+              requester_user_id: row.requester_user_id ?? null,
+              requester_name: row.requester_name ?? null,
+              requester_email: row.requester_email ?? null,
+              requester_deleted_at: row.requester_deleted_at ?? null,
+            },
+            { tag: 'orders.physical_signature.requester_member_check', orderId: id },
+          );
       const noticeEmail = contact.email;
       const noticeName = contact.name;
       const emailOptedOut = await requesterEmailOptedOut(admin, row.requester_user_id ?? null, {
@@ -5473,6 +5469,15 @@ export class OrderRequestsService {
     return ((data as { requester_deleted_at?: string | null } | null)?.requester_deleted_at ?? null) !== null;
   }
 
+  /**
+   * Who a status email goes to. An address the order recorded (on-behalf-of,
+   * the public request link, a portal buyer) as before, whoever placed the
+   * order. A member's own address (the order kept none: their profile's) only
+   * while they are a current member of the order's organization (docket S36:
+   * readCurrentMember, the rule of 0422 and createNotification); someone
+   * removed from the organization, or who left it, is no longer emailed about
+   * it, and a read that fails sends nothing and is reported.
+   */
   private async resolveRecipient(
     row: OrderRequestRow,
   ): Promise<{ recipientEmail: string | null; recipientName: string | null }> {
@@ -5483,11 +5488,22 @@ export class OrderRequestsService {
       return { recipientEmail: row.requester_email, recipientName: row.requester_name ?? null };
     }
     if (row.requester_user_id) {
-      const { data } = await this.ctx.supabase
-        .from('user_profiles')
-        .select('email, full_name')
-        .eq('id', row.requester_user_id)
-        .maybeSingle();
+      const [verdict, { data }] = await Promise.all([
+        ownAddressVerdict(
+          createAdminClient(),
+          {
+            organizationId: row.organization_id ?? this.ctx.organizationId,
+            userId: row.requester_user_id,
+          },
+          { tag: 'order-requests.email.requester_member_check', extra: { orderId: row.id } },
+        ),
+        this.ctx.supabase
+          .from('user_profiles')
+          .select('email, full_name')
+          .eq('id', row.requester_user_id)
+          .maybeSingle(),
+      ]);
+      if (verdict !== 'current') return { recipientEmail: null, recipientName: null };
       return {
         recipientEmail: (data?.email as string | null) ?? null,
         recipientName: (data?.full_name as string | null) ?? null,
