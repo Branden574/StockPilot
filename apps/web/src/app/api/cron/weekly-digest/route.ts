@@ -13,6 +13,7 @@ import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   applySectionOptIns,
   buildDigestPayload,
@@ -414,16 +415,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ ok: true, sent, skipped, failed });
   } catch (err) {
-    void reportError(err, { tag: 'cron.weekly-digest' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Digest run failed',
-        sent,
-        skipped,
-        failed,
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.weekly-digest', { body: { sent, skipped, failed } });
   }
 }

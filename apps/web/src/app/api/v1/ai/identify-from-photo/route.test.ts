@@ -4,6 +4,7 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 /**
@@ -25,6 +26,7 @@ const hoisted = vi.hoisted(() => ({
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/lib/ai/claude', () => ({ claudeGenerateJsonString: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 // Keep the real env, but let each test dictate which provider keys exist —
 // that is the axis gate (2) turns on. The keys never reach a provider: the
 // Claude client is stubbed and Gemini is never constructed on this path.
@@ -140,5 +142,70 @@ describe('POST /api/v1/ai/identify-from-photo (SP-138)', () => {
     expect(res.status).toBe(200);
     const call = vi.mocked(claudeGenerateJsonString).mock.calls[0]![0];
     expect(call.media?.[0]?.mediaType).toBe('image/jpeg');
+  });
+
+  // S16: a failed vision call answered the provider's own text in `error`,
+  // which the phone shows when there is no `message`, and reported nothing.
+  it('a failed vision call answers vision_failed and the fixed sentence, never the provider text', async () => {
+    const err = new Error('429 rate_limit_error: quota for this model is exceeded');
+    vi.mocked(claudeGenerateJsonString).mockRejectedValueOnce(err);
+    const res = await POST(
+      jsonRequest({
+        imageBase64: Buffer.from(jpegBytes()).toString('base64'),
+        mimeType: 'image/jpeg',
+      }),
+    );
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'vision_failed',
+      message: 'The photo could not be read. Try again.',
+    });
+    expect(text).not.toMatch(/quota|rate_limit/);
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.ai.identify_from_photo',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+  });
+
+  // JSON.parse's SyntaxError quotes the text it could not parse: here the
+  // model's own reply.
+  it('a model reply that is not JSON answers the same, never the parser text that quotes it', async () => {
+    vi.mocked(claudeGenerateJsonString).mockResolvedValueOnce(
+      'Sure! The cover reads Private Notes',
+    );
+    const res = await POST(
+      jsonRequest({
+        imageBase64: Buffer.from(jpegBytes()).toString('base64'),
+        mimeType: 'image/jpeg',
+      }),
+    );
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'vision_failed',
+      message: 'The photo could not be read. Try again.',
+    });
+    expect(text).not.toContain('Sure!');
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('a body that cannot be read is a 400 with the fixed sentence, not the parser text', async () => {
+    const res = await POST(
+      new Request('https://test.local/api/v1/ai/identify-from-photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"imageBase64": ',
+      }) as unknown as Parameters<typeof POST>[0],
+    );
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'invalid_body',
+      message: 'The request could not be read.',
+    });
+    expect(text).not.toMatch(/JSON|position|Unexpected/);
+    expect(claudeGenerateJsonString).not.toHaveBeenCalled();
   });
 });

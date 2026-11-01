@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   archiveExpiredZeroStockItems,
   notifyAutoArchived,
@@ -113,14 +114,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ orgsProcessed, itemsArchived, orgsTruncated, candidates: candidates.length });
   } catch (err) {
-    void reportError(err, { tag: 'cron.auto-archive-zero-stock' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Auto-archive failed',
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.auto-archive-zero-stock');
   }
 }
 
