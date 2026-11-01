@@ -566,30 +566,6 @@ describe('The way back each message offers', () => {
     expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(BOOKS.length);
   });
 
-  it('Items, server mode, "Clear search" while a typed search is not in the address yet: the box drops it at once', async () => {
-    setAddress(BASE.items);
-    render(tableFor('items', 'server', { items: ITEMS }));
-    const user = userEvent.setup();
-    // The link navigates (next/link); here the click stops at the window, after the table saw it.
-    const stop = (e: Event) => e.preventDefault();
-    window.addEventListener('click', stop);
-    try {
-      // No settle: the box filters its page at once, the server search has not answered.
-      await user.type(searchBox(), 'zzqqxx');
-      expect(
-        screen.getByRole('heading', { level: 3, name: 'No items match your search' }),
-      ).toBeInTheDocument();
-      await user.click(screen.getByRole('link', { name: 'Clear search' }));
-      await settle();
-    } finally {
-      window.removeEventListener('click', stop);
-    }
-    expect(searchBox()).toHaveValue('');
-    expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(ITEMS.length);
-    expect(tableWrites.filter((w) => w.includes('q='))).toEqual([]);
-    expect(routerMock.replace).not.toHaveBeenCalled();
-  });
-
   /**
    * Server mode (staff and viewers on Items, everyone on Rentals items): the link
    * navigates. The box empties at once, as "Clear all filters" empties it, and
@@ -638,6 +614,109 @@ describe('The way back each message offers', () => {
       expect(routerMock.replace).not.toHaveBeenCalled();
     },
   );
+});
+
+/**
+ * Server mode: the box's search is answered by the server, by its own request or
+ * by the page of an address that holds the search. Until then the table filters
+ * only the rows of its page, and the count line says "(searching…)". The list's
+ * own message for a search says nothing matched, so it shows only once the
+ * server has answered; before that the general line shows, as it did before
+ * batch D (review of B1, 2026-11-01). Books has no message for a search: it
+ * shows the general line either way.
+ */
+describe('Server mode: a search says "Nothing matched" only once the server has answered it', () => {
+  it.each<List>(['items', 'rentals'])(
+    "%s: the general line while the search is out, then the list's message when nothing matched",
+    async (list) => {
+      setAddress(BASE[list]);
+      render(tableFor(list, 'server', { items: datasetFor(list) }));
+      let answer: ((r: Response) => void) | undefined;
+      fetchSpy.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      await userEvent.setup().type(searchBox(), 'zzqqxx');
+      // Before the 150 ms debounce, then with the request out.
+      expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+      await settle();
+      expect(document.body.textContent).toContain('(searching…)');
+      expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+      expect(screen.queryByRole('link', { name: 'Clear search' })).toBeNull();
+
+      await act(async () => {
+        answer!({ ok: true, json: async () => ({ items: [], total: 0 }) } as Response);
+      });
+      await settle();
+      expect(window.location.search).toBe('?q=zzqqxx');
+      expectMessage(
+        CASES.find((c) => c[0] === list && c[1] === 'q=zzqqxx')!,
+        'table',
+      );
+    },
+  );
+
+  it('items: a match the page did not hold shows when the server answers, with no "Nothing matched" before it', async () => {
+    setAddress(BASE.items);
+    render(tableFor('items', 'server', { items: ITEMS }));
+    let answer: ((r: Response) => void) | undefined;
+    fetchSpy.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await userEvent.setup().type(searchBox(), 'Pencil');
+    expect(screen.queryByText(/Nothing matched/)).toBeNull();
+    await settle();
+    expect(document.body.textContent).toContain('(searching…)');
+    expect(screen.queryByText(/Nothing matched/)).toBeNull();
+    expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+
+    const pencil = row({ id: 'pencil', name: 'Pencil Box' });
+    await act(async () => {
+      answer!({ ok: true, json: async () => ({ items: [pencil], total: 1 }) } as Response);
+    });
+    await settle();
+    expect(emptyArea()).toBeNull();
+    expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(1);
+  });
+
+  it('items: an emptied box on Low + critical says "No low-stock items" only once the list without the search lands', async () => {
+    setAddress(`${BASE.items}?q=zz&stock=low`);
+    const view = render(tableFor('items', 'server', { items: [], initialQuery: 'zz' }));
+    await settle();
+    expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+    routerMock.replace.mockClear();
+    await userEvent.setup().clear(searchBox());
+    await settle();
+    // The emptied box navigates without the search; until it lands the rows are the old search's.
+    expect(routerMock.replace.mock.calls.map((c) => c[0])).toEqual([`${BASE.items}?stock=low`]);
+    expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+
+    await land(`${BASE.items}?stock=low`, () =>
+      view.rerender(tableFor('items', 'server', { items: [] })),
+    );
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'No low-stock items' }),
+    ).toBeInTheDocument();
+  });
+
+  it('items: when the search request fails, nothing says "Nothing matched": the server never answered', async () => {
+    setAddress(BASE.items);
+    render(tableFor('items', 'server', { items: ITEMS }));
+    fetchSpy.mockImplementation(
+      async () => ({ ok: false, status: 500, json: async () => ({}) }) as Response,
+    );
+    await userEvent.setup().type(searchBox(), 'zzqqxx');
+    await settle();
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(screen.queryByText(/Nothing matched/)).toBeNull();
+    expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+    expect(window.location.search).toBe('');
+  });
 });
 
 describe('Phone width: the empty area is never inside the sideways scroller (review 2026-10-20)', () => {

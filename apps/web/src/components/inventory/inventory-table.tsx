@@ -2390,8 +2390,19 @@ export function InventoryTable({
   // ticked filters (optimistic) and the address's stock view, Expected,
   // Auto-archived only and rack, so it is right in instant mode the moment a
   // filter is set, after a reload, from a pasted address and in server mode.
+  //
+  // In server mode the server answers the box's search, by the box's request
+  // (which then writes the search into the address) or by the page of an
+  // address that holds it. Until then the table filters only the rows of its
+  // page and the count line says "(searching…)", and while an emptied box's
+  // navigation is out the rows are still the old search's. A list's own
+  // message says what was found ("Nothing matched ..."), so in server mode it
+  // shows only while the box's search is the address's; otherwise the general
+  // line shows, as it did before batch D (review of B1, 2026-11-01). Instant
+  // mode answers each keystroke over the whole list.
+  const boxSearchAnswered = instantMode || q.trim() === addressQ.trim();
   const emptyMessage =
-    displayed.length === 0
+    displayed.length === 0 && boxSearchAnswered
       ? listEmptyMessage(rentalsOnly ? 'rentals' : showBookFields ? 'books' : 'items', {
           ...instantStateFromSearchParams(params),
           q,
