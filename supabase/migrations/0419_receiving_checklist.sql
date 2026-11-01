@@ -1,10 +1,12 @@
--- 0406_receiving_checklist.sql
+-- 0419_receiving_checklist.sql
 --
 -- Receiving checklist, slice F4-1 (owner-approved lean scope, blanket go
 -- 2026-09-27; plan stockpilot-work/six/f4-plan.md sections 3 and 4 F4-1, with
--- the 2026-09-30 refresh's corrections). Written as 0398 and renumbered 0406
--- when it was rebased onto main, where 0398 is the returns contract. Nothing
--- in a function body names the number, so the renumbering moved no md5 pin.
+-- the 2026-09-30 refresh's corrections). Written as 0398, renumbered 0406
+-- when it was rebased onto main (where 0398 is the returns contract), and
+-- renumbered 0419 on 2026-11-01 to follow the migrations shipped or queued
+-- before it. Nothing in a function body names the number, so neither
+-- renumbering moved an md5 pin.
 --
 -- A manager publishes a short checklist for deliveries. After a receipt posts,
 -- or later from its receipt card, a manager records a run of it: what a person
@@ -102,7 +104,7 @@
 -- applied. SHARE ROW EXCLUSIVE lets plain reads through but makes writes to
 -- those six tables wait for the commit (milliseconds); the policy_grants
 -- tables (auth sessions among them) wait too. Push off-peak.
--- scripts/db-concurrency/0406_migration_lock_footprint.sh.
+-- scripts/db-concurrency/0419_migration_lock_footprint.sh.
 -- At run time: checklist_publish and checklist_retire take a transaction
 -- advisory lock per organization and binding, then the live version FOR NO
 -- KEY UPDATE (a start inserting a run that references it only takes KEY

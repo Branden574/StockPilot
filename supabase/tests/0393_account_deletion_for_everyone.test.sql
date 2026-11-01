@@ -318,7 +318,7 @@ select is(
   -- request log's person, item_grouping_requests.user_id>user_profiles:c:NN
   -- (recomputed from that production census with the one entry added),
   -- 885e1d5a80696bacdf3424d5f34953e2|135, which production gives at head 0401.
-  -- Re-pinned by 0406: the receiving checklist adds four person keys, all ON
+  -- Re-pinned by 0419: the receiving checklist adds four person keys, all ON
   -- DELETE SET NULL on nullable columns (A3 rule): checklist_runs.completed_by
   -- and started_by, checklist_versions.published_by and retired_by, to
   -- user_profiles. Computed from production's own 135 rows (the schema-only
@@ -358,7 +358,7 @@ select is(
              where c.conrelid = ('public.' || m.tbl)::regclass and c.contype = 'f'
                and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)
                and c.confdeltype = 'n')),
-  -- Re-pinned by 0406 (was the 16 without checklist_runs and
+  -- Re-pinned by 0419 (was the 16 without checklist_runs and
   -- checklist_versions): the receiving checklist's two new tables carry the
   -- marker for their person columns (A3 rule for a new person column shown
   -- as "Deleted user"); their trigger pairs, stamps and CHECKs are proven by
@@ -381,7 +381,7 @@ select is(
     where c.connamespace = 'public'::regnamespace and c.contype = 'c'
       and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
            or c.conname = 'cc_ai_scans_confirm_chk')),
-  -- Re-pinned by 0406 (was the same list without the two checklist_ rows):
+  -- Re-pinned by 0419 (was the same list without the two checklist_ rows):
   -- the receiving checklist adds two exactly-one CHECKs of the same rule on
   -- its own tables. The selector stays every *_deleted_chk in public, so any
   -- later one, on any table, must be validated and listed here.
@@ -392,7 +392,7 @@ select is(
   'putaway_moves.putaway_moves_performed_by_deleted_chk:true,receipts.receipts_received_by_deleted_chk:true,'
   'schedule_events.schedule_events_created_by_deleted_chk:true,'
   'size_count_training_samples.size_count_training_samples_captured_by_deleted_chk:true',
-  'K6: the nine exactly-one CHECKs, 0406''s two and the relaxed cc_ai_scans_confirm_chk exist and are validated');
+  'K6: the nine exactly-one CHECKs, 0419''s two and the relaxed cc_ai_scans_confirm_chk exist and are validated');
 select is(
   (select coalesce(string_agg(x.tbl || ':' || x.problem, ',' order by x.tbl), '')
      from (
@@ -546,11 +546,11 @@ select is(
                      or c.conname in ('cc_ai_scans_confirm_chk', 'order_requests_delivery_target_chk', 'order_submissions_user_id_fkey',
                                       'delivery_locations_driver_user_id_fkey', 'user_permission_overrides_updated_by_fkey',
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
-  -- Re-pinned by 0406 (was true|true|true/16): its two exactly-one CHECKs
+  -- Re-pinned by 0419 (was true|true|true/16): its two exactly-one CHECKs
   -- (K6) say "the 0393 rule" in their comments, so every *_deleted_chk in
   -- public still has to name 0393.
   'true|true|true/18',
-  'K20: the five functions, the 16 deleted_users columns, the 16 constraints 0393 adds or restates and 0406''s two exactly-one CHECKs say so in their comments');
+  'K20: the five functions, the 16 deleted_users columns, the 16 constraints 0393 adds or restates and 0419''s two exactly-one CHECKs say so in their comments');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'

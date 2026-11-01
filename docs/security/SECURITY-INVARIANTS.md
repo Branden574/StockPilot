@@ -1183,7 +1183,7 @@ actually fire.
 
 ### INV-C8 — the receiving checklist is written only through its four gated functions; a run is read exactly where its PO is
 
-- **Invariant** (0406, written as 0398 and renumbered when it was rebased onto main; F4-1):
+- **Invariant** (0419, written as 0398, renumbered 0406 when it was rebased onto main and 0419 on 2026-11-01; F4-1):
   `checklist_versions` and `checklist_runs` take no write from any API role.
   - **Grants.** PUBLIC, `anon`, `authenticated` and `service_role` hold no
     INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES or MAINTAIN on
@@ -1223,12 +1223,12 @@ actually fire.
   - **No other write.** The functions touch no ledger table, receipt,
     purchase order, stock row, attachment or notification.
     `post_receipt_v2`, `reverse_receipt`, `recompute_po_status` and the
-    receipt guards are unchanged (their md5s are pinned in the 0406 suite,
+    receipt guards are unchanged (their md5s are pinned in the 0419 suite,
     Z1/Z2). Posting or reversing a receipt never fails because of the
     checklist: a start's new run holds KEY SHARE on the receipt and the
     purchase order until it commits, so a post on that purchase order or a
     reversal of that receipt can wait those milliseconds, then goes through
-    (`0406_checklist_races.sh` sections 7 to 9).
+    (`0419_checklist_races.sh` sections 7 to 9).
   - **Account deletion** (0393's pattern, the A3 rule for a new person
     column): `published_by`, `retired_by`, `started_by` and `completed_by`
     are ON DELETE SET NULL to `user_profiles`, each table carries
@@ -1245,7 +1245,7 @@ actually fire.
   `ReceivingService.postReceipt` share), maps refusals by SQLSTATE and hint
   only, and reads through the caller's own client, so RLS decides what is
   visible.
-- **Tested at**: [`0406_receiving_checklist.test.sql`](../../supabase/tests/0406_receiving_checklist.test.sql)
+- **Tested at**: [`0419_receiving_checklist.test.sql`](../../supabase/tests/0419_receiving_checklist.test.sql)
   A (shape, grants and function posture), P (publish: normalised steps,
   one live version, stale and replayed publishes, every refusal), S (start),
   V (save: every refusal through the case table tied to core by `-- case:`
@@ -1256,8 +1256,8 @@ actually fire.
   guards); each break named
   "Mutation:" in the file is caught by the test before it. The 0359 census,
   INV-25, the 0367 class guard and 0393's person-key census (K1, K4) cover
-  the new functions and columns. `scripts/db-concurrency/0406_checklist_races.sh`
-  and `0406_migration_lock_footprint.sh` prove the races and the push's
+  the new functions and columns. `scripts/db-concurrency/0419_checklist_races.sh`
+  and `0419_migration_lock_footprint.sh` prove the races and the push's
   lock footprint. App side: `receiving-checklist.test.ts` (service), the
   `/api/v1/receiving-checks` route tests, core `receiving-gate.test.ts`,
   `receiving-checklist.test.ts` and `receiving-checklist-copy.test.ts`, and

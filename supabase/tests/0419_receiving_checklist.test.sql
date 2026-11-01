@@ -1,7 +1,8 @@
--- supabase/tests/0406_receiving_checklist.test.sql
--- pgTAP proof for migration 0406 (receiving checklist, F4-1; written as 0398
--- and renumbered 0406 when it was rebased onto main, where 0398 is the
--- returns contract; nothing below depends on the number): a versioned
+-- supabase/tests/0419_receiving_checklist.test.sql
+-- pgTAP proof for migration 0419 (receiving checklist, F4-1; written as 0398,
+-- renumbered 0406 when it was rebased onto main, where 0398 is the returns
+-- contract, and 0419 on 2026-11-01 to follow the migrations shipped or queued
+-- before it; nothing below depends on the number): a versioned
 -- checklist a manager publishes, and runs a manager records on receipts,
 -- written only through four gated SECURITY DEFINER functions, visible exactly
 -- when the purchase order is, and writing no stock.
@@ -83,71 +84,71 @@
 -- Roles: fixtures as the test superuser. Every call runs through pg_temp.rpc,
 -- which switches role and claims with set_config inside a subtransaction (the
 -- 0387/0393 helper shape), kept or always undone. begin/rollback: nothing
--- leaks. Namespace 04060000.
+-- leaks. Namespace 04190000.
 
 begin;
 
 select plan(99);
 
-\set orgA     '\'04060000-0000-0000-0000-00000000000a\''
-\set orgB     '\'04060000-0000-0000-0000-00000000000b\''
-\set orgC     '\'04060000-0000-0000-0000-00000000000c\''
-\set orgD     '\'04060000-0000-0000-0000-00000000000d\''
-\set own      '\'04060000-0000-0000-0000-0000000000a0\''
-\set mgr      '\'04060000-0000-0000-0000-0000000000a1\''
-\set mgr2     '\'04060000-0000-0000-0000-0000000000a2\''
-\set mgrNoMan '\'04060000-0000-0000-0000-0000000000a3\''
-\set mgrNoAdj '\'04060000-0000-0000-0000-0000000000a4\''
-\set mgrNoRd  '\'04060000-0000-0000-0000-0000000000a5\''
-\set dis      '\'04060000-0000-0000-0000-0000000000a6\''
-\set stf      '\'04060000-0000-0000-0000-0000000000a7\''
-\set stfB     '\'04060000-0000-0000-0000-0000000000a8\''
-\set vwr      '\'04060000-0000-0000-0000-0000000000a9\''
-\set vwrNoRd  '\'04060000-0000-0000-0000-0000000000aa\''
-\set vwrMan   '\'04060000-0000-0000-0000-0000000000ab\''
-\set outB     '\'04060000-0000-0000-0000-0000000000b1\''
-\set mgrC     '\'04060000-0000-0000-0000-0000000000c1\''
-\set ownD     '\'04060000-0000-0000-0000-0000000000d0\''
-\set del      '\'04060000-0000-0000-0000-0000000000d1\''
-\set nobody   '\'04060000-0000-0000-0000-0000000000ff\''
-\set whA      '\'04060000-0000-0000-0000-000000000101\''
-\set whA2     '\'04060000-0000-0000-0000-000000000102\''
-\set whB      '\'04060000-0000-0000-0000-000000000103\''
-\set whC      '\'04060000-0000-0000-0000-000000000104\''
-\set whD      '\'04060000-0000-0000-0000-000000000105\''
-\set itA      '\'04060000-0000-0000-0000-000000000201\''
-\set itA2     '\'04060000-0000-0000-0000-000000000202\''
-\set itB      '\'04060000-0000-0000-0000-000000000203\''
-\set itC      '\'04060000-0000-0000-0000-000000000204\''
-\set itD      '\'04060000-0000-0000-0000-000000000205\''
-\set poA1     '\'04060000-0000-0000-0000-000000000301\''
-\set poA2     '\'04060000-0000-0000-0000-000000000302\''
-\set poB      '\'04060000-0000-0000-0000-000000000303\''
-\set poC      '\'04060000-0000-0000-0000-000000000304\''
-\set poD      '\'04060000-0000-0000-0000-000000000305\''
-\set lnA1     '\'04060000-0000-0000-0000-000000000311\''
-\set lnA2     '\'04060000-0000-0000-0000-000000000312\''
-\set lnB      '\'04060000-0000-0000-0000-000000000313\''
-\set lnC      '\'04060000-0000-0000-0000-000000000314\''
-\set lnD      '\'04060000-0000-0000-0000-000000000315\''
-\set procA    '\'04060000-0000-0000-0000-000000000401\''
-\set procArch '\'04060000-0000-0000-0000-000000000402\''
-\set procB    '\'04060000-0000-0000-0000-000000000403\''
-\set cpA1     '\'04060000-0000-0000-0000-000000000501\''
-\set cpA2     '\'04060000-0000-0000-0000-000000000502\''
-\set cpA3     '\'04060000-0000-0000-0000-000000000503\''
-\set cpX      '\'04060000-0000-0000-0000-000000000504\''
-\set cpD1     '\'04060000-0000-0000-0000-000000000505\''
-\set cpD2     '\'04060000-0000-0000-0000-000000000506\''
-\set sv1      '\'04060000-0000-0000-0000-000000000601\''
-\set sv2      '\'04060000-0000-0000-0000-000000000602\''
-\set sv3      '\'04060000-0000-0000-0000-000000000603\''
-\set sv4      '\'04060000-0000-0000-0000-000000000604\''
-\set sv5      '\'04060000-0000-0000-0000-000000000605\''
-\set sv6      '\'04060000-0000-0000-0000-000000000606\''
-\set sv7      '\'04060000-0000-0000-0000-000000000607\''
-\set sv8      '\'04060000-0000-0000-0000-000000000608\''
-\set missing  '\'04060000-0000-0000-0000-0000000009ff\''
+\set orgA     '\'04190000-0000-0000-0000-00000000000a\''
+\set orgB     '\'04190000-0000-0000-0000-00000000000b\''
+\set orgC     '\'04190000-0000-0000-0000-00000000000c\''
+\set orgD     '\'04190000-0000-0000-0000-00000000000d\''
+\set own      '\'04190000-0000-0000-0000-0000000000a0\''
+\set mgr      '\'04190000-0000-0000-0000-0000000000a1\''
+\set mgr2     '\'04190000-0000-0000-0000-0000000000a2\''
+\set mgrNoMan '\'04190000-0000-0000-0000-0000000000a3\''
+\set mgrNoAdj '\'04190000-0000-0000-0000-0000000000a4\''
+\set mgrNoRd  '\'04190000-0000-0000-0000-0000000000a5\''
+\set dis      '\'04190000-0000-0000-0000-0000000000a6\''
+\set stf      '\'04190000-0000-0000-0000-0000000000a7\''
+\set stfB     '\'04190000-0000-0000-0000-0000000000a8\''
+\set vwr      '\'04190000-0000-0000-0000-0000000000a9\''
+\set vwrNoRd  '\'04190000-0000-0000-0000-0000000000aa\''
+\set vwrMan   '\'04190000-0000-0000-0000-0000000000ab\''
+\set outB     '\'04190000-0000-0000-0000-0000000000b1\''
+\set mgrC     '\'04190000-0000-0000-0000-0000000000c1\''
+\set ownD     '\'04190000-0000-0000-0000-0000000000d0\''
+\set del      '\'04190000-0000-0000-0000-0000000000d1\''
+\set nobody   '\'04190000-0000-0000-0000-0000000000ff\''
+\set whA      '\'04190000-0000-0000-0000-000000000101\''
+\set whA2     '\'04190000-0000-0000-0000-000000000102\''
+\set whB      '\'04190000-0000-0000-0000-000000000103\''
+\set whC      '\'04190000-0000-0000-0000-000000000104\''
+\set whD      '\'04190000-0000-0000-0000-000000000105\''
+\set itA      '\'04190000-0000-0000-0000-000000000201\''
+\set itA2     '\'04190000-0000-0000-0000-000000000202\''
+\set itB      '\'04190000-0000-0000-0000-000000000203\''
+\set itC      '\'04190000-0000-0000-0000-000000000204\''
+\set itD      '\'04190000-0000-0000-0000-000000000205\''
+\set poA1     '\'04190000-0000-0000-0000-000000000301\''
+\set poA2     '\'04190000-0000-0000-0000-000000000302\''
+\set poB      '\'04190000-0000-0000-0000-000000000303\''
+\set poC      '\'04190000-0000-0000-0000-000000000304\''
+\set poD      '\'04190000-0000-0000-0000-000000000305\''
+\set lnA1     '\'04190000-0000-0000-0000-000000000311\''
+\set lnA2     '\'04190000-0000-0000-0000-000000000312\''
+\set lnB      '\'04190000-0000-0000-0000-000000000313\''
+\set lnC      '\'04190000-0000-0000-0000-000000000314\''
+\set lnD      '\'04190000-0000-0000-0000-000000000315\''
+\set procA    '\'04190000-0000-0000-0000-000000000401\''
+\set procArch '\'04190000-0000-0000-0000-000000000402\''
+\set procB    '\'04190000-0000-0000-0000-000000000403\''
+\set cpA1     '\'04190000-0000-0000-0000-000000000501\''
+\set cpA2     '\'04190000-0000-0000-0000-000000000502\''
+\set cpA3     '\'04190000-0000-0000-0000-000000000503\''
+\set cpX      '\'04190000-0000-0000-0000-000000000504\''
+\set cpD1     '\'04190000-0000-0000-0000-000000000505\''
+\set cpD2     '\'04190000-0000-0000-0000-000000000506\''
+\set sv1      '\'04190000-0000-0000-0000-000000000601\''
+\set sv2      '\'04190000-0000-0000-0000-000000000602\''
+\set sv3      '\'04190000-0000-0000-0000-000000000603\''
+\set sv4      '\'04190000-0000-0000-0000-000000000604\''
+\set sv5      '\'04190000-0000-0000-0000-000000000605\''
+\set sv6      '\'04190000-0000-0000-0000-000000000606\''
+\set sv7      '\'04190000-0000-0000-0000-000000000607\''
+\set sv8      '\'04190000-0000-0000-0000-000000000608\''
+\set missing  '\'04190000-0000-0000-0000-0000000009ff\''
 
 -- ══ Helpers (the 0387/0393 shape, sentinel XX398) ═════════════════════════
 create function pg_temp.hint(p_hint text) returns text language sql immutable as $$
@@ -295,29 +296,29 @@ grant all on j, ids to authenticated;
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,      '0406-own@test.local',      '{}'::jsonb),
-  (:mgr,      '0406-mgr@test.local',      '{"full_name": "Manager One"}'::jsonb),
-  (:mgr2,     '0406-mgr2@test.local',     '{}'::jsonb),
-  (:mgrNoMan, '0406-mgrnoman@test.local', '{}'::jsonb),
-  (:mgrNoAdj, '0406-mgrnoadj@test.local', '{}'::jsonb),
-  (:mgrNoRd,  '0406-mgrnord@test.local',  '{}'::jsonb),
-  (:dis,      '0406-dis@test.local',      '{}'::jsonb),
-  (:stf,      '0406-stf@test.local',      '{}'::jsonb),
-  (:stfB,     '0406-stfb@test.local',     '{}'::jsonb),
-  (:vwr,      '0406-vwr@test.local',      '{}'::jsonb),
-  (:vwrNoRd,  '0406-vwrnord@test.local',  '{}'::jsonb),
-  (:vwrMan,   '0406-vwrman@test.local',   '{}'::jsonb),
-  (:outB,     '0406-outb@test.local',     '{}'::jsonb),
-  (:mgrC,     '0406-mgrc@test.local',     '{}'::jsonb),
-  (:ownD,     '0406-ownd@test.local',     '{}'::jsonb),
-  (:del,      '0406-del@test.local',      '{}'::jsonb),
-  (:nobody,   '0406-nobody@test.local',   '{}'::jsonb)
+  (:own,      '0419-own@test.local',      '{}'::jsonb),
+  (:mgr,      '0419-mgr@test.local',      '{"full_name": "Manager One"}'::jsonb),
+  (:mgr2,     '0419-mgr2@test.local',     '{}'::jsonb),
+  (:mgrNoMan, '0419-mgrnoman@test.local', '{}'::jsonb),
+  (:mgrNoAdj, '0419-mgrnoadj@test.local', '{}'::jsonb),
+  (:mgrNoRd,  '0419-mgrnord@test.local',  '{}'::jsonb),
+  (:dis,      '0419-dis@test.local',      '{}'::jsonb),
+  (:stf,      '0419-stf@test.local',      '{}'::jsonb),
+  (:stfB,     '0419-stfb@test.local',     '{}'::jsonb),
+  (:vwr,      '0419-vwr@test.local',      '{}'::jsonb),
+  (:vwrNoRd,  '0419-vwrnord@test.local',  '{}'::jsonb),
+  (:vwrMan,   '0419-vwrman@test.local',   '{}'::jsonb),
+  (:outB,     '0419-outb@test.local',     '{}'::jsonb),
+  (:mgrC,     '0419-mgrc@test.local',     '{}'::jsonb),
+  (:ownD,     '0419-ownd@test.local',     '{}'::jsonb),
+  (:del,      '0419-del@test.local',      '{}'::jsonb),
+  (:nobody,   '0419-nobody@test.local',   '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0406 Receiving A', '0406-receiving-a'),
-  (:orgB, '0406 Receiving B', '0406-receiving-b'),
-  (:orgC, '0406 Receiving C', '0406-receiving-c'),
-  (:orgD, '0406 Receiving D', '0406-receiving-d');
+  (:orgA, '0419 Receiving A', '0419-receiving-a'),
+  (:orgB, '0419 Receiving B', '0419-receiving-b'),
+  (:orgC, '0419 Receiving C', '0419-receiving-c'),
+  (:orgD, '0419 Receiving D', '0419-receiving-d');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,      'owner',   now()),
   (:orgA, :mgr,      'manager', now()),
@@ -345,11 +346,11 @@ insert into public.organization_modules (organization_id, module_id, enabled, ti
 on conflict (organization_id, module_id) do update set enabled = excluded.enabled;
 -- The seed trigger creates Staging and Unplaced per warehouse.
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA,  :orgA, '0406 Main',   'WH-0406A',  'active'),
-  (:whA2, :orgA, '0406 Annex',  'WH-0406A2', 'active'),
-  (:whB,  :orgB, '0406 Bee',    'WH-0406B',  'active'),
-  (:whC,  :orgC, '0406 Cee',    'WH-0406C',  'active'),
-  (:whD,  :orgD, '0406 Dee',    'WH-0406D',  'active');
+  (:whA,  :orgA, '0419 Main',   'WH-0419A',  'active'),
+  (:whA2, :orgA, '0419 Annex',  'WH-0419A2', 'active'),
+  (:whB,  :orgB, '0419 Bee',    'WH-0419B',  'active'),
+  (:whC,  :orgC, '0419 Cee',    'WH-0419C',  'active'),
+  (:whD,  :orgD, '0419 Dee',    'WH-0419D',  'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,     :whA,  true),
   (:orgA, :stfB,    :whA2, true),
@@ -363,21 +364,21 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   (:orgA, :vwrNoRd,  'purchase_orders:read',   false),
   (:orgA, :vwrMan,   'purchase_orders:manage', true);
 insert into public.procedures (id, organization_id, title, archived_at) values
-  (:procA,    :orgA, '0406 Receiving SOP', null),
-  (:procArch, :orgA, '0406 Old SOP',       now()),
-  (:procB,    :orgB, '0406 Other SOP',     null);
+  (:procA,    :orgA, '0419 Receiving SOP', null),
+  (:procArch, :orgA, '0419 Old SOP',       now()),
+  (:procB,    :orgB, '0419 Other SOP',     null);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
-  (:itA,  :orgA, :whA,  '0406-A',  '0406 Shirt',       0, 'active', 'none'),
-  (:itA2, :orgA, :whA2, '0406-A2', '0406 Annex shirt', 0, 'active', 'none'),
-  (:itB,  :orgB, :whB,  '0406-B',  '0406 Bee shirt',   0, 'active', 'none'),
-  (:itC,  :orgC, :whC,  '0406-C',  '0406 Cee shirt',   0, 'active', 'none'),
-  (:itD,  :orgD, :whD,  '0406-D',  '0406 Dee shirt',   0, 'active', 'none');
+  (:itA,  :orgA, :whA,  '0419-A',  '0419 Shirt',       0, 'active', 'none'),
+  (:itA2, :orgA, :whA2, '0419-A2', '0419 Annex shirt', 0, 'active', 'none'),
+  (:itB,  :orgB, :whB,  '0419-B',  '0419 Bee shirt',   0, 'active', 'none'),
+  (:itC,  :orgC, :whC,  '0419-C',  '0419 Cee shirt',   0, 'active', 'none'),
+  (:itD,  :orgD, :whD,  '0419-D',  '0419 Dee shirt',   0, 'active', 'none');
 insert into public.purchase_orders (id, organization_id, po_number, status, destination_location_id) values
-  (:poA1, :orgA, '0406-PO-A1', 'ordered', (select id from public.locations where warehouse_id = :whA  and kind = 'staging' limit 1)),
-  (:poA2, :orgA, '0406-PO-A2', 'ordered', (select id from public.locations where warehouse_id = :whA2 and kind = 'staging' limit 1)),
-  (:poB,  :orgB, '0406-PO-B',  'ordered', (select id from public.locations where warehouse_id = :whB  and kind = 'staging' limit 1)),
-  (:poC,  :orgC, '0406-PO-C',  'ordered', (select id from public.locations where warehouse_id = :whC  and kind = 'staging' limit 1)),
-  (:poD,  :orgD, '0406-PO-D',  'ordered', (select id from public.locations where warehouse_id = :whD  and kind = 'staging' limit 1));
+  (:poA1, :orgA, '0419-PO-A1', 'ordered', (select id from public.locations where warehouse_id = :whA  and kind = 'staging' limit 1)),
+  (:poA2, :orgA, '0419-PO-A2', 'ordered', (select id from public.locations where warehouse_id = :whA2 and kind = 'staging' limit 1)),
+  (:poB,  :orgB, '0419-PO-B',  'ordered', (select id from public.locations where warehouse_id = :whB  and kind = 'staging' limit 1)),
+  (:poC,  :orgC, '0419-PO-C',  'ordered', (select id from public.locations where warehouse_id = :whC  and kind = 'staging' limit 1)),
+  (:poD,  :orgD, '0419-PO-D',  'ordered', (select id from public.locations where warehouse_id = :whD  and kind = 'staging' limit 1));
 insert into public.purchase_order_items (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost) values
   (:lnA1, :orgA, :poA1, :itA,  100, 0, 5),
   (:lnA2, :orgA, :poA2, :itA2, 100, 0, 5),
@@ -396,17 +397,17 @@ returns uuid language sql as $$
     p_key, 'hash-' || p_key)))::uuid
 $$;
 insert into ids values
-  ('rc1', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 2, '0406-k1')),
-  ('rc2', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0406-k2')),
-  ('rc3', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0406-k3')),
-  ('rc4', pg_temp.post(:mgr,  :poA2, :whA2, :lnA2, 1, '0406-k4')),
-  ('rc5', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0406-k5')),
-  ('rcB', pg_temp.post(:outB, :poB,  :whB,  :lnB,  1, '0406-kB')),
-  ('rcC', pg_temp.post(:mgrC, :poC,  :whC,  :lnC,  1, '0406-kC')),
-  ('rcD', pg_temp.post(:ownD, :poD,  :whD,  :lnD,  1, '0406-kD'));
+  ('rc1', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 2, '0419-k1')),
+  ('rc2', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0419-k2')),
+  ('rc3', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0419-k3')),
+  ('rc4', pg_temp.post(:mgr,  :poA2, :whA2, :lnA2, 1, '0419-k4')),
+  ('rc5', pg_temp.post(:mgr,  :poA1, :whA,  :lnA1, 1, '0419-k5')),
+  ('rcB', pg_temp.post(:outB, :poB,  :whB,  :lnB,  1, '0419-kB')),
+  ('rcC', pg_temp.post(:mgrC, :poC,  :whC,  :lnC,  1, '0419-kC')),
+  ('rcD', pg_temp.post(:ownD, :poD,  :whD,  :lnD,  1, '0419-kD'));
 insert into ids values
   ('rc2rev', pg_temp.val(pg_temp.rpc(:mgr, format('select v.id::text from public.reverse_receipt(%L, %L) v',
-                                                   (select v from ids where k = 'rc2'), '0406 test reversal')))::uuid);
+                                                   (select v from ids where k = 'rc2'), '0419 test reversal')))::uuid);
 select v as "rc1" from ids where k = 'rc1' \gset
 select v as "rc2" from ids where k = 'rc2' \gset
 select v as "rc3" from ids where k = 'rc3' \gset
@@ -894,8 +895,8 @@ create function pg_temp.seen(p_sub uuid) returns text language sql as $$
     'select (select count(*) filter (where purchase_order_id = %L) || ''/'' || count(*) filter (where purchase_order_id = %L)
                from public.checklist_runs where organization_id = %L)
             || ''|'' || (select count(*) from public.checklist_versions where organization_id = %L)',
-    '04060000-0000-0000-0000-000000000301', '04060000-0000-0000-0000-000000000302',
-    '04060000-0000-0000-0000-00000000000a', '04060000-0000-0000-0000-00000000000a'))
+    '04190000-0000-0000-0000-000000000301', '04190000-0000-0000-0000-000000000302',
+    '04190000-0000-0000-0000-00000000000a', '04190000-0000-0000-0000-00000000000a'))
 $$;
 select is(pg_temp.seen(:mgr) || ',' || pg_temp.seen(:own), 'ok:3/1|3,ok:3/1|3',
   'L1: managers and owners see every run (3 on PO A1, 1 on PO A2) and every version');
@@ -932,7 +933,7 @@ select is(
      from n_before b),
   'true,true,true,true,true,true,true,true',
   'N1: every publish, retire, start and save above left stock, movements, holdings, receipts, receipt lines and the purchase orders exactly as they were');
-select is(pg_temp.rpc(:mgr, format('select v.status from public.reverse_receipt(%L, %L) v', :'rc3', '0406 reversal of a checked receipt'), true,
+select is(pg_temp.rpc(:mgr, format('select v.status from public.reverse_receipt(%L, %L) v', :'rc3', '0419 reversal of a checked receipt'), true,
                       format('select r.status || ''/'' || (select status from public.receipts where id = %L) || ''/'' || r.revision from public.checklist_runs r where r.id = %L', :'rc3', :'run3')),
   'ok:reversal|completed/reversed/1',
   'N2: reverse_receipt on a receipt with a completed run succeeds, and the run stays as it was');
@@ -961,7 +962,7 @@ select is(
   'ok:1|null/null/true/true|null/null/true/true/completed/true|2/1|true',
   'D1: deleting the account of a manager who published, turned off, started and completed: both rows are kept, every person column is null and stamped (the 0393 marker; the CHECKs hold), the run stays completed, and the other publisher is untouched (undone)');
 -- Desk check F12: a person who only completed a run (the owner started it).
-insert into ids values ('rcD2', pg_temp.post(:ownD, :poD, :whD, :lnD, 1, '0406-kD2'));
+insert into ids values ('rcD2', pg_temp.post(:ownD, :poD, :whD, :lnD, 1, '0419-kD2'));
 select v as "rcD2" from ids where k = 'rcD2' \gset
 select pg_temp.rpc(:ownD, pg_temp.start(:'rcD2')) as "sD2" \gset
 select pg_temp.val(:'sD2')::jsonb ->> 'runId' as "runD2" \gset

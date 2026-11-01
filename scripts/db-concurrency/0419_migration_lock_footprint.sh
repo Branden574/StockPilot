@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0406 (receiving checklist, F4-1; the file is
+# Lock footprint of migration 0419 (receiving checklist, F4-1; the file is
 # found by its name, so a renumber at push time needs no edit here). The push
 # runs the whole file as one batch, so every table lock a statement takes is
 # held until the file commits. The two new tables' foreign keys add RI
@@ -54,7 +54,7 @@
 # only (docker container supabase_db_stockpilot). Exit status 0 = every check
 # passed.
 #
-# Usage: bash scripts/db-concurrency/0406_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0419_migration_lock_footprint.sh
 
 set -uo pipefail
 
@@ -65,12 +65,12 @@ MIG="$(find "$REPO/supabase/migrations" -name '*_receiving_checklist.sql' | sort
 TMP="$(mktemp -d)"
 BG=()
 
-ORG='04062222-0000-0000-0000-00000000000a'
-MGR='04062222-0000-0000-0000-0000000000a1'
-WH='04062222-0000-0000-0000-0000000000c1'
-ITEM='04062222-0000-0000-0000-0000000000c2'
-PO='04062222-0000-0000-0000-0000000000d1'
-RCPT='04062222-0000-0000-0000-0000000000e1'
+ORG='04192222-0000-0000-0000-00000000000a'
+MGR='04192222-0000-0000-0000-0000000000a1'
+WH='04192222-0000-0000-0000-0000000000c1'
+ITEM='04192222-0000-0000-0000-0000000000c2'
+PO='04192222-0000-0000-0000-0000000000d1'
+RCPT='04192222-0000-0000-0000-0000000000e1'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -115,15 +115,15 @@ fi
 
 cleanup_rows
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0406-lock-mgr@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0406 Lock Org', '0406-lock');
+insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0419-lock-mgr@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0419 Lock Org', '0419-lock');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$MGR', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0406 Lock Main', 'WH-0406-LK', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0419 Lock Main', 'WH-0419-LK', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0406-LK', 0, 'active');
-insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'PO-0406-LK', 'partially_received');
+  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0419-LK', 0, 'active');
+insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'PO-0419-LK', 'partially_received');
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash)
-  values ('$RCPT', '$ORG', '$PO', '$WH', 'R-0406-LK', 'posted', '$MGR', md5('lock'));
+  values ('$RCPT', '$ORG', '$PO', '$WH', 'R-0419-LK', 'posted', '$MGR', md5('lock'));
 SQL
 
 # The file in three parts: before the prelude, the prelude, the rest.
@@ -205,16 +205,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0406-lock-file-%'"
+ where a.application_name like '0419-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0406-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0419-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0406-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0419-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   local samples=0 sleeping=0 held=0 r
@@ -256,7 +256,7 @@ run_behind 3b-short-receipt-writer "update public.receipts set notes = notes whe
 
 # ── 4 and 5. The two deadlock shapes, each already holding its first lock ─
 shape() { # shape <label> <first lock sql> <second step sql>
-  local label="$1" app="0406-lock-shape-$1"
+  local label="$1" app="0419-lock-shape-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\ncommit;\nselect 'SHAPE_DONE';\n" "$app" "$2" "$3" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$label.s.out" 2>&1 &
   local sp=$!
@@ -291,14 +291,14 @@ shape "5-receipt-then-profile" \
 
 # ── 6. While the file holds its locks, readers pass and writers wait ──────
 {
-  echo "set application_name = '0406-lock-migration-6';"
+  echo "set application_name = '0419-lock-migration-6';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/6m.out" 2> "$TMP/6m.err" &
 BG+=("$!")
-if ! wait_sleeping 0406-lock-migration-6; then
+if ! wait_sleeping 0419-lock-migration-6; then
   bad "6: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/6m.err")"
 else
   t0="$(now_ms)"
@@ -336,10 +336,10 @@ sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s
 if grep -q 'do \$lock\$' "$TMP/no-prelude.sql" || [ "$(grep -c "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql")" != "2" ]; then
   bad "7: could not build the no-prelude control file"
 else
-  printf "set application_name = '0406-lock-control';\nbegin;\nupdate public.receipts set notes = notes where id = '%s';\nselect pg_sleep(1.5);\nupdate public.user_profiles set full_name = full_name where id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$RCPT" "$MGR" \
+  printf "set application_name = '0419-lock-control';\nbegin;\nupdate public.receipts set notes = notes where id = '%s';\nselect pg_sleep(1.5);\nupdate public.user_profiles set full_name = full_name where id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$RCPT" "$MGR" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.s.out" 2>&1 &
   sp=$!
-  if wait_sleeping 0406-lock-control; then
+  if wait_sleeping 0419-lock-control; then
     { echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.m.out" 2> "$TMP/7.m.err"
     wait "$sp"
     S40="$(grep -c '40P01' "$TMP/7.s.out" || true)"
