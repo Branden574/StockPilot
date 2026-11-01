@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { PoImportsService } from '@/server/services/po-imports';
@@ -112,5 +113,60 @@ describe('POST /api/po-imports/scan — separate vs combined', () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toBe('validation_error');
+  });
+});
+
+// S16: two answers used to carry an error's own text: the scan's last catch
+// (a pipeline failure: Storage, the vision call, a database write) and the
+// unreadable form, which echoed the parser's message.
+describe('POST /api/po-imports/scan — failures never answer their own text', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 60_000,
+    });
+  });
+
+  it('a pipeline failure answers the fixed sentence and is reported with the route tag', async () => {
+    const err = new Error('Object not found: bucket po-imports, path org-1/scan.pdf');
+    createFromScan = vi.fn(async () => {
+      throw err;
+    });
+    vi.mocked(PoImportsService).mockImplementation(function () {
+      return { createFromScan } as never;
+    });
+    const res = await POST(scanRequest([pdf('PO-001.pdf')]));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('po-imports');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'po-imports.scan',
+      organizationId: 'org-1',
+      userIdHash: 'u-1',
+    });
+  });
+
+  it('an unreadable form is a 400 with the fixed sentence, not the parser text', async () => {
+    const unreadable = {
+      headers: new Headers({ 'content-type': 'multipart/form-data; boundary=x' }),
+      formData: async () => {
+        throw new TypeError('Failed to parse body as FormData: unexpected end of multipart stream');
+      },
+    } as unknown as Request;
+    const res = await POST(unreadable);
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'invalid_form',
+      message: 'The request could not be read.',
+    });
+    expect(text).not.toContain('multipart');
   });
 });

@@ -126,7 +126,11 @@ export async function POST(req: Request) {
     if (kind === 'pdf' || kind === 'image') {
       const mime =
         kind === 'pdf' ? 'application/pdf' : (file.type || 'image/png');
-      const result = await aiExtractIsbnsFromBuffer(buffer, mime);
+      // A failed model call is reported by the helper and answered as a
+      // fixed note, never the vendor's text (S16 review).
+      const result = await aiExtractIsbnsFromBuffer(buffer, mime, {
+        organizationId: ctx.organizationId,
+      });
       return NextResponse.json({
         ok: true,
         kind,
@@ -140,7 +144,7 @@ export async function POST(req: Request) {
     }
 
     const text = await fileToText(buffer, kind);
-    const result = await aiExtractIsbns(text);
+    const result = await aiExtractIsbns(text, { organizationId: ctx.organizationId });
     return NextResponse.json({
       ok: true,
       kind,

@@ -3,6 +3,10 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { can } from '@/lib/auth/permissions';
+import {
+  UNREADABLE_REQUEST_MESSAGE,
+  unreadableRequestResponse,
+} from '@/server/lib/api-error-response';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 import { runStreamedStockWrites } from '@/server/services/lib/inventory-list-cache';
 import { reportError } from '@/lib/error-reporter';
@@ -53,6 +57,28 @@ const bodySchema = z.object({
   history: z.array(turnSchema).max(40).optional(),
   pageContext: pageContextSchema.optional(),
 });
+
+/**
+ * The sentence for a body the schema refused: the app's words, chosen by
+ * where it refused, never the ZodError's own text (its issue list as JSON).
+ *
+ * Two refusals happen in normal use, so they say what to do. The web chat box
+ * has no length cap (`message`). The phone sends its whole on-screen
+ * transcript as `history` with every message (app/ai/chat.tsx), so about the
+ * 22nd message of one chat passes the 40 turns, and every message after a
+ * reply over 8,000 characters passes a turn's cap. Anything else is a broken
+ * client: the fixed sentence. Not reported: the body is the caller's.
+ */
+function bodyRefusalMessage(issues: z.ZodIssue[]): string {
+  const first = issues[0];
+  if (first?.code === 'too_big') {
+    if (first.path[0] === 'message') {
+      return 'Your message is too long. Keep it under 2,000 characters.';
+    }
+    if (first.path[0] === 'history') return 'This conversation is too long. Start a new chat.';
+  }
+  return UNREADABLE_REQUEST_MESSAGE;
+}
 
 /**
  * Pull a known entity reference out of a referrer path. We allowlist
@@ -161,18 +187,21 @@ export async function POST(req: Request) {
     );
   }
 
-  let payload: z.infer<typeof bodySchema>;
+  let body: unknown;
   try {
-    payload = bodySchema.parse(await req.json());
-  } catch (err) {
+    body = await req.json();
+  } catch {
+    // Never the parser's text: a SyntaxError quotes what it read.
+    return unreadableRequestResponse('validation_error');
+  }
+  const parsed = bodySchema.safeParse(body);
+  if (!parsed.success) {
     return NextResponse.json(
-      {
-        error: 'validation_error',
-        message: err instanceof Error ? err.message : 'Invalid payload',
-      },
+      { error: 'validation_error', message: bodyRefusalMessage(parsed.error.issues) },
       { status: 400 },
     );
   }
+  const payload = parsed.data;
 
   // Resolve session + history up front, before streaming starts.
   let sessionId = payload.sessionId ?? null;
