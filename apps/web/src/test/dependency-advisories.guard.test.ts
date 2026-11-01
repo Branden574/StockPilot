@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -350,11 +350,15 @@ type Dismissal = Floor & { alert: number; dependents: string[] };
  * glob inside the range fails the check.
  *
  *   - glob 13.0.6: Expo's build tools, on our own patterns. The advisory is
- *     about a walk that keeps reading after it is aborted, and the only one
- *     of them that aborts a walk, @expo/cli's anyMatchAsync
- *     (build/src/utils/glob.js), is called nowhere in @expo/cli 57.0.24: the
- *     TypeScript check of `expo start` uses plain glob. glob 14 changes its
- *     API and needs minimatch 11; every Expo release still asks for ^13.
+ *     about a walk that keeps reading directories after it is aborted. The
+ *     only walk they abort is the TypeScript check's, in `expo start` and
+ *     `expo run`: @expo/cli 57.0.24 gives it AbortSignal.timeout(5000)
+ *     (TypeScriptProjectPrerequisite.js:179-181; its anyMatchAsync helper
+ *     aborts too, but nothing calls it). That check walks only a project with
+ *     no tsconfig.json. apps/mobile has one (checked below), so it never
+ *     walks here, and it would only ever walk our own files on a developer
+ *     machine. glob 14 changes its API and needs minimatch 11; every Expo
+ *     release still asks for ^13.
  *   - minimatch 10.2.6 and 3.1.5: ESLint and its plugins, typescript-eslint,
  *     @expo/fingerprint and glob, on our own patterns, and readdir-glob,
  *     which only archiver uses, inside exceljs, without ever globbing (see
@@ -732,6 +736,16 @@ describe('the alerts dismissed instead of fixed keep their reasons', () => {
     expect(unnamedDependents(LOCKFILE, DISMISSAL_CHAINS)).toEqual([]);
   });
 
+  it("keeps the phone app's tsconfig.json, without which `expo start` runs the glob walk #153 is about", () => {
+    // Expo's TypeScript check looks for TypeScript files with a glob walk it
+    // aborts when it runs over five seconds, and only in a project with no
+    // tsconfig.json (see DISMISSED).
+    const tsconfig = statSync(join(REPO_ROOT, 'apps', 'mobile', 'tsconfig.json'), {
+      throwIfNoEntry: false,
+    });
+    expect(tsconfig?.isFile()).toBe(true);
+  });
+
   it('reads who depends on what in the real lockfile', () => {
     const all = dependents(LOCKFILE).byName;
     expect(all.size).toBeGreaterThan(1000);
@@ -815,21 +829,30 @@ describe('the alerts dismissed instead of fixed keep their reasons', () => {
   });
 
   it('flags a dependent the dismissal does not name, however it is listed', () => {
+    // A workspace or a package can list a dependency under an npm alias
+    // (`g: glob@13.0.6`), and both checks follow it to the real package.
     const lock = graph(
-      { 'apps/web': ['exceljs: 4.4.0', 'minimatch: 10.2.6', 'archiver: 5.3.2'] },
+      {
+        'apps/web': ['exceljs: 4.4.0', 'minimatch: 10.2.6', 'archiver: 5.3.2'],
+        'packages/core': ['g: glob@13.0.6', 'rg: readdir-glob@1.1.3'],
+      },
       {
         ...today,
+        'alias-lib@1.0.0': { dependencies: ['arc: archiver@5.3.2'] },
         'other-lib@1.0.0': { dependencies: ['g: glob@13.0.6', 'readdir-glob: 1.1.3'] },
         'server-lib@2.0.0': { optionalDependencies: ['deepmerge: 4.3.1(peer-lib@1.0.0)'] },
       },
     );
     expect(undismissed(lock)).toEqual([
       'glob@13.0.6 <- other-lib',
+      'glob@13.0.6 <- workspace packages/core',
       'minimatch@10.2.6 <- workspace apps/web',
       'deepmerge@4.3.1 <- server-lib',
     ]);
     expect(unnamedDependents(lock, DISMISSAL_CHAINS)).toEqual([
       'readdir-glob <- other-lib',
+      'readdir-glob <- workspace packages/core',
+      'archiver <- alias-lib',
       'archiver <- workspace apps/web',
     ]);
   });
