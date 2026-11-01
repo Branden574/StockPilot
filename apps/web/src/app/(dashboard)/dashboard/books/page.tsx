@@ -763,15 +763,15 @@ async function booksTableSection({
   );
 }
 
+/** The warehouse the view is filtered to, and how many books match in the others. */
+type OtherWarehouseHint = { warehouseName: string; matches: number };
+
 /**
  * The zero-result EmptyStates, shared VERBATIM by the instant and server
  * branches (extracted, not duplicated, so the two modes can't drift).
  * Returns null when the table should render, which it does for every view a
  * filter or a search narrows (listFilterActive), as on the Items page.
  */
-/** The warehouse the view is filtered to, and how many books match in the others. */
-type OtherWarehouseHint = { warehouseName: string; matches: number };
-
 function booksEmptyState({
   total,
   params,
