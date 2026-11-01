@@ -25,10 +25,14 @@ const FORM_WIDTH = 'w-full max-w-[960px]';
  * One receiving checklist run (F4-1). A static segment beside [id] on
  * purpose, never nested under a PO id: the phone's PO rewrite rule is
  * unanchored. The section layout already requires purchase_orders:read; the
- * run itself is visible exactly when its PO is (a run the caller cannot see
- * is not found). A completed run, or one this person may not record, is read
- * only. A failed read shows "The checklist didn't load" with Try again, never
- * the error boundary.
+ * run itself is visible exactly when its PO is under RLS (a run the caller
+ * cannot see is not found), as on the phone. That is wider than the web PO
+ * page for one kind of member: below manager, holding
+ * purchase_orders:manage, opening a run on a PO outside their warehouses,
+ * which PurchaseOrdersService.get hides from them and RLS does not
+ * (INV-C8). A completed run, or one this person may not record, is read
+ * only. A failed read shows "The checklist didn't load" with Try again,
+ * never the error boundary.
  */
 export default async function ReceivingCheckPage({
   params,
@@ -44,7 +48,7 @@ export default async function ReceivingCheckPage({
   } catch (e) {
     unstable_rethrow(e);
     // Not found, or not this person's to see: the same answer, so a run id
-    // never tells anyone more than the PO page would.
+    // never tells anyone whether a run they may not read exists.
     if (e instanceof ServiceError && (e.code === 'not_found' || e.code === 'forbidden')) {
       notFound();
     }

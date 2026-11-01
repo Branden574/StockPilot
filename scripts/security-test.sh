@@ -772,8 +772,11 @@ PGTAP_TESTS=(
   # reads as not found) and gate in this order: signed in, member, receiving
   # on, then a manager with purchase_orders:manage (publish, turn off) or with
   # stock:adjust and purchase_orders:read (start, save). A run is visible
-  # exactly when its purchase order is (warehouse scope below manager
-  # included); versions follow membership. Person keys are SET NULL with the
+  # exactly when its purchase order is: under purchase_orders_select
+  # (purchase_orders:read, and the warehouse scope below manager) or
+  # purchase_orders_write, whose FOR ALL USING lets a manager or a holder of
+  # purchase_orders:manage read every purchase order and so every run (L7);
+  # versions follow membership. Person keys are SET NULL with the
   # 0393 marker. The start, save and publish races are
   # scripts/db-concurrency/0419_checklist_races.sh; the lock footprint is
   # scripts/db-concurrency/0419_migration_lock_footprint.sh.

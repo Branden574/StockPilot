@@ -41,8 +41,9 @@
 --     on a retired version completes.
 -- R.  Retire, then: an existing run is still answered, no live version and no
 --     run is no_checklist, a newer version never moves a run.
--- L.  RLS: runs follow the purchase order (permission and warehouse scope),
---     versions follow membership, no API write.
+-- L.  RLS: runs follow the purchase order (permission and warehouse scope,
+--     and the write policy's manager and purchase_orders:manage arm, which
+--     admits a read too: L7), versions follow membership, no API write.
 -- N.  F4 writes no stock: counts and sums unchanged; reverse_receipt on a
 --     receipt with a completed run succeeds and the run stays.
 -- D.  An account deletion keeps versions and runs, nulls and stamps every
@@ -88,7 +89,7 @@
 
 begin;
 
-select plan(99);
+select plan(101);
 
 \set orgA     '\'04190000-0000-0000-0000-00000000000a\''
 \set orgB     '\'04190000-0000-0000-0000-00000000000b\''
@@ -918,6 +919,23 @@ select is(
   || pg_temp.rpc(null, 'select count(*)::text from public.checklist_runs', false, null, 'anon'),
   '42501:-:-,42501:-:-,42501:-:-,42501:-:-,42501:-:-,42501:-:-',
   'L6: no API role writes either table (not even a manager, and not the marker), and anon cannot read them');
+-- L7 (review 2026-11-01): a run follows its purchase order's WHOLE visibility,
+-- not purchase_orders_select alone. The EXISTS reads purchase_orders under
+-- every policy that admits a SELECT, and purchase_orders_write is FOR ALL
+-- (0140, 0208), so its USING (manager, or purchase_orders:manage) admits a
+-- read too: a manager whose purchase_orders:read was revoked, and a viewer
+-- assigned warehouse A who holds purchase_orders:manage, read PO A2 and its
+-- run. Pinned on both sides, so a change to either policy shows here: a runs
+-- policy restating purchase_orders_select's three conjuncts turns L7 red and
+-- leaves L1 to L6 green (shown through migtest on 2026-11-01).
+select is(pg_temp.seen(:mgrNoRd) || ',' || pg_temp.seen(:vwrMan), 'ok:3/1|3,ok:3/1|3',
+  'L7: a manager without purchase_orders:read and a warehouse-A viewer holding purchase_orders:manage see every run, the one on PO A2 included');
+select is(
+  pg_temp.rpc(:mgrNoRd, format('select count(*)::text from public.purchase_orders where id = %L', :poA2)) || ','
+  || pg_temp.rpc(:vwrMan, format('select count(*)::text from public.purchase_orders where id = %L', :poA2)) || ','
+  || pg_temp.rpc(:vwr, format('select count(*)::text from public.purchase_orders where id = %L', :poA2)),
+  'ok:1,ok:1,ok:0',
+  'L7b: because they read PO A2 itself (purchase_orders_write''s USING), while a plain warehouse-A viewer does not');
 
 -- ══ N. F4 writes no stock ══════════════════════════════════════════════════
 select is(

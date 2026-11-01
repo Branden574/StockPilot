@@ -1190,9 +1190,17 @@ actually fire.
     either table; `authenticated` and `service_role` hold SELECT. RLS is on.
   - **Reads.** `checklist_versions_select`: a member of the organization
     (`is_org_member`). `checklist_runs_select`: a member AND the run's
-    purchase order is visible to the caller under `purchase_orders_select`
-    (membership, `purchase_orders:read` and, below manager, the warehouse
-    scope), so a run is never readable where its PO is not.
+    purchase order is visible to the caller, so a run is never readable
+    where its PO is not. The policy's EXISTS reads `purchase_orders` under
+    every policy that admits a SELECT: `purchase_orders_select` (membership,
+    `purchase_orders:read` and, below manager, the warehouse scope) OR
+    `purchase_orders_write`, which is FOR ALL, so its USING (manager, or
+    `purchase_orders:manage`; 0140, 0208) admits a read too. A manager, and
+    any member holding `purchase_orders:manage`, therefore reads every
+    purchase order and every run of the organization, whatever their
+    warehouses or `purchase_orders:read` (the suite's L7 pins this for a
+    manager without `purchase_orders:read` and a warehouse-scoped viewer
+    holding `purchase_orders:manage`).
   - **Writes.** Only `checklist_publish`, `checklist_retire`,
     `receiving_check_start` and `checklist_run_save`, SECURITY DEFINER with
     `search_path = public, pg_temp` and `lock_timeout = '5s'`, EXECUTE for
@@ -1237,24 +1245,34 @@ actually fire.
 - **Why it matters**: a checklist records what a person checked for a
   receipt. If a member could write a run directly, they could complete
   another person's checklist, change a completed one, or attach a run to a
-  receipt of a PO they cannot see; and a run readable outside its PO's
-  scope would leak a warehouse's deliveries to staff scoped elsewhere.
+  receipt of a PO they cannot see; and a run readable where its PO is not
+  would show a delivery's answers, notes and who recorded them to a member
+  the PO itself is hidden from (staff or a viewer scoped to another
+  warehouse, or one whose `purchase_orders:read` was revoked, without
+  `purchase_orders:manage`).
 - **Enforced by**: the grants, the two SELECT policies and the in-body
   gates. In the app, `ReceivingChecklistService` checks the same floor first
   (core `receivingGate`, the predicate the web PO page, the phone and
   `ReceivingService.postReceipt` share), maps refusals by SQLSTATE and hint
   only, and reads through the caller's own client, so RLS decides what is
-  visible.
+  visible. The web purchase-order pages also hide a PO whose destination is
+  outside a below-manager member's warehouses (`PurchaseOrdersService.get`
+  and its list, in the app only). The run page and the `/api/v1` run routes
+  do not repeat that filter: like the phone's PO screens, they follow RLS.
+  So a member below manager who holds `purchase_orders:manage` opens, from
+  a link, a run on a PO that the web PO page hides from them; the phone and
+  the Data API already show them that PO and its receipts.
 - **Tested at**: [`0419_receiving_checklist.test.sql`](../../supabase/tests/0419_receiving_checklist.test.sql)
   A (shape, grants and function posture), P (publish: normalised steps,
   one live version, stale and replayed publishes, every refusal), S (start),
   V (save: every refusal through the case table tied to core by `-- case:`
   markers, stale revisions, replays, completion), R (retire, and what it
-  leaves), L (visibility: runs follow the purchase order's permission and
-  warehouse scope), N (no stock written), D (account deletion keeps the
-  records and stamps the people) and Z (the frozen receipt functions and
-  guards); each break named
-  "Mutation:" in the file is caught by the test before it. The 0359 census,
+  leaves), L (visibility: runs follow the purchase order's visibility, its
+  read permission and warehouse scope and the write policy's manager and
+  `purchase_orders:manage` arm, L7), N (no stock written), D (account
+  deletion keeps the records and stamps the people) and Z (the frozen
+  receipt functions and guards); each break in the file's mutation table
+  turns the assertions it names red. The 0359 census,
   INV-25, the 0367 class guard and 0393's person-key census (K1, K4) cover
   the new functions and columns. `scripts/db-concurrency/0419_checklist_races.sh`
   and `0419_migration_lock_footprint.sh` prove the races and the push's

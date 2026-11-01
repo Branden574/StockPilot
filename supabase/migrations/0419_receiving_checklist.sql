@@ -37,9 +37,14 @@
 --      call), decided here rather than by comparing clocks, so the app
 --      writes one audit row per real write.
 --   4. SELECT for signed-in users only: versions to members, a run only when
---      its purchase order is visible to the caller (purchase_orders_select:
---      membership, purchase_orders:read and, below manager, the warehouse
---      scope). No API role may insert, update or delete either table.
+--      its purchase order is visible to the caller. That is
+--      purchase_orders_select (membership, purchase_orders:read and, below
+--      manager, the warehouse scope) OR purchase_orders_write, which is FOR
+--      ALL, so its USING (manager, or purchase_orders:manage) admits a read
+--      too: a manager, and anyone holding purchase_orders:manage, reads every
+--      run of the organization, whatever their warehouses or
+--      purchase_orders:read. No API role may insert, update or delete either
+--      table.
 --   5. The "Deleted user" marker (the 0393 pattern, A3 rule for a new person
 --      column): every person key is ON DELETE SET NULL, each table carries
 --      deleted_users jsonb and the zzz_deleted_users_ins/_upd pair running
@@ -831,9 +836,11 @@ create policy checklist_versions_select on public.checklist_versions
   for select to authenticated
   using ((select public.is_org_member(checklist_versions.organization_id)));
 
--- The EXISTS runs under the caller's own purchase_orders_select, so a run is
--- visible exactly when its purchase order is (membership,
--- purchase_orders:read and, below manager, the warehouse scope).
+-- The EXISTS reads purchase_orders under the caller's own RLS, so a run is
+-- visible exactly when its purchase order is: under purchase_orders_select
+-- (membership, purchase_orders:read and, below manager, the warehouse scope)
+-- or purchase_orders_write, whose FOR ALL USING (manager, or
+-- purchase_orders:manage) admits a read too (the suite's L7).
 create policy checklist_runs_select on public.checklist_runs
   for select to authenticated
   using ((select public.is_org_member(checklist_runs.organization_id))
@@ -892,6 +899,6 @@ comment on function public.checklist_run_save(uuid, jsonb, text, integer, uuid, 
 comment on policy checklist_versions_select on public.checklist_versions is
   'Receiving checklist (F4-1): members read every version of their organization.';
 comment on policy checklist_runs_select on public.checklist_runs is
-  'Receiving checklist (F4-1): a run is visible exactly when its purchase order is to the caller (the EXISTS runs under purchase_orders_select).';
+  'Receiving checklist (F4-1): a run is visible exactly when its purchase order is to the caller (the EXISTS reads purchase_orders under the caller''s RLS: purchase_orders_select, or purchase_orders_write''s FOR ALL USING).';
 
 reset lock_timeout;
