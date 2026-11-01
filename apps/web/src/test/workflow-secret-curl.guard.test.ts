@@ -34,25 +34,26 @@ import { describe, expect, it } from 'vitest';
  * read by hand and given a reason in READ_BY_HAND: an interpreter (node,
  * python, ...), a test runner (vitest, jest, playwright, ...), make, xargs, a
  * repository program that is not a shell script, a program named by a
- * variable, an HTTP client other than curl, an action passed a secret (in its
- * step, or by its job's or the workflow's env:) unless it is a local
- * composite one, a run block in another shell, an npm or yarn workspace
- * fan-out, anything past the depth limit, and a program that has a curl
- * command among its arguments (a wrapper WRAPPERS does not list). Any other
- * program (jq, tar, next build, a CLI that pnpm dlx fetches) is taken for
- * what it is: the census does not read it.
+ * variable, an HTTP client other than curl, a database or network client
+ * (psql, redis-cli, nc, ...), an action passed a secret (in its step, or by
+ * its job's or the workflow's env:) unless it is a local composite one, a run
+ * block in another shell, an npm or yarn workspace fan-out, anything past the
+ * depth limit, and a program that has a curl command among its arguments (a
+ * wrapper WRAPPERS does not list). Any other program (jq, tar, next build, a
+ * CLI that pnpm dlx fetches) is taken for what it is: the census does not
+ * read it.
  *
  * A reason read by hand holds only while what it relies on holds. So each
- * READ_BY_HAND entry also records the secrets in the call's environment
- * (what the env: of its step, job or workflow maps from a secret, and any
- * name a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one), every
- * secret its job uses in any step (the steps share a runner, so one can leave
- * a secret in a file for another), and a hash of each repository file the
- * call runs (the files named on its command line, or what `node --test`
- * finds). When any of these changes, the call is unresolved again until
- * someone reads it again. A call whose files the census cannot list (a whole
- * test suite) records none, so its reason can rest only on its environment
- * and its job.
+ * READ_BY_HAND entry also records the secrets in the call's environment (what
+ * the env: of its step, job or workflow maps from a secret, and any name a
+ * step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one), every secret its
+ * job uses in any step (the steps share a runner, so one can leave a secret
+ * in a file for another), and a hash of each repository file the call runs
+ * (the files named on its command line or what `node --test` finds, and what
+ * they import from the repository). When any of these changes, the call is
+ * unresolved again until someone reads it again. A call whose files the
+ * census cannot list (a whole test suite) records none, so its reason can
+ * rest only on its environment and its job.
  *
  * A secret is ${{ secrets }} in any form or github.token; an env., inputs.,
  * vars., steps.<id>.outputs. or needs.<job>.outputs. name that a workflow maps
