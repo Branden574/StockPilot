@@ -25,6 +25,18 @@ function allOnPrefs(): NotificationPreferences {
   return Object.fromEntries(NOTIFICATION_PREF_KEYS.map((k) => [k, true])) as NotificationPreferences;
 }
 
+describe('NotificationPreferencesForm — New order requests (docket S36)', () => {
+  it('says the alert comes for requests in a warehouse where you can approve orders, not by role', () => {
+    render(<NotificationPreferencesForm initial={allOnPrefs()} />);
+    expect(
+      screen.getByText(
+        'In-app and push alert when a new order request is waiting in a warehouse where you can approve orders. Turn off to stop these alerts.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/managers and above/)).not.toBeInTheDocument();
+  });
+});
+
 describe('NotificationPreferencesForm — Maintenance Resolved (Task 4)', () => {
   it('NOTIFICATION_PREF_KEYS contains the literal push_maintenance_resolved key', () => {
     expect(NOTIFICATION_PREF_KEYS).toContain('push_maintenance_resolved');

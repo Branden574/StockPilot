@@ -311,6 +311,23 @@ describe('notifyAutoArchived', () => {
     }
   });
 
+  it('reads accepted owners, admins and managers, never a support Act-as seat (docket S36)', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: [], error: null },
+    });
+
+    await notifyAutoArchived(stub.client, 'org-test', items);
+
+    const chain = stub.chains.get('organization_members.select')!;
+    const args = stub.chainArgs.get('organization_members.select')!;
+    expect(args[chain.indexOf('eq')]).toEqual(['organization_id', 'org-test']);
+    expect(args[chain.indexOf('in')]).toEqual(['role', ['owner', 'admin', 'manager']]);
+    expect(args[chain.indexOf('not')]).toEqual(['accepted_at', 'is', null]);
+    // An Act-as seat is a real owner membership for 45 minutes: without this
+    // the platform admin's own account is told about the organization's items.
+    expect(args[chain.indexOf('is')]).toEqual(['impersonation_expires_at', null]);
+  });
+
   it('skips the notify pass with zero createNotification calls when there are no owner/admin/manager recipients', async () => {
     const stub = makeSupabaseStub({
       'organization_members.select': { data: [], error: null },

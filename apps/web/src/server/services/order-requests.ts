@@ -1327,35 +1327,24 @@ export class OrderRequestsService {
     return { rows, total: total || rows.length };
   }
 
-  async pendingCount(): Promise<number> {
-    const { count, error } = await this.ctx.supabase
-      .from('order_requests')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', 'pending_approval');
-    if (error) throw new ServiceError('internal_error', error.message);
-    return count ?? 0;
-  }
-
   /**
    * The pending requests this caller could approve or deny: the Overview's
-   * "N order requests awaiting your approval" (B11). approve() and deny() ask
-   * orders:approve, then write access to the request's warehouse
-   * (requireWarehouseAccess 'write', assertWarehouseAccess's rule), so this
-   * counts by the same two:
+   * "N order requests awaiting your approval" (B11), and the briefing's
+   * approvals line (docket S36). approve() and deny() ask orders:approve,
+   * then write access to the request's warehouse (requireWarehouseAccess
+   * 'write', assertWarehouseAccess's rule), so this counts by the same two:
    *   - without orders:approve, or a viewer (the app refuses every write for a
    *     viewer, whatever their warehouses): none, and nothing is read;
    *   - an owner, admin or manager (every warehouse by role, so no access is
-   *     read), or a member with the all-warehouses flag: the organization's,
-   *     as pendingCount() counts them;
+   *     read), or a member with the all-warehouses flag: every pending request
+   *     in the organization;
    *   - anyone else: those in the warehouses they are assigned to. None when
    *     they have none, or when their access could not be read (that answer
    *     lists no warehouse, and approve() then refuses too).
-   * pendingCount() stays the organization's count, for the Insights page and
-   * the daily briefing. getWarehouseAccess is request-cached, so on the
-   * Overview this shares the read the overdue purchase order count makes. The
-   * Orders module and the MFA step-up are the caller's to ask, as for
-   * pendingCount(). A failed count read throws, as pendingCount()'s does.
+   * The daily briefing's owner-role system context gets the organization's
+   * count. getWarehouseAccess is request-cached, so on the Overview this
+   * shares the read the overdue purchase order count makes. The Orders module
+   * and the MFA step-up are the caller's to ask. A failed count read throws.
    */
   async approvablePendingCount(): Promise<number> {
     if (this.ctx.role === 'viewer' || !can(this.ctx, 'orders:approve')) return 0;
