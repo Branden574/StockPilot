@@ -102,11 +102,12 @@ describe('createNotification — disabled accounts', () => {
     expect(stub.chains.has('notifications.insert')).toBe(true);
   });
 
-  it('fails OPEN (still inserts) when the disabled_at check itself errors', async () => {
-    // This function's contract is "never throws, best-effort delivery" — an
-    // unreadable profile is a read error, not evidence the account is
-    // disabled, so it must not silently swallow every notification in the
-    // product the moment user_profiles is unreachable.
+  it('fails CLOSED: a disabled_at read that errors writes nothing (so pushes nothing), and is reported once', async () => {
+    // Docket S36 (integrator decision 2026-11-01): this read used to fail
+    // OPEN, an unreadable profile counting as "not disabled", so the row was
+    // written and pushed. Best-effort delivery makes a notice dropped on a
+    // read error acceptable; a push carrying the organization's data to an
+    // account disabled for suspected compromise is not.
     const stub = makeSupabaseStub({
       'user_profiles.select': { data: null, error: { message: 'boom' } },
       'organization_members.select.maybeSingle': memberships([{ user_id: 'user-unknown' }]),
@@ -116,7 +117,13 @@ describe('createNotification — disabled accounts', () => {
 
     const id = await createNotification(baseArgs('user-unknown'));
 
-    expect(id).toBe('notif-2');
+    expect(id).toBeNull();
+    expect(stub.chains.has('notifications.insert')).toBe(false);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
+      tag: 'notifications.create_disabled_check',
+      extra: { userId: 'user-unknown' },
+    });
   });
 });
 
@@ -129,7 +136,8 @@ describe('createNotification — disabled accounts', () => {
  * went to the order's stored requester id, and the 0028 trigger pushed every
  * row to that person's phone. The same rule now holds here, for every caller:
  * an accepted membership of the notice's organization that is not an Act-as
- * seat (the account-disable check above is unchanged).
+ * seat, read with the account-disable check above through one shared helper
+ * (server/lib/current-member.ts), both failing closed.
  */
 describe('createNotification — current members of the organization only (docket S36)', () => {
   it('writes nothing for someone removed from the organization, or who left it', async () => {

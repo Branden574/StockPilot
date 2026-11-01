@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
  * Tests for the at-most-once maintenance-resolved email (Task 6). Load-
@@ -74,6 +74,16 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'organization_modules.select': MODULE_SETTINGS_DEFAULT,
     'maintenance_request_share_links.select': NO_ACTIVE_LINK,
     'maintenance_request_attachments.select': NO_RESOLUTION_PHOTOS,
+    // S36: the requester is still a current member of the request's
+    // organization (maintenance-resolved.member.test.ts covers the rest).
+    'organization_members.select.maybeSingle': servedLikePostgrest([
+      {
+        organization_id: ORG_ID,
+        user_id: 'requester-1',
+        accepted_at: '2026-01-05T00:00:00Z',
+        impersonation_expires_at: null,
+      },
+    ]),
     ...overrides,
   });
 }
@@ -204,13 +214,19 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
-    it('a null requester_user_id does NOT trigger self_resolve (nothing to compare resolved_by against) — proceeds normally', async () => {
+    // Docket S36 (re-pinned; this case used to send). The snapshot is the
+    // filer's own address (0362 fills it from their profile), emailed only
+    // while they are a current member of the request's organization, and a
+    // null requester (the auth.users foreign key nulls it when the account is
+    // deleted) is nobody's membership. self_resolve still does not fire.
+    it('a null requester_user_id does NOT trigger self_resolve (nothing to compare resolved_by against): requester_not_member, nothing claimed or sent', async () => {
       const stub = makeStub({
         'maintenance_requests.select': { data: { ...RESOLVED_ROW, requester_user_id: null }, error: null },
       });
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
-      expect(res).toEqual({ sent: true });
-      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(res).toEqual({ sent: false, reason: 'requester_not_member' });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('resolution_email_sent_at already set (cheap pre-check) -> already_sent, no update even attempted', async () => {

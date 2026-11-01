@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { reportError } from '@/lib/error-reporter';
+import { readCurrentMember } from '@/server/lib/current-member';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -28,7 +29,7 @@ export interface CreateNotificationArgs {
  *
  * Writes nothing (returns null) for a disabled account, or for anyone who is
  * not a current member of `organizationId` (removed, left, an invite never
- * accepted, a support Act-as seat).
+ * accepted, a support Act-as seat), or when either cannot be read (reported).
  *
  * Returns the inserted row id. Never throws — failures are reported
  * via reportError so the calling write path (e.g. approving a PO)
@@ -45,12 +46,9 @@ export async function createNotification(
     // trigger fans out to push unconditionally — so a user disabled for
     // suspected compromise kept getting lock-screen push banners carrying
     // PO numbers, low-stock SKUs and deep links. This is the ONE insert
-    // path every caller in the codebase funnels through, so one point-read
-    // here closes the gap for all of them rather than requiring each call
-    // site to remember it. A failed read is treated as "unknown, not
-    // disabled" (fail OPEN): this function's contract is best-effort
-    // delivery that never throws, and an unreadable profile is a read
-    // error, not evidence of a disable.
+    // path every caller in the codebase funnels through, so one check here
+    // closes the gap for all of them rather than requiring each call site
+    // to remember it.
     //
     // The recipient must also still be a member of the notice's organization
     // (docket S36): an accepted membership that is not a support Act-as seat,
@@ -58,40 +56,34 @@ export async function createNotification(
     // _notify_is_current_member). Several callers address a stored id, such as
     // an order's requester, and removing a member or leaving deletes only the
     // membership row, so the person kept getting pushes about the
-    // organization's orders. Read beside the profile, not through that
-    // function, so a web deploy never depends on the migration. Unlike the
-    // disable check this one fails CLOSED: it is what lets the organization's
-    // data reach the person at all, and an unreadable membership is no
-    // evidence of one (reported, and nothing is written).
-    const [{ data: profile, error: profileError }, { data: membership, error: membershipError }] =
-      await Promise.all([
-        admin.from('user_profiles').select('disabled_at').eq('id', args.userId).maybeSingle(),
-        admin
-          .from('organization_members')
-          .select('user_id')
-          .eq('organization_id', args.organizationId)
-          .eq('user_id', args.userId)
-          .not('accepted_at', 'is', null)
-          .is('impersonation_expires_at', null)
-          .maybeSingle(),
-      ]);
-    if (profileError) {
-      void reportError(new Error(profileError.message), {
-        tag: 'notifications.create_disabled_check',
-        extra: { userId: args.userId },
-      });
-    }
-    if ((profile as { disabled_at: string | null } | null)?.disabled_at) {
+    // organization's orders.
+    //
+    // Both facts come from the one current-member read the app's emails to a
+    // member's own address use too (server/lib/current-member.ts), from the
+    // tables rather than the 0422 function, so a web deploy never depends on
+    // the migration. Both fail CLOSED (docket S36, integrator decision
+    // 2026-11-01): a read that fails is reported and nothing is written, so
+    // nothing is pushed. The disable check used to fail OPEN, an unreadable
+    // profile counting as "not disabled" under this function's best-effort
+    // contract. Best-effort delivery makes a notice dropped on a read error
+    // acceptable; a push carrying the organization's data to an account
+    // disabled for suspected compromise is not.
+    const recipient = await readCurrentMember(admin, args.organizationId, args.userId);
+    if (!recipient.readable) {
+      for (const failure of recipient.failures) {
+        void reportError(
+          new Error(failure.message),
+          failure.read === 'profile'
+            ? { tag: 'notifications.create_disabled_check', extra: { userId: args.userId } }
+            : {
+                tag: 'notifications.create_member_check',
+                extra: { organizationId: args.organizationId, userId: args.userId },
+              },
+        );
+      }
       return null;
     }
-    if (membershipError) {
-      void reportError(new Error(membershipError.message), {
-        tag: 'notifications.create_member_check',
-        extra: { organizationId: args.organizationId, userId: args.userId },
-      });
-      return null;
-    }
-    if (!membership) return null;
+    if (!recipient.current) return null;
 
     const { data, error } = await admin
       .from('notifications')

@@ -83,6 +83,7 @@ import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
 } from '@/server/lib/order-handover-notify';
+import { ownAddressVerdict } from '@/server/lib/current-member';
 import { requesterEmailOptedOut, resolveRequesterContact } from '@/server/lib/requester-contact';
 
 import { audit } from './audit';
@@ -4241,17 +4242,23 @@ export class OrderRequestsService {
       // A3 unchanged: a requester who deleted their account is never emailed
       // again, not even at the address the order kept. The RPC returns the
       // whole row, so the marker is on it (requesterAccountDeleted reads it
-      // only for a narrow row).
+      // only for a narrow row). Docket S36: a member's own address only while
+      // they are a current member of the order's organization.
       const admin = createAdminClient();
       const requesterGone = await this.requesterAccountDeleted(row);
       const contact = requesterGone
         ? { email: null, name: null }
-        : await resolveRequesterContact(admin, {
-            requester_user_id: row.requester_user_id ?? null,
-            requester_name: row.requester_name ?? null,
-            requester_email: row.requester_email ?? null,
-            requester_deleted_at: row.requester_deleted_at ?? null,
-          });
+        : await resolveRequesterContact(
+            admin,
+            {
+              organization_id: row.organization_id ?? this.ctx.organizationId,
+              requester_user_id: row.requester_user_id ?? null,
+              requester_name: row.requester_name ?? null,
+              requester_email: row.requester_email ?? null,
+              requester_deleted_at: row.requester_deleted_at ?? null,
+            },
+            { tag: 'orders.physical_signature.requester_member_check', orderId: id },
+          );
       const noticeEmail = contact.email;
       const noticeName = contact.name;
       const emailOptedOut = await requesterEmailOptedOut(admin, row.requester_user_id ?? null, {
@@ -5462,6 +5469,15 @@ export class OrderRequestsService {
     return ((data as { requester_deleted_at?: string | null } | null)?.requester_deleted_at ?? null) !== null;
   }
 
+  /**
+   * Who a status email goes to. An address the order recorded (on-behalf-of,
+   * the public request link, a portal buyer) as before, whoever placed the
+   * order. A member's own address (the order kept none: their profile's) only
+   * while they are a current member of the order's organization (docket S36:
+   * readCurrentMember, the rule of 0422 and createNotification); someone
+   * removed from the organization, or who left it, is no longer emailed about
+   * it, and a read that fails sends nothing and is reported.
+   */
   private async resolveRecipient(
     row: OrderRequestRow,
   ): Promise<{ recipientEmail: string | null; recipientName: string | null }> {
@@ -5472,11 +5488,22 @@ export class OrderRequestsService {
       return { recipientEmail: row.requester_email, recipientName: row.requester_name ?? null };
     }
     if (row.requester_user_id) {
-      const { data } = await this.ctx.supabase
-        .from('user_profiles')
-        .select('email, full_name')
-        .eq('id', row.requester_user_id)
-        .maybeSingle();
+      const [verdict, { data }] = await Promise.all([
+        ownAddressVerdict(
+          createAdminClient(),
+          {
+            organizationId: row.organization_id ?? this.ctx.organizationId,
+            userId: row.requester_user_id,
+          },
+          { tag: 'order-requests.email.requester_member_check', extra: { orderId: row.id } },
+        ),
+        this.ctx.supabase
+          .from('user_profiles')
+          .select('email, full_name')
+          .eq('id', row.requester_user_id)
+          .maybeSingle(),
+      ]);
+      if (verdict !== 'current') return { recipientEmail: null, recipientName: null };
       return {
         recipientEmail: (data?.email as string | null) ?? null,
         recipientName: (data?.full_name as string | null) ?? null,
