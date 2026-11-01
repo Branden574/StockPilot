@@ -47,13 +47,24 @@ export class WarehouseChartersService {
   async setForWarehouse(warehouseId: string, charterIds: string[]) {
     assertPermission(this.ctx, 'organization:update');
 
-    const { data: current } = await this.ctx.supabase
-      .from('warehouse_charters')
-      .select('charter_id')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('warehouse_id', warehouseId);
+    // Every current link, page by page, ordered by charter (B47 part C). One
+    // read with no range stopped at 1000 links on the warehouse, so a save
+    // that changed nothing re-inserted links that already existed and failed
+    // on the primary key; and its error was ignored, so a failed read was "no
+    // links". A failed page now throws before any insert, count or delete.
+    // The editor's list comes from WarehousesService.list, which reads every
+    // link too, so both sides of this comparison are complete.
+    const current = await fetchAllRows<{ charter_id: string }>((from, to) =>
+      this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', warehouseId)
+        .order('charter_id', { ascending: true })
+        .range(from, to),
+    );
 
-    const existing = new Set(((current ?? []) as Array<{ charter_id: string }>).map((r) => r.charter_id));
+    const existing = new Set(current.map((r) => r.charter_id));
     const desired = new Set(charterIds);
 
     const toAdd = [...desired].filter((id) => !existing.has(id));
