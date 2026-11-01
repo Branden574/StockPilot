@@ -497,9 +497,23 @@ describe('ReportsService.inventoryValuation (view-sourced totals)', () => {
     expect(result.totalValue).toBe(1_000_000);
     expect(result.totalUnits).toBe(50_000);
     expect(result.itemCount).toBe(42_000);
+    // Each warehouse row carries its own item count (B78: the Overview's Avg
+    // value / SKU divides a warehouse's value by it).
     expect(result.byWarehouse).toEqual([
-      { warehouseId: 'w1', warehouseName: 'Main', value: 900_000, units: 40_000 },
-      { warehouseId: null, warehouseName: 'Unassigned', value: 100_000, units: 10_000 },
+      {
+        warehouseId: 'w1',
+        warehouseName: 'Main',
+        value: 900_000,
+        units: 40_000,
+        itemCount: 30_000,
+      },
+      {
+        warehouseId: null,
+        warehouseName: 'Unassigned',
+        value: 100_000,
+        units: 10_000,
+        itemCount: 12_000,
+      },
     ]);
     expect(result.byCategory).toEqual([
       { categoryId: 'c1', categoryName: 'Widgets', value: 1_000_000, units: 50_000 },

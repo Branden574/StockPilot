@@ -75,6 +75,30 @@ export function toBreakdownSlices(
     }));
 }
 
+// ── Average value per item ────────────────────────────────────────────────
+
+/**
+ * The Overview's Avg value / SKU: value over item count, both from the Value
+ * breakdown's rows, which leave rental items out and count the same items
+ * they value (B78). The card's own item count includes rental items, so
+ * dividing the card's value by it would mix two sets of items.
+ *
+ * No warehouse selected: the report's totals. A warehouse selected: that
+ * warehouse's row. 0 when there are no items or the warehouse has no row.
+ */
+export function toValuePerItem(
+  report: Pick<ValuationReport, 'totalValue' | 'itemCount' | 'byWarehouse'>,
+  warehouseId: string | null | undefined,
+): number {
+  const { value, itemCount } = warehouseId
+    ? (report.byWarehouse.find((w) => w.warehouseId === warehouseId) ?? {
+        value: 0,
+        itemCount: 0,
+      })
+    : { value: report.totalValue, itemCount: report.itemCount };
+  return itemCount > 0 ? value / itemCount : 0;
+}
+
 // ── Movement volume by type ───────────────────────────────────────────────
 
 export interface MovementBar {

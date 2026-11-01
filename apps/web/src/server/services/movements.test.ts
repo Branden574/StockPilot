@@ -905,13 +905,37 @@ describe('getDashboardSummary', () => {
       'inventory_items.select': {
         data: [
           // active, normal stock
-          { quantity_on_hand: 10, reorder_point: 0, unit_cost: 2, status: 'active' },
+          {
+            quantity_on_hand: 10,
+            reorder_point: 0,
+            unit_cost: 2,
+            status: 'active',
+            is_rental: false,
+          },
           // active, out-of-stock
-          { quantity_on_hand: 0, reorder_point: 5, unit_cost: 4, status: 'active' },
+          {
+            quantity_on_hand: 0,
+            reorder_point: 5,
+            unit_cost: 4,
+            status: 'active',
+            is_rental: false,
+          },
           // active, low-stock (qty <= reorder_point and reorder > 0)
-          { quantity_on_hand: 3, reorder_point: 5, unit_cost: 1, status: 'active' },
+          {
+            quantity_on_hand: 3,
+            reorder_point: 5,
+            unit_cost: 1,
+            status: 'active',
+            is_rental: false,
+          },
           // archived rows are excluded entirely
-          { quantity_on_hand: 9999, reorder_point: 0, unit_cost: 1, status: 'archived' },
+          {
+            quantity_on_hand: 9999,
+            reorder_point: 0,
+            unit_cost: 1,
+            status: 'archived',
+            is_rental: false,
+          },
         ],
         error: null,
       },
@@ -927,6 +951,50 @@ describe('getDashboardSummary', () => {
     expect(result.lowStockCount).toBe(1);
     // 10*2 + 0*4 + 3*1 = 23
     expect(result.inventoryValue).toBe(23);
+  });
+
+  // B78: the Overview card with a warehouse selected added every active row's
+  // value, rental items included, while the Value breakdown and the Items and
+  // Books totals leave them out (vw_inventory_valuation_*, 0179). A rental
+  // item now counts as an item and adds no value, like the card without a
+  // warehouse (get_dashboard_summary since the B78 migration).
+  it('warehouse path: a rental item counts as an item but adds no value (B78)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          {
+            quantity_on_hand: 10,
+            reorder_point: 0,
+            unit_cost: 2,
+            status: 'active',
+            awaiting_first_receipt: false,
+            is_rental: false,
+          },
+          // A rental item: 3 x 100 would be 300 more on the card.
+          {
+            quantity_on_hand: 3,
+            reorder_point: 0,
+            unit_cost: 100,
+            status: 'active',
+            awaiting_first_receipt: false,
+            is_rental: true,
+          },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const result = await getDashboardSummary({ warehouseId: 'wh-a' });
+
+    expect(result.inventoryValue).toBe(20);
+    expect(result.itemCount).toBe(2);
+    // The value test reads is_rental, so the query must select it (pattern
+    // #5): without it every row would read undefined and add nothing.
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const selected = String(args[chain.indexOf('select')]?.[0] ?? '');
+    expect(selected.split(',').map((c) => c.trim())).toContain('is_rental');
   });
 
   it('throws ServiceError when the RPC errors', async () => {
@@ -987,6 +1055,7 @@ describe('getDashboardSummary', () => {
             unit_cost: 4,
             status: 'active',
             awaiting_first_receipt: true,
+            is_rental: false,
           },
           // Established out-of-stock item — still counts.
           {
@@ -995,6 +1064,7 @@ describe('getDashboardSummary', () => {
             unit_cost: 2,
             status: 'active',
             awaiting_first_receipt: false,
+            is_rental: false,
           },
         ],
         error: null,

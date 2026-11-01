@@ -46,6 +46,9 @@ interface ReportSummary {
   itemCount: number;
   outOfStockCount: number;
   inventoryValue: number;
+  /** The items VALUE adds up: active items that are not rental items (B78).
+   *  Avg value / SKU divides by it; ITEMS (itemCount) still counts rental items. */
+  valueItemCount: number;
   lowStockCount: number;
   thirtyDayMovements: number;
 }
@@ -142,12 +145,22 @@ export default function ReportsScreen() {
           .select('id', { count: 'exact', head: true })
           .eq('organization_id', orgId)
           .gte('created_at', since),
+        // B78: the items inventory_value adds up, active and not rental
+        // items, so Avg value / SKU divides VALUE by the same set it values.
+        // In this Promise.all, so a failed read is "couldn't load" below.
+        supabase
+          .from('inventory_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', orgId)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .eq('is_rental', false),
       ]);
     } catch {
       setKpi({ orgId: forOrg, kind: 'error' });
       return;
     }
-    const [items, out, valueRpc, lowRpc, flaggedLow, moves] = results;
+    const [items, out, valueRpc, lowRpc, flaggedLow, moves, valueItems] = results;
     // Every read must have answered: one failure is "couldn't load", never a
     // zero standing in for a number that was not read.
     if (results.some((r) => r.error)) {
@@ -161,6 +174,7 @@ export default function ReportsScreen() {
         itemCount: items.count ?? 0,
         outOfStockCount: out.count ?? 0,
         inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
+        valueItemCount: valueItems.count ?? 0,
         lowStockCount: Math.max(
           0,
           (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
@@ -311,7 +325,18 @@ export default function ReportsScreen() {
               <ReportRow
                 icon={Package}
                 title="Avg value / SKU"
-                value={fmt(summary.itemCount > 0 ? summary.inventoryValue / summary.itemCount : 0).value + fmt(summary.itemCount > 0 ? summary.inventoryValue / summary.itemCount : 0).unit}
+                value={
+                  fmt(
+                    summary.valueItemCount > 0
+                      ? summary.inventoryValue / summary.valueItemCount
+                      : 0,
+                  ).value +
+                  fmt(
+                    summary.valueItemCount > 0
+                      ? summary.inventoryValue / summary.valueItemCount
+                      : 0,
+                  ).unit
+                }
                 tone="default"
               />
               <ReportRow
