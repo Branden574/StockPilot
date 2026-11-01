@@ -185,7 +185,11 @@ import { getUnsavedSources, resetUnsavedSourcesForTests } from '@/lib/unsaved-wo
 
 import PoDetailPage from './page';
 
-const page = () => PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) });
+// A well-formed id, as the other PO detail tests use: the page reads nothing
+// with a malformed one (B63's id check answers Page not found first).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
+const page = () => PoDetailPage({ params: Promise.resolve({ id: PO_ID }) });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -238,7 +242,7 @@ describe('PO detail page: the Posted panel outlives the post that completes the 
     po.received = 2;
     view.rerender(await page());
     await user.click(screen.getByRole('button', { name: C.recordChecklist }));
-    expect(startReceivingCheckAction).toHaveBeenCalledWith('rcpt-1', 'po-1');
+    expect(startReceivingCheckAction).toHaveBeenCalledWith('rcpt-1', PO_ID);
     await waitFor(() =>
       expect(router.push).toHaveBeenCalledWith('/dashboard/purchase-orders/receiving-checks/run-1'),
     );

@@ -159,6 +159,10 @@ vi.mock('@/server/services/context', () => ({
 
 import PoDetailPage from './page';
 
+// A well-formed id, as the other PO detail tests use: the page reads nothing
+// with a malformed one (B63's id check answers Page not found first).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 const LIVE = {
   id: 'v2',
   versionNumber: 2,
@@ -169,7 +173,7 @@ const LIVE = {
 };
 
 async function renderPage() {
-  return render(await PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) }));
+  return render(await PoDetailPage({ params: Promise.resolve({ id: PO_ID }) }));
 }
 
 beforeEach(() => {
@@ -212,7 +216,7 @@ describe('PO detail page: who is offered Receive', () => {
     expect(dialogProps.value?.receivable).toBe(true);
     expect(historyProps.value?.canReceive).toBe(true);
     expect(historyProps.value?.checklists).toEqual(checks.value);
-    expect(historyProps.value?.poId).toBe('po-1');
+    expect(historyProps.value?.poId).toBe(PO_ID);
   });
 
   it('no live checklist, or a checklist read that failed, offers no checklist in the dialog', async () => {
