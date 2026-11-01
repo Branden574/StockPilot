@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -227,6 +227,24 @@ function tableFor(
 const realReplaceState = History.prototype.replaceState;
 /** Every address the TABLE wrote with replaceState / pushState (shallow). */
 let tableWrites: string[] = [];
+/**
+ * While set, a shallow write moves the address bar at once but what
+ * useSearchParams reads only on releaseLandings(): Next's App Router lands a
+ * shallow write in a transition, after the call, so a keystroke can come in
+ * between.
+ */
+let heldLandings: string[] | null = null;
+
+function holdLandings() {
+  heldLandings = [];
+}
+
+/** The held shallow writes land, in the order they were written. */
+function releaseLandings() {
+  const held = heldLandings ?? [];
+  heldLandings = null;
+  for (const search of held) nav.set(search);
+}
 
 function setAddress(path: string) {
   realReplaceState.call(window.history, null, '', path);
@@ -265,6 +283,7 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   tableWrites = [];
+  heldLandings = null;
   for (const k of ['replaceState', 'pushState'] as const) {
     const real = History.prototype[k];
     vi.spyOn(window.history, k).mockImplementation(function (
@@ -277,7 +296,8 @@ beforeEach(() => {
       if (url != null) {
         const u = new URL(String(url), window.location.origin);
         tableWrites.push(u.pathname + u.search);
-        nav.set(u.search.slice(1));
+        if (heldLandings) heldLandings.push(u.search.slice(1));
+        else nav.set(u.search.slice(1));
       }
     });
   }
@@ -562,5 +582,96 @@ describe('A search another navigation puts in the address: the box takes it and 
     await settle();
     expect(searchBox()).toHaveValue('');
     expect(routerMock.replace).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * AN ADDRESS THE BOX WROTE THAT LANDS LATE. The box takes any search that
+ * lands in the address unless the box wrote it itself (`agreedQ`, set just
+ * before each write). A write can land after the next keystroke: Next lands a
+ * shallow write in a transition, and a server navigation (the emptied box,
+ * Clear all filters) takes a round trip. If the box did not mark its own write
+ * first, that late landing would read as another navigation's search and
+ * replace what was typed since. The tests above land every write at once, so
+ * none of them reaches this order.
+ */
+describe('An address the box wrote that lands late never replaces what was typed since', () => {
+  it('instant mode: typing on while its own search is landing keeps what was typed', async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'instant', { items: BOOKS }));
+    holdLandings();
+    await userEvent.setup().type(searchBox(), 'Grade');
+    await settle();
+    expect(window.location.search).toBe('?q=Grade');
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Grade 5' } });
+      releaseLandings();
+    });
+    expect(searchBox()).toHaveValue('Grade 5');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 5');
+    expect(window.location.search).toBe('?q=Grade+5');
+    expect(shownNames()).toEqual(['Grade 5 Atlas']);
+  });
+
+  it('server mode: typing on while the address of the search it ran is landing keeps what was typed', async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'server', { items: BOOKS }));
+    holdLandings();
+    await userEvent.setup().type(searchBox(), 'Dune');
+    await settle();
+    expect(window.location.search).toBe('?q=Dune');
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Grade 5' } });
+      releaseLandings();
+    });
+    expect(searchBox()).toHaveValue('Grade 5');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 5');
+    expect(window.location.search).toBe('?q=Grade+5');
+    expect(shownNames()).toEqual(['Grade 5 Atlas']);
+  });
+
+  it('server mode: a new search typed before the list without the old one arrives stays', async () => {
+    setAddress('/dashboard/books?q=Dune');
+    const view = render(tableFor('books', 'server', { items: [BOOKS[3]!], initialQuery: 'Dune' }));
+    await settle();
+    await userEvent.setup().clear(searchBox());
+    await settle();
+    expect(routerMock.replace.mock.calls.map((c) => c[0])).toEqual(['/dashboard/books']);
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Grade 5' } });
+      setAddress('/dashboard/books');
+      view.rerender(tableFor('books', 'server', { items: BOOKS }));
+    });
+    expect(searchBox()).toHaveValue('Grade 5');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 5');
+    expect(window.location.search).toBe('?q=Grade+5');
+    expect(shownNames()).toEqual(['Grade 5 Atlas']);
+  });
+
+  it('server mode: a search typed after "Clear all filters", before the bare list arrives, stays', async () => {
+    setAddress(`/dashboard/inventory?cat=${SCIENCE}&q=zz`);
+    const view = render(tableFor('items', 'server', { items: [], initialQuery: 'zz' }));
+    await settle();
+    routerMock.replace.mockClear();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Clear all filters' }));
+    await settle();
+    expect(routerMock.replace.mock.calls.map((c) => c[0])).toEqual(['/dashboard/inventory']);
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Stapler' } });
+      setAddress('/dashboard/inventory');
+      view.rerender(tableFor('items', 'server', { items: ITEMS }));
+    });
+    expect(searchBox()).toHaveValue('Stapler');
+    await settle();
+    expect(searchBox()).toHaveValue('Stapler');
+    expect(window.location.search).toBe('?q=Stapler');
+    expect(shownNames()).toEqual(['Stapler']);
   });
 });
