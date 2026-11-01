@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Dependency advisories fixed in pnpm-lock.yaml stay fixed (docket S13,
- * 2026-10-24).
+ * 2026-10-24), and the alerts dismissed instead keep their reasons (docket
+ * C20, 2026-11-01).
  *
  * WHAT WAS OPEN: after the Next.js 16.4.3 upgrade (#381), Dependabot still
  * had alerts open on versions the lockfile resolved although every
@@ -47,25 +48,44 @@ import { describe, expect, it } from 'vitest';
  * sharp and shell-quote, fixed by #381 while their alerts (#119 and #118)
  * were still open, are held to the same rule.
  *
+ * On 2026-11-01 Dependabot opened fifteen more alerts (#140 to #154):
+ *
+ *   - node-forge 1.4.0 (eleven advisories, #142 to #152): Expo's command-line
+ *     tools in apps/mobile, on a developer machine or the EAS build server.
+ *     1.4.1 fixes them, and the override takes 1.4.2.
+ *   - decode-uri-component 0.5.0 (GHSA-qr28-fpjm-wq7f, #141): the decoder of
+ *     the patched query-string 7.1.3 in the phone bundle. 0.5.1 fixes it;
+ *     apps/mobile/src/lib/query-string-decode.test.ts runs the patched module
+ *     with it.
+ *   - glob 13.0.6 (#153), minimatch 10.2.6 and 3.1.5 (#154) and deepmerge
+ *     4.3.1 (#140): their fixes are glob 14 and minimatch 11, majors no parent
+ *     accepts yet, and deepmerge has no fixed release. Their alerts are
+ *     dismissed instead, and DISMISSED below checks why.
+ *
  * WHAT STOPS IT NOW: root package.json overrides set the floors
  * (compression@1 ^1.8.2, dompurify@3 ^3.4.17, source-map-js@1 ^1.2.2,
- * fast-uri@3 ^3.1.9, vite ^6.4.4), apps/web asks for happy-dom ^21.0.4, and
- * this test reads every version the lockfile resolves and fails when one is
- * inside an advisory's vulnerable range. A lockfile change that brings one
+ * fast-uri@3 ^3.1.9, vite ^6.4.4, node-forge@1 ^1.4.2,
+ * decode-uri-component@<0.5.1 0.5.1), apps/web asks for happy-dom ^21.0.4,
+ * and this test reads every version the lockfile resolves and fails when one
+ * is inside an advisory's vulnerable range. A lockfile change that brings one
  * back (a new dependency, a revert, a hand edit) fails CI instead of waiting
- * for an alert.
+ * for an alert. For each dismissed alert it reads who depends on each locked
+ * version inside the advisory's range, and fails on a dependent the dismissal
+ * does not name, or when no locked version is inside the range any more (an
+ * upgrade took the vulnerable copy out: remove the entry and re-check the
+ * alert, which a dismissal never does by itself).
  *
- * NOT COVERED: node-forge (GHSA-86w9-cpqp-85rv) has no fixed release, so its
- * alert is dismissed instead; NODE_FORGE_DEPENDENTS below checks the reason
- * for that (only Expo's command-line tools depend on it). zod 3
- * (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and #134) needs zod 4, a
- * change of its own (#381 refuses over-long lists on the two public routes
- * until then). A withdrawn advisory (sprintf-js, GHSA-hp3w-g68c-fv3c) is not
- * a defect.
+ * NOT COVERED: zod 3 (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and
+ * #134) needs zod 4, a change of its own (docket C12; #381 refuses over-long
+ * lists on the two public routes until then). A withdrawn advisory
+ * (sprintf-js, GHSA-hp3w-g68c-fv3c) is not a defect.
  *
- * IF THIS FAILS: a lockfile change resolved a vulnerable version. Find what
- * asks for it (`pnpm why -r <package>`) and resolve the fixed version; do not
- * lower a range here.
+ * IF THIS FAILS: a lockfile change resolved a vulnerable version, or gave a
+ * dismissed one a new dependent. Find what asks for it
+ * (`pnpm why -r <package>`) and resolve the fixed version; do not lower a
+ * range here. Before naming a new dependent of a dismissed package, find out
+ * whether it runs on the web server or in the phone app with input that is
+ * not ours: if it does, the alert cannot stay dismissed.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
@@ -227,6 +247,37 @@ const FLOORS: Floor[] = [
     advisories: ['GHSA-pqg4-j6r4-53mv'],
     ranges: [{ from: '1.8.4', fixed: '1.11.0' }],
   },
+  {
+    pkg: 'node-forge',
+    // The eleven of Dependabot #142 to #152 (listed in alert order): <=1.4.0
+    // -> 1.4.1. GHSA-86w9-cpqp-85rv (#112, dismissed 2026-10-25): <=1.4.0 ->
+    // none listed by GitHub, but forge's CHANGELOG (tag v1.4.2, 7928054627d)
+    // lists its CVE-2026-85393 in the Security section of 1.4.1. The override
+    // asks for ^1.4.2 because 1.4.1's pem.decode() threw a TypeError on Buffer
+    // input, which 1.4.2 fixed.
+    advisories: [
+      'GHSA-5x38-2vff-x55p',
+      'GHSA-hqq3-7jhf-c5jx',
+      'GHSA-8hrf-8g6f-7xwp',
+      'GHSA-jc66-7q78-782g',
+      'GHSA-5cwg-6vw7-rj6p',
+      'GHSA-4487-j8r4-4g2f',
+      'GHSA-h6cr-wjv9-3cpp',
+      'GHSA-7wch-p9px-956x',
+      'GHSA-525v-9gp9-w22h',
+      'GHSA-6wvx-3r32-xmcg',
+      'GHSA-4642-5mcj-2rqw',
+      'GHSA-86w9-cpqp-85rv',
+    ],
+    ranges: [{ fixed: '1.4.1' }],
+  },
+  {
+    pkg: 'decode-uri-component',
+    // GHSA-vcc3-ghjq-m6fr <=0.4.2 -> 0.5.0 (Dependabot #79); GHSA-qr28-fpjm-wq7f
+    // <=0.5.0 -> 0.5.1 (#141).
+    advisories: ['GHSA-vcc3-ghjq-m6fr', 'GHSA-qr28-fpjm-wq7f'],
+    ranges: [{ fixed: '0.5.1' }],
+  },
 ];
 
 /**
@@ -254,53 +305,121 @@ function lockedVersions(lockfile: string): Map<string, string[]> {
   return out;
 }
 
+/** Whether a locked version is inside one of the ranges. A text that is not a version counts as inside. */
+function inRanges(text: string, ranges: Range[]): boolean {
+  const v = parseVersion(text);
+  return (
+    v === null ||
+    ranges.some(
+      (r) =>
+        (r.from === undefined || compare(v, version(r.from)) >= 0) &&
+        compare(v, version(r.fixed)) < 0,
+    )
+  );
+}
+
 /** Each locked version inside a floor's vulnerable range (or not a version at all), as `name@version (advisories)`. */
 function vulnerableLocked(lockfile: string, floors: Floor[] = FLOORS): string[] {
   const locked = lockedVersions(lockfile);
   const found: string[] = [];
   for (const floor of floors) {
     for (const text of locked.get(floor.pkg) ?? []) {
-      const v = parseVersion(text);
-      const hit =
-        v === null ||
-        floor.ranges.some(
-          (r) =>
-            (r.from === undefined || compare(v, version(r.from)) >= 0) &&
-            compare(v, version(r.fixed)) < 0,
-        );
-      if (hit) found.push(`${floor.pkg}@${text} (${floor.advisories.join(', ')})`);
+      if (inRanges(text, floor.ranges)) {
+        found.push(`${floor.pkg}@${text} (${floor.advisories.join(', ')})`);
+      }
     }
   }
   return found;
 }
 
 /**
- * node-forge has no fixed release (GHSA-86w9-cpqp-85rv, Dependabot #112:
- * every version up to 1.4.0, none patched), so its alert is dismissed instead
- * of fixed, for one reason: only Expo's command-line tools load it, on a
- * developer machine or a build server. That stays true while node-forge and
- * @expo/code-signing-certificates (through which those tools also load it)
- * have no dependents but these:
- *
- *   - @expo/cli loads node-forge itself to read local signing certificates
- *     for `expo run:ios` (build/src/run/ios/codeSigning/Security.js), and
- *     loads @expo/code-signing-certificates for development code signing
- *     (build/src/utils/codesigning.js).
- *   - expo-updates' own command-line tool loads
- *     @expo/code-signing-certificates in its codesigning:generate and
- *     codesigning:configure commands (cli/build/generateCodeSigningAsync.js
- *     and configureCodeSigningAsync.js). Nothing else in expo-updates loads
- *     it, its app runtime included.
- *
- * Only apps/mobile reaches them (expo > @expo/cli, and expo-updates). The
- * iOS export's source map holds expo-updates' runtime but neither package.
- * A new dependent fails the check below. Before naming it here, find out
- * whether it runs in the phone app or on the web server: if it does, the
- * alert cannot stay dismissed.
+ * An alert dismissed on GitHub instead of fixed: the vulnerable ranges
+ * (copied from the advisory, as in FLOORS), the Dependabot alert number, and
+ * the packages the dismissal's reason allows to depend on a version inside
+ * those ranges.
  */
-const NODE_FORGE_DEPENDENTS: Record<string, string[]> = {
-  'node-forge': ['@expo/cli', '@expo/code-signing-certificates'],
-  '@expo/code-signing-certificates': ['@expo/cli', 'expo-updates'],
+type Dismissal = Floor & { alert: number; dependents: string[] };
+
+/**
+ * Each alert here is dismissed (as tolerable risk) for one reason: every
+ * package that depends on a locked version inside its ranges either runs on a
+ * developer machine or a build server with only our own input, or never
+ * reaches the flawed code. Only the dependents of versions inside the ranges
+ * count, so archiver-utils and rimraf, which pull glob 7.2.3 onto the web
+ * server (through exceljs), are not named, and either of them moving onto a
+ * glob inside the range fails the check.
+ *
+ *   - glob 13.0.6: Expo's build tools, on our own patterns. Of them only
+ *     @expo/cli passes an AbortSignal, the case the advisory is about, in
+ *     `expo start`'s TypeScript check of our own folder. glob 14 changes its
+ *     API and needs minimatch 11; every Expo release still asks for ^13.
+ *   - minimatch 10.2.6 and 3.1.5: ESLint and its plugins, typescript-eslint,
+ *     @expo/fingerprint and glob, on our own patterns, and readdir-glob,
+ *     which only archiver uses, inside exceljs, without ever globbing (see
+ *     DISMISSAL_CHAINS). 3.1.5 does not hold the flawed code
+ *     (firstPhasePreProcess). The fix is 11.x, and no parent accepts it.
+ *   - deepmerge 4.3.1: @expo/config, merging our own app config. No release
+ *     is fixed; @expo/config 58 (Expo SDK 58) no longer depends on it.
+ *
+ * Neither glob, minimatch nor deepmerge is in the phone app's bundle.
+ */
+const DISMISSED: Dismissal[] = [
+  {
+    pkg: 'glob',
+    alert: 153,
+    // GHSA-3g3m-2fjr-6pw4 >=9.0.0 <=14.0.1 -> 14.0.2.
+    advisories: ['GHSA-3g3m-2fjr-6pw4'],
+    ranges: [{ from: '9.0.0', fixed: '14.0.2' }],
+    dependents: [
+      '@expo/cli',
+      '@expo/config',
+      '@expo/config-plugins',
+      '@expo/fingerprint',
+      '@expo/metro-config',
+      'expo-updates',
+    ],
+  },
+  {
+    pkg: 'minimatch',
+    alert: 154,
+    // GHSA-g3hv-75wg-m249 <11.0.1 -> 11.0.1.
+    advisories: ['GHSA-g3hv-75wg-m249'],
+    ranges: [{ fixed: '11.0.1' }],
+    dependents: [
+      '@eslint/config-array',
+      '@eslint/eslintrc',
+      '@expo/fingerprint',
+      '@typescript-eslint/typescript-estree',
+      'eslint',
+      'eslint-plugin-import',
+      'eslint-plugin-jsx-a11y',
+      'eslint-plugin-react',
+      'glob',
+      'readdir-glob',
+    ],
+  },
+  {
+    pkg: 'deepmerge',
+    alert: 140,
+    // GHSA-gcqx-w48m-w2h4 >=4.2.0 <=4.3.1, no patched version listed: 4.3.2
+    // is the next version up, not a known fix.
+    advisories: ['GHSA-gcqx-w48m-w2h4'],
+    ranges: [{ from: '4.2.0', fixed: '4.3.2' }],
+    dependents: ['@expo/config'],
+  },
+];
+
+/**
+ * Packages a dismissal relies on staying where they are, whatever their
+ * version: minimatch 10.2.6 reaches the web server through exceljs >
+ * archiver > readdir-glob, and #154 stays dismissed because exceljs uses only
+ * archiver's append() and file(), while only its directory() and glob() call
+ * readdir-glob. Any other dependent of either, our own code included, fails
+ * the check.
+ */
+const DISMISSAL_CHAINS: Record<string, string[]> = {
+  'readdir-glob': ['archiver'],
+  archiver: ['exceljs'],
 };
 
 /** The package name in a lockfile key: `@scope/name@1.0.0(peer@2.0.0)` is `@scope/name`. */
@@ -318,16 +437,30 @@ function aliasOf(value: string): string | null {
   return /^((?:@[^@/'\s(]+\/)?[^@'\s(]+)@\d/.exec(value)?.[1] ?? null;
 }
 
+/**
+ * The locked `name@version` a dependency resolves to: its version without the
+ * `(peer@2.0.0)` suffixes, and for an alias (`x: real@1.2.3`) the real
+ * package's.
+ */
+function resolvedAs(name: string, value: string): string {
+  const key = aliasOf(value) === null ? `${name}@${value}` : value;
+  return key.replace(/\(.*$/, '');
+}
+
 const DEPENDENCY_LISTS = new Set(['dependencies', 'devDependencies', 'optionalDependencies']);
 
 /**
- * Who depends on each package: the packages whose `snapshots:` entry lists it,
- * and the workspace packages (as `workspace apps/mobile`) whose `importers:`
- * entry lists it. A dependency installed under an alias also counts for the
- * real package. Throws rather than returning nothing when the file does not
- * have that shape.
+ * Who depends on what, read in one pass: `byName` maps each package to the
+ * packages whose `snapshots:` entry lists it and the workspace packages (as
+ * `workspace apps/mobile`) whose `importers:` entry lists it; `byVersion`
+ * maps each locked `name@version` the same way. A dependency installed under
+ * an alias also counts for the real package. Throws rather than returning
+ * nothing when the file does not have that shape.
  */
-function dependents(lockfile: string): Map<string, Set<string>> {
+function dependents(lockfile: string): {
+  byName: Map<string, Set<string>>;
+  byVersion: Map<string, Set<string>>;
+} {
   const lines = lockfile.split('\n');
   if (lines[0] !== "lockfileVersion: '9.0'") {
     throw new Error(`unexpected lockfile version line: ${lines[0]}`);
@@ -338,13 +471,17 @@ function dependents(lockfile: string): Map<string, Set<string>> {
   if (importersAt < 0 || packagesAt < importersAt || snapshotsAt < packagesAt) {
     throw new Error('no importers:, packages: and snapshots: sections, in that order');
   }
-  const out = new Map<string, Set<string>>();
+  const byName = new Map<string, Set<string>>();
+  const byVersion = new Map<string, Set<string>>();
+  const add = (to: Map<string, Set<string>>, key: string, owner: string): void => {
+    to.set(key, (to.get(key) ?? new Set<string>()).add(owner));
+  };
   // Both sections hold one entry per line at two spaces, with its dependency
   // lists at four and their entries at six.
   const read = (
     section: string[],
     ownerOf: (key: string) => string,
-    dependenciesOn: (line: string) => string[],
+    dependencyOn: (line: string) => { names: string[]; resolved?: string },
   ): void => {
     let owner: string | undefined;
     let listing = false;
@@ -361,42 +498,49 @@ function dependents(lockfile: string): Map<string, Set<string>> {
         continue;
       }
       if (!listing || owner === undefined) continue;
-      for (const pkg of dependenciesOn(line)) {
-        out.set(pkg, (out.get(pkg) ?? new Set<string>()).add(owner));
-      }
+      const { names, resolved } = dependencyOn(line);
+      for (const pkg of names) add(byName, pkg, owner);
+      if (resolved !== undefined) add(byVersion, resolved, owner);
     }
   };
+  // An importer lists a dependency's name at six spaces and its `version:` at
+  // eight, a few lines below.
+  let importing: string | undefined;
   read(
     lines.slice(importersAt + 1, packagesAt),
     (key) => `workspace ${key}`,
     (line) => {
       const name = /^ {6}'?([^'\s][^']*?)'?:$/.exec(line)?.[1];
-      if (name !== undefined) return [name];
+      if (name !== undefined) {
+        importing = name;
+        return { names: [name] };
+      }
       const version = /^ {8}version: '?([^'\s]+?)'?$/.exec(line)?.[1];
-      const real = version === undefined ? null : aliasOf(version);
-      return real === null ? [] : [real];
+      if (version === undefined || importing === undefined) return { names: [] };
+      const resolved = resolvedAs(importing, version);
+      importing = undefined;
+      const real = aliasOf(version);
+      return { names: real === null ? [] : [real], resolved };
     },
   );
   read(lines.slice(snapshotsAt + 1), packageName, (line) => {
     const m = /^ {6}'?([^'\s][^']*?)'?: '?([^'\s]+?)'?$/.exec(line);
-    if (!m?.[1] || !m[2]) return [];
+    if (!m?.[1] || !m[2]) return { names: [] };
     const real = aliasOf(m[2]);
-    return real === null ? [m[1]] : [m[1], real];
+    return { names: real === null ? [m[1]] : [m[1], real], resolved: resolvedAs(m[1], m[2]) };
   });
-  return out;
+  return { byName, byVersion };
 }
 
 /**
  * Each dependent of a package in `named` that its list does not name, as
- * `package <- dependent`. Throws when a package is locked but nothing seems to
- * depend on it, since that means the lockfile was not read.
+ * `package <- dependent`, whatever the version. Throws when a package is
+ * locked but nothing seems to depend on it, since that means the lockfile was
+ * not read.
  */
-function unnamedDependents(
-  lockfile: string,
-  named: Record<string, string[]> = NODE_FORGE_DEPENDENTS,
-): string[] {
+function unnamedDependents(lockfile: string, named: Record<string, string[]>): string[] {
   const locked = lockedVersions(lockfile);
-  const all = dependents(lockfile);
+  const all = dependents(lockfile).byName;
   const found: string[] = [];
   for (const [pkg, allowed] of Object.entries(named)) {
     const by = [...(all.get(pkg) ?? [])].sort();
@@ -405,6 +549,40 @@ function unnamedDependents(
     }
     for (const dependent of by) {
       if (!allowed.includes(dependent)) found.push(`${pkg} <- ${dependent}`);
+    }
+  }
+  return found;
+}
+
+/**
+ * What a dismissal no longer covers: each dependent of a locked version
+ * inside its ranges that it does not name, as `glob@13.0.6 <- some-lib`, and
+ * a dismissal with no locked version inside its ranges any more (stale: an
+ * upgrade took the vulnerable copy out). Throws when a version inside the
+ * ranges is locked but nothing seems to depend on it, since that means the
+ * lockfile was not read.
+ */
+function undismissed(lockfile: string, dismissed: Dismissal[] = DISMISSED): string[] {
+  const locked = lockedVersions(lockfile);
+  const all = dependents(lockfile).byVersion;
+  const found: string[] = [];
+  for (const d of dismissed) {
+    const inside = (locked.get(d.pkg) ?? []).filter((text) => inRanges(text, d.ranges));
+    if (inside.length === 0) {
+      found.push(
+        `${d.pkg}: no locked version is inside the dismissed range any more: remove this entry and re-check alert #${d.alert}`,
+      );
+    }
+    for (const text of inside) {
+      const by = [...(all.get(`${d.pkg}@${text}`) ?? [])].sort();
+      if (by.length === 0) {
+        throw new Error(
+          `${d.pkg}@${text} is locked but nothing depends on it: the lockfile was not read`,
+        );
+      }
+      for (const dependent of by) {
+        if (!d.dependents.includes(dependent)) found.push(`${d.pkg}@${text} <- ${dependent}`);
+      }
     }
   }
   return found;
@@ -462,6 +640,8 @@ describe('the check itself', () => {
       'happy-dom@21.0.3',
       'sharp@0.35.4',
       'shell-quote@1.10.0',
+      'node-forge@1.4.0',
+      'decode-uri-component@0.5.0',
       "'@scope/other@1.0.0'",
     ]);
     expect(vulnerableLocked(lock).map((f) => f.split(' ')[0])).toEqual([
@@ -475,6 +655,8 @@ describe('the check itself', () => {
       'happy-dom@21.0.3',
       'sharp@0.35.4',
       'shell-quote@1.10.0',
+      'node-forge@1.4.0',
+      'decode-uri-component@0.5.0',
     ]);
     expect(
       vulnerableLocked(
@@ -488,6 +670,8 @@ describe('the check itself', () => {
           'happy-dom@21.0.4',
           'sharp@0.35.5',
           'shell-quote@1.11.0',
+          'node-forge@1.4.1',
+          'decode-uri-component@0.5.1',
         ]),
       ),
     ).toEqual([]);
@@ -537,13 +721,17 @@ describe('the check itself', () => {
   });
 });
 
-describe('node-forge, which has no fixed release, stays inside Expo command-line tools', () => {
-  it('has no dependent that the dismissal of its alert does not name', () => {
-    expect(unnamedDependents(LOCKFILE)).toEqual([]);
+describe('the alerts dismissed instead of fixed keep their reasons', () => {
+  it('names every dependent of a locked version a dismissal covers, and no dismissal is stale', () => {
+    expect(undismissed(LOCKFILE)).toEqual([]);
+  });
+
+  it('keeps readdir-glob and archiver where the minimatch dismissal relies on them', () => {
+    expect(unnamedDependents(LOCKFILE, DISMISSAL_CHAINS)).toEqual([]);
   });
 
   it('reads who depends on what in the real lockfile', () => {
-    const all = dependents(LOCKFILE);
+    const all = dependents(LOCKFILE).byName;
     expect(all.size).toBeGreaterThan(1000);
     expect([...(all.get('react') ?? [])]).toEqual(
       expect.arrayContaining(['workspace apps/web', 'workspace apps/mobile']),
@@ -552,7 +740,18 @@ describe('node-forge, which has no fixed release, stays inside Expo command-line
     expect([...(all.get('typescript') ?? [])]).toContain('workspace .');
   });
 
+  it('reads who depends on each locked version in the real lockfile', () => {
+    // Every version the lockfile locks has a dependent, so one the reader
+    // misses (a peer suffix it kept, an alias it did not follow) shows here.
+    const { byVersion } = dependents(LOCKFILE);
+    const unread = [...lockedVersions(LOCKFILE)].flatMap(([pkg, versions]) =>
+      versions.map((v) => `${pkg}@${v}`).filter((key) => !byVersion.has(key)),
+    );
+    expect(unread).toEqual([]);
+  });
+
   type Lists = { dependencies?: string[]; optionalDependencies?: string[] };
+  // Workspace and package dependencies are both written `name: version`.
   const graph = (workspace: Record<string, string[]>, snapshots: Record<string, Lists>): string =>
     [
       "lockfileVersion: '9.0'",
@@ -562,11 +761,10 @@ describe('node-forge, which has no fixed release, stays inside Expo command-line
       ...Object.entries(workspace).flatMap(([path, deps]) => [
         `  ${path}:`,
         '    dependencies:',
-        ...deps.flatMap((d) => [
-          `      ${d}:`,
-          '        specifier: ^1.0.0',
-          '        version: 1.0.0',
-        ]),
+        ...deps.flatMap((d) => {
+          const [name = '', version = ''] = d.split(': ');
+          return [`      ${name}:`, `        specifier: ${version}`, `        version: ${version}`];
+        }),
         '',
       ]),
       'packages:',
@@ -587,43 +785,98 @@ describe('node-forge, which has no fixed release, stays inside Expo command-line
       }),
     ].join('\n');
 
-  const expoTools: Record<string, Lists> = {
-    "'@expo/cli@57.0.24(expo@57.0.22)'": {
-      dependencies: ["'@expo/code-signing-certificates': 0.0.6", 'node-forge: 1.4.0'],
-    },
-    "'@expo/code-signing-certificates@0.0.6'": { dependencies: ['node-forge: 1.4.0'] },
-    'expo-updates@57.0.22(expo@57.0.22)': {
-      dependencies: ["'@expo/code-signing-certificates': 0.0.6"],
-    },
-    'node-forge@1.4.0': {},
+  // Today's shape, cut down: the versions inside the ranges, with dependents
+  // the dismissals name; glob 7.2.3, outside glob's range, under
+  // archiver-utils and rimraf; and exceljs > archiver > readdir-glob on the
+  // web server.
+  const web = { 'apps/web': ['exceljs: 4.4.0'] };
+  const today: Record<string, Lists> = {
+    "'@expo/cli@57.0.24(expo@57.0.22)'": { dependencies: ['glob: 13.0.6'] },
+    "'@expo/config@57.0.9'": { dependencies: ['deepmerge: 4.3.1', 'glob: 13.0.6'] },
+    "'@expo/fingerprint@0.20.3'": { dependencies: ['glob: 13.0.6', 'minimatch: 10.2.6'] },
+    'archiver-utils@2.1.0': { dependencies: ['glob: 7.2.3'] },
+    'archiver@5.3.2': { dependencies: ['archiver-utils: 2.1.0', 'readdir-glob: 1.1.3'] },
+    'deepmerge@4.3.1': {},
+    'eslint@9.39.5': { dependencies: ['minimatch: 3.1.5'] },
+    'exceljs@4.4.0': { dependencies: ['archiver: 5.3.2', 'rimraf: 2.7.1'] },
+    'glob@13.0.6': { dependencies: ['minimatch: 10.2.6'] },
+    'glob@7.2.3': { dependencies: ['minimatch: 3.1.5'] },
+    'minimatch@10.2.6': {},
+    'minimatch@3.1.5': {},
+    'readdir-glob@1.1.3': { dependencies: ['minimatch: 10.2.6'] },
+    'rimraf@2.7.1': { dependencies: ['glob: 7.2.3'] },
   };
 
-  it('passes the dependents it names, and flags any other, however it is listed', () => {
-    expect(unnamedDependents(graph({ 'apps/mobile': ['expo-updates'] }, expoTools))).toEqual([]);
-    expect(
-      unnamedDependents(
-        graph(
-          { 'apps/web': ['node-forge'] },
-          {
-            ...expoTools,
-            'server-lib@2.0.0': { optionalDependencies: ['node-forge: 1.4.0'] },
-            'other-lib@1.0.0': { dependencies: ['forge: node-forge@1.4.0'] },
-            'some-tool@1.0.0': { dependencies: ["'@expo/code-signing-certificates': 0.0.6"] },
-          },
-        ),
-      ),
-    ).toEqual([
-      'node-forge <- other-lib',
-      'node-forge <- server-lib',
-      'node-forge <- workspace apps/web',
-      '@expo/code-signing-certificates <- some-tool',
+  it('passes the dependents a dismissal names, and ignores those of a version outside its range', () => {
+    expect(undismissed(graph(web, today))).toEqual([]);
+    expect(unnamedDependents(graph(web, today), DISMISSAL_CHAINS)).toEqual([]);
+  });
+
+  it('flags a dependent the dismissal does not name, however it is listed', () => {
+    const lock = graph(
+      { 'apps/web': ['exceljs: 4.4.0', 'minimatch: 10.2.6', 'archiver: 5.3.2'] },
+      {
+        ...today,
+        'other-lib@1.0.0': { dependencies: ['g: glob@13.0.6', 'readdir-glob: 1.1.3'] },
+        'server-lib@2.0.0': { optionalDependencies: ['deepmerge: 4.3.1(peer-lib@1.0.0)'] },
+      },
+    );
+    expect(undismissed(lock)).toEqual([
+      'glob@13.0.6 <- other-lib',
+      'minimatch@10.2.6 <- workspace apps/web',
+      'deepmerge@4.3.1 <- server-lib',
+    ]);
+    expect(unnamedDependents(lock, DISMISSAL_CHAINS)).toEqual([
+      'readdir-glob <- other-lib',
+      'archiver <- workspace apps/web',
     ]);
   });
 
-  it('fails closed when it cannot read who asks for a locked node-forge', () => {
-    expect(() => unnamedDependents(graph({}, { 'node-forge@1.4.0': {} }))).toThrow(
-      /nothing depends on it/,
-    );
+  it('flags a dependent that moves onto a version inside the range', () => {
+    // archiver 7 asks for archiver-utils ^5.0.2, which asks for glob ^10.
+    const lock = graph(web, {
+      ...today,
+      'archiver@5.3.2': { dependencies: ['archiver-utils: 5.0.2', 'readdir-glob: 1.1.3'] },
+      'archiver-utils@5.0.2': { dependencies: ['glob: 10.5.0'] },
+      'glob@10.5.0': { dependencies: ['minimatch: 10.2.6'] },
+    });
+    expect(undismissed(lock)).toEqual(['glob@10.5.0 <- archiver-utils']);
+  });
+
+  it('reports a dismissal with no locked version inside its range any more', () => {
+    // An Expo release on glob 14, and glob 7.2.3 still under rimraf: none of
+    // the three dismissals has a vulnerable copy left to cover.
+    const lock = graph(web, {
+      "'@expo/cli@58.1.18'": { dependencies: ['glob: 14.0.3'] },
+      'exceljs@4.4.0': { dependencies: ['rimraf: 2.7.1'] },
+      'glob@14.0.3': {},
+      'glob@7.2.3': {},
+      'rimraf@2.7.1': { dependencies: ['glob: 7.2.3'] },
+    });
+    expect(undismissed(lock)).toEqual([
+      'glob: no locked version is inside the dismissed range any more: remove this entry and re-check alert #153',
+      'minimatch: no locked version is inside the dismissed range any more: remove this entry and re-check alert #154',
+      'deepmerge: no locked version is inside the dismissed range any more: remove this entry and re-check alert #140',
+    ]);
+  });
+
+  it('fails closed when it cannot read who asks for a version it checks', () => {
+    // Something asks for glob 7.2.3, but nothing for 13.0.6.
+    expect(() =>
+      undismissed(
+        graph(
+          {},
+          {
+            'glob@13.0.6': {},
+            'glob@7.2.3': {},
+            'rimraf@2.7.1': { dependencies: ['glob: 7.2.3'] },
+          },
+        ),
+      ),
+    ).toThrow(/glob@13\.0\.6 is locked but nothing depends on it/);
+    expect(() =>
+      unnamedDependents(graph({}, { 'readdir-glob@1.1.3': {} }), DISMISSAL_CHAINS),
+    ).toThrow(/nothing depends on it/);
     expect(() => dependents("lockfileVersion: '9.0'\n\npackages:\n\nsnapshots:\n")).toThrow(
       /importers:/,
     );
