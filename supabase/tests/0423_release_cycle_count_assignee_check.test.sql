@@ -58,8 +58,8 @@
 --     stock:adjust releases a count assigned to themself (the assignee
 --     check's manager clause), and a viewer granted stock:adjust releases
 --     their own count: the assignee's rule is the permission the app asks
---     before a release, not a rank, so the database refuses no one the app
---     lets through.
+--     before a release, not a rank (a rank rule would refuse an assignee
+--     the app lets through).
 -- U.  A count with no assignee: only a manager releases it; everyone else
 --     is refused, the assignee whose count a manager just released (a stale
 --     screen) included, and so is an assignee who sends their own release

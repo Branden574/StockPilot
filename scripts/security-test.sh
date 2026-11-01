@@ -769,13 +769,13 @@ PGTAP_TESTS=(
   # everyone but a manager of the count's organization on a count with no
   # assignee (the old check was NULL there and refused no one: any signed-in
   # account of any organization that knew the id released the count and got
-  # its row back past row level security; an assignee's second release after
-  # the first went through is refused now too), and refuses the assignee
-  # once has_permission stock:adjust no longer holds for them in the count's
-  # organization (a member removed from it, a disabled account, an expired
-  # act-as seat, a viewer, a member whose stock:adjust was revoked).
-  # Managers are unaffected, with or without stock:adjust, on their own
-  # counts too, and the assignee's rule is that permission, not a rank (a
+  # its row back past row level security; a non-manager assignee's second
+  # release after the first went through is refused now too), and refuses
+  # the assignee once has_permission stock:adjust no longer holds for them in
+  # the count's organization (a member removed from it, a disabled account,
+  # an expired act-as seat, a viewer, a member whose stock:adjust was
+  # revoked). Managers are unaffected, with or without stock:adjust, on their
+  # own counts too, and the assignee's rule is that permission, not a rank (a
   # viewer granted stock:adjust releases their own count, as the app
   # allows). The restated body is production's with its two added blocks
   # removed, and taking each block out lets the refused calls through. The
