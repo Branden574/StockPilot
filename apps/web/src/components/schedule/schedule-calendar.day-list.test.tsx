@@ -103,6 +103,30 @@ const JULY = [...BUSY_DAY, ...THREE, ...LAST_DAY];
 
 const BUSY_MORE = '2 more events on Tuesday, July 14';
 
+/** Thirty events on Tue Jul 14, ten minutes apart: a list that scrolls. */
+const thirtyOnJul14 = () => {
+  const start = Date.parse('2026-07-14T14:00:00Z');
+  return Array.from({ length: 30 }, (_, i) =>
+    event(`ev-m${i + 1}`, `Delivery ${i + 1}`, new Date(start + i * 10 * 60_000).toISOString()),
+  );
+};
+const THIRTY_MORE = '27 more events on Tuesday, July 14';
+
+/**
+ * Makes `el` answer `:focus-visible` with `answer()`, and every other
+ * selector as before. happy-dom matches :focus-visible on every focus, so
+ * this is how a test says how the focus came (a press or tap shows no ring;
+ * the keyboard does), as orders-placed-control.test.tsx does.
+ */
+const answerFocusVisible = (el: Element, answer: () => boolean) => {
+  const matches = Element.prototype.matches;
+  return vi
+    .spyOn(el, 'matches')
+    .mockImplementation((selector: string) =>
+      selector === ':focus-visible' ? answer() : matches.call(el, selector),
+    );
+};
+
 function renderJuly(events = JULY) {
   const user = userEvent.setup();
   const view = render(
@@ -207,13 +231,44 @@ describe('"+N more" on a busy day of the team calendar', () => {
     await waitFor(() => expect(more).toHaveFocus());
   });
 
-  it('lists all 30 events of a 30-event day in a list that scrolls inside a box held to the room on screen', async () => {
-    const start = Date.parse('2026-07-14T14:00:00Z');
-    const many = Array.from({ length: 30 }, (_, i) =>
-      event(`ev-m${i + 1}`, `Delivery ${i + 1}`, new Date(start + i * 10 * 60_000).toISOString()),
+  // The list belongs to its day. The month can change while it is open (Back
+  // from the keyboard or a trackpad gesture moves no pointer outside it), and
+  // the cells are kept by their place in the grid: the list closes even where
+  // the new month has a busy day in the same cell.
+  it('a month change closes an open list, even with a busy day in the same cell', async () => {
+    const indexOf = (cell: HTMLElement) => Array.from(cell.parentElement!.children).indexOf(cell);
+    // August 2026's grid starts on Sun Jul 26, so Tue Aug 11 takes the cell
+    // that holds Tue Jul 14 in July's.
+    const august = [
+      event('ev-a1', 'Route 1', '2026-08-11T16:00:00Z'),
+      event('ev-a2', 'Route 2', '2026-08-11T17:00:00Z'),
+      event('ev-a3', 'Route 3', '2026-08-11T18:00:00Z'),
+      event('ev-a4', 'Route 4', '2026-08-11T19:00:00Z'),
+    ];
+    const { user, rerender } = renderJuly();
+    const julyCell = indexOf(cellOf('2026-07-14'));
+    await user.click(screen.getByRole('button', { name: BUSY_MORE }));
+    await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
+    rerender(
+      <ScheduleCalendar
+        year={2026}
+        month={8}
+        events={august}
+        canManage
+        timeZone={LOS_ANGELES}
+        todayYmd={null}
+      />,
     );
+    expect(indexOf(cellOf('2026-08-11'))).toBe(julyCell);
+    const more = screen.getByRole('button', { name: '1 more event on Tuesday, August 11' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('lists all 30 events of a 30-event day in a list that scrolls inside a box held to the room on screen', async () => {
+    const many = thirtyOnJul14();
     const { user } = renderJuly(many);
-    await user.click(screen.getByRole('button', { name: '27 more events on Tuesday, July 14' }));
+    await user.click(screen.getByRole('button', { name: THIRTY_MORE }));
     const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
     expect(within(dialog).getByText('30 events')).toBeInTheDocument();
     const list = within(dialog).getByRole('list');
@@ -225,21 +280,21 @@ describe('"+N more" on a busy day of the team calendar', () => {
     ).toEqual(many.map((e) => `/dashboard/schedule/${e.id}`));
     expect(list).toHaveClass('min-h-0', 'overflow-y-auto');
     expect(dialog).toHaveClass('max-h-[min(24rem,var(--radix-popover-content-available-height))]');
+    // A flex column, or the list does not keep to the box: without flex it
+    // runs out of the box and does not scroll; without flex-col it sits
+    // beside the date and Close (measured in Chromium).
+    expect(dialog).toHaveClass('flex', 'flex-col');
   });
 
   // Radix keeps Tab inside the list, and its wrap (Shift+Tab from Close to the
   // last row, @radix-ui/react-focus-scope 1.3.1) focuses with preventScroll:
   // in a list that scrolls, the row with focus would be out of view.
   it("Shift+Tab from Close wraps to the last event and brings it into the list's view", async () => {
-    const start = Date.parse('2026-07-14T14:00:00Z');
-    const many = Array.from({ length: 30 }, (_, i) =>
-      event(`ev-m${i + 1}`, `Delivery ${i + 1}`, new Date(start + i * 10 * 60_000).toISOString()),
-    );
     const scrollIntoView = vi
       .spyOn(Element.prototype, 'scrollIntoView')
       .mockImplementation(() => undefined);
-    const { user } = renderJuly(many);
-    await user.click(screen.getByRole('button', { name: '27 more events on Tuesday, July 14' }));
+    const { user } = renderJuly(thirtyOnJul14());
+    await user.click(screen.getByRole('button', { name: THIRTY_MORE }));
     const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
     const close = within(dialog).getByRole('button', { name: 'Close' });
     await waitFor(() => expect(close).toHaveFocus());
@@ -251,6 +306,56 @@ describe('"+N more" on a busy day of the team calendar', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
     // And its focus ring with it: a scroll margin as wide as the ring's room.
     expect(last).toHaveClass('scroll-my-1');
+  });
+
+  // Chrome and Edge, and Chrome on Android on a tap, focus a link when it is
+  // pressed, before the release. Scrolling the list then would move a row
+  // that is partly out of view from under the pointer: the list jumped 26 px,
+  // and a press near the list's edge ended outside the row and opened nothing
+  // (measured in Chromium and Firefox). A press shows no focus ring, so it
+  // scrolls nothing; the keyboard's focus does (the case above).
+  it('a row pressed with a mouse or a tap takes focus without scrolling the list', async () => {
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => undefined);
+    const { user } = renderJuly(thirtyOnJul14());
+    await user.click(screen.getByRole('button', { name: THIRTY_MORE }));
+    const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Close' })).toHaveFocus(),
+    );
+    const row = within(dialog).getAllByRole('link')[12]!;
+    const asked = answerFocusVisible(row, () => false);
+    scrollIntoView.mockClear();
+    // Pressed and not yet released: user-event focuses on the press, as Chrome does.
+    await user.pointer({ keys: '[MouseLeft>]', target: row });
+    expect(row).toHaveFocus();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(asked).toHaveBeenCalledWith(':focus-visible');
+  });
+
+  // Every browser the app supports answers :focus-visible. One that could not
+  // would not say how the focus came, so it scrolls nothing, as the report
+  // filter's calendar does (orders-placed-control.tsx).
+  it('a browser that cannot answer :focus-visible scrolls nothing', async () => {
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => undefined);
+    const { user } = renderJuly(thirtyOnJul14());
+    await user.click(screen.getByRole('button', { name: THIRTY_MORE }));
+    const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Close' })).toHaveFocus(),
+    );
+    const row = within(dialog).getAllByRole('link')[12]!;
+    const asked = answerFocusVisible(row, () => {
+      throw new SyntaxError("':focus-visible' is not a valid selector");
+    });
+    scrollIntoView.mockClear();
+    act(() => row.focus());
+    expect(row).toHaveFocus();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(asked).toHaveBeenCalledWith(':focus-visible');
   });
 
   // One set of words and tones for the cell's chip and the list's row
@@ -296,6 +401,18 @@ describe('"+N more" on a busy day of the team calendar', () => {
     expect(rows[3]!.dataset.status).toBe('cancelled');
     expect(rows[3]).toHaveTextContent(BUSY_DAY_WORDS[3]!);
     expect(rows[3]).toHaveClass('bg-destructive-wash', 'text-destructive', 'line-through');
+    // A row is a flex box and its words sit in ONE span in it. As the row's
+    // own flex items, the time would lose its trailing space and "8:00 AM"
+    // would run into the title (3.6 px to 0 in Chromium) with the same
+    // textContent and name. The span wraps a long title inside the row.
+    rows.forEach((row) => {
+      expect(row).toHaveClass('flex');
+      expect(row.children).toHaveLength(1);
+      const words = row.firstElementChild!;
+      expect(words.tagName).toBe('SPAN');
+      expect(words).toHaveClass('min-w-0', 'break-words');
+      expect(words.querySelector('.tabular-nums')).not.toBeNull();
+    });
   });
 
   // The rows are one of many links on the page: warmed on intent, never on
@@ -311,6 +428,34 @@ describe('"+N more" on a busy day of the team calendar', () => {
     expect(router.prefetch).toHaveBeenCalledTimes(1);
     expect(router.prefetch).toHaveBeenCalledWith('/dashboard/schedule/ev-2');
     expect(markNavigationIntent).toHaveBeenCalledWith('/dashboard/schedule/ev-2');
+  });
+
+  // A row is a plain link and leaves the list alone: a click opens its event,
+  // and a modified click (a new tab) keeps the list open on this page.
+  it('a click on a row opens its event and leaves the list open', async () => {
+    const { user } = renderJuly();
+    const more = screen.getByRole('button', { name: BUSY_MORE });
+    await user.click(more);
+    const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
+    // In the app, Next's router takes a link's click: it stops the page load
+    // and pushes the route. next/link has no router to hand it to in a test,
+    // so this stands in for it, and the test's page does not navigate.
+    const opened: (string | null)[] = [];
+    const takeClick = (e: MouseEvent) => {
+      const link = (e.target as Element).closest('a');
+      if (!link) return;
+      e.preventDefault();
+      opened.push(link.getAttribute('href'));
+    };
+    document.addEventListener('click', takeClick);
+    try {
+      await user.click(within(dialog).getAllByRole('link')[1]!);
+    } finally {
+      document.removeEventListener('click', takeClick);
+    }
+    expect(opened).toEqual(['/dashboard/schedule/ev-2']);
+    expect(screen.getByRole('dialog', { name: 'Tuesday, July 14' })).toBe(dialog);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
   });
 
   it("keeps the link's look across its cell, with a phone-size touch target, and phone-size rows", async () => {

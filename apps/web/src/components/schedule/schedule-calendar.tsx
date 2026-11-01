@@ -144,6 +144,34 @@ function ChipWords({ ev, timeZone }: { ev: CalendarEvent; timeZone: string | und
 /** A busy day's date in its "+N more" name and on its list: "Tuesday, July 14". */
 const DAY_LABEL: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric' };
 
+/**
+ * Brings a row of a busy day's list into the list's view when the keyboard
+ * moves focus to it. Radix keeps Tab inside the list, and its wrap from Close
+ * back to the last row (Shift+Tab) focuses with preventScroll
+ * (@radix-ui/react-focus-scope), which leaves that row out of view in a list
+ * that scrolls.
+ *
+ * Only when the focus ring shows (:focus-visible), as the report filter's
+ * calendar (orders-placed-control.tsx) and the storefront's kit strip
+ * (storefront-kit-card.tsx) do. Chrome and Edge, and Chrome on Android on a
+ * tap, focus a link when it is pressed, before the release: scrolling then
+ * would move a row that is partly out of view from under the pointer, and a
+ * press near the list's edge would end outside the row and open nothing. A
+ * browser that cannot answer :focus-visible (none that this app supports)
+ * scrolls nothing, as the report filter's calendar.
+ */
+function revealKeyboardFocusedRow(e: React.FocusEvent<HTMLUListElement>): void {
+  const row: Element = e.target;
+  if (row === e.currentTarget) return;
+  let ring = false;
+  try {
+    ring = row.matches(':focus-visible');
+  } catch {
+    return;
+  }
+  if (ring) row.scrollIntoView({ block: 'nearest' });
+}
+
 interface DayMoreProps {
   /** The day, "YYYY-MM-DD". */
   ymd: string;
@@ -227,14 +255,9 @@ function DayMore({ ymd, events, overflow, timeZone }: DayMoreProps) {
             inside the scroller for a row's focus ring. */}
         <ul
           role="list"
-          // Radix keeps Tab inside the list, and its wrap from Close back to
-          // the last row (Shift+Tab) focuses with preventScroll
-          // (@radix-ui/react-focus-scope), which leaves that row out of view
-          // in a list that scrolls, as orders-placed-control.tsx found. A row
-          // that takes focus is brought into the list's view.
-          onFocus={(e) => {
-            if (e.target !== e.currentTarget) e.target.scrollIntoView({ block: 'nearest' });
-          }}
+          // A row the keyboard reaches is brought into the list's view; a row
+          // pressed with a mouse or a tap stays under the pointer.
+          onFocus={revealKeyboardFocusedRow}
           className="-mx-1 mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1"
         >
           {events.map((ev) => (
