@@ -958,10 +958,10 @@ select is(
       where c.relnamespace = 'public'::regnamespace
         and c.relname in ('order_requests', 'order_request_lines', 'idempotency_keys', 'warehouses', 'warehouse_charters')
       group by c.relname) x),
-  -- Re-pinned by 0407 (was 7c0b897aca77ae4e04596b5f08a6f58b|2): the FOR ALL
+  -- Re-pinned by 0420 (was 7c0b897aca77ae4e04596b5f08a6f58b|2): the FOR ALL
   -- idempotency_keys_write became an INSERT and an UPDATE policy with the same
   -- manager floor, and idempotency_keys_select went from any member to
-  -- managers; putting the two old policies back on the post-0407 stack gives
+  -- managers; putting the two old policies back on the post-0420 stack gives
   -- 7c0b897a|2 exactly. The 0391 writers keep their keys in order_submissions,
   -- never in idempotency_keys.
   E'idempotency_keys=f2904bc6a44f00dae9504d234b77e545|3\n'

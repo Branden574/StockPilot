@@ -11,10 +11,10 @@
 -- S. Structure: plpgsql, STABLE, SECURITY INVOKER, search_path=public and
 --    plan_cache_mode=force_custom_plan pinned; EXECUTE for authenticated,
 --    never anon or PUBLIC; service_role kept EXECUTE for the rollout only,
---    and the follow-up, 0407, revoked it and removed the rollout branch; the
+--    and the follow-up, 0420, revoked it and removed the rollout branch; the
 --    gates are in every body; nothing writes or raises 40001/40P01.
 -- G. Gates: signed out, and any caller with no user (the test superuser
---    included; since 0407 nobody is answered without a user): 42501
+--    included; since 0420 nobody is answered without a user): 42501
 --    unauthenticated. Another
 --    org's manager, a disabled member, a viewer without reports:read and a
 --    manager with reports:read revoked: the SAME 42501 forbidden. Bundles
@@ -238,11 +238,11 @@ begin
   return v;
 end $$;
 
--- The organization-wide answer: what the service role got before 0407 (the
+-- The organization-wide answer: what the service role got before 0420 (the
 -- pre-0380 call). The same body, read past RLS: the test superuser, which
 -- owns the tables and bypasses row level security, with the user id of the
 -- organization's owner so the body's gates (signed in, member with
--- reports:read) let it through. 0407 took service_role's EXECUTE and its
+-- reports:read) let it through. 0420 took service_role's EXECUTE and its
 -- no-user branch away, so the service role itself can no longer be asked.
 create function pg_temp.answer_all(p_fn text, p_org uuid, p_days int) returns text language plpgsql as $$
 declare v text; v_owner uuid;
@@ -331,7 +331,7 @@ select is(
   (select array_agg(f.fn order by f.fn) from fns f
     where has_function_privilege('service_role', f.sig, 'execute')),
   null::text[],
-  'S4: service_role cannot execute any of the six (0407 revoked the rollout grant)');
+  'S4: service_role cannot execute any of the six (0420 revoked the rollout grant)');
 
 select ok(
   (select bool_and(p.prosrc ~ 'auth\.uid\(\)'
@@ -342,7 +342,7 @@ select ok(
                    and p.prosrc !~ '40001|40P01'
                    and p.prosrc !~* '\m(insert\s+into|update\s+public|delete\s+from|truncate)\M')
      from fns f join pg_proc p on p.oid = f.sig),
-  'S5: every body holds its gates (signed in, member with reports:read; bundles module for the bundle pair), has no service-role branch (0407), writes nothing, never raises 40001/40P01');
+  'S5: every body holds its gates (signed in, member with reports:read; bundles module for the bundle pair), has no service-role branch (0420), writes nothing, never raises 40001/40P01');
 
 -- ══ G. Gates ══════════════════════════════════════════════════════════════
 -- Signed out: role authenticated with no sub.
@@ -351,8 +351,8 @@ select is(
   array['42501:unauthenticated'],
   'G1: signed out (authenticated, no user): every function raises 42501 unauthenticated');
 
--- A caller with no user (here the test superuser; since 0407 the service role
--- holds no EXECUTE and its no-user branch is gone, 0407 R1-R4).
+-- A caller with no user (here the test superuser; since 0420 the service role
+-- holds no EXECUTE and its no-user branch is gone, 0420 R1-R4).
 do $$
 declare v_state text; v_hint text; r text := '';
 begin

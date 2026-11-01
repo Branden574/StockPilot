@@ -1,5 +1,5 @@
--- supabase/tests/0407_grants_policy_cleanup.test.sql
--- pgTAP proof for migration 0407 (small fixes slice 4): database permission
+-- supabase/tests/0420_grants_policy_cleanup.test.sql
+-- pgTAP proof for migration 0420 (small fixes slice 4): database permission
 -- clean-up with no change to anything the apps do.
 --
 -- R. The six report_* functions: service_role holds EXECUTE on none of them,
@@ -31,7 +31,7 @@
 --    cannot insert one; no storage.objects policy names the item-attachments
 --    bucket. (Whether the migration deletes the bucket, and refuses when it
 --    holds anything, is proven against a database that has the bucket by
---    scripts/db-concurrency/0407_migration_guards.sh: no local or CI stack
+--    scripts/db-concurrency/0420_migration_guards.sh: no local or CI stack
 --    has it while migrations run, because the CLI creates config.toml's
 --    buckets after them.)
 -- I. item_images: the storage_path, thumb_path and organization_id indexes
@@ -40,22 +40,22 @@
 -- Persona calls run as `authenticated` with request.jwt.claim.sub set; no
 -- statement here calls a function the current role cannot execute (a
 -- permission-denied function call crashes older local images, 0225's note).
--- begin/rollback: nothing leaks. Namespace 04070000.
+-- begin/rollback: nothing leaks. Namespace 04200000.
 
 begin;
 
 select plan(30);
 
-\set orgA   '\'04070000-0000-0000-0000-00000000000a\''
-\set orgB   '\'04070000-0000-0000-0000-00000000000b\''
-\set mgrA   '\'04070000-0000-0000-0000-0000000000a1\''
-\set stfA   '\'04070000-0000-0000-0000-0000000000a2\''
-\set vwrA   '\'04070000-0000-0000-0000-0000000000a3\''
-\set mgrB   '\'04070000-0000-0000-0000-0000000000b1\''
-\set wh     '\'04070000-0000-0000-0000-0000000000c1\''
-\set item   '\'04070000-0000-0000-0000-0000000000d1\''
-\set po     '\'04070000-0000-0000-0000-0000000000e1\''
-\set poline '\'04070000-0000-0000-0000-0000000000f1\''
+\set orgA   '\'04200000-0000-0000-0000-00000000000a\''
+\set orgB   '\'04200000-0000-0000-0000-00000000000b\''
+\set mgrA   '\'04200000-0000-0000-0000-0000000000a1\''
+\set stfA   '\'04200000-0000-0000-0000-0000000000a2\''
+\set vwrA   '\'04200000-0000-0000-0000-0000000000a3\''
+\set mgrB   '\'04200000-0000-0000-0000-0000000000b1\''
+\set wh     '\'04200000-0000-0000-0000-0000000000c1\''
+\set item   '\'04200000-0000-0000-0000-0000000000d1\''
+\set po     '\'04200000-0000-0000-0000-0000000000e1\''
+\set poline '\'04200000-0000-0000-0000-0000000000f1\''
 
 -- ── Fixtures (as the test superuser: RLS does not apply) ───────────────────
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -64,26 +64,26 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:vwrA, 'viewer-a@example.test',  '{}'::jsonb),
   (:mgrB, 'manager-b@example.test', '{}'::jsonb);
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0407 Org A', 'org-0407-a'),
-  (:orgB, '0407 Org B', 'org-0407-b');
+  (:orgA, '0420 Org A', 'org-0420-a'),
+  (:orgB, '0420 Org B', 'org-0420-b');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :mgrA, 'manager', now()),
   (:orgA, :stfA, 'staff',   now()),
   (:orgA, :vwrA, 'viewer',  now()),
   (:orgB, :mgrB, 'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status)
-  values (:wh, :orgA, '0407 Warehouse', 'WH-0407', 'active');
+  values (:wh, :orgA, '0420 Warehouse', 'WH-0420', 'active');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status, tracking_type)
-  values (:item, :orgA, :wh, '0407 Widget', 'SKU-0407', 0, 'active', 'none');
+  values (:item, :orgA, :wh, '0420 Widget', 'SKU-0420', 0, 'active', 'none');
 insert into public.purchase_orders (id, organization_id, po_number, status)
-  values (:po, :orgA, 'PO-0407', 'ordered');
+  values (:po, :orgA, 'PO-0420', 'ordered');
 insert into public.purchase_order_items
   (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost)
   values (:poline, :orgA, :po, :item, 10, 0, 5);
 insert into public.idempotency_keys (organization_id, scope, key, request_hash, status) values
-  (:orgA, 'test_0407', 'a-1', 'h', 'completed'),
-  (:orgB, 'test_0407', 'b-1', 'h', 'completed');
+  (:orgA, 'test_0420', 'a-1', 'h', 'completed'),
+  (:orgB, 'test_0420', 'b-1', 'h', 'completed');
 
 create temp table t407 (k text primary key, v text);
 grant all on t407 to authenticated, service_role;
@@ -130,7 +130,7 @@ grant execute on function public.report_top_movers(uuid, timestamptz, integer) t
 set local role service_role;
 set local "request.jwt.claim.sub" to '';
 select throws_ok(
-  $$ select * from public.report_top_movers('04070000-0000-0000-0000-00000000000a'::uuid, now() - interval '30 days', 5) $$,
+  $$ select * from public.report_top_movers('04200000-0000-0000-0000-00000000000a'::uuid, now() - interval '30 days', 5) $$,
   '42501', 'unauthenticated',
   'R4: service_role with no user is refused 42501 unauthenticated by the body itself');
 reset role;
@@ -224,14 +224,14 @@ select is(
   'P1: idempotency_keys has a SELECT, an INSERT and an UPDATE policy for managers of the key''s organization, and no FOR ALL or DELETE policy');
 
 set local role authenticated;
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a3';
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a3';
 select is((select count(*) from public.idempotency_keys), 0::bigint,
-  'P2: a viewer reads no key (any member did before 0407)');
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a2';
+  'P2: a viewer reads no key (any member did before 0420)');
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a2';
 select is((select count(*) from public.idempotency_keys), 0::bigint,
   'P3: a staff member reads no key');
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a1';
-select is((select array_agg(key order by key) from public.idempotency_keys where scope = 'test_0407'),
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a1';
+select is((select array_agg(key order by key) from public.idempotency_keys where scope = 'test_0420'),
   array['a-1'],
   'P4: a manager reads their organization''s keys and none of another organization''s');
 select throws_ok(
@@ -243,31 +243,31 @@ select is((select count(*) from u), 0::bigint,
   'P6: a manager''s update of another organization''s key changes nothing');
 select throws_ok(
   $$ insert into public.idempotency_keys (organization_id, scope, key, request_hash, status)
-     values ('04070000-0000-0000-0000-00000000000b', 'test_0407', 'a-2', 'h', 'in_progress') $$,
+     values ('04200000-0000-0000-0000-00000000000b', 'test_0420', 'a-2', 'h', 'in_progress') $$,
   '42501', null,
   'P7: a manager cannot record a key for another organization');
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a2';
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a2';
 select throws_ok(
   $$ insert into public.idempotency_keys (organization_id, scope, key, request_hash, status)
-     values ('04070000-0000-0000-0000-00000000000a', 'test_0407', 'a-3', 'h', 'in_progress') $$,
+     values ('04200000-0000-0000-0000-00000000000a', 'test_0420', 'a-3', 'h', 'in_progress') $$,
   '42501', null,
   'P8: a staff member cannot record a key');
 
 -- A manager's receipt, then the same call again: the replay answers the
 -- first receipt through the committed key.
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a1';
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a1';
 do $$
 declare v_id uuid;
 begin
   for i in 1..2 loop
     select r.id into v_id
       from public.post_receipt_v2(
-        '04070000-0000-0000-0000-0000000000e1'::uuid,
-        '04070000-0000-0000-0000-0000000000c1'::uuid,
+        '04200000-0000-0000-0000-0000000000e1'::uuid,
+        '04200000-0000-0000-0000-0000000000c1'::uuid,
         jsonb_build_array(jsonb_build_object(
-          'po_line_id', '04070000-0000-0000-0000-0000000000f1',
+          'po_line_id', '04200000-0000-0000-0000-0000000000f1',
           'qty_received', 2, 'qty_accepted', 2, 'qty_rejected', 0, 'unit_cost', 5)),
-        'receipt-0407', 'hash-0407', null) r;
+        'receipt-0420', 'hash-0420', null) r;
     insert into t407 values ('receipt-' || i, v_id::text);
   end loop;
 end $$;
@@ -281,7 +281,7 @@ select is(
   (select array[(select count(*) from public.receipts where purchase_order_id = :po)::numeric,
                 (select quantity_on_hand from public.inventory_items where id = :item),
                 (select count(*) from public.idempotency_keys
-                  where organization_id = :orgA and scope = 'receipt' and key = 'receipt-0407'
+                  where organization_id = :orgA and scope = 'receipt' and key = 'receipt-0420'
                     and status = 'completed' and resource_id::text = (select v from t407 where k = 'receipt-1'))::numeric]),
   array[1, 2, 1]::numeric[],
   'P10: one receipt, stock on record up once, and the manager''s key recorded as completed for it');
@@ -294,16 +294,16 @@ select is(
   'M1: maintenance_request_attachments keeps its SELECT and DELETE policies and has no INSERT policy');
 
 set local role authenticated;
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a1';
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a1';
 select throws_ok(
-  $$ insert into public.maintenance_request_attachments (organization_id) values ('04070000-0000-0000-0000-00000000000a') $$,
+  $$ insert into public.maintenance_request_attachments (organization_id) values ('04200000-0000-0000-0000-00000000000a') $$,
   '42501', 'permission denied for table maintenance_request_attachments',
   'M2: an insert with a user''s token is refused by privilege, before any policy (finalize inserts with the service role)');
 reset role;
 
 -- ══ A. item_attachments and the item-attachments storage policies (4.6) ═══
 insert into public.item_attachments (organization_id, item_id, storage_path, filename)
-  values (:orgA, :item, '04070000-0000-0000-0000-00000000000a/items/04070000-0000-0000-0000-0000000000d1/a.pdf', 'a.pdf');
+  values (:orgA, :item, '04200000-0000-0000-0000-00000000000a/items/04200000-0000-0000-0000-0000000000d1/a.pdf', 'a.pdf');
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.item_attachments'::regclass)
@@ -311,13 +311,13 @@ select ok(
   'A1: item_attachments keeps row level security on and has no policy');
 
 set local role authenticated;
-set local "request.jwt.claim.sub" to '04070000-0000-0000-0000-0000000000a1';
+set local "request.jwt.claim.sub" to '04200000-0000-0000-0000-0000000000a1';
 select is((select count(*) from public.item_attachments), 0::bigint,
   'A2: a manager reads no item_attachments row');
 select throws_ok(
   $$ insert into public.item_attachments (organization_id, item_id, storage_path, filename)
-     values ('04070000-0000-0000-0000-00000000000a', '04070000-0000-0000-0000-0000000000d1',
-             '04070000-0000-0000-0000-00000000000a/items/04070000-0000-0000-0000-0000000000d1/b.pdf', 'b.pdf') $$,
+     values ('04200000-0000-0000-0000-00000000000a', '04200000-0000-0000-0000-0000000000d1',
+             '04200000-0000-0000-0000-00000000000a/items/04200000-0000-0000-0000-0000000000d1/b.pdf', 'b.pdf') $$,
   '42501', null,
   'A3: a manager cannot insert an item_attachments row');
 reset role;
@@ -343,7 +343,7 @@ select is(
         'CREATE INDEX item_images_thumb_path_idx ON public.item_images USING btree (thumb_path)'],
   'I1: item_images has plain btree indexes on storage_path, thumb_path and organization_id');
 
--- The planner's choice at real sizes was measured (0407's header); here the
+-- The planner's choice at real sizes was measured (0420's header); here the
 -- sequential scan is turned off so the plans show the indexes can serve the
 -- queries' own predicates.
 set local enable_seqscan = off;
@@ -363,7 +363,7 @@ select ok(
   and pg_temp.plan_of($q$ select 1 from public.item_images r
                            where r.thumb_path = 'x/y/z.webp' $q$) ~ 'item_images_thumb_path_idx'
   and pg_temp.plan_of($q$ select item_id from public.item_images
-                           where organization_id in ('04070000-0000-0000-0000-00000000000a') $q$)
+                           where organization_id in ('04200000-0000-0000-0000-00000000000a') $q$)
         ~ 'item_images_organization_id_idx',
   'I2: a lookup by storage_path, by thumb_path (the two halves of the 0381 path probe and of the shared-object read) and by organization (rls_item_image_shared_paths) can each use its index');
 reset enable_seqscan;

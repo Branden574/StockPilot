@@ -1,8 +1,8 @@
 /**
- * The census tools behind migration 0407's REVOKE block
+ * The census tools behind migration 0420's REVOKE block
  * (scripts/gen-explicit-grants-sql.mjs --revokes and --compare).
  *
- * 0407 (docket S9, slice 4.3) takes TRUNCATE, REFERENCES, TRIGGER and
+ * 0420 (docket S9, slice 4.3) takes TRUNCATE, REFERENCES, TRIGGER and
  * MAINTAIN from anon and authenticated on every public relation. Its GENERATED
  * REVOKES block is written from a census, like 0402's GENERATED block of
  * grants. These tests pin:
@@ -15,14 +15,14 @@
  *     exit codes, and --revokes --check / write on a scratch file;
  *   - the committed blocks themselves: 0402's block, read back into a census,
  *     renders to itself (so the reading is exact), and that census renders
- *     0407's block byte for byte. No migration between them changes which
+ *     0420's block byte for byte. No migration between them changes which
  *     relations anon or authenticated hold the four on; one that ever does
  *     makes the last test fail, and the block is then regenerated from a
  *     scratch database at the previous migration (--revokes --db-url).
  *
- * The database side (no holder is left after 0407, nor in the default
+ * The database side (no holder is left after 0420, nor in the default
  * privileges) is pgTAP: security_invariants INV-42..INV-44 and
- * 0407_grants_policy_cleanup T1-T3.
+ * 0420_grants_policy_cleanup T1-T3.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -216,7 +216,7 @@ describe('the two GENERATED blocks', () => {
     writeFileSync(path.join(none, '0402_explicit_data_api_grants.sql'), '');
     expect(() => gen.revokesMigrationPath(none)).toThrow(/found 0/u);
     const two = mkdtempSync(path.join(tmp, 'two-'));
-    writeFileSync(path.join(two, '0407_grants_policy_cleanup.sql'), '');
+    writeFileSync(path.join(two, '0420_grants_policy_cleanup.sql'), '');
     writeFileSync(path.join(two, '0409_grants_policy_cleanup.sql'), '');
     expect(() => gen.revokesMigrationPath(two)).toThrow(/found 2/u);
   });
@@ -308,7 +308,7 @@ describe('--revokes on a scratch migration', () => {
 });
 
 describe('the committed blocks', () => {
-  it("0402's block reads back into a census that renders it unchanged, and that census renders 0407's block", () => {
+  it("0402's block reads back into a census that renders it unchanged, and that census renders 0420's block", () => {
     const grants = gen.currentBlock(readFileSync(gen.MIGRATION_PATH, 'utf8'));
     expect(grants).not.toBeNull();
     const census = readGrantsBlock(grants!);

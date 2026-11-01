@@ -57,7 +57,7 @@
 --    too) returns the first answer with replay true and writes nothing; the
 --    key with another request, or for another order: P0001
 --    idempotency_conflict; the key row as stored, each draft named by its
---    id only (since 0407 only a manager reads the row, and it names no PO
+--    id only (since 0420 only a manager reads the row, and it names no PO
 --    number or supplier; a viewer reads no row),
 --    while a replay still answers each draft's number and supplier, read
 --    from the PO; a refused call leaves no key and the key can be used again.
@@ -864,7 +864,7 @@ set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :vwr;
 insert into fx select 'I5 viewer', (
   select count(*)::text from public.idempotency_keys k where k.organization_id = :orgA and k.key = 'idem-1');
--- 0407: idempotency_keys_select is for managers only (was any member), so
+-- 0420: idempotency_keys_select is for managers only (was any member), so
 -- the row's contents are checked as the manager.
 set local "request.jwt.claim.sub" to :mgr;
 insert into fx select 'I5', (
@@ -879,7 +879,7 @@ select is(
     || (select (r->'created'->0->>'poNumber' is not null
                 and r->'created'->0->>'supplierId' = :supA1) from ans where who = 'I2')::text,
   '0/1/false/true',
-  'I5: a viewer reads no key row (0407: managers only); the manager reads it, with no PO number or supplier in it, while the replay still answers both, read from the PO');
+  'I5: a viewer reads no key row (0420: managers only); the manager reads it, with no PO number or supplier in it, while the replay still answers both, read from the PO');
 delete from fx;
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
@@ -1087,10 +1087,10 @@ select is(
       from information_schema.column_privileges cp
      where cp.table_schema = 'public' and cp.table_name in ('order_requests', 'schedule_events') and cp.grantee in ('anon', 'authenticated')
   ) g),
-  -- Re-pinned by 0407 (was 13e9b93da345dd302ad93629ff2d1690|6): each body
+  -- Re-pinned by 0420 (was 13e9b93da345dd302ad93629ff2d1690|6): each body
   -- lost its service-role test (the one that answered a call with no user
-  -- for service_role), and service_role lost EXECUTE (0407 R1-R4). Putting 0380's bodies and
-  -- service_role's grant back (in the original ACL order) on the post-0407
+  -- for service_role), and service_role lost EXECUTE (0420 R1-R4). Putting 0380's bodies and
+  -- service_role's grant back (in the original ACL order) on the post-0420
   -- stack gives 13e9b93d|6 exactly, so nothing else moved. The functions
   -- proven here call none of the six.
   E'0380 report functions|0769b2794fa982df036c92971016b3cc|6\n'
@@ -1133,12 +1133,12 @@ select is(
   -- grant: server-owned). F2-5's function writes no order column. Computed
   -- from production's own column_privileges rows (which reproduce the old
   -- pin) plus exactly that row (2026-10-05); verify on the stack.
-  -- Re-pinned by 0407 (was 76d3805f145a1ca9c587f348cac0270d|213): 0407
+  -- Re-pinned by 0420 (was 76d3805f145a1ca9c587f348cac0270d|213): 0420
   -- revoked REFERENCES from anon and authenticated on every public relation,
   -- which takes the 46 REFERENCES rows the two roles held on schedule_events'
   -- columns through their table-level grant (order_requests' went in 0387).
   -- No SELECT, INSERT or UPDATE row changed: granting REFERENCES on
-  -- schedule_events back on the post-0407 stack gives 76d3805f|213 exactly.
+  -- schedule_events back on the post-0420 stack gives 76d3805f|213 exactly.
   '0384 column grants (order_requests, schedule_events)|459bbfc2f7237a3c6e1256ddf57187e6|167\n'
   -- Re-pinned by 0394 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
   -- process_return_disposition restated (md5 69e46c8163600cb55ae70246ca3a85d3,
@@ -1172,12 +1172,12 @@ select is(
   -- that reproduces the old pin from production's text); verify on the stack.
   'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
-  -- Re-pinned by 0407 (was 4d66c95449ef3c5127f8d19974023c70|6): the FOR ALL
+  -- Re-pinned by 0420 (was 4d66c95449ef3c5127f8d19974023c70|6): the FOR ALL
   -- idempotency_keys_write became idempotency_keys_insert and
   -- idempotency_keys_update with the same manager floor, and
   -- idempotency_keys_select went from any member to managers (one policy
   -- more). purchase_orders and purchase_order_items are untouched: putting
-  -- the two old key policies back on the post-0407 stack gives 4d66c954|6
+  -- the two old key policies back on the post-0420 stack gives 4d66c954|6
   -- exactly. F2-5's function records its key as a manager (I-section).
   'purchase_orders + purchase_order_items + idempotency_keys policies|7aa82d598e1390a08b3ba4803939302a|7',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');

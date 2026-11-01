@@ -765,7 +765,7 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
-  # Grants and policy clean-up (0407, docket S9): anon and authenticated hold
+  # Grants and policy clean-up (0420, docket S9): anon and authenticated hold
   # no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN on any public relation or in
   # the postgres role's default privileges (the class is INV-42..INV-44 in the
   # sweep above); the six report functions answer only a signed-in caller and
@@ -774,8 +774,8 @@ PGTAP_TESTS=(
   # and a receipt replay still returns the first receipt; maintenance photo
   # rows are inserted by the service role only; item_attachments answers no
   # API role. The data guards, the bucket delete and the lock footprint are
-  # scripts/db-concurrency/0407_migration_guards.sh.
-  supabase/tests/0407_grants_policy_cleanup.test.sql
+  # scripts/db-concurrency/0420_migration_guards.sh.
+  supabase/tests/0420_grants_policy_cleanup.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

@@ -1,4 +1,4 @@
--- 0407_grants_policy_cleanup.sql
+-- 0420_grants_policy_cleanup.sql
 --
 -- Database permission clean-up (small fixes slice 4, docket S9). Nothing a
 -- person does in the web app or on the phone changes: every privilege and
@@ -163,7 +163,7 @@
 set lock_timeout = '900ms';
 
 -- ═══ 0. Preflight ═══════════════════════════════════════════════════════════
-do $pre407$
+do $pre420$
 declare
   v_bad     text := '';
   v_data    text := '';
@@ -264,8 +264,8 @@ begin
       v_data := v_data || format(' item_images holds %s rows (index it with CREATE INDEX CONCURRENTLY outside the push);', v_n);
       v_hint := 'item_images_too_large';
     end if;
-    raise exception using errcode = 'XX407', message = 'undo';
-  exception when sqlstate 'XX407' then
+    raise exception using errcode = 'XX420', message = 'undo';
+  exception when sqlstate 'XX420' then
     null;
   end;
 
@@ -290,7 +290,7 @@ begin
       using errcode = '55000', hint = v_hint;
   end if;
 end
-$pre407$;
+$pre420$;
 
 -- ═══ 1. The report functions answer only for a signed-in caller (4.2) ═════
 -- Each body is 0380's (md5 in the preflight) with its service-role test taken
@@ -826,7 +826,7 @@ alter default privileges for role postgres
 -- and the next attempt starts after 50 to 150 ms holding no table lock. After
 -- the 40th busy attempt the 55P03 is raised as it is (never 40001/40P01) and
 -- nothing in the file is applied.
-do $lock407$
+do $lock420$
 declare
   v_grants text := nullif(current_setting('supautils.policy_grants', true), '');
   v_name   text;
@@ -858,7 +858,7 @@ begin
     end;
     perform pg_sleep(0.05 + random() * 0.1);
   end loop;
-end $lock407$;
+end $lock420$;
 
 -- ═══ 6. Policies ═══════════════════════════════════════════════════════════
 -- 4.4 idempotency_keys: managers read, insert and update their organization's
@@ -891,7 +891,7 @@ drop policy if exists "item-attachments staff write" on storage.objects;
 -- nothing can be uploaded between the count and the delete; the foreign keys
 -- from storage.objects and the upload tables (NO ACTION) would refuse a
 -- non-empty bucket as well. Never deletes an object.
-do $bucket407$
+do $bucket420$
 declare
   v_objects bigint := 0;
   v_uploads bigint := 0;
@@ -913,7 +913,7 @@ begin
   delete from storage.buckets where id = 'item-attachments';
   perform set_config('storage.allow_delete_query', 'false', true);
 end
-$bucket407$;
+$bucket420$;
 
 -- ═══ 8. item_images indexes (4.8) ══════════════════════════════════════════
 create index if not exists item_images_storage_path_idx on public.item_images (storage_path);
@@ -922,10 +922,10 @@ create index if not exists item_images_organization_id_idx on public.item_images
 
 -- ═══ Comments ═══════════════════════════════════════════════════════════════
 comment on policy idempotency_keys_select on public.idempotency_keys is
-  'Managers of the organization read its keys: every API writer (post_receipt_v2, distribute_bundle, draft_order_shortfall_pos, start_targeted_recount) requires a manager (0407; was any member).';
+  'Managers of the organization read its keys: every API writer (post_receipt_v2, distribute_bundle, draft_order_shortfall_pos, start_targeted_recount) requires a manager (0420; was any member).';
 comment on policy idempotency_keys_insert on public.idempotency_keys is
-  'Managers of the organization record keys (0407; split from the FOR ALL idempotency_keys_write, same floor). No API role deletes a key.';
+  'Managers of the organization record keys (0420; split from the FOR ALL idempotency_keys_write, same floor). No API role deletes a key.';
 comment on policy idempotency_keys_update on public.idempotency_keys is
-  'Managers of the organization update its keys (0407; split from idempotency_keys_write, same floor). Kept at that scope: post_receipt_v2 reads a committed key with SELECT ... FOR UPDATE, which this policy also filters.';
+  'Managers of the organization update its keys (0420; split from idempotency_keys_write, same floor). Kept at that scope: post_receipt_v2 reads a committed key with SELECT ... FOR UPDATE, which this policy also filters.';
 
 reset lock_timeout;

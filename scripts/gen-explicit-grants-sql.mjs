@@ -26,19 +26,19 @@
  * WHERE THE PRIVILEGES COME FROM: a census, the JSON printed by
  * scripts/explicit-grants/census.sql (one read-only SELECT).
  *
- * AFTER 0402: THE REVOKES OF 0407. Migration 0407 (docket S9, slice 4.3)
+ * AFTER 0402: THE REVOKES OF 0420. Migration 0420 (docket S9, slice 4.3)
  * takes TRUNCATE, REFERENCES, TRIGGER and MAINTAIN away from anon and
  * authenticated on every public relation, and out of the postgres role's
  * default privileges in public, so neither role holds them afterwards (pgTAP
  * security_invariants INV-42 and INV-43). 0402's block still grants them,
  * because it restates 2026-10-24, and a migration that has been pushed is
- * never edited. So from 0407 on:
- *   - 0402's --check describes 0402 alone. Against a database at 0407 or
- *     later it reports every relation 0407 changed (and every relation a
+ * never edited. So from 0420 on:
+ *   - 0402's --check describes 0402 alone. Against a database at 0420 or
+ *     later it reports every relation 0420 changed (and every relation a
  *     later migration created); that is expected, not drift.
- *   - --revokes writes and checks 0407's own GENERATED block: one REVOKE per
+ *   - --revokes writes and checks 0420's own GENERATED block: one REVOKE per
  *     relation on which anon or authenticated holds any of the four. Before
- *     0407 is pushed, --revokes --check with a fresh production census proves
+ *     0420 is pushed, --revokes --check with a fresh production census proves
  *     the block names exactly the relations production would lose them on.
  *     After the push the census gives an empty block, so --check then fails
  *     by design: the post-push proof is that no relation is listed (the
@@ -61,7 +61,7 @@
  *       write nothing; exit 1 when the block differs from what the census
  *       gives (run it with a fresh production census before pushing 0402)
  *   node scripts/gen-explicit-grants-sql.mjs --revokes (--census census.json | --db-url <url>) [--check] [--out <file>]
- *       the same for 0407's REVOKE block (default --out: the one migration
+ *       the same for 0420's REVOKE block (default --out: the one migration
  *       named *_grants_policy_cleanup.sql, whatever its number after a rebase)
  *   node scripts/gen-explicit-grants-sql.mjs --compare <a.json> <b.json>
  *       write nothing; print every privilege one census holds and the other
@@ -84,7 +84,7 @@ export const BEGIN_MARKER =
   '-- BEGIN GENERATED: scripts/gen-explicit-grants-sql.mjs from a census (scripts/explicit-grants/census.sql). Do not edit by hand.';
 export const END_MARKER = '-- END GENERATED';
 
-/** 0407's block: its own markers, so neither mode can read the other's block. */
+/** 0420's block: its own markers, so neither mode can read the other's block. */
 export const REVOKES_BEGIN_MARKER =
   '-- BEGIN GENERATED REVOKES: scripts/gen-explicit-grants-sql.mjs --revokes from a census (scripts/explicit-grants/census.sql). Do not edit by hand.';
 export const REVOKES_END_MARKER = '-- END GENERATED REVOKES';
@@ -95,7 +95,7 @@ export const REVOKES_MIGRATION_SUFFIX = '_grants_policy_cleanup.sql';
 export const ROLES = ['anon', 'authenticated', 'service_role'];
 
 /**
- * What 0407 takes away: these table privileges, from these roles, on every
+ * What 0420 takes away: these table privileges, from these roles, on every
  * public relation (and out of the postgres role's default privileges there).
  * None of them is ever used through the Data API; TRUNCATE skips row level
  * security altogether.
@@ -276,7 +276,7 @@ export function renderGrantsBlock(census) {
 }
 
 /**
- * 0407's block: one REVOKE per public relation (sequences aside: the four are
+ * 0420's block: one REVOKE per public relation (sequences aside: the four are
  * table privileges) on which anon or authenticated holds TRUNCATE,
  * REFERENCES, TRIGGER or MAINTAIN, table-level or column-level, sorted by
  * name. Every statement names all four privileges and both roles: revoking a
@@ -323,7 +323,7 @@ export function currentBlock(text, begin = BEGIN_MARKER, end = END_MARKER) {
   return text.slice(from, to + end.length);
 }
 
-/** The one migration named *_grants_policy_cleanup.sql (0407, or its number after a rebase). */
+/** The one migration named *_grants_policy_cleanup.sql (0420, or its number after a rebase). */
 export function revokesMigrationPath(dir = path.join(ROOT, 'supabase/migrations')) {
   const found = readdirSync(dir).filter((f) => f.endsWith(REVOKES_MIGRATION_SUFFIX));
   if (found.length !== 1) {

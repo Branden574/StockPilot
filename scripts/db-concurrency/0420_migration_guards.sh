@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Data guards and lock footprint of migration 0407 (docket S9: grants and
-# policy clean-up). The pgTAP file 0407_grants_policy_cleanup.test.sql runs on
+# Data guards and lock footprint of migration 0420 (docket S9: grants and
+# policy clean-up). The pgTAP file 0420_grants_policy_cleanup.test.sql runs on
 # a database the file has already been applied to, where none of these paths
 # can be reached: no stack ever has the item-attachments bucket when the
 # migrations run (the CLI creates config.toml's buckets after them), so the
@@ -58,13 +58,13 @@
 #        default privileges, buckets, objects and item_images indexes as
 #        before).
 #
-# No session ever sees 40001 or 40P01. It needs the head right before 0407
+# No session ever sees 40001 or 40P01. It needs the head right before 0420
 # (the six report functions as 0380 left them, the idempotency_keys_write
-# policy, no 0407 index). LOCAL stack only (docker container
+# policy, no 0420 index). LOCAL stack only (docker container
 # supabase_db_stockpilot; CONTAINER=<name> for another local stack). Exit
 # status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0407_migration_guards.sh
+# Usage: bash scripts/db-concurrency/0420_migration_guards.sh
 
 set -uo pipefail
 
@@ -79,8 +79,8 @@ TMP="$(mktemp -d)"
 HOLD_BUDGET_MS="${HOLD_BUDGET_MS:-250}"
 BG=()
 
-ORG='04079999-0000-4000-8000-00000000000a'
-ITEM='04079999-0000-4000-8000-0000000000d1'
+ORG='04209999-0000-4000-8000-00000000000a'
+ITEM='04209999-0000-4000-8000-0000000000d1'
 
 FAILS=0
 ok() { printf 'ok     %s\n' "$*"; }
@@ -115,7 +115,7 @@ PRE_HEAD="$(q "select (select md5(prosrc) from pg_proc where oid = to_regprocedu
             || '|' || (select count(*) from pg_policy where polrelid = 'public.idempotency_keys'::regclass and polname = 'idempotency_keys_write')
             || '|' || (to_regclass('public.item_images_storage_path_idx') is null)")"
 if [ "$PRE_HEAD" != "f3d8bba356ad4c1e48669a9a731acc76|1|true" ]; then
-  echo "needs the head right before 0407 (got $PRE_HEAD): supabase db reset --local --version <the migration before 0407>"
+  echo "needs the head right before 0420 (got $PRE_HEAD): supabase db reset --local --version <the migration before 0420>"
   exit 1
 fi
 HEAD_NOW="$(q "select max(version) from supabase_migrations.schema_migrations")"
@@ -138,14 +138,14 @@ STATE_SQL="select md5(concat_ws('#',
 STATE_BEFORE="$(q "$STATE_SQL")"
 
 ENSURE_BUCKET="insert into storage.buckets (id, name) values ('item-attachments', 'item-attachments') on conflict (id) do nothing;"
-FIXTURE_ITEM="insert into public.organizations (id, name, slug) values ('$ORG', '0407 Guard Org', '0407-guard');
-insert into public.inventory_items (id, organization_id, name, sku) values ('$ITEM', '$ORG', 'Guard item', 'SKU-0407-GUARD');"
+FIXTURE_ITEM="insert into public.organizations (id, name, slug) values ('$ORG', '0420 Guard Org', '0420-guard');
+insert into public.inventory_items (id, organization_id, name, sku) values ('$ITEM', '$ORG', 'Guard item', 'SKU-0420-GUARD');"
 
 # The file in three parts: before the prelude, the prelude, the rest.
-# shellcheck disable=SC2016  # a literal $lock407$ dollar tag, not an expansion
-P0="$(grep -n '^do \$lock407\$$' "$MIG" | head -n 1 | cut -d: -f1)"
+# shellcheck disable=SC2016  # a literal $lock420$ dollar tag, not an expansion
+P0="$(grep -n '^do \$lock420\$$' "$MIG" | head -n 1 | cut -d: -f1)"
 # shellcheck disable=SC2016  # the same literal tag
-P1="$(grep -n '^end \$lock407\$;$' "$MIG" | head -n 1 | cut -d: -f1)"
+P1="$(grep -n '^end \$lock420\$;$' "$MIG" | head -n 1 | cut -d: -f1)"
 [ -n "$P0" ] && [ -n "$P1" ] || {
   echo "no lock prelude in $MIG"
   exit 1
@@ -177,12 +177,12 @@ refused() {
 # ── G1, G3, G5, G6, G7, G8: the preflight refuses ──────────────────────────
 refused G1-object-in-bucket \
   "$ENSURE_BUCKET
-   insert into storage.objects (bucket_id, name) values ('item-attachments', '0407-guard/one.pdf');" \
+   insert into storage.objects (bucket_id, name) values ('item-attachments', '0420-guard/one.pdf');" \
   item_attachments_bucket_not_empty 'grants_cleanup_data: the item-attachments bucket holds 1 objects;'
 refused G3-upload-in-progress \
   "$ENSURE_BUCKET
    insert into storage.s3_multipart_uploads (id, upload_signature, bucket_id, key, version)
-   values ('0407-guard-upload', 'guard', 'item-attachments', '0407-guard/big.pdf', 'v1');" \
+   values ('0420-guard-upload', 'guard', 'item-attachments', '0420-guard/big.pdf', 'v1');" \
   item_attachments_bucket_not_empty 'holds 1 multipart uploads;'
 refused G5-attachment-row \
   "$FIXTURE_ITEM
@@ -222,7 +222,7 @@ fi
   echo "$ENSURE_BUCKET"
   cat "$TMP/part1.sql"
   echo "select 'PART1_DONE';"
-  echo "insert into storage.objects (bucket_id, name) values ('item-attachments', '0407-guard/late.pdf');"
+  echo "insert into storage.objects (bucket_id, name) values ('item-attachments', '0420-guard/late.pdf');"
   echo "savepoint before_prelude;"
   cat "$TMP/prelude.sql" "$TMP/part3.sql"
   echo "rollback to savepoint before_prelude;"
@@ -245,7 +245,7 @@ OBJECTS_SQL="select 'OBJECTS|' || count(*) || '|' || coalesce(md5(string_agg(o.i
 {
   echo "begin;"
   echo "$ENSURE_BUCKET"
-  echo "insert into storage.objects (bucket_id, name) values ('item-images', '0407-guard/kept.webp');"
+  echo "insert into storage.objects (bucket_id, name) values ('item-images', '0420-guard/kept.webp');"
   echo "$OBJECTS_SQL;"
   cat "$MIG"
   echo "$OBJECTS_SQL;"
@@ -333,9 +333,9 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0407-lock-file-%'"
+ where a.application_name like '0420-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0407-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0420-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\nselect 'HOLDER_DONE';\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
@@ -346,7 +346,7 @@ run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|
   fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0407-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0420-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   local samples=0 sleeping=0 held=0 r
@@ -393,14 +393,14 @@ run_behind short-photo-writer "update public.item_images set sort_order = sort_o
 
 # ── L4: while the file holds its locks ─────────────────────────────────────
 {
-  echo "set application_name = '0407-lock-migration-4';"
+  echo "set application_name = '0420-lock-migration-4';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/4m.out" 2> "$TMP/4m.err" &
 BG+=("$!")
-if ! wait_sleeping 0407-lock-migration-4; then
+if ! wait_sleeping 0420-lock-migration-4; then
   bad "L4: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/4m.err" | cut -c1-300)"
 else
   for target in public.item_images public.inventory_items public.stock_movements; do

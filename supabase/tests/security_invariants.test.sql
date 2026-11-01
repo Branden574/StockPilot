@@ -58,7 +58,7 @@
 -- the standing proof that INV-25/26 can still fail. The same holds for
 -- INV-32, INV-34 and INV-36 (0371), the controls for INV-31, INV-33 and
 -- INV-35, for INV-39 (0373), the control for INV-37 and INV-38, for
--- INV-41 (0373), the control for INV-40, and for INV-44 (0407), the control
+-- INV-41 (0373), the control for INV-40, and for INV-44 (0420), the control
 -- for INV-42 and INV-43.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
@@ -1584,7 +1584,7 @@ select is(
 drop function public._sec_inv_probe_draw_scope();
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- INV-42..44 (0407, docs INV-C8). No API client role holds TRUNCATE,
+-- INV-42..44 (0420, docs INV-C8). No API client role holds TRUNCATE,
 -- REFERENCES, TRIGGER or MAINTAIN on a relation in public, and none gets them
 -- from the migration role's default privileges. TRUNCATE empties a table
 -- without asking row level security; the other three serve only DDL,
@@ -1632,14 +1632,14 @@ $f$;
 select is(
   array(select h from pg_temp.inv42_holders() h order by 1),
   array[]::text[],
-  'INV-42: no relation in public gives anon or authenticated TRUNCATE, REFERENCES, TRIGGER or MAINTAIN (0407)'
+  'INV-42: no relation in public gives anon or authenticated TRUNCATE, REFERENCES, TRIGGER or MAINTAIN (0420)'
 );
 
 -- INV-43. What a later migration's table, view or materialized view gets.
 select is(
   array(select d from pg_temp.inv43_defaults() d order by 1),
   array[]::text[],
-  'INV-43: the postgres role''s default privileges give anon and authenticated none of the four in public (0407)'
+  'INV-43: the postgres role''s default privileges give anon and authenticated none of the four in public (0420)'
 );
 
 -- INV-44. VACUITY + MUTATION CONTROL for INV-42 and INV-43: the swept

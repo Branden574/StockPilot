@@ -52,7 +52,7 @@ buckets.item-images.public = false
 buckets.item-images.file_size_limit = "10MiB"
 buckets.item-images.allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/avif"]
 
-# No item-attachments bucket: it never had an app writer, and migration 0407
+# No item-attachments bucket: it never had an app writer, and migration 0420
 # deleted the empty bucket in production. Declaring it here would re-create it
 # on every local and CI stack after the migrations run.
 

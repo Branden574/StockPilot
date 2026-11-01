@@ -189,7 +189,7 @@ export class MaintenanceAttachmentsService {
    * assertPermission), the parent request exists in this org, the caller is
    * either its requester or a manage-holder (mirrors the ownership clause of
    * the maintenance_request_attachments_delete RLS policy, and of the INSERT
-   * policy until 0407 dropped it: finalize writes the row with the service
+   * policy until 0420 dropped it: finalize writes the row with the service
    * role, so for an insert this check is the only gate), and the request is
    * not archived/cancelled — UNCONDITIONALLY, matching that same RLS
    * policy's `r.archived_at is null and r.cancelled_at is null` clause,
@@ -211,7 +211,7 @@ export class MaintenanceAttachmentsService {
    * can no longer change. Mirrors the 0317 attachments DELETE RLS
    * predicate exactly (`r.archived_at is null and r.cancelled_at is null
    * and r.resolved_at is null`; 0317's INSERT policy held the same until
-   * 0407 dropped it) — defense in depth on a delete, the only gate on an
+   * 0420 dropped it) — defense in depth on a delete, the only gate on an
    * insert.
    */
   private async assertParentOwnedAndOpen(
@@ -660,7 +660,7 @@ export class MaintenanceAttachmentsService {
     const width = clean.width ?? sniffed.width;
     const height = clean.height ?? sniffed.height;
 
-    // The row is written with the SERVICE ROLE (L40), which let 0407 drop the
+    // The row is written with the SERVICE ROLE (L40), which let 0420 drop the
     // attachments INSERT policy and authenticated's INSERT privilege: through
     // them a requester could insert a row straight into the table, naming an
     // upload that skipped every check above. The service role skips row level
