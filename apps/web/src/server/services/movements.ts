@@ -833,8 +833,9 @@ export function mapHistorySeries(rows: HistorySeriesRow[], rangeDays: number): D
  *
  * Fallbacks (inside the RPC): warehouseId set → snapshots are org-wide, so
  * the old fully-scoped math runs via dashboard_history_series_reconstructed
- * (the 0228 body, kept verbatim); any closed day missing from snapshots
- * (new org, missed cron) → same reconstructed path for the whole window.
+ * (0228's body, except that since the B78 migration it values a rental item
+ * at 0); any closed day missing from snapshots (new org, missed cron) → same
+ * reconstructed path for the whole window.
  * Only on those fallback (and gap-healed) days do the old approximation
  * notes still apply: deleted items' history is lost and unit_cost/
  * reorder_point are treated as constant at today's value.
