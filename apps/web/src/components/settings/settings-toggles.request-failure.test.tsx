@@ -520,7 +520,20 @@ describe('permission boxes when the save gets no answer (inside a transition)', 
       ),
     );
     expect(screen.queryByText('The settings page broke.')).toBeNull();
-    expect(within(region).getAllByRole('checkbox')[0]!).toHaveAttribute('aria-checked', before);
+    const again = within(region).getAllByRole('checkbox')[0]!;
+    expect(again).toHaveAttribute('aria-checked', before);
+    // No longer busy (its save is one per box at a time, so a box left busy
+    // never saves again until the page is reloaded).
+    expect(within(region).queryByLabelText(/^Saving Sam — /)).toBeNull();
+    expect(again).not.toHaveAttribute('aria-busy');
+
+    // And it saves when pressed again.
+    vi.mocked(setUserPermissionOverrideAction).mockResolvedValueOnce({
+      ok: true,
+      data: undefined,
+    } as never);
+    fireEvent.click(again);
+    await waitFor(() => expect(setUserPermissionOverrideAction).toHaveBeenCalledTimes(2));
   });
 
   it('the Auditor preset: keeps the page and the error replaces its loading toast', async () => {

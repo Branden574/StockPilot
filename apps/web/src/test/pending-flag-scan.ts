@@ -20,7 +20,11 @@ import ts from 'typescript';
  * string or an id, and later to `false`, `null`, `undefined`, `''` or `0`; a
  * setter of any name set to a busy word ('saving', { kind: 'loading' }) and
  * later to anything else (a phase); and a ref of a busy name set
- * `current = true` and later `current = false`.
+ * `current = true` and later `current = false`. Also a helper of the same file
+ * that sets one for its caller, named like a setter with `mark` or `set` in
+ * front (markBusy(key, true) ... markBusy(key, false), a phone sheet's
+ * setBusy(true)): its last argument says set or clear. And an alias of a
+ * setter (`const setBusy = ai ? setAiExtracting : setExtracting`).
  *
  * WHAT CAN REJECT. A call to a Server Action (imported from a `'use server'`
  * module), `fetch`, and any function whose body can reject: it throws, or
@@ -696,6 +700,87 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
     };
     findSetters(sf);
 
+    // (f) An alias of a setter, which is that setter:
+    // `const setBusy = ai ? setAiExtracting : setExtracting`.
+    const isSetter = (e: ts.Expression): boolean => {
+      const v = unwrap(e);
+      if (ts.isIdentifier(v)) return setters.has(v.text);
+      return ts.isConditionalExpression(v) && isSetter(v.whenTrue) && isSetter(v.whenFalse);
+    };
+    const findAliases = (n: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.initializer &&
+        isSetter(n.initializer)
+      ) {
+        setters.add(n.name.text);
+      }
+      ts.forEachChild(n, findAliases);
+    };
+    findAliases(sf);
+
+    // (e) A helper that sets a flag for its caller: a function of this file
+    // named like a flag setter with `mark` or `set` in front (markBusy,
+    // markSaving, a phone sheet's setBusy), whose own body calls a useState
+    // setter. A call to it sets the flag when its last argument is `true` and
+    // clears it when `false`: markBusy(key, true) ... markBusy(key, false).
+    const helpers = new Set<string>();
+    const callsASetter = (body: ts.Node): boolean => {
+      let found = false;
+      const visit = (n: ts.Node) => {
+        if (found) return;
+        if (
+          ts.isCallExpression(n) &&
+          ts.isIdentifier(unwrap(n.expression)) &&
+          setters.has((unwrap(n.expression) as ts.Identifier).text)
+        ) {
+          found = true;
+          return;
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(body);
+      return found;
+    };
+    const findHelpers = (n: ts.Node) => {
+      let name: string | null = null;
+      let fnNode: ts.Node | null = null;
+      if (ts.isFunctionDeclaration(n) && n.name && n.body) {
+        name = n.name.text;
+        fnNode = n.body;
+      } else if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.initializer &&
+        (ts.isArrowFunction(unwrap(n.initializer)) ||
+          ts.isFunctionExpression(unwrap(n.initializer)))
+      ) {
+        name = n.name.text;
+        fnNode = (unwrap(n.initializer) as ts.ArrowFunction | ts.FunctionExpression).body;
+      }
+      const named = name ? /^(?:mark|set)([A-Z]\w*)$/.exec(name) : null;
+      if (
+        name &&
+        fnNode &&
+        named &&
+        !setters.has(name) &&
+        FLAG_NAME.test(named[1]!) &&
+        callsASetter(fnNode)
+      ) {
+        helpers.add(name);
+      }
+      ts.forEachChild(n, findHelpers);
+    };
+    findHelpers(sf);
+    const classifyHelper = (call: ts.CallExpression): SetKind => {
+      const last = call.arguments[call.arguments.length - 1];
+      const v = last ? unwrap(last) : null;
+      if (v?.kind === ts.SyntaxKind.TrueKeyword) return 'start';
+      if (v?.kind === ts.SyntaxKind.FalseKeyword) return 'end';
+      return 'other';
+    };
+
     const classifySet = (flag: string, arg: ts.Expression | undefined): SetKind => {
       if (!arg) return 'other';
       if (isBusyValue(arg)) return 'phase-start';
@@ -720,6 +805,8 @@ export function scanPendingFlags(files: ScanFile[], roots: ScanRoot[]): PendingF
               node: n,
               kind: classifySet(callee.text, n.arguments[0]),
             });
+          } else if (ts.isIdentifier(callee) && helpers.has(callee.text)) {
+            sets.push({ flag: callee.text, pos: n.getStart(sf), node: n, kind: classifyHelper(n) });
           }
           // A promise chain with a `.then(...)` that is not awaited (an awaited
           // one is judged as an await), judged once from its last link.

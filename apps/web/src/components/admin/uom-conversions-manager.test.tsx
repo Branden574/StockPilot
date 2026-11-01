@@ -1,8 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage } from '@/lib/request-failure';
-import { offline } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 /**
  * UoM conversions in the redesign (W-AD-06): every add-form field is named
@@ -11,7 +18,11 @@ import { offline } from '@/test/rejected-request';
  */
 
 const refresh = vi.fn();
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh }) }));
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ push: vi.fn(), refresh }),
+}));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 const actions = vi.hoisted(() => ({ upsert: vi.fn(), remove: vi.fn() }));
 vi.mock('@/server/actions/uom-conversions', () => ({
@@ -112,4 +123,50 @@ describe('UomConversionsManager when the request gets no answer', () => {
     expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(refresh).not.toHaveBeenCalled();
   });
+
+  async function saveOne() {
+    const user = userEvent.setup();
+    render(
+      <UomConversionsManager
+        conversions={[]}
+        items={[{ id: 'i1', sku: 'AA-24', name: 'AA batteries' }]}
+      />,
+    );
+    await user.click(screen.getByRole('combobox', { name: 'Item' }));
+    await user.click(await screen.findByRole('option', { name: 'AA-24 — AA batteries' }));
+    await user.click(screen.getByRole('button', { name: 'Save conversion' }));
+  }
+
+  for (const [row, error] of [
+    ['no answer', offline],
+    ['a page older than the server', outOfDate],
+  ] as const) {
+    it(`Save conversion, ${row}: says the conversion was not saved, and the button works again`, async () => {
+      actions.upsert.mockRejectedValueOnce(error());
+      await saveOne();
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          requestFailedMessage(error(), 'save the conversion'),
+        ),
+      );
+      const button = screen.getByRole('button', { name: 'Save conversion' });
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute('aria-busy', 'true');
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(refresh).not.toHaveBeenCalled();
+    });
+  }
+
+  it('Save conversion answered with a redirect says nothing, and nothing is left to escape', async () => {
+    actions.upsert.mockRejectedValueOnce(signInRedirect());
+    await saveOne();
+    await waitFor(() => expect(actions.upsert).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 });
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();

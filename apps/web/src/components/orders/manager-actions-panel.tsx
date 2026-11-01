@@ -295,6 +295,7 @@ export function ManagerActionsPanel({
   async function releaseEarly(reason: string) {
     if (!replacement) return;
     setBusy('release-early');
+    setDialogError(null);
     // This order is the replacement the page shows (desk check F7: a stale
     // page never releases a newer replacement).
     let res: Awaited<ReturnType<typeof releaseReturnReplacementAction>>;
@@ -303,12 +304,15 @@ export function ManagerActionsPanel({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'release the replacement'));
+      const message = requestFailedMessage(e, 'release the replacement');
+      setDialogError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(null);
     }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       router.refresh();
       return;
@@ -433,6 +437,14 @@ export function ManagerActionsPanel({
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
   const [reopenOpen, setReopenOpen] = React.useState(false);
   const [reopenReason, setReopenReason] = React.useState('');
+  // Why the last Deny, Reopen picking, Physical signature, Close or Release
+  // before return failed, inside its dialog (pattern 20: a toast sits outside
+  // the dialog and goes in seconds). One at a time, as only one of them is
+  // open; cleared when any of them opens or closes and on each try.
+  const [dialogError, setDialogError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setDialogError(null);
+  }, [denyOpen, reopenOpen, physicalSigOpen, closePartialOpen, releaseOpen]);
 
   // F2-2: the two confirms that catch a short order before it moves on. Both
   // are UI only (decision D17); the fixes live on the lines (D18), so their
@@ -533,18 +545,22 @@ export function ManagerActionsPanel({
       return;
     }
     setBusy('deny');
+    setDialogError(null);
     let res: Awaited<ReturnType<typeof denyOrderRequestAction>>;
     try {
       res = await denyOrderRequestAction({ id: orderId, reason });
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'deny the request'));
+      const message = requestFailedMessage(e, 'deny the request');
+      setDialogError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(null);
     }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -752,18 +768,22 @@ export function ManagerActionsPanel({
       return;
     }
     setBusy('reopen-picking');
+    setDialogError(null);
     let res: Awaited<ReturnType<typeof reopenPickingAction>>;
     try {
       res = await reopenPickingAction({ id: orderId, reason });
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'reopen picking'));
+      const message = requestFailedMessage(e, 'reopen picking');
+      setDialogError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(null);
     }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -774,18 +794,22 @@ export function ManagerActionsPanel({
 
   async function closePartial() {
     setBusy('close-partial');
+    setDialogError(null);
     let res: Awaited<ReturnType<typeof closePartialAction>>;
     try {
       res = await closePartialAction({ id: orderId });
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'close the order'));
+      const message = requestFailedMessage(e, 'close the order');
+      setDialogError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(null);
     }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -798,18 +822,22 @@ export function ManagerActionsPanel({
     const signer = physicalSignerName.trim();
     if (!signer) return;
     setBusy('physical-signature');
+    setDialogError(null);
     let res: Awaited<ReturnType<typeof confirmPhysicalSignatureAction>>;
     try {
       res = await confirmPhysicalSignatureAction({ id: orderId, signerName: signer });
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'record the signature'));
+      const message = requestFailedMessage(e, 'record the signature');
+      setDialogError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(null);
     }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -1450,6 +1478,7 @@ export function ManagerActionsPanel({
           open={releaseOpen}
           onOpenChange={setReleaseOpen}
           busy={busy === 'release-early'}
+          error={dialogError}
           onConfirm={(reason) => void releaseEarly(reason)}
         />
       ) : null}
@@ -1475,6 +1504,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1526,6 +1560,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1580,6 +1619,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1620,6 +1664,11 @@ export function ManagerActionsPanel({
               backordered units will NOT be fulfilled. You can&apos;t reopen the order afterward.
             </DialogDescription>
           </DialogHeader>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"

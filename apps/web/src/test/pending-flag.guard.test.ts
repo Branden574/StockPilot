@@ -123,7 +123,12 @@ const PLANTED: ScanFile[] = [
       `  const [editing, setEditing] = React.useState(false);`,
       `  const [error, setError] = React.useState<string | null>(null);`,
       `  const [holding, setHolding] = React.useState(false);`,
+      `  const [cellBusy, setCellBusy] = React.useState<ReadonlySet<string>>(new Set());`,
       `  const busyRef = React.useRef(false);`,
+      // (e) A helper that sets a flag for its caller (the role matrix's markBusy):
+      `  function markBusy(key: string, on: boolean) { setCellBusy((prev) => { const next = new Set(prev); if (on) next.add(key); else next.delete(key); return next; }); }`,
+      // Named like one, but sets nothing: not a flag.
+      `  function markLoading(on: boolean) { return on; }`,
       `  const load = React.useCallback(async () => { try { setItems(await loadThings()); } catch { setError('x'); } }, []);`,
       `  const loadLoud = React.useCallback(async () => { setItems(await loadThings()); }, []);`,
       // Reported:
@@ -152,6 +157,10 @@ const PLANTED: ScanFile[] = [
       `  async function holdShape() { setHolding(true); const res = await saveThingAction('a'); setHolding(false); return res; }`,
       // (d) A wrapper that awaits its callback parameter passes the rejection on (withStepUp):
       `  async function viaWrapperParam() { setSaving(true); try { await withRetry(() => saveThingAction('a')); } finally { setSaving(false); } }`,
+      // (e) The helper's clear after a catch that returns first:
+      `  async function helperFlag(key: string) { markBusy(key, true); try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); return; } markBusy(key, false); }`,
+      // (f) An alias of a setter is that setter (bulk ISBN import's setBusy):
+      `  async function aliasFlag(ai: boolean) { const setWorking = ai ? setSaving : setHolding; setWorking(true); await saveThingAction('a'); setWorking(false); }`,
       // Not reported:
       `  async function finallyClears() { setSaving(true); try { const res = await saveThingAction('a'); if (!res.ok) toast.error('x'); } catch (e) { if (isControlFlow(e)) return; toast.error('y'); } finally { setSaving(false); } }`,
       `  async function catchClears() { setSaving(true); try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; setSaving(false); toast.error('x'); return; } setSaving(false); }`,
@@ -174,6 +183,9 @@ const PLANTED: ScanFile[] = [
       `  async function earlyReturnClearCaught(x: boolean) { setSaving(true); if (x) { setSaving(false); return; } try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } finally { setSaving(false); } }`,
       // (d) The same wrapper around a call that cannot reject:
       `  async function viaWrapperQuiet() { setSaving(true); try { await withRetry(() => quietLoad()); } finally { setSaving(false); } }`,
+      // (e) The same helper, cleared in finally:
+      `  async function helperFlagFinally(key: string) { markBusy(key, true); try { await saveThingAction('a'); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } finally { markBusy(key, false); } }`,
+      `  async function notAHelper() { markLoading(true); await saveThingAction('a'); markLoading(false); }`,
       // A callback made while the flag is set, which awaits and then clears it:
       `  function effectTimer() { setSaving(true); const t = window.setTimeout(async () => { await saveThingAction('a'); setSaving(false); }, 10); return () => window.clearTimeout(t); }`,
       `  function transitionAfterFlag() { setSaving(true); React.startTransition(async () => { await saveThingAction('a'); setSaving(false); }); }`,
@@ -185,7 +197,7 @@ const PLANTED: ScanFile[] = [
       `  async function callsAndCatches() { try { await finallyOnlyCaught(); } catch (e) { if (isControlFlow(e)) return; toast.error('x'); } }`,
       `  function thenFinallyOnly() { setSaving(true); void saveThingAction('a').then(() => toast.error('ok')).finally(() => setSaving(false)); }`,
       `  const handlers = { onClick: finallyOnlyHandler, onSave: callsAndCatches, onThen: thenFinallyOnly, onEarly: earlyReturnClear, onEarlyCaught: earlyReturnClearCaught, onWrap: viaWrapperParam, onWrapQuiet: viaWrapperQuiet, onNested: nestedTryInCatch, onHold: holdShape };`,
-      `  return [saving, busy, phase, items, editing, error, holding, handlers];`,
+      `  return [saving, busy, phase, items, editing, error, holding, cellBusy, handlers];`,
       `}`,
       `export async function exportedFinallyOnly(setSaving: (b: boolean) => void) { setSaving(true); try { await saveThingAction('a'); } finally { setSaving(false); } }`,
     ].join('\n'),
@@ -226,10 +238,10 @@ const PLANTED: ScanFile[] = [
  * handled: finallyClears, catchClears, catchFallsThrough, thenCatchClears,
  * effectTimerCaught, the timer in callbackOwnsItsWindow, finallyOnlyCaught
  * (its caller catches), exportedFinallyOnly (its callers are in other
- * modules, so it is not judged), both awaits in nestedTryInCatch and
- * earlyReturnClearCaught.
+ * modules, so it is not judged), both awaits in nestedTryInCatch,
+ * earlyReturnClearCaught and helperFlagFinally.
  */
-const GUARDED_PLANTED = 11;
+const GUARDED_PLANTED = 12;
 
 describe('the pending-flag scan (self-test on planted files)', () => {
   const scan = scanPendingFlags(PLANTED, PLANTED_ROOTS);
@@ -266,6 +278,8 @@ describe('the pending-flag scan (self-test on planted files)', () => {
         'earlyReturnClear',
         'holdShape',
         'viaWrapperParam',
+        'helperFlag',
+        'aliasFlag',
       ].sort(),
     );
   });
@@ -296,6 +310,10 @@ describe('the pending-flag scan (self-test on planted files)', () => {
       'nestedTryInCatch',
       'earlyReturnClearCaught',
       'viaWrapperQuiet',
+      'helperFlagFinally',
+      'notAHelper',
+      'markBusy',
+      'markLoading',
     ]) {
       expect(reported).not.toContain(fn);
     }
@@ -336,6 +354,8 @@ describe('the pending-flag scan (self-test on planted files)', () => {
     }
     expect(byFn.get('holdShape')).toMatchObject({ problem: 'stays-set', flag: 'setHolding' });
     expect(byFn.get('viaWrapperParam')?.reaches).toBe('withRetry');
+    expect(byFn.get('helperFlag')).toMatchObject({ problem: 'stays-set', flag: 'markBusy' });
+    expect(byFn.get('aliasFlag')).toMatchObject({ problem: 'stays-set', flag: 'setWorking' });
   });
 
   it('takes allowed findings out, and fails an allowed entry that matches nothing', () => {
