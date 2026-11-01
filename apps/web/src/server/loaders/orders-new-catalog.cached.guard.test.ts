@@ -37,8 +37,13 @@ const PINS: Record<string, string> = {
   // phone's order sites). The value's shape and the key parts are unchanged;
   // the callback edit rotates the key once on deploy, and the first visit per
   // warehouse after it is cold (the prewarm cron refills it).
+  // Re-pinned again in B47's review round: the sites are returned by name,
+  // then id (the returns chooser's rule), not in the charter order the pages
+  // are read in, because the web site picker and the phone's site sheet list
+  // them as given and a charter id is a random uuid. Same release as part B,
+  // so the key still rotates once on deploy; shape and key parts unchanged.
   loadChartersForWarehouseCached:
-    '927ba032e3e5dc8afe11694149c4ff46b38ef614ee05a4d5558a72e3073f1cc4',
+    'ba09045770c935e56a932c480a2e89c6c4ce542a5988630a00ac23501a4a25d4',
 };
 
 function initializerHashes(): Record<string, string> {

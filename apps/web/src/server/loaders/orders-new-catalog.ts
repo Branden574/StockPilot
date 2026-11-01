@@ -387,7 +387,8 @@ const loadChartersForWarehouseCached = unstable_cache(
     // range answered an arbitrary 1000 past 1000 links on this warehouse, and
     // archived charters' links count too (the status filter runs below), so
     // the rest of the sites were missing here and in the phone's order sites,
-    // which this loader also serves (B47).
+    // which this loader also serves (B47). The charter order only keeps the
+    // pages stable; the sites are returned by name (below).
     type LinkRow = { charter: unknown };
     let pairs: LinkRow[];
     try {
@@ -417,7 +418,7 @@ const loadChartersForWarehouseCached = unstable_cache(
             : String(err);
       throw new Error(`[orders-new] warehouse charters read failed: ${cause}`);
     }
-    return pairs.flatMap((p) => {
+    const sites = pairs.flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)
         ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
         : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
@@ -438,6 +439,10 @@ const loadChartersForWarehouseCached = unstable_cache(
         },
       ];
     });
+    // By name, then id: the returns chooser's rule (readDeliverySites). Nothing
+    // after this sorts: the site picker on Orders > New and the phone's site
+    // sheet list the sites as given, and a charter id is a random uuid.
+    return sites.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   },
   ['orders-new-v2-charters-v2'],
   { revalidate: 300, tags: ['orders-new-v2-charters'] },

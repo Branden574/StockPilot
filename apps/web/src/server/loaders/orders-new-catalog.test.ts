@@ -1240,6 +1240,67 @@ describe('loadChartersForWarehouse: every delivery site, past 1000 links', () =>
     );
     expect(calls).toBe(2);
   });
+
+  // The pages are read in charter order only so that they are stable. A
+  // charter id is a random uuid, and nothing after this loader sorts: the web
+  // site picker (orders-storefront.tsx) and the phone's site sheet (through
+  // /api/v1/orders/catalog) list the sites as given. So the loader lists them
+  // by name, then id: the returns chooser's rule (readDeliverySites). The
+  // tests above check which sites are listed; these check their order.
+  const named = (i: number, name: string, status = 'active') => ({
+    warehouse_id: WH,
+    charter_id: charterId(i),
+    charter: { id: charterId(i), name, code: null, status, address: null },
+  });
+
+  it('lists a handful of sites by name, then id, whatever order the rows arrive in', async () => {
+    // Arrival order is neither charter order nor name order. Two sites share
+    // a name and arrive larger id first; one name starts in lower case (name
+    // order, not character-code order); the archived charter stays out.
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select': {
+        data: [
+          named(9, 'Delta Site'),
+          named(3, 'Bravo Site'),
+          named(1, 'charlie Site'),
+          named(8, 'Archived Site', 'archived'),
+          named(7, 'Alpha Site'),
+          named(5, 'Delta Site'),
+        ],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    expect(sites.map((s) => [s.name, s.id])).toEqual([
+      ['Alpha Site', charterId(7)],
+      ['Bravo Site', charterId(3)],
+      ['charlie Site', charterId(1)],
+      ['Delta Site', charterId(5)],
+      ['Delta Site', charterId(9)],
+    ]);
+  });
+
+  it('past 1000 links, lists every site by name across both pages, not in the charter order they are read in', async () => {
+    // Charter i is named Site <1199 - i>, so the first site by name has the
+    // largest charter id and is read on the second page.
+    const pad = (n: number) => String(n).padStart(4, '0');
+    const REVERSED = Array.from({ length: 1200 }, (_, i) => named(i, `Site ${pad(1199 - i)}`));
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(REVERSED) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    expect(stub.chainsAll.get('warehouse_charters.select')).toHaveLength(2);
+    expect(argsOf(stub, 0, 'order').map((a) => a![0])).toEqual(['charter_id']);
+    expect(sites.map((s) => s.id)).toEqual(
+      Array.from({ length: 1200 }, (_, k) => charterId(1199 - k)),
+    );
+    expect(sites[0]!.name).toBe('Site 0000');
+    expect(sites[1199]!.name).toBe('Site 1199');
+  });
 });
 
 /* ---- the thumb map stays bounded ---- */
