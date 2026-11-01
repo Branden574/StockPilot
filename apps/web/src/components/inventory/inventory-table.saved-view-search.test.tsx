@@ -590,7 +590,8 @@ describe('A search another navigation puts in the address: the box takes it and 
  * lands in the address unless the box wrote it itself (`agreedQ`, set just
  * before each write). A write can land after the next keystroke: Next lands a
  * shallow write in a transition, and a server navigation (the emptied box,
- * Clear all filters) takes a round trip. If the box did not mark its own write
+ * Clear all filters, the way back under a list's own message) takes a round
+ * trip. If the box did not mark its own write
  * first, that late landing would read as another navigation's search and
  * replace what was typed since. The tests above land every write at once, so
  * none of them reaches this order.
@@ -673,5 +674,64 @@ describe('An address the box wrote that lands late never replaces what was typed
     expect(searchBox()).toHaveValue('Stapler');
     expect(window.location.search).toBe('?q=Stapler');
     expect(shownNames()).toEqual(['Stapler']);
+  });
+
+  /*
+   * The way back under a list's own message ("Clear search" here) drops the
+   * search as "Clear all filters" does, and the same late landing applies to it
+   * (review of B1, 2026-11-01): it used to leave the box unmarked, so its landing
+   * wiped a search typed in the meantime, while the same steps through "Clear all
+   * filters" kept it (the test above).
+   */
+  it('instant mode: a search typed after "Clear search", while its push is landing, stays', async () => {
+    setAddress('/dashboard/inventory?q=zzqqxx');
+    render(tableFor('items', 'instant', { items: ITEMS, initialQuery: 'zzqqxx' }));
+    await settle();
+    holdLandings();
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Clear search' }));
+    expect(searchBox()).toHaveValue('');
+    expect(window.location.search).toBe('');
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Stapler' } });
+      releaseLandings();
+    });
+    expect(searchBox()).toHaveValue('Stapler');
+    await settle();
+    expect(searchBox()).toHaveValue('Stapler');
+    expect(window.location.search).toBe('?q=Stapler');
+    expect(shownNames()).toEqual(['Stapler']);
+    expect(routerMock.replace).not.toHaveBeenCalled();
+  });
+
+  it('server mode: a search typed after "Clear search", before the bare list arrives, stays', async () => {
+    setAddress('/dashboard/inventory?q=zzqqxx');
+    const view = render(tableFor('items', 'server', { items: [], initialQuery: 'zzqqxx' }));
+    await settle();
+    routerMock.replace.mockClear();
+    // The link navigates (next/link); here the click stops at the window, after the table saw it.
+    const stop = (e: Event) => e.preventDefault();
+    window.addEventListener('click', stop);
+    try {
+      await userEvent.setup().click(screen.getByRole('link', { name: 'Clear search' }));
+    } finally {
+      window.removeEventListener('click', stop);
+    }
+    expect(searchBox()).toHaveValue('');
+    await settle();
+    // The link is the one navigation: the emptied box makes none of its own.
+    expect(routerMock.replace).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.change(searchBox(), { target: { value: 'Stapler' } });
+      setAddress('/dashboard/inventory');
+      view.rerender(tableFor('items', 'server', { items: ITEMS }));
+    });
+    expect(searchBox()).toHaveValue('Stapler');
+    await settle();
+    expect(searchBox()).toHaveValue('Stapler');
+    expect(window.location.search).toBe('?q=Stapler');
+    expect(shownNames()).toEqual(['Stapler']);
+    expect(routerMock.replace).not.toHaveBeenCalled();
   });
 });

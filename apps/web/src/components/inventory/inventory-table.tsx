@@ -993,8 +993,9 @@ export function InventoryTable({
   // search was lost and the list did not narrow. Now the box takes the
   // address's search whenever it changes to something the box did not write and
   // does not already hold. `agreedQ` is the search the box and the address last
-  // agreed on: set just BEFORE the box writes the address, and when the box
-  // takes the address's search. Only a change of the address acts (`seenQ`),
+  // agreed on: set just BEFORE the box writes the address (or the table makes a
+  // navigation that drops the search: emptyBoxForOwnNavigation), and when the
+  // box takes the address's search. Only a change of the address acts (`seenQ`),
   // never `agreedQ` running ahead of an address that is still landing, so the
   // box never takes back a search it has just replaced. Both are state, read
   // here in render. The saved-view handshake above stays for the one case this
@@ -1272,13 +1273,23 @@ export function InventoryTable({
   // on a Category and a search left the Category on. The clear marks its own
   // emptying of the box here, and the effect run it causes navigates nowhere.
   const clearingSearchRef = React.useRef(false);
-  function clearAllFilters() {
+  // The box's part of a navigation of this table's own that drops the search:
+  // "Clear all filters", and the way back under a list's own message ("Clear
+  // search", "Show all items" ...). The box empties now. Its emptying makes no
+  // navigation of its own (the mark above), since the caller makes the one
+  // navigation. That navigation writes the address's search (it drops it), so
+  // the box does not take it back when it lands (see agreedQ above), and a
+  // search typed while it is out stays. The way back used to do none of this
+  // in server mode and only the emptying in instant mode, so its landing wiped
+  // a search typed in the meantime (review of B1, 2026-11-01).
+  function emptyBoxForOwnNavigation() {
     // Only when the box changes: the effect then runs and takes the mark.
     if (q !== '') clearingSearchRef.current = true;
-    // The clear writes the address's search (it drops it), so the box does
-    // not take it back when the navigation lands (see agreedQ above).
     setAgreedQ('');
     setQ('');
+  }
+  function clearAllFilters() {
+    emptyBoxForOwnNavigation();
     // One navigation clears the three filter keys (the override) plus
     // sort + q, so two navigations can't race each other.
     filters.navigate((next) => {
@@ -1345,8 +1356,8 @@ export function InventoryTable({
     // instantMode flips true, this effect re-runs and early-returns, and
     // the SAME q re-derives locally over the full dataset (the search box
     // is preserved — the table never remounts).
-    // A clear's own emptying of the box (clearAllFilters), taken by the run it
-    // causes whatever the mode, so it can never outlive that run.
+    // A clear's own emptying of the box (emptyBoxForOwnNavigation), taken by the
+    // run it causes whatever the mode, so it can never outlive that run.
     const clearing = clearingSearchRef.current;
     clearingSearchRef.current = false;
     if (instantMode) return;
@@ -1356,8 +1367,9 @@ export function InventoryTable({
       setServerHits(null);
       setServerHitsTotal(null);
       setServerLoading(false);
-      // The clear navigates itself, without the search and without the
-      // filters: a second navigation from the old address would put them back.
+      // The clear (or the way back) navigates itself, without the search and
+      // without the filters: a second navigation from the old address would
+      // put them back.
       if (clearing) return;
       // Clear the q param from the URL when the user empties the box.
       // Use router.replace (not history.replaceState) so Next.js
@@ -2404,21 +2416,20 @@ export function InventoryTable({
             href={emptyMessage.cta.href}
             prefetch={false}
             onClick={(e) => {
-              // Instant mode: the whole list derives here, so the way back is a
-              // shallow push that empties the box with it (a typed search may
-              // not be in the address yet).
+              // The way back drops the search with the rest, as "Clear all
+              // filters" does: the box empties now and makes no navigation of
+              // its own, and a search typed before the list lands stays
+              // (emptyBoxForOwnNavigation). A click that opens a new tab leaves
+              // this list as it is. Instant mode: the whole list derives here, so
+              // the way back is a shallow push. Server mode: the link navigates.
               if (instantMode) {
                 interceptShallowNav(e, emptyMessage.cta.href, (href) => {
-                  setQ('');
+                  emptyBoxForOwnNavigation();
                   shallowPush(href);
                 });
                 return;
               }
-              // Server mode: the link navigates, and the box takes the address's
-              // (empty) search when the list lands (agreedQ), with the list. A
-              // typed search the address does not hold yet would not change
-              // with it, so the box drops that one now.
-              if (q.trim() !== addressQ.trim() && isPlainLeftClick(e)) setQ('');
+              if (isPlainLeftClick(e)) emptyBoxForOwnNavigation();
             }}
           >
             {emptyMessage.cta.label}

@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -237,7 +237,12 @@ beforeEach(() => {
   fetchSpy = vi.fn(async (input: string | URL) => {
     const u = new URL(String(input), window.location.origin);
     const needle = (u.searchParams.get('q') ?? '').toLowerCase();
-    const pool = u.searchParams.get('type') === 'book' ? BOOKS : ITEMS;
+    const pool =
+      u.searchParams.get('rentalsOnly') === '1'
+        ? RENTALS
+        : u.searchParams.get('type') === 'book'
+          ? BOOKS
+          : ITEMS;
     const items = pool.filter((r) => r.name.toLowerCase().includes(needle));
     return { ok: true, json: async () => ({ items, total: items.length }) } as Response;
   });
@@ -585,21 +590,54 @@ describe('The way back each message offers', () => {
     expect(routerMock.replace).not.toHaveBeenCalled();
   });
 
-  it('Rentals items, server mode, "Clear search": a link to the list, and the box empties when it lands', async () => {
-    setAddress(`${BASE.rentals}?q=zzqqxx`);
-    const view = render(tableFor('rentals', 'server', { items: [], initialQuery: 'zzqqxx' }));
-    await settle();
-    const link = screen.getByRole('link', { name: 'Clear search' });
-    expect(link).toHaveAttribute('href', '/dashboard/rentals/items');
-    // The link's navigation lands (next/link pushes it): the server's whole list.
-    await land(BASE.rentals, () =>
-      view.rerender(tableFor('rentals', 'server', { items: RENTALS })),
-    );
-    await settle();
-    expect(searchBox()).toHaveValue('');
-    expect(routerMock.replace).not.toHaveBeenCalled();
-    expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(RENTALS.length);
-  });
+  /**
+   * Server mode (staff and viewers on Items, everyone on Rentals items): the link
+   * navigates. The box empties at once, as "Clear all filters" empties it, and
+   * makes no navigation of its own. It used to keep the old search for the whole
+   * round trip, then take the address's empty search when the list landed, which
+   * wiped a search typed in the meantime (review of B1, 2026-11-01).
+   */
+  it.each<[List, string]>([
+    ['items', 'Stapler'],
+    ['rentals', 'Canopy'],
+  ])(
+    '%s, server mode, "Clear search": the box empties at once, the link is the one navigation, and "%s" typed before the list lands stays',
+    async (list, typed) => {
+      setAddress(`${BASE[list]}?q=zzqqxx`);
+      const view = render(tableFor(list, 'server', { items: [], initialQuery: 'zzqqxx' }));
+      // The box asks the server for the address's search when it mounts, and writes it back.
+      await settle();
+      routerMock.replace.mockClear();
+      tableWrites = [];
+      const link = screen.getByRole('link', { name: 'Clear search' });
+      expect(link).toHaveAttribute('href', BASE[list]);
+      // The link navigates (next/link); here the click stops at the window, after the table saw it.
+      const stop = (e: Event) => e.preventDefault();
+      window.addEventListener('click', stop);
+      try {
+        await userEvent.setup().click(link);
+      } finally {
+        window.removeEventListener('click', stop);
+      }
+      expect(searchBox()).toHaveValue('');
+      await settle();
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(tableWrites).toEqual([]);
+
+      // A search is typed while the link's navigation is out; then the list lands.
+      await act(async () => {
+        fireEvent.change(searchBox(), { target: { value: typed } });
+        setAddress(BASE[list]);
+        view.rerender(tableFor(list, 'server', { items: datasetFor(list) }));
+      });
+      expect(searchBox()).toHaveValue(typed);
+      await settle();
+      expect(searchBox()).toHaveValue(typed);
+      expect(window.location.search).toBe(`?q=${typed}`);
+      expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(1);
+      expect(routerMock.replace).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('Phone width: the empty area is never inside the sideways scroller (review 2026-10-20)', () => {
