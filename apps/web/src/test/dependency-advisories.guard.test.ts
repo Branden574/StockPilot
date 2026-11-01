@@ -349,9 +349,11 @@ type Dismissal = Floor & { alert: number; dependents: string[] };
  * server (through exceljs), are not named, and either of them moving onto a
  * glob inside the range fails the check.
  *
- *   - glob 13.0.6: Expo's build tools, on our own patterns. Of them only
- *     @expo/cli passes an AbortSignal, the case the advisory is about, in
- *     `expo start`'s TypeScript check of our own folder. glob 14 changes its
+ *   - glob 13.0.6: Expo's build tools, on our own patterns. The advisory is
+ *     about a walk that keeps reading after it is aborted, and the only one
+ *     of them that aborts a walk, @expo/cli's anyMatchAsync
+ *     (build/src/utils/glob.js), is called nowhere in @expo/cli 57.0.24: the
+ *     TypeScript check of `expo start` uses plain glob. glob 14 changes its
  *     API and needs minimatch 11; every Expo release still asks for ^13.
  *   - minimatch 10.2.6 and 3.1.5: ESLint and its plugins, typescript-eslint,
  *     @expo/fingerprint and glob, on our own patterns, and readdir-glob,
@@ -412,10 +414,10 @@ const DISMISSED: Dismissal[] = [
 /**
  * Packages a dismissal relies on staying where they are, whatever their
  * version: minimatch 10.2.6 reaches the web server through exceljs >
- * archiver > readdir-glob, and #154 stays dismissed because exceljs uses only
- * archiver's append() and file(), while only its directory() and glob() call
- * readdir-glob. Any other dependent of either, our own code included, fails
- * the check.
+ * archiver > readdir-glob, and #154 stays dismissed because exceljs adds
+ * entries only with archiver's append() and file(), while only its
+ * directory() and glob() call readdir-glob. Any other dependent of either,
+ * our own code included, fails the check.
  */
 const DISMISSAL_CHAINS: Record<string, string[]> = {
   'readdir-glob': ['archiver'],
