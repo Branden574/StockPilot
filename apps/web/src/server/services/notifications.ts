@@ -26,6 +26,10 @@ export interface CreateNotificationArgs {
  * banners, diagnosed 2026-07-14 — 1 row + 1 token, yet 2 banners: one from
  * this code path, one from the trigger).
  *
+ * Writes nothing (returns null) for a disabled account, or for anyone who is
+ * not a current member of `organizationId` (removed, left, an invite never
+ * accepted, a support Act-as seat).
+ *
  * Returns the inserted row id. Never throws — failures are reported
  * via reportError so the calling write path (e.g. approving a PO)
  * doesn't fail just because the notification side errored.
@@ -47,11 +51,30 @@ export async function createNotification(
     // disabled" (fail OPEN): this function's contract is best-effort
     // delivery that never throws, and an unreadable profile is a read
     // error, not evidence of a disable.
-    const { data: profile, error: profileError } = await admin
-      .from('user_profiles')
-      .select('disabled_at')
-      .eq('id', args.userId)
-      .maybeSingle();
+    //
+    // The recipient must also still be a member of the notice's organization
+    // (docket S36): an accepted membership that is not a support Act-as seat,
+    // the rule the database's own notices follow (0422,
+    // _notify_is_current_member). Several callers address a stored id, such as
+    // an order's requester, and removing a member or leaving deletes only the
+    // membership row, so the person kept getting pushes about the
+    // organization's orders. Read beside the profile, not through that
+    // function, so a web deploy never depends on the migration. Unlike the
+    // disable check this one fails CLOSED: it is what lets the organization's
+    // data reach the person at all, and an unreadable membership is no
+    // evidence of one (reported, and nothing is written).
+    const [{ data: profile, error: profileError }, { data: membership, error: membershipError }] =
+      await Promise.all([
+        admin.from('user_profiles').select('disabled_at').eq('id', args.userId).maybeSingle(),
+        admin
+          .from('organization_members')
+          .select('user_id')
+          .eq('organization_id', args.organizationId)
+          .eq('user_id', args.userId)
+          .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null)
+          .maybeSingle(),
+      ]);
     if (profileError) {
       void reportError(new Error(profileError.message), {
         tag: 'notifications.create_disabled_check',
@@ -61,6 +84,14 @@ export async function createNotification(
     if ((profile as { disabled_at: string | null } | null)?.disabled_at) {
       return null;
     }
+    if (membershipError) {
+      void reportError(new Error(membershipError.message), {
+        tag: 'notifications.create_member_check',
+        extra: { organizationId: args.organizationId, userId: args.userId },
+      });
+      return null;
+    }
+    if (!membership) return null;
 
     const { data, error } = await admin
       .from('notifications')

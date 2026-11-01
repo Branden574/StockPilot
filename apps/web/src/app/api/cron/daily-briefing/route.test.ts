@@ -420,6 +420,105 @@ describe('GET /api/cron/daily-briefing — who is told, and what', () => {
     expect(summarizeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('two readers who see every line share one narrative, written once', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    summarizeMock.mockResolvedValue('Three orders wait for approval and four items are low.');
+    // The owner and an admin with the admin defaults: both read both lines.
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 2 });
+    for (const userId of ['user-owner', 'user-admin']) {
+      expect(sentTo(userId)[0]!.body).toBe(
+        'Three orders wait for approval and four items are low.',
+      );
+    }
+    expect(summarizeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('an admin with no line they can open is sent nothing, while the owner still is', async () => {
+    gatherMock.mockResolvedValue({
+      signals: [{ key: 'pending_approvals', label: 'orders awaiting approval', count: 3 }],
+    });
+    // The only line is approvals, and this admin cannot approve. They can
+    // still open the briefing (items:update), so only the empty-lines rule
+    // keeps "Morning briefing: 0 things need attention" from them.
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) =>
+      role === 'admin' ? adminSet('orders:approve') : new Set<Permission>(ROLE_PERMISSIONS.owner),
+    );
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 1 });
+    expect(sentTo('user-admin')).toEqual([]);
+    expect(sentTo('user-owner')).toEqual([
+      expect.objectContaining({ title: 'Morning briefing: 1 thing needs attention' }),
+    ]);
+  });
+
+  it('a line no reader can open (its module is off) does not stop the narrative for the readers who see every other line', async () => {
+    // Open purchase orders are still counted with the module off (the counts
+    // ask no module), and no reader is shown them.
+    gatherMock.mockResolvedValue({
+      signals: [
+        { key: 'pending_approvals', label: 'orders awaiting approval', count: 3 },
+        { key: 'open_pos', label: 'open purchase orders', count: 2 },
+      ],
+    });
+    summarizeMock.mockResolvedValue('Three orders wait for approval.');
+    adminHolder.client = briefingStub(OWNER_AND_ADMIN, ['ai', 'orders', 'cycle_counts']).client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 2 });
+    for (const userId of ['user-owner', 'user-admin']) {
+      expect(sentTo(userId)[0]).toMatchObject({
+        title: 'Morning briefing: 1 thing needs attention',
+        body: 'Three orders wait for approval.',
+        metadata: { signalKeys: ['pending_approvals'] },
+      });
+    }
+    // Written once, and only from the lines the organization can open: the
+    // purchase order line never reaches the narrative.
+    expect(summarizeMock).toHaveBeenCalledTimes(1);
+    const told = summarizeMock.mock.calls[0]![0] as { signals: Array<{ key: string }> };
+    expect(told.signals.map((s) => s.key)).toEqual(['pending_approvals']);
+  });
+
+  it('an organization whose module set cannot be read is skipped for the day and reported, never sent a trimmed briefing', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    for (const perOrgModules of [
+      // The read failed: buildSystemContext keeps every copy's shape and
+      // drops the error, so the set arrives empty.
+      {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      },
+      // Or ai was turned off between the scan and this read.
+      { data: [{ module_id: 'orders' }], error: null },
+    ] as QueryResult[]) {
+      vi.clearAllMocks();
+      adminHolder.client = makeSupabaseStub({
+        'organization_modules.select': (call: MockCall): QueryResult =>
+          call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
+            ? { data: [{ organization_id: 'org-1' }], error: null }
+            : perOrgModules,
+        'organization_members.select': membersAnswer(OWNER_AND_ADMIN),
+        'notifications.select.maybeSingle': { data: null, error: null },
+      }).client;
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
+      expect(createNotificationMock).not.toHaveBeenCalled();
+      expect(gatherMock).not.toHaveBeenCalled();
+      const reports = vi
+        .mocked(reportError)
+        .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.modules');
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toMatchObject({ organizationId: 'org-1' });
+    }
+  });
+
   it('a purchase order line is dropped when the Purchase orders module is off', async () => {
     gatherMock.mockResolvedValue({
       signals: [

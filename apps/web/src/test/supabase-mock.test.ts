@@ -103,4 +103,28 @@ describe('servedLikePostgrest', () => {
       Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
     ).rejects.toThrow(/cannot evaluate \.or\(\)/);
   });
+
+  it('evaluates a negated IS (.not(col, "is", null)) and refuses any other negation', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const { data } = await stub.client.from('items').select('id').not('gone', 'is', null);
+    expect((data as Array<{ id: string }>).map((r) => r.id)).toEqual(['d']);
+    // Through .maybeSingle(), as a point read asks.
+    const one = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .not('gone', 'is', null)
+      .maybeSingle();
+    expect(one.data).toEqual(expect.objectContaining({ id: 'd' }));
+    const none = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o2')
+      .not('gone', 'is', null)
+      .maybeSingle();
+    expect(none.data).toBeNull();
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').not('n', 'eq', 1)),
+    ).rejects.toThrow(/cannot evaluate \.not\(/);
+  });
 });

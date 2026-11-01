@@ -86,15 +86,19 @@
 -- stops getting it (the release's read-only census counts both before the
 -- push). A viewer given orders:approve is still never told: the app refuses
 -- a viewer every write.
--- Someone removed from the organization, or who left it, stops getting
--- notices about the purchase orders they created and the orders they
--- requested. So does a customer portal buyer, who is never a member (0250):
--- the portal has no notification list, and the buyer hears about an order by
--- email, which this file does not touch. A disabled account is no longer
--- written an in-app row as a creator or requester; its push was already
--- suppressed (0313). Everyone who keeps orders:approve by their role, every
--- current member's own notices, and every "New order requests" opt-out, are
--- unchanged.
+-- Someone removed from the organization, or who left it, stops getting the
+-- notices this file writes about the purchase orders they created and the
+-- orders they requested. So does a customer portal buyer, who is never a
+-- member (0250): the portal has no notification list, and the buyer hears
+-- about an order by email, which this file does not touch. The app writes
+-- its own notices about such orders (a partial hand-over, backordered items
+-- shipped, a line changed or removed by someone else, return events), all
+-- through createNotification, and the same release limits that function to
+-- current members by the same rule: neither half alone stops the notices. A
+-- disabled account is no longer written an in-app row as a creator or
+-- requester; its push was already suppressed (0313). Everyone who keeps
+-- orders:approve by their role, every current member's own notices, and
+-- every "New order requests" opt-out, are unchanged.
 --
 -- ── PARITY ─────────────────────────────────────────────────────────────────
 -- The resolver restates has_permission's precedence for a subject other than

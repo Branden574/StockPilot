@@ -73,9 +73,27 @@ export async function GET(req: NextRequest) {
       try {
         const ctx = await buildSystemContext(admin, orgId);
         if (!ctx) continue;
+        // The organization was picked because its ai module is on, so a set
+        // without ai means its module read failed (buildSystemContext keeps
+        // every cron copy's shape and drops that error, leaving an empty set)
+        // or ai was turned off since. Either way every module's line would be
+        // dropped for every reader: skip the organization for this run and
+        // say so, rather than send a briefing trimmed without a trace.
+        if (!ctx.enabledModules.has('ai')) {
+          void reportError(new Error('Daily briefing could not confirm the organization modules'), {
+            tag: 'cron.daily-briefing.modules',
+            organizationId: orgId,
+          });
+          continue;
+        }
         orgsProcessed += 1;
 
-        const insights = await gatherInsightsForCtx(ctx);
+        // Every line the counts produce, then the lines the organization can
+        // open: the cron's context is the owner (buildSystemContext), so its
+        // view is the module rules alone. A line whose module is off is counted
+        // anyway (the counts ask no module) and no reader is ever shown it.
+        const gathered = await gatherInsightsForCtx(ctx);
+        const insights = insightsVisibleTo(gathered, ctx);
         if (insights.signals.length === 0) continue; // quiet day — say nothing
 
         // Who may be told: the accepted owners and admins, never an Act-as
@@ -99,11 +117,11 @@ export async function GET(req: NextRequest) {
         }
 
         // Narrative is a graceful enhancement; the signal lines stand alone.
-        // It is written from every line, so it goes only to a recipient who
-        // reads every line, and only once per organization, when the first
-        // such recipient needs it. 10s race so one slow Gemini call can't eat
-        // the 300s budget across a multi-org fan-out (summarizeInsights itself
-        // never throws).
+        // It is written from every line the organization can open, so it goes
+        // only to a recipient who reads all of them, and only once per
+        // organization, when the first such recipient needs it. 10s race so
+        // one slow Gemini call can't eat the 300s budget across a multi-org
+        // fan-out (summarizeInsights itself never throws).
         let narrative: Promise<string | null> | null = null;
         const fullNarrative = () =>
           (narrative ??= Promise.race([
