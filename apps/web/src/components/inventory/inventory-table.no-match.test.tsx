@@ -400,6 +400,12 @@ function expectMessage(
     note ? `${description} ${note}` : description,
   );
   expect(panel.getByRole('link', { name: label })).toHaveAttribute('href', BASE[list]);
+  // Each list's icon, as its page drew it: an open book on Books, boxes on Items
+  // and Rentals items (main 7c28c3a9c: books/page.tsx:761, :800, :810;
+  // inventory/page.tsx:1157, :1211, :1221, :1237; rentals/items/page.tsx:242).
+  expect(area!.querySelector('[data-slot="state-panel-icon"] svg')?.getAttribute('class')).toMatch(
+    list === 'books' ? /\blucide-book-open\b/ : /\blucide-boxes\b/,
+  );
   expect(screen.queryByText('No items match your filters.')).toBeNull();
   // The filter bar stays, with what narrows the list marked.
   expect(screen.getByRole('button', { name: 'Filter by Category' })).toBeInTheDocument();
@@ -524,6 +530,29 @@ describe('A search, a stock view or the Expected chip that leaves nothing: the l
     expect(area!.closest('.overflow-x-auto')).toBeNull();
     expect(screen.getByRole('button', { name: 'Filter by Category' })).toBeInTheDocument();
   });
+
+  it.each(['instant', 'server'] as const)(
+    'Items, %s mode: ticking a Category on a search that found nothing turns the message into the general line at once',
+    async (mode) => {
+      setAddress(`${BASE.items}?q=zzqqxx`);
+      render(
+        tableFor('items', mode, {
+          items: mode === 'instant' ? ITEMS : [],
+          initialQuery: 'zzqqxx',
+        }),
+      );
+      await settle();
+      expect(
+        screen.getByRole('heading', { level: 3, name: 'No items match your search' }),
+      ).toBeInTheDocument();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Filter by Category' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Apparel' }));
+      // The tick shows at once and its navigation follows 300 ms later: so does the message.
+      expect(window.location.search).toBe('?q=zzqqxx');
+      expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+    },
+  );
 });
 
 describe('The way back each message offers', () => {
@@ -612,6 +641,38 @@ describe('The way back each message offers', () => {
       expect(window.location.search).toBe(`?q=${typed}`);
       expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(1);
       expect(routerMock.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['instant', 'server'] as const)(
+    'Items, %s mode: a Ctrl or Cmd click on "Clear search" (a new tab) leaves this list as it is',
+    async (mode) => {
+      setAddress(`${BASE.items}?q=zzqqxx`);
+      render(
+        tableFor('items', mode, {
+          items: mode === 'instant' ? ITEMS : [],
+          initialQuery: 'zzqqxx',
+        }),
+      );
+      await settle();
+      tableWrites = [];
+      // The browser opens the link in a new tab; jsdom would navigate this one.
+      const stop = (e: Event) => e.preventDefault();
+      window.addEventListener('click', stop);
+      try {
+        fireEvent.click(screen.getByRole('link', { name: 'Clear search' }), { ctrlKey: true });
+        fireEvent.click(screen.getByRole('link', { name: 'Clear search' }), { metaKey: true });
+      } finally {
+        window.removeEventListener('click', stop);
+      }
+      await settle();
+      expect(searchBox()).toHaveValue('zzqqxx');
+      expect(window.location.search).toBe('?q=zzqqxx');
+      expect(tableWrites).toEqual([]);
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole('heading', { level: 3, name: 'No items match your search' }),
+      ).toBeInTheDocument();
     },
   );
 });
@@ -772,6 +833,16 @@ describe('The Discontinued view and an Items type show as pressed chips that dro
     expect(screen.queryByRole('link', { name: 'Discontinued' })).toBeNull();
     expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(ITEMS.length);
     expect(routerMock.push).not.toHaveBeenCalled();
+  });
+
+  it('the Discontinued chip drops Auto-archived only and the page with it, as the Active toggle does', async () => {
+    setAddress(`${BASE.items}?status=discontinued&auto=1&page=2&sort=name_asc`);
+    render(tableFor('items', 'server', { items: [] }));
+    await settle();
+    expect(screen.getByRole('link', { name: 'Discontinued' })).toHaveAttribute(
+      'href',
+      `${BASE.items}?sort=name_asc`,
+    );
   });
 
   it('no Discontinued chip on the other views', async () => {

@@ -554,6 +554,25 @@ describe('A search another navigation puts in the address: the box takes it and 
     expect(shownNames()).toHaveLength(4);
   });
 
+  it("server mode, Back to another search: that search's rows at once, not the last search's answer", async () => {
+    setAddress('/dashboard/books');
+    const view = render(tableFor('books', 'server', { items: BOOKS }));
+    await userEvent.setup().type(searchBox(), 'Dune');
+    await settle();
+    expect(shownNames()).toEqual(['Dune']);
+
+    // The server's page for the other search lands; the box's own request for it stays out.
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => {}));
+    await land('/dashboard/books?q=Grade+2', () =>
+      view.rerender(tableFor('books', 'server', { items: GRADE_2, initialQuery: 'Grade 2' })),
+    );
+    expect(searchBox()).toHaveValue('Grade 2');
+    // Not ["Dune"], the last search's server answer, under the new search.
+    expect(shownNames()).toEqual(GRADE_2.map((b) => b.name));
+    await settle();
+    expect(shownNames()).toEqual(GRADE_2.map((b) => b.name));
+  });
+
   it('the box never takes back its own search: what is typed stays as typed while the address catches up', async () => {
     setAddress('/dashboard/books');
     render(tableFor('books', 'instant', { items: BOOKS }));
