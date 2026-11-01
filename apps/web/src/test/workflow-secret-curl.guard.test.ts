@@ -1057,6 +1057,11 @@ const RUNNER = new RegExp(
   ].join('|')})$`,
 );
 const HTTP_CLIENTS = new Set(['wget', 'http', 'https', 'httpie', 'xh', 'xhs', 'aria2c', 'curlie']);
+/** Database and raw network clients: each prints what the server answers, by design. */
+const SERVER_CLIENTS = new Set([
+  ...['psql', 'mysql', 'mariadb', 'mongosh', 'mongo', 'redis-cli', 'sqlcmd', 'cqlsh'],
+  ...['nc', 'ncat', 'netcat', 'socat', 'telnet', 'websocat', 'grpcurl'],
+]);
 /** Words before the command itself that take no option. */
 const KEYWORDS = new Set([
   'if',
@@ -1171,10 +1176,62 @@ function nodeTestFiles(cwd: string, io: Io): string[] {
   return found;
 }
 
+/** A relative import in JavaScript or TypeScript: from '...', import '...', import(...), require(...). */
+const JS_IMPORT = /\b(?:from|import|require)\s*\(?\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
+/** A Python import: import a.b, c (and its modules). */
+const PY_IMPORT =
+  /^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \t]*[\w.]+(?:[ \t]+as[ \t]+\w+)?)*)/gm;
+/** A Python import: from .a.b import c, d. */
+const PY_FROM = /^[ \t]*from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+\(?[ \t]*([\w \t,]+)/gm;
+
 /**
- * The repository files an interpreter or a test runner is given (any word
- * that names one), or that `node --test` finds when it is given none, each
- * with a hash of its text.
+ * The repository files a file imports: a relative JavaScript or TypeScript
+ * import, or a Python module found beside the script (Python puts the
+ * script's own directory first on its path) or relative to the file.
+ */
+function localImports(path: string, text: string, io: Io): string[] {
+  const dir = posix.dirname(path);
+  const first = (candidates: string[]) => candidates.find((file) => io.read(file) !== null);
+  const found: Array<string | undefined> = [];
+  if (/\.[cm]?[jt]sx?$/.test(path)) {
+    for (const m of text.matchAll(JS_IMPORT)) {
+      const base = posix.join(dir, m[1] ?? '');
+      const endings = ['', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.tsx', '.jsx'];
+      found.push(
+        first([...endings.map((end) => base + end), `${base}/index.js`, `${base}/index.ts`]),
+      );
+    }
+  } else if (/\.py$/.test(path)) {
+    const pyModule = (base: string, name: string) =>
+      first([
+        `${posix.join(base, ...name.split('.'))}.py`,
+        posix.join(base, ...name.split('.'), '__init__.py'),
+      ]);
+    for (const m of text.matchAll(PY_IMPORT)) {
+      for (const name of (m[1] ?? '').split(','))
+        found.push(pyModule(dir, name.trim().split(/\s+/)[0] ?? ''));
+    }
+    for (const m of text.matchAll(PY_FROM)) {
+      let base = dir;
+      for (let up = 1; up < (m[1] ?? '').length; up++) base = posix.dirname(base);
+      const from = m[2] ?? '';
+      if (from !== '') found.push(pyModule(base, from));
+      // from x import y: y may be a module of x.
+      for (const name of (m[3] ?? '').split(',')) {
+        const word = name.trim().split(/\s+/)[0] ?? '';
+        if (word !== '')
+          found.push(pyModule(from === '' ? base : posix.join(base, ...from.split('.')), word));
+      }
+    }
+  }
+  return found.filter((file): file is string => file !== undefined && file !== path);
+}
+
+/**
+ * The repository files an interpreter or a test runner runs, each with a
+ * hash of its text: the files it is given (any word that names one), or that
+ * `node --test` finds when it is given none, and what they import from the
+ * repository, to the depth limit.
  */
 function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<string, string> {
   const paths = args
@@ -1184,9 +1241,18 @@ function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<stri
   if (/^node(?:js)?$/.test(name) && paths.length === 0 && args.some((w) => w.value === '--test')) {
     paths.push(...nodeTestFiles(scope.cwd, io));
   }
-  return Object.fromEntries(
-    [...new Set(paths)].sort().map((path) => [path, fileHash(io.read(path) ?? '')]),
-  );
+  const runs = new Map<string, string>();
+  for (let level = 0, next = paths; level <= MAX_DEPTH && next.length > 0; level++) {
+    const imported: string[] = [];
+    for (const path of next) {
+      if (runs.has(path)) continue;
+      const text = io.read(path) ?? '';
+      runs.set(path, fileHash(text));
+      imported.push(...localImports(path, text, io));
+    }
+    next = imported;
+  }
+  return Object.fromEntries([...runs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 /** False, and unresolved, past the depth limit. */
@@ -1436,6 +1502,8 @@ function dispatch(
     return cannot(`${name} runs code the census cannot read`, filesRun(name, args, scope, ctx.io));
   } else if (HTTP_CLIENTS.has(name) || (name === 'gh' && args[0]?.value === 'api')) {
     return cannot('an HTTP client the census does not judge');
+  } else if (SERVER_CLIENTS.has(name)) {
+    return cannot('a client that prints what a server answers, which the census does not judge');
   } else if (/\.(?:ba|z|k|da)?sh$/.test(program.value)) {
     runFile(program, args, src, where, text(words), newShell(scope), ctx);
   } else if (program.value.includes('/') && !program.value.startsWith('/')) {
@@ -3788,6 +3856,13 @@ const PLANTS: Plant[] = [
     env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
     finds: { unresolved: /newman run postman\/report\.json \(newman runs code/ },
   },
+  {
+    id: 'E16',
+    what: 'psql given a connection string from a secret prints the rows it answers',
+    script: `psql "$DATABASE_URL" -c 'select id from orders'`,
+    env: { DATABASE_URL: '${{ secrets.DATABASE_URL }}' },
+    finds: { unresolved: /psql "\$DATABASE_URL" .*\(a client that prints what a server answers/ },
+  },
 ];
 
 /** A workflow, and the repository files it reads, at one moment. */
@@ -3975,6 +4050,46 @@ const REREADS: Reread[] = [
       files: REPORT_FILES,
     },
     opens: /its environment holds \[AUDIT_CONFIG, AUDIT_TOKEN\], read with \[AUDIT_TOKEN\]/,
+  },
+  {
+    id: 'F9',
+    what: 'a module the program imports changes',
+    before: {
+      workflow: reportJob([REPORT_RUN]),
+      files: {
+        'scripts/report.mjs': "import { render } from './render.mjs';\nconsole.log(render());\n",
+        'scripts/render.mjs': "export const render = () => 'report';\n",
+      },
+    },
+    after: {
+      workflow: reportJob([REPORT_RUN]),
+      files: {
+        'scripts/report.mjs': "import { render } from './render.mjs';\nconsole.log(render());\n",
+        'scripts/render.mjs':
+          'export const render = async () => (await fetch(process.env.REPORT_URL)).text();\n',
+      },
+    },
+    opens: /scripts\/render\.mjs changed since it was read/,
+  },
+  {
+    id: 'F10',
+    what: 'a Python module beside the script changes',
+    before: {
+      workflow: reportJob(['        run: python3 scripts/report.py']),
+      files: {
+        'scripts/report.py': 'from helpers import post\npost()\n',
+        'scripts/helpers.py': 'def post():\n    print("report")\n',
+      },
+    },
+    after: {
+      workflow: reportJob(['        run: python3 scripts/report.py']),
+      files: {
+        'scripts/report.py': 'from helpers import post\npost()\n',
+        'scripts/helpers.py':
+          'import os, urllib.request\ndef post():\n    print(urllib.request.urlopen(os.environ["REPORT_URL"]).read())\n',
+      },
+    },
+    opens: /scripts\/helpers\.py changed since it was read/,
   },
   {
     id: 'F8',
