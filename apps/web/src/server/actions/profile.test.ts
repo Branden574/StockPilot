@@ -60,7 +60,7 @@ vi.mock('@/lib/auth/session', () => ({
     if (authState.signedOut) throw redirectError('/signin');
     return {
       userId: 'user-1',
-      email: 'u@e.com',
+      email: 'u@example.test',
       fullName: null,
       avatarUrl: null,
       defaultOrganizationId: authState.orgLess ? null : 'org-1',
@@ -71,7 +71,7 @@ vi.mock('@/lib/auth/session', () => ({
     if (authState.orgLess) throw redirectError('/onboarding');
     return {
       userId: 'user-1',
-      email: 'u@e.com',
+      email: 'u@example.test',
       fullName: null,
       avatarUrl: null,
       defaultOrganizationId: 'org-1',
@@ -153,7 +153,7 @@ const {
     cookieSignOut: vi.fn(async (_opts?: { scope?: string }) => ({ error: null as unknown })),
     /** O-A3-7 (0393): the VERIFIED auth email and the allowlist check. */
     platformAdmin: {
-      getVerifiedEmail: vi.fn(async (): Promise<string | null> => 'u@e.com'),
+      getVerifiedEmail: vi.fn(async (): Promise<string | null> => 'u@example.test'),
       isPlatformAdmin: vi.fn((_email: string | null | undefined) => false),
     },
     /** O-A3-9 (0393): user-avatars/<uid>/ is emptied after the delete. */
@@ -279,7 +279,7 @@ beforeEach(() => {
   checkRateLimitMock.mockImplementation(async () => ({ allowed: true, count: 1, resetAt: 0 }));
   insertAuditRowReportedMock.mockImplementation(async () => true);
   revokeAllSessionsForUserMock.mockImplementation(async () => ({ ok: true, sessionIds: [] }));
-  platformAdmin.getVerifiedEmail.mockImplementation(async () => 'u@e.com');
+  platformAdmin.getVerifiedEmail.mockImplementation(async () => 'u@example.test');
   platformAdmin.isPlatformAdmin.mockImplementation(() => false);
   avatarStorage.list.mockImplementation(async () => ({ data: [], error: null }));
   avatarStorage.remove.mockImplementation(async () => ({ data: [], error: null }));
@@ -639,7 +639,7 @@ describe('deleteOwnAccountAction', () => {
       );
       expect((result.error.details as { reason?: string } | undefined)?.reason).toBe('platform_admin');
     }
-    // Never the profile email the person can edit (session.email 'u@e.com').
+    // Never the profile email the person can edit (session.email 'u@example.test').
     expect(platformAdmin.isPlatformAdmin).toHaveBeenCalledWith('ops@stockpilotusa.com');
     expect(stubHolder.stub!.fromCalls).not.toContain('organization_members');
     expect(checkRateLimitMock).not.toHaveBeenCalled();

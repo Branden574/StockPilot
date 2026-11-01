@@ -102,12 +102,12 @@ describe('the body Submit sends (core’s create body, as the web builds it)', (
 
   it('a delivery on behalf: the site, the trimmed name and email; core’s schema reads it', () => {
     const body = buildOrderCreateBody({
-      cart: base({ fulfillmentType: 'delivery', charterId: SITE, onBehalfOf: { name: ' Maria ', email: ' maria@example.org ' } }),
+      cart: base({ fulfillmentType: 'delivery', charterId: SITE, onBehalfOf: { name: ' Pixie ', email: ' pixie@example.org ' } }),
       userId: USER,
       key: KEY,
       kits: [],
     });
-    expect(body).toMatchObject({ deliveryCharterId: SITE, onBehalfOf: { name: 'Maria', email: 'maria@example.org' } });
+    expect(body).toMatchObject({ deliveryCharterId: SITE, onBehalfOf: { name: 'Pixie', email: 'pixie@example.org' } });
     expect(parseOrderCreateRequest(body).ok).toBe(true);
   });
 
