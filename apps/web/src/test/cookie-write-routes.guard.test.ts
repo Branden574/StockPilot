@@ -150,6 +150,13 @@ const EXEMPT: Record<string, Exemption> = {
     reason:
       'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, before verifyOtp. Its GET reads the session only to say which account the browser is already signed in as.',
   },
+  'ingest/[...path]/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    session: 'none',
+    reason:
+      "PostHog's first-party proxy (docket S34): the browser SDK posts analytics events here and the route passes them to PostHog with no cookie and no member credential. It reads no session and writes nothing of ours, so a cross-site post can do nothing a direct request to PostHog cannot.",
+  },
   'r/confirm/submit/route.ts': {
     methods: ['POST'],
     auth: 'public token',
