@@ -52,17 +52,26 @@
 -- app's only caller (the phone's Release, through CycleCountsService.release)
 -- asks an accepted, enabled membership of the caller's active organization
 -- with the cycle_counts module and stock:adjust, and the phone offers Release
--- only on a count with an assignee, to that assignee or a manager. Two edge
--- cases now get the refusal the app already words as "Only the assigned
--- employee or a manager can release this count.": an assignee who taps
--- Release after a manager already released the count (a silent success
--- before, with a "released" audit row for a no-op; the same person already
--- gets that sentence when the manager reassigned it instead), and a member
--- removed from an organization who still belongs to another, acting from a
--- page left open. The release steps count, read-only, before the push:
--- in-progress counts with no assignee, counts assigned to someone who is no
--- longer an accepted member, and assignees without stock:adjust. No row
--- changes whatever those numbers are.
+-- only on a count with an assignee, to that assignee or a manager. Three
+-- edge cases now get the refusal the app already words as "Only the assigned
+-- employee or a manager can release this count.":
+--   - An assignee who taps Release after a manager already released the
+--     count: a silent success before, with a "released" audit row for a
+--     no-op; the same person already gets that sentence when the manager
+--     reassigned it instead.
+--   - An assignee who is not a manager and taps Release count again after
+--     their own release went through but its answer was lost (the phone
+--     stops waiting after 20 seconds, or the connection drops): before, the
+--     second call released the count again as a no-op, wrote a second
+--     "released" audit row and closed the sheet; now the sheet stays open
+--     with that sentence, although the count is released. A manager's
+--     second call goes through as before.
+--   - A member removed from an organization who still belongs to another,
+--     acting from a page left open.
+-- The release steps count, read-only, before the push: in-progress counts
+-- with no assignee, counts assigned to someone who is no longer an accepted
+-- member, and assignees without stock:adjust. No row changes whatever those
+-- numbers are.
 --
 -- LOCKS. No table lock is held to commit, and a call already running
 -- finishes on the body it started with. One table lock is taken briefly:

@@ -4,8 +4,8 @@
 -- refuses everyone but a manager of the count's organization on a count with
 -- no assignee, and refuses the assignee once they may no longer count in the
 -- count's organization (has_permission stock:adjust). Written to fail against
--- the head before it (0414 when it was written) in R1, P2, A3-A7, U1, U3, M1
--- and M2; every other line passes there too.
+-- the head before it (0414 when it was written) in R1, P2, A3-A7, U1, U3, U4,
+-- M1 and M2; every other line passes there too.
 --
 -- The function's old check, `not (assigned_to = auth.uid() or manager)`, is
 -- NULL for a count with no assignee, and an IF treats NULL as false, so it
@@ -16,7 +16,8 @@
 -- Personas (organization A unless named):
 --   asg       staff assigned to warehouse A, the assignee of cAsg
 --   mgr       manager
---   mgrNoAdj  manager, stock:adjust revoked (a user override)
+--   mgrNoAdj  manager, stock:adjust revoked (a user override), the assignee
+--             of cMgr
 --   rmv       staff, the assignee of cRmv (and of the completed cDone), then
 --             removed as TeamService.removeMember removes a member (the
 --             membership row, then their warehouse assignments); still staff
@@ -27,6 +28,8 @@
 --   exp       a platform admin's "act as" seat (an owner row) whose
 --             impersonation_expires_at has passed, the assignee of cExp
 --   vwr       viewer, the assignee of cVwr
+--   vwrAdj    viewer granted stock:adjust (a user override, as an admin may
+--             grant it), the assignee of cVwrAdj
 --   noAdj     staff, stock:adjust revoked, the assignee of cNoAdj
 --   stf       staff assigned to warehouse A, assignee of nothing
 --   outZ      a manager of organization Z
@@ -34,7 +37,8 @@
 -- S2's callers: rmvMgr (a manager removed from organization A, still staff
 -- of Z) and disMgr (a manager whose account was disabled).
 -- Counts of organization A, in progress: cUn (no assignee, a private note),
--- cAsg, cRmv, cDis, cExp, cVwr, cNoAdj; cDone is completed, assigned to rmv.
+-- cAsg, cRmv, cDis, cExp, cVwr, cNoAdj, cMgr, cVwrAdj; cDone is completed,
+-- assigned to rmv.
 --
 -- F.  The fixture is what the matrices assume: each persona's membership,
 --     stock:adjust and manager rank in organization A (F1), each count's
@@ -50,10 +54,17 @@
 --     the removed member, the disabled account, the expired seat, the viewer
 --     and the revoked member are refused their own count; a non-assignee who
 --     is not a manager is refused as before; the reason, not-found and
---     closed-count refusals come first, as before.
+--     closed-count refusals come first, as before. A manager without
+--     stock:adjust releases a count assigned to themself (the assignee
+--     check's manager clause), and a viewer granted stock:adjust releases
+--     their own count: the assignee's rule is the permission the app asks
+--     before a release, not a rank, so the database refuses no one the app
+--     lets through.
 -- U.  A count with no assignee: only a manager releases it; everyone else
 --     is refused, the assignee whose count a manager just released (a stale
---     screen) included.
+--     screen) included, and so is an assignee who sends their own release
+--     again after it went through (the phone's retry when the first answer
+--     was lost).
 -- S.  The twin (release_picking, 0240) and the family (assign_cycle_count,
 --     force_reassign_cycle_count) refuse the same callers, each beside a
 --     manager it allows.
@@ -75,7 +86,7 @@
 
 begin;
 
-select plan(21);
+select plan(24);
 
 \set orgA     '\'54200000-0000-0000-0000-00000000000a\''
 \set orgZ     '\'54200000-0000-0000-0000-00000000000b\''
@@ -90,6 +101,7 @@ select plan(21);
 \set stf      '\'54200000-0000-0000-0000-0000000000a9\''
 \set rmvMgr   '\'54200000-0000-0000-0000-0000000000aa\''
 \set disMgr   '\'54200000-0000-0000-0000-0000000000ab\''
+\set vwrAdj   '\'54200000-0000-0000-0000-0000000000ac\''
 \set outZ     '\'54200000-0000-0000-0000-0000000000b1\''
 \set nobody   '\'54200000-0000-0000-0000-0000000000c1\''
 \set whA      '\'54200000-0000-0000-0000-0000000000d1\''
@@ -102,6 +114,8 @@ select plan(21);
 \set cVwr     '\'54200000-0000-0000-0000-000000000106\''
 \set cNoAdj   '\'54200000-0000-0000-0000-000000000107\''
 \set cDone    '\'54200000-0000-0000-0000-000000000108\''
+\set cMgr     '\'54200000-0000-0000-0000-000000000109\''
+\set cVwrAdj  '\'54200000-0000-0000-0000-00000000010a\''
 \set cNone    '\'54200000-0000-0000-0000-0000000001ff\''
 \set oRmv     '\'54200000-0000-0000-0000-000000000201\''
 \set oDis     '\'54200000-0000-0000-0000-000000000202\''
@@ -120,6 +134,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:stf,      's42-stf@s42.test',      '{}'::jsonb),
   (:rmvMgr,   's42-rmvmgr@s42.test',   '{}'::jsonb),
   (:disMgr,   's42-dismgr@s42.test',   '{}'::jsonb),
+  (:vwrAdj,   's42-vwradj@s42.test',   '{}'::jsonb),
   (:outZ,     's42-outz@s42.test',     '{}'::jsonb),
   (:nobody,   's42-nobody@s42.test',   '{}'::jsonb)
   on conflict (id) do nothing;
@@ -143,6 +158,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :stf,      'staff',   now(), null),
   (:orgA, :rmvMgr,   'manager', now(), null),
   (:orgA, :disMgr,   'manager', now(), null),
+  (:orgA, :vwrAdj,   'viewer',  now(), null),
   (:orgZ, :rmv,      'staff',   now(), null),
   (:orgZ, :rmvMgr,   'staff',   now(), null),
   (:orgZ, :outZ,     'manager', now(), null);
@@ -150,15 +166,17 @@ insert into public.warehouses (id, organization_id, name, code, status) values
   (:whA, :orgA, 'S42 Main', 'WH-S42A', 'active'),
   (:whZ, :orgZ, 'S42 Zed',  'WH-S42Z', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
-  (:orgA, :asg,   :whA, true),
-  (:orgA, :rmv,   :whA, true),
-  (:orgA, :dis,   :whA, true),
-  (:orgA, :vwr,   :whA, true),
-  (:orgA, :noAdj, :whA, true),
-  (:orgA, :stf,   :whA, true);
+  (:orgA, :asg,    :whA, true),
+  (:orgA, :rmv,    :whA, true),
+  (:orgA, :dis,    :whA, true),
+  (:orgA, :vwr,    :whA, true),
+  (:orgA, :noAdj,  :whA, true),
+  (:orgA, :stf,    :whA, true),
+  (:orgA, :vwrAdj, :whA, true);
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
   (:orgA, :mgrNoAdj, 'stock:adjust', false),
-  (:orgA, :noAdj,    'stock:adjust', false);
+  (:orgA, :noAdj,    'stock:adjust', false),
+  (:orgA, :vwrAdj,   'stock:adjust', true);
 
 -- The counts, inserted by the superuser (the status guard holds API roles
 -- only; the assignment notice fires on UPDATE only). Each assigned count was
@@ -168,14 +186,16 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
 insert into public.cycle_counts
   (id, organization_id, warehouse_id, status, started_by, notes, assigned_to, assignment_claimed_at,
    assignment_claimed_by, assignment_version, completed_at, completed_by) values
-  (:cUn,    :orgA, :whA, 'in_progress', :mgr, 'S42 private note', null,    null,  null, 2, null,  null),
-  (:cAsg,   :orgA, :whA, 'in_progress', :mgr, null,               :asg,    now(), :mgr, 1, null,  null),
-  (:cRmv,   :orgA, :whA, 'in_progress', :mgr, null,               :rmv,    now(), :mgr, 1, null,  null),
-  (:cDis,   :orgA, :whA, 'in_progress', :mgr, null,               :dis,    now(), :mgr, 1, null,  null),
-  (:cExp,   :orgA, :whA, 'in_progress', :mgr, null,               :exp,    now(), :mgr, 1, null,  null),
-  (:cVwr,   :orgA, :whA, 'in_progress', :mgr, null,               :vwr,    now(), :mgr, 1, null,  null),
-  (:cNoAdj, :orgA, :whA, 'in_progress', :mgr, null,               :noAdj,  now(), :mgr, 1, null,  null),
-  (:cDone,  :orgA, :whA, 'completed',   :mgr, null,               :rmv,    now(), :mgr, 1, now(), :mgr);
+  (:cUn,     :orgA, :whA, 'in_progress', :mgr, 'S42 private note', null,      null,  null, 2, null,  null),
+  (:cAsg,    :orgA, :whA, 'in_progress', :mgr, null,               :asg,      now(), :mgr, 1, null,  null),
+  (:cRmv,    :orgA, :whA, 'in_progress', :mgr, null,               :rmv,      now(), :mgr, 1, null,  null),
+  (:cDis,    :orgA, :whA, 'in_progress', :mgr, null,               :dis,      now(), :mgr, 1, null,  null),
+  (:cExp,    :orgA, :whA, 'in_progress', :mgr, null,               :exp,      now(), :mgr, 1, null,  null),
+  (:cVwr,    :orgA, :whA, 'in_progress', :mgr, null,               :vwr,      now(), :mgr, 1, null,  null),
+  (:cNoAdj,  :orgA, :whA, 'in_progress', :mgr, null,               :noAdj,    now(), :mgr, 1, null,  null),
+  (:cMgr,    :orgA, :whA, 'in_progress', :mgr, null,               :mgrNoAdj, now(), :mgr, 1, null,  null),
+  (:cVwrAdj, :orgA, :whA, 'in_progress', :mgr, null,               :vwrAdj,   now(), :mgr, 1, null,  null),
+  (:cDone,   :orgA, :whA, 'completed',   :mgr, null,               :rmv,      now(), :mgr, 1, now(), :mgr);
 
 -- S1's orders (release_picking, the twin): rmv and dis are each the picker
 -- of one; oNone has no picker.
@@ -240,7 +260,7 @@ create temp table persona (who text primary key, id uuid);
 insert into persona (who, id) values
   ('asg', :asg), ('mgr', :mgr), ('mgrNoAdj', :mgrNoAdj), ('rmv', :rmv), ('dis', :dis), ('exp', :exp),
   ('vwr', :vwr), ('noAdj', :noAdj), ('stf', :stf), ('rmvMgr', :rmvMgr), ('disMgr', :disMgr),
-  ('outZ', :outZ), ('nobody', :nobody);
+  ('vwrAdj', :vwrAdj), ('outZ', :outZ), ('nobody', :nobody);
 -- The same statement for each named persona, in the order given, each call
 -- undone: 'who=<attempt>, who=<attempt>, ...'.
 create function pg_temp.each(p_who text[], p_sql text, p_check text default null)
@@ -288,6 +308,44 @@ create function pg_temp.assignment(p_count uuid) returns text language sql stabl
          || '/' || c.assignment_version::text
     from public.cycle_counts c where c.id = p_count
 $$;
+-- A release by p_who, then the very same call again, as the phone sends it
+-- when the first answer was lost (it gives up waiting, or the connection
+-- drops, after the release went through), both as p_who inside one
+-- subtransaction that is always undone: 'first=<outcome>, again=<outcome>,
+-- after=<assignment>', each outcome 'ok' or '<sqlstate>:<hint or ->:<message>'.
+-- Each call is its own inner block, so a refused second call keeps the first.
+create function pg_temp.again(p_who text, p_count uuid) returns text language plpgsql as $$
+declare v_sub text := (select p.id::text from persona p where p.who = p_who);
+        v_out text[] := '{}'; v_after text; v_state text; v_msg text; v_hint text; i int;
+begin
+  begin
+    perform set_config('request.jwt.claim.sub', v_sub, true);
+    perform set_config('request.jwt.claim.role', 'authenticated', true);
+    perform set_config('role', 'authenticated', true);
+    for i in 1 .. 2 loop
+      begin
+        perform public.release_cycle_count(p_count, 'Shift ending');
+        v_out := v_out || 'ok'::text;
+      exception when others then
+        get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
+        v_out := v_out || (v_state || ':'
+                           || case when v_hint is null or v_hint = ''
+                                     or v_hint like 'Grant the required privileges to the current role with:%'
+                                   then '-' else v_hint end
+                           || ':' || v_msg);
+      end;
+    end loop;
+    perform set_config('role', 'none', true);
+    v_after := pg_temp.assignment(p_count);
+    raise exception using errcode = 'XXS42', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+    if v_state <> 'XXS42' then
+      return v_state || ':' || v_msg;
+    end if;
+  end;
+  return 'first=' || v_out[1] || ', again=' || v_out[2] || ', after=' || v_after;
+end $$;
 
 -- ══ F. The fixture is what the matrices assume ═══════════════════════════
 -- is_org_member / has_permission(stock:adjust) / has_org_role(manager) in
@@ -304,21 +362,22 @@ begin
 end $$;
 select is(
   (select string_agg(pg_temp.gates(u.w), ' ' order by u.o)
-     from unnest(array['asg', 'mgr', 'mgrNoAdj', 'rmv', 'dis', 'exp', 'vwr', 'noAdj', 'stf', 'outZ', 'nobody',
-                       'rmvMgr', 'disMgr']) with ordinality u(w, o)),
+     from unnest(array['asg', 'mgr', 'mgrNoAdj', 'rmv', 'dis', 'exp', 'vwr', 'vwrAdj', 'noAdj', 'stf', 'outZ',
+                       'nobody', 'rmvMgr', 'disMgr']) with ordinality u(w, o)),
   'asg=true/true/false mgr=true/true/true mgrNoAdj=true/false/true rmv=false/false/false dis=false/false/false '
-  'exp=false/false/false vwr=true/false/false noAdj=true/false/false stf=true/true/false outZ=false/false/false '
-  'nobody=false/false/false rmvMgr=false/false/false disMgr=false/false/false',
-  'F1: membership / stock:adjust / manager in organization A: the assignee and plain staff are members holding stock:adjust (the role default); the managers are managers, one without stock:adjust; the viewer and the revoked member are members without it; the removed member, the disabled account, the expired seat, the removed and the disabled manager, the other organization''s manager and the member of no organization are none of the three');
+  'exp=false/false/false vwr=true/false/false vwrAdj=true/true/false noAdj=true/false/false stf=true/true/false '
+  'outZ=false/false/false nobody=false/false/false rmvMgr=false/false/false disMgr=false/false/false',
+  'F1: membership / stock:adjust / manager in organization A: the assignee and plain staff are members holding stock:adjust (the role default); the managers are managers, one without stock:adjust; the viewer and the revoked member are members without it, and the viewer granted it holds it; the removed member, the disabled account, the expired seat, the removed and the disabled manager, the other organization''s manager and the member of no organization are none of the three');
 select is(
   (select string_agg(k.label || '=' || c.status || '/' || coalesce(p.who, '-'), ', ' order by k.o)
      from (values (1, 'cUn', :cUn::uuid), (2, 'cAsg', :cAsg::uuid), (3, 'cRmv', :cRmv::uuid), (4, 'cDis', :cDis::uuid),
                   (5, 'cExp', :cExp::uuid), (6, 'cVwr', :cVwr::uuid), (7, 'cNoAdj', :cNoAdj::uuid),
-                  (8, 'cDone', :cDone::uuid)) k(o, label, id)
+                  (8, 'cDone', :cDone::uuid), (9, 'cMgr', :cMgr::uuid), (10, 'cVwrAdj', :cVwrAdj::uuid)) k(o, label, id)
      join public.cycle_counts c on c.id = k.id
      left join persona p on p.id = c.assigned_to),
   'cUn=in_progress/-, cAsg=in_progress/asg, cRmv=in_progress/rmv, cDis=in_progress/dis, cExp=in_progress/exp, '
-  'cVwr=in_progress/vwr, cNoAdj=in_progress/noAdj, cDone=completed/rmv',
+  'cVwr=in_progress/vwr, cNoAdj=in_progress/noAdj, cDone=completed/rmv, cMgr=in_progress/mgrNoAdj, '
+  'cVwrAdj=in_progress/vwrAdj',
   'F2: each count''s status and assignee: cUn has none; the removal and the disable left rmv''s and dis''s counts assigned to them');
 select is(
   pg_temp.each(array['asg', 'stf', 'vwr', 'noAdj', 'rmv', 'dis', 'exp', 'outZ', 'nobody'],
@@ -438,6 +497,16 @@ select is(
   'P0001:-:release_reason_required / P0002:-:cycle_count_not_found / '
   'rmv=P0001:-:invalid_status_transition, nobody=P0001:-:invalid_status_transition',
   'A10: the refusals ahead of the new checks come first, as before: a blank reason (P0001 release_reason_required), an unknown id (P0002 cycle_count_not_found), and a closed count (P0001 invalid_status_transition), for the removed assignee and for a member of no organization alike');
+select is(
+  pg_temp.attempt('authenticated', :mgrNoAdj, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cMgr), null,
+                  format('select pg_temp.assignment(%L)', :cMgr)),
+  'ok:1:-/-/-/2',
+  'A11: a manager without stock:adjust releases a count assigned to themself, as before: the assignee check lets a manager through (its last clause); without that clause it would refuse a manager the old check allows');
+select is(
+  pg_temp.attempt('authenticated', :vwrAdj, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cVwrAdj), null,
+                  format('select pg_temp.assignment(%L)', :cVwrAdj)),
+  'ok:1:-/-/-/2',
+  'A12: a viewer granted stock:adjust releases their own count: the assignee''s rule is has_permission stock:adjust, the permission the app asks before a release, not a rank (a rule that also asked for staff rank would refuse someone the app lets through)');
 
 -- ══ U. A count with no assignee ═══════════════════════════════════════════
 select is(
@@ -455,6 +524,10 @@ select is(
   pg_temp.attempt('authenticated', :asg, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cUn)),
   '42501:-:forbidden',
   'U3: the assignee of other counts, on a count no one is assigned to (a stale screen after a manager released it), is refused (42501 forbidden: the app says "Only the assigned employee or a manager can release this count."). Before S42 the call succeeded as a no-op');
+select is(
+  pg_temp.again('asg', :cAsg),
+  'first=ok, again=42501:-:forbidden, after=-/-/-/2',
+  'U4: the assignee releases their own count, then sends the same release again (the phone''s retry when the first answer was lost): the first call releases it; the second finds no assignee and is refused (42501 forbidden: the app says "Only the assigned employee or a manager can release this count.", although the release went through). Before S42 the second call succeeded as a no-op and moved assignment_version again (after=-/-/-/3)');
 
 -- ══ S. The twin and the family ════════════════════════════════════════════
 select is(
