@@ -440,9 +440,23 @@ function WarehouseDialog({
       notes: values.notes || undefined,
       status: 'active' as const,
     };
-    const res = editing
-      ? await updateWarehouseAction(editing.id, payload)
-      : await createWarehouseAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateWarehouseAction>>
+      | Awaited<ReturnType<typeof createWarehouseAction>>;
+    try {
+      res = editing
+        ? await updateWarehouseAction(editing.id, payload)
+        : await createWarehouseAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Sent again after it went
+      // through, a create is refused by the code's unique rule ("A warehouse
+      // with code ... already exists.").
+      const term = termSingular.toLowerCase();
+      toast.error(requestFailedMessage(e, editing ? `save the ${term}` : `create the ${term}`));
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

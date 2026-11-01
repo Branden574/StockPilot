@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { useHydrated } from '@/lib/use-hydrated';
 import { createApiKeyAction, revokeApiKeyAction } from '@/server/actions/api-keys';
 
@@ -59,8 +61,18 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
       return;
     }
     setBusy(true);
-    const res = await createApiKeyAction({ name: name.trim(), scopes: [...selected] });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createApiKeyAction>>;
+    try {
+      res = await createApiKeyAction({ name: name.trim(), scopes: [...selected] });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // A key created before the answer was lost is a second key if sent again.
+      toast.error(requestUnconfirmedMessage(e, 'the key was created', 'the API keys list'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) return toast.error(res.error.message);
     setNewKey(res.data.key);
     setName('');
@@ -72,7 +84,15 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
   async function revoke(id: string) {
     if (!window.confirm('Revoke this key? Any integration using it will immediately stop working.'))
       return;
-    const res = await revokeApiKeyAction(id);
+    let res: Awaited<ReturnType<typeof revokeApiKeyAction>>;
+    try {
+      res = await revokeApiKeyAction(id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'revoke the key'));
+      return;
+    }
     if (!res.ok) return toast.error(res.error.message);
     toast.success('Key revoked.');
     router.refresh();

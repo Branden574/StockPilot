@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { uploadWithProgress } from '@/lib/upload-with-progress';
@@ -230,6 +231,8 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
   const [pending, setPending] = React.useState<PendingUpload[]>([]);
   const [deleteTarget, setDeleteTarget] = React.useState<UploadedVideo | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last Remove failed, inside the confirm. Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
@@ -354,18 +357,28 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
+    setDeleteError(null);
     try {
       const res = await deleteProcedureVideoAction(deleteTarget.id);
       if (!res.ok) {
+        setDeleteError(res.error.message);
         toast.error(res.error.message);
         return;
       }
       setVideos((arr) => arr.filter((v) => v.id !== deleteTarget.id));
+      // Closed only once it worked: a failure keeps the confirm open, with
+      // the reason inside it.
+      setDeleteTarget(null);
       toast.success('Video removed.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'remove the video');
+      setDeleteError(message);
+      toast.error(message);
     } finally {
       setDeleteBusy(false);
-      setDeleteTarget(null);
     }
   }
 
@@ -386,7 +399,10 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
                   variant="ghost"
                   size="sm"
                   className="w-7 px-0"
-                  onClick={() => setDeleteTarget(v)}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleteTarget(v);
+                  }}
                   aria-label={`Delete ${v.title ?? 'video'}`}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -443,6 +459,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
         description="The video file is deleted from storage and the procedure no longer shows it. This cannot be undone."
         confirmLabel="Remove"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </div>

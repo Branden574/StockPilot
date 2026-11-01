@@ -61,6 +61,8 @@ import {
   transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { formatRelative } from '@/lib/utils';
 
 import {
@@ -284,6 +286,9 @@ function MemberRow({
   const [warehouseAccessOpen, setWarehouseAccessOpen] = React.useState(false);
   const [resetOpen, setResetOpen] = React.useState(false);
   const [resetBusy, setResetBusy] = React.useState(false);
+  // Why the last Remove or Send reset failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -324,7 +329,15 @@ function MemberRow({
     : (assignedWarehouseName ?? '—');
 
   async function changeRole(role: Role) {
-    const res = await updateMemberRoleAction({ memberId: member.id, role });
+    let res: Awaited<ReturnType<typeof updateMemberRoleAction>>;
+    try {
+      res = await updateMemberRoleAction({ memberId: member.id, role });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'change the role'));
+      return;
+    }
     if (!res.ok) toast.error(res.error.message);
     else {
       toast.success('Role updated.');
@@ -334,7 +347,20 @@ function MemberRow({
 
   async function toggleDriver() {
     const next = !member.isDriver;
-    const res = await setMemberDriverAction({ memberId: member.id, isDriver: next });
+    let res: Awaited<ReturnType<typeof setMemberDriverAction>>;
+    try {
+      res = await setMemberDriverAction({ memberId: member.id, isDriver: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestFailedMessage(
+          e,
+          next ? 'mark them as a delivery driver' : 'take them off the delivery drivers',
+        ),
+      );
+      return;
+    }
     if (!res.ok) toast.error(res.error.message);
     else {
       toast.success(
@@ -348,9 +374,22 @@ function MemberRow({
 
   async function confirmRemove() {
     setRemoveBusy(true);
-    const res = await removeMemberAction(member.id);
-    setRemoveBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof removeMemberAction>>;
+    try {
+      res = await removeMemberAction(member.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'remove the member');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRemoveBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -361,9 +400,22 @@ function MemberRow({
 
   async function confirmSendReset() {
     setResetBusy(true);
-    const res = await sendMemberPasswordResetAction(member.userId);
-    setResetBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof sendMemberPasswordResetAction>>;
+    try {
+      res = await sendMemberPasswordResetAction(member.userId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'send the reset link');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setResetBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -381,11 +433,22 @@ function MemberRow({
       return;
     }
     setTransferBusy(true);
-    const res = await transferOwnershipAction({
-      targetMemberId: member.id,
-      password: transferPassword,
-    });
-    setTransferBusy(false);
+    let res: Awaited<ReturnType<typeof transferOwnershipAction>>;
+    try {
+      res = await transferOwnershipAction({
+        targetMemberId: member.id,
+        password: transferPassword,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again after it went through, the transfer is refused: this
+      // account is no longer the owner.
+      toast.error(requestFailedMessage(e, 'transfer ownership'));
+      return;
+    } finally {
+      setTransferBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -502,7 +565,12 @@ function MemberRow({
               {/* Only accepted members have an account to recover — pending
                   invitees get "Resend invite" in the invites table instead. */}
               {member.acceptedAt !== null && (
-                <DropdownMenuItem onClick={() => setResetOpen(true)}>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setConfirmError(null);
+                    setResetOpen(true);
+                  }}
+                >
                   Send password reset…
                 </DropdownMenuItem>
               )}
@@ -511,7 +579,13 @@ function MemberRow({
                   Transfer ownership…
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => setRemoveOpen(true)} className="text-destructive">
+              <DropdownMenuItem
+                onClick={() => {
+                  setConfirmError(null);
+                  setRemoveOpen(true);
+                }}
+                className="text-destructive"
+              >
                 <Trash2 className="mr-2 h-4 w-4" /> Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -524,6 +598,7 @@ function MemberRow({
           description={`${displayName} will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them anytime.`}
           confirmLabel="Remove"
           pending={removeBusy}
+          error={confirmError}
           onConfirm={confirmRemove}
         />
         <DestructiveConfirm
@@ -534,6 +609,7 @@ function MemberRow({
           description={`Email ${displayName} (${member.email}) a password-reset link? The link works once and expires in 1 hour.`}
           confirmLabel="Send reset link"
           pending={resetBusy}
+          error={confirmError}
           onConfirm={confirmSendReset}
         />
         {warehouseAccessOpen && (
@@ -661,6 +737,8 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
   const [resending, setResending] = React.useState(false);
   const [revokeOpen, setRevokeOpen] = React.useState(false);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
+  // Why the last Revoke failed, inside the confirm. Cleared on open and on each try.
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
 
   async function copyLink() {
     await navigator.clipboard.writeText(invite.acceptUrl);
@@ -669,8 +747,17 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
 
   async function resend() {
     setResending(true);
-    const res = await resendInviteAction(invite.id);
-    setResending(false);
+    let res: Awaited<ReturnType<typeof resendInviteAction>>;
+    try {
+      res = await resendInviteAction(invite.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'resend the invite'));
+      return;
+    } finally {
+      setResending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -683,9 +770,22 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
 
   async function confirmRevoke() {
     setRevokeBusy(true);
-    const res = await revokeInviteAction(invite.id);
-    setRevokeBusy(false);
+    setRevokeError(null);
+    let res: Awaited<ReturnType<typeof revokeInviteAction>>;
+    try {
+      res = await revokeInviteAction(invite.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'revoke the invite');
+      setRevokeError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRevokeBusy(false);
+    }
     if (!res.ok) {
+      setRevokeError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -727,7 +827,10 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
             variant="ghost"
             size="icon"
             className="text-muted-foreground"
-            onClick={() => setRevokeOpen(true)}
+            onClick={() => {
+              setRevokeError(null);
+              setRevokeOpen(true);
+            }}
             aria-label={`Revoke invite for ${invite.email}`}
           >
             <Trash2 className="h-4 w-4" />
@@ -740,6 +843,7 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
           description={`The pending invite for ${invite.email} will be cancelled. The accept link will stop working immediately. You can send a fresh invite anytime.`}
           confirmLabel="Revoke invite"
           pending={revokeBusy}
+          error={revokeError}
           onConfirm={confirmRevoke}
         />
       </TableCell>
@@ -863,8 +967,17 @@ function MemberChartersDialog({
 
   async function save() {
     setBusy(true);
-    const res = await setMemberChartersAction({ userId, warehouseId, charterIds: selected });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof setMemberChartersAction>>;
+    try {
+      res = await setMemberChartersAction({ userId, warehouseId, charterIds: selected });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, `save the ${charterSingular.toLowerCase()} access`));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -962,12 +1075,21 @@ function MemberWarehouseAccessDialog({
       return;
     }
     setBusy(true);
-    const res = await setMemberWarehouseAccessAction({
-      userId,
-      allWarehouses: mode === 'all',
-      warehouseId: mode === 'one' ? warehouseId : null,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof setMemberWarehouseAccessAction>>;
+    try {
+      res = await setMemberWarehouseAccessAction({
+        userId,
+        allWarehouses: mode === 'all',
+        warehouseId: mode === 'one' ? warehouseId : null,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, `save the ${warehouseSingular.toLowerCase()} access`));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -1160,16 +1282,27 @@ function InviteDialog({
       );
       return;
     }
-    const res = await inviteMemberAction({
-      email: values.email,
-      role: values.role,
-      // All-warehouse invites carry no charter scoping (charters are
-      // warehouse-scoped) — the checklist is already cleared in the UI.
-      charterIds: submitAll ? [] : values.charterIds,
-      warehouseId: submitAll ? null : values.warehouseId || null,
-      allWarehouses: submitAll,
-      message: values.message || undefined,
-    });
+    let res: Awaited<ReturnType<typeof inviteMemberAction>>;
+    try {
+      res = await inviteMemberAction({
+        email: values.email,
+        role: values.role,
+        // All-warehouse invites carry no charter scoping (charters are
+        // warehouse-scoped) — the checklist is already cleared in the UI.
+        charterIds: submitAll ? [] : values.charterIds,
+        warehouseId: submitAll ? null : values.warehouseId || null,
+        allWarehouses: submitAll,
+        message: values.message || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Sent again after it went
+      // through, the invite is refused: "An active invite already exists for
+      // that email."
+      toast.error(requestFailedMessage(e, 'send the invite'));
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

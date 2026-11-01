@@ -12,6 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   createIntegrationEndpointAction,
   deleteIntegrationEndpointAction,
@@ -102,13 +104,23 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
       return;
     }
     setBusy(true);
-    const res = await createIntegrationEndpointAction({
-      type,
-      url: url.trim(),
-      eventTypes: [...selected],
-      description: description.trim() || undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createIntegrationEndpointAction>>;
+    try {
+      res = await createIntegrationEndpointAction({
+        type,
+        url: url.trim(),
+        eventTypes: [...selected],
+        description: description.trim() || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // An endpoint added before the answer was lost is a second one if sent again.
+      toast.error(requestUnconfirmedMessage(e, 'the endpoint was added', 'the endpoints list'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -123,21 +135,47 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
   }
 
   async function test(id: string) {
-    const res = await testIntegrationEndpointAction(id);
+    let res: Awaited<ReturnType<typeof testIntegrationEndpointAction>>;
+    try {
+      res = await testIntegrationEndpointAction(id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'send the test'));
+      return;
+    }
     if (!res.ok) return toast.error(res.error.message);
     if (res.data.ok) toast.success('Test delivered — check the destination.');
     else toast.error(`Test failed: ${res.data.error ?? `HTTP ${res.data.status}`}`);
   }
 
   async function toggleEnabled(ep: PanelEndpoint) {
-    const res = await setIntegrationEndpointEnabledAction(ep.id, !ep.enabled);
+    let res: Awaited<ReturnType<typeof setIntegrationEndpointEnabledAction>>;
+    try {
+      res = await setIntegrationEndpointEnabledAction(ep.id, !ep.enabled);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestFailedMessage(e, ep.enabled ? 'turn the endpoint off' : 'turn the endpoint on'),
+      );
+      return;
+    }
     if (!res.ok) return toast.error(res.error.message);
     router.refresh();
   }
 
   async function remove(id: string) {
     if (!window.confirm('Delete this endpoint? Events will stop being delivered to it.')) return;
-    const res = await deleteIntegrationEndpointAction(id);
+    let res: Awaited<ReturnType<typeof deleteIntegrationEndpointAction>>;
+    try {
+      res = await deleteIntegrationEndpointAction(id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'delete the endpoint'));
+      return;
+    }
     if (!res.ok) return toast.error(res.error.message);
     toast.success('Endpoint deleted.');
     router.refresh();

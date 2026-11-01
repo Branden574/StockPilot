@@ -27,6 +27,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { useHydrated } from '@/lib/use-hydrated';
 import {
   createPublicLinkAction,
@@ -82,8 +84,18 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
   async function setActive(link: PublicLinkRow, active: boolean) {
     setTogglingId(link.id);
     setError(null);
-    const res = await setPublicLinkActiveAction({ id: link.id, active });
-    setTogglingId(null);
+    let res: Awaited<ReturnType<typeof setPublicLinkActiveAction>>;
+    try {
+      res = await setPublicLinkActiveAction({ id: link.id, active });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, active ? 'turn the link on' : 'turn the link off');
+      setError(message);
+      return;
+    } finally {
+      setTogglingId(null);
+    }
     if (!res.ok) {
       setError(res.error.message);
       return;
@@ -95,8 +107,19 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
   async function duplicateLink(link: PublicLinkRow) {
     setDuplicatingId(link.id);
     setError(null);
-    const res = await duplicatePublicLinkAction({ id: link.id });
-    setDuplicatingId(null);
+    let res: Awaited<ReturnType<typeof duplicatePublicLinkAction>>;
+    try {
+      res = await duplicatePublicLinkAction({ id: link.id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // A copy made before the answer was lost is a second copy if sent again.
+      const message = requestUnconfirmedMessage(e, 'the link was copied', 'the links list');
+      setError(message);
+      return;
+    } finally {
+      setDuplicatingId(null);
+    }
     if (!res.ok) {
       setError(res.error.message);
       return;
@@ -114,8 +137,19 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
     }
     setCreating(true);
     setCreateError(null);
-    const res = await createPublicLinkAction({ name });
-    setCreating(false);
+    let res: Awaited<ReturnType<typeof createPublicLinkAction>>;
+    try {
+      res = await createPublicLinkAction({ name });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // A link made before the answer was lost is a second link if sent again.
+      const message = requestUnconfirmedMessage(e, 'the link was created', 'the links list');
+      setCreateError(message);
+      return;
+    } finally {
+      setCreating(false);
+    }
     if (!res.ok) {
       setCreateError(res.error.message);
       return;
@@ -250,9 +284,16 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
                         variant="outline"
                         size="sm"
                         disabled={togglingId === link.id}
-                        onClick={() =>
-                          link.active ? setConfirmDisable(link) : setActive(link, true)
-                        }
+                        onClick={() => {
+                          if (link.active) {
+                            // The confirm shows the list's error inside it:
+                            // an older one (a failed copy, say) must not be there.
+                            setError(null);
+                            setConfirmDisable(link);
+                          } else {
+                            void setActive(link, true);
+                          }
+                        }}
                       >
                         {togglingId === link.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                         {link.active ? 'Disable' : 'Enable'}
@@ -296,6 +337,7 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
         description="The public page for this link stops accepting visits and submissions immediately. The URL is kept — you can re-enable the link at any time."
         confirmLabel="Disable link"
         pending={togglingId === confirmDisable?.id}
+        error={error}
         onConfirm={() => {
           if (confirmDisable) void setActive(confirmDisable, false);
         }}

@@ -40,7 +40,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveLocationAction,
   createLocationAction,
@@ -460,9 +460,25 @@ function LocationDialog({
         'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
       notes: values.notes || undefined,
     };
-    const res = editing
-      ? await updateLocationAction(editing.id, payload)
-      : await createLocationAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateLocationAction>>
+      | Awaited<ReturnType<typeof createLocationAction>>;
+    try {
+      res = editing
+        ? await updateLocationAction(editing.id, payload)
+        : await createLocationAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. A create that may have
+      // landed says to look first.
+      toast.error(
+        editing
+          ? requestFailedMessage(e, 'save the location')
+          : requestUnconfirmedMessage(e, 'the location was created', 'the locations list'),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

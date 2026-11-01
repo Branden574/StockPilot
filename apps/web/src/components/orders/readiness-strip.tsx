@@ -9,7 +9,9 @@ import { describeHoldResult, holdLeftShort, HOLD_AVAILABLE_STOCK_LABEL } from '@
 
 import { Button } from '@/components/ui/button';
 import { IntentLink } from '@/components/ui/intent-link';
+import { isControlFlow } from '@/lib/control-flow';
 import type { NeededByChangeView } from '@/lib/orders/needed-by-change';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
@@ -85,8 +87,20 @@ export function ReadinessStrip({
   async function holdAvailableStock() {
     if (!holdOrderId) return;
     setHolding(true);
-    const res = await holdOrderStockAction({ id: holdOrderId });
-    setHolding(false);
+    let res: Awaited<ReturnType<typeof holdOrderStockAction>>;
+    try {
+      res = await holdOrderStockAction({ id: holdOrderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, the hold only tops up what the lines still owe
+      // (hold_order_stock converges: a second call adds 0), so nothing is
+      // held twice.
+      toast.error(requestFailedMessage(e, 'hold the available stock'));
+      return;
+    } finally {
+      setHolding(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

@@ -31,6 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveSupplierAction,
   createSupplierAction,
@@ -75,13 +77,29 @@ export function SuppliersManager({
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreTarget, setRestoreTarget] = React.useState<SupplierRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  // Why the last Archive or Restore failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
 
   async function confirmArchive() {
     if (!archiveTarget) return;
     setArchiveBusy(true);
-    const res = await archiveSupplierAction(archiveTarget.id);
-    setArchiveBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof archiveSupplierAction>>;
+    try {
+      res = await archiveSupplierAction(archiveTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the supplier');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -93,9 +111,22 @@ export function SuppliersManager({
   async function confirmRestore() {
     if (!restoreTarget) return;
     setRestoreBusy(true);
-    const res = await restoreSupplierAction(restoreTarget.id);
-    setRestoreBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof restoreSupplierAction>>;
+    try {
+      res = await restoreSupplierAction(restoreTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the supplier');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -198,7 +229,10 @@ export function SuppliersManager({
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => setRestoreTarget(row)}
+                              onClick={() => {
+                                setConfirmError(null);
+                                setRestoreTarget(row);
+                              }}
                             >
                               <RotateCcw className="h-3.5 w-3.5" /> Restore
                             </Button>
@@ -217,7 +251,10 @@ export function SuppliersManager({
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => setArchiveTarget(row)}
+                                onClick={() => {
+                                  setConfirmError(null);
+                                  setArchiveTarget(row);
+                                }}
                                 aria-label={`Archive ${row.name}`}
                               >
                                 <Archive className="text-muted-foreground h-4 w-4" />
@@ -251,6 +288,7 @@ export function SuppliersManager({
         }
         confirmLabel="Archive"
         pending={archiveBusy}
+        error={confirmError}
         onConfirm={confirmArchive}
       />
 
@@ -264,6 +302,7 @@ export function SuppliersManager({
         confirmLabel="Restore"
         tone="primary"
         pending={restoreBusy}
+        error={confirmError}
         onConfirm={confirmRestore}
       />
     </>
@@ -313,9 +352,25 @@ function SupplierDialog({
       website: values.website || undefined,
       notes: values.notes || undefined,
     };
-    const res = editing
-      ? await updateSupplierAction(editing.id, payload)
-      : await createSupplierAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateSupplierAction>>
+      | Awaited<ReturnType<typeof createSupplierAction>>;
+    try {
+      res = editing
+        ? await updateSupplierAction(editing.id, payload)
+        : await createSupplierAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Supplier names are not
+      // unique, so a create that may have landed says to look first.
+      toast.error(
+        editing
+          ? requestFailedMessage(e, 'save the supplier')
+          : requestUnconfirmedMessage(e, 'the supplier was created', 'the suppliers list'),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

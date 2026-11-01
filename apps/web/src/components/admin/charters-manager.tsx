@@ -43,7 +43,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveCharterAction,
   createCharterAction,
@@ -461,9 +461,26 @@ function CharterDialog({
       contactEmail: values.contactEmail || undefined,
       contactPhone: values.contactPhone || undefined,
     };
-    const res = editing
-      ? await updateCharterAction(editing.id, payload)
-      : await createCharterAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateCharterAction>>
+      | Awaited<ReturnType<typeof createCharterAction>>;
+    try {
+      res = editing
+        ? await updateCharterAction(editing.id, payload)
+        : await createCharterAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. A code is optional, so a
+      // create that may have landed says to look first.
+      const term = termSingular.toLowerCase();
+      toast.error(
+        editing
+          ? requestFailedMessage(e, `save the ${term}`)
+          : requestUnconfirmedMessage(e, `the ${term} was created`, `the ${term}s list`),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

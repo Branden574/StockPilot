@@ -6,6 +6,8 @@ import * as React from 'react';
 import { Badge } from '@/components/ui/badge';
 import { choiceRowClass, eyebrowClass, nativeRadioClass } from '@/components/returns/returns-ui';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 
 import {
@@ -59,7 +61,19 @@ export function ReplacementPicker({
     const term = q.trim();
     const run = async () => {
       setLoading(true);
-      const res = await loadRef.current(term.length >= 2 ? term : '');
+      let res: ActionResult<ExchangeCandidatesAnswer>;
+      try {
+        res = await loadRef.current(term.length >= 2 ? term : '');
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // A newer search took over and says what it found.
+        if (!live) return;
+        // No answer: the spinner stops and says so; typing again reads again.
+        setLoading(false);
+        setError(requestFailedMessage(e, 'load the replacement items'));
+        return;
+      }
       if (!live) return;
       setLoading(false);
       if (!res.ok) {

@@ -9,6 +9,8 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setPlanningParamsAction } from '@/server/actions/planning-settings';
 
 interface PlanningParams {
@@ -49,8 +51,17 @@ export function PlanningParamsPanel({ initial }: { initial: PlanningParams }) {
       return;
     }
     setBusy(true);
-    const r = await setPlanningParamsAction(params);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setPlanningParamsAction>>;
+    try {
+      r = await setPlanningParamsAction(params);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the planning settings'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

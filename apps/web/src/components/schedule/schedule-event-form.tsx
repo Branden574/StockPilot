@@ -10,6 +10,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   eventInputFromInstant,
   eventInstantsFromInputs,
@@ -169,6 +171,8 @@ export function ScheduleEventForm({
   );
   const [busy, setBusy] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Why the last Delete failed, inside the confirm. Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
   // A start or end that names a time that never happens in the zone.
   const [startError, setStartError] = React.useState<string | null>(null);
   const [endError, setEndError] = React.useState<string | null>(null);
@@ -281,6 +285,16 @@ export function ScheduleEventForm({
       toast.success(isEdit ? 'Event updated.' : 'Event created.');
       router.push(`/dashboard/schedule/${res.data.id}`);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The form keeps what was typed. A hand-made event has no rule that stops
+      // a second copy, so a create that may have landed says to look first.
+      toast.error(
+        isEdit && defaults?.id
+          ? requestFailedMessage(e, 'save the event')
+          : requestUnconfirmedMessage(e, 'the event was created', 'the schedule'),
+      );
     } finally {
       setBusy(false);
     }
@@ -288,15 +302,18 @@ export function ScheduleEventForm({
 
   function onDelete() {
     if (!defaults?.id) return;
+    setDeleteError(null);
     setDeleteOpen(true);
   }
 
   async function confirmDelete() {
     if (!defaults?.id) return;
     setBusy(true);
+    setDeleteError(null);
     try {
       const res = await deleteScheduleEventAction(defaults.id);
       if (!res.ok) {
+        setDeleteError(res.error.message);
         toast.error(res.error.message);
         return;
       }
@@ -304,6 +321,12 @@ export function ScheduleEventForm({
       toast.success('Event deleted.');
       router.push('/dashboard/schedule');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the event');
+      setDeleteError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -607,6 +630,7 @@ export function ScheduleEventForm({
         }
         confirmLabel="Delete event"
         pending={busy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </form>

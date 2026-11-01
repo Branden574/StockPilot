@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   renameSessionAction,
   revokeOtherSessionsAction,
@@ -55,8 +57,17 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
 
   async function signOut(id: string) {
     setBusyId(id);
-    const res = await revokeSessionAction({ sessionId: id });
-    setBusyId(null);
+    let res: Awaited<ReturnType<typeof revokeSessionAction>>;
+    try {
+      res = await revokeSessionAction({ sessionId: id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'sign out that device'));
+      return;
+    } finally {
+      setBusyId(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -67,8 +78,17 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
 
   async function signOutOthers() {
     setBusyId('others');
-    const res = await revokeOtherSessionsAction();
-    setBusyId(null);
+    let res: Awaited<ReturnType<typeof revokeOtherSessionsAction>>;
+    try {
+      res = await revokeOtherSessionsAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'sign out the other devices'));
+      return;
+    } finally {
+      setBusyId(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -89,8 +109,17 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
   async function saveName(id: string) {
     const sent = draft.trim();
     setSavingId(id);
-    const res = await renameSessionAction({ sessionId: id, name: sent });
-    setSavingId(null);
+    let res: Awaited<ReturnType<typeof renameSessionAction>>;
+    try {
+      res = await renameSessionAction({ sessionId: id, name: sent });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'rename the device'));
+      return;
+    } finally {
+      setSavingId(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

@@ -118,7 +118,15 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     // A sign-out on purpose leaves nothing an interrupted run kept in this tab
     // (lib/interrupted-run). Before the request, which answers with a redirect.
     purgeInterruptedRuns();
-    await signOutAction();
+    try {
+      await signOutAction();
+    } catch (e) {
+      // Signed out: the action answers with a redirect to sign-in, so this is
+      // the usual way out, and the router is already on its way.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'sign you out'));
+      return;
+    }
     router.replace('/signin');
     router.refresh();
   }

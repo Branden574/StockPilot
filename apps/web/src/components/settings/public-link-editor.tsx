@@ -38,6 +38,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   addPublicLinkEntriesAction,
   deletePublicLinkAction,
@@ -175,8 +177,18 @@ export function PublicLinkEditor({
   async function performRotate() {
     setRotating(true);
     setHeaderError(null);
-    const res = await rotatePublicLinkTokenAction({ id: link.id });
-    setRotating(false);
+    let res: Awaited<ReturnType<typeof rotatePublicLinkTokenAction>>;
+    try {
+      res = await rotatePublicLinkTokenAction({ id: link.id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'regenerate the URL');
+      setHeaderError(message);
+      return;
+    } finally {
+      setRotating(false);
+    }
     if (!res.ok) {
       setHeaderError(res.error.message);
       return;
@@ -190,8 +202,18 @@ export function PublicLinkEditor({
   async function performDelete() {
     setDeleting(true);
     setHeaderError(null);
-    const res = await deletePublicLinkAction({ id: link.id });
-    setDeleting(false);
+    let res: Awaited<ReturnType<typeof deletePublicLinkAction>>;
+    try {
+      res = await deletePublicLinkAction({ id: link.id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the link');
+      setHeaderError(message);
+      return;
+    } finally {
+      setDeleting(false);
+    }
     if (!res.ok) {
       setHeaderError(res.error.message);
       return;
@@ -234,22 +256,32 @@ export function PublicLinkEditor({
       return;
     }
     setSaving(true);
-    const res = await updatePublicLinkAction({
-      id: link.id,
-      name: name.trim(),
-      purpose: purpose.trim() ? purpose.trim() : null,
-      instructions: instructions.trim() ? instructions.trim() : null,
-      active,
-      expiresAt: localInputToIso(expiresAt),
-      availableFrom: localInputToIso(availableFrom),
-      availableUntil: localInputToIso(availableUntil),
-      availabilityDisplay,
-      booksEnabled,
-      itemsEnabled,
-      includePublicPool,
-      defaultMaxQty: qty,
-    });
-    setSaving(false);
+    let res: Awaited<ReturnType<typeof updatePublicLinkAction>>;
+    try {
+      res = await updatePublicLinkAction({
+        id: link.id,
+        name: name.trim(),
+        purpose: purpose.trim() ? purpose.trim() : null,
+        instructions: instructions.trim() ? instructions.trim() : null,
+        active,
+        expiresAt: localInputToIso(expiresAt),
+        availableFrom: localInputToIso(availableFrom),
+        availableUntil: localInputToIso(availableUntil),
+        availabilityDisplay,
+        booksEnabled,
+        itemsEnabled,
+        includePublicPool,
+        defaultMaxQty: qty,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the link settings');
+      setSaveError(message);
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!res.ok) {
       setSaveError(res.error.message);
       return;
@@ -267,8 +299,17 @@ export function PublicLinkEditor({
   const refreshEffective = React.useCallback(async () => {
     setEffectiveLoading(true);
     setEffectiveError(null);
-    const res = await getPublicLinkEffectiveCountAction({ linkId: link.id });
-    setEffectiveLoading(false);
+    let res: Awaited<ReturnType<typeof getPublicLinkEffectiveCountAction>>;
+    try {
+      res = await getPublicLinkEffectiveCountAction({ linkId: link.id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setEffectiveError(requestFailedMessage(e, 'count the items on the link'));
+      return;
+    } finally {
+      setEffectiveLoading(false);
+    }
     if (!res.ok) {
       setEffectiveError(res.error.message);
       return;
@@ -315,19 +356,28 @@ export function PublicLinkEditor({
           : sortKey === 'created-desc'
             ? (['created', 'desc'] as const)
             : (['name', 'asc'] as const);
-    const res = await searchPublicLinkCandidatesAction({
-      linkId: link.id,
-      search: search || undefined,
-      categoryId: categoryFilter === 'all' ? undefined : categoryFilter,
-      itemType: typeFilter === 'all' ? undefined : typeFilter,
-      warehouseId: warehouseFilter === 'all' ? undefined : warehouseFilter,
-      onLinkOnly: membershipFilter === 'on' ? true : undefined,
-      page,
-      pageSize: PAGE_SIZE,
-      sort,
-      sortDir,
-    });
-    setListLoading(false);
+    let res: Awaited<ReturnType<typeof searchPublicLinkCandidatesAction>>;
+    try {
+      res = await searchPublicLinkCandidatesAction({
+        linkId: link.id,
+        search: search || undefined,
+        categoryId: categoryFilter === 'all' ? undefined : categoryFilter,
+        itemType: typeFilter === 'all' ? undefined : typeFilter,
+        warehouseId: warehouseFilter === 'all' ? undefined : warehouseFilter,
+        onLinkOnly: membershipFilter === 'on' ? true : undefined,
+        page,
+        pageSize: PAGE_SIZE,
+        sort,
+        sortDir,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setListError(requestFailedMessage(e, 'load the items'));
+      return;
+    } finally {
+      setListLoading(false);
+    }
     if (!res.ok) {
       setListError(res.error.message);
       return;
@@ -405,12 +455,23 @@ export function PublicLinkEditor({
     }
     setBulkPending(true);
     setBulkError(null);
-    const res = await addPublicLinkEntriesAction({
-      linkId: link.id,
-      itemIds: [...selected],
-      maxQtyPerRequest: qty,
-    });
-    setBulkPending(false);
+    let res: Awaited<ReturnType<typeof addPublicLinkEntriesAction>>;
+    try {
+      res = await addPublicLinkEntriesAction({
+        linkId: link.id,
+        itemIds: [...selected],
+        maxQtyPerRequest: qty,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, an item already on the link is written once (upsert on link and item).
+      const message = requestFailedMessage(e, 'add the items');
+      setBulkError(message);
+      return;
+    } finally {
+      setBulkPending(false);
+    }
     if (!res.ok) {
       setBulkError(res.error.message);
       return;
@@ -423,11 +484,21 @@ export function PublicLinkEditor({
   async function confirmBulkRemove() {
     setBulkPending(true);
     setBulkError(null);
-    const res = await removePublicLinkEntriesAction({
-      linkId: link.id,
-      itemIds: [...selected],
-    });
-    setBulkPending(false);
+    let res: Awaited<ReturnType<typeof removePublicLinkEntriesAction>>;
+    try {
+      res = await removePublicLinkEntriesAction({
+        linkId: link.id,
+        itemIds: [...selected],
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'remove the items');
+      setBulkError(message);
+      return;
+    } finally {
+      setBulkPending(false);
+    }
     if (!res.ok) {
       setBulkError(res.error.message);
       return;
@@ -477,12 +548,22 @@ export function PublicLinkEditor({
     }
     setCapPendingId(row.id);
     setCapError(null);
-    const res = await setPublicLinkEntryMaxQtyAction({
-      linkId: link.id,
-      itemId: row.id,
-      maxQtyPerRequest: next,
-    });
-    setCapPendingId(null);
+    let res: Awaited<ReturnType<typeof setPublicLinkEntryMaxQtyAction>>;
+    try {
+      res = await setPublicLinkEntryMaxQtyAction({
+        linkId: link.id,
+        itemId: row.id,
+        maxQtyPerRequest: next,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the quantity limit');
+      setCapError(message);
+      return;
+    } finally {
+      setCapPendingId(null);
+    }
     if (!res.ok) {
       setCapError(res.error.message);
       return;
@@ -556,7 +637,17 @@ export function PublicLinkEditor({
           {/* 8 px apart: the 28 px buttons' 44 px touch areas (coarse
               pointers) must not overlap. */}
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setRotateOpen(true)}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // The confirm shows the header's error inside it: an older
+                // one (a failed copy, the other confirm's) must not be there.
+                setHeaderError(null);
+                setRotateOpen(true);
+              }}
+            >
               <RefreshCw className="h-3.5 w-3.5" />
               Regenerate URL
             </Button>
@@ -565,7 +656,10 @@ export function PublicLinkEditor({
               variant="outline"
               size="sm"
               className="text-destructive"
-              onClick={() => setDeleteOpen(true)}
+              onClick={() => {
+                setHeaderError(null);
+                setDeleteOpen(true);
+              }}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete link
@@ -1184,6 +1278,7 @@ export function PublicLinkEditor({
         description="The current public URL stops working immediately — anyone using the old link (bookmarks, emails, printed flyers) will see a 404. The catalog and settings are kept; only the URL changes."
         confirmLabel="Regenerate URL"
         pending={rotating}
+        error={headerError}
         onConfirm={performRotate}
       />
 
@@ -1194,6 +1289,7 @@ export function PublicLinkEditor({
         description="The public page stops working immediately and this link's catalog configuration is permanently removed. Past orders submitted through it are kept."
         confirmLabel="Delete link"
         pending={deleting}
+        error={headerError}
         onConfirm={performDelete}
       />
     </div>

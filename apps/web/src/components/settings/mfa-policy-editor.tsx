@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setOrgMfaPolicyAction } from '@/server/actions/mfa';
 
 type Policy = 'optional' | 'admins_required' | 'all_required';
@@ -41,8 +43,17 @@ export function MfaPolicyEditor({ current }: { current: Policy }) {
 
   async function save() {
     setPending(true);
-    const res = await setOrgMfaPolicyAction({ policy });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof setOrgMfaPolicyAction>>;
+    try {
+      res = await setOrgMfaPolicyAction({ policy });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the MFA policy'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

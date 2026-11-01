@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setAutoArchiveSettingsAction } from '@/server/actions/auto-archive-settings';
 
 interface Props {
@@ -40,8 +42,19 @@ export function AutoArchivePanel({ initial, eligibleCount }: Props) {
   async function save() {
     setError(null);
     setBusy(true);
-    const r = await setAutoArchiveSettingsAction({ enabled, dwellDays });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setAutoArchiveSettingsAction>>;
+    try {
+      r = await setAutoArchiveSettingsAction({ enabled, dwellDays });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the auto-archive settings');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       setError(r.error.message);
       return;
@@ -122,7 +135,11 @@ export function AutoArchivePanel({ initial, eligibleCount }: Props) {
         </div>
       )}
 
-      {error ? <p className="text-destructive text-[13px]">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-destructive text-[13px]">
+          {error}
+        </p>
+      ) : null}
 
       <div>
         <Button onClick={save} disabled={busy}>

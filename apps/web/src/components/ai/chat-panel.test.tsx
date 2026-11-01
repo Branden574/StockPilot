@@ -5,6 +5,11 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn() },
 }));
 
+import { toast } from 'sonner';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { ChatPanel, jumpLinkFor } from './chat-panel';
 
 /**
@@ -156,5 +161,32 @@ describe('ChatPanel', () => {
       expect(screen.getByRole('heading', { name: 'Ask your inventory anything' })).toBeVisible(),
     );
     expect(window.localStorage.getItem('stockpilot.ai.activeSession')).toBeNull();
+  });
+});
+
+/**
+ * B40: the first read of the past chats had a finally and no catch, so a read
+ * that got no answer left the rail empty with nothing said, and the rejection
+ * went unhandled.
+ */
+describe('ChatPanel when the past chats cannot be read', () => {
+  it('opens on a new chat and says the past chats did not load', async () => {
+    vi.mocked(toast.error).mockClear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw offline();
+      }),
+    );
+    render(<ChatPanel />);
+    expect(await screen.findByText('No chats yet.')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'load your past chats'),
+      ),
+    );
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Ask your inventory anything' }),
+    ).toBeInTheDocument();
   });
 });

@@ -6,6 +6,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setZendeskSubdomainAction } from '@/server/actions/zendesk';
 
 /**
@@ -32,8 +34,17 @@ export function ZendeskQuickAccess({
     const next = value.trim();
     if (!next || saving) return;
     setSaving(true);
-    const res = await setZendeskSubdomainAction({ subdomain: next });
-    setSaving(false);
+    let res: Awaited<ReturnType<typeof setZendeskSubdomainAction>>;
+    try {
+      res = await setZendeskSubdomainAction({ subdomain: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the Zendesk subdomain'));
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

@@ -7,6 +7,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import { setAvatarUrlAction } from '@/server/actions/profile';
 
@@ -84,6 +86,10 @@ export function AvatarUploader({
       setUrl(data.publicUrl);
       toast.success('Avatar updated.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'update your avatar'));
     } finally {
       setBusy(false);
     }
@@ -100,6 +106,10 @@ export function AvatarUploader({
       setUrl(null);
       toast.success('Avatar removed.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'remove your avatar'));
     } finally {
       setBusy(false);
     }

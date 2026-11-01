@@ -30,7 +30,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveCategoryAction,
   createCategoryAction,
@@ -707,9 +707,25 @@ function CategoryDialog({
       // new category states its whole sports intent by definition.
       ...(editing ? dropUnchangedSportsFields(sportsFields, editing) : sportsFields),
     };
-    const res = editing
-      ? await updateCategoryAction(editing.id, payload)
-      : await createCategoryAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateCategoryAction>>
+      | Awaited<ReturnType<typeof createCategoryAction>>;
+    try {
+      res = editing
+        ? await updateCategoryAction(editing.id, payload)
+        : await createCategoryAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Category names are not
+      // unique, so a create that may have landed says to look first.
+      toast.error(
+        editing
+          ? requestFailedMessage(e, 'save the category')
+          : requestUnconfirmedMessage(e, 'the category was created', 'the categories list'),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

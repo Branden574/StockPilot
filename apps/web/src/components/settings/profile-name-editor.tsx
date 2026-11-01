@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updateProfileNameAction } from '@/server/actions/profile';
 
 export function ProfileNameEditor({ current }: { current: string }) {
@@ -32,10 +34,19 @@ export function ProfileNameEditor({ current }: { current: string }) {
     if (!dirty) return;
     setBusy(true);
     const trimmed = name.trim();
-    const r = await updateProfileNameAction({
-      fullName: trimmed.length === 0 ? null : trimmed,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof updateProfileNameAction>>;
+    try {
+      r = await updateProfileNameAction({
+        fullName: trimmed.length === 0 ? null : trimmed,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save your name'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

@@ -21,6 +21,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   cancelEmailChangeAction,
   requestEmailChangeAction,
@@ -146,6 +148,10 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
       });
       toast.success(`Verification re-sent to ${res.data.pendingEmail}.`);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'send the verification email again'));
     } finally {
       setBusy(null);
     }
@@ -163,6 +169,10 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
       setCancelOpen(false);
       toast.success('Email change cancelled.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'cancel the email change'));
     } finally {
       setBusy(null);
     }
@@ -320,7 +330,16 @@ function ChangeEmailDialog(props: {
   };
 
   const onSubmit = handleSubmit(async (values) => {
-    const res = await withStepUp(props.ensureStepUp, () => requestEmailChangeAction(values));
+    let res: Awaited<ReturnType<typeof requestEmailChangeAction>>;
+    try {
+      res = await withStepUp(props.ensureStepUp, () => requestEmailChangeAction(values));
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed.
+      toast.error(requestFailedMessage(e, 'send the verification email'));
+      return;
+    }
     if (!res.ok) {
       // Field-level where it belongs; toast for everything else.
       if (res.error.code === 'validation_error' || res.error.code === 'conflict') {

@@ -14,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { ORG_TIMEZONE_OPTIONS, type OrgTimezoneOption } from '@/lib/timezone-options';
 import { updateOrgTimezoneAction } from '@/server/actions/organization';
 
@@ -77,8 +79,17 @@ export function OrgTimezoneEditor({ current }: { current: string | null }) {
   async function save() {
     if (!dirty) return;
     setBusy(true);
-    const r = await updateOrgTimezoneAction({ timezone: tz });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof updateOrgTimezoneAction>>;
+    try {
+      r = await updateOrgTimezoneAction({ timezone: tz });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the time zone'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

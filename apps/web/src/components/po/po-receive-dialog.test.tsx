@@ -17,18 +17,19 @@ const postReceiptAction = vi.fn();
 vi.mock('@/server/actions/receiving', () => ({
   postReceiptAction: (...args: unknown[]) => postReceiptAction(...args),
 }));
-vi.mock('next/navigation', () => ({
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-import { requestFailedMessage } from '@/lib/request-failure';
 import { setDefaultLocale } from '@/test/hydration';
-import { offline } from '@/test/rejected-request';
+import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
 
-import { PoReceiveDialog } from './po-receive-dialog';
+import { PoReceiveDialog, RECEIPT_UNCONFIRMED_MESSAGE } from './po-receive-dialog';
 import type { SizeRunGroup } from './size-run-receive-grid';
 
 interface DialogLine {
@@ -340,28 +341,99 @@ describe('PoReceiveDialog — a failed post must be visible INSIDE the dialog', 
 
 // B40: Post receipt set `submitting`, awaited the action with no catch and
 // cleared it only when it answered. A post that got no answer (offline, a
-// server error, a deploy) left the button spinning with no message. The same
-// Post sends the same idempotency key, so posting again cannot receive twice.
+// server error, a deploy) left the button spinning with no message. It may
+// have landed before the answer was lost, so the dialog says so and keeps the
+// entries, and Post receipt sends the same idempotency key, in this window or
+// in the next one opened on this page: post_receipt_v2 answers the same key
+// and entries with the receipt it already posted, so it is never posted twice.
 describe('PoReceiveDialog when the post gets no answer', () => {
-  it('says the receipt was not posted, in the dialog, keeps the entries and posts again with the same key', async () => {
-    postReceiptAction.mockRejectedValueOnce(offline());
-    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+  const keys = () =>
+    postReceiptAction.mock.calls.map((c) => (c[0] as { idempotencyKey: string }).idempotencyKey);
+
+  async function postOnce(user: Awaited<ReturnType<typeof openDialog>>) {
     await user.click(screen.getByRole('button', { name: /^all$/i }));
     await user.click(screen.getByRole('button', { name: /post receipt/i }));
+  }
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      requestFailedMessage(offline(), 'post the receipt'),
-    );
+  it('says the receipt may have been posted, in the dialog, keeps the entries and posts again with the same key', async () => {
+    postReceiptAction.mockRejectedValueOnce(offline());
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await postOnce(user);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(RECEIPT_UNCONFIRMED_MESSAGE);
     expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(5);
     const again = screen.getByRole('button', { name: /post receipt/i });
     expect(again).toBeEnabled();
 
     await user.click(again);
     await waitFor(() => expect(postReceiptAction).toHaveBeenCalledTimes(2));
-    const [first, second] = postReceiptAction.mock.calls.map(
-      (c) => (c[0] as { idempotencyKey: string }).idempotencyKey,
-    );
+    const [first, second] = keys();
     expect(second).toBe(first);
+  });
+
+  it('posts with the same key after the window is closed and opened again', async () => {
+    postReceiptAction.mockRejectedValueOnce(offline());
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await postOnce(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent(RECEIPT_UNCONFIRMED_MESSAGE);
+
+    // The window closes after the failure, and opens again fresh.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(screen.getByRole('button', { name: /receive items/i }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(null);
+
+    await postOnce(user);
+    await waitFor(() => expect(postReceiptAction).toHaveBeenCalledTimes(2));
+    const [first, second] = keys();
+    expect(second).toBe(first);
+  });
+
+  it.each([
+    ['a receipt', { ok: true, data: { receiptNumber: 'RC-2' } }],
+    [
+      'a refusal',
+      { ok: false, error: { code: 'conflict', message: 'This PO is already closed.' } },
+    ],
+  ])('after any answer (%s) the next window posts with a new key', async (_answer, answer) => {
+    postReceiptAction.mockRejectedValueOnce(offline()).mockResolvedValueOnce(answer);
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await postOnce(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent(RECEIPT_UNCONFIRMED_MESSAGE);
+    await user.click(screen.getByRole('button', { name: /post receipt/i }));
+    await waitFor(() => expect(postReceiptAction).toHaveBeenCalledTimes(2));
+
+    // A receipt closes the window by itself; a refusal is closed here.
+    if (screen.queryByRole('dialog'))
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(screen.getByRole('button', { name: /receive items/i }));
+    await postOnce(user);
+    await waitFor(() => expect(postReceiptAction).toHaveBeenCalledTimes(3));
+    const [first, second, third] = keys();
+    expect(second).toBe(first);
+    expect(third).not.toBe(first);
+  });
+
+  it('a page older than the server says nothing was changed and to reload first', async () => {
+    postReceiptAction.mockRejectedValueOnce(outOfDate());
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await postOnce(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'StockPilot was updated since this page was opened, so nothing was changed. Reload the page, then try again.',
+    );
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(5);
+  });
+
+  it('says nothing on the way to sign-in', async () => {
+    postReceiptAction.mockRejectedValueOnce(signInRedirect());
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await postOnce(user);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /post receipt/i })).toBeEnabled(),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

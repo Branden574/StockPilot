@@ -2,14 +2,18 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { hydrateAcrossClockShift } from '@/test/hydration';
+import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
 
 import { RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
 
 import { PortalShop } from './portal-shop';
 
 const refresh = vi.fn();
-vi.mock('next/navigation', () => ({
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
   useRouter: () => ({ refresh, push: vi.fn() }),
 }));
 
@@ -296,5 +300,61 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
     expect(within(region).getByText('New Hire Shirt, L ×1')).toBeInTheDocument();
     expect(within(region).getByText('SO-000104')).toBeInTheDocument();
     expect(region.textContent).not.toMatch(/awaiting drop-off|pending approval|staging|\brack\b|disposition/i);
+  });
+});
+
+/**
+ * B40: Place order kept spinning, and said nothing, when the call got no
+ * answer. A portal order has no key, so an order placed before the answer was
+ * lost is placed twice if it is sent again: the message says to look at Your
+ * orders first, and the cart and the notes are kept.
+ */
+describe('PortalShop when Place order gets no answer', () => {
+  beforeEach(() => {
+    actions.submitPortalOrderAction.mockReset();
+    refresh.mockReset();
+  });
+
+  async function placeOrder() {
+    const user = userEvent.setup();
+    renderShop({ catalog: [{ ...ITEM, unitPrice: null, quotable: false }] });
+    await user.click(screen.getByRole('button', { name: /Add one Composition Notebook/i }));
+    await user.type(
+      screen.getByLabelText('Notes for your supplier (optional)'),
+      'Leave at the front desk',
+    );
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+  }
+
+  it('keeps the cart and says to look at Your orders before trying again', async () => {
+    actions.submitPortalOrderAction.mockRejectedValueOnce(offline());
+    await placeOrder();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "We couldn't confirm that your order was submitted. Check Your orders before trying again.",
+    );
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+    expect(screen.getByText('1 units')).toBeInTheDocument();
+    expect(screen.getByLabelText('Notes for your supplier (optional)')).toHaveValue(
+      'Leave at the front desk',
+    );
+    expect(screen.queryByText(/Order submitted/)).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('a page older than the server says nothing was changed and to reload first', async () => {
+    actions.submitPortalOrderAction.mockRejectedValueOnce(outOfDate());
+    await placeOrder();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      requestUnconfirmedMessage(outOfDate(), 'your order was submitted', 'Your orders'),
+    );
+    expect(screen.getByText('1 units')).toBeInTheDocument();
+  });
+
+  it('says nothing on the way to sign-in', async () => {
+    actions.submitPortalOrderAction.mockRejectedValueOnce(signInRedirect());
+    await placeOrder();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled());
+    expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

@@ -11,6 +11,8 @@ import {
   type MaintenanceRequestFormValues,
   MaintenanceRequestFormInput,
 } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
+import { isActionOutOfDate, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createMaintenanceRequestAction } from '@/server/actions/maintenance-requests';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -128,9 +130,17 @@ export function MaintenanceRequestForm({
       let res: MaintenanceFormSubmitResult;
       try {
         res = await (submit ?? createPlainRequest)(values);
-      } catch {
-        toast.error(SUBMIT_UNCONFIRMED_MESSAGE);
-        setSubmitError(SUBMIT_UNCONFIRMED_MESSAGE);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating,
+        // so nothing is said.
+        if (isControlFlow(e)) return;
+        // A page older than the server never reached it: nothing was saved,
+        // and only a reload helps.
+        const message = isActionOutOfDate(e)
+          ? requestUnconfirmedMessage(e, 'the request was saved', 'your maintenance requests')
+          : SUBMIT_UNCONFIRMED_MESSAGE;
+        toast.error(message);
+        setSubmitError(message);
         return;
       }
       if ('handled' in res) {

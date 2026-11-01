@@ -25,6 +25,7 @@ import {
   takeInterruptedRun,
   type RunHandle,
 } from '@/lib/interrupted-run';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import { BatchProgress } from '@/lib/upload-with-progress';
 import {
@@ -104,6 +105,14 @@ interface ProcedureFormProps {
 }
 
 const NULL_VALUE = '__none';
+
+/**
+ * The procedure was saved, then something stopped its staged videos before
+ * the batch could end on this page (B40). Never "try again": the form still
+ * says Create procedure, and a second press would make a second procedure.
+ */
+export const PROCEDURE_CREATED_VIDEOS_UNFINISHED =
+  'The procedure was created, but its videos did not finish uploading. Open it from the procedures list to add them.';
 
 /**
  * Procedure create/edit form.
@@ -305,6 +314,9 @@ export function ProcedureForm({
     // ends below. Every way out of this handler that does not end it on the
     // page stops it in the finally, where what it recorded stays.
     let run: RunHandle | null = null;
+    // Set once the new procedure exists: a failure after it is said as the
+    // videos that did not finish, never as a save that did not happen.
+    let created = false;
     const payload = {
       title: t,
       description: description.trim() || null,
@@ -352,6 +364,7 @@ export function ProcedureForm({
         return;
       }
       const newId = res.data.id;
+      created = true;
 
       if (!run) {
         toast.success('Procedure created.');
@@ -385,6 +398,25 @@ export function ProcedureForm({
         // edit page renders a recovery toast off this query param.
         router.push(`/dashboard/procedures/${newId}/edit?upload_recovery=1`);
         router.refresh();
+      }
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer. The form keeps what was typed and the page does not move.
+      if (created) {
+        // The procedure exists; its videos stopped part way (what was
+        // recorded stays, and this form opened again goes on to it). Said as
+        // what did happen: pressing Create procedure again would make a
+        // second one.
+        toast.error(PROCEDURE_CREATED_VIDEOS_UNFINISHED);
+      } else if (isEdit) {
+        toast.error(requestFailedMessage(e, 'save the procedure'));
+      } else {
+        // A procedure made before the answer was lost is a second one if sent
+        // again.
+        toast.error(
+          requestUnconfirmedMessage(e, 'the procedure was created', 'the procedures list'),
+        );
       }
     } finally {
       // Not ended on the page (a redirect, a refused save, anything thrown):

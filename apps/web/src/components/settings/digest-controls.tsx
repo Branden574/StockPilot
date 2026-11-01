@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { sendDigestPreviewAction, setDigestPrefsAction } from '@/server/actions/digest';
 
 interface SectionFlags {
@@ -64,8 +66,23 @@ export function DigestControls({
   async function toggleMaster(next: boolean) {
     setSavingToggle(true);
     setOptIn(next); // optimistic
-    const res = await setDigestPrefsAction({ optIn: next });
-    setSavingToggle(false);
+    let res: Awaited<ReturnType<typeof setDigestPrefsAction>>;
+    try {
+      res = await setDigestPrefsAction({ optIn: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setOptIn(!next); // revert
+      toast.error(
+        requestFailedMessage(
+          e,
+          next ? 'subscribe you to the weekly digest' : 'unsubscribe you from the weekly digest',
+        ),
+      );
+      return;
+    } finally {
+      setSavingToggle(false);
+    }
     if (!res.ok) {
       setOptIn(!next); // revert
       toast.error(res.error.message);
@@ -80,8 +97,18 @@ export function DigestControls({
   async function toggleSection(key: keyof SectionFlags, next: boolean) {
     setSavingSection(key);
     setSections((prev) => ({ ...prev, [key]: next })); // optimistic
-    const res = await setDigestPrefsAction({ [key]: next });
-    setSavingSection(null);
+    let res: Awaited<ReturnType<typeof setDigestPrefsAction>>;
+    try {
+      res = await setDigestPrefsAction({ [key]: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setSections((prev) => ({ ...prev, [key]: !next })); // revert
+      toast.error(requestFailedMessage(e, 'save the digest setting'));
+      return;
+    } finally {
+      setSavingSection(null);
+    }
     if (!res.ok) {
       setSections((prev) => ({ ...prev, [key]: !next })); // revert
       toast.error(res.error.message);
@@ -92,8 +119,17 @@ export function DigestControls({
 
   async function preview() {
     setPreviewing(true);
-    const res = await sendDigestPreviewAction();
-    setPreviewing(false);
+    let res: Awaited<ReturnType<typeof sendDigestPreviewAction>>;
+    try {
+      res = await sendDigestPreviewAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'send the digest preview'));
+      return;
+    } finally {
+      setPreviewing(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

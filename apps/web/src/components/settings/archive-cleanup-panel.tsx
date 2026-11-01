@@ -9,6 +9,8 @@ import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setAutoDeleteArchivedSettingsAction } from '@/server/actions/inventory-cleanup-settings';
 
 const DAY_PRESETS = [30, 60, 90, 180, 365];
@@ -57,8 +59,17 @@ export function ArchiveCleanupPanel({ initial, archivedCount, windowedCounts }: 
       if (!ok) return;
     }
     setBusy(true);
-    const r = await setAutoDeleteArchivedSettingsAction({ enabled, days });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setAutoDeleteArchivedSettingsAction>>;
+    try {
+      r = await setAutoDeleteArchivedSettingsAction({ enabled, days });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the cleanup settings'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

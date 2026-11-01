@@ -15,6 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setOrderStatusConfigAction } from '@/server/actions/order-status-settings';
 
 import {
@@ -102,6 +104,10 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
         return;
       }
       toast.success('Order status labels saved.');
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the status labels'));
     } finally {
       setPending(false);
     }
@@ -117,6 +123,10 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
       }
       setRows(seed(null));
       toast.success('Order statuses reset to defaults.');
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'reset the statuses'));
     } finally {
       setPending(false);
     }
