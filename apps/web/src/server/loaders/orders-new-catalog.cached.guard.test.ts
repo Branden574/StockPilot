@@ -42,8 +42,14 @@ const PINS: Record<string, string> = {
   // are read in, because the web site picker and the phone's site sheet list
   // them as given and a charter id is a random uuid. Same release as part B,
   // so the key still rotates once on deploy; shape and key parts unchanged.
+  // Re-pinned a third time in B47's decisions round (2026-11-01): the read
+  // passes { cap: LOOKUP_ROW_CEILING } and reports reaching it, because
+  // paging removed the 1000-row bound PostgREST had put on it. unstable_cache
+  // hashes this callback's text, so the edit rotates the key; all of #443
+  // ships in one deploy, so it still rotates only once. Shape and key parts
+  // unchanged.
   loadChartersForWarehouseCached:
-    'ba09045770c935e56a932c480a2e89c6c4ce542a5988630a00ac23501a4a25d4',
+    '6c1bcb8667e5c395d5c8886b9f99d56e1d614658781708f0b42f633916ae2878',
 };
 
 function initializerHashes(): Record<string, string> {

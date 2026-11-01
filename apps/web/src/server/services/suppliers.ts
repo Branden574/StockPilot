@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
@@ -99,23 +100,32 @@ export class SuppliersService {
    * import can create that many at once), every supplier whose name sorts
    * after them was missing from the Supplier pickers, the purchase orders and
    * the Suppliers page (B47). The module gate still refuses before any read.
+   * It stops at LOOKUP_ROW_CEILING rows (the first by name, then id),
+   * reported once.
    */
   async list(opts: { includeArchived?: boolean } = {}) {
     assertModuleEnabled(this.ctx, 'suppliers');
-    return fetchAllRows((from, to) => {
-      const query = this.ctx.supabase
-        .from('suppliers')
-        .select(
-          'id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at',
+    const rows = await fetchAllRows(
+      (from, to) => {
+        const query = this.ctx.supabase
+          .from('suppliers')
+          .select(
+            'id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at',
+          )
+          .eq('organization_id', this.ctx.organizationId);
+        return (
+          opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
         )
-        .eq('organization_id', this.ctx.organizationId);
-      return (
-        opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
-      )
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to);
-    });
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+      },
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('suppliers.list', { organizationId: this.ctx.organizationId });
+    }
+    return rows;
   }
 
   async create(input: CreateSupplierInput) {

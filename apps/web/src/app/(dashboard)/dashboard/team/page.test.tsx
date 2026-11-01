@@ -13,9 +13,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * paged and a failure fails the page.
  */
 
-const { stubRef, managerProps } = vi.hoisted(() => ({
+const { stubRef, managerProps, ceiling, reportError } = vi.hoisted(() => ({
   stubRef: { current: null as unknown },
   managerProps: vi.fn(),
+  // The shared LOOKUP_ROW_CEILING, lowered by the ceiling test.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the page reads the binding on
+// every render.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
@@ -79,7 +92,10 @@ import {
 
 import TeamPage from './page';
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  ceiling.value = 10_000;
+});
 
 describe('Team page: 250 viewers', () => {
   it('reads grants in batches of at most 100 viewers, paged, and shows the last viewer its grants', async () => {
@@ -183,6 +199,50 @@ describe('Team page: more than 1000 categories', () => {
       name: 'Zebra',
     });
     expect(stub.chainsAll.get('categories.select')).toHaveLength(2);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * B47 decisions round (2026-11-01): the read stops at LOOKUP_ROW_CEILING,
+   * the first categories by name and then id, and reports it once with the
+   * organization only. The list is for display: the dialog's save sends the
+   * viewer's whole grant set, seeded from the grants read.
+   */
+  it('stops at the ceiling with the first categories by name then id, and reports it once', async () => {
+    ceiling.value = 1100;
+    const cats = Array.from({ length: 1200 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      organization_id: 'org-1',
+      name: `A category ${String(i).padStart(4, '0')}`,
+      deleted_at: null,
+    }));
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: { terminology: null }, error: null },
+      'categories.select': servedLikePostgrest(cats),
+      'user_category_assignments.select': { data: [], error: null },
+    });
+    stubRef.current = stub.client;
+
+    render(await TeamPage());
+
+    const props = managerProps.mock.calls.at(-1)?.[0] as {
+      allCategories: Array<{ id: string; name: string }>;
+    };
+    expect(props.allCategories).toHaveLength(1100);
+    expect(props.allCategories.at(-1)?.name).toBe('A category 1099');
+    // The second page is cut at the ceiling, not read in full.
+    const page2 = stub.chainsAll.get('categories.select')![1]!;
+    expect(stub.chainArgsAll.get('categories.select')![1]![page2.indexOf('range')]).toEqual([
+      1000, 1099,
+    ]);
+    const ceilingReports = reportError.mock.calls.filter((c) =>
+      String((c[1] as { tag: string }).tag).startsWith('lookup_ceiling.'),
+    );
+    expect(ceilingReports).toHaveLength(1);
+    expect(ceilingReports[0]?.[1]).toMatchObject({
+      tag: 'lookup_ceiling.team.categories',
+      extra: { lookup: 'team.categories', organizationId: 'org-1' },
+    });
   });
 });
 

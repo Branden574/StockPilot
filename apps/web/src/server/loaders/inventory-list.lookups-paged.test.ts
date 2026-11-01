@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The Location filter on the Items and Books pages. A manager's options come
@@ -15,13 +15,27 @@ import { describe, expect, it, vi } from 'vitest';
  * the query's own filters, order and range, 1000 rows at most per response).
  */
 
-const h = vi.hoisted(() => ({ admin: null as unknown }));
+const h = vi.hoisted(() => ({
+  admin: null as unknown,
+  // The shared LOOKUP_ROW_CEILING, lowered by the ceiling tests.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
 
 vi.mock('next/cache', () => ({
   revalidateTag: vi.fn(),
   unstable_cache: vi.fn((fn: unknown) => fn),
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => h.admin }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
+// A getter, so a test can lower the ceiling: the loader and the services read
+// the binding on every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return h.ceiling.value;
+  },
+}));
 
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
@@ -151,6 +165,11 @@ describe('the cached lookups read every page of locations, as LocationsService.l
  * code, because both paths were cut at the same 1000; the row past the first
  * 1000 and the page counts are what the old code fails.
  */
+beforeEach(() => {
+  h.ceiling.value = 10_000;
+  h.reportError.mockClear();
+});
+
 describe('the cached lookups read every page of categories, tags, charters and suppliers, as the live services do', () => {
   const N = 1200;
   const pad = (i: number) => String(i).padStart(4, '0');
@@ -409,4 +428,100 @@ describe('the cached lookups read every page of categories, tags, charters and s
       );
     },
   );
+
+  /** The reports reportLookupCeiling made, as [tag, extra], by tag (the
+   *  reads run in parallel, so they finish in any order). */
+  const ceilingReports = () =>
+    h.reportError.mock.calls
+      .map((c) => c[1] as { tag: string; extra: Record<string, unknown> })
+      .filter((c) => c.tag.startsWith('lookup_ceiling.'))
+      .map((c) => [c.tag, c.extra] as const)
+      .sort((a, b) => a[0].localeCompare(b[0]));
+
+  it('under the ceiling nothing is reported', async () => {
+    h.admin = stubFor().client;
+    await loadInventoryLookups(ORG);
+    await liveLookups();
+    expect(ceilingReports()).toEqual([]);
+  });
+
+  /**
+   * B47 decisions round (2026-11-01): each of these reads stops at
+   * LOOKUP_ROW_CEILING, the first rows by name and then id, in the cached
+   * loader and in the live services alike, and reports reaching it once.
+   * Lowered here to 1100, so the second page is cut at row 1100.
+   */
+  it('at the ceiling each list is its first rows by name then id, in both paths, and each read reports it once', async () => {
+    h.ceiling.value = 1100;
+    const stub = stubFor();
+    h.admin = stub.client;
+
+    const lookups = await loadInventoryLookups(ORG);
+
+    for (const table of Object.keys(TABLES) as Lookup[]) {
+      expect(lookups[table], table).toHaveLength(1100);
+      expect(argsOf(stub, table, 1, 'range'), table).toEqual([[1000, 1099]]);
+    }
+    // The first 1100 by name: the "A … 0000" onward rows, so not Zebra.
+    expect(lookups.categories.at(-1)?.name).toBe('A category 1099');
+    expect(lookups.tags.at(-1)?.name).toBe('a tag 1099');
+    expect(lookups.charters.at(-1)?.name).toBe('A charter 1099');
+    expect(lookups.suppliers.at(-1)?.name).toBe('A supplier 1099');
+    expect(ceilingReports()).toEqual(
+      ['categories', 'charters', 'suppliers', 'tags'].map((lookup) => [
+        `lookup_ceiling.inventory_lookups.${lookup}`,
+        { lookup: `inventory_lookups.${lookup}`, organizationId: ORG },
+      ]),
+    );
+
+    // The live services stop at the same rows, so a manager (cached) and a
+    // staff member (live) still see the same lists.
+    h.reportError.mockClear();
+    const live = await liveLookups();
+    expect(lookups.categories).toEqual(live.categories);
+    expect(lookups.tags).toEqual(live.tags);
+    expect(lookups.charters).toEqual(live.charters);
+    expect(lookups.suppliers).toEqual(live.suppliers);
+    expect(ceilingReports()).toEqual(
+      ['categories', 'charters', 'suppliers', 'tags'].map((lookup) => [
+        `lookup_ceiling.${lookup}.list`,
+        { lookup: `${lookup}.list`, organizationId: ORG },
+      ]),
+    );
+  });
+
+  it('the archived lists stop at the ceiling too', async () => {
+    h.ceiling.value = 3;
+    const archived = (prefix: string) =>
+      Array.from({ length: 5 }, (_, i) => ({
+        id: uuid(prefix, i),
+        organization_id: ORG,
+        name: `B archived ${i}`,
+        status: 'archived',
+        deleted_at: '2026-01-01T00:00:00Z',
+        warehouses: [],
+        users: [],
+      }));
+    const stub = makeSupabaseStub({
+      'categories.select': servedLikePostgrest(archived('aaaaaaaa')),
+      'suppliers.select': servedLikePostgrest(archived('bbbbbbbb')),
+      'charters.select': servedLikePostgrest(archived('cccccccc')),
+    });
+    const ctx = makeServiceContext(stub.client) as never;
+
+    const [categories, suppliers, charters] = await Promise.all([
+      new CategoriesService(ctx).list({ includeArchived: true }),
+      new SuppliersService(ctx).list({ includeArchived: true }),
+      new ChartersService(ctx).list({ includeArchived: true }),
+    ]);
+
+    expect(categories.map((c) => c.name)).toEqual(['B archived 0', 'B archived 1', 'B archived 2']);
+    expect(suppliers).toHaveLength(3);
+    expect(charters).toHaveLength(3);
+    expect(ceilingReports().map(([tag]) => tag)).toEqual([
+      'lookup_ceiling.categories.list',
+      'lookup_ceiling.charters.list',
+      'lookup_ceiling.suppliers.list',
+    ]);
+  });
 });

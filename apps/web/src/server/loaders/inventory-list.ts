@@ -118,6 +118,7 @@ import {
 } from '@/server/services/lib/inventory-list-cache';
 import { displayGroupFields, readDisplayGroupsForOrg } from '@/server/services/lib/display-groups';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export type InventoryListView = 'items' | 'books';
@@ -1316,7 +1317,9 @@ const DATASET_ID_BATCH_CONCURRENCY = 20;
  * max_rows with no error, so past 1000 of a list both paths lost every row
  * whose name sorts after them (small fixes slice 8 for locations, B47 for
  * the rest). A failed page throws with its lookup's label and the PostgREST
- * text, so a partial list is never cached:
+ * text, so a partial list is never cached. Categories, tags, charters and
+ * suppliers stop at LOOKUP_ROW_CEILING rows, as their services do, and
+ * reaching it is reported once per fill (B47 decisions round):
  *   categories → CategoriesService.list()            (not deleted)
  *   locations  → LocationsService.list({sitesOnly})   (not deleted,
  *                isSiteLocation filter — same shared predicate)
@@ -1348,22 +1351,38 @@ function lookupReadFailed(lookup: string): (err: unknown) => never {
   };
 }
 
+/**
+ * Reports a lookup that reached LOOKUP_ROW_CEILING (its first rows by name,
+ * then id, are the list) and passes the rows on.
+ */
+function noteLookupCeiling<Row>(lookup: string, organizationId: string, rows: Row[]): Row[] {
+  if (rows.length >= LOOKUP_ROW_CEILING) {
+    reportLookupCeiling(`inventory_lookups.${lookup}`, { organizationId });
+  }
+  return rows;
+}
+
 async function loadInventoryLookupsUncached(organizationId: string): Promise<InventoryListLookups> {
   const admin = createAdminClient();
   // Every list page by page, by name and then id, as its live service reads
   // it (B47; the locations since small fixes slice 8). Any failed page throws,
   // so a partial list is never cached.
   const [categoryRows, locationRows, suppliers, tagRows, charterRows] = await Promise.all([
-    fetchAllRows((from, to) =>
-      admin
-        .from('categories')
-        .select('id, name, color')
-        .eq('organization_id', organizationId)
-        .is('deleted_at', null)
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    ).catch(lookupReadFailed('categories')),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('categories')
+          .select('id, name, color')
+          .eq('organization_id', organizationId)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('categories', organizationId, rows),
+      lookupReadFailed('categories'),
+    ),
     // The sites are picked out of every location kind below, so one read
     // capped at 1000 rows lost each site whose name sorts past them.
     fetchAllRows<LocationLookupRow>(
@@ -1381,25 +1400,32 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
         }>,
     ).catch(lookupReadFailed('locations')),
     loadSuppliersIfEnabled(admin, organizationId),
-    fetchAllRows((from, to) =>
-      admin
-        .from('tags')
-        .select('id, name, color')
-        .eq('organization_id', organizationId)
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    ).catch(lookupReadFailed('tags')),
-    fetchAllRows((from, to) =>
-      admin
-        .from('charters')
-        .select('id, name, code')
-        .eq('organization_id', organizationId)
-        .eq('status', 'active')
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    ).catch(lookupReadFailed('charters')),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('tags')
+          .select('id, name, color')
+          .eq('organization_id', organizationId)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then((rows) => noteLookupCeiling('tags', organizationId, rows), lookupReadFailed('tags')),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('charters')
+          .select('id, name, code')
+          .eq('organization_id', organizationId)
+          .eq('status', 'active')
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('charters', organizationId, rows),
+      lookupReadFailed('charters'),
+    ),
   ]);
 
   return {
@@ -1694,17 +1720,23 @@ async function loadSuppliersIfEnabled(
   // Comp wins even over an explicit enabled=false row — identical to
   // getModulesForRequest, which adds all non-core ids after the query.
   if (!modRes.data?.enabled && !comped) return [];
-  // Every page, by name and then id, as SuppliersService.list reads it (B47).
-  const rows = await fetchAllRows((from, to) =>
-    admin
-      .from('suppliers')
-      .select('id, name')
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .order('name', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  ).catch(lookupReadFailed('suppliers'));
+  // Every page, by name and then id, as SuppliersService.list reads it (B47),
+  // up to LOOKUP_ROW_CEILING rows.
+  const rows = await fetchAllRows(
+    (from, to) =>
+      admin
+        .from('suppliers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .is('deleted_at', null)
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { cap: LOOKUP_ROW_CEILING },
+  ).then(
+    (found) => noteLookupCeiling('suppliers', organizationId, found),
+    lookupReadFailed('suppliers'),
+  );
   return rows.map((s) => ({ id: s.id as string, name: s.name as string }));
 }
 

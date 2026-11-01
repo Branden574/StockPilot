@@ -186,6 +186,46 @@ export function servedLikePostgrest(
   };
 }
 
+/**
+ * servedLikePostgrest, and a HEAD COUNT (`select(cols, { count: 'exact',
+ * head: true })`) answered as PostgREST answers one: no rows, and `count` =
+ * how many rows the query's own filters keep (`eq`, `neq`, `is`, `in`), with
+ * no range and no 1000-row cap, as its Content-Range header carries. Any
+ * other method in a counted chain throws, so nothing is ignored silently.
+ */
+export function countedLikePostgrest(
+  rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
+): (call: MockCall) => QueryResult {
+  const served = servedLikePostgrest(rows);
+  return (call) => {
+    const options = callArgs(call, 'select')?.[1] as { count?: string; head?: boolean } | undefined;
+    if (!options?.head) return served(call);
+    let out = [...(typeof rows === 'function' ? rows() : rows)];
+    call.methods.forEach((method, i) => {
+      const [col, value] = (call.args[i] ?? []) as [string, unknown];
+      switch (method) {
+        case 'select':
+          break;
+        case 'eq':
+          out = out.filter((r) => r[col] === value);
+          break;
+        case 'neq':
+          out = out.filter((r) => r[col] !== value);
+          break;
+        case 'is':
+          out = out.filter((r) => (r[col] ?? null) === value);
+          break;
+        case 'in':
+          out = out.filter((r) => (value as unknown[]).includes(r[col]));
+          break;
+        default:
+          throw new Error(`countedLikePostgrest cannot evaluate .${method}() in a count`);
+      }
+    });
+    return { data: null, error: null, count: out.length };
+  };
+}
+
 /** A minimal but GENUINE 26-byte PNG — the 8-byte signature, the IHDR
  *  length + tag, then 2x3 dimensions. Every byte is a literal from the PNG
  *  spec, so `sniffImage` classifies it as a real png. Used as the default

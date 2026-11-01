@@ -12,6 +12,7 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { createClient } from '@/lib/supabase/server';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { env } from '@/lib/env';
 
@@ -77,18 +78,34 @@ export default async function TeamPage() {
     // unticked on its own (B47). The same dialog lists the categories to
     // grant, so a failed page fails the page (an ignored error here was an
     // empty list), with the PostgREST cause in the log.
-    fetchAllRows<{ id: string; name: string }>((from, to) =>
-      supabase
-        .from('categories')
-        .select('id, name')
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    ).catch((err: unknown) => {
-      throw new Error(`[team] categories read failed: ${rawErrorText(err)}`);
-    }),
+    //
+    // Up to LOOKUP_ROW_CEILING (the first by name, then id), reported once.
+    // A list cut there is for display only: the dialog's save sends the
+    // member's whole grant set, seeded from the grants read below, so a grant
+    // it could not show is kept, and Select all past 500 categories is
+    // refused by the action (user-categories.ts).
+    fetchAllRows<{ id: string; name: string }>(
+      (from, to) =>
+        supabase
+          .from('categories')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => {
+        if (rows.length >= LOOKUP_ROW_CEILING) {
+          reportLookupCeiling('team.categories', { organizationId: ctx.organizationId });
+        }
+        return rows;
+      },
+      (err: unknown) => {
+        throw new Error(`[team] categories read failed: ${rawErrorText(err)}`);
+      },
+    ),
     // Grants ONLY for current viewers. Filtering by user_id keeps the
     // payload small on orgs with many ex-viewers; the org_id filter
     // is defense in depth (RLS also enforces).

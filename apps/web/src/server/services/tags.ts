@@ -7,6 +7,7 @@ import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabas
 import { audit, auditMany } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 import { assertStoredColor } from './lib/stored-color';
 
@@ -45,18 +46,24 @@ export class TagsService {
    * pages are stable. It was one read, so PostgREST's 1000-row max_rows cut it
    * off with no error: past 1000 tags, every tag whose name sorts after them
    * was missing from the Tags picker and the Tags page (B47). One request
-   * still answers an organization under 1000 tags.
+   * still answers an organization under 1000 tags. It stops at
+   * LOOKUP_ROW_CEILING rows (the first by name, then id), reported once.
    */
   async list(): Promise<TagRow[]> {
-    const rows = await fetchAllRows((from, to) =>
-      this.ctx.supabase
-        .from('tags')
-        .select('id, name, color, created_at')
-        .eq('organization_id', this.ctx.organizationId)
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
+    const rows = await fetchAllRows(
+      (from, to) =>
+        this.ctx.supabase
+          .from('tags')
+          .select('id, name, color, created_at')
+          .eq('organization_id', this.ctx.organizationId)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
     );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('tags.list', { organizationId: this.ctx.organizationId });
+    }
     return rows as TagRow[];
   }
 

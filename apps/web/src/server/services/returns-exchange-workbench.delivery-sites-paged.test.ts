@@ -1,8 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { ceiling, reportError } = vi.hoisted(() => ({
+  // The shared LOOKUP_ROW_CEILING, lowered by the ceiling test.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+
 vi.mock('./lib/fetch-by-ids', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/fetch-by-ids')>()),
   reportDegradedRead: vi.fn(),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the service reads the binding on
+// every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 
 import {
@@ -66,6 +81,8 @@ function stubWith(select: (call: MockCall) => QueryResult) {
 
 beforeEach(() => {
   vi.mocked(reportDegradedRead).mockClear();
+  reportError.mockClear();
+  ceiling.value = 10_000;
 });
 
 describe('readDeliverySites: every active site of the warehouse, past 1000 links', () => {
@@ -93,6 +110,32 @@ describe('readDeliverySites: every active site of the warehouse, past 1000 links
       );
     }
     expect(reportDegradedRead).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * B47 decisions round (2026-11-01): the read stops at LOOKUP_ROW_CEILING
+   * links, the first by charter, and reports it once with the warehouse only;
+   * the chooser offers those links' active sites, by name.
+   */
+  it('stops at the ceiling: the active sites of the first links by charter, by name, reported once', async () => {
+    ceiling.value = 1100;
+    const { stub, ctx } = stubWith(servedLikePostgrest(LINKS));
+
+    const sites = await readDeliverySites(ctx, W);
+
+    expect(sites).toEqual(
+      ACTIVE.slice(0, 1100)
+        .map((l) => ({ id: l.charter.id, name: l.charter.name }))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    );
+    expect(pageArgs(stub, 1, 'range')).toEqual([[1000, 1099]]);
+    expect(reportDegradedRead).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+      tag: 'lookup_ceiling.returns.workbench.delivery_sites',
+      extra: { lookup: 'returns.workbench.delivery_sites', warehouseId: W },
+    });
   });
 
   it('a failed second page answers [] with one degraded-read report, never a partial list', async () => {

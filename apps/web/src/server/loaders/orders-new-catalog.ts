@@ -27,6 +27,7 @@ import {
   settleAsDataError,
 } from '@/server/services/lib/fetch-by-ids';
 import { ServiceError } from '@/server/services/context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import {
   ordersCatalogTag,
   ordersCatalogWarehouseTag,
@@ -388,7 +389,9 @@ const loadChartersForWarehouseCached = unstable_cache(
     // archived charters' links count too (the status filter runs below), so
     // the rest of the sites were missing here and in the phone's order sites,
     // which this loader also serves (B47). The charter order only keeps the
-    // pages stable; the sites are returned by name (below).
+    // pages stable; the sites are returned by name (below). The read stops at
+    // LOOKUP_ROW_CEILING links (the first by charter), reported once per fill:
+    // the cached value is then those links' active sites, by name.
     type LinkRow = { charter: unknown };
     let pairs: LinkRow[];
     try {
@@ -403,6 +406,7 @@ const loadChartersForWarehouseCached = unstable_cache(
             data: LinkRow[] | null;
             error: { message: string } | null;
           }>,
+        { cap: LOOKUP_ROW_CEILING },
       );
     } catch (err) {
       // THROW, never []: a failed read cached as "this warehouse services no
@@ -417,6 +421,9 @@ const loadChartersForWarehouseCached = unstable_cache(
             ? err.message
             : String(err);
       throw new Error(`[orders-new] warehouse charters read failed: ${cause}`);
+    }
+    if (pairs.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('orders_new.delivery_sites', { warehouseId });
     }
     const sites = pairs.flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)

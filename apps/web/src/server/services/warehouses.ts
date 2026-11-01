@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 
 export const createWarehouseSchema = z.object({
@@ -104,12 +105,17 @@ export class WarehousesService {
    * Each warehouse's `charters` come from their own read of the links, every
    * page, ordered by warehouse and then charter (B47 part C), not from a
    * to-many embed. The Admin > Warehouses editor starts from this list and
-   * every save sends it back to WarehouseChartersService.setForWarehouse,
+   * every save sends it back to WarehouseChartersService.prepareSetForWarehouse,
    * which reads every link the same way. With the editor's list cut at 1000
    * (PostgREST may cut an embed like any response), a save that changed
    * nothing would DELETE the links nobody unticked, and the cascade would
    * remove the staff charter assignments on them. Archived charters keep
    * their links and stay named here, as the embed named them.
+   *
+   * The links read stops at LOOKUP_ROW_CEILING for the whole organization
+   * (the first by warehouse, then charter), reported once. A warehouse past
+   * that point gets a cut list, so the save refuses to remove a link while
+   * the organization is at the ceiling (prepareSetForWarehouse).
    */
   async list(opts: { includeArchived?: boolean } = {}): Promise<WarehouseRow[]> {
     const targetStatus = opts.includeArchived ? 'archived' : 'active';
@@ -127,17 +133,24 @@ export class WarehousesService {
         .eq('organization_id', this.ctx.organizationId)
         .eq('status', targetStatus)
         .order('name', { ascending: true }),
-      fetchAllRows<LinkRow>((from, to) =>
-        this.ctx.supabase
-          .from('warehouse_charters')
-          .select('warehouse_id, charter:charters!charter_id (id, name)')
-          .eq('organization_id', this.ctx.organizationId)
-          .order('warehouse_id', { ascending: true })
-          .order('charter_id', { ascending: true })
-          .range(from, to),
+      fetchAllRows<LinkRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('warehouse_charters')
+            .select('warehouse_id, charter:charters!charter_id (id, name)')
+            .eq('organization_id', this.ctx.organizationId)
+            .order('warehouse_id', { ascending: true })
+            .order('charter_id', { ascending: true })
+            .range(from, to),
+        { cap: LOOKUP_ROW_CEILING },
       ),
     ]);
     if (error) throw new ServiceError('internal_error', error.message);
+    if (links.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('warehouses.list.charter_links', {
+        organizationId: this.ctx.organizationId,
+      });
+    }
 
     const chartersByWarehouse = new Map<string, Array<{ id: string; name: string }>>();
     for (const link of links) {
@@ -328,6 +341,21 @@ export class WarehousesService {
     if (patch.address !== undefined) updates.address = patch.address ?? null;
     if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
     if (patch.status !== undefined) updates.status = patch.status;
+
+    // Charter list reconciliation lives in WarehouseChartersService — calling
+    // it from here keeps the audit log + item-conflict checks in one place.
+    // Its checks run BEFORE the warehouse row is written, and its writes
+    // after (B47 decisions round): every refusal of the charter list (items
+    // still tagged to a removed charter, a count that cannot be read, a list
+    // at the lookup ceiling) used to come after the row change was saved, so
+    // a refused save still renamed the warehouse.
+    let applyCharters: (() => Promise<void>) | null = null;
+    if (patch.charterIds !== undefined) {
+      const { WarehouseChartersService } = await import('./warehouse-charters');
+      const svc = new WarehouseChartersService(this.ctx);
+      applyCharters = await svc.prepareSetForWarehouse(id, patch.charterIds);
+    }
+
     if (Object.keys(updates).length > 0) {
       const { error } = await this.ctx.supabase
         .from('warehouses')
@@ -337,13 +365,7 @@ export class WarehousesService {
       if (error) throw new ServiceError('internal_error', error.message);
     }
 
-    // Charter list reconciliation lives in WarehouseChartersService — calling
-    // it from here keeps the audit log + item-conflict checks in one place.
-    if (patch.charterIds !== undefined) {
-      const { WarehouseChartersService } = await import('./warehouse-charters');
-      const svc = new WarehouseChartersService(this.ctx);
-      await svc.setForWarehouse(id, patch.charterIds);
-    }
+    if (applyCharters) await applyCharters();
 
     await audit(
       {

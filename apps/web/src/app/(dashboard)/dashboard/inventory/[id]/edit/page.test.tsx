@@ -62,8 +62,20 @@ vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: svc({ listNames: async () => [{ id: 'wh-1', name: 'North DC' }] }),
 }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: svc({ list: async () => [] }) }));
+// The page's warehouse charter pairs, and the shared LOOKUP_ROW_CEILING (a
+// getter, so a test can lower it: the page reads the binding on every render).
+const { pairs, ceiling } = vi.hoisted(() => ({
+  pairs: { current: [] as Array<{ warehouse_id: string; charter_id: string }> },
+  ceiling: { value: 10_000 },
+}));
 vi.mock('@/server/services/warehouse-charters', () => ({
-  WarehouseChartersService: svc({ listPairs: async () => [] }),
+  WarehouseChartersService: svc({ listPairs: async () => pairs.current }),
+}));
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: svc({
@@ -114,6 +126,8 @@ const page = (id = 'rec-1', ret?: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   ctxHolder.current = { role: 'manager' };
+  pairs.current = [];
+  ceiling.value = 10_000;
 });
 
 describe('Edit item page', () => {
@@ -147,5 +161,37 @@ describe('Edit item page', () => {
     await expect(page('missing')).rejects.toThrow('not-found');
     ctxHolder.current = { role: 'viewer' };
     await expect(page()).rejects.toThrow('redirect:/dashboard/inventory/rec-1');
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): listPairs stops at LOOKUP_ROW_CEILING
+ * links. At that many the list may be cut, so the page tells the form, which
+ * then keeps the record's charter on a warehouse change instead of clearing it
+ * from part of the list (the save checks the pair on the server).
+ */
+describe('Edit item page: the warehouse charter list at the ceiling', () => {
+  const pairsOf = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      warehouse_id: 'wh-1',
+      charter_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    }));
+
+  it('a list that reached the ceiling is passed as cut', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(5);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseCharters: pairs.current, warehouseChartersCapped: true }),
+    );
+  });
+
+  it('a list under the ceiling is passed as whole', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(4);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseChartersCapped: false }),
+    );
   });
 });

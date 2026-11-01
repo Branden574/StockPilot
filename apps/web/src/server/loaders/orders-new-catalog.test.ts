@@ -3,9 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { holdMembership, type BundleMembership } from '@/lib/auth/request-context-bundle';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
-const { createAdminClientMock, createClientMock } = vi.hoisted(() => ({
+const { createAdminClientMock, createClientMock, ceiling, reportError } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   createClientMock: vi.fn(),
+  // The shared LOOKUP_ROW_CEILING, lowered by the delivery sites ceiling test.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the loader reads the binding on
+// every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 
 vi.mock('next/cache', () => ({
@@ -1205,11 +1218,17 @@ describe('loadChartersForWarehouse: every delivery site, past 1000 links', () =>
     return methods.flatMap((m, i) => (m === method ? [args[i]] : []));
   }
 
+  beforeEach(() => {
+    ceiling.value = 10_000;
+    reportError.mockClear();
+  });
+
   it('lists the 1,200 active sites, in two pages ordered by charter, keeping the warehouse on every page', async () => {
     const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(LINKS) });
     createAdminClientMock.mockReturnValue(stub.client);
 
     const sites = await loadChartersForWarehouse(WH);
+    expect(reportError).not.toHaveBeenCalled();
 
     expect(sites).toHaveLength(1200);
     expect(new Set(sites.map((s) => s.id))).toEqual(
@@ -1300,6 +1319,29 @@ describe('loadChartersForWarehouse: every delivery site, past 1000 links', () =>
     );
     expect(sites[0]!.name).toBe('Site 0000');
     expect(sites[1199]!.name).toBe('Site 1199');
+  });
+
+  /**
+   * B47 decisions round (2026-11-01): the read stops at LOOKUP_ROW_CEILING
+   * links, the first by charter, and reports it once with the warehouse only.
+   * The cached value is then the active sites among those links, by name.
+   */
+  it('stops at the ceiling: the active sites of the first links by charter, by name, reported once', async () => {
+    ceiling.value = 1100;
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(LINKS) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    // Charters 0-1199 are active and sort before the archived 5000-5029.
+    expect(sites.map((s) => s.id)).toEqual(Array.from({ length: 1100 }, (_, i) => charterId(i)));
+    expect(argsOf(stub, 1, 'range')).toEqual([[1000, 1099]]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+      tag: 'lookup_ceiling.orders_new.delivery_sites',
+      organizationId: null,
+      extra: { lookup: 'orders_new.delivery_sites', warehouseId: WH },
+    });
   });
 });
 

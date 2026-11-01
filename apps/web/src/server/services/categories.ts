@@ -25,6 +25,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 import { assertStoredColor } from './lib/stored-color';
 
@@ -101,29 +102,37 @@ export class CategoriesService {
    * 1000-row max_rows cut it off with no error: an organization with more than
    * 1000 categories lost every category whose name sorts past them from the
    * Category filter, the item forms and the Categories page (B47). One request
-   * still answers an organization under 1000 categories.
+   * still answers an organization under 1000 categories. It stops at
+   * LOOKUP_ROW_CEILING rows (the first by name, then id), reported once.
    */
   async list(opts: { includeArchived?: boolean } = {}) {
-    return fetchAllRows((from, to) => {
-      const query = this.ctx.supabase
-        .from('categories')
-        // A single string literal, deliberately not built via `+` concatenation:
-        // postgrest-js's select-string parser needs a literal type to resolve
-        // column-by-column, and splitting this across `+` widens it to plain
-        // `string` — which the parser can't narrow, so it falls back to
-        // `GenericStringError` for the whole row type (surfaced everywhere this
-        // service's return value is destructured, not just here).
-        .select(
-          'id, parent_id, name, description, color, icon, supports_sizes, public_visibility, tracking_mode, size_scale_id, default_unit_of_measure, sports_subcategory_key, tracking_profile, deleted_at, created_at, updated_at',
+    const rows = await fetchAllRows(
+      (from, to) => {
+        const query = this.ctx.supabase
+          .from('categories')
+          // A single string literal, deliberately not built via `+` concatenation:
+          // postgrest-js's select-string parser needs a literal type to resolve
+          // column-by-column, and splitting this across `+` widens it to plain
+          // `string` — which the parser can't narrow, so it falls back to
+          // `GenericStringError` for the whole row type (surfaced everywhere this
+          // service's return value is destructured, not just here).
+          .select(
+            'id, parent_id, name, description, color, icon, supports_sizes, public_visibility, tracking_mode, size_scale_id, default_unit_of_measure, sports_subcategory_key, tracking_profile, deleted_at, created_at, updated_at',
+          )
+          .eq('organization_id', this.ctx.organizationId);
+        return (
+          opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
         )
-        .eq('organization_id', this.ctx.organizationId);
-      return (
-        opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
-      )
-        .order('name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to);
-    });
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+      },
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('categories.list', { organizationId: this.ctx.organizationId });
+    }
+    return rows;
   }
 
   /**

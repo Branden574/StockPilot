@@ -1,8 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { ceiling, reportError } = vi.hoisted(() => ({
+  // The shared LOOKUP_ROW_CEILING, lowered by the ceiling tests.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the services read the binding on
+// every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
+}));
 
 import {
+  countedLikePostgrest,
   makeServiceContext,
   makeSupabaseStub,
   servedLikePostgrest,
@@ -91,6 +107,11 @@ function pageArgs(stub: SupabaseStub, key: string, page: number, method: string)
   return methods.flatMap((m, i) => (m === method ? [args[i]!] : []));
 }
 
+beforeEach(() => {
+  ceiling.value = 10_000;
+  reportError.mockClear();
+});
+
 describe('WarehousesService.list builds each warehouse charters from every link', () => {
   let writes: MockCall[];
 
@@ -170,5 +191,130 @@ describe('WarehousesService.list builds each warehouse charters from every link'
       code: 'internal_error',
       internalDetail: expect.stringContaining('statement timeout'),
     });
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): the links read stops at
+ * LOOKUP_ROW_CEILING for the whole organization and reports it. The editor
+ * then starts from a cut list, so its save must refuse instead of removing
+ * the links it could not show; and every refusal of the charter list comes
+ * before the warehouse row is written (lead L-7).
+ */
+describe('Admin > Warehouses at LOOKUP_ROW_CEILING, and the order of the save', () => {
+  let writes: { rows: MockCall[]; links: MockCall[]; counts: MockCall[] };
+
+  beforeEach(() => {
+    writes = { rows: [], links: [], counts: [] };
+  });
+
+  function stubWith(opts: { items?: Array<Record<string, unknown>> } = {}) {
+    const itemsCounted = countedLikePostgrest(opts.items ?? []);
+    const record = (into: MockCall[]) => (call: MockCall) => {
+      into.push(call);
+      return { data: null, error: null };
+    };
+    return makeSupabaseStub({
+      'warehouses.select': servedLikePostgrest(WAREHOUSES),
+      'warehouses.update': record(writes.rows),
+      'warehouse_charters.select': countedLikePostgrest(LINKS),
+      'warehouse_charters.insert': record(writes.links),
+      'warehouse_charters.delete': record(writes.links),
+      'inventory_items.select': (call) => {
+        writes.counts.push(call);
+        return itemsCounted(call);
+      },
+    });
+  }
+
+  it("list(): the first links by warehouse then charter, the organization's ceiling reported once", async () => {
+    ceiling.value = 1100;
+    const stub = stubWith();
+
+    const list = await new WarehousesService(makeServiceContext(stub.client) as never).list();
+
+    // W1 sorts first: its first 1100 links by charter (the archived charter's
+    // id sorts last, so it is past the ceiling); W2 gets none of its 300.
+    const north = list.find((w) => w.id === W1)!;
+    expect(north.charters).toHaveLength(1100);
+    expect(north.charters.map((c) => c.id)).not.toContain(ARCHIVED_CHARTER);
+    expect(list.find((w) => w.id === W2)!.charters).toEqual([]);
+    expect(pageArgs(stub, 'warehouse_charters.select', 1, 'range')).toEqual([[1000, 1099]]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+      tag: 'lookup_ceiling.warehouses.list.charter_links',
+      extra: { lookup: 'warehouses.list.charter_links', organizationId: ORG },
+    });
+  });
+
+  it.each([
+    // W2's 300 links are rows 1200-1499 of the organization's read: the
+    // editor shows 200 of them, though W2's own read (300) is under it.
+    ['W2, whose list the ceiling cuts', 1400, W2, 200, '1,400 or more warehouse charter links'],
+    ['W2, past the ceiling altogether', 1100, W2, 0, '1,100 or more warehouse charter links'],
+    // W1's own 1200 links reach it: the save cannot compare against them.
+    ['W1, whose own links reach it', 1100, W1, 1100, 'This warehouse is linked to 1,100 or more'],
+  ] as const)(
+    "saving the editor's list unchanged for %s refuses: no row, no link written",
+    async (_label, at, warehouseId, shown, words) => {
+      ceiling.value = at;
+      const stub = stubWith();
+      const ctx = makeServiceContext(stub.client) as never;
+
+      const list = await new WarehousesService(ctx).list();
+      const ids = list.find((w) => w.id === warehouseId)!.charters.map((c) => c.id);
+      expect(ids).toHaveLength(shown);
+
+      await expect(
+        new WarehousesService(ctx).update(warehouseId, { name: 'Renamed', charterIds: ids }),
+      ).rejects.toMatchObject({ code: 'conflict', message: expect.stringContaining(words) });
+      expect(writes).toEqual({ rows: [], links: [], counts: [] });
+    },
+  );
+
+  it('a charter save refused for items still tagged to it writes no warehouse row (L-7: the refusal comes first)', async () => {
+    const removed = W1_LINKS[3]!.charter_id;
+    const stub = stubWith({
+      items: [
+        {
+          id: 'item-1',
+          organization_id: ORG,
+          warehouse_id: W1,
+          charter_id: removed,
+          deleted_at: null,
+        },
+      ],
+    });
+    const ids = W1_LINKS.map((l) => l.charter_id).filter((id) => id !== removed);
+
+    await expect(
+      new WarehousesService(makeServiceContext(stub.client) as never).update(W1, {
+        name: 'North renamed',
+        charterIds: [...ids, '00000000-0000-4000-8000-000000009999'],
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      message: expect.stringContaining('Cannot remove a charter'),
+    });
+    // Not the rename, not the added link, not the removal.
+    expect(writes.rows).toEqual([]);
+    expect(writes.links).toEqual([]);
+    expect(writes.counts).toHaveLength(1);
+  });
+
+  it('a save that passes its checks writes the row, then the links', async () => {
+    const removed = W1_LINKS[3]!.charter_id;
+    const stub = stubWith();
+    const ids = W1_LINKS.map((l) => l.charter_id).filter((id) => id !== removed);
+
+    await new WarehousesService(makeServiceContext(stub.client) as never).update(W1, {
+      name: 'North renamed',
+      charterIds: ids,
+    });
+
+    expect(writes.rows).toHaveLength(1);
+    expect(writes.rows[0]!.args[0]![0]).toEqual({ name: 'North renamed' });
+    expect(writes.links).toHaveLength(1);
+    expect(writes.links[0]!.op).toBe('delete');
   });
 });
