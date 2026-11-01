@@ -542,6 +542,9 @@ export interface DashboardSummary {
   itemCount: number;
   outOfStockCount: number;
   lowStockCount: number;
+  /** Cost-basis value of the active items that are not rental items, like the
+   *  Value breakdown and the Items and Books totals (B78). The three counts
+   *  above still include rental items. */
   inventoryValue: number;
 }
 
@@ -551,6 +554,8 @@ export interface DashboardSummary {
  * get_dashboard_summary RPC (single index scan, fastest path). When a
  * warehouse filter is active, falls back to a direct aggregate query
  * scoped to that warehouse so manager-level filters honor on the dash.
+ * Both paths leave rental items out of the value and count them as items
+ * (B78: the RPC since its migration, the warehouse path below).
  */
 export async function getDashboardSummary(
   options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
@@ -604,8 +609,8 @@ export async function getDashboardSummary(
   }
 
   // Warehouse-scoped path: PostgREST aggregate isn't great here, so we
-  // pull just the four numeric columns we need and roll up in TS. Cheap
-  // because we filter by warehouse_id (indexed) and project 4 columns.
+  // pull just the numeric columns and flags we need and roll up in TS. Cheap
+  // because we filter by warehouse_id (indexed) and project 6 columns.
   // PAGINATED: a bare select is silently capped at 1000 rows, so a warehouse
   // with >1000 items would roll up a wrong (truncated) dashboard summary.
   const data = await fetchAllRows<{
@@ -614,10 +619,13 @@ export async function getDashboardSummary(
     unit_cost: number;
     status: string;
     awaiting_first_receipt: boolean;
+    is_rental: boolean;
   }>((from, to) =>
     ctx.supabase
       .from('inventory_items')
-      .select('quantity_on_hand, reorder_point, unit_cost, status, awaiting_first_receipt')
+      .select(
+        'quantity_on_hand, reorder_point, unit_cost, status, awaiting_first_receipt, is_rental',
+      )
       .eq('organization_id', ctx.organizationId)
       .eq('warehouse_id', options.warehouseId)
       .is('deleted_at', null)
@@ -631,7 +639,13 @@ export async function getDashboardSummary(
   for (const r of data) {
     if (r.status !== 'active') continue;
     itemCount += 1;
-    inventoryValue += (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0);
+    // B78: a rental item adds no value (the RPC's `is_rental = false`, the
+    // Value breakdown's rule); it still counts as an item, and below as out
+    // or low. is_rental is NOT NULL and selected above, so `=== false` is
+    // that same test.
+    if (r.is_rental === false) {
+      inventoryValue += (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0);
+    }
     // Expected items (mig 0277) are qty-0 phantoms from inbound POs —
     // never count them as out-of-stock/low (mirrors the RPC-path
     // correction above; itemCount/value stay untouched there too).
@@ -740,8 +754,10 @@ export interface DashboardHistory {
   /** Daily inventory value (cost basis), length `rangeDays`, oldest → newest.
       Since migration 0230: closed days are OBSERVED values snapshotted at
       each UTC day close — they no longer drift when unit_cost is edited or an
-      item is deleted after the fact; today is computed live. The last index
-      matches summary.inventoryValue. */
+      item is deleted after the fact; today is computed live. Every day leaves
+      rental items out (B78): today and every day snapshotted since the B78
+      migration by rule, earlier days because that migration took their
+      rental share out once. The last index matches summary.inventoryValue. */
   inventoryValueSeries: number[];
   /** Daily count of items where qty <= reorder_point (and reorder_point > 0),
       length `rangeDays`, oldest → newest. Since migration 0230: observed at
@@ -809,10 +825,17 @@ export function mapHistorySeries(rows: HistorySeriesRow[], rangeDays: number): D
  * from current state. Return shape and row counts are unchanged (one row per
  * day_index 0..N-1), so this mapper is untouched.
  *
+ * RENTAL ITEMS (B78): the value leaves them out on every path, as the Value
+ * breakdown does; the item and low/out counts still include them. Closed days
+ * snapshotted since the B78 migration leave them out by rule; that migration
+ * took the rental share out of every earlier stored day once (an estimate,
+ * the one rewrite of observed days), so the line has no step on its day.
+ *
  * Fallbacks (inside the RPC): warehouseId set → snapshots are org-wide, so
  * the old fully-scoped math runs via dashboard_history_series_reconstructed
- * (the 0228 body, kept verbatim); any closed day missing from snapshots
- * (new org, missed cron) → same reconstructed path for the whole window.
+ * (0228's body, except that since the B78 migration it values a rental item
+ * at 0); any closed day missing from snapshots (new org, missed cron) → same
+ * reconstructed path for the whole window.
  * Only on those fallback (and gap-healed) days do the old approximation
  * notes still apply: deleted items' history is lost and unit_cost/
  * reorder_point are treated as constant at today's value.

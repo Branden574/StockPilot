@@ -4,6 +4,7 @@ import Link from 'next/link';
 import {
   toBreakdownSlices,
   toMovementBars,
+  toValuePerItem,
   toValueSeries,
 } from '@/components/dashboard/charts/widget-data';
 import {
@@ -433,7 +434,12 @@ async function DashboardBody({
   const healthyCount = Math.max(summary.itemCount - attentionStockCount, 0);
   const healthRate =
     summary.itemCount > 0 ? Math.round((healthyCount / summary.itemCount) * 100) : 100;
-  const valuePerSku = summary.itemCount > 0 ? summary.inventoryValue / summary.itemCount : 0;
+  // Avg value / SKU from the Value breakdown's rows (B78): their value and
+  // item count cover the same items, rental items left out, while
+  // summary.itemCount still counts rental items. For the topbar's warehouse
+  // when one is selected, like the card. No extra read: `valuation` is in
+  // the fan-out above.
+  const valuePerSku = toValuePerItem(valuation, warehouseFilter);
 
   // "Needs attention" list — five categories, fixed priority order.
   // Each surfaced only when its count is > 0. Rank ascending = most urgent

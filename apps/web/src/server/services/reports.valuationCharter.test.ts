@@ -107,9 +107,10 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
     expect(result.totalValue).toBe(56); // 5*10 + 2*3
     expect(result.totalUnits).toBe(7);
     expect(result.itemCount).toBe(2);
+    // Each warehouse row counts its items, as the whole-org view does (B78).
     expect(result.byWarehouse).toEqual([
-      { warehouseId: 'w1', warehouseName: 'WH1', value: 50, units: 5 },
-      { warehouseId: null, warehouseName: 'Unassigned', value: 6, units: 2 },
+      { warehouseId: 'w1', warehouseName: 'WH1', value: 50, units: 5, itemCount: 1 },
+      { warehouseId: null, warehouseName: 'Unassigned', value: 6, units: 2, itemCount: 1 },
     ]);
     expect(result.byCategory).toEqual([
       { categoryId: 'c1', categoryName: 'Widgets', value: 50, units: 5 },
@@ -125,6 +126,38 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
       .map((m, i) => (m === 'eq' ? args[i] : null))
       .filter((a): a is unknown[] => a !== null);
     expect(eqCalls).toContainEqual(['charter_id', CHARTER_X]);
+  });
+
+  // B78: the charter path builds its warehouse rows in JS, so it counts each
+  // row's items itself, every item in that warehouse, as the view's
+  // item_count does on the whole-org path.
+  it('(b2) charter path: a warehouse row counts every item in that warehouse', async () => {
+    const item = (id: string, warehouseId: string | null) => ({
+      id,
+      sku: id,
+      name: id,
+      quantity_on_hand: 1,
+      unit_cost: 1,
+      warehouse_id: warehouseId,
+      category_id: null,
+      warehouse: warehouseId ? { name: 'WH1' } : null,
+      category: null,
+    });
+    const stub = makeSupabaseStub({
+      'charters.select': { data: [{ id: CHARTER_X }], error: null },
+      'inventory_items.select': {
+        data: [item('i1', 'w1'), item('i2', 'w1'), item('i3', 'w1'), item('i4', null)],
+        error: null,
+      },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    const result = await svc.inventoryValuation({ charterId: CHARTER_X });
+
+    expect(result.byWarehouse.map((w) => [w.warehouseId, w.itemCount])).toEqual([
+      ['w1', 3],
+      [null, 1],
+    ]);
   });
 
   it('(c) charterId not in the org (foreign/nonexistent) → empty/zero, not a leak', async () => {

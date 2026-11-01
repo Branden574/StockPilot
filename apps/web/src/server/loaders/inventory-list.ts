@@ -1446,8 +1446,9 @@ async function loadInventoryValueOnHandUncached(
   // status='active' + item_type by view + is_rental=false + optional
   // warehouse — asserted by the 0227 pgTAP behavioral test. (The 0179
   // valuation views and get_dashboard_summary were checked and rejected:
-  // neither carries the item_type split, and the latter also lacks
-  // is_rental.) SECURITY: execute is revoked from anon/authenticated;
+  // neither carries the item_type split. get_dashboard_summary has left
+  // rental items out of its value since the B78 migration, too.) SECURITY:
+  // execute is revoked from anon/authenticated;
   // only this service-role client may call it, and the ORG SCOPE comes
   // from the loader's own cache key — never from user input.
   // NOTE (mig 0277): the RPC does not carry the awaiting_first_receipt

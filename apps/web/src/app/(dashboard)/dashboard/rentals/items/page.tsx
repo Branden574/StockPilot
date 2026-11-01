@@ -249,6 +249,10 @@ export default async function RentalItemsPage({
             <InventoryTable
               items={itemsWithImages}
               total={rentalTotal}
+              // The footer's "$N on hand": list()'s sum over every rental item
+              // in the view, not the 50 on this page (B78). Rental value is
+              // shown here, since the Overview's Inventory value leaves it out.
+              valueOnHand={inventory.valueOnHand}
               lookups={lookups}
               canCreate={canCreate}
               categories={categories.map((c) => ({

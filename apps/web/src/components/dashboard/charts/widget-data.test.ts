@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  toBreakdownSlices,
-  toMovementBars,
-  toValueSeries,
-} from './widget-data';
+import { toBreakdownSlices, toMovementBars, toValuePerItem, toValueSeries } from './widget-data';
 
 describe('toValueSeries', () => {
   it('labels the final point "Today" and counts back "D-N" for the rest', () => {
@@ -42,8 +38,8 @@ describe('toBreakdownSlices', () => {
       { categoryId: null, categoryName: 'Uncategorized', value: 25, units: 5 },
     ],
     byWarehouse: [
-      { warehouseId: 'w1', warehouseName: 'Main', value: 80, units: 8 },
-      { warehouseId: null, warehouseName: 'Unassigned', value: -5, units: 0 },
+      { warehouseId: 'w1', warehouseName: 'Main', value: 80, units: 8, itemCount: 2 },
+      { warehouseId: null, warehouseName: 'Unassigned', value: -5, units: 0, itemCount: 1 },
     ],
   };
 
@@ -68,6 +64,51 @@ describe('toBreakdownSlices', () => {
   it('falls back to "__none" key for null ids', () => {
     const out = toBreakdownSlices(report, 'category');
     expect(out.find((s) => s.name === 'Uncategorized')?.key).toBe('__none');
+  });
+});
+
+// B78: Avg value / SKU divided the card's value by the card's item count, and
+// both counted rental items. It now comes from the Value breakdown's rows,
+// which carry a value and an item count over the same items (rental items
+// left out), so the two numbers always describe the same set.
+describe('toValuePerItem', () => {
+  const report = {
+    totalValue: 120,
+    itemCount: 6,
+    byWarehouse: [
+      { warehouseId: 'w1', warehouseName: 'Main', value: 80, units: 8, itemCount: 2 },
+      { warehouseId: 'w2', warehouseName: 'Annex', value: 40, units: 4, itemCount: 4 },
+    ],
+  };
+
+  it('with no warehouse selected: total value over the item count', () => {
+    expect(toValuePerItem(report, null)).toBe(20);
+    expect(toValuePerItem(report, undefined)).toBe(20);
+  });
+
+  it("with a warehouse selected: that warehouse's value over its item count", () => {
+    expect(toValuePerItem(report, 'w1')).toBe(40);
+    expect(toValuePerItem(report, 'w2')).toBe(10);
+  });
+
+  it('is 0 for a warehouse with no row (no items there that carry a value)', () => {
+    expect(toValuePerItem(report, 'w9')).toBe(0);
+  });
+
+  it('is 0, never NaN or Infinity, when there are no items', () => {
+    expect(toValuePerItem({ totalValue: 0, itemCount: 0, byWarehouse: [] }, null)).toBe(0);
+    expect(
+      toValuePerItem(
+        {
+          totalValue: 0,
+          itemCount: 0,
+          byWarehouse: [
+            { warehouseId: 'w1', warehouseName: 'Main', value: 0, units: 0, itemCount: 0 },
+          ],
+        },
+        'w1',
+      ),
+    ).toBe(0);
   });
 });
 

@@ -105,6 +105,7 @@ beforeEach(() => {
   h.list.mockImplementation(async () => ({
     items: h.total > 0 ? [rentalItem('r1')] : [],
     total: h.total,
+    valueOnHand: h.total > 0 ? 4321.5 : 0,
     elsewhereUnavailable: false,
   }));
   h.total = 1;
@@ -138,6 +139,16 @@ describe('Rentals items: the Table / Grid choice comes from its own cookie', () 
     // Its search box asks for this same set (rentals of every type); without
     // it a typed SKU or name found nothing on this page.
     expect(props.rentalsOnly).toBe(true);
+  });
+
+  // B78: the "$N on hand" footer is where rental value shows, now that the
+  // Overview's Inventory value leaves rental items out. Without the list's
+  // own total the table summed only the rows on screen (50 a page), so with
+  // more rental items than that the footer came up short.
+  it("the footer's value is the list's total over every rental item in the view, not one page", async () => {
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.valueOnHand).toBe(4321.5);
   });
 });
 

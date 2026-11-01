@@ -42,7 +42,16 @@ export interface ValuationReport {
   totalValue: number;
   totalUnits: number;
   itemCount: number;
-  byWarehouse: Array<{ warehouseId: string | null; warehouseName: string; value: number; units: number }>;
+  /** One row per warehouse; `itemCount` counts its items, as the report's
+   *  `itemCount` does for all of them (the Overview's Avg value / SKU for a
+   *  warehouse divides by it, B78). */
+  byWarehouse: Array<{
+    warehouseId: string | null;
+    warehouseName: string;
+    value: number;
+    units: number;
+    itemCount: number;
+  }>;
   byCategory: Array<{ categoryId: string | null; categoryName: string; value: number; units: number }>;
 }
 
@@ -460,7 +469,13 @@ export class ReportsService {
 
     const byWarehouse = new Map<
       string,
-      { warehouseId: string | null; warehouseName: string; value: number; units: number }
+      {
+        warehouseId: string | null;
+        warehouseName: string;
+        value: number;
+        units: number;
+        itemCount: number;
+      }
     >();
     const byCategory = new Map<
       string,
@@ -482,9 +497,11 @@ export class ReportsService {
           warehouseName: wh?.name ?? 'Unassigned',
           value: 0,
           units: 0,
+          itemCount: 0,
         };
         whEntry.value += value;
         whEntry.units += qty;
+        whEntry.itemCount += 1;
         byWarehouse.set(whKey, whEntry);
 
         const catKey = rec.category_id ?? '__none';
@@ -554,6 +571,7 @@ export class ReportsService {
         warehouse_name: string | null;
         value: number;
         units: number;
+        item_count: number;
       }>
     )
       .map((r) => ({
@@ -561,6 +579,7 @@ export class ReportsService {
         warehouseName: r.warehouse_name ?? 'Unassigned',
         value: Number(r.value) || 0,
         units: Number(r.units) || 0,
+        itemCount: Number(r.item_count) || 0,
       }))
       // A view has no row order: ties on value break by name, then id, so
       // tied warehouses keep their places from one load to the next.

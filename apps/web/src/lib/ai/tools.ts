@@ -637,7 +637,7 @@ const getDashboardSummaryTool: ToolExecutor = {
   declaration: {
     name: 'getDashboardSummary',
     description:
-      'Overall workspace metrics: total active items, out-of-stock count, low-stock count, and total inventory value (sum of qty * unit_cost). Optionally scope to a warehouse.',
+      'Overall workspace metrics: total active items, out-of-stock count, low-stock count, and total inventory value (sum of qty * unit_cost over items that are not rental items; the counts include rental items). Optionally scope to a warehouse.',
     parameters: {
       type: SchemaType.OBJECT,
       properties: {

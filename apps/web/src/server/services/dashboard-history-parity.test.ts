@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -37,14 +40,23 @@ import {
  *
  * MIGRATION 0230 (snapshot rollups): the public RPCs now read closed days from
  * precomputed snapshot tables (OBSERVED UTC-day closes) and compute only TODAY
- * live; the 0228/0224 bodies pinned here live on VERBATIM as
+ * live; the 0228/0224 bodies pinned here live on as
  * dashboard_history_series_reconstructed / dashboard_movement_metrics_
  * reconstructed — they are (a) what the nightly refresh derives snapshots
  * from and (b) the RPCs' fallback for warehouse-scoped calls and windows with
- * missing snapshot days. So this suite still guards live prod math; NOTHING
- * here may be weakened. The snapshot read path itself (hit / gap-fallback /
- * warehouse-fallback / today-live) is asserted by
- * supabase/tests/0230_dashboard_snapshot_rollups.test.sql.
+ * missing snapshot days. So this suite still guards live prod math (rental
+ * items aside, below); NOTHING here may be weakened. The snapshot read path
+ * itself (hit / gap-fallback / warehouse-fallback / today-live) is asserted
+ * by supabase/tests/0230_dashboard_snapshot_rollups.test.sql.
+ *
+ * RENTAL ITEMS (B78): the B78 migration re-created the history body with one
+ * change from 0228's: a rental item's cost is 0, so it adds no value on any
+ * day while it still counts in item_count and low/out. It left the movement
+ * body alone. ItemFix has no is_rental, so the history simulations here
+ * mirror the live body only for items that are not rental items. The rental
+ * rule is pinned by
+ * supabase/tests/0421_overview_value_leaves_out_rental_items.test.sql.
+ * The last describe block holds these comments to the newest migration.
  *
  * If the RPC math ever drifts from the reverse-walk, `mapX(simulateX(...))` will
  * stop deep-equalling `referenceX(...)`. The actual SQL is separately hand-
@@ -620,5 +632,62 @@ describe('dashboard_movement_metrics parity (RPC rollup vs pre-0224 JS count)', 
       { type: 'receive_po', count: 1, share: 1 / 5 },
     ]);
     expect(m.dailyCounts.reduce((s, n) => s + n, 0)).toBe(9);
+  });
+});
+
+// ── What the comments say about the live reconstructed history body (B78) ───
+// Since the B78 migration, dashboard_history_series_reconstructed values a
+// rental item at 0. ItemFix has no is_rental, so the simulations above mirror
+// that body only for items that are not rental items. A comment calling the
+// body 0228's word for word invites a rewrite that copies 0228 back and drops
+// the rule, so the comments are checked against the newest migration that
+// re-creates the function.
+describe('comments on dashboard_history_series_reconstructed match its newest body (B78)', () => {
+  const REPO_ROOT = path.resolve(__dirname, '../../../../..');
+  const MIGRATIONS_DIR = path.join(REPO_ROOT, 'supabase/migrations');
+  /** SQL with `--` comments removed, so prose never counts as code. */
+  const code = (sql: string): string => sql.replace(/--[^\n]*/g, '');
+  const DEFINES =
+    /create\s+(or\s+replace\s+)?function\s+public\.dashboard_history_series_reconstructed\s*\(/i;
+
+  const newest = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+    .sort()
+    .map((file) => ({ file, sql: code(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')) }))
+    .filter(({ sql }) => DEFINES.test(sql))
+    .at(-1);
+  const body = (() => {
+    if (!newest) return '';
+    const open = newest.sql.indexOf('$$', newest.sql.search(DEFINES));
+    return newest.sql.slice(open, newest.sql.indexOf('$$', open + 2));
+  })();
+
+  it('the newest body reads is_rental: a rental item adds no value', () => {
+    expect(newest?.file).toBeDefined();
+    expect(body).toMatch(/\bis_rental\b/);
+  });
+
+  it("getDashboardHistory's docblock does not call the body verbatim", () => {
+    const src = readFileSync(path.join(__dirname, 'movements.ts'), 'utf8');
+    const fn = src.indexOf('export async function getDashboardHistory(');
+    expect(fn).toBeGreaterThan(0);
+    const doc = src.slice(src.lastIndexOf('/**', fn), fn);
+    expect(doc).toContain('dashboard_history_series_reconstructed');
+    expect(doc).not.toMatch(/verbatim/i);
+  });
+
+  it("this suite's header names an existing pgTAP file that runs the body with a rental item", () => {
+    const self = readFileSync(path.join(__dirname, 'dashboard-history-parity.test.ts'), 'utf8');
+    const start = self.indexOf('/**');
+    const header = self.slice(start, self.indexOf('*/', start));
+    expect(header).toContain('PARITY SUITE');
+    const named = [...header.matchAll(/supabase\/tests\/[\w.-]+\.test\.sql/g)].map((m) => m[0]);
+    // readFileSync throws on a name that no longer exists (a renumbered
+    // migration's test file), so a stale pointer fails here too.
+    const pins = named.filter((rel) => {
+      const sql = code(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+      return /dashboard_history_series_reconstructed\s*\(/.test(sql) && /\bis_rental\b/.test(sql);
+    });
+    expect(pins).not.toEqual([]);
   });
 });

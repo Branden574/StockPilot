@@ -26,6 +26,16 @@ const calls = vi.hoisted(() => ({
   awaitingSignature: vi.fn(async () => 0),
   /** The viewer's organization (the Demo Co check). */
   orgId: 'org-1',
+  /** What ReportsService.inventoryValuationSummary answers (the Value breakdown). */
+  valuation: {
+    totalValue: 50,
+    totalUnits: 9,
+    itemCount: 4,
+    byWarehouse: [] as unknown[],
+    byCategory: [] as unknown[],
+  },
+  /** widget-data's toValuePerItem (Avg value / SKU), tested in widget-data.test.ts. */
+  toValuePerItem: vi.fn((_report: unknown, _warehouseId: unknown) => 12.5),
 }));
 
 // ── The fan-out's services. `summary` is held open by the timing tests. ──
@@ -70,7 +80,7 @@ vi.mock('@/server/services/purchase-orders', () => ({
 }));
 vi.mock('@/server/services/reports', () => ({
   ReportsService: {
-    forCurrentUser: async () => ({ inventoryValuationSummary: async () => ({}) }),
+    forCurrentUser: async () => ({ inventoryValuationSummary: async () => calls.valuation }),
   },
 }));
 
@@ -132,6 +142,8 @@ vi.mock('@/components/dashboard/widgets', () => ({
 vi.mock('@/components/dashboard/charts/widget-data', () => ({
   toBreakdownSlices: () => [],
   toMovementBars: () => [],
+  toValuePerItem: (report: unknown, warehouseId: unknown) =>
+    calls.toValuePerItem(report, warehouseId),
   toValueSeries: () => [],
 }));
 vi.mock('@/components/dashboard/scoped-warehouse-notice', () => ({
@@ -268,6 +280,25 @@ describe('/dashboard data body: one wave', () => {
     ).done;
     // warehouse yes, team (2 members) yes, item yes, MFA no: not complete.
     expect(widgetProps.mock.calls[0]![0]).toMatchObject({ checklistComplete: false });
+  });
+});
+
+// B78: Avg value / SKU was the card's value over the card's item count, and
+// both counted rental items, so it mixed rental value into a per-item figure
+// the Value breakdown never showed. It now comes from the Value breakdown's
+// own rows (value and item count over the same items, rental items left out),
+// for the topbar's warehouse when one is selected. No new read: the valuation
+// is already in the page's one fan-out.
+describe('/dashboard: Avg value / SKU comes from the Value breakdown (B78)', () => {
+  it("is toValuePerItem of the page's valuation for the selected warehouse", async () => {
+    await (
+      await startBody()
+    ).done;
+    expect(calls.toValuePerItem).toHaveBeenCalledTimes(1);
+    expect(calls.toValuePerItem).toHaveBeenCalledWith(calls.valuation, 'wh-1');
+    expect(widgetProps.mock.calls[0]![0]).toMatchObject({ valuePerSku: 12.5 });
+    // The card itself still shows the summary's value and item count.
+    expect(widgetProps.mock.calls[0]![0]).toMatchObject({ inventoryValue: 90, itemCount: 3 });
   });
 });
 
