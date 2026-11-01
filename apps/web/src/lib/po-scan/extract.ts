@@ -7,6 +7,7 @@ import { resolveAiProvider } from '@/lib/ai/provider';
 import { normalizeApparelLineNames } from '@/lib/po-scan/apparel-names';
 import { dropDuplicateNewIsbnLines } from '@/lib/po-scan/dedupe';
 import { env } from '@/lib/env';
+import { ServiceError } from '@/server/services/context';
 
 /**
  * Strict JSON schema we hand to Gemini's structured-output mode. Every
@@ -472,7 +473,11 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
   }));
 
   if (parsed.lines.length === 0 && parsed.overallConfidence < 0.3) {
-    throw new Error(
+    // A ServiceError: the one sentence here written for the person, which the
+    // scan route answers as it is (a plain Error there is answered with the
+    // fixed sentence and reported, which hid this one since S16).
+    throw new ServiceError(
+      'validation_error',
       "This doesn't look like a purchase order — try a clearer photo of the full document.",
     );
   }
