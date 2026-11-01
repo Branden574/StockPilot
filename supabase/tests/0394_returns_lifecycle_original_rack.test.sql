@@ -1721,7 +1721,11 @@ select is(
        -- Re-pinned by 0395 (was a223ae83810149728156b8e299c7425e): the approved
        -- notification says when only part is held (0395 R4); RX-1 reads no
        -- notification text.
-       ('public._notify_order_request_changes()',                     '438e676429dda6fb9d2b8faee8d6dd59'),
+       -- Re-pinned by the notice audience migration (S36a; was
+       -- 438e676429dda6fb9d2b8faee8d6dd59): the New order request alert follows
+       -- orders:approve and warehouse write, and the requester is pinged only
+       -- while a member; no check in this suite reads who is told.
+       ('public._notify_order_request_changes()',                     'ca103ffa6669cdb7b885099c9a794fb5'),
        ('public._validate_order_request_status_transition()',         'dee8cd4782ec83abdb31a2b48fcd4ef2'),
        ('public.tg_order_requests_insert_guard()',                    'caf69f8a23d03b9bfa6ea87a9cf94077'),
        ('public.tg_order_request_lines_guard()',                      'd899924c0f8fc1dfae4e8be7bd4c5cad'),
@@ -1732,7 +1736,10 @@ select is(
        -- branch also requires a member with Orders on (0395 R3); the hand-over
        -- accounting is unchanged.
        ('public.confirm_physical_signature(uuid,text)',               'c0d1c11d31dd86e072f05b72f299535c'),
-       ('public._notify_recipients(uuid)',                            '679e6193e3dbe5644055e835e8209043'),
+       -- Re-pinned by the notice audience migration (S36a; was
+       -- 679e6193e3dbe5644055e835e8209043): one added line leaves an Act-as seat
+       -- out; no check in this suite reads who is told.
+       ('public._notify_recipients(uuid)',                            '7b53d7d107211e42620800cb1de7d476'),
        ('public._dispatch_push_for_notification()',                   '17f00da160feb6a7d6609cca4fb6337e'),
        ('public.has_permission(uuid,text)',                           'cc0accdad7e2fdf4f88aa82aa887e85f'),
        ('public.user_can_access_inventory(uuid,uuid,uuid,text)',      '8a214b77e32a052ca3bf07a2be39a8ae'),

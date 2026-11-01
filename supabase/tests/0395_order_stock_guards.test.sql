@@ -484,8 +484,12 @@ select is(
         end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')),
-  '438e676429dda6fb9d2b8faee8d6dd59|a223ae83810149728156b8e299c7425e',
-  'R4: _notify_order_request_changes has 0395''s body (md5 438e6764), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
+  -- Re-pinned by the notice audience migration (S36a; was
+  -- 438e676429dda6fb9d2b8faee8d6dd59|a223ae83810149728156b8e299c7425e): its suite's
+  -- T7a puts 0395's text back and gets 438e6764; the partial-approval sentence
+  -- below is unchanged and still the only text this check removes.
+  'ca103ffa6669cdb7b885099c9a794fb5|4a48545125a614e8e609a04a3ff862dc',
+  'R4: _notify_order_request_changes carries 0395''s partial-approval sentence (L86) exactly once: removing it leaves the body with only the later notice-audience changes');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -818,7 +822,10 @@ $b0$, '')) as m
   end if;
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.reverse_receipt(uuid, text)')) d),
-  E'_notify_order_request_changes=7d197c46a1c9d9d5267f0c01be903ede|ff18125ea9142821da9c1a0d2b07c1da\n'
+  -- Re-pinned by the notice audience migration (S36a; was
+  -- 7d197c46a1c9d9d5267f0c01be903ede|ff18125ea9142821da9c1a0d2b07c1da): the same
+  -- header and options, a body with the notice-audience changes (its suite's T7a).
+  E'_notify_order_request_changes=b6c4574de1b12cbd435aa59f4fba6559|7d3e9769b3a8068f22c2c5c84dda1aee\n'
   'adjust_stock=0dbc639017c2f827e2c7a18e5486d975|8f2b54ee153cb1dd8cfccce7ab462b62\n'
   'assemble_bundle=c3e186436c7848163beafe5e85b062c8|9c725f9d2aac44bcd38889450056d67a\n'
   'cancel_order_request=6a21252e51fff929fc18573e60b51324|112ba9976a11269694b161bc55d41562\n'
@@ -828,7 +835,7 @@ $b0$, '')) as m
   'reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2\n'
   'reverse_receipt=774eb447eaf4d8340522f159295a9377|4c049069d229b92b9b121d723cff081e\n'
   'transfer_stock=6a21d824bb893511cf72d192acb6043a|6231a20a470cd1991d32de9effe472c8',
-  'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0395''s, and removing the added text gives production''s definition exactly: arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');
+  'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0395''s (_notify_order_request_changes: with the later notice-audience changes), and removing the added text gives production''s definition exactly (that one: with those changes only): arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');
 
 
 -- ══ P. The ten keep their posture; the comments say what 0395 enforces ════

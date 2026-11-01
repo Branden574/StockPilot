@@ -1792,8 +1792,12 @@ select is(
   (select count(*)::text from public.notifications n
     where n.type = 'order_request.created' and n.metadata->>'order_request_id' = '03970000-0000-0000-0000-000000000913')
   || '/' || (select count(*)::text from public._notify_recipients(:orgA)),
-  '2/2',
-  'N1: a new ordinary order still pings every manager (the notify trigger''s WHEN never skips an ordinary order)');
+  -- The notice audience migration (S36a; was '2/2'): the alert follows
+  -- orders:approve with write access to the order's warehouse, so stfCh
+  -- (granted, assigned whA through charter C1) is told beside the owner and
+  -- the manager; stfB (granted, whB only) is not.
+  '3/2',
+  'N1: a new ordinary order still pings everyone who may approve it in its warehouse (the notify trigger''s WHEN never skips an ordinary order): the owner, the manager and the granted staff member assigned to whA, not the one assigned only to whB');
 select is(
   (select count(*)::text from public.notifications n
     where n.metadata->>'order_request_id' in (select o.id::text from public.order_requests o
@@ -2254,7 +2258,12 @@ select is(
 select is(
   (select coalesce(string_agg(x.sig, ','), '')
      from (values
-       ('public._notify_order_request_changes()',                 '438e676429dda6fb9d2b8faee8d6dd59'),
+       -- Re-pinned by the notice audience migration (S36a; was
+       -- 438e676429dda6fb9d2b8faee8d6dd59): the New order request alert follows
+       -- orders:approve and warehouse write, and the requester is pinged only
+       -- while a member (N1 above pins the alert; replacements have their own
+       -- trigger).
+       ('public._notify_order_request_changes()',                 'ca103ffa6669cdb7b885099c9a794fb5'),
        ('public._validate_order_request_status_transition()',     'dee8cd4782ec83abdb31a2b48fcd4ef2'),
        ('public.create_order_request(jsonb,jsonb)',               '4d65cef6c569a8c2c699fd9d5c8b77d5'),
        ('public.tg_order_requests_insert_guard()',                'caf69f8a23d03b9bfa6ea87a9cf94077'),
@@ -2272,7 +2281,10 @@ select is(
        ('public.assign_order_request_number()',                   '03097df3cded3d0ea42676855abc6a25'),
        ('public.confirm_physical_signature(uuid,text)',           'c0d1c11d31dd86e072f05b72f299535c'),
        ('public.caller_can_read_item(uuid)',                      '80523d2cc0fafe7fc6b3599903d7f014'),
-       ('public._notify_recipients(uuid)',                        '679e6193e3dbe5644055e835e8209043'),
+       -- Re-pinned by the notice audience migration (S36a; was
+       -- 679e6193e3dbe5644055e835e8209043): one added line leaves an Act-as seat
+       -- out; N1 reads its count, which this suite's members keep at 2.
+       ('public._notify_recipients(uuid)',                        '7b53d7d107211e42620800cb1de7d476'),
        ('public.create_return_request(uuid,jsonb,uuid)',          '36596e93f472b0f831a6a43bb316a294'),
        ('public.create_requester_return_request(uuid,jsonb,uuid,jsonb)', '157aebbe26a7baff32dd56755ab9025d'),
        ('public.approve_return(uuid,integer,jsonb,boolean)',      'edf25c49264c74d8597fa87d6260112b'),
