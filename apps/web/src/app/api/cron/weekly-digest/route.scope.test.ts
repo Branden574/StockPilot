@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
 
@@ -340,6 +339,12 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
       expect.anything(),
       expect.objectContaining({ tag: 'cron.weekly-digest.org' }),
     );
+    // The report carries the read's own text, not the generic sentence a
+    // ServiceError('internal_error') shows (docket S27 review).
+    const orgReport = reportErrorMock.mock.calls.find(
+      ([, context]) => (context as { tag?: string }).tag === 'cron.weekly-digest.org',
+    );
+    expect((orgReport?.[0] as Error).message).toBe('canceling statement due to statement timeout');
   });
 
   /**
@@ -366,7 +371,12 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
         ([, context]) => (context as { tag?: string }).tag === 'cron.weekly-digest.org',
       );
       expect(reports).toHaveLength(1);
-      expect(rawErrorText(reports[0]?.[0])).toBe(`${table} answered no list (status ${status})`);
+      // What the reporter emits is the error's message (error-reporter-core
+      // logs and posts `message` only), so the report itself names the table
+      // and the status: a ServiceError's message is the generic sentence.
+      expect((reports[0]?.[0] as Error).message).toBe(
+        `${table} answered no list (status ${status})`,
+      );
       expect(reports[0]?.[1]).toEqual({ tag: 'cron.weekly-digest.org', extra: { orgId: ORG } });
     }
 

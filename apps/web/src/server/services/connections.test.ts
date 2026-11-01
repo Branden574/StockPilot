@@ -1040,6 +1040,98 @@ describe('ConnectionsService: writes report what the database did (docket S27)',
         extra: { connectionId: 'conn-row-1', provider: 'easypost' },
       });
     });
+
+    // docket S27 review: an activation that changed no row (the row was
+    // deleted between the member's write and the activation) answers no
+    // error, so only the guard's "no row" half refuses it.
+    it('an activation that updates no row is reported and refused, never reported connected', async () => {
+      const { stub } = clients([]);
+      adminClientHolder.client = makeSupabaseStub({
+        'org_connections.update': { data: [], error: null },
+      }).client;
+      const svc = withClient(stub, keyHolder(['shipping:manage'], ['shipping']));
+      await expect(svc.connectApiKey('easypost', 'EZTK_test_key_123')).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(audit).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledTimes(1);
+      expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'integrations.connect.activate',
+        extra: { connectionId: 'conn-row-1', provider: 'easypost' },
+      });
+      expect((vi.mocked(reportError).mock.calls[0]?.[0] as Error).message).toBe(
+        'org_connections activate: the activation updated no row',
+      );
+    });
+
+    // docket S27 review: a member write that answers no row (an empty body,
+    // no error) gives no id to name the Vault secret by. Without the guard
+    // the secret was named `connector:undefined`, one name every organization
+    // would share, and connector_secret_put updates a secret by name in place.
+    it('a member write that answers no row is refused before any Vault write', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: [], error: null },
+        'org_connections.insert': { data: null, error: null },
+      });
+      const svc = withClient(stub, keyHolder(['shipping:manage'], ['shipping']));
+      await expect(svc.connectApiKey('easypost', 'EZTK_test_key_123')).rejects.toMatchObject(
+        REFUSED,
+      );
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * docket S27 review: the dead-letter view lists a failed sync to every
+   * member given either key (its select rule is member-level), but the replay
+   * rule (0152) is admin-only, so a member's replay changed 0 rows and was
+   * told "No replayable failed sync was found for that id." about a row on
+   * their screen. A failed sync the member can still see is a refusal; any
+   * other 0-row replay stays not found.
+   */
+  describe('a replay the database refused', () => {
+    const BOTH = ['integrations', 'shipping'] as ModuleId[];
+    const replayWith = (reread: { data: unknown; error: { message: string } | null }) => {
+      const stub = makeSupabaseStub({
+        'connection_sync_log.update': { data: [], error: null },
+        'connection_sync_log.select': reread,
+      });
+      return { stub, svc: withClient(stub, keyHolder(['shipping:manage'], BOTH)) };
+    };
+
+    it.each([
+      ['a dead', 'dead'],
+      ['an error', 'error'],
+    ])('on %s sync the member can see is a refusal, not "not found"', async (_label, status) => {
+      const { stub, svc } = replayWith({ data: [{ id: 'sync-1', status }], error: null });
+      await expect(svc.replaySync('sync-1')).rejects.toMatchObject(REFUSED);
+      expect(audit).not.toHaveBeenCalled();
+      // The second look is the member's own read of that row, in this organization.
+      const reread = stub.chainArgsAll.get('connection_sync_log.select')?.[0];
+      expect(reread).toContainEqual(['id', 'sync-1']);
+      expect(reread).toContainEqual(['organization_id', 'org-test']);
+    });
+
+    it.each([
+      ['a row the member cannot see', { data: [], error: null }],
+      [
+        'a sync that is no longer failed (replayed already)',
+        { data: [{ id: 'sync-1', status: 'pending' }], error: null },
+      ],
+      [
+        'a sync that has since succeeded',
+        { data: [{ id: 'sync-1', status: 'success' }], error: null },
+      ],
+      ['a second look that fails', { data: null, error: { message: 'timeout' } }],
+    ])('stays "not found" for %s', async (_case, reread) => {
+      const { svc } = replayWith(reread);
+      await expect(svc.replaySync('sync-1')).rejects.toMatchObject({
+        code: 'not_found',
+        message: 'No replayable failed sync was found for that id.',
+      });
+      expect(audit).not.toHaveBeenCalled();
+    });
   });
 
   /**

@@ -5,6 +5,7 @@ import { json, realSupabaseClient, type ClientRequest } from '@/test/postgrest-a
 import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import { enabledIntegrationOrgIds, MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
+import { quickbooksConnector } from './quickbooks';
 import { sageIntacctConnector } from './sage-intacct';
 
 vi.mock('@/lib/error-reporter', () => ({
@@ -675,4 +676,194 @@ describe('runDrain: an Intacct mapping read that answers no list posts nothing',
       expect(run.mappingReports).toHaveLength(1);
     },
   );
+});
+
+/**
+ * docket S27 review: QuickBooks and Sage Intacct read the supplier's mapping
+ * inside the try whose catch decides `retryable` from the thrown error's
+ * `status`, meant for the provider's HTTP status. A mapping read that answered
+ * no list threw a ListReadError carrying PostgREST's status (200 or 204),
+ * which read as a provider's caller error: the export went to 'dead' at once,
+ * never offered again without a manual Replay. An error answer from the same
+ * read carried no status and went to 'dead' the same way, before S27. Either
+ * one is StockPilot's own read failing before anything is posted: the attempt
+ * goes to 'error' with backoff, as a failed read outside the try always did.
+ * Driven through a real supabase-js client (a local fetch) and the real
+ * connectors, whose own fetch is a spy: no request leaves the test.
+ */
+describe('runDrain: a failed supplier mapping read retries the export with backoff', () => {
+  const NOW = new Date('2026-10-26T12:00:00Z');
+  const SUPPLIER = { id: 'sup-1', name: 'Placeholder Supplier' };
+  const PO_ROW = { id: 'po-1', po_number: 'PO-1', supplier_id: 'sup-1', subtotal: 120, total: 120 };
+  const QBO_CONN = {
+    id: 'conn-qbo',
+    organization_id: 'org-1',
+    provider_id: 'quickbooks',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'realm-1',
+    settings: { env: 'sandbox', accountIds: { billExpense: '42' } },
+  };
+  const INTACCT_CONN = {
+    id: 'conn-si',
+    organization_id: 'org-1',
+    provider_id: 'sage_intacct',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'company-1',
+    settings: { intacct: { defaultItemId: 'NONINV' } },
+  };
+  const outboxEvent = (topic: string, aggregateType: string, aggregateId: string) => ({
+    id: 'evt-1',
+    organization_id: 'org-1',
+    topic,
+    aggregate_type: aggregateType,
+    aggregate_id: aggregateId,
+    payload: {},
+    dedupe_key: null,
+    created_at: NOW.toISOString(),
+  });
+
+  /** The three exports that read the supplier's mapping inside the connector's try. */
+  const EXPORTS: Array<{
+    name: string;
+    conn: Record<string, unknown>;
+    event: Record<string, unknown>;
+    connectors: Parameters<typeof runDrain>[1];
+    /** What each rehydration read answers, by table. */
+    rows: Record<string, unknown[]>;
+  }> = [
+    {
+      name: 'QuickBooks receipt.posted (a Bill)',
+      conn: QBO_CONN,
+      event: outboxEvent('receipt.posted', 'receipt', 'rcpt-1'),
+      connectors: { quickbooks: quickbooksConnector },
+      rows: {
+        receipts: [{ id: 'rcpt-1', purchase_order_id: 'po-1', receipt_number: 'RC-1' }],
+        receipt_lines: [{ qty_accepted_base: 5, unit_cost: 2 }],
+        purchase_orders: [{ supplier_id: 'sup-1' }],
+        suppliers: [SUPPLIER],
+      },
+    },
+    {
+      name: 'QuickBooks purchase_order.ordered',
+      conn: QBO_CONN,
+      event: outboxEvent('purchase_order.ordered', 'purchase_order', 'po-1'),
+      connectors: { quickbooks: quickbooksConnector },
+      rows: { purchase_orders: [PO_ROW], suppliers: [SUPPLIER] },
+    },
+    {
+      name: 'Sage Intacct purchase_order.ordered',
+      conn: INTACCT_CONN,
+      event: outboxEvent('purchase_order.ordered', 'purchase_order', 'po-1'),
+      connectors: { sage_intacct: sageIntacctConnector },
+      rows: { purchase_orders: [PO_ROW], suppliers: [SUPPLIER] },
+    },
+  ];
+
+  /** The supplier mapping read's failed answers, with the attempt's last_error and
+   *  whether getMapping reports it (it reports an answer that is not a list). */
+  const FAILED_READS = [
+    [
+      'an empty 200 body',
+      () => new Response('', { status: 200 }),
+      'connection_mappings answered no list (status 200)',
+      true,
+    ],
+    [
+      'an empty 404 body (status rewritten to 204)',
+      () => new Response('', { status: 404 }),
+      'connection_mappings answered no list (status 204)',
+      true,
+    ],
+    [
+      'a JSON object',
+      () => json({ id: 'not-a-list' }),
+      'connection_mappings answered no list (status 200)',
+      true,
+    ],
+    [
+      'an error answer',
+      () => json({ code: '57014', message: 'canceling statement due to statement timeout' }, 500),
+      'connection_mappings select: canceling statement due to statement timeout',
+      false,
+    ],
+  ] as const;
+
+  /** The providers' own requests: QuickBooks and Intacct answer each create. */
+  const providerFetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes('/bill')) return json({ Bill: { Id: 'BILL-1' } });
+    if (url.includes('/purchaseorder')) return json({ PurchaseOrder: { Id: 'QPO-1' } });
+    return json({ 'ia::result': { key: 'DOC-8' } });
+  });
+
+  beforeEach(() => {
+    vi.mocked(reportError).mockClear();
+    providerFetch.mockClear();
+    vi.stubGlobal('fetch', providerFetch);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** One drain of `x` whose supplier mapping read answers `supplierMapping`;
+   *  every other read answers as PostgREST would. */
+  async function drain(x: (typeof EXPORTS)[number], supplierMapping: () => Response) {
+    const requests: ClientRequest[] = [];
+    const admin = realSupabaseClient((req) => {
+      requests.push(req);
+      const path = req.url.pathname.replace(/^\/rest\/v1\//, '');
+      if (req.method === 'GET' && path === 'org_connections') return json([x.conn]);
+      if (req.method === 'GET' && path === 'organization_modules')
+        return json([{ organization_id: 'org-1' }]);
+      if (path === 'rpc/connector_drain_candidates') return json([x.event]);
+      if (req.method === 'GET' && path === 'connection_sync_log') return json([]);
+      if (req.method === 'GET' && path === 'connection_mappings') {
+        // Intacct's own purchase order mapping is not there yet: never posted.
+        return req.url.searchParams.get('entity_type') === 'eq.supplier'
+          ? supplierMapping()
+          : json([]);
+      }
+      if (req.method === 'GET' && x.rows[path]) return json(x.rows[path]);
+      // The writes: the pending row, the outcome, the mapping, last_synced_at.
+      return new Response(null, { status: 204 });
+    });
+    const result = await runDrain(admin, x.connectors, NOW);
+    const outcome = requests
+      .filter((r) => r.method === 'PATCH' && r.url.pathname.endsWith('/connection_sync_log'))
+      .map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
+    const mappingReports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, context]) => context?.tag === 'cron.drain-outbox.mapping');
+    return { result, outcome, mappingReports };
+  }
+
+  describe.each(EXPORTS)('$name', (x) => {
+    it('with the supplier mapping answered, posts once and succeeds', async () => {
+      const run = await drain(x, () => json([{ external_id: 'VENDOR-7', external_meta: {} }]));
+      expect(run.result).toEqual({ processed: 1, succeeded: 1, failed: 0, deadlettered: 0 });
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(run.outcome[0]).toMatchObject({ status: 'success' });
+    });
+
+    it.each(FAILED_READS)(
+      '%s posts nothing and goes to error with backoff, not to dead',
+      async (_shape, answer, lastError, reported) => {
+        const run = await drain(x, answer);
+        expect(providerFetch).not.toHaveBeenCalled();
+        expect(run.result).toEqual({ processed: 1, succeeded: 0, failed: 1, deadlettered: 0 });
+        expect(run.outcome).toHaveLength(1);
+        expect(run.outcome[0]).toMatchObject({ status: 'error', last_error: lastError });
+        expect(new Date(run.outcome[0]!.next_attempt_at as string).getTime()).toBeGreaterThan(
+          NOW.getTime(),
+        );
+        expect(run.mappingReports).toHaveLength(reported ? 1 : 0);
+        if (reported) {
+          expect(run.mappingReports[0]?.[1]).toEqual({
+            tag: 'cron.drain-outbox.mapping',
+            extra: { connectionId: x.conn.id, entityType: 'supplier' },
+          });
+        }
+      },
+    );
+  });
 });

@@ -172,12 +172,23 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     role: QueryResult | null;
     user: QueryResult | null;
   } = { role: null, user: null };
+  /** A failed read: its error, and the status line postgrest-js gives with it
+   *  when set (a gateway's 502 with an empty body has an empty message). */
+  type FailedRead = { error: QueryResult['error']; status?: number; statusText?: string };
   /** When set, the read of the creators' memberships (by user id) fails with
    *  this error. The owners and admins read (by role) still answers. */
-  const creatorsRead: { error: QueryResult['error'] } = { error: null };
+  const creatorsRead: FailedRead = { error: null };
   /** When set, notifyAdmins' read of every owner and admin fails with this
    *  error (buildSystemContext's read of one, with its limit, still answers). */
-  const adminsRead: { error: QueryResult['error'] } = { error: null };
+  const adminsRead: FailedRead = { error: null };
+  /** The failed read as postgrest-js answers it. */
+  const failedAnswer = (read: FailedRead) =>
+    ({
+      data: null,
+      error: read.error,
+      status: read.status,
+      statusText: read.statusText,
+    }) as QueryResult;
   /** When set, that read answers with no error and no list (docket S27):
    *  the creators' memberships, the owners and admins, either override. */
   const oddAnswer: Record<'creators' | 'admins' | 'role' | 'user', QueryResult | null> = {
@@ -189,8 +200,8 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
   beforeEach(() => {
     overrides.role = null;
     overrides.user = null;
-    creatorsRead.error = null;
-    adminsRead.error = null;
+    Object.assign(creatorsRead, { error: null, status: undefined, statusText: undefined });
+    Object.assign(adminsRead, { error: null, status: undefined, statusText: undefined });
     oddAnswer.creators = null;
     oddAnswer.admins = null;
     oddAnswer.role = null;
@@ -207,13 +218,13 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
    */
   function members(call: MockCall): QueryResult {
     if (creatorsRead.error && inFilters(call).some(([col]) => col === 'user_id')) {
-      return { data: null, error: creatorsRead.error };
+      return failedAnswer(creatorsRead);
     }
     if (oddAnswer.creators && inFilters(call).some(([col]) => col === 'user_id')) {
       return oddAnswer.creators;
     }
     if (inFilters(call).some(([col]) => col === 'role') && !call.methods.includes('limit')) {
-      if (adminsRead.error) return { data: null, error: adminsRead.error };
+      if (adminsRead.error) return failedAnswer(adminsRead);
       if (oddAnswer.admins) return oddAnswer.admins;
     }
     let rows: Array<Record<string, unknown>> = [...MEMBERS];
@@ -508,6 +519,25 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
         },
       );
 
+      // A gateway's 502 with an empty body: postgrest-js reads the body as the
+      // error's message, so the message is empty and a report of it said
+      // nothing. The report names the status line instead (docket S27 review).
+      it("a gateway error with an empty body on the creators' read is reported with its status", async () => {
+        Object.assign(creatorsRead, {
+          error: { message: '' },
+          status: 502,
+          statusText: 'Bad Gateway',
+        });
+        await runManagerTemplate();
+
+        expect(told()).toEqual(['admin-1']);
+        const reports = permissionReports();
+        expect(reports).toHaveLength(1);
+        expect((reports[0]?.[0] as Error).message).toBe(
+          'HTTP 502 Bad Gateway (empty error message)',
+        );
+      });
+
       it('when every read fails, it is still reported once', async () => {
         overrides.role = { data: null, error: { message: 'role overrides unavailable' } };
         overrides.user = { data: null, error: { message: 'member overrides unavailable' } };
@@ -594,6 +624,21 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
           level: 'warning',
           extra: { orgId: 'org-1' },
         });
+      });
+
+      it('a gateway error with an empty body is reported with its status, not an empty message', async () => {
+        Object.assign(adminsRead, {
+          error: { message: '' },
+          status: 502,
+          statusText: 'Bad Gateway',
+        });
+        await runManagerTemplate();
+        expect(told()).toEqual(['manager-1']);
+        const reports = adminReports();
+        expect(reports).toHaveLength(1);
+        expect((reports[0]?.[0] as Error).message).toBe(
+          'HTTP 502 Bad Gateway (empty error message)',
+        );
       });
 
       it.each(NOT_A_LIST)(
