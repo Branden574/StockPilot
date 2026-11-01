@@ -37,11 +37,13 @@
      section 8 row updated. The GET list was read from the route files on
      that date; it is not a sweep.
 
-     AMENDED 2026-10-25 (0420, docket S9): INV-C8 added, with its assertions
+     AMENDED 2026-10-25 (0420, docket S9): INV-C9 added, with its assertions
      INV-42..44, and INV-D3 notes the deleted item-attachments bucket. The
-     catalog figures in INV-C8 were read out of the migration scratch stack at
-     migration 0402 (equal to production's census of 2026-10-24); the counts
-     in section 10 were not re-derived. -->
+     catalog figures in INV-C9 were read out of the migration scratch stack at
+     migration 0402 (equal to production's census of 2026-10-24) and again on
+     2026-11-01 with 0415 to 0419 stacked (the same 122 relations); the
+     counts in section 10 were not re-derived. (Numbered C9: the receiving
+     checklist, 0419, ships first and takes C8.) -->
 
 # Security invariants
 
@@ -1187,7 +1189,7 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
-### INV-C8 — no API client role holds `TRUNCATE`, `REFERENCES`, `TRIGGER` or `MAINTAIN` in `public`
+### INV-C9 — no API client role holds `TRUNCATE`, `REFERENCES`, `TRIGGER` or `MAINTAIN` in `public`
 
 - **Invariant**: neither `anon` nor `authenticated` holds `TRUNCATE`,
   `REFERENCES`, `TRIGGER` or `MAINTAIN` on any relation in `public`, at table

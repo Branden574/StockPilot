@@ -1584,7 +1584,7 @@ select is(
 drop function public._sec_inv_probe_draw_scope();
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- INV-42..44 (0420, docs INV-C8). No API client role holds TRUNCATE,
+-- INV-42..44 (0420, docs INV-C9). No API client role holds TRUNCATE,
 -- REFERENCES, TRIGGER or MAINTAIN on a relation in public, and none gets them
 -- from the migration role's default privileges. TRUNCATE empties a table
 -- without asking row level security; the other three serve only DDL,
