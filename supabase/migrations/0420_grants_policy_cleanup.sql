@@ -44,7 +44,9 @@
 --    and LOCK TABLE. No app or script code, and no function or trigger in
 --    public or ledger, truncates, locks, refreshes or maintains a table
 --    (catalog census of every body on the migration scratch stack,
---    2026-10-25), and foreign key checks run as the table owner, so no API
+--    2026-10-25, and again 2026-11-01 with 0415 to 0419 stacked: of 413
+--    functions only two backfill functions no API role can execute hold an
+--    ALTER TABLE), and foreign key checks run as the table owner, so no API
 --    path uses any of the four. service_role keeps them (it is the server's
 --    own role and bypasses RLS anyway).
 -- 4. The same four leave the postgres role's default privileges in public,
@@ -135,7 +137,7 @@
 --     key check reads storage.objects and the upload tables;
 --   * each CREATE INDEX takes SHARE on item_images.
 -- So the prelude (5) takes all of those at once, NOWAIT, retrying up to 40
--- times with a 50 to 150 ms pause that holds nothing (the 0390, 0395 and 0404
+-- times with a 50 to 150 ms pause that holds nothing (the 0390 and 0395
 -- pattern), and after it no statement takes a new table lock: the file never
 -- waits while holding one, so it cannot deadlock. From the prelude to the
 -- commit (policies, the bucket, three index builds: milliseconds at today's
@@ -155,13 +157,14 @@
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- After 0402 (live): 0402 restates every grant production held on
 -- 2026-10-24, these four privileges included, so applied after this file it
--- would grant them back. After 0403-0406: none of them replaces an object
--- this file replaces, and the two tables 0406 creates revoke everything first,
--- so the GENERATED REVOKES block is the same with or without them (checked:
--- the generator's --revokes --check against a scratch database at 0406).
--- ledger.distribute_bundle, which 0404 restates, records its key as a manager
--- under these policies either way. The web and phone code need no change and
--- can deploy before or after.
+-- would grant them back. After 0413 and 0414 (live) and 0415 to 0419 (queued
+-- ahead of this file): none of them restates, drops or replaces an object
+-- this file does, and the two tables 0419 creates revoke everything first,
+-- so the GENERATED REVOKES block is the same with or without them (checked
+-- 2026-11-01: the generator's --revokes --check against a scratch database
+-- with 0415 to 0419 applied). ledger.distribute_bundle, which 0415 restates,
+-- still refuses anyone below manager before it reads or records a key. The
+-- web and phone code need no change and can deploy before or after.
 
 set lock_timeout = '900ms';
 
