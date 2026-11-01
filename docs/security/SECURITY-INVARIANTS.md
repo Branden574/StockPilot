@@ -42,7 +42,18 @@
      signed account reference every /auth/confirm link now carries and the
      page's press gate. The sentence on links without the reference is
      transitional: the second release refuses them and removes it. Nothing
-     else in this document was re-verified. -->
+     else in this document was re-verified.
+
+     AMENDED 2026-11-01 (docket S25 review): INV-E5 said the press gate meant
+     a window swap "cannot land a press on it unseen". It could: another site
+     can open a link in a small window scrolled to the button (the form's
+     fragment id did it in Chromium, Firefox and WebKit), and the gate armed
+     with the account's address never on screen. The gate now waits until
+     every address the page names has been wholly on screen through its quiet
+     second, and the page gives no element an id; the Enforced by, Tested at
+     and "Also not covered" texts say so. An email-change link whose change
+     GoTrue no longer holds now gets the expired answer without the addresses.
+     Nothing else in this document was re-verified. -->
 
 # Security invariants
 
@@ -1484,12 +1495,19 @@ application structure.
   65 minutes the expired answer, with no lookup), looks the account up with
   the service client and prints its full address above the form, and names
   both accounts when the browser is signed in as another one (compared by id).
-  A failed or slow lookup gets a "try again" page with no form. `POST` checks
-  `r` again before `verifyOtp`, and a session GoTrue made for another account
-  than `r` names is signed out again in the same answer. The press counts only
-  once the page has been visible, in front and quiet for a second
-  ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)), so a
-  window swap (DoubleClickjacking) cannot land a press on it unseen. Until the
+  A failed or slow lookup gets a "try again" page with no form, and an
+  email-change link whose change GoTrue no longer holds (completed, cancelled,
+  or replaced by a newer request) gets the expired answer with neither
+  address. `POST` checks `r` again before `verifyOtp`, and a session GoTrue
+  made for another account than `r` names is signed out again in the same
+  answer. The press counts only once the page has been visible, in front and
+  quiet for a second (no press, key, scroll or resize in it), and every
+  address the page names has been wholly on screen through such a second
+  ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
+  page gives no element an id, so no link opens it scrolled to the button. A
+  window swap (DoubleClickjacking), or a window another site opens small and
+  scrolled past the line, therefore gets no press before the account's
+  address has been on screen for a second. Until the
   second S25 release a link without `r` still gets the page it got before,
   with the signed-in notice and the gate, and is logged (type only). Where a
   link lands is fixed by its type
@@ -1530,7 +1548,12 @@ application structure.
   answers within five seconds);
   [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
   (the page's own script: the quiet second, focus, visibility, the window swap,
-  and a browser that never reports focus);
+  every address on screen through the second at any window size or scroll, and
+  a browser that never reports focus);
+  [`route.email-change-replaced.test.ts`](../../apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts)
+  (the real email-change link builder and route: a link sent to a mistyped
+  address, opened after the change was corrected or completed, shows neither
+  address);
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
   (each type's landings, and sweeps over the five link builders, each signing
   for the id GoTrue returned with its link, and the repository's sign-in
@@ -1594,11 +1617,13 @@ application structure.
     verified. Since docket S25 the page prints the full address of the account
     the link is for before anyone presses (and both addresses when the browser
     is signed in as another account), the press counts only after a quiet
-    second in front, another site can no longer sign the browser out first,
-    and the link lands where its type says. What stays open: a person who
-    reads another account's address and presses anyway; a person talked into
-    stopping on the page and pressing again later, which the gate cannot tell
-    from a real press; and a lookalike address made to match the full one
+    second in front with every address it names on screen, another site can
+    no longer sign the browser out first, and the link lands where its type
+    says. What stays open: a person who reads another account's address and
+    presses anyway; a person talked into stopping on the page and pressing
+    again later, which the gate cannot tell from a real press (the address has
+    then been on screen for at least a second, though the page may have been
+    scrolled on since); and a lookalike address made to match the full one
     (much harder than matching a mask). Until the second S25 release a link
     without `r` (one sent before the first, or one built by hand from a token
     the other site holds) still gets the old page, which cannot name the

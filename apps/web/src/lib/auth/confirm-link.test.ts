@@ -39,7 +39,9 @@ import { checkConfirmRecipient } from './confirm-recipient';
 import {
   CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS,
   confirmLinkUrl,
+  EMAIL_CHANGE_REQUEST_SKEW_S,
   lookUpConfirmRecipient,
+  pendingEmailChangeFor,
   verifyConfirmRecipient,
 } from './confirm-link';
 
@@ -246,29 +248,38 @@ describe('lookUpConfirmRecipient', () => {
     error: null,
   });
 
-  it('found: the address, and the new one an email change is waiting on', async () => {
+  it('found: the address, the new one an email change is waiting on, and when GoTrue recorded that request', async () => {
     getUserById.mockResolvedValueOnce(user({}));
     await expect(lookUpConfirmRecipient(USER_A, NOW)).resolves.toEqual({
       kind: 'found',
       email: 'person@example.com',
       newEmail: null,
+      emailChangeSentAt: null,
     });
     expect(getUserById).toHaveBeenCalledWith(USER_A);
 
-    getUserById.mockResolvedValueOnce(user({ new_email: 'new@example.com' }));
+    getUserById.mockResolvedValueOnce(
+      user({ new_email: 'new@example.com', email_change_sent_at: '2026-10-31T11:58:30.25Z' }),
+    );
     await expect(lookUpConfirmRecipient(USER_A, NOW)).resolves.toEqual({
       kind: 'found',
       email: 'person@example.com',
       newEmail: 'new@example.com',
+      emailChangeSentAt: Date.parse('2026-10-31T11:58:30.25Z'),
     });
 
     getUserById.mockResolvedValueOnce(
-      user({ new_email: '  ', banned_until: '2026-01-01T00:00:00Z' }),
+      user({
+        new_email: '  ',
+        banned_until: '2026-01-01T00:00:00Z',
+        email_change_sent_at: 'not a time',
+      }),
     );
     await expect(lookUpConfirmRecipient(USER_A, NOW)).resolves.toEqual({
       kind: 'found',
       email: 'person@example.com',
       newEmail: null,
+      emailChangeSentAt: null,
     });
   });
 
@@ -329,5 +340,48 @@ describe('lookUpConfirmRecipient', () => {
     getUserById.mockResolvedValueOnce(user({}));
     await lookUpConfirmRecipient(USER_A, NOW);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('pendingEmailChangeFor (an email-change link GoTrue still holds)', () => {
+  /** The link's issue time, in whole seconds. */
+  const ISSUED = NOW.getTime() / 1000;
+  const at = (seconds: number) => (ISSUED + seconds) * 1000;
+
+  it('names the pending address while the change the link was built for is the latest', () => {
+    expect(EMAIL_CHANGE_REQUEST_SKEW_S).toBe(5);
+    // GoTrue stores the request before the link is signed: its time is
+    // earlier, or later only by the clocks and the issue time's whole seconds.
+    for (const sentAt of [at(-3), at(0), at(0.999), at(EMAIL_CHANGE_REQUEST_SKEW_S)]) {
+      expect(
+        pendingEmailChangeFor({ newEmail: 'new@example.com', emailChangeSentAt: sentAt }, ISSUED),
+        String(sentAt),
+      ).toBe('new@example.com');
+    }
+  });
+
+  it('nothing pending (the change was completed or cancelled): no address', () => {
+    for (const newEmail of [null, '']) {
+      expect(pendingEmailChangeFor({ newEmail, emailChangeSentAt: at(0) }, ISSUED)).toBeNull();
+      expect(pendingEmailChangeFor({ newEmail, emailChangeSentAt: null }, ISSUED)).toBeNull();
+    }
+  });
+
+  it('a later request replaced the link (asked again to another address, or resent): no address', () => {
+    for (const sentAt of [at(EMAIL_CHANGE_REQUEST_SKEW_S + 0.001), at(45), at(3600)]) {
+      expect(
+        pendingEmailChangeFor(
+          { newEmail: 'corrected@example.com', emailChangeSentAt: sentAt },
+          ISSUED,
+        ),
+        String(sentAt),
+      ).toBeNull();
+    }
+  });
+
+  it('no request time from GoTrue (it stores one with every pending change): taken as the live link, as before', () => {
+    expect(
+      pendingEmailChangeFor({ newEmail: 'new@example.com', emailChangeSentAt: null }, ISSUED),
+    ).toBe('new@example.com');
   });
 });

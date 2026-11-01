@@ -310,8 +310,10 @@ budget, its audit row and its alert. Every emailed confirmation link names the
 account it is for under a server signature (`r`, docket S25): the page checks it
 on `GET` and `POST`, prints that account's full address before anyone presses
 (and both addresses when the browser is signed in as another account), counts a
-press only after a quiet second in front, and each link type lands on a fixed
-page. Until the second S25 release a link without `r` still gets the old page.
+press only after a quiet second in front with every address it names on screen,
+shows neither address for an email-change link whose change is no longer
+pending, and each link type lands on a fixed page. Until the second S25 release
+a link without `r` still gets the old page.
 
 _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/lib/auth/api-context.cross-site.test.ts`,
@@ -324,7 +326,8 @@ _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/app/auth/confirm/route.recipient-session.test.ts`,
 `apps/web/src/lib/auth/confirm-recipient.test.ts`,
 `apps/web/src/lib/auth/confirm-link.test.ts`,
-`apps/web/src/app/auth/confirm/press-gate.test.ts`.
+`apps/web/src/app/auth/confirm/press-gate.test.ts`,
+`apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts`.
 
 _Gap_: no generic sweep asserting that **every** route is gated — coverage is
 per-route (the INV-E5 sweep checks only that a write route reaches

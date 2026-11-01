@@ -63,7 +63,13 @@ export async function POST(req: NextRequest) {
     userId: data?.user?.id,
   });
   if (!confirmUrl) {
-    return NextResponse.json({ error: 'the link could not be signed' }, { status: 500 });
+    // GoTrue answered no account id the link can name: never a link without
+    // r. Reported under the route's tag, so the walk's 500 has a cause.
+    return internalErrorResponse(
+      new Error('the recovery link could not be signed for its account'),
+      'admin.qa-recovery-link',
+      { message: 'The link could not be signed.' },
+    );
   }
   return NextResponse.json({ confirmUrl });
 }

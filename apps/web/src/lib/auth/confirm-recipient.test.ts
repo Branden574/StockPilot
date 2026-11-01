@@ -178,6 +178,21 @@ describe('signConfirmRecipient and checkConfirmRecipient', () => {
     }
   });
 
+  it("a second spelling of a correct tag is invalid: only the signer's own spelling passes", () => {
+    // 43 base64url characters carry 258 bits for the tag's 256, so the last
+    // character has two spare bits: four characters decode to the same 32
+    // bytes. Change only those two bits.
+    const r = sign()!;
+    const tag = r.split('.')[3]!;
+    const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = ALPHABET.indexOf(tag.at(-1)!);
+    const twin = r.slice(0, -1) + ALPHABET[(last & ~3) | ((last + 1) & 3)];
+    expect(twin).not.toBe(r);
+    expect(Buffer.from(twin.split('.')[3]!, 'base64url')).toEqual(Buffer.from(tag, 'base64url'));
+    expect(check(r)).toEqual({ status: 'valid', userId: USER_A, issued: ISSUED });
+    expect(check(twin)).toEqual({ status: 'invalid' });
+  });
+
   it('a user id that is not a UUID, an oversized value and characters outside base64url are invalid', () => {
     const tag = tagFor(SIGNING_INPUT, 'magiclink', LINK_HASH, 'user-1', String(ISSUED));
     expect(check(`v1.user-1.${ISSUED}.${tag}`)).toEqual({ status: 'invalid' });

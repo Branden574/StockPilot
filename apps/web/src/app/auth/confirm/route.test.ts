@@ -57,9 +57,10 @@ vi.mock('@/lib/error-reporter', () => ({
   reportError: (...args: unknown[]) => reportError(...args),
 }));
 
+import { EMAIL_CHANGE_REQUEST_SKEW_S } from '@/lib/auth/confirm-link';
 import { signConfirmRecipient } from '@/lib/auth/confirm-recipient';
 
-import { PRESS_GATE_SCRIPT } from './press-gate';
+import { PRESS_GATE_FORM_ATTR, PRESS_GATE_SCRIPT, PRESS_GATE_SEE_ATTR } from './press-gate';
 import { GET, POST } from './route';
 
 const BASE = 'https://app.example.com';
@@ -373,7 +374,7 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     const html = await res.text();
     expect(html).toContain(
-      'This link signs in as <span class="addr">person@example.com</span>. If that is not your email address, close this page.',
+      'This link signs in as <span class="addr" data-press-gate-see>person@example.com</span>. If that is not your email address, close this page.',
     );
     // The line comes before the form.
     expect(html.indexOf('This link signs in as')).toBeLessThan(html.indexOf('<form'));
@@ -390,17 +391,17 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
   it.each([
     [
       'recovery',
-      'This link sets a new password for <span class="addr">person@example.com</span>. If that is not your email address, close this page.',
+      'This link sets a new password for <span class="addr" data-press-gate-see>person@example.com</span>. If that is not your email address, close this page.',
       'Reset your password',
     ],
     [
       'invite',
-      'This invite is for <span class="addr">person@example.com</span>. If that is not your email address, close this page.',
+      'This invite is for <span class="addr" data-press-gate-see>person@example.com</span>. If that is not your email address, close this page.',
       'Accept your invite',
     ],
     [
       'magiclink',
-      'This link signs in as <span class="addr">person@example.com</span>. If that is not your email address, close this page.',
+      'This link signs in as <span class="addr" data-press-gate-see>person@example.com</span>. If that is not your email address, close this page.',
       'Sign in',
     ],
   ])('%s: one fixed line naming the account', async (type, line, heading) => {
@@ -413,24 +414,83 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
     const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
     expect(html).toContain(
-      'This link changes the sign-in email of <span class="addr">old@example.com</span> to <span class="addr">new@example.com</span>. If neither address is yours, close this page.',
+      'This link changes the sign-in email of <span class="addr" data-press-gate-see>old@example.com</span> to <span class="addr" data-press-gate-see>new@example.com</span>. If neither address is yours, close this page.',
     );
     expect(html).toContain('Confirm your email change');
   });
 
-  it('an email change with nothing waiting names the account only', async () => {
-    getUserById.mockResolvedValueOnce(account('old@example.com'));
-    const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
-    expect(html).toContain(
-      'This link is for the account <span class="addr">old@example.com</span>. If that is not your email address, close this page.',
+  it('an email change with nothing waiting (the change finished or was cancelled): the expired page, with no address and no form', async () => {
+    getUserById.mockResolvedValueOnce(account('new@example.com', { new_email: '' }));
+    const res = await GET(getReq(linkQuery({ type: 'email_change' })));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('This link has expired or was already used');
+    expect(html).not.toContain('new@example.com');
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain('<script');
+    expect(reportError).not.toHaveBeenCalled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('an email change a newer request replaced: the expired page with neither address, so a link sent to a mistyped address never shows the corrected one', async () => {
+    const issued = nowSeconds() - 600;
+    const r = signedRef({ type: 'email_change', tokenHash: HASH_A, userId: USER_A, issued });
+    // The person corrected the change a minute later: GoTrue now holds the
+    // corrected address and that request's time, and this link is dead.
+    getUserById.mockResolvedValueOnce(
+      account('old@example.com', {
+        new_email: 'corrected@example.com',
+        email_change_sent_at: new Date((issued + 60) * 1000).toISOString(),
+      }),
     );
-    expect(html).not.toContain('changes the sign-in email');
+    const res = await GET(getReq(linkQuery({ type: 'email_change', r })));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('This link has expired or was already used');
+    expect(html).not.toContain('corrected@example.com');
+    expect(html).not.toContain('old@example.com');
+    expect(html).not.toContain('<form');
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("an email change whose request GoTrue timed up to EMAIL_CHANGE_REQUEST_SKEW_S after the link's issue time is the link's own request: both addresses", async () => {
+    const issued = nowSeconds() - 600;
+    const r = signedRef({ type: 'email_change', tokenHash: HASH_A, userId: USER_A, issued });
+    const line =
+      /This link changes the sign-in email of <span class="addr"[^>]*>old@example\.com<\/span> to <span class="addr"[^>]*>new@example\.com<\/span>\./;
+    // GoTrue writes the request time before the link is signed: earlier, or
+    // later only by the clocks and the issue time's whole seconds.
+    for (const offset of [-2, 0.75, EMAIL_CHANGE_REQUEST_SKEW_S]) {
+      getUserById.mockResolvedValueOnce(
+        account('old@example.com', {
+          new_email: 'new@example.com',
+          email_change_sent_at: new Date((issued + offset) * 1000).toISOString(),
+        }),
+      );
+      const html = await (await GET(getReq(linkQuery({ type: 'email_change', r })))).text();
+      expect(html, String(offset)).toMatch(line);
+      expect(html, String(offset)).toContain('form method="post"');
+    }
+    // A request any later than that is a newer one.
+    getUserById.mockResolvedValueOnce(
+      account('old@example.com', {
+        new_email: 'new@example.com',
+        email_change_sent_at: new Date(
+          (issued + EMAIL_CHANGE_REQUEST_SKEW_S + 1) * 1000,
+        ).toISOString(),
+      }),
+    );
+    const html = await (await GET(getReq(linkQuery({ type: 'email_change', r })))).text();
+    expect(html).toContain('This link has expired or was already used');
+    expect(html).not.toContain('new@example.com');
   });
 
   it('escapes the address it prints', async () => {
     getUserById.mockResolvedValueOnce(account('a<b>"c\'d&@example.com'));
     const html = await (await GET(getReq(linkQuery({ type: 'recovery' })))).text();
-    expect(html).toContain('<span class="addr">a&lt;b&gt;&quot;c&#39;d&amp;@example.com</span>');
+    expect(html).toContain(
+      '<span class="addr" data-press-gate-see>a&lt;b&gt;&quot;c&#39;d&amp;@example.com</span>',
+    );
     expect(html).not.toContain('a<b>');
   });
 
@@ -445,9 +505,40 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(html.match(/<script\b/gi)).toHaveLength(1);
     // The gate comes after the form it guards.
     expect(html.indexOf('<script>')).toBeGreaterThan(html.indexOf('</form>'));
-    expect(html).toContain('<form method="post" action="/auth/confirm" id="confirm-form">');
+    expect(html).toContain('<form method="post" action="/auth/confirm" data-press-gate>');
     expect(html).toContain('<button type="submit" class="btn">');
     expect(html).not.toMatch(/<button[^>]*\bdisabled\b/);
+  });
+
+  it('gives no element an id a link could scroll to, and marks every address it names for the gate (S25 review)', async () => {
+    // Signed in as another account: the line names the link's account, and
+    // the note names both.
+    signedInAs(USER_B, EMAIL_B);
+    const html = await (
+      await GET(getReq(linkQuery({ type: 'magiclink', next: '/dashboard' })))
+    ).text();
+    // A fragment scrolls only to an element with that id (or an <a name>),
+    // so with none, no link can open the page at the button with the
+    // account's line above the window (an old link's #confirm-form did, in
+    // every engine).
+    expect(html).not.toMatch(/\sid\s*=/i);
+    expect(html).not.toMatch(/<a\b[^>]*\bname\s*=/i);
+    expect(html).not.toContain('confirm-form');
+    // The gate finds its form, and the addresses it waits on, by attribute.
+    expect(PRESS_GATE_FORM_ATTR).toBe('data-press-gate');
+    expect(PRESS_GATE_SEE_ATTR).toBe('data-press-gate-see');
+    expect(html.match(/<form\b[^>]*>/gi)).toEqual([
+      `<form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>`,
+    ]);
+    const marked = [
+      ...html.matchAll(/<span class="addr" data-press-gate-see>([^<]*)<\/span>/g),
+    ].map((m) => m[1]);
+    expect(marked).toEqual([EMAIL_A, EMAIL_B, EMAIL_A]);
+    expect(html.match(/<span\b[^>]*>/g)).toHaveLength(3);
+    // Each mark comes before the form (the gate's own script names the
+    // attribute too, after the form).
+    const page = html.slice(0, html.indexOf('<script>'));
+    expect(page.lastIndexOf(PRESS_GATE_SEE_ATTR)).toBeLessThan(page.indexOf('<form'));
   });
 
   it('nothing taken from the URL reaches the page unchecked: a hostile next or extra parameter changes nothing', async () => {
@@ -632,10 +723,12 @@ describe('GET /auth/confirm when the account cannot be named (S25)', () => {
 describe('GET /auth/confirm in a browser that is already signed in', () => {
   it('signed in as the account the link is for: no notice (it was a false alarm)', async () => {
     signedInAs(USER_A, EMAIL_A);
+    // An email change of this account, still waiting on its links.
+    getUserById.mockResolvedValueOnce(account(EMAIL_A, { new_email: 'new@example.com' }));
     const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
     expect(html).not.toContain('class="note"');
     expect(html).not.toContain("You're signed in as");
-    expect(html).toContain('<form method="post" action="/auth/confirm" id="confirm-form">');
+    expect(html).toContain('<form method="post" action="/auth/confirm" data-press-gate>');
   });
 
   it('signed in as another account: the notice names both, above the same form, and spends nothing', async () => {
@@ -644,7 +737,7 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(
-      `<p class="note">You're signed in as <span class="addr">member@example.com</span> on this browser. Continuing signs you in as <span class="addr">person@example.com</span> instead. If you didn't ask for this link, close this page.</p>`,
+      `<p class="note">You're signed in as <span class="addr" data-press-gate-see>member@example.com</span> on this browser. Continuing signs you in as <span class="addr" data-press-gate-see>person@example.com</span> instead. If you didn't ask for this link, close this page.</p>`,
     );
     expect(html).toContain('form method="post"');
     expect(verifyOtp).not.toHaveBeenCalled();
@@ -654,7 +747,7 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
     signedInAs(USER_B, EMAIL_A);
     const html = await (await GET(getReq(linkQuery({ type: 'magiclink' })))).text();
     expect(html).toContain(
-      'Continuing signs you in as <span class="addr">person@example.com</span> instead.',
+      'Continuing signs you in as <span class="addr" data-press-gate-see>person@example.com</span> instead.',
     );
   });
 
@@ -662,7 +755,7 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
     signedInAs(USER_B, 'a<b>"c@example.com');
     const html = await (await GET(getReq(linkQuery({ type: 'invite' })))).text();
     expect(html).toContain(
-      '<span class="addr">a&lt;b&gt;&quot;c@example.com</span> on this browser.',
+      '<span class="addr" data-press-gate-see>a&lt;b&gt;&quot;c@example.com</span> on this browser.',
     );
     expect(html).not.toContain('a<b>');
   });
@@ -671,7 +764,7 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
     signedInAs(USER_B, null);
     const html = await (await GET(getReq(linkQuery({ type: 'magiclink' })))).text();
     expect(html).toContain(
-      'This browser is already signed in to another StockPilot account. Continuing signs you in as <span class="addr">person@example.com</span> instead.',
+      'This browser is already signed in to another StockPilot account. Continuing signs you in as <span class="addr" data-press-gate-see>person@example.com</span> instead.',
     );
   });
 
@@ -726,6 +819,10 @@ describe('GET /auth/confirm for a link without r (until the next release)', () =
     expect(html).toContain('This link works once. Press the button to continue.');
     expect(html.match(/<script\b/gi)).toHaveLength(1);
     expect(html).toContain(`<script>${PRESS_GATE_SCRIPT}</script>`);
+    // No account to name, so nothing for the gate to wait on but the second,
+    // and no id for a link to scroll to either.
+    expect(html.slice(0, html.indexOf('<script>'))).not.toContain(PRESS_GATE_SEE_ATTR);
+    expect(html).not.toMatch(/\sid\s*=/i);
     vi.mocked(console.info).mockRestore();
   });
 
@@ -1016,7 +1113,7 @@ describe('/auth/confirm lands where the link type says, not where the link says'
     // The page must render (a click in webmail is a cross-site navigation too),
     // and now says whose session this browser holds and whose the link is.
     expect(html).toContain(
-      'You\'re signed in as <span class="addr">member@example.com</span> on this browser. Continuing signs you in as <span class="addr">person@example.com</span> instead.',
+      'You\'re signed in as <span class="addr" data-press-gate-see>member@example.com</span> on this browser. Continuing signs you in as <span class="addr" data-press-gate-see>person@example.com</span> instead.',
     );
     // Its own form posts same-origin, so the press is verified; the browser
     // lands on the account's home, not on the page the link chose.

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { confirmLanding } from '@/lib/auth/confirm-landing';
 import {
   lookUpConfirmRecipient,
+  pendingEmailChangeFor,
   verifyConfirmRecipient,
   type ConfirmRecipientAccount,
 } from '@/lib/auth/confirm-link';
@@ -11,7 +12,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { completeEmailChange, EMAIL_CHANGE_RETURN_PATH } from '@/server/services/email-change';
 
-import { PRESS_GATE_FORM_ID, PRESS_GATE_SCRIPT } from './press-gate';
+import { PRESS_GATE_FORM_ATTR, PRESS_GATE_SCRIPT, PRESS_GATE_SEE_ATTR } from './press-gate';
 
 import type { EmailOtpType } from '@supabase/supabase-js';
 
@@ -56,15 +57,20 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     GET checks it before anything else and, for a link that checks out,
  *     looks that account up and prints its address above the form; a changed,
  *     moved or relabelled `r` gets the type's refused answer and one past its
- *     hour the expired answer, with no lookup. POST checks it again before
- *     verifyOtp, so the token is not spent;
+ *     hour the expired answer, with no lookup. An email-change link whose
+ *     change GoTrue no longer holds (done, cancelled, or replaced by a newer
+ *     request) gets the expired answer and no address. POST checks `r` again
+ *     before verifyOtp, so the token is not spent;
  *   - a browser already signed in as another account is told both addresses
  *     (and the one already signed in as the link's account is told nothing);
  *     another site can no longer sign the browser out first
  *     (app/auth/session-ended);
  *   - the press counts only after the page has been in front of the person
- *     for a quiet second (./press-gate.ts), so a window swap cannot land a
- *     double-click's second press on the button unseen;
+ *     for a quiet second and every address it names has been wholly on
+ *     screen through such a second (./press-gate.ts), so neither a window
+ *     swap nor a window opened small and scrolled to the button gets a press
+ *     before the account was on screen. No element has an id, so no link can
+ *     open the page scrolled to the button;
  *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
  * A link without `r` (sent before S25's first release, so expired within the
  * hour, or built by hand) still gets the page it got before and is logged;
@@ -125,9 +131,13 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 
-/** An email address as the page prints it: escaped, in a face where l, I, 1, O and 0 read apart. */
+/**
+ * An email address as the page prints it: escaped, in a face where l, I, 1, O
+ * and 0 read apart, and marked for the press gate, which counts a press only
+ * once every marked address has been on screen (./press-gate.ts).
+ */
 function addr(email: string): string {
-  return `<span class="addr">${escapeHtml(email)}</span>`;
+  return `<span class="addr" ${PRESS_GATE_SEE_ATTR}>${escapeHtml(email)}</span>`;
 }
 
 const PAGE_HEADERS = {
@@ -297,23 +307,27 @@ function signedInNotice(email: string | null): string {
 /**
  * The one line naming the account a signed link is for (S25): its full
  * address, looked up on the server, so a lookalike cannot hide behind a mask.
- * An email change names the address waiting to replace it too. Fixed words per
- * type; only the escaped addresses vary.
+ * Fixed words per type; only the escaped address varies.
  */
-function recipientLine(type: string, account: { email: string; newEmail: string | null }): string {
+function recipientLine(type: 'recovery' | 'invite' | 'magiclink', email: string): string {
   const notYours = 'If that is not your email address, close this page.';
   switch (type) {
     case 'recovery':
-      return `This link sets a new password for ${addr(account.email)}. ${notYours}`;
+      return `This link sets a new password for ${addr(email)}. ${notYours}`;
     case 'invite':
-      return `This invite is for ${addr(account.email)}. ${notYours}`;
+      return `This invite is for ${addr(email)}. ${notYours}`;
     case 'magiclink':
-      return `This link signs in as ${addr(account.email)}. ${notYours}`;
-    default:
-      return account.newEmail
-        ? `This link changes the sign-in email of ${addr(account.email)} to ${addr(account.newEmail)}. If neither address is yours, close this page.`
-        : `This link is for the account ${addr(account.email)}. ${notYours}`;
+      return `This link signs in as ${addr(email)}. ${notYours}`;
   }
+}
+
+/**
+ * The line for an email-change link: the account's address and the one still
+ * waiting to replace it. GET shows it only while GoTrue holds the change the
+ * link was sent for (pendingEmailChangeFor).
+ */
+function emailChangeLine(current: string, pending: string): string {
+  return `This link changes the sign-in email of ${addr(current)} to ${addr(pending)}. If neither address is yours, close this page.`;
 }
 
 /**
@@ -366,7 +380,7 @@ function confirmPage(args: {
     <p>
       This link works once. Press the button to continue.
     </p>
-    <form method="post" action="/auth/confirm" id="${PRESS_GATE_FORM_ID}">
+    <form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>
       <input type="hidden" name="token_hash" value="${escapeHtml(args.tokenHash)}">
       <input type="hidden" name="type" value="${escapeHtml(type)}">
       <input type="hidden" name="next" value="${escapeHtml(args.next)}">
@@ -431,6 +445,19 @@ export async function GET(request: NextRequest) {
     );
     return tryAgainPage();
   }
+  let line: string;
+  if (type === 'email_change') {
+    // GoTrue keeps one pending change, and every new request replaces the
+    // links of the last one. A link whose change is done, cancelled or
+    // replaced gets the expired answer and no address: the account's
+    // addresses now are not the ones it was sent for (a link sent to a
+    // mistyped address must not show the corrected one).
+    const pending = pendingEmailChangeFor(account, verdict.issued);
+    if (pending === null) return expiredAnswer(origin, type);
+    line = emailChangeLine(account.email, pending);
+  } else {
+    line = recipientLine(type as 'recovery' | 'invite' | 'magiclink', account.email);
+  }
   const notice =
     signedIn && signedIn.id !== verdict.userId
       ? otherAccountNotice(signedIn.email, account.email)
@@ -440,7 +467,7 @@ export async function GET(request: NextRequest) {
     tokenHash,
     next,
     r,
-    lines: `<p class="recipient">${recipientLine(type, account)}</p>
+    lines: `<p class="recipient">${line}</p>
     ${notice}`,
   });
 }

@@ -82,8 +82,9 @@ export const CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS = 5000;
 
 /**
  * The account a signed link is for, read from GoTrue with the service client:
- *   found   its sign-in address, and the new one an email change is waiting
- *           on (null when none);
+ *   found   its sign-in address, the new one an email change is waiting on
+ *           (null when none) and when GoTrue recorded that change's latest
+ *           request (email_change_sent_at, in ms; null when it gives none);
  *   gone    GoTrue answered 404 user_not_found, the account has no address,
  *           or it is disabled (banned_until in the future,
  *           server/services/platform/account-status.ts): the link cannot be
@@ -93,9 +94,49 @@ export const CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS = 5000;
  * and never returns GoTrue's message, which can carry the id.
  */
 export type ConfirmRecipientAccount =
-  | { kind: 'found'; email: string; newEmail: string | null }
+  | { kind: 'found'; email: string; newEmail: string | null; emailChangeSentAt: number | null }
   | { kind: 'gone' }
   | { kind: 'failed'; reason: 'error' | 'timeout' };
+
+/**
+ * How far past an email-change link's issue time GoTrue's record of the
+ * latest request may fall and still be the request that link was built for.
+ * mintEmailChangeLinks signs after GoTrue has stored the request, so only the
+ * two servers' clocks and the issue time's whole seconds can put GoTrue's time
+ * later, by far less than this. A request to another address takes longer than
+ * this: it needs that address and the current password typed again (a resend
+ * can come sooner, but names the same addresses).
+ */
+export const EMAIL_CHANGE_REQUEST_SKEW_S = 5;
+
+/**
+ * The new address an email-change link may name, or null when GoTrue no
+ * longer holds the change the link was sent for (docket S25 review):
+ *   - nothing is pending: the change was completed or cancelled;
+ *   - GoTrue's latest request is later than the link (by more than
+ *     EMAIL_CHANGE_REQUEST_SKEW_S): the change was asked for again, to
+ *     another address or the same one, or resent, and GoTrue keeps one pending
+ *     change, so this link's token is gone (server/services/email-change.ts).
+ * The page then shows the expired answer and no address: the account's
+ * addresses are no longer the ones the link was sent for, and a link sent to a
+ * mistyped address must not show its holder the address the person meant.
+ * GoTrue stores the request time with the pending address (and the cancel
+ * clears both); were it ever missing, the link is taken as the live one, as
+ * before this check, rather than refusing every email change.
+ */
+export function pendingEmailChangeFor(
+  account: { newEmail: string | null; emailChangeSentAt: number | null },
+  issued: number,
+): string | null {
+  if (!account.newEmail) return null;
+  if (
+    account.emailChangeSentAt !== null &&
+    account.emailChangeSentAt / 1000 > issued + EMAIL_CHANGE_REQUEST_SKEW_S
+  ) {
+    return null;
+  }
+  return account.newEmail;
+}
 
 /** GoTrue v2's not-found answer for GET /admin/users/<id> (as account-deletion.ts reads it). */
 function isUserNotFound(e: unknown): boolean {
@@ -116,7 +157,13 @@ async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipien
     const bannedUntil = Date.parse(user.banned_until ?? '');
     if (Number.isFinite(bannedUntil) && bannedUntil > now.getTime()) return { kind: 'gone' };
     const pending = typeof user.new_email === 'string' ? user.new_email.trim() : '';
-    return { kind: 'found', email, newEmail: pending || null };
+    const sentAt = Date.parse(user.email_change_sent_at ?? '');
+    return {
+      kind: 'found',
+      email,
+      newEmail: pending || null,
+      emailChangeSentAt: Number.isFinite(sentAt) ? sentAt : null,
+    };
   } catch {
     return { kind: 'failed', reason: 'error' };
   }
