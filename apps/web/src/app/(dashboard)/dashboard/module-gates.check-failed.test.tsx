@@ -103,6 +103,7 @@ import PoImportPage from './purchase-orders/imports/[id]/page';
 import NewPoImportPage from './purchase-orders/imports/new/page';
 import PoImportsPage from './purchase-orders/imports/page';
 import PurchaseOrdersPage from './purchase-orders/page';
+import ReceivingChecklistPage from './purchase-orders/receiving-checklist/page';
 import RecurringPosPage from './purchase-orders/recurring/page';
 import RentalPage from './rentals/[id]/page';
 import NewRentalPage from './rentals/new/page';
@@ -170,6 +171,8 @@ const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
     'purchase_orders',
     () => ({ searchParams: Promise.resolve({}) }),
   ],
+  // The receiving checklist (F4-1), merged with main 2026-11-01.
+  ['Receiving checklist', ReceivingChecklistPage, 'receiving', () => ({})],
   [
     'Recurring purchase orders',
     RecurringPosPage,

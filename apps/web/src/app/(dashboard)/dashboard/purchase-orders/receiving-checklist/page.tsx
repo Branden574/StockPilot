@@ -1,6 +1,6 @@
 import { unstable_rethrow } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ReceivingChecklistEditor } from '@/components/po/receiving-checklist-editor';
 import { ReceivingChecklistLoadFailed } from '@/components/po/receiving-checklist-load-failed';
@@ -36,7 +36,8 @@ const FORM_WIDTH = 'w-full max-w-[960px]';
 export default async function ReceivingChecklistPage() {
   const moduleAccess = await checkModuleAccess('receiving');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="receiving" canManage={moduleAccess.canManage} />;
+    // Off, or could not be checked: ModuleUnavailable tells the two apart.
+    return <ModuleUnavailable moduleId="receiving" access={moduleAccess} />;
   }
   const svc = await ReceivingChecklistService.forCurrentUser();
   let editor: ChecklistEditorView | null = null;
