@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
 import { countRowsWithImages } from '@/lib/exports/export-images';
 import {
@@ -12,6 +13,7 @@ import {
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilterFor: vi.fn().mockResolvedValue(null),
 }));
@@ -219,5 +221,23 @@ describe('POST /api/inventory/export/preview — the export request schema', () 
     expect(passed.scope).toBe('filtered');
     expect(passed.itemType).toBe('book');
     expect(passed.filters).toMatchObject(filters);
+  });
+});
+
+// S16: the last catch used to answer the error's own text.
+describe('POST /api/inventory/export/preview — an unexpected failure', () => {
+  it("answers the fixed sentence, never the error's own text, and is reported", async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new Error('column inventory_items.order_catalog_visible does not exist');
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ scope: 'all', itemType: 'book' }));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('order_catalog_visible');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export.preview' });
   });
 });

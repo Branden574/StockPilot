@@ -12,6 +12,11 @@ import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
+import {
+  internalErrorResponse,
+  unreadableRequestResponse,
+  VISION_FAILED_MESSAGE,
+} from '@/server/lib/api-error-response';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
@@ -147,11 +152,8 @@ export async function POST(req: NextRequest) {
         { status: 415 },
       );
     }
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'invalid request body' },
-      { status: 400 },
-    );
+  } catch {
+    return unreadableRequestResponse();
   }
 
   if (bytes.byteLength > VISION_MAX_BYTES) {
@@ -254,10 +256,16 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
     //     shipped; this route, sharing the same prompt and schema, did not.
     return NextResponse.json(scrubVisionInjection(pickSchemaFields(parsed)));
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'vision_failed' },
-      { status: 502 },
-    );
+    // The vendor's text, or JSON.parse's, which quotes the model's reply:
+    // reported, never answered. `error` was that text, and the phone shows
+    // `error` when there is no `message`.
+    return internalErrorResponse(e, 'api.v1.ai.identify_from_photo', {
+      organizationId: ctx.organizationId,
+      status: 502,
+      code: 'vision_failed',
+      message: VISION_FAILED_MESSAGE,
+      level: 'warning',
+    });
   }
 }
 
