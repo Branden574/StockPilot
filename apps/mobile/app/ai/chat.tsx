@@ -1,11 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import {
-  ChevronLeft,
-  Paperclip,
-  Send,
-  Sparkles,
-} from 'lucide-react-native';
+import { ChevronLeft, Paperclip, Plus, Send, Sparkles } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -24,8 +19,15 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Mono } from '@/components/ui/text';
-import { buildChatRequestBody, chatRefusalSentence, parseChatStream } from '@/lib/ai-chat';
+import { notifyUnauthorized } from '@/lib/account-eviction';
+import {
+  buildChatRequestBody,
+  ChatFailure,
+  chatRefusalSentence,
+  parseChatStream,
+} from '@/lib/ai-chat';
 import { API_BASE, orgHeader } from '@/lib/api';
+import { CONNECTION_FAILURE_COPY } from '@/lib/connection-copy';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
@@ -43,17 +45,27 @@ interface Turn {
 
 /**
  * Mobile-native AI chat surface. Calls the same /api/ai/chat NDJSON
- * stream the web uses, reads token deltas as they arrive, and renders
- * them into a growing assistant bubble. Sessions persist across
- * messages via sessionId. Tool-call notifications surface as inline
- * pills so the user can see when the agent is reading inventory /
- * drafting POs / etc.
+ * stream the web uses, reads the whole answer, and renders it into the
+ * assistant bubble. Tool-call notifications surface as inline pills so
+ * the user can see when the agent is reading inventory / drafting POs /
+ * etc.
+ *
+ * One chat is one session, as on the web: the screen keeps the session id
+ * the route's answer names (sessionRef) and, while it holds one, sends no
+ * history, so the route answers from the chat's own stored turns. The
+ * request and the reading of the answer are lib/ai-chat.ts (docket B75:
+ * this screen used to resend its whole transcript and never held a
+ * session, so about the 22nd message of a chat was refused). New chat (+)
+ * starts another; the chat it leaves stays in the AI Assistant on the web.
  */
 export default function AIChat() {
   const router = useRouter();
   const { c } = useTheme();
   const [turns, setTurns] = React.useState<Turn[]>([]);
-  const [sessionId, setSessionId] = React.useState<string | undefined>(undefined);
+  // The session the route's answer named. A ref, not state: send() reads it
+  // when it runs, so the photo flow's send() (from the render attachPhoto
+  // started in) sends this chat's current id too.
+  const sessionRef = React.useRef<string | null>(null);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
@@ -85,12 +97,16 @@ export default function AIChat() {
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
           ...(await orgHeader(session?.user.id ?? null)),
         },
-        body: JSON.stringify(buildChatRequestBody(text, sessionId, turns)),
+        body: JSON.stringify(buildChatRequestBody(text, sessionRef.current, turns)),
       });
 
       if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(chatRefusalSentence(res.status, errText, res.statusText));
+        // The route's own sentence, or the status's: never the raw body. A
+        // 401 asks for the account probe, as api() does (the bus ignores
+        // every other status).
+        const raw = await res.text().catch(() => '');
+        notifyUnauthorized({ status: res.status });
+        throw new ChatFailure(chatRefusalSentence(res.status, raw));
       }
 
       // React Native's fetch polyfill returns `response.body = null`
@@ -101,9 +117,10 @@ export default function AIChat() {
       // chat actually works. A real streaming UX needs an
       // XHR-with-onprogress shim — that's a follow-up.
       const answer = parseChatStream(await res.text());
-      if (answer.sessionId !== null) setSessionId(answer.sessionId);
-
-      if (answer.errorMessage) throw new Error(answer.errorMessage);
+      // Kept before an error is shown: the route names the session after an
+      // error event too, and the next message belongs to this chat.
+      if (answer.sessionId) sessionRef.current = answer.sessionId;
+      if (answer.errorMessage) throw new ChatFailure(answer.errorMessage);
 
       setTurns((prev) => {
         const next = [...prev];
@@ -119,7 +136,10 @@ export default function AIChat() {
       });
       scrollToBottom();
     } catch (err) {
-      Alert.alert('Chat error', err instanceof Error ? err.message : String(err));
+      // Anything without a sentence of its own got no answer from the server
+      // (offline, a dropped connection): the network layer's text is never
+      // shown (connection-copy.ts).
+      Alert.alert('Chat error', err instanceof ChatFailure ? err.message : CONNECTION_FAILURE_COPY);
       setTurns((prev) => prev.slice(0, -1)); // remove the empty assistant bubble
     } finally {
       setBusy(false);
@@ -128,6 +148,18 @@ export default function AIChat() {
       );
       scrollToBottom();
     }
+  }
+
+  /**
+   * New chat: empties the screen and forgets the session, so the next
+   * message starts a chat of its own. Nothing is deleted: the chat it leaves
+   * stays in the AI Assistant on the web. Offered only between answers, so a
+   * late reply never lands in the new chat.
+   */
+  function startNewChat() {
+    sessionRef.current = null;
+    setTurns([]);
+    setInput('');
   }
 
   /**
@@ -237,8 +269,15 @@ export default function AIChat() {
               AI · BETA
             </Mono>
           </View>
-          {/* Balances the back chip's 44pt frame so the label stays centred. */}
-          <View style={{ width: 44 }} />
+          {/* New chat once the chat has started, hidden while an answer or a
+              photo is pending. Otherwise a spacer: the chip's 44pt frame and
+              the spacer both balance the back chip's, so the label stays
+              centred. */}
+          {turns.length > 0 && !busy && !uploading ? (
+            <IconChip icon={Plus} onPress={startNewChat} accessibilityLabel="New chat" minTap />
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
         </View>
       </SafeAreaView>
 

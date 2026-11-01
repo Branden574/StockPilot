@@ -62,12 +62,15 @@ const bodySchema = z.object({
  * The sentence for a body the schema refused: the app's words, chosen by
  * where it refused, never the ZodError's own text (its issue list as JSON).
  *
- * Two refusals happen in normal use, so they say what to do. The web chat box
- * has no length cap (`message`). The phone sends its whole on-screen
- * transcript as `history` with every message (app/ai/chat.tsx), so about the
- * 22nd message of one chat passes the 40 turns, and every message after a
- * reply over 8,000 characters passes a turn's cap. Anything else is a broken
- * client: the fixed sentence. Not reported: the body is the caller's.
+ * Two refusals can happen in normal use, so they say what to do. The web chat
+ * box has no length cap (`message`). `history` is checked only on a request
+ * without a session id (withoutHistoryWhenSessionSent): every phone keeps the
+ * id from its chat's first answer (builds since 2026-05-27 from the early
+ * `session` event, builds after docket B75 from `done` too), and builds after
+ * B75 send no history beside it, so the 40-turn and 8,000-character caps now
+ * refuse only a client that holds no session and sends more than that.
+ * Anything else is a broken client: the fixed sentence. Not reported: the
+ * body is the caller's.
  */
 function bodyRefusalMessage(issues: z.ZodIssue[]): string {
   const first = issues[0];
@@ -78,6 +81,29 @@ function bodyRefusalMessage(issues: z.ZodIssue[]): string {
     if (first.path[0] === 'history') return 'This conversation is too long. Start a new chat.';
   }
   return UNREADABLE_REQUEST_MESSAGE;
+}
+
+/**
+ * The body as the schema reads it: without `history` when the body names a
+ * session (a string `sessionId`).
+ *
+ * The route answers from a held session's own stored turns and reads a
+ * client's history only when it holds no session (below), so a history sent
+ * beside a session id was checked but never used. Every phone build up to
+ * docket B75 sends its whole on-screen transcript with every message
+ * (app/ai/chat.tsx), and that check refused about the 22nd message of a
+ * chat, and every message after a reply over 8,000 characters. A
+ * `sessionId` that is not a UUID is still refused by the schema, and a body
+ * without one is still checked in full. When the session is gone (deleted,
+ * or idle 30 days), the new chat starts without the dropped history, as the
+ * web chat's does (it never sends one).
+ */
+function withoutHistoryWhenSessionSent(body: unknown): unknown {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return body;
+  if (typeof (body as { sessionId?: unknown }).sessionId !== 'string') return body;
+  const read: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  delete read.history;
+  return read;
 }
 
 /**
@@ -116,10 +142,14 @@ const MAX_HISTORY_TURNS = 40;
  * waiting for the full reply.
  *
  * Event shapes (each is a single line, terminated by \n):
+ *   {"type":"session","id":"..."}   first, before any text
  *   {"type":"text","delta":"..."}
  *   {"type":"tool","name":"...","ok":true}
  *   {"type":"done","sessionId":"...","reply":"...","toolCallsUsed":[...]}
  *   {"type":"error","code":"...","message":"..."}
+ *
+ * The session is named twice: first (the phone adopts it there) and in
+ * `done`, which ends every stream (the web reads it there).
  *
  * Auth + payload validation still respond with a JSON 4xx (no stream)
  * so the client can branch on Content-Type.
@@ -194,7 +224,7 @@ export async function POST(req: Request) {
     // Never the parser's text: a SyntaxError quotes what it read.
     return unreadableRequestResponse('validation_error');
   }
-  const parsed = bodySchema.safeParse(body);
+  const parsed = bodySchema.safeParse(withoutHistoryWhenSessionSent(body));
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'validation_error', message: bodyRefusalMessage(parsed.error.issues) },
@@ -218,6 +248,8 @@ export async function POST(req: Request) {
         history = messages.map((m) => ({ role: m.role, content: m.content }));
       }
     }
+    // Only a request that named no session carries a history here: one sent
+    // beside a session id was dropped unread (withoutHistoryWhenSessionSent).
     if (!sessionId && payload.history && payload.history.length > 0) {
       history = payload.history as ChatTurn[];
     }
@@ -280,6 +312,12 @@ export async function POST(req: Request) {
           // Client disconnected mid-write. Swallow — finally still runs.
         }
       };
+
+      // The session first, before any text. Every phone build adopts the id
+      // from this event (app/ai/chat.tsx since 2026-05-27), and nothing sent
+      // it until docket B75, so each phone message began a chat of its own.
+      // An answer cut short after this line still names its chat.
+      send({ type: 'session', id: finalSessionId });
 
       let assembledReply = '';
       const toolCallsUsed: ToolCallRecord[] = [];

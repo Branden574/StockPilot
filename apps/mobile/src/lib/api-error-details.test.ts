@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { notifyUnauthorized } from './account-eviction';
+
 /**
  * The API client must carry a route's APP-AUTHORED `details` blob through to
  * the caller.
@@ -30,7 +32,6 @@ vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn(async () =>
 vi.mock('./account-eviction', () => ({ notifyUnauthorized: vi.fn() }));
 vi.mock('./request-cancellation', () => ({ registerInFlight: vi.fn(() => vi.fn()) }));
 
-import { notifyUnauthorized } from './account-eviction';
 import { api, ApiError } from './api';
 
 function respondWith(status: number, body: string) {

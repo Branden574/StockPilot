@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 import { notifyUnauthorized } from './account-eviction';
+import { readErrorBody, statusSentence } from './api-error-body';
 import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
@@ -227,39 +228,15 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       // markup on screen where a sentence belonged (seen in the simulator on
       // the staging screen, 2026-07-22). Read the body, use it ONLY when it
       // parses as our JSON error shape, and otherwise say something a person
-      // can act on.
+      // can act on. The reader and the sentences are shared with the AI chat
+      // (api-error-body.ts); the code is the fallback here only.
       const raw = await res.text().catch(() => '');
-      let message: string | null = null;
-      let code: string | undefined;
-      let details: unknown;
-      if (raw.trimStart().startsWith('{')) {
-        try {
-          const body = JSON.parse(raw) as {
-            message?: unknown;
-            error?: unknown;
-            details?: unknown;
-          };
-          const m = typeof body.message === 'string' ? body.message : null;
-          const e = typeof body.error === 'string' ? body.error : null;
-          message = m ?? e;
-          code = e ?? undefined;
-          // Carried through UNINSPECTED — the shape is the caller's business,
-          // and every consumer narrows it before rendering.
-          details = body.details;
-        } catch {
-          message = null;
-        }
-      }
-      if (!message) {
-        message =
-          res.status === 401 || res.status === 403
-            ? 'You do not have access to that.'
-            : res.status === 404
-              ? 'That is not available on this version of the app. Update the app and try again.'
-              : res.status >= 500
-                ? 'The server had a problem. Try again in a moment.'
-                : `Request failed (${res.status}).`;
-      }
+      const body = readErrorBody(raw);
+      // `details` is carried through UNINSPECTED — the shape is the caller's
+      // business, and every consumer narrows it before rendering.
+      const { code, details } = body;
+      let message = body.message ?? code;
+      if (!message) message = statusSentence(res.status);
       // A 401 is the app's earliest reliable signal that the account was
       // disabled while the device was offline or missed the broadcast — but the
       // server will NOT say so (it answers a uniform 401 on purpose), so this
