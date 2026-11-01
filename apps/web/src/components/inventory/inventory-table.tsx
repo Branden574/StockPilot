@@ -5598,6 +5598,9 @@ function SavedViewChip({
   const [deleting, setDeleting] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Why the last Delete failed, inside its confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   async function apply() {
     try {
@@ -5625,23 +5628,28 @@ function SavedViewChip({
 
   function remove(e: React.MouseEvent) {
     e.stopPropagation();
+    setDeleteError(null);
     setDeleteOpen(true);
   }
 
   async function confirmDelete() {
     setDeleting(true);
+    setDeleteError(null);
     let res: Awaited<ReturnType<typeof deleteSavedViewAction>>;
     try {
       res = await deleteSavedViewAction(view.id, scope);
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'delete the view'));
+      const message = requestFailedMessage(e, 'delete the view');
+      setDeleteError(message);
+      toast.error(message);
       return;
     } finally {
       setDeleting(false);
     }
     if (!res.ok) {
+      setDeleteError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -5756,6 +5764,7 @@ function SavedViewChip({
         }
         confirmLabel="Delete view"
         pending={deleting}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </span>
@@ -5774,6 +5783,9 @@ function SaveCurrentViewButton({
   const [name, setName] = React.useState('');
   const [shareWithTeam, setShareWithTeam] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  // Why the last Save failed, in the popover (a toast sits outside it). The
+  // name stays. Cleared on each try and when the popover closes.
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const nameId = React.useId();
   const shareNoteId = React.useId();
@@ -5785,6 +5797,7 @@ function SaveCurrentViewButton({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setName('');
       setShareWithTeam(false);
+      setSaveError(null);
     }
   }, [open]);
 
@@ -5792,6 +5805,7 @@ function SaveCurrentViewButton({
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
     setSaving(true);
+    setSaveError(null);
     let res: Awaited<ReturnType<typeof createSavedViewAction>>;
     try {
       res = await createSavedViewAction({
@@ -5805,12 +5819,15 @@ function SaveCurrentViewButton({
       if (isControlFlow(e)) return;
       // B40: no answer (offline, a server error the action threw, a deploy
       // that no longer has it). The popover stays open with the name kept.
-      toast.error(requestFailedMessage(e, 'save the view'));
+      const message = requestFailedMessage(e, 'save the view');
+      setSaveError(message);
+      toast.error(message);
       return;
     } finally {
       setSaving(false);
     }
     if (!res.ok) {
+      setSaveError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -5873,6 +5890,11 @@ function SaveCurrentViewButton({
               Everyone in your org will see this view. Only you can edit or delete it.
             </p>
           </div>
+          {saveError && (
+            <p role="alert" className="text-destructive text-[12.5px] leading-[18px]">
+              {saveError}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
               Cancel

@@ -81,7 +81,11 @@ import { CategoriesManager } from '@/components/categories/categories-manager';
 import { LocationsManager } from '@/components/locations/locations-manager';
 import { SuppliersManager } from '@/components/suppliers/suppliers-manager';
 import { TagsManager } from '@/components/tags/tags-manager';
-import { createCategoryAction } from '@/server/actions/categories';
+import {
+  archiveCategoryAction,
+  createCategoryAction,
+  restoreCategoryAction,
+} from '@/server/actions/categories';
 import { createCharterAction, updateCharterAction } from '@/server/actions/charters';
 import { createLocationAction } from '@/server/actions/locations';
 import {
@@ -320,6 +324,20 @@ describe('Edit dialogs when the save gets no answer', () => {
   });
 });
 
+const CATEGORY = {
+  id: 'cat-1',
+  name: 'Stationery',
+  description: null,
+  color: null,
+  supports_sizes: false,
+  public_visibility: 'public' as const,
+  parent_id: null,
+  tracking_mode: null,
+  sports_subcategory_key: null,
+  tracking_profile: null,
+  default_unit_of_measure: null,
+};
+
 describe('confirms that could not be closed', () => {
   it('supplier Archive says why inside the confirm, which can be closed', async () => {
     vi.mocked(archiveSupplierAction).mockRejectedValueOnce(offline());
@@ -345,6 +363,61 @@ describe('confirms that could not be closed', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       requestFailedMessage(offline(), 'restore the supplier'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
+  it('category Archive says why inside the confirm, a refusal too, and it can be closed', async () => {
+    vi.mocked(archiveCategoryAction)
+      .mockRejectedValueOnce(offline())
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'conflict', message: 'Archive its subcategories first.' },
+      } as never);
+    const user = userEvent.setup();
+    render(
+      <CategoriesManager
+        initial={[CATEGORY]}
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    const dialog = await openDialog(user, 'Archive Stationery');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    const sentence = requestFailedMessage(offline(), 'archive the category');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'Archive its subcategories first.',
+      ),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const again = await openDialog(user, 'Archive Stationery');
+    expect(within(again).queryByRole('alert')).toBeNull();
+  });
+
+  it('category Restore says why inside the confirm', async () => {
+    vi.mocked(restoreCategoryAction).mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(
+      <CategoriesManager
+        initial={[CATEGORY]}
+        view="archived"
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    const dialog = await openDialog(user, /Restore/);
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'restore the category'),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
   });

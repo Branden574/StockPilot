@@ -149,6 +149,10 @@ export function OrderLineActions({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [removing, setRemoving] = React.useState(false);
   const [raiseConfirmOpen, setRaiseConfirmOpen] = React.useState(false);
+  // Why the last raise or removal failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [raiseError, setRaiseError] = React.useState<string | null>(null);
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
 
   const blocked = quantityBlockedReason({
     quantity: draft,
@@ -193,6 +197,7 @@ export function OrderLineActions({
   function requestSave() {
     if (blocked != null || unchanged || saving) return;
     if (raiseWarning != null) {
+      setRaiseError(null);
       setRaiseConfirmOpen(true);
       return;
     }
@@ -202,12 +207,17 @@ export function OrderLineActions({
   async function save() {
     if (blocked != null || unchanged) return;
     setSaving(true);
+    setRaiseError(null);
     // The server's refusal is shown unedited (it names the fulfilled/staged
     // number that made the change impossible, which generic copy would throw
     // away), and the editor stays open with the typed number to adjust it.
-    const saved = await commitLineQuantity({ orderId, lineId, itemName, quantity: draft });
+    const result = await commitLineQuantity({ orderId, lineId, itemName, quantity: draft });
     setSaving(false);
-    if (!saved) return;
+    if (!result.saved) {
+      // Inside the raise confirm when it is open; the toast says it as well.
+      setRaiseError(result.message);
+      return;
+    }
     // Repeated as a toast as well as in the confirmation: the confirmation is
     // gone by now, and the person who has to act on it may not be the person
     // who clicked. The order's own banner carries it from here.
@@ -221,12 +231,16 @@ export function OrderLineActions({
 
   async function remove() {
     setRemoving(true);
+    setRemoveError(null);
     // Left open on a refusal, on purpose: it is nearly always a state the
     // viewer didn't know about (someone staged the line in another tab), and
     // it reads better against the item name still on screen.
-    const removed = await commitLineRemoval({ orderId, lineId, itemName });
+    const result = await commitLineRemoval({ orderId, lineId, itemName });
     setRemoving(false);
-    if (!removed) return;
+    if (!result.saved) {
+      setRemoveError(result.message);
+      return;
+    }
     setConfirmOpen(false);
     router.refresh();
   }
@@ -295,6 +309,7 @@ export function OrderLineActions({
           confirmLabel="Raise the quantity"
           cancelLabel="Leave it as it is"
           pending={saving}
+          error={raiseError}
           onConfirm={save}
         />
       </div>
@@ -350,7 +365,10 @@ export function OrderLineActions({
           className="text-destructive hover:text-destructive h-8 w-8"
           aria-label={`Remove ${itemName}`}
           title="Remove from order"
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => {
+            setRemoveError(null);
+            setConfirmOpen(true);
+          }}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
@@ -361,6 +379,7 @@ export function OrderLineActions({
         itemName={itemName}
         quantityRequested={quantityRequested}
         pending={removing}
+        error={removeError}
         onConfirm={remove}
       />
     </div>
@@ -408,21 +427,28 @@ export function ShortLineFixes({
   const [lowering, setLowering] = React.useState(false);
   const [removing, setRemoving] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // Why the last removal failed, inside its confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
 
   if (fixes.actions.length === 0 && !fixes.note) return null;
 
   async function lower(quantity: number) {
     setLowering(true);
-    const saved = await commitLineQuantity({ orderId, lineId, itemName, quantity });
+    const result = await commitLineQuantity({ orderId, lineId, itemName, quantity });
     setLowering(false);
-    if (saved) router.refresh();
+    if (result.saved) router.refresh();
   }
 
   async function remove() {
     setRemoving(true);
-    const removed = await commitLineRemoval({ orderId, lineId, itemName });
+    setRemoveError(null);
+    const result = await commitLineRemoval({ orderId, lineId, itemName });
     setRemoving(false);
-    if (!removed) return;
+    if (!result.saved) {
+      setRemoveError(result.message);
+      return;
+    }
     setConfirmOpen(false);
     router.refresh();
   }
@@ -463,7 +489,10 @@ export function ShortLineFixes({
                 data-short-line-fix=""
                 aria-label={`${a.label}: ${itemName}`}
                 disabled={busy}
-                onClick={() => setConfirmOpen(true)}
+                onClick={() => {
+                  setRemoveError(null);
+                  setConfirmOpen(true);
+                }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 {a.label}
@@ -486,6 +515,7 @@ export function ShortLineFixes({
         itemName={itemName}
         quantityRequested={quantityRequested}
         pending={removing}
+        error={removeError}
         onConfirm={remove}
       />
     </div>
@@ -499,6 +529,7 @@ function RemoveLineConfirm({
   itemName,
   quantityRequested,
   pending,
+  error,
   onConfirm,
 }: {
   open: boolean;
@@ -506,6 +537,8 @@ function RemoveLineConfirm({
   itemName: string;
   quantityRequested: number;
   pending: boolean;
+  /** Why the last try failed, shown inside the confirm. */
+  error: string | null;
   onConfirm: () => void | Promise<void>;
 }) {
   return (
@@ -523,22 +556,30 @@ function RemoveLineConfirm({
       }
       confirmLabel="Remove item"
       pending={pending}
+      error={error}
       onConfirm={onConfirm}
     />
   );
 }
 
 /**
+ * What a line change came to: saved, or not, with the sentence the toast
+ * said (the refusal, or that there was no answer) so a confirm can show it
+ * too. Null on the way to sign-in, when nothing is said.
+ */
+type LineCommit = { saved: true } | { saved: false; message: string | null };
+
+/**
  * One quantity change, as every line control says it: the server's refusal
  * verbatim, else what it changed to, a stale printed slip, and (F2-2) what
- * the automatic hold did for a raise. True when the change was saved.
+ * the automatic hold did for a raise.
  */
 async function commitLineQuantity(input: {
   orderId: string;
   lineId: string;
   itemName: string;
   quantity: number;
-}): Promise<boolean> {
+}): Promise<LineCommit> {
   let res: Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>;
   try {
     res = await updateOrderRequestLineQuantityAction({
@@ -548,46 +589,48 @@ async function commitLineQuantity(input: {
     });
   } catch (e) {
     // A redirect (the session ended): the router is already navigating.
-    if (isControlFlow(e)) return false;
+    if (isControlFlow(e)) return { saved: false, message: null };
     // No answer (offline, a server error, a deploy). Setting a quantity is
     // safe to send again; the editor stays open with the typed number.
-    toast.error(requestFailedMessage(e, `change the quantity of ${input.itemName}`));
-    return false;
+    const message = requestFailedMessage(e, `change the quantity of ${input.itemName}`);
+    toast.error(message);
+    return { saved: false, message };
   }
   if (!res.ok) {
     toast.error(res.error.message);
-    return false;
+    return { saved: false, message: res.error.message };
   }
   toast.success(`${input.itemName} — quantity changed to ${formatNumber(res.data.quantity)}.`);
   warnIfPickSlipStale(res.data.pickSlipStale);
   // Null on a lowering or when no hold was attempted, so only a raise by
   // someone who may approve orders, at a hold status, says anything.
   announceHoldTopUp(res.data.hold, 'raised');
-  return true;
+  return { saved: true };
 }
 
-/** One removal, as every line control says it. True when the line is gone. */
+/** One removal, as every line control says it. Saved when the line is gone. */
 async function commitLineRemoval(input: {
   orderId: string;
   lineId: string;
   itemName: string;
-}): Promise<boolean> {
+}): Promise<LineCommit> {
   let res: Awaited<ReturnType<typeof removeOrderRequestLineAction>>;
   try {
     res = await removeOrderRequestLineAction({ id: input.orderId, lineId: input.lineId });
   } catch (e) {
     // A redirect (the session ended): the router is already navigating.
-    if (isControlFlow(e)) return false;
-    toast.error(requestFailedMessage(e, `remove ${input.itemName}`));
-    return false;
+    if (isControlFlow(e)) return { saved: false, message: null };
+    const message = requestFailedMessage(e, `remove ${input.itemName}`);
+    toast.error(message);
+    return { saved: false, message };
   }
   if (!res.ok) {
     toast.error(res.error.message);
-    return false;
+    return { saved: false, message: res.error.message };
   }
   toast.success(`${input.itemName} removed from this order.`);
   warnIfPickSlipStale(res.data.pickSlipStale);
-  return true;
+  return { saved: true };
 }
 
 /**

@@ -189,6 +189,19 @@ function humanizeVariantKey(key: string): string | null {
  */
 const FOLLOW_UP_NO_ANSWER = 'check your connection and try again.';
 
+/**
+ * The end of the warning after a create whose photos did not all upload. A
+ * photo whose record step got no answer may be on the item already, so it is
+ * said apart from the ones that failed, with where to look before adding it
+ * again (B40). Empty when every photo got an answer.
+ */
+function unconfirmedPhotosSentence(unconfirmed: number, where: string): string {
+  if (unconfirmed === 0) return '';
+  return unconfirmed === 1
+    ? ` We couldn't confirm that 1 photo was saved. Check ${where} before adding it again.`
+    : ` We couldn't confirm that ${unconfirmed} photos were saved. Check ${where} before adding them again.`;
+}
+
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // HEIC + HEIF added so iPhone Safari (which ships HEIC by default
 // unless the user has flipped Camera > Format to "Most Compatible")
@@ -1155,7 +1168,7 @@ export function ItemForm({
       : null;
 
   async function uploadStagedImages(itemId: string) {
-    if (staged.length === 0) return { uploaded: 0, failed: 0 };
+    if (staged.length === 0) return { uploaded: 0, failed: 0, unconfirmed: 0 };
     setUploadingImages(true);
     // Byte-weighted progress over the staged originals. The denominator is
     // fixed up front so the percentage cannot travel backwards as each file
@@ -1169,6 +1182,10 @@ export function ItemForm({
     const publishProgress = () => setUploadPercent(batch.percent);
     let uploaded = 0;
     let failed = 0;
+    // A photo whose record step got no answer: the file is up, but whether
+    // its row was written is unknown, and adding it again would make a
+    // second copy (each upload is its own row).
+    let unconfirmed = 0;
     try {
       for (let i = 0; i < staged.length; i++) {
         const item = staged[i];
@@ -1223,13 +1240,21 @@ export function ItemForm({
           batch.settle(progressKey, true);
           publishProgress();
           const thumbOk = thumbRes ? thumbRes.ok : false;
-          const record = await recordImageAction({
-            itemId,
-            storagePath: presign.data.path,
-            thumbPath: thumbOk ? presign.data.thumbPath : null,
-            lqip,
-            isFirst: i === 0,
-          });
+          let record: Awaited<ReturnType<typeof recordImageAction>>;
+          try {
+            record = await recordImageAction({
+              itemId,
+              storagePath: presign.data.path,
+              thumbPath: thumbOk ? presign.data.thumbPath : null,
+              lqip,
+              isFirst: i === 0,
+            });
+          } catch (e) {
+            // A redirect (the session ended) goes up as it is: nothing is shown.
+            if (isControlFlow(e)) throw e;
+            unconfirmed++;
+            continue;
+          }
           if (record.ok) uploaded++;
           else failed++;
         } catch (e) {
@@ -1248,7 +1273,7 @@ export function ItemForm({
       setUploadingImages(false);
       setUploadPercent(null);
     }
-    return { uploaded, failed };
+    return { uploaded, failed, unconfirmed };
   }
 
   /**
@@ -1412,24 +1437,32 @@ export function ItemForm({
       const createdIds = res.data.ids ?? [];
       let totalUploaded = 0;
       let totalFailed = 0;
+      let totalUnconfirmed = 0;
       if (staged.length > 0 && createdIds.length > 0) {
-        for (const variantId of createdIds) {
-          const r = await uploadStagedImages(variantId);
-          totalUploaded += r.uploaded;
-          totalFailed += r.failed;
+        try {
+          for (const variantId of createdIds) {
+            const r = await uploadStagedImages(variantId);
+            totalUploaded += r.uploaded;
+            totalFailed += r.failed;
+            totalUnconfirmed += r.unconfirmed;
+          }
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+          throw e;
         }
       }
 
       const expected = staged.length * createdIds.length;
       if (expected === 0) {
         toast.success(`Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`);
-      } else if (totalFailed === 0) {
+      } else if (totalFailed === 0 && totalUnconfirmed === 0) {
         toast.success(
           `Created ${res.data.created} variants with ${staged.length} photo${staged.length === 1 ? '' : 's'} each.`,
         );
       } else {
         toast.warning(
-          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed.`,
+          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded${totalFailed > 0 ? ` — ${totalFailed} failed.` : '.'}${unconfirmedPhotosSentence(totalUnconfirmed, "each variant's photos")}`,
         );
       }
       // A SEPARATE toast rather than another branch of the tree above: photos
@@ -1670,10 +1703,18 @@ export function ItemForm({
     // Photo uploads are only staged in the create flow; edit flow uses the
     // ImageUploader on the item detail page directly against an existing id.
     if (!isEdit && staged.length > 0) {
-      const { uploaded, failed } = await uploadStagedImages(res.data.id);
-      if (failed > 0) {
+      let photos: Awaited<ReturnType<typeof uploadStagedImages>>;
+      try {
+        photos = await uploadStagedImages(res.data.id);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        throw e;
+      }
+      const { uploaded, failed, unconfirmed } = photos;
+      if (failed > 0 || unconfirmed > 0) {
         toast.warning(
-          `Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`,
+          `Item created. ${uploaded} of ${staged.length} photos uploaded${failed > 0 ? ` — ${failed} failed.` : '.'}${unconfirmedPhotosSentence(unconfirmed, "the item's photos")}`,
         );
       } else {
         savedRef.current = true;

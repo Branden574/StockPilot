@@ -81,6 +81,10 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
   const [copied, setCopied] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [revoking, setRevoking] = React.useState(false);
+  // Why the last Revoke got no answer, inside the confirm (a toast sits
+  // behind it). The confirm stays open and Cancel closes it. Cleared on open
+  // and on each try.
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
 
   // A link exists if the server said so, or we just generated one.
   const hasActiveLink = generatedUrl !== null || status !== null;
@@ -125,14 +129,16 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
   async function revoke() {
     setRevoking(true);
+    setRevokeError(null);
     let res: Awaited<ReturnType<typeof revokeMaintenanceShareLinkAction>>;
     try {
       res = await revokeMaintenanceShareLinkAction(requestId);
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      setConfirmOpen(false);
-      toast.error(requestFailedMessage(e, 'revoke the share link'));
+      const message = requestFailedMessage(e, 'revoke the share link');
+      setRevokeError(message);
+      toast.error(message);
       return;
     } finally {
       setRevoking(false);
@@ -212,7 +218,10 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
             variant="outline"
             size="sm"
             className="text-destructive hover:text-destructive"
-            onClick={() => setConfirmOpen(true)}
+            onClick={() => {
+              setRevokeError(null);
+              setConfirmOpen(true);
+            }}
           >
             Revoke
           </Button>
@@ -234,6 +243,7 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
           description="The link stops granting photo access immediately. Generate a new link whenever this request needs one again."
           confirmLabel="Revoke link"
           pending={revoking}
+          error={revokeError}
           onConfirm={() => void revoke()}
         />
       ) : null}

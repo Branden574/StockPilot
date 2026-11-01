@@ -442,9 +442,13 @@ export function BulkActions({
   // explicit "Archive anyway" that re-runs with acknowledgeStock — the silent
   // orphan is dead, but a deliberate archive-with-stock stays one click away.
   const [pendingAckArchive, setPendingAckArchive] = React.useState<string | null>(null);
+  // Why the last Archive failed, inside its confirm (a toast sits behind it).
+  // Cleared when the confirm opens and on each try.
+  const [archiveError, setArchiveError] = React.useState<string | null>(null);
 
   async function run(op: BulkInventoryOp, opts: { acknowledgeStock?: boolean } = {}) {
     setBusy(true);
+    if (op.kind === 'archive') setArchiveError(null);
     let r: Awaited<ReturnType<typeof bulkUpdateInventoryAction>>;
     try {
       r = await bulkUpdateInventoryAction({
@@ -455,7 +459,9 @@ export function BulkActions({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'update the items'));
+      const message = requestFailedMessage(e, 'update the items');
+      if (op.kind === 'archive') setArchiveError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(false);
@@ -469,6 +475,7 @@ export function BulkActions({
         setPendingAckArchive(r.error.message);
         return;
       }
+      if (op.kind === 'archive') setArchiveError(r.error.message);
       toast.error(r.error.message);
       return;
     }
@@ -787,7 +794,10 @@ export function BulkActions({
             variant="ghost"
             size="sm"
             className={cn(ACTION, 'text-destructive hover:text-destructive')}
-            onClick={() => setDialog({ kind: 'archive' })}
+            onClick={() => {
+              setArchiveError(null);
+              setDialog({ kind: 'archive' });
+            }}
           >
             <Archive aria-hidden strokeWidth={1.6} /> Archive
           </Button>
@@ -890,6 +900,7 @@ export function BulkActions({
         description="Archived items are hidden from the default view but keep their history. You can restore them later by switching the view to Archived."
         confirmLabel="Archive"
         pending={busy}
+        error={archiveError}
         onConfirm={() => run({ kind: 'archive' })}
       />
 

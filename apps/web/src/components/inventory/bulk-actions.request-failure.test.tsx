@@ -93,5 +93,29 @@ describe('BulkActions when a bulk write gets no answer', () => {
     const again = within(dialog).getAllByRole('button', { name: /Archive/i });
     expect(again[again.length - 1]).toBeEnabled();
     expect(onClear).not.toHaveBeenCalled();
+    // Inside the confirm as well, where the person is looking.
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'update the items'),
+    );
+  });
+
+  it('Archive shows a refusal inside the confirm too, and a confirm opened again starts clean', async () => {
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'forbidden', message: 'You need edit access to archive items.' },
+    } as never);
+    renderBar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    const dialog = await screen.findByRole('dialog');
+    const confirm = within(dialog).getAllByRole('button', { name: /Archive/i });
+    await user.click(confirm[confirm.length - 1]!);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'You need edit access to archive items.',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    expect(within(await screen.findByRole('dialog')).queryByRole('alert')).toBeNull();
   });
 });

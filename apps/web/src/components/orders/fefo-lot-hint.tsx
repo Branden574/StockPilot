@@ -70,6 +70,9 @@ export function FefoLotHint({
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
+      // The quantities stay, and the page is left as it is: reading it again
+      // with no connection becomes a full page load, which shows the
+      // browser's error page (B40 plan 3.4).
       toast.error(
         requestUnconfirmedMessage(
           e,
@@ -77,7 +80,6 @@ export function FefoLotHint({
           "each lot's remaining quantity",
         ),
       );
-      router.refresh();
       return;
     } finally {
       setSaving(false);

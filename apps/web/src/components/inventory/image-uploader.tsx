@@ -64,6 +64,10 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<ImageRow | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last Remove got no answer, inside this card's confirm (a toast
+  // sits behind it). The confirm stays open and Cancel closes it. Cleared on
+  // open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   // Keep local state in sync if the server-passed list changes (e.g. after
   // router.refresh() following an upload).
@@ -238,41 +242,60 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // of them would contradict it.
       if (failed === 0) toast.success('Photos uploaded.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended) ends the batch here: the router is
+      // already navigating, so nothing more is said. Left to escape, it was an
+      // unhandled rejection from the file input's handler.
+      if (isControlFlow(e)) return;
+      // Each photo's own failure is said by its worker above, so only
+      // something outside them reaches here; it is said rather than dropped.
+      toast.error(requestFailedMessage(e, 'upload the photos'));
     } finally {
       setUploading(false);
       setUploadPercent(null);
     }
   }
 
-  // Variant used by the lightbox toolbar (already confirmed there).
-  async function deleteImageById(imageId: string) {
+  // Variant used by the lightbox toolbar (already confirmed there). Answers
+  // the sentence when the request got no answer, so this card's confirm can
+  // keep it; null otherwise (removed, or refused with its reason toasted).
+  async function deleteImageById(imageId: string): Promise<string | null> {
     let res: Awaited<ReturnType<typeof removeImageAction>>;
     try {
       res = await removeImageAction(imageId, itemId);
     } catch (e) {
-      // A redirect (the session ended): the router is already navigating.
-      if (isControlFlow(e)) throw e;
-      // No answer (offline, a server error, a deploy): the photo stays, and
-      // both confirms (this card's and the lightbox's) close on the message.
-      toast.error(requestFailedMessage(e, 'delete the photo'));
-      return;
+      // A redirect (the session ended): the router is already navigating, so
+      // nothing is said and either confirm closes.
+      if (isControlFlow(e)) return null;
+      // No answer (offline, a server error, a deploy): the photo stays. The
+      // lightbox's confirm closes on the message; this card's stays open
+      // with it.
+      const message = requestFailedMessage(e, 'delete the photo');
+      toast.error(message);
+      return message;
     }
     if (!res.ok) {
       toast.error(res.error.message);
-      return;
+      return null;
     }
     setImages((arr) => arr.filter((i) => i.id !== imageId));
     router.refresh();
+    return null;
   }
 
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
+    setDeleteError(null);
     try {
-      await deleteImageById(deleteTarget.id);
+      const unanswered = await deleteImageById(deleteTarget.id);
+      if (unanswered) {
+        setDeleteError(unanswered);
+        return;
+      }
+      setDeleteTarget(null);
     } finally {
       setDeleteBusy(false);
-      setDeleteTarget(null);
     }
   }
 
@@ -311,6 +334,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  setDeleteError(null);
                   setDeleteTarget(img);
                 }}
                 // A dark chip over the photo, legible on any picture in both
@@ -336,7 +360,9 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           startIndex={lightboxIndex}
           open
           onClose={() => setLightboxIndex(null)}
-          onDelete={(id) => deleteImageById(id)}
+          onDelete={async (id) => {
+            await deleteImageById(id);
+          }}
         />
       )}
 
@@ -407,6 +433,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         description="The image is removed from this item and deleted from storage. This cannot be undone — re-upload the photo if you need it back."
         confirmLabel="Remove"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </div>

@@ -97,9 +97,11 @@ describe('FefoLotHint — the redesigned lot sub-panel (P4.B1)', () => {
 // cleared it only when it answered. A record that got no answer (offline, a
 // server error, a deploy) left the button spinning with no message. Each
 // record adds lot pick events, so the same record sent again could count the
-// picks twice: the message says to check first, and the lots are read again.
+// picks twice: the message says to check first. The page is left as it is:
+// reading it again with no connection becomes a full page load, which shows
+// the browser's error page and loses the typed quantities.
 describe('FefoLotHint when the record gets no answer', () => {
-  it("says to check each lot's remaining quantity first, and Record works again", async () => {
+  it("says to check each lot's remaining quantity first, keeps the quantities, and Record works again", async () => {
     vi.mocked(recordLotPicksAction).mockRejectedValueOnce(offline());
     const user = userEvent.setup();
     renderHint([lot('L-A')]);
@@ -112,7 +114,8 @@ describe('FefoLotHint when the record gets no answer', () => {
         "each lot's remaining quantity",
       ),
     );
-    expect(refresh).toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole('spinbutton', { name: 'Picked quantity from lot L-A' })).toHaveValue(2);
     expect(screen.getByRole('button', { name: 'Record picked lots' })).toBeEnabled();
     expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
   });

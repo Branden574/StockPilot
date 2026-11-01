@@ -388,13 +388,12 @@ function AddItemsBody({
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
       // No answer (offline, a server error, a deploy): the add may have been
-      // saved. The same picks sent again would add an item already on the
-      // order a second time, so they go, as for a refusal that can never
-      // take them, and the order is read again.
+      // saved, and the same picks sent again would add them a second time,
+      // so the sentence says to look at the order first. The dialog stays
+      // open with the picks, and the page is left as it is: reading the
+      // order again with no connection becomes a full page load, which shows
+      // the browser's error page (B40 plan 3.4).
       toast.error(requestUnconfirmedMessage(e, 'the items were added', 'the order'));
-      setPicks({});
-      onClose();
-      router.refresh();
       return;
     } finally {
       setPending(false);

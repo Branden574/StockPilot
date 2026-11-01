@@ -3,7 +3,12 @@ import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { offline, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 // B40: Items > Save view spun forever and said nothing when the request
 // failed. save() set `saving`, awaited createSavedViewAction with no catch and
@@ -121,6 +126,9 @@ async function openSaveView(user: ReturnType<typeof userEvent.setup>) {
   return screen.getByRole('button', { name: 'Save' });
 }
 
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
+
 beforeEach(() => {
   vi.clearAllMocks();
   urlState.params = new URLSearchParams('');
@@ -141,7 +149,11 @@ describe('B40: Save view when the request fails', () => {
         "We couldn't save the view. Check your connection and try again.",
       ),
     );
-    // The popover is still open with the name kept, and Save works again.
+    // The popover is still open with the name kept and the reason inside it
+    // (the toast sits outside the popover), and Save works again.
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "We couldn't save the view. Check your connection and try again.",
+    );
     const again = screen.getByRole('button', { name: 'Save' });
     expect(again).toBeEnabled();
     expect(screen.getByLabelText('Name')).toHaveValue('Pens');
@@ -166,7 +178,23 @@ describe('B40: Save view when the request fails', () => {
     await waitFor(() =>
       expect(toastMock.error).toHaveBeenCalledWith('A view with that name already exists.'),
     );
+    // In the popover as well, where the person is looking.
+    expect(screen.getByRole('alert')).toHaveTextContent('A view with that name already exists.');
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('a page older than the server says to reload, in the popover too', async () => {
+    actions.createSavedViewAction.mockRejectedValueOnce(outOfDate());
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(await openSaveView(user));
+
+    const sentence =
+      "StockPilot was updated since this page was opened, so we couldn't save the view. Reload the page, then try again.";
+    expect(await screen.findByRole('alert')).toHaveTextContent(sentence);
+    expect(toastMock.error).toHaveBeenCalledWith(sentence);
+    expect(screen.getByLabelText('Name')).toHaveValue('Pens');
   });
 
   it('shows nothing when the call redirected to sign-in (the router is already navigating)', async () => {
@@ -178,8 +206,11 @@ describe('B40: Save view when the request fails', () => {
 
     await waitFor(() => expect(actions.createSavedViewAction).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toastMock.error).not.toHaveBeenCalled();
     expect(toastMock.success).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
@@ -217,6 +248,13 @@ describe('B40: the saved view chip when the request fails', () => {
     expect(within(dialog).getByRole('button', { name: 'Delete view' })).toBeEnabled();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(routerMock.refresh).not.toHaveBeenCalled();
+    // The reason inside the confirm (the toast sits behind it), and Cancel
+    // closes it.
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      "We couldn't delete the view. Check your connection and try again.",
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('Apply says the view was not applied, and leaves the page as it was', async () => {

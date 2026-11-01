@@ -100,4 +100,33 @@ describe('order assign and cancel controls when the request gets no answer', () 
     expect(within(dialog).getByRole('button', { name: 'Cancel request' })).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  // Inside the confirm as well (the toast sits behind it), with the reason
+  // typed kept; a refusal shows there too.
+  it('Cancel request says why inside the confirm and keeps the reason typed, a refusal too', async () => {
+    vi.mocked(cancelOrderRequestAction)
+      .mockRejectedValueOnce(offline())
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'conflict', message: 'This order is already out for delivery.' },
+      } as never);
+    render(<CancelOrderButton orderId={ORDER} status="approved" />);
+    fireEvent.click(screen.getByRole('button', { name: /Cancel request/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Reason/), {
+      target: { value: 'Ordered twice' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'cancel the request'),
+    );
+    expect(within(dialog).getByLabelText(/Reason/)).toHaveValue('Ordered twice');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'This order is already out for delivery.',
+      ),
+    );
+  });
 });

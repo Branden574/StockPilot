@@ -246,16 +246,20 @@ describe('ShareLinkPanel when the request gets no answer', () => {
     expect(screen.getByRole('button', { name: 'Generate link' })).toBeEnabled();
   });
 
-  it('Revoke says the link was not revoked, closes the confirm and does not refresh', async () => {
+  it('Revoke says the link was not revoked inside the confirm, which stays open and closes with Cancel', async () => {
     revoke.mockRejectedValueOnce(offline());
     render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
-    expect(toastError).toHaveBeenCalledWith(
-      requestFailedMessage(offline(), 'revoke the share link'),
-    );
+    const sentence = requestFailedMessage(offline(), 'revoke the share link');
+    expect(toastError).toHaveBeenCalledWith(sentence);
+    expect(await screen.findByRole('alert')).toHaveTextContent(sentence);
+    expect(screen.getByText('Revoke this share link?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke link' })).toBeEnabled();
+    expect(refreshMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByText('Revoke this share link?')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeEnabled();
-    expect(refreshMock).not.toHaveBeenCalled();
   });
 });

@@ -48,6 +48,34 @@ describe('bundle Archive and Restore when the request gets no answer', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  // The reason shows inside the confirm as well (the toast sits behind it),
+  // a refusal's too, and a confirm opened again starts clean.
+  it('Archive says why inside the confirm, a refusal too, and a confirm opened again starts clean', async () => {
+    mockArchive.mockRejectedValueOnce(offline()).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'This bundle is on an open order.' },
+    });
+    render(<ArchiveBundleButton bundleId="b-1" bundleName="Field Kit" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'archive the bundle'),
+    );
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        'This bundle is on an open order.',
+      ),
+    );
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(within(await screen.findByRole('dialog')).queryByRole('alert')).toBeNull();
+  });
+
   it('Restore stops its spinner, keeps the confirm open and says the bundle was not restored', async () => {
     mockRestore.mockRejectedValueOnce(offline());
     render(<RestoreBundleButton bundleId="b-1" bundleName="Field Kit" />);
@@ -60,6 +88,9 @@ describe('bundle Archive and Restore when the request gets no answer', () => {
       ),
     );
     expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'restore the bundle'),
+    );
     expect(mockToast.success).not.toHaveBeenCalled();
   });
 });

@@ -226,8 +226,9 @@ describe('MaintenanceRequestActions — Archive confirm copy (Task 7 Step 1 test
 
 // B40: a request that got no answer (offline, a server error, a deploy) left
 // both confirms' buttons pending for good, with nothing said.
+// Each confirm stays open with the reason inside it, and Cancel closes it.
 describe('MaintenanceRequestActions when the request gets no answer', () => {
-  it('Archive says the request was not archived, and the confirm works again', async () => {
+  it('Archive says inside the confirm that the request was not archived, and the confirm works again', async () => {
     archive.mockRejectedValueOnce(offline());
     render(
       <MaintenanceRequestActions
@@ -238,22 +239,21 @@ describe('MaintenanceRequestActions when the request gets no answer', () => {
       />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await userEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Archive' }),
-    );
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage(offline(), 'archive the request'),
-      ),
-    );
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    const sentence = requestFailedMessage(offline(), 'archive the request');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+
+    // Closed and opened again, it starts clean.
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    expect(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Archive' }),
-    ).toBeEnabled();
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
   });
 
-  it('Cancel request says the request was not cancelled', async () => {
+  it('Cancel request says inside the confirm that the request was not cancelled', async () => {
     cancel.mockRejectedValueOnce(offline());
     render(
       <MaintenanceRequestActions
@@ -264,13 +264,11 @@ describe('MaintenanceRequestActions when the request gets no answer', () => {
       />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Cancel request' }));
-    await userEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel request' }),
-    );
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        requestFailedMessage(offline(), 'cancel the request'),
-      ),
-    );
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
+    const sentence = requestFailedMessage(offline(), 'cancel the request');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });

@@ -31,6 +31,9 @@ export function CancelOrderButton({ orderId, status }: Props) {
   // half-typed reason doesn't leak into the next request the user
   // cancels in the same session.
   const [reason, setReason] = React.useState('');
+  // Why the last try failed, inside the confirm (a toast sits behind it). The
+  // reason typed stays. Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
 
   // Reset reason whenever the dialog closes — covers both confirm-path
   // and explicit-dismiss.
@@ -43,6 +46,7 @@ export function CancelOrderButton({ orderId, status }: Props) {
 
   async function confirmCancel() {
     setBusy(true);
+    setError(null);
     const trimmed = reason.trim();
     let res: Awaited<ReturnType<typeof cancelOrderRequestAction>>;
     try {
@@ -53,12 +57,15 @@ export function CancelOrderButton({ orderId, status }: Props) {
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'cancel the request'));
+      const message = requestFailedMessage(e, 'cancel the request');
+      setError(message);
+      toast.error(message);
       return;
     } finally {
       setBusy(false);
     }
     if (!res.ok) {
+      setError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -69,7 +76,14 @@ export function CancelOrderButton({ orderId, status }: Props) {
 
   return (
     <>
-      <Button variant="ghost" onClick={() => setOpen(true)} disabled={busy}>
+      <Button
+        variant="ghost"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+        disabled={busy}
+      >
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
         Cancel request
       </Button>
@@ -103,6 +117,7 @@ export function CancelOrderButton({ orderId, status }: Props) {
         confirmLabel="Cancel request"
         cancelLabel="Keep request"
         pending={busy}
+        error={error}
         onConfirm={confirmCancel}
       />
     </>

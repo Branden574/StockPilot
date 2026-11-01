@@ -546,8 +546,11 @@ describe('AddItemsDialog', () => {
   // B40: Add set `pending`, awaited the action with no catch and cleared it
   // only when it answered. An add that got no answer (offline, a server error,
   // a deploy) left Add spinning and the dialog unclosable, with no message.
-  // The add may have been saved, so the same picks are not left armed.
-  it('when the add gets no answer, says to check the order, drops the picks and reloads it', async () => {
+  // The add may have been saved, so the sentence says to look at the order
+  // before adding again. The dialog keeps the picks and can be closed, and
+  // the page is left as it is: reading the order again with no connection
+  // becomes a full page load, which shows the browser's error page.
+  it('when the add gets no answer, says to check the order, keeps the picks, and leaves the page as it is', async () => {
     addLines.mockRejectedValueOnce(offline());
     await stageTwoAndAdd();
 
@@ -556,11 +559,8 @@ describe('AddItemsDialog', () => {
         requestUnconfirmedMessage(offline(), 'the items were added', 'the order'),
       );
     });
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: /add items/i })).toBeEnabled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expectPicksIntact();
   });
 
   // ── Paging ───────────────────────────────────────────────────────

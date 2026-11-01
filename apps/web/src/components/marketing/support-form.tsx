@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { isControlFlow } from '@/lib/control-flow';
-import { requestFailedMessage } from '@/lib/request-failure';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createSupportTicketAction } from '@/server/actions/support-tickets';
 
 const CATEGORIES: Array<{ value: string; label: string }> = [
@@ -58,9 +58,18 @@ export function SupportForm() {
         company: company || undefined,
       });
     } catch (e) {
-      // A redirect (the session ended): the router is already navigating.
+      // A redirect: the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'send your ticket'));
+      // A ticket has no rule against a second copy, so one saved before the
+      // answer was lost would be sent twice. Every saved ticket emails its
+      // receipt to the address given, so that is where to look first.
+      toast.error(
+        requestUnconfirmedMessage(
+          e,
+          'your ticket was sent',
+          'your inbox for our confirmation email',
+        ),
+      );
       return;
     } finally {
       setBusy(false);

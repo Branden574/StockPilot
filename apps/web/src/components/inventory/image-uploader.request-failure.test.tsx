@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the item page's Photos card.
@@ -16,7 +16,11 @@ import { offline } from '@/test/rejected-request';
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh }) }));
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ push: vi.fn(), refresh }),
+}));
 // The lightbox is loaded on demand and never opened here.
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('next/image', () => ({
@@ -72,12 +76,15 @@ function chooseFront(container: HTMLElement) {
   });
 }
 
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('ImageUploader when a request gets no answer', () => {
-  it('Remove says the photo was not deleted, closes the confirm and keeps the photo', async () => {
+  it('Remove says the photo was not deleted inside the confirm, which stays open and closes with Cancel', async () => {
     vi.mocked(removeImageAction).mockRejectedValueOnce(offline());
     render(
       <ImageUploader
@@ -88,12 +95,19 @@ describe('ImageUploader when a request gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove image' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'delete the photo')),
-    );
+    const sentence = requestFailedMessage(offline(), 'delete the photo');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(within(dialog).getByRole('button', { name: 'Remove' })).toBeEnabled();
+    expect(refresh).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('button', { name: 'Remove image' })).toBeInTheDocument();
-    expect(refresh).not.toHaveBeenCalled();
+
+    // Opened again, it starts clean.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove image' }));
+    expect(within(await screen.findByRole('dialog')).queryByRole('alert')).toBeNull();
   });
 
   it('an upload whose request gets no answer says that photo failed, and the card is ready again', async () => {
@@ -144,5 +158,34 @@ describe('ImageUploader when a request gets no answer', () => {
     } as never);
     chooseFront(container);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Photos uploaded.'));
+  });
+  it('an upload answered with a redirect says nothing, and nothing is left to escape', async () => {
+    vi.mocked(createImageUploadAction).mockResolvedValueOnce(PRESIGN);
+    vi.mocked(recordImageAction).mockRejectedValueOnce(signInRedirect());
+    const { container } = render(<ImageUploader itemId={ITEM_ID} initialImages={[]} />);
+    chooseFront(container);
+    await waitFor(() => expect(recordImageAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('Remove answered with a redirect says nothing, and nothing is left to escape', async () => {
+    vi.mocked(removeImageAction).mockRejectedValueOnce(signInRedirect());
+    render(
+      <ImageUploader
+        itemId={ITEM_ID}
+        initialImages={[{ id: 'img-1', url: 'https://img.example.com/1.jpg', isPrimary: true }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove image' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(removeImageAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

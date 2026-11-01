@@ -198,6 +198,9 @@ export function CategoriesManager({
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreTarget, setRestoreTarget] = React.useState<CategoryRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  // Why the last Archive or Restore failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
   const [setupBusy, setSetupBusy] = React.useState(false);
 
   const byId = React.useMemo(() => new Map(initial.map((c) => [c.id, c])), [initial]);
@@ -253,18 +256,22 @@ export function CategoriesManager({
   async function confirmArchive() {
     if (!archiveTarget) return;
     setArchiveBusy(true);
+    setConfirmError(null);
     let res: Awaited<ReturnType<typeof archiveCategoryAction>>;
     try {
       res = await archiveCategoryAction(archiveTarget.id);
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'archive the category'));
+      const message = requestFailedMessage(e, 'archive the category');
+      setConfirmError(message);
+      toast.error(message);
       return;
     } finally {
       setArchiveBusy(false);
     }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -276,18 +283,22 @@ export function CategoriesManager({
   async function confirmRestore() {
     if (!restoreTarget) return;
     setRestoreBusy(true);
+    setConfirmError(null);
     let res: Awaited<ReturnType<typeof restoreCategoryAction>>;
     try {
       res = await restoreCategoryAction(restoreTarget.id);
     } catch (e) {
       // A redirect (the session ended): the router is already navigating.
       if (isControlFlow(e)) return;
-      toast.error(requestFailedMessage(e, 'restore the category'));
+      const message = requestFailedMessage(e, 'restore the category');
+      setConfirmError(message);
+      toast.error(message);
       return;
     } finally {
       setRestoreBusy(false);
     }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -367,7 +378,14 @@ export function CategoriesManager({
         </div>
         {canManage &&
           (isArchivedView ? (
-            <Button variant="outline" size="sm" onClick={() => setRestoreTarget(row)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setConfirmError(null);
+                setRestoreTarget(row);
+              }}
+            >
               <RotateCcw className="h-3.5 w-3.5" /> Restore
             </Button>
           ) : (
@@ -375,7 +393,10 @@ export function CategoriesManager({
               variant="ghost"
               size="icon"
               className={cn('-mr-1 -mt-1', HOVER_REVEAL)}
-              onClick={() => setArchiveTarget(row)}
+              onClick={() => {
+                setConfirmError(null);
+                setArchiveTarget(row);
+              }}
               aria-label={`Archive ${row.name}`}
             >
               <Trash2 className="text-muted-foreground h-4 w-4" />
@@ -501,6 +522,7 @@ export function CategoriesManager({
         }
         confirmLabel="Archive"
         pending={archiveBusy}
+        error={confirmError}
         onConfirm={confirmArchive}
       />
 
@@ -514,6 +536,7 @@ export function CategoriesManager({
         confirmLabel="Restore"
         tone="primary"
         pending={restoreBusy}
+        error={confirmError}
         onConfirm={confirmRestore}
       />
     </>
