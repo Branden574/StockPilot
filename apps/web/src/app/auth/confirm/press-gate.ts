@@ -16,14 +16,20 @@
  * quiet second in which the page is visible and has focus (or the pointer is
  * on it), with no pointerdown, keydown, scroll or resize in it, and at the end
  * of which every address the page names (marked with PRESS_GATE_SEE_ATTR) has
- * been wholly on screen through such a second. The second is restarted by
- * any scroll or resize, so the page holds still through it, and the addresses
- * on screen at its end were on screen all through it. An address seen once
- * stays seen: a small screen scrolls on to the button afterwards, and an
- * address taller than the screen (a very large zoom) counts once it fills the
- * screen. A press while it is not armed is cancelled and starts the second
- * again, so the second press of a double-click, or a run of rapid clicks or
- * keys, never counts. Losing focus or visibility, or leaving the page,
+ * been seen. An address is seen once it is wholly on screen at the end of
+ * such a second, or once each of its lines has been, a screenful at a time:
+ * a very large zoom or a very small window wraps an address a few characters
+ * a line, taller than the screen. Part of an address is never enough: another
+ * site can open a tiny window at a text fragment inside a long address it
+ * chose for its own account, and the window then shows five of its
+ * characters (S25 review). The second is restarted by any scroll or resize,
+ * so whatever is on screen at its end was on screen all through it. Lines are
+ * the address's line boxes (getClientRects), so an address must stay an
+ * inline element; when it wraps again (its box or its number of lines
+ * changes), its lines start again. An address seen stays seen: a small screen
+ * scrolls on to the button afterwards. A press while it is not armed is
+ * cancelled and starts the second again, so the second press of a
+ * double-click, or a run of rapid clicks or keys, never counts. Losing focus or visibility, or leaving the page,
  * disarms it; coming back (focus, visibilitychange, pageshow after the
  * back-forward cache) starts the second again. Once armed, the person's own
  * pointer, keys and scrolling do not take it back. Until then the button is
@@ -35,8 +41,8 @@
  * Fail-safe: the button stays enabled in the markup, so a browser where this
  * does not run posts as before, and the pointer can arm a page whose browser
  * never reports focus. What it does not stop: a person talked into stopping
- * on the page and pressing again later (every address it names has then been
- * on screen for at least a second), INV-E5.
+ * on the page and pressing again later (every line of every address it names
+ * has then been on screen for at least a second), INV-E5.
  *
  * Plain ES5 with no dependency: the CSP allows inline scripts
  * (next.config.ts), and nothing from the request is ever written into it.
@@ -59,7 +65,13 @@ export const PRESS_GATE_SCRIPT = `(function () {
   if (!form || !button) return;
   var marks = document.querySelectorAll('[${PRESS_GATE_SEE_ATTR}]');
   var seen = [];
-  for (var i = 0; i < marks.length; i++) seen.push(false);
+  var linesSeen = [];
+  var shapes = [];
+  for (var i = 0; i < marks.length; i++) {
+    seen.push(false);
+    linesSeen.push([]);
+    shapes.push('');
+  }
   var armed = false;
   var pointerOn = false;
   var timer = null;
@@ -69,12 +81,29 @@ export const PRESS_GATE_SCRIPT = `(function () {
   function present() {
     return document.visibilityState === 'visible' && (document.hasFocus() || pointerOn);
   }
-  function within(start, end, size) {
-    return (start >= -1 && end <= size + 1) || (end - start > size && start <= 1 && end >= size - 1);
+  function onScreen(box) {
+    return (
+      box.top >= -1 &&
+      box.bottom <= window.innerHeight + 1 &&
+      box.left >= -1 &&
+      box.right <= window.innerWidth + 1
+    );
   }
-  function onScreen(el) {
-    var box = el.getBoundingClientRect();
-    return within(box.top, box.bottom, window.innerHeight) && within(box.left, box.right, window.innerWidth);
+  function look(n) {
+    var box = marks[n].getBoundingClientRect();
+    if (onScreen(box)) return true;
+    var lines = marks[n].getClientRects();
+    var shape = box.width + 'x' + box.height + 'x' + lines.length;
+    if (shape !== shapes[n]) {
+      shapes[n] = shape;
+      linesSeen[n] = [];
+    }
+    var all = lines.length > 0;
+    for (var k = 0; k < lines.length; k++) {
+      if (onScreen(lines[k])) linesSeen[n][k] = true;
+      if (!linesSeen[n][k]) all = false;
+    }
+    return all;
   }
   function stop() {
     if (timer !== null) clearTimeout(timer);
@@ -85,7 +114,7 @@ export const PRESS_GATE_SCRIPT = `(function () {
     var here = present();
     var all = here;
     for (var i = 0; i < marks.length; i++) {
-      if (here && !seen[i] && onScreen(marks[i])) seen[i] = true;
+      if (here && !seen[i] && look(i)) seen[i] = true;
       if (!seen[i]) all = false;
     }
     armed = all;

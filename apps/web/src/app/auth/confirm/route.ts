@@ -66,11 +66,12 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     another site can no longer sign the browser out first
  *     (app/auth/session-ended);
  *   - the press counts only after the page has been in front of the person
- *     for a quiet second and every address it names has been wholly on
- *     screen through such a second (./press-gate.ts), so neither a window
- *     swap nor a window opened small and scrolled to the button gets a press
- *     before the account was on screen. No element has an id, so no link can
- *     open the page scrolled to the button;
+ *     for a quiet second and every address it names has been on screen
+ *     through such a second, wholly or, for one taller than the window, line
+ *     by line (./press-gate.ts), so neither a window swap nor a window opened
+ *     small, at the button or inside a long address, gets a press before the
+ *     account was on screen. No element has an id, so no link can open the
+ *     page scrolled to the button;
  *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
  * A link without `r` (sent before S25's first release, so expired within the
  * hour, or built by hand) still gets the page it got before and is logged;
@@ -134,7 +135,9 @@ function escapeHtml(s: string): string {
 /**
  * An email address as the page prints it: escaped, in a face where l, I, 1, O
  * and 0 read apart, and marked for the press gate, which counts a press only
- * once every marked address has been on screen (./press-gate.ts).
+ * once every marked address has been on screen (./press-gate.ts). It stays an
+ * inline span: the gate counts an address wrapped taller than the window by
+ * its line boxes.
  */
 function addr(email: string): string {
   return `<span class="addr" ${PRESS_GATE_SEE_ATTR}>${escapeHtml(email)}</span>`;

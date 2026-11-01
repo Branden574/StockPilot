@@ -49,9 +49,12 @@
      can open a link in a small window scrolled to the button (the form's
      fragment id did it in Chromium, Firefox and WebKit), and the gate armed
      with the account's address never on screen. The gate now waits until
-     every address the page names has been wholly on screen through its quiet
-     second, and the page gives no element an id; the Enforced by, Tested at
-     and "Also not covered" texts say so. An email-change link whose change
+     every address the page names has been on screen through its quiet
+     second, wholly or, for one taller than the window, line by line (part
+     of it is not enough: a tiny window another site opens at a text
+     fragment inside a long address it chose shows five of its characters),
+     and the page gives no element an id; the Enforced by, Tested at and
+     "Also not covered" texts say so. An email-change link whose change
      GoTrue no longer holds now gets the expired answer without the addresses.
      Nothing else in this document was re-verified. -->
 
@@ -1502,12 +1505,14 @@ application structure.
   made for another account than `r` names is signed out again in the same
   answer. The press counts only once the page has been visible, in front and
   quiet for a second (no press, key, scroll or resize in it), and every
-  address the page names has been wholly on screen through such a second
+  address the page names has been on screen through such a second: wholly,
+  or, for one taller than the window, each of its lines
   ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
   page gives no element an id, so no link opens it scrolled to the button. A
   window swap (DoubleClickjacking), or a window another site opens small and
-  scrolled past the line, therefore gets no press before the account's
-  address has been on screen for a second. Until the
+  scrolled past the line or into the middle of a long address, therefore
+  gets no press before the account's address has been on screen for a
+  second. Until the
   second S25 release a link without `r` still gets the page it got before,
   with the signed-in notice and the gate, and is logged (type only). Where a
   link lands is fixed by its type
@@ -1548,8 +1553,9 @@ application structure.
   answers within five seconds);
   [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
   (the page's own script: the quiet second, focus, visibility, the window swap,
-  every address on screen through the second at any window size or scroll, and
-  a browser that never reports focus);
+  every address on screen through the second at any window size or scroll,
+  line by line for one taller than the window, and a browser that never
+  reports focus);
   [`route.email-change-replaced.test.ts`](../../apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts)
   (the real email-change link builder and route: a link sent to a mistyped
   address, opened after the change was corrected or completed, shows neither

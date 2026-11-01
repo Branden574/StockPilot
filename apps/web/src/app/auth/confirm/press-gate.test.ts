@@ -10,8 +10,9 @@ import {
 /**
  * Security invariant (docket S25, INV-E5): a press on the confirmation page
  * counts only after the page has been in front of the person, quiet, for a
- * second, and only once every address it names has been wholly on screen
- * through such a second.
+ * second, and only once every address it names has been on screen through
+ * such a second: wholly, or, for one too tall for the screen, every one of
+ * its lines.
  *
  * The page names the account a link is for before anyone presses, but a
  * known window-swap trick (DoubleClickjacking, published December 2024) gets
@@ -21,8 +22,9 @@ import {
  * Framing headers do not stop it (the page is never framed). Another site
  * also picks the window's size and where the page opens scrolled to (a
  * fragment), so the button can be on screen while the line naming the
- * account is not (S25 review). The inline gate cancels any submit until the
- * page has been visible, with focus or the pointer over it, for a whole
+ * account is not, or a long address it chose fills a tiny window with a few
+ * of its characters (S25 review). The inline gate cancels any submit until
+ * the page has been visible, with focus or the pointer over it, for a whole
  * second with no pointerdown, keydown, scroll or resize, and until each
  * address has been on screen through such a second. These run the exact
  * script the page carries (route.test.ts pins that it does, and that the page
@@ -36,8 +38,11 @@ import {
  *     behind the popup is disarmed when the pointer leaves for it;
  *   - an address scrolled off screen, or on screen for less than the second,
  *     has not been seen; once it has, scrolling on to the button keeps the
- *     gate armed, and an address taller than the screen counts once it fills
- *     it, so neither a small screen nor a large zoom is locked out;
+ *     gate armed, so a small screen is not locked out;
+ *   - an address taller than the screen counts once each of its lines has
+ *     been on screen, a screenful at a time, so a large zoom is not locked
+ *     out either; the few lines a tiny window shows of it, a line cut by an
+ *     edge, or lines seen before it wrapped again, do not count;
  *   - a page that never gets focus arms after pointer movement and a quiet
  *     second, so no browser is locked out;
  *   - the button stays enabled in the markup and is shown aria-disabled
@@ -103,26 +108,42 @@ function windowSize(width: number, height: number) {
   vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(height);
 }
 
-/** Lays an element out at a place on the page (its box moves with the scroll). */
+/**
+ * Lays an element out at a place on the page (its box moves with the scroll).
+ * With `line`, it is an address wrapped over lines that tall, as a very large
+ * zoom or a very small window wraps it: each line is one of its client rects,
+ * as a browser gives them for an inline element. The box is read on every
+ * call, so a test can change it (the address wraps again).
+ */
 function layOut(
   el: Element,
-  box: { top: number; height: number; left?: number; width?: number },
+  box: { top: number; height: number; left?: number; width?: number; line?: number },
 ): void {
-  vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => {
-    const top = box.top - scrollY;
+  const rect = (top: number, height: number): DOMRect => {
     const left = box.left ?? 40;
     const width = box.width ?? 240;
     return {
       x: left,
       y: top,
       top,
-      bottom: top + box.height,
+      bottom: top + height,
       left,
       right: left + width,
       width,
-      height: box.height,
+      height,
       toJSON: () => ({}),
     } as DOMRect;
+  };
+  vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() =>
+    rect(box.top - scrollY, box.height),
+  );
+  vi.spyOn(el, 'getClientRects').mockImplementation(() => {
+    const line = box.line ?? box.height;
+    const lines: DOMRect[] = [];
+    for (let y = 0; y < box.height; y += line) {
+      lines.push(rect(box.top - scrollY + y, Math.min(line, box.height - y)));
+    }
+    return lines as unknown as DOMRectList;
   });
 }
 
@@ -473,17 +494,120 @@ describe('every address the page names must have been on screen (S25 review)', (
     expect(press(form, button)).toBe(true);
   });
 
-  it('an address taller than the screen counts once it fills the screen, so a very large zoom locks nobody out', async () => {
-    windowSize(320, 120);
+  it('a long address another site chose, in a tiny window it opened at a text fragment inside the address, never arms: a few characters filling the window are not the address', async () => {
+    // The other site's own account, under a 60-character address. In a
+    // 100x100 window it wraps one character a line, 22 px each (measured in
+    // Chromium, Firefox and WebKit), and a text fragment inside it opens the
+    // window on its middle: a few characters fill the screen.
+    windowSize(100, 100);
     const { form, button, marks } = mountPage();
-    // Wrapped a few characters a line at a very large zoom.
-    layOut(marks[0]!, { top: 100, height: 400 });
+    layOut(marks[0]!, { top: 280, height: 1320, left: 43, width: 8, line: 22 });
+    scrollTo(504);
+    await wait(PRESS_GATE_QUIET_MS * 5);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // Its lure: Tab to the button, then Enter.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(submit(form)).toBe(false);
+    await wait(PRESS_GATE_QUIET_MS * 5);
+    expect(submit(form)).toBe(false);
+  });
+
+  it('an address taller than the screen counts once each of its lines has been on screen, a screenful at a time, so a very large zoom locks nobody out', async () => {
+    windowSize(130, 200);
+    const { form, button, marks } = mountPage();
+    // Wrapped a few characters a line: 12 lines of 22 px, taller than the window.
+    layOut(marks[0]!, { top: 100, height: 264, left: 43, width: 40, line: 22 });
     await wait(PRESS_GATE_QUIET_MS * 3);
     expect(button.getAttribute('aria-disabled')).toBe('true');
-    scrollTo(150);
+    // Its first eight lines.
+    scrollTo(90);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // The rest of it.
+    scrollTo(200);
     await wait(PRESS_GATE_QUIET_MS);
     expect(button.getAttribute('aria-disabled')).toBe('false');
     scrollTo(900);
+    expect(press(form, button)).toBe(true);
+  });
+
+  it('a line never wholly on screen in between keeps the button off until it has been', async () => {
+    windowSize(130, 100);
+    const { form, button, marks } = mountPage();
+    // 10 lines of 22 px.
+    layOut(marks[0]!, { top: 100, height: 220, left: 43, width: 40, line: 22 });
+    // Lines 1-4, then 6-9, then 10: the fifth is never on screen.
+    for (const y of [100, 210, 290]) {
+      scrollTo(y);
+      await wait(PRESS_GATE_QUIET_MS);
+      expect(button.getAttribute('aria-disabled'), String(y)).toBe('true');
+    }
+    expect(submit(form)).toBe(false);
+    scrollTo(180);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+    expect(press(form, button)).toBe(true);
+  });
+
+  it('a line seen only in halves, its top on one screen and its bottom on the next, has not been seen', async () => {
+    windowSize(130, 100);
+    const { form, button, marks } = mountPage();
+    // Three lines of 22 px, at 60-82, 82-104 and 104-126: the second is cut by the bottom edge.
+    layOut(marks[0]!, { top: 60, height: 66, left: 43, width: 40, line: 22 });
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // Now the second is cut by the top edge, and the third is whole.
+    scrollTo(90);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(submit(form)).toBe(false);
+    scrollTo(50);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+  });
+
+  it('lines on screen only while the page was not in front do not count', async () => {
+    windowSize(130, 200);
+    const { form, button, marks } = mountPage();
+    // 12 lines of 22 px; its first 8 come on screen, and a popup takes the
+    // front part-way through the second, with no blur event.
+    layOut(marks[0]!, { top: 100, height: 264, left: 43, width: 40, line: 22 });
+    scrollTo(90);
+    await wait(PRESS_GATE_QUIET_MS - 500);
+    focused = false;
+    await wait(PRESS_GATE_QUIET_MS * 3);
+    // The page comes back to the front showing only the rest of it.
+    scrollTo(200);
+    focused = true;
+    window.dispatchEvent(new Event('focus'));
+    await wait(PRESS_GATE_QUIET_MS * 3);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(submit(form)).toBe(false);
+  });
+
+  it('when the address wraps again (the window is resized), the lines seen in the old wrapping do not count', async () => {
+    windowSize(130, 200);
+    const { form, button, marks } = mountPage();
+    const box = { top: 100, height: 264, left: 43, width: 40, line: 22 };
+    layOut(marks[0]!, box);
+    // The first 8 of its 12 lines.
+    scrollTo(90);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // A narrower window wraps it again over 16 lines: the first 8 of these
+    // are not the 8 seen. Its last 8 come on screen.
+    Object.assign(box, { height: 352, width: 30 });
+    windowSize(110, 200);
+    window.dispatchEvent(new Event('resize'));
+    scrollTo(260);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(submit(form)).toBe(false);
+    // Its first 8 lines, in this wrapping.
+    scrollTo(90);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('false');
     expect(press(form, button)).toBe(true);
   });
 
