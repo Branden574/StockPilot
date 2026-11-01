@@ -8,6 +8,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
 const deleteSpy = vi.fn(async (_admin: unknown, _secretId: string) => undefined);
 const putSpy = vi.fn(
@@ -39,16 +40,38 @@ vi.mock('@/server/connectors/easypost/client', () => ({
   },
 }));
 
+// Zendesk client: validateToken() resolves by default (good token), so a
+// connect test never reaches the network.
+const validateTokenSpy = vi.fn(async () => undefined);
+vi.mock('@/server/connectors/zendesk/client', () => ({
+  ZendeskApiError: class ZendeskApiError extends Error {
+    status: number;
+    constructor(status: number) {
+      super(`Zendesk API error ${status}`);
+      this.name = 'ZendeskApiError';
+      this.status = status;
+    }
+  },
+  ZendeskClient: class ZendeskClient {
+    constructor(_cfg: unknown) {}
+    validateToken() {
+      return validateTokenSpy();
+    }
+  },
+}));
+
 const adminClientHolder = { client: { _admin: true } as unknown };
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => adminClientHolder.client),
 }));
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { EasyPostApiError } from '@/server/connectors/easypost/client';
 import { audit } from '@/server/services/audit';
 import { ConnectionsService } from './connections';
 import { ServiceError } from './context';
+import { INTEGRATION_WRITE_REFUSED } from './integration-events';
 
 import type { ModuleId } from '@stockpilot/core';
 
@@ -61,9 +84,11 @@ const ORIGINAL_QBO_CLIENT_ID = env.QBO_CLIENT_ID;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  adminClientHolder.client = { _admin: true };
   // Reset the EasyPost key validation to the happy path (good key); the
   // bad-key test overrides it.
   validateKeySpy.mockResolvedValue(undefined);
+  validateTokenSpy.mockResolvedValue(undefined);
   (env as { QBO_CLIENT_ID: string }).QBO_CLIENT_ID = 'test-qbo-client-id';
 });
 
@@ -282,6 +307,10 @@ describe('ConnectionsService.connectApiKey (EasyPost)', () => {
       'org_connections.select': { data: [], error: null },
       'org_connections.insert': { data: [{ id: 'conn-ep-1' }], error: null },
     });
+    const adminStub = makeSupabaseStub({
+      'org_connections.update': { data: [{ id: 'conn-ep-1' }], error: null },
+    });
+    adminClientHolder.client = adminStub.client;
     const svc = new ConnectionsService(
       makeServiceContext(stub.client, {
         role: 'owner',
@@ -306,17 +335,26 @@ describe('ConnectionsService.connectApiKey (EasyPost)', () => {
       accessToken: 'EZTK_test_key_123',
     });
 
-    // Connection upserted active with the Vault secret id + mode (test, from the
-    // EZTK prefix). The raw key must NOT appear in settings.
+    // The member's own write (the one the database checks) carries the row
+    // only: no status, no secret_id (docket S27).
     const upsertArgs = stub.chainArgsAll.get('org_connections.insert')?.[0]?.[0]?.[0] as Record<
       string,
       unknown
     >;
-    expect(upsertArgs.provider_id).toBe('easypost');
-    expect(upsertArgs.status).toBe('active');
-    expect(upsertArgs.secret_id).toBe('vault-secret-id-1');
-    expect(upsertArgs.settings).toMatchObject({ mode: 'test' });
-    expect(JSON.stringify(upsertArgs.settings)).not.toContain('EZTK_test_key_123');
+    expect(upsertArgs).toEqual({
+      organization_id: 'org-test',
+      provider_id: 'easypost',
+      created_by: 'user-test',
+    });
+    // The service role activates that row with the Vault secret id + mode
+    // (test, from the EZTK prefix). The raw key must NOT appear in settings.
+    const activateArgs = adminStub.chainArgsAll.get(
+      'org_connections.update',
+    )?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(activateArgs.status).toBe('active');
+    expect(activateArgs.secret_id).toBe('vault-secret-id-1');
+    expect(activateArgs.settings).toMatchObject({ mode: 'test' });
+    expect(JSON.stringify(activateArgs.settings)).not.toContain('EZTK_test_key_123');
 
     expect(audit).toHaveBeenCalledTimes(1);
     expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('integration.connected');
@@ -376,7 +414,7 @@ describe('ConnectionsService.disconnect', () => {
         data: [{ id: 'conn-1', secret_id: 'secret-uuid-123' }],
         error: null,
       },
-      'org_connections.update': { data: null, error: null },
+      'org_connections.update': { data: [{ id: 'conn-1' }], error: null },
     });
     const svc = new ConnectionsService(
       makeServiceContext(stub.client, {
@@ -410,7 +448,7 @@ describe('ConnectionsService.disconnect', () => {
         data: [{ id: 'conn-1', secret_id: null }],
         error: null,
       },
-      'org_connections.update': { data: null, error: null },
+      'org_connections.update': { data: [{ id: 'conn-1' }], error: null },
     });
     const svc = new ConnectionsService(
       makeServiceContext(stub.client, {
@@ -462,7 +500,7 @@ describe('ConnectionsService.disconnect', () => {
         data: [{ id: 'conn-ep', secret_id: 'ep-secret-1' }],
         error: null,
       },
-      'org_connections.update': { data: null, error: null },
+      'org_connections.update': { data: [{ id: 'conn-ep' }], error: null },
     });
     const svc = new ConnectionsService(
       makeServiceContext(stub.client, {
@@ -679,7 +717,7 @@ describe('ConnectionsService.saveAccountMapping', () => {
         data: [{ id: 'conn-1', settings: { env: 'sandbox' } }],
         error: null,
       },
-      'org_connections.update': { data: null, error: null },
+      'org_connections.update': { data: [{ id: 'conn-1' }], error: null },
     });
     const svc = new ConnectionsService(
       makeServiceContext(stub.client, {
@@ -726,5 +764,346 @@ describe('ConnectionsService.saveAccountMapping', () => {
         returnCredit: '',
       }),
     ).rejects.toBeInstanceOf(ServiceError);
+  });
+});
+
+/**
+ * docket S27: every integration write reports what the database did. The
+ * service gates on the member's EFFECTIVE key, but org_connections' row rule
+ * (0146) still asks for the admin role, so a member given Manage integrations
+ * or Manage shipping passes the gate and is refused by the database. Before:
+ *   - an update the rule refused changes 0 rows with no error, and disconnect
+ *     went on to delete the Vault secret and audit "disconnected" (the row kept
+ *     a dangling secret_id), and the settings saves reported success;
+ *   - connect wrote the Vault secret BEFORE the write the database checks, so a
+ *     refused reconnect had already replaced the live key in place;
+ *   - an insert or upsert the rule refused (42501) read as an internal error.
+ */
+describe('ConnectionsService: writes report what the database did (docket S27)', () => {
+  const REFUSED_42501 = {
+    data: null,
+    error: {
+      code: '42501',
+      message: 'new row violates row-level security policy for table "org_connections"',
+    },
+  };
+  const REFUSED = { code: 'forbidden', message: INTEGRATION_WRITE_REFUSED };
+  /** The Zendesk connect form, with placeholder values. */
+  const FORM_VALUE = 'placeholder-1';
+  const ZENDESK_FORM = { subdomain: 'example', email: 'agent@example.com', apiToken: FORM_VALUE };
+  /** A member given the key, whom the database's admin-only rule refuses. */
+  const keyHolder = (permissions: string[], modules: ModuleId[]) =>
+    makeServiceContext(makeSupabaseStub().client, {
+      role: 'manager',
+      permissions: new Set(permissions),
+      enabledModules: new Set<ModuleId>(modules),
+    });
+  const withClient = (
+    stub: ReturnType<typeof makeSupabaseStub>,
+    ctx: ReturnType<typeof keyHolder>,
+  ) => new ConnectionsService({ ...ctx, supabase: stub.client });
+
+  it('the refusal names no table, policy or code', () => {
+    expect(INTEGRATION_WRITE_REFUSED).toBe(
+      'This change was not saved: your access does not allow it. Ask an owner or an admin.',
+    );
+  });
+
+  describe('a refused update (0 rows, no error)', () => {
+    it('disconnect deletes no Vault secret and writes no audit', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': {
+          data: [{ id: 'conn-1', secret_id: 'secret-uuid-123' }],
+          error: null,
+        },
+        'org_connections.update': { data: [], error: null },
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['integrations']));
+      await expect(svc.disconnect('quickbooks')).rejects.toMatchObject(REFUSED);
+      expect(deleteSpy).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+      // The update asks for the row it changed.
+      expect(stub.chainsAll.get('org_connections.update')?.[0]).toContain('select');
+    });
+
+    it('saving the QuickBooks account mapping is refused, not reported saved', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: [{ id: 'conn-1', settings: {} }], error: null },
+        'org_connections.update': { data: [], error: null },
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['integrations']));
+      await expect(
+        svc.saveAccountMapping('quickbooks', {
+          billExpense: '54',
+          inventoryAsset: '81',
+          valuationOffset: '90',
+          returnCredit: '47',
+        }),
+      ).rejects.toMatchObject(REFUSED);
+    });
+
+    it('saving the Sage Intacct settings is refused, not reported saved', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: [{ id: 'conn-si', settings: {} }], error: null },
+        'org_connections.update': { data: [], error: null },
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['integrations']));
+      await expect(
+        svc.saveIntacctSettings({
+          poTxnDefinition: 'Purchase Order',
+          defaultItemId: 'NONINV',
+          defaultVendorId: 'VDEF',
+          journalSymbol: 'GJ',
+          returnCredit: '4900',
+          inventoryAsset: '1200',
+        }),
+      ).rejects.toMatchObject(REFUSED);
+    });
+  });
+
+  describe('a refused insert or upsert (42501) is a refusal, never an internal error', () => {
+    it('beginConnect; any other write error stays internal (matched by code, never by text)', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: [], error: null },
+        'org_connections.insert': REFUSED_42501,
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['integrations']));
+      await expect(svc.beginConnect('quickbooks')).rejects.toMatchObject(REFUSED);
+
+      const other = makeSupabaseStub({
+        'org_connections.select': { data: [], error: null },
+        'org_connections.insert': {
+          data: null,
+          error: { code: '23505', message: 'violates row-level security policy (a look-alike)' },
+        },
+      });
+      await expect(
+        withClient(other, keyHolder(['integrations:manage'], ['integrations'])).beginConnect(
+          'quickbooks',
+        ),
+      ).rejects.toMatchObject({ code: 'internal_error' });
+    });
+
+    it('connectApiKey (EasyPost): refused before any Vault write', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': {
+          data: [{ id: 'conn-ep', settings: {}, created_by: 'owner-1' }],
+          error: null,
+        },
+        'org_connections.insert': REFUSED_42501,
+      });
+      const svc = withClient(stub, keyHolder(['shipping:manage'], ['shipping']));
+      await expect(svc.connectApiKey('easypost', 'EZAK_live_key')).rejects.toMatchObject(REFUSED);
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it('connectZendesk: refused before any Vault write', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': {
+          data: [{ id: 'conn-zd', settings: {}, created_by: 'owner-1' }],
+          error: null,
+        },
+        'org_connections.insert': REFUSED_42501,
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['zendesk']));
+      await expect(svc.connectZendesk(ZENDESK_FORM)).rejects.toMatchObject(REFUSED);
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it('setZendeskSubdomain', async () => {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: [], error: null },
+        'org_connections.insert': REFUSED_42501,
+      });
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['zendesk']));
+      await expect(svc.setZendeskSubdomain('example')).rejects.toMatchObject(REFUSED);
+      expect(audit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('connect: the member writes the row, then Vault, then the service role activates it', () => {
+    /** Every step, in the order it ran. */
+    let steps: string[] = [];
+    beforeEach(() => {
+      steps = [];
+      putSpy.mockImplementation(async (_admin, name) => {
+        steps.push(`vault ${name}`);
+        return 'vault-secret-id-1';
+      });
+      vi.mocked(audit).mockImplementation(async () => {
+        steps.push('audit');
+      });
+    });
+    afterEach(() => {
+      putSpy.mockImplementation(async () => 'vault-secret-id-1');
+      vi.mocked(audit).mockImplementation(async () => undefined);
+    });
+
+    function clients(existing: Array<Record<string, unknown>>) {
+      const stub = makeSupabaseStub({
+        'org_connections.select': { data: existing, error: null },
+        'org_connections.insert': () => {
+          steps.push('member upsert');
+          return { data: [{ id: 'conn-row-1' }], error: null };
+        },
+      });
+      const adminStub = makeSupabaseStub({
+        'org_connections.update': () => {
+          steps.push('service-role update');
+          return { data: [{ id: 'conn-row-1' }], error: null };
+        },
+      });
+      adminClientHolder.client = adminStub.client;
+      return { stub, adminStub };
+    }
+    const activation = (adminStub: ReturnType<typeof makeSupabaseStub>) => ({
+      values: adminStub.chainArgsAll.get('org_connections.update')?.[0]?.[0]?.[0] as Record<
+        string,
+        unknown
+      >,
+      filters: adminStub.chainArgsAll.get('org_connections.update')?.[0],
+    });
+
+    it('EasyPost: the secret is named by the row the database accepted, on a first connect too', async () => {
+      const { stub, adminStub } = clients([]);
+      const svc = withClient(stub, keyHolder(['shipping:manage'], ['shipping']));
+      await svc.connectApiKey('easypost', 'EZTK_test_key_123');
+
+      expect(steps).toEqual([
+        'member upsert',
+        'vault connector:conn-row-1',
+        'service-role update',
+        'audit',
+      ]);
+      expect(stub.chainArgsAll.get('org_connections.insert')?.[0]?.[0]?.[0]).toEqual({
+        organization_id: 'org-test',
+        provider_id: 'easypost',
+        created_by: 'user-test',
+      });
+      const { values, filters } = activation(adminStub);
+      expect(values).toMatchObject({
+        status: 'active',
+        secret_id: 'vault-secret-id-1',
+        oauth_state: null,
+        settings: { mode: 'test' },
+      });
+      expect(typeof values.last_connected_at).toBe('string');
+      expect(filters).toContainEqual(['id', 'conn-row-1']);
+      expect(filters).toContainEqual(['organization_id', 'org-test']);
+      expect(vi.mocked(audit).mock.calls[0]?.[0]).toMatchObject({
+        event: 'integration.connected',
+        entityId: 'conn-row-1',
+      });
+    });
+
+    it('Zendesk: the subdomain and email ride the service-role activation, keeping the saved settings', async () => {
+      const { stub, adminStub } = clients([
+        { id: 'conn-row-1', settings: { embedded: true }, created_by: 'owner-1' },
+      ]);
+      const svc = withClient(stub, keyHolder(['integrations:manage'], ['zendesk']));
+      await svc.connectZendesk(ZENDESK_FORM);
+
+      expect(steps).toEqual([
+        'member upsert',
+        'vault connector:conn-row-1',
+        'service-role update',
+        'audit',
+      ]);
+      expect(stub.chainArgsAll.get('org_connections.insert')?.[0]?.[0]?.[0]).toEqual({
+        organization_id: 'org-test',
+        provider_id: 'zendesk',
+        created_by: 'owner-1',
+      });
+      expect(activation(adminStub).values).toMatchObject({
+        status: 'active',
+        secret_id: 'vault-secret-id-1',
+        external_account_id: 'example',
+        oauth_state: null,
+        settings: { embedded: true, subdomain: 'example', email: 'agent@example.com' },
+      });
+    });
+
+    it('a failed activation is reported and refused, never reported connected', async () => {
+      const { stub } = clients([]);
+      adminClientHolder.client = makeSupabaseStub({
+        'org_connections.update': { data: null, error: { message: 'timeout' } },
+      }).client;
+      const svc = withClient(stub, keyHolder(['shipping:manage'], ['shipping']));
+      await expect(svc.connectApiKey('easypost', 'EZTK_test_key_123')).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(audit).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'integrations.connect.activate',
+        extra: { connectionId: 'conn-row-1', provider: 'easypost' },
+      });
+    });
+  });
+
+  /**
+   * The Integrations page loads the dead-letter view whenever a card shows:
+   * the QuickBooks card for Manage integrations, the EasyPost card for Manage
+   * shipping. assertSyncLogManage picked the key to assert by STATIC role, then
+   * asserted it on the effective set, so it refused a manager given Manage
+   * shipping and an admin whose Manage integrations was taken away: the page
+   * crashed for both.
+   */
+  describe('the dead-letter view follows the key of each enabled module', () => {
+    const BOTH = ['integrations', 'shipping'] as ModuleId[];
+    const failedSyncs = (ctx: ReturnType<typeof keyHolder>) =>
+      withClient(
+        makeSupabaseStub({ 'connection_sync_log.select': { data: [], error: null } }),
+        ctx,
+      ).listFailedSyncs();
+
+    it('a manager given Manage shipping reads it; a member with neither key is still refused', async () => {
+      await expect(failedSyncs(keyHolder(['shipping:manage'], BOTH))).resolves.toEqual({
+        rows: [],
+      });
+      await expect(failedSyncs(keyHolder(['items:read'], BOTH))).rejects.toMatchObject({
+        code: 'forbidden',
+      });
+      // Manage shipping does not open it when only integrations is on.
+      await expect(
+        failedSyncs(keyHolder(['shipping:manage'], ['integrations'])),
+      ).rejects.toMatchObject({
+        code: 'forbidden',
+      });
+    });
+
+    it('an admin whose Manage integrations was taken away, who kept Manage shipping, reads it and can replay', async () => {
+      const ctx = makeServiceContext(makeSupabaseStub().client, {
+        role: 'admin',
+        permissions: new Set(['shipping:manage']),
+        enabledModules: new Set<ModuleId>(BOTH),
+      });
+      const stub = makeSupabaseStub({
+        'connection_sync_log.select': { data: [], error: null },
+        'connection_sync_log.update': { data: [{ id: 'sync-1' }], error: null },
+      });
+      const svc = new ConnectionsService({ ...ctx, supabase: stub.client });
+      await expect(svc.listFailedSyncs()).resolves.toEqual({ rows: [] });
+      await expect(svc.replaySync('sync-1')).resolves.toBeUndefined();
+    });
+
+    it('the MFA gate still runs first', async () => {
+      const ctx = makeServiceContext(makeSupabaseStub().client, {
+        role: 'manager',
+        permissions: new Set(['shipping:manage']),
+        enabledModules: new Set<ModuleId>(BOTH),
+        mfaRequired: true,
+        mfaSatisfied: false,
+      });
+      await expect(new ConnectionsService(ctx).listFailedSyncs()).rejects.toMatchObject({
+        code: 'forbidden',
+        details: { reason: 'mfa_required' },
+      });
+      // With the session stepped up, the same member reads it.
+      await expect(failedSyncs(keyHolder(['shipping:manage'], BOTH))).resolves.toEqual({
+        rows: [],
+      });
+    });
   });
 });

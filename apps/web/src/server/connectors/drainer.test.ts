@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reportError } from '@/lib/error-reporter';
+import { json, realSupabaseClient, type ClientRequest } from '@/test/postgrest-answers';
 import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import { enabledIntegrationOrgIds, MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
+import { sageIntacctConnector } from './sage-intacct';
 
 vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(),
@@ -550,4 +553,126 @@ describe('enabledIntegrationOrgIds with 250 orgs', () => {
       'organization_modules select: fetch failed',
     );
   });
+});
+
+/**
+ * docket S27: getMapping is Intacct's only guard against posting a document
+ * twice (Intacct has no provider-side dedupe key; sage-intacct/index.ts). It
+ * read with maybeSingle(), and postgrest-js resolves an empty body there as
+ * data null with no error: read as "no mapping", the purchase order was posted
+ * to the customer's ERP again. An answer that is not a list now fails the
+ * attempt into 'error' with backoff, posts nothing and is reported. Driven
+ * through a real supabase-js client (a local fetch) and the real Intacct
+ * connector, whose own fetch is a spy: no request leaves the test.
+ */
+describe('runDrain: an Intacct mapping read that answers no list posts nothing', () => {
+  const NOW = new Date('2026-10-26T12:00:00Z');
+  const CONN = {
+    id: 'conn-si',
+    organization_id: 'org-1',
+    provider_id: 'sage_intacct',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'company-1',
+    settings: { intacct: { defaultItemId: 'NONINV', defaultVendorId: 'VDEF' } },
+  };
+  const EVENT = {
+    id: 'evt-1',
+    organization_id: 'org-1',
+    topic: 'purchase_order.ordered',
+    aggregate_type: 'purchase_order',
+    aggregate_id: 'po-1',
+    payload: {},
+    dedupe_key: null,
+    created_at: NOW.toISOString(),
+  };
+  const MAPPING = { external_id: 'DOC-7', external_meta: {} };
+  const intacctFetch = vi.fn(async () => json({ 'ia::result': { key: 'DOC-8' } }));
+
+  beforeEach(() => {
+    vi.mocked(reportError).mockClear();
+    intacctFetch.mockClear();
+    vi.stubGlobal('fetch', intacctFetch);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** One drain whose mapping read answers `mappingAnswer`; every other read
+   *  answers as PostgREST would for this connection, event and order. */
+  async function drain(mappingAnswer: () => Response) {
+    const requests: ClientRequest[] = [];
+    const admin = realSupabaseClient((req) => {
+      requests.push(req);
+      const path = req.url.pathname.replace(/^\/rest\/v1\//, '');
+      if (req.method === 'GET' && path === 'org_connections') return json([CONN]);
+      if (req.method === 'GET' && path === 'organization_modules')
+        return json([{ organization_id: 'org-1' }]);
+      if (path === 'rpc/connector_drain_candidates') return json([EVENT]);
+      if (req.method === 'GET' && path === 'connection_sync_log') return json([]);
+      if (req.method === 'GET' && path === 'connection_mappings') return mappingAnswer();
+      if (req.method === 'GET' && path === 'purchase_orders') {
+        return json([
+          { id: 'po-1', po_number: 'PO-1', supplier_id: null, subtotal: 120, total: 120 },
+        ]);
+      }
+      // The writes: the pending row, the outcome, the mapping, last_synced_at.
+      return new Response(null, { status: 204 });
+    });
+    const result = await runDrain(admin, { sage_intacct: sageIntacctConnector }, NOW);
+    const outcome = requests
+      .filter((r) => r.method === 'PATCH' && r.url.pathname.endsWith('/connection_sync_log'))
+      .map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
+    const mappingReports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, context]) => context?.tag === 'cron.drain-outbox.mapping');
+    vi.mocked(reportError).mockClear();
+    return { result, outcome, mappingReports };
+  }
+
+  function expectFailedAttempt(run: Awaited<ReturnType<typeof drain>>, lastError: string) {
+    expect(intacctFetch).not.toHaveBeenCalled();
+    expect(run.result).toEqual({ processed: 1, succeeded: 0, failed: 1, deadlettered: 0 });
+    expect(run.outcome).toHaveLength(1);
+    expect(run.outcome[0]).toMatchObject({ status: 'error', last_error: lastError });
+    expect(new Date(run.outcome[0]!.next_attempt_at as string).getTime()).toBeGreaterThan(
+      NOW.getTime(),
+    );
+  }
+
+  it('an empty 200 body posts nothing, fails into error with backoff and is reported; an answered mapping and two rows behave as before', async () => {
+    // The mapping answered: the document was posted before, so nothing is posted now.
+    const answered = await drain(() => json([MAPPING]));
+    expect(intacctFetch).not.toHaveBeenCalled();
+    expect(answered.result).toEqual({ processed: 1, succeeded: 1, failed: 0, deadlettered: 0 });
+    expect(answered.outcome[0]).toMatchObject({ status: 'success', external_id: 'DOC-7' });
+
+    // The same read with an empty body.
+    const empty = await drain(() => new Response('', { status: 200 }));
+    expectFailedAttempt(empty, 'connection_mappings answered no list (status 200)');
+    expect(empty.mappingReports).toHaveLength(1);
+    expect((empty.mappingReports[0]?.[0] as Error).message).toBe(
+      'connection_mappings answered no list (status 200)',
+    );
+    expect(empty.mappingReports[0]?.[1]).toEqual({
+      tag: 'cron.drain-outbox.mapping',
+      extra: { connectionId: 'conn-si', entityType: 'purchase_order' },
+    });
+
+    // Two rows for one document is no answer either (maybeSingle refused it too).
+    const two = await drain(() => json([MAPPING, MAPPING]));
+    expect(intacctFetch).not.toHaveBeenCalled();
+    expect(two.result).toEqual({ processed: 1, succeeded: 0, failed: 1, deadlettered: 0 });
+    expect(two.outcome[0]).toMatchObject({ status: 'error' });
+  });
+
+  it.each([
+    ['an empty 404 body (status rewritten to 204)', () => new Response('', { status: 404 }), 204],
+    ['a JSON object', () => json({ id: 'not-a-list' }), 200],
+  ])(
+    '%s posts nothing, fails into error with backoff and is reported',
+    async (_shape, answer, status) => {
+      const run = await drain(answer);
+      expectFailedAttempt(run, `connection_mappings answered no list (status ${status})`);
+      expect(run.mappingReports).toHaveLength(1);
+    },
+  );
 });
