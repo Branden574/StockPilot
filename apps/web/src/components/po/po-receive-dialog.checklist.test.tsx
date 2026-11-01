@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
+import { redirect, RedirectType } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
@@ -22,12 +23,35 @@ const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 
 vi.mock('@/server/actions/receiving', () => ({ postReceiptAction }));
 vi.mock('@/server/actions/receiving-checklist', () => ({ startReceivingCheckAction }));
-vi.mock('next/navigation', () => ({ useRouter: () => router }));
+// The real next/navigation (so redirect() makes Next's own error and
+// isControlFlow() judges it with Next's own unstable_rethrow), with the router
+// replaced.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => router,
+}));
 vi.mock('sonner', () => ({ toast }));
 
 import { getUnsavedSources, resetUnsavedSourcesForTests } from '@/lib/unsaved-work';
 
 import { PoReceiveDialog } from './po-receive-dialog';
+
+/** The redirect a Server Action rejects with when the session has ended. */
+function signInRedirect(): unknown {
+  try {
+    redirect('/signin?redirect=%2Fdashboard%2Fpurchase-orders', RedirectType.push);
+  } catch (e) {
+    return e;
+  }
+  throw new Error('redirect() did not throw');
+}
+
+/** Lets a rejected action's catch run before the screen is read. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 const LINES = [
   {
@@ -113,6 +137,25 @@ describe('PoReceiveDialog: the Posted panel', () => {
     expect((await screen.findByRole('alert')).textContent).toBe(
       RECEIVING_CHECKLIST_COPY.startFailedAfterPostWeb,
     );
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  // Merge of main 2026-11-01 (#386's rule, server/actions/action-catch.guard):
+  // a start answered with the sign-in redirect is not a failure. The router is
+  // already on its way to sign-in, so nothing is said and nothing is opened.
+  it('a start answered with the sign-in redirect shows no error and opens nothing', async () => {
+    startReceivingCheckAction.mockRejectedValueOnce(signInRedirect());
+    const user = await postOne({
+      checklist: { versionNumber: 2, title: 'T' },
+      canRecordChecklist: true,
+    });
+    await user.click(
+      await screen.findByRole('button', { name: RECEIVING_CHECKLIST_COPY.recordChecklist }),
+    );
+    await waitFor(() => expect(startReceivingCheckAction).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
     expect(router.push).not.toHaveBeenCalled();
   });
 

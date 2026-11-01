@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { reverseReceiptAction } from '@/server/actions/receiving';
 import { startReceivingCheckAction } from '@/server/actions/receiving-checklist';
@@ -228,7 +229,9 @@ function ReceiptEntry({
     let r: Awaited<ReturnType<typeof startReceivingCheckAction>>;
     try {
       r = await startReceivingCheckAction(receipt.id, poId ?? null);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       setStarting(false);
       setStartError(RECEIVING_CHECKLIST_COPY.didNotGoThrough);
       return;

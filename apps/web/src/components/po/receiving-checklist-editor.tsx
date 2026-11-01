@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import {
   publishReceivingChecklistAction,
@@ -187,7 +188,9 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
         ...body,
         clientPublishId: pending.current.clientPublishId,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The reply was lost, so the version may have been published. The id is
       // kept: publishing the same edits again is answered as that publish.
       setBusy(false);
@@ -217,7 +220,9 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
     let res: Awaited<ReturnType<typeof retireReceivingChecklistAction>>;
     try {
       res = await retireReceivingChecklistAction({ versionId: live.id });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       setBusy(false);
       setError({ message: C.didNotGoThrough, step: null, changed: false });
       return;

@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { saveReceivingCheckAction } from '@/server/actions/receiving-checklist';
 
@@ -192,7 +193,9 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
         saveId: pending.current.saveId,
         complete,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The reply was lost, so the save may have landed. The save id is kept:
       // sending the same answers again is answered as that save, not a second.
       setBusy(null);

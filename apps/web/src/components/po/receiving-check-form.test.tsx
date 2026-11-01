@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { redirect, RedirectType } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CASE_TABLE_STEPS, RECEIVING_CHECKLIST_COPY as C } from '@stockpilot/core';
@@ -17,7 +18,13 @@ import { CASE_TABLE_STEPS, RECEIVING_CHECKLIST_COPY as C } from '@stockpilot/cor
 const saveReceivingCheckAction = vi.hoisted(() => vi.fn());
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock('@/server/actions/receiving-checklist', () => ({ saveReceivingCheckAction }));
-vi.mock('next/navigation', () => ({ useRouter: () => router }));
+// The real next/navigation (so redirect() makes Next's own error and
+// isControlFlow() judges it with Next's own unstable_rethrow), with the router
+// replaced.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => router,
+}));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
@@ -30,6 +37,23 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 
 import { ReceivingCheckForm } from './receiving-check-form';
+
+/** The redirect a Server Action rejects with when the session has ended. */
+function signInRedirect(): unknown {
+  try {
+    redirect('/signin?redirect=%2Fdashboard%2Fpurchase-orders', RedirectType.push);
+  } catch (e) {
+    return e;
+  }
+  throw new Error('redirect() did not throw');
+}
+
+/** Lets a rejected action's catch run before the screen is read. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 import type { ReceivingRunView } from '@/server/services/receiving-checklist';
 
@@ -273,6 +297,21 @@ describe('ReceivingCheckForm', () => {
     await user.click(screen.getByRole('button', { name: C.saveProgress }));
     await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(2));
     expect(saveReceivingCheckAction.mock.calls[1]![1].expectedRevision).toBe(2);
+  });
+
+  // Merge of main 2026-11-01 (#386's rule, server/actions/action-catch.guard):
+  // a save answered with the sign-in redirect is not a lost reply; the router
+  // is already on its way to sign-in, so nothing is said.
+  it('a save answered with the sign-in redirect shows no error', async () => {
+    saveReceivingCheckAction.mockRejectedValueOnce(signInRedirect());
+    const user = userEvent.setup();
+    render(<ReceivingCheckForm view={view()} />);
+    await user.type(screen.getByRole('textbox', { name: 'Number of boxes received' }), '9');
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(router.refresh).not.toHaveBeenCalled();
   });
 
   // Mutation caught: the save awaited bare (Save progress stayed busy for

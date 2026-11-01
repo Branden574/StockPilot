@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { redirect, RedirectType } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RECEIVING_CHECKLIST_COPY as C, SUGGESTED_RECEIVING_STEPS } from '@stockpilot/core';
@@ -20,10 +21,33 @@ vi.mock('@/server/actions/receiving-checklist', () => ({
   publishReceivingChecklistAction,
   retireReceivingChecklistAction,
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => router }));
+// The real next/navigation (so redirect() makes Next's own error and
+// isControlFlow() judges it with Next's own unstable_rethrow), with the router
+// replaced.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => router,
+}));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { ReceivingChecklistEditor } from './receiving-checklist-editor';
+
+/** The redirect a Server Action rejects with when the session has ended. */
+function signInRedirect(): unknown {
+  try {
+    redirect('/signin?redirect=%2Fdashboard%2Fpurchase-orders', RedirectType.push);
+  } catch (e) {
+    return e;
+  }
+  throw new Error('redirect() did not throw');
+}
+
+/** Lets a rejected action's catch run before the screen is read. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 import type { ChecklistEditorView } from '@/server/services/receiving-checklist';
 
@@ -282,6 +306,34 @@ describe('ReceivingChecklistEditor', () => {
     await user.click(screen.getAllByRole('button', { name: C.turnOff }).at(-1)!);
     expect((await screen.findByRole('alert')).textContent).toContain(C.didNotGoThrough);
     expect(screen.getByRole('button', { name: C.turnOff })).not.toBeDisabled();
+  });
+
+  // Merge of main 2026-11-01 (#386's rule, server/actions/action-catch.guard):
+  // a publish or turn off answered with the sign-in redirect is not a lost
+  // reply; the router is already on its way to sign-in, so nothing is said.
+  it('a publish answered with the sign-in redirect shows no error', async () => {
+    publishReceivingChecklistAction.mockRejectedValueOnce(signInRedirect());
+    const user = userEvent.setup();
+    render(<ReceivingChecklistEditor editor={editor()} />);
+    await user.click(screen.getByRole('button', { name: C.startSuggested }));
+    await user.click(screen.getByRole('button', { name: C.publishVersion(1) }));
+    await user.click(screen.getAllByRole('button', { name: C.publishVersion(1) }).at(-1)!);
+    await waitFor(() => expect(publishReceivingChecklistAction).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a turn off answered with the sign-in redirect shows no error', async () => {
+    retireReceivingChecklistAction.mockRejectedValueOnce(signInRedirect());
+    const user = userEvent.setup();
+    render(<ReceivingChecklistEditor editor={editor({ live: LIVE, nextVersionNumber: 2 })} />);
+    await user.click(screen.getByRole('button', { name: C.turnOff }));
+    await user.click(screen.getAllByRole('button', { name: C.turnOff }).at(-1)!);
+    await waitFor(() => expect(retireReceivingChecklistAction).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(router.refresh).not.toHaveBeenCalled();
   });
 
   it('Turn off asks first, then turns off the live version', async () => {

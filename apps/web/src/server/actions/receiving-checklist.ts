@@ -1,8 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { unstable_rethrow } from 'next/navigation';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { ReceivingChecklistService } from '@/server/services/receiving-checklist';
@@ -27,7 +27,9 @@ import {
  */
 
 function fail<T>(e: unknown, tag: string): ActionResult<T> {
-  unstable_rethrow(e);
+  // A redirect (the session ended) or another Next.js control-flow error is
+  // rethrown first, before anything is reported or mapped (lib/control-flow).
+  rethrowControlFlow(e);
   if (e instanceof ServiceError) {
     if (e.code === 'internal_error') void reportError(e, { tag });
     return err(e.code, e.message, e.code !== 'internal_error' ? e.details : undefined);

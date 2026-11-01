@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { redirect, RedirectType } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CASE_TABLE_STEPS, RECEIVING_CHECKLIST_COPY as C } from '@stockpilot/core';
@@ -17,10 +18,33 @@ const startReceivingCheckAction = vi.hoisted(() => vi.fn());
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock('@/server/actions/receiving', () => ({ reverseReceiptAction: vi.fn() }));
 vi.mock('@/server/actions/receiving-checklist', () => ({ startReceivingCheckAction }));
-vi.mock('next/navigation', () => ({ useRouter: () => router }));
+// The real next/navigation (so redirect() makes Next's own error and
+// isControlFlow() judges it with Next's own unstable_rethrow), with the router
+// replaced.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => router,
+}));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { ReceiptHistory, type ReceiptChecklists } from './receipt-history';
+
+/** The redirect a Server Action rejects with when the session has ended. */
+function signInRedirect(): unknown {
+  try {
+    redirect('/signin?redirect=%2Fdashboard%2Fpurchase-orders', RedirectType.push);
+  } catch (e) {
+    return e;
+  }
+  throw new Error('redirect() did not throw');
+}
+
+/** Lets a rejected action's catch run before the screen is read. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 const receipt = (id: string, status: string, receivedAt: string) => ({
   id,
@@ -231,6 +255,20 @@ describe('receipt cards: checklist chips and actions', () => {
     renderHistory(CHECKS, true);
     await user.click(within(cardOf('R-c')).getByRole('button', { name: C.recordChecklist }));
     expect((await within(cardOf('R-c')).findByRole('alert')).textContent).toBe(C.noChecklist);
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  // Merge of main 2026-11-01 (#386's rule, server/actions/action-catch.guard):
+  // a start answered with the sign-in redirect is not a failure; the router is
+  // already on its way to sign-in.
+  it('a start answered with the sign-in redirect says nothing on the card and opens nothing', async () => {
+    startReceivingCheckAction.mockRejectedValueOnce(signInRedirect());
+    const user = userEvent.setup();
+    renderHistory(CHECKS, true);
+    await user.click(within(cardOf('R-c')).getByRole('button', { name: C.recordChecklist }));
+    await waitFor(() => expect(startReceivingCheckAction).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(within(cardOf('R-c')).queryByRole('alert')).toBeNull();
     expect(router.push).not.toHaveBeenCalled();
   });
 

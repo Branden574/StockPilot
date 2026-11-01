@@ -19,6 +19,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn, formatNumber } from '@/lib/utils';
 import { postReceiptAction } from '@/server/actions/receiving';
@@ -373,7 +374,9 @@ export function PoReceiveDialog({
     let res: Awaited<ReturnType<typeof startReceivingCheckAction>>;
     try {
       res = await startReceivingCheckAction(posted.receiptId, poId);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The request never came back: the receipt is still posted.
       setStarting(false);
       setStartError(
