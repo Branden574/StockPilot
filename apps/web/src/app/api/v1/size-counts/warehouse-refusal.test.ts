@@ -263,6 +263,25 @@ describe('size-count requests the warehouse check refuses (B73)', () => {
       );
       expectNothingSpent();
     });
+
+    it('control: past the gate, the same scan reaches the rate limits', async () => {
+      useContext(
+        database({
+          data: [
+            { warehouse_id: WH_HOME, is_primary: true },
+            { warehouse_id: WH_OTHER, is_primary: false },
+          ],
+          error: null,
+        }),
+      );
+      const res = await scanPOST(scanRequest(), params());
+      // The bytes are not an image, so the route stops before any model call.
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({ error: 'invalid_image' });
+      expect(checkRateLimit).toHaveBeenCalledTimes(2);
+      expect(claudeGenerateJsonString).not.toHaveBeenCalled();
+      expect(reportError).not.toHaveBeenCalled();
+    });
   });
 
   describe('start (POST /api/v1/size-counts)', () => {
@@ -276,7 +295,7 @@ describe('size-count requests the warehouse check refuses (B73)', () => {
       expect(stub.fromCalls).not.toContain('size_count_sessions');
     });
 
-    it('control: naming the caller own warehouse starts the size count', async () => {
+    it("control: naming the caller's own warehouse starts the size count", async () => {
       const stub = database();
       useContext(stub);
       const res = await startPOST(startRequest(WH_HOME));
