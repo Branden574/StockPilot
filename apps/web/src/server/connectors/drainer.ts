@@ -9,6 +9,7 @@ import type {
 
 import { reportError } from '@/lib/error-reporter';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 
 import { getConnectionSecret, putConnectionSecret } from './secret-store';
 
@@ -407,14 +408,34 @@ function makeDeps(admin: any) {
         .eq('connection_id', connectionId)
         .eq('entity_type', entityType);
       q = localId === null ? q.is('local_id', null) : q.eq('local_id', localId);
-      const { data, error } = await q.maybeSingle();
+      // A list of at most two, not maybeSingle(): maybeSingle() resolves an
+      // empty body as data null with no error, which read as "no mapping"
+      // (docket S27).
+      const res = await q.limit(2);
       // FAIL CLOSED: this read is the idempotency guard for connectors without
       // a provider-side dedupe key (Intacct has no QBO-style requestid). A
       // transient query error must NOT read as "no mapping" — that would
       // re-POST and duplicate the document in the customer's ERP. Throwing
       // surfaces as a failed attempt (retry/dead-letter), which is always
       // recoverable; a duplicate export is not.
-      if (error) throw new Error(`connection_mappings select: ${error.message}`);
+      if (res.error) throw new Error(`connection_mappings select: ${res.error.message}`);
+      let rows: Array<{ external_id: string; external_meta: Record<string, unknown> | null }>;
+      try {
+        rows = listRows('connection_mappings', res);
+      } catch (err) {
+        // Reported here: the attempt's catch stores a thrown error as the
+        // row's last_error and reports only a failed write.
+        if (err instanceof ListReadError) {
+          void reportError(err, {
+            tag: 'cron.drain-outbox.mapping',
+            extra: { connectionId, entityType },
+          });
+        }
+        throw err;
+      }
+      // Two rows for one local id is no answer either (maybeSingle refused it too).
+      if (rows.length > 1) throw new Error('connection_mappings answered more than one mapping');
+      const data = rows[0];
       return data
         ? { externalId: data.external_id, externalMeta: data.external_meta ?? {} }
         : null;

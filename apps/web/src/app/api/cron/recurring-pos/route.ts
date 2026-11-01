@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { createNotification } from '@/server/services/notifications';
+import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import {
   RecurringPoTemplatesService,
@@ -186,6 +187,11 @@ const EDITS_TEMPLATES = 'purchase_orders:manage';
  * org and can still edit templates. Each person once, with the notice for
  * them (recurringRunNotice with `recipientId`: the templates they created
  * named first, every one). Best-effort.
+ *
+ * A failed read of the owners and admins, or an answer that is not a list,
+ * is reported (docket S27): it used to read as "no owners or admins", so they
+ * were not told and nothing said why. The creators who can still edit
+ * templates are told all the same.
  */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,
@@ -193,14 +199,34 @@ async function notifyAdmins(
   summary: RecurringRunSummary,
 ): Promise<void> {
   const creators = summary.templatesSkipped.map((s) => s.createdBy);
-  const { data: admins } = await admin
+  const adminsRes = await admin
     .from('organization_members')
     .select('user_id')
     .eq('organization_id', orgId)
     .in('role', ['owner', 'admin'])
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null);
-  const recipients = new Set(((admins ?? []) as Array<{ user_id: string }>).map((m) => m.user_id));
+  const recipients = new Set<string>();
+  if (adminsRes.error) {
+    void reportError(new Error(adminsRes.error.message), {
+      tag: 'cron.recurring-pos.admins',
+      level: 'warning',
+      extra: { orgId },
+    });
+  } else {
+    try {
+      for (const m of listRows<{ user_id: string }>('organization_members', adminsRes)) {
+        recipients.add(m.user_id);
+      }
+    } catch (err) {
+      if (!(err instanceof ListReadError)) throw err;
+      void reportError(err, {
+        tag: 'cron.recurring-pos.admins',
+        level: 'warning',
+        extra: { orgId, table: err.table, status: err.status },
+      });
+    }
+  }
 
   const creatorIds = [...new Set(creators.filter((id): id is string => Boolean(id)))].filter(
     (id) => !recipients.has(id),
@@ -236,13 +262,14 @@ async function notifyAdmins(
  * too, so they are not told (slice 8 review).
  *
  * FAILS CLOSED. When the read of the creators' memberships or either override
- * read fails, the failure is reported once and no creator is told this run
- * (an empty list). A creator's notice is optional, and without the overrides
- * the answer is unknown: the role's defaults would tell a manager whose
- * permission an override took away. The owners and admins are told as
- * always; notifyAdmins reads them by role before this. The request gate
- * (loadEffectivePermissions) refuses on the same failure (docket S19); here
- * the notice is optional, so it is skipped rather than failing the run.
+ * read fails, or answers with no list (an empty body, docket S27), the
+ * failure is reported once and no creator is told this run (an empty list).
+ * A creator's notice is optional, and without the overrides the answer is
+ * unknown: the role's defaults would tell a manager whose permission an
+ * override took away. The owners and admins are told as always; notifyAdmins
+ * reads them by role before this. The request gate (loadEffectivePermissions)
+ * refuses on the same failure (docket S19); here the notice is optional, so
+ * it is skipped rather than failing the run.
  */
 async function creatorsWhoEditTemplates(
   admin: ReturnType<typeof createAdminClient>,
@@ -280,9 +307,22 @@ async function creatorsWhoEditTemplates(
     });
     return [];
   }
-  const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
-  const roleOv = (roleOvRes.data ?? []) as Array<PermissionOverride & { role: Role }>;
-  const userOv = (userOvRes.data ?? []) as Array<PermissionOverride & { user_id: string }>;
+  let members: Array<{ user_id: string; role: Role }>;
+  let roleOv: Array<PermissionOverride & { role: Role }>;
+  let userOv: Array<PermissionOverride & { user_id: string }>;
+  try {
+    members = listRows('organization_members', membersRes);
+    roleOv = listRows('role_permission_overrides', roleOvRes);
+    userOv = listRows('user_permission_overrides', userOvRes);
+  } catch (err) {
+    if (!(err instanceof ListReadError)) throw err;
+    void reportError(err, {
+      tag: 'cron.recurring-pos.creator_permissions',
+      level: 'warning',
+      extra: { orgId, table: err.table, status: err.status },
+    });
+    return [];
+  }
   return members
     .filter((m) =>
       effectivePermissions(

@@ -15,6 +15,7 @@ import {
   type ServiceContext,
 } from './context';
 import { keepAlive } from './lib/defer';
+import { listRows } from './lib/list-rows';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -533,7 +534,7 @@ export async function drainIntegrationDeliveries(
 
     // Batch-load the endpoints for the due rows.
     const endpointIds = Array.from(new Set(due.map((d) => (d as DeliveryRow).endpoint_id)));
-    const { data: eps, error: epsErr } = await admin
+    const epsRes = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
       // in-list-bound: endpoints of at most `limit` (100) due deliveries per tick
@@ -541,9 +542,11 @@ export async function drainIntegrationDeliveries(
     // A delivery whose endpoint is missing from this read is marked dead below,
     // so a FAILED read must not be read as "every endpoint was removed": that
     // permanently dropped every due webhook. Stop here; the rows stay pending
-    // and the next tick retries them. The catch below reports it.
-    if (epsErr) throw new Error(`integration_endpoints select: ${epsErr.message}`);
-    const epById = new Map((eps ?? []).map((e) => [(e as EndpointRow).id, e as EndpointRow]));
+    // and the next tick retries them. The catch below reports it. An answer
+    // that is not a list (an empty body) is a failed read too (docket S27).
+    if (epsRes.error) throw new Error(`integration_endpoints select: ${epsRes.error.message}`);
+    const eps = listRows<EndpointRow>('integration_endpoints', epsRes);
+    const epById = new Map(eps.map((e) => [e.id, e]));
 
     // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
     const live: DeliveryRow[] = [];
@@ -619,6 +622,31 @@ export async function sendTest(endpoint: {
 }
 
 // ── Admin-managed endpoint CRUD ──────────────────────────────────────────────
+
+/**
+ * What a member is told when the database refused their integration write
+ * (docket S27). The services gate on the member's effective Manage
+ * integrations or Manage shipping, while the integration tables' row rules
+ * still ask for the admin role, so a member given the key can pass the gate
+ * and be refused by the database. Names no table, policy or code.
+ */
+export const INTEGRATION_WRITE_REFUSED =
+  'This change was not saved: your access does not allow it. Ask an owner or an admin.';
+
+/**
+ * The error for a failed integration insert or upsert: a row rule's refusal
+ * (SQLSTATE 42501, insufficient_privilege) is a refusal, matched by its code
+ * and never by its text (recurring bug pattern 28); anything else stays an
+ * internal error, its text kept server-side.
+ */
+export function integrationWriteError(error: {
+  code?: string | null;
+  message: string;
+}): ServiceError {
+  if (error.code === '42501') return new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
+  return new ServiceError('internal_error', error.message);
+}
+
 export interface ManagedEndpoint {
   id: string;
   type: EndpointType;
@@ -712,40 +740,54 @@ export class IntegrationEndpointsService {
       })
       .select('id')
       .single();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) throw integrationWriteError(error);
     return { id: (data as { id: string }).id, secret };
   }
 
+  // The writes below ask for the row they changed (docket S27): a write the
+  // row rule refused, or an id that is gone, changes 0 rows with no error,
+  // and was reported as done. No row is "not found".
+
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     this.gate();
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('integration_endpoints')
       .update({ enabled, updated_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Endpoint not found.');
   }
 
   async remove(id: string): Promise<void> {
     this.gate();
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('integration_endpoints')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Endpoint not found.');
   }
 
+  /** The new secret, returned only once the database has stored it. */
   async rotateSecret(id: string): Promise<{ secret: string }> {
     this.gate();
     const secret = `whsec_${randomBytes(24).toString('hex')}`;
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('integration_endpoints')
       .update({ secret, updated_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .eq('type', 'webhook');
+      .eq('type', 'webhook')
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Endpoint not found.');
     return { secret };
   }
 
