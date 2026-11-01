@@ -48,6 +48,49 @@ const WIDGET_REF = 'placeholder-widget';
 const TICKET = '00000000-0000-4000-8000-000000000000';
 const SDK_VERSION = '1.438.15';
 
+// Everything a signed-in member's browser sends with a same-origin request, and
+// what the platform adds on the way in: the member's credentials, where the
+// request came from (Origin, Referer, x-forwarded-host), the platform's own
+// headers, and the headers PostHog reads.
+const BROWSER_HEADERS: Record<string, string> = {
+  cookie: MEMBER_COOKIE,
+  authorization: MEMBER_BEARER,
+  'content-type': 'text/plain',
+  'content-encoding': 'gzip',
+  accept: '*/*',
+  'user-agent': 'Mozilla/5.0 (placeholder)',
+  'posthog-placeholder-header': 'kept',
+  'x-conversations-token': WIDGET_REF,
+  origin: SITE,
+  referer: `${SITE}/dashboard/inventory?q=placeholder`,
+  'accept-language': 'en-US',
+  'x-forwarded-for': '203.0.113.7, 198.51.100.2',
+  'x-real-ip': '203.0.113.7',
+  'x-forwarded-host': 'app.example.com',
+  'x-vercel-id': 'iad1::placeholder',
+};
+// Of those, the only headers PostHog is sent: the ones it reads, and the
+// visitor address.
+const SENT_HEADERS = [
+  'accept',
+  'content-encoding',
+  'content-type',
+  'posthog-placeholder-header',
+  'user-agent',
+  'x-conversations-token',
+  'x-forwarded-for',
+];
+// Pieces of BROWSER_HEADERS that reach PostHog nowhere, not in the address,
+// any header or the body: the session cookie and its chunk, PostHog's own
+// cookie, the member's bearer token, and our host.
+const NEVER_SENT = [
+  'placeholder-session',
+  'placeholder-chunk',
+  'placeholder-ph',
+  'eyJplaceholder',
+  'app.example.com',
+];
+
 const MIB = 1024 * 1024;
 
 const upstream = vi.fn<typeof fetch>();
@@ -115,6 +158,18 @@ async function sentToPostHog(call = 0) {
   };
 }
 
+/** A request sent to PostHog as one string: its address, its header values and its body. */
+function everythingIn(sent: Awaited<ReturnType<typeof sentToPostHog>>): string {
+  return `${sent.url} ${[...sent.headers.values()].join(' ')} ${Buffer.from(sent.body).toString('latin1')}`;
+}
+
+/** `text` with every character percent-encoded: only '%', digits and A-F. */
+function encodedWhole(text: string): string {
+  return [...text]
+    .map((c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)
+    .join('');
+}
+
 /**
  * A body sent in chunks with no Content-Length, that counts the chunks asked
  * for and says whether it was cancelled. It makes a chunk only when one is
@@ -145,23 +200,7 @@ describe('/ingest sends PostHog no member credential', () => {
   it('forwards no cookie and no member Authorization: only the headers PostHog reads, and the visitor address', async () => {
     const req = incoming('/ingest/e/?ip=1&_=1700000000000', {
       method: 'POST',
-      headers: {
-        cookie: MEMBER_COOKIE,
-        authorization: MEMBER_BEARER,
-        'content-type': 'text/plain',
-        'content-encoding': 'gzip',
-        accept: '*/*',
-        'user-agent': 'Mozilla/5.0 (placeholder)',
-        'posthog-placeholder-header': 'kept',
-        'x-conversations-token': WIDGET_REF,
-        origin: SITE,
-        referer: `${SITE}/dashboard/inventory?q=placeholder`,
-        'accept-language': 'en-US',
-        'x-forwarded-for': '203.0.113.7, 198.51.100.2',
-        'x-real-ip': '203.0.113.7',
-        'x-forwarded-host': 'app.example.com',
-        'x-vercel-id': 'iad1::placeholder',
-      },
+      headers: BROWSER_HEADERS,
       body: new Uint8Array([1, 2, 3]),
     });
     // The route is handed what the browser sent.
@@ -172,15 +211,7 @@ describe('/ingest sends PostHog no member credential', () => {
 
     expect(upstream).toHaveBeenCalledTimes(1);
     const sent = await sentToPostHog();
-    expect([...sent.headers.keys()].sort()).toEqual([
-      'accept',
-      'content-encoding',
-      'content-type',
-      'posthog-placeholder-header',
-      'user-agent',
-      'x-conversations-token',
-      'x-forwarded-for',
-    ]);
+    expect([...sent.headers.keys()].sort()).toEqual(SENT_HEADERS);
     expect(sent.headers.get('cookie')).toBeNull();
     expect(sent.headers.get('authorization')).toBeNull();
     // The first hop: the visitor, as Vercel recorded it.
@@ -190,14 +221,8 @@ describe('/ingest sends PostHog no member credential', () => {
     expect(sent.headers.get('posthog-placeholder-header')).toBe('kept');
     expect(sent.headers.get('x-conversations-token')).toBe(WIDGET_REF);
     // Nowhere else either: not in the address, any header or the body.
-    const everything = `${sent.url} ${[...sent.headers.values()].join(' ')} ${Buffer.from(sent.body).toString('latin1')}`;
-    for (const piece of [
-      'placeholder-session',
-      'placeholder-chunk',
-      'placeholder-ph',
-      'eyJplaceholder',
-    ]) {
-      expect(everything).not.toContain(piece);
+    for (const piece of NEVER_SENT) {
+      expect(everythingIn(sent)).not.toContain(piece);
     }
   });
 
@@ -365,6 +390,55 @@ describe('/ingest passes on the requests posthog-js makes, to the host the SDK i
   });
 });
 
+describe('/ingest sends no member credential and passes back no cookie, on every path the SDK asks for and by every method', () => {
+  // The first test is one POST of events. Most of the requests that carry the
+  // session cookies are GETs: the remote config on every page load, the
+  // bundles (a script tag with crossOrigin 'anonymous' still sends this
+  // origin's cookies), the surveys and tours lists. For each path the SDK asks
+  // for, by GET, HEAD and POST: only SENT_HEADERS go out, and PostHog's
+  // Set-Cookie and its other headers do not come back.
+  it.each(SDK_REQUESTS.map(([, path]) => [path]))('/ingest%s', async (path) => {
+    upstream.mockImplementation(
+      async () =>
+        new Response('{}', {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'cache-control': 'public, max-age=300',
+            'set-cookie': 'ph_placeholder=1; Path=/',
+            'x-placeholder-upstream': '1',
+          },
+        }),
+    );
+
+    for (const [call, method] of (['GET', 'HEAD', 'POST'] as const).entries()) {
+      const req = incoming(`/ingest${path}`, {
+        method,
+        headers: BROWSER_HEADERS,
+        body: method === 'POST' ? new Uint8Array([1]) : undefined,
+      });
+      // The route is handed the member's cookie: this cannot pass by never seeing one.
+      expect(req.headers.get('cookie'), method).toBe(MEMBER_COOKIE);
+
+      const res = await route[method](req);
+
+      const sent = await sentToPostHog(call);
+      expect(sent.method).toBe(method);
+      expect([...sent.headers.keys()].sort(), method).toEqual(SENT_HEADERS);
+      for (const piece of NEVER_SENT) {
+        expect(everythingIn(sent), `${method} ${piece}`).not.toContain(piece);
+      }
+      expect(res.status, method).toBe(200);
+      expect(res.headers.getSetCookie(), method).toEqual([]);
+      expect([...res.headers.keys()].sort(), method).toEqual([
+        'cache-control',
+        'content-type',
+        'x-content-type-options',
+      ]);
+    }
+  });
+});
+
 describe('/ingest refuses every other path with 404, no body and no request to PostHog', () => {
   it.each([
     ['/ingest with nothing after it', '/ingest/'],
@@ -401,6 +475,26 @@ describe('/ingest refuses every other path with 404, no body and no request to P
       `/ingest/api/early_access_features/?token=${PROJECT_REF}`,
     ],
     ['a second segment after a ticket', `/ingest/api/conversations/v1/widget/messages/${TICKET}/x`],
+    // The ticket id and the version under /static/ are the only segments not
+    // spelled out whole. Each takes only the characters those ids are made of,
+    // never a '%', so no encoded slash inside one reaches PostHog.
+    [
+      'an encoded traversal as a ticket id',
+      '/ingest/api/conversations/v1/widget/messages/..%2F..%2F..%2Fapi%2Fprojects%2F',
+    ],
+    [
+      'an encoded traversal as a ticket id, before /read',
+      '/ingest/api/conversations/v1/widget/messages/%2E%2E%2Fx/read',
+    ],
+    ['a ticket id with a dot in it', '/ingest/api/conversations/v1/widget/messages/a.b'],
+    [
+      "an encoded traversal in a version's pre-release part",
+      `/ingest/static/${SDK_VERSION}-${encodedWhole('x/../../array/other/config.js?')}/surveys.js`,
+    ],
+    [
+      "an encoded traversal after a version's numbers",
+      `/ingest/static/1.2.3${encodedWhole('/../../array/other/config.js?')}/surveys.js`,
+    ],
     ['a path that would read as another host', '/ingest//other.example/x'],
     ['an encoded slash', '/ingest/static/..%2F..%2Fapi%2Fprojects%2F'],
     ['an encoded slash in lower case', '/ingest/e%2f'],
@@ -563,12 +657,16 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 
-  it("passes PostHog's refusals on as they are, with Retry-After so the SDK waits as long as PostHog asked", async () => {
+  it("passes PostHog's refusals on with their status and body, with Retry-After so the SDK waits as long as PostHog asked, and with no Set-Cookie", async () => {
     upstream.mockImplementationOnce(
       async () =>
         new Response('{"type":"throttled"}', {
           status: 429,
-          headers: { 'content-type': 'application/json', 'retry-after': '30' },
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': '30',
+            'set-cookie': 'ph_placeholder=1; Path=/',
+          },
         }),
     );
 
@@ -579,10 +677,14 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
     expect(res.status).toBe(429);
     expect(res.headers.get('retry-after')).toBe('30');
     expect(await res.text()).toBe('{"type":"throttled"}');
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 
   it('answers a status that carries no body (204) without one', async () => {
-    upstream.mockImplementationOnce(async () => new Response(null, { status: 204 }));
+    upstream.mockImplementationOnce(
+      async () =>
+        new Response(null, { status: 204, headers: { 'set-cookie': 'ph_placeholder=1; Path=/' } }),
+    );
 
     const res = await route.POST(
       incoming('/ingest/e/', { method: 'POST', body: new Uint8Array([1]) }),
@@ -591,6 +693,7 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
     expect(res.status).toBe(204);
     expect(await res.text()).toBe('');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 
   it.each([
