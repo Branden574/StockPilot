@@ -816,17 +816,22 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
   // the former member's own. With the address unknown, no signer receipt
   // goes out at all. A receipt lost to a read error is acceptable (every
   // email here is best-effort); one to a former member's own address is not.
+  /** The requester's own profile: the address the sign page offers as the
+   *  default signer email (the read of it fails in these tests). */
+  const OWN = { email: 'former@example.com', full_name: 'Former Requester' };
+
   it('their own address cannot be read: no completion receipt to it, and the failed read is reported', async () => {
     adminHolder.client = buildAdmin({
       status: 'completed',
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 5,
+      profile: OWN,
       ...former,
       ownAddressReadFails: true,
     });
 
-    const res = await POST(request('alice@site.org'));
+    const res = await POST(request(OWN.email));
     expect(res.status).toBe(200);
 
     expect(sentTo()).toEqual([]);
@@ -839,11 +844,12 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 2,
+      profile: OWN,
       ...former,
       ownAddressReadFails: true,
     });
 
-    await POST(request('alice@site.org'));
+    await POST(request(OWN.email));
 
     expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
     expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
@@ -855,11 +861,12 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 5,
+      profile: OWN,
       ...former,
       ownAddressReadFails: true,
     });
 
-    await POST(request());
+    await POST(request('dock.signer@example.com'));
 
     expect(sentTo()).toEqual([]);
   });
@@ -870,11 +877,12 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 5,
+      profile: OWN,
       disabledReadFails: true,
       ownAddressReadFails: true,
     });
 
-    await POST(request('alice@site.org'));
+    await POST(request(OWN.email));
 
     expect(sentTo()).toEqual([]);
     expect(reportedTags()).toEqual([
@@ -884,18 +892,20 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
   });
 
   it('a current member whose address read fails: the signer still gets the receipt, and the failed read is reported', async () => {
+    const member = { email: 'member@example.com', full_name: 'Member Requester' };
     adminHolder.client = buildAdmin({
       status: 'completed',
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 5,
+      profile: member,
       ownAddressReadFails: true,
     });
 
-    await POST(request('alice@site.org'));
+    await POST(request(member.email));
 
     // No requester email (no address), and the signer's receipt as always.
-    expect(sentTo()).toEqual(['alice@site.org']);
+    expect(sentTo()).toEqual([member.email]);
     expect(reportedTags()).toEqual(['orders.sign.requester_member_check']);
   });
 
