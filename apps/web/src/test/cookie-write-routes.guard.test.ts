@@ -148,7 +148,7 @@ const EXEMPT: Record<string, Exemption> = {
     auth: 'one-time token',
     session: 'creates',
     reason:
-      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, before verifyOtp. Its GET reads the session only to say which account the browser is already signed in as.',
+      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, and one whose signed account reference (r, docket S25) does not check out, both before verifyOtp. Its GET checks r too, looks that account up with the service client to name it, and reads the session only to say which account the browser is already signed in as. A session made for another account than r names is signed out again (scope local) in the same answer.',
   },
   'r/confirm/submit/route.ts': {
     methods: ['POST'],

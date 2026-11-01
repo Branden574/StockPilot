@@ -26,7 +26,9 @@ import { describe, expect, it } from 'vitest';
  * again. An empty string (the unset secret) is no secret and stays.
  *
  * The member one-click unsubscribe tests (B15) hold a signing value too, kept
- * the same way, and are checked here from the start.
+ * the same way, and are checked here from the start. So do the confirmation
+ * link's recipient tests (S25), whose signing value stands in for the service
+ * key.
  *
  * IF THIS FAILS: hold the value in a constant with a neutral name and give the
  * secret-shaped name the constant. Do not make the value look random.
@@ -44,6 +46,15 @@ const FILES = [
   'src/app/unsubscribe/route.settings-parity.test.tsx',
   'src/server/services/member-email-unsubscribe.test.ts',
   'src/server/actions/digest.preview.test.ts',
+  // S25: the signed recipient reference on confirmation links, keyed on a
+  // value derived from the service key.
+  'src/lib/auth/confirm-recipient.test.ts',
+  'src/lib/auth/confirm-link.test.ts',
+  'src/app/auth/confirm/press-gate.test.ts',
+  'src/app/auth/confirm/route.recipient-session.test.ts',
+  'src/app/auth/confirm/route.email-change-replaced.test.ts',
+  'src/app/api/admin/qa-recovery-link/route.test.ts',
+  'src/test/confirm-link-check.ts',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

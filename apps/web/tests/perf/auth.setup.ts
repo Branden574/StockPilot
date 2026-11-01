@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { test as setup } from '@playwright/test';
 
+import { signConfirmRecipient } from '../../src/lib/auth/confirm-recipient';
 import { toRouteTemplate } from '../../src/lib/perf/route-template';
 import { authStatePath, identityPath, isLoopback } from './paths';
 import { endSavedSession } from './session';
@@ -34,7 +35,17 @@ import { serviceKey, supabaseOrigin } from './supabase-admin';
 
 const STEP_TIMEOUT = 15_000;
 
-async function mintTokenHash(origin: string, key: string, email: string): Promise<string> {
+/**
+ * A one-time sign-in link's parts: its token hash, and `r`, the account it is
+ * for. /auth/confirm checks `r` (docket S25), so it is signed here exactly as
+ * the app signs it, with the service key the app under test reads: a key that
+ * is not the app's gets the link refused, and the run stops at sign-in.
+ */
+async function mintSignInLink(
+  origin: string,
+  key: string,
+  email: string,
+): Promise<{ tokenHash: string; r: string }> {
   let res: Response;
   try {
     res = await fetch(`${origin}/auth/v1/admin/generate_link`, {
@@ -50,9 +61,17 @@ async function mintTokenHash(origin: string, key: string, email: string): Promis
     );
   }
   if (!res.ok) throw new Error(`generate_link answered HTTP ${res.status}`);
-  const body = (await res.json().catch(() => ({}))) as { hashed_token?: string };
+  // GoTrue answers with the account itself, its id among its fields.
+  const body = (await res.json().catch(() => ({}))) as { hashed_token?: string; id?: string };
   if (!body.hashed_token) throw new Error('generate_link returned no hashed_token');
-  return body.hashed_token;
+  const r = signConfirmRecipient(key, {
+    type: 'magiclink',
+    tokenHash: body.hashed_token,
+    userId: body.id ?? '',
+    issued: Math.floor(Date.now() / 1000),
+  });
+  if (!r) throw new Error('generate_link returned no account id the sign-in link could name');
+  return { tokenHash: body.hashed_token, r };
 }
 
 setup('sign in', async ({ page, baseURL }) => {
@@ -102,16 +121,18 @@ setup('sign in', async ({ page, baseURL }) => {
       throw new Error(
         'Magic-link sign-in needs a service key (SUPABASE_SERVICE_ROLE_KEY or PERF_ENV_FILE).',
       );
-    const tokenHash = await mintTokenHash(supabaseOrigin(supabaseUrl), key, email);
+    const link = await mintSignInLink(supabaseOrigin(supabaseUrl), key, email);
     try {
       await page.goto(
-        `/auth/confirm?token_hash=${encodeURIComponent(tokenHash)}&type=magiclink&next=%2Fdashboard`,
+        `/auth/confirm?token_hash=${encodeURIComponent(link.tokenHash)}&type=magiclink&next=%2Fdashboard&r=${encodeURIComponent(link.r)}`,
         {
           timeout: STEP_TIMEOUT * 2,
         },
       );
       // /auth/confirm shows a confirm step so an email scanner that merely
-      // fetches the link cannot burn it.
+      // fetches the link cannot burn it, and its press gate counts a press
+      // only once the page has been in front for a quiet second (S25).
+      await page.locator('button[aria-disabled="false"]').waitFor({ timeout: STEP_TIMEOUT });
       await page
         .getByRole('button', { name: /continue to stockpilot/i })
         .click({ timeout: STEP_TIMEOUT });
