@@ -45,9 +45,14 @@ import { describe, expect, it } from 'vitest';
  * A reason read by hand holds only while what it relies on holds. So each
  * READ_BY_HAND entry also records the secrets in the call's environment
  * (what the env: of its step, job or workflow maps from a secret, and any
- * name a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one) and a hash of
- * each repository file the call runs. When either changes, the call is
- * unresolved again until someone reads it again.
+ * name a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one), every
+ * secret its job uses in any step (the steps share a runner, so one can leave
+ * a secret in a file for another), and a hash of each repository file the
+ * call runs (the files named on its command line, or what `node --test`
+ * finds). When any of these changes, the call is unresolved again until
+ * someone reads it again. A call whose files the census cannot list (a whole
+ * test suite) records none, so its reason can rest only on its environment
+ * and its job.
  *
  * A secret is ${{ secrets }} in any form or github.token; an env., inputs.,
  * vars., steps.<id>.outputs. or needs.<job>.outputs. name that a workflow maps
@@ -59,17 +64,22 @@ import { describe, expect, it } from 'vitest';
  *
  * A curl sends a secret when one of its words uses a secret, or it has an
  * Authorization, Proxy-Authorization or Cookie header, headers read from a
- * file, a body, form part or query read from a file or standard input
- * (--data @file, --json @-, -F name=<file, --data-urlencode name@file,
- * --url-query @file, -T), or a credential, cookie, netrc, config or
- * client-certificate option. What curl reads from a file or standard input
- * is not in the workflow, so the census cannot tell that it holds no secret.
+ * file, a body, form part, query, header or URL read from a file or standard
+ * input (--data @file, --json @-, -F name=<file, --data-urlencode name@file,
+ * --url-query @file, -T, --etag-compare, --url @file), or a credential,
+ * cookie, netrc, config or client-certificate option. What curl reads from a
+ * file or standard input is not in the workflow, so the census cannot tell
+ * that it holds no secret; nor can it tell for a value that opens with an
+ * expansion ("$BODY" may hold @file), an option curl's manual does not list,
+ * or a list of words ("${OPTS[@]}"), so these count as sending one too.
  * Such a curl must:
  * - write every answer to exactly /dev/null: one -o /dev/null per URL, after
  *   each --next too. A URL that may expand to several transfers (a {..} or
  *   [..] glob, or an expansion whose text the census cannot see) needs
  *   --globoff; an unquoted expansion fails outright, since the shell can
- *   split it into several URLs;
+ *   split it into several URLs, and so does an --url that may read its URLs
+ *   from a file (--url @file, or --url "$X"): give the URL as a word of its
+ *   own;
  * - not print headers, a trace or a URL: no -v, -i, --show-headers, --trace*
  *   or --libcurl, no -D, -c, --etag-save or a trace to anything but
  *   /dev/null, no -w variable outside the safe list, no --output-dir, and no
@@ -703,8 +713,10 @@ interface Curl {
   writeOuts: string[];
   sideOutputs: Array<{ option: string; target: string }>;
   variables: string[];
-  /** A body, form part or query read from a file or standard input: --data @file, -T file. */
+  /** What it sends from a file or standard input: --data @file, -T file, --url @file. */
   bodyFiles: string[];
+  /** --url values that may name a file of URLs (--url @file): one transfer per line. */
+  urlFiles: string[];
   /** Every other option, by its long name. */
   options: Set<string>;
   /** Options curl's manual does not list. */
@@ -717,24 +729,35 @@ interface Curl {
 const LIST_EXPANSION = /\$(?:[@*]|\{(?:[@*]|[!#]?[A-Za-z_][A-Za-z0-9_]*\[[@*]\][^}]*)\})/;
 
 /**
- * Whether an option's value makes curl read the body, a form part or the
- * query from a file or standard input (- is standard input): --data @file
- * and its kin, -F name=@file, name=<file or ;headers=@file, --data-urlencode
- * and --url-query @file or name@file, and -T.
+ * Whether an option's value makes curl send what a file or standard input
+ * holds (- is standard input): --data @file and its kin, -F name=@file,
+ * name=<file or ;headers=@file, --data-urlencode and --url-query @file or
+ * name@file, -T, --etag-compare, and --url @file (curl 8.13 and later read
+ * the URLs from the file). `raw` is the word as written: a value that opens
+ * with an expansion ("$BODY") may open with @ once the shell expands it.
  */
-function readsFile(name: string, value: string): boolean {
-  if (['data', 'data-ascii', 'data-binary', 'json'].includes(name)) return value.startsWith('@');
+function readsFile(name: string, value: string, raw: string): boolean {
+  const opensWithExpansion = (text: string) => /^[$`]/.test(text) && expansion(raw).expands;
+  if (['data', 'data-ascii', 'data-binary', 'json', 'url'].includes(name)) {
+    return value.startsWith('@') || opensWithExpansion(value);
+  }
   if (name === 'data-urlencode' || name === 'url-query') {
     // --url-query +text is sent as it is written.
     if (name === 'url-query' && value.startsWith('+')) return false;
-    // =text and name=text are text; @file and name@file read the file.
-    return /[=@]/.exec(value)?.[0] === '@';
+    // =text and name=text are text; @file and name@file read the file. The
+    // first of = and @ decides, and an expansion before both may hold either.
+    const first = /[=@$`]/.exec(value);
+    return first?.[0] === '@' || (first !== null && opensWithExpansion(value.slice(first.index)));
   }
   if (name === 'form') {
     const content = value.slice(value.indexOf('=') + 1).replace(/^"/, '');
-    return /^[@<]/.test(content) || /;\s*headers\s*=\s*"?[@<]/.test(value);
+    return (
+      /^[@<]/.test(content) ||
+      opensWithExpansion(content) ||
+      /;\s*headers\s*=\s*"?[@<$`]/.test(value)
+    );
   }
-  return name === 'upload-file';
+  return name === 'upload-file' || name === 'etag-compare';
 }
 
 function readCurl(args: Word[]): Curl {
@@ -745,6 +768,7 @@ function readCurl(args: Word[]): Curl {
     sideOutputs: [],
     variables: [],
     bodyFiles: [],
+    urlFiles: [],
     options: new Set(),
     unknown: [],
     lists: [],
@@ -758,7 +782,10 @@ function readCurl(args: Word[]): Curl {
     else if (name === 'header' || name === 'proxy-header') curl.headers.push(value);
     else if (name === 'variable') curl.variables.push(value);
     else if (SIDE_OUTPUTS.has(name)) curl.sideOutputs.push({ option: name, target: value });
-    if (readsFile(name, value)) curl.bodyFiles.push(`--${name} ${value}`);
+    if (readsFile(name, value, word.raw)) {
+      curl.bodyFiles.push(`--${name} ${value}`);
+      if (name === 'url') curl.urlFiles.push(value);
+    }
     curl.options.add(name);
   };
   const flag = (name: string, on: boolean) => {
@@ -839,6 +866,11 @@ function sendsSecret(args: Word[], curl: Curl, names: ReadonlySet<string>): bool
     curl.headers.some((header) => AUTH_HEADER.test(header) || header.startsWith('@')) ||
     // What a file or standard input holds is not in the workflow, as with -H @file.
     curl.bodyFiles.length > 0 ||
+    // Nor what an option the manual did not list sends (curl 8.22 added
+    // --httpsig-key, which signs the request with a key), or what a list of
+    // words holds ("${OPTS[@]}" may hold -u or --data @file).
+    curl.unknown.length > 0 ||
+    curl.lists.length > 0 ||
     [...curl.options].some((name) => CREDENTIAL_OPTIONS.has(name)) ||
     curl.variables.some((spec) => variableImportsSecret(spec, names)) ||
     args.some((word) => usesSecret(word.raw, names))
@@ -883,6 +915,10 @@ function whyPrinted(curl: Curl, piped: boolean): string[] {
       }
     }
   }
+  for (const file of curl.urlFiles) {
+    // --globoff does not help: each line of the file is a transfer of its own.
+    why.push(`--url ${file}: may read its URLs from a file, one transfer each (--url @file)`);
+  }
   for (const name of curl.options) {
     if (PRINTING_OPTIONS.has(name)) why.push(`--${name}`);
     else if (name === 'output-dir') why.push('--output-dir: no -o stays /dev/null');
@@ -925,6 +961,8 @@ interface Unresolved {
   why: string;
   /** The secrets in its environment, by name: what env: maps or a step writes from one. */
   secrets: string[];
+  /** Every secret its job uses, in any step: one step can leave a secret on disk for another. */
+  jobSecrets: string[];
   /** The repository files it runs, each with a hash of its text. */
   runs: Record<string, string>;
 }
@@ -943,6 +981,8 @@ interface Ctx {
   names: Set<string>;
   /** The secrets in the environment of the run block being read. */
   env: string[];
+  /** The secrets its job uses anywhere. */
+  jobSecrets: string[];
   /** Names a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from a secret. */
   written: Set<string>;
 }
@@ -1006,7 +1046,8 @@ const RUNNER = new RegExp(
     'node(?:js)?|deno|bun|tsx|ts-node|vite-node|babel-node|(?:python|pypy)[\\d.]*|ruby[\\d.]*',
     'perl[\\d.]*|php[\\d.]*|lua[\\d.]*|Rscript|pwsh|powershell|osascript|expect|tclsh',
     // Test runners: a test can call a server, and a failed assertion prints what came back.
-    'vitest|jest|playwright|mocha|cypress|ava|jasmine|karma|tap|uvu|pytest|nyc|c8',
+    'vitest|jest|playwright|mocha|cypress|ava|jasmine|karma|tap|uvu|pytest|nyc|c8|bats',
+    'wdio|testcafe|codeceptjs|cucumber-js|newman|detox|maestro',
     // Task runners and fan-outs.
     'g?make|just|task|mage|rake|gradlew?|mvn|ant|bazel|nx|lerna|rush|npm-run-all|run-[sp]',
     'concurrently',
@@ -1097,7 +1138,15 @@ function cannotRead(
   why: string,
   runs: Record<string, string> = {},
 ): void {
-  ctx.out.unresolved.push({ where, file: src.file, command, why, secrets: [...ctx.env], runs });
+  ctx.out.unresolved.push({
+    where,
+    file: src.file,
+    command,
+    why,
+    secrets: [...ctx.env],
+    jobSecrets: [...ctx.jobSecrets],
+    runs,
+  });
 }
 
 /**
@@ -1115,7 +1164,8 @@ function nodeTestFiles(cwd: string, io: Io): string[] {
       if (isTest) found.push(posix.join(dir, name));
     }
     if (level >= MAX_DEPTH) return;
-    for (const name of io.dirs(dir)) visit(posix.join(dir, name), inTest || name === 'test', level + 1);
+    for (const name of io.dirs(dir))
+      visit(posix.join(dir, name), inTest || name === 'test', level + 1);
   };
   visit(cwd, false, 0);
   return found;
@@ -1917,6 +1967,20 @@ function indentOf(line: string): number {
   return line.length - line.trimStart().length;
 }
 
+/** A line that is neither blank nor a comment. */
+const meaningful = (line: string) => line.trim() !== '' && !line.trim().startsWith('#');
+
+/** The end (exclusive) of the block under the key on line `from`, whose column is `column`. */
+function blockEnd(lines: string[], from: number, column: number): number {
+  let end = from + 1;
+  while (
+    end < lines.length &&
+    (!meaningful(lines[end] ?? '') || indentOf(lines[end] ?? '') > column)
+  )
+    end++;
+  return end;
+}
+
 /** The column of a mapping key, after a `- ` list marker when there is one. */
 function keyColumn(line: string): number {
   const m = /^(\s*)(-\s+)?/.exec(line);
@@ -1955,7 +2019,6 @@ function defaultsRun(lines: string[], key: string): string | undefined {
 /** The lines of the step (or job) whose key at `column` is on line `index`. */
 function stepLines(lines: string[], index: number, column: number): { start: number; end: number } {
   const lineAt = (i: number) => lines[i] ?? '';
-  const meaningful = (line: string) => line.trim() !== '' && !line.trim().startsWith('#');
   let start = index;
   while (start > 0 && !(/^\s*-\s/.test(lineAt(start)) && keyColumn(lineAt(start)) === column)) {
     if (start < index && meaningful(lineAt(start)) && indentOf(lineAt(start)) < column) {
@@ -2095,12 +2158,28 @@ function mappedSecrets(texts: string[], names: Set<string>): void {
   }
 }
 
-/** The keys of YAML lines (and of a flow mapping, { A: ... }) whose value uses a secret. */
+/**
+ * The keys of YAML lines whose value uses a secret: a plain or quoted value,
+ * a block scalar (KEY: | and the lines under it), or a pair of a flow
+ * mapping ({ A: ${{ secrets.X }} }).
+ */
 function mappedNames(body: string, names: ReadonlySet<string>): string[] {
   const found = new Set<string>();
-  for (const line of body.split('\n')) {
+  const lines = body.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
     const m = /^[ \t]*-?[ \t]*(['"]?)([A-Za-z_][\w-]*)\1[ \t]*:[ \t]*(.*)$/.exec(line);
-    if (m?.[2] && usesSecret(m[3] ?? '', names)) found.add(m[2]);
+    let value = m?.[3] ?? '';
+    if (m && /^[|>]/.test(value.trim())) {
+      // A block scalar: the lines under it are its value, not keys.
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1] ?? '';
+        if (next.trim() !== '' && indentOf(next) <= indentOf(line)) break;
+        value += `\n${next}`;
+        i++;
+      }
+    }
+    if (m?.[2] && usesSecret(value, names)) found.add(m[2]);
     for (const pair of line.matchAll(/([A-Za-z_][\w-]*)\s*:\s*(\$\{\{[\s\S]*?\}\})/g)) {
       if (pair[1] && usesSecret(pair[2] ?? '', names)) found.add(pair[1]);
     }
@@ -2110,34 +2189,30 @@ function mappedNames(body: string, names: ReadonlySet<string>): string[] {
 
 /**
  * Every `env:` block: the lines it reaches (the block of the job or step it
- * is on, or the whole workflow for a top-level one) and the names it maps
- * from a secret.
+ * is on, the step it opens as `- env:`, or the whole workflow for a
+ * top-level one) and the names it maps from a secret.
  */
 function envBlocks(
   lines: string[],
   names: ReadonlySet<string>,
 ): Array<{ start: number; end: number; secrets: string[] }> {
-  const meaningful = (line: string) => line.trim() !== '' && !line.trim().startsWith('#');
-  const blockEnd = (from: number, column: number) => {
-    let end = from + 1;
-    while (
-      end < lines.length &&
-      (!meaningful(lines[end] ?? '') || indentOf(lines[end] ?? '') > column)
-    )
-      end++;
-    return end;
-  };
   const blocks: Array<{ start: number; end: number; secrets: string[] }> = [];
   for (const [i, line] of lines.entries()) {
-    const m = /^(\s*)env:[ \t]*(.*)$/.exec(line);
+    const m = /^(\s*)(-\s+)?env:[ \t]*(.*)$/.exec(line);
     if (!m) continue;
-    const column = m[1]?.length ?? 0;
-    const body = [m[2] ?? '', ...lines.slice(i + 1, blockEnd(i, column))].join('\n');
+    const column = keyColumn(line);
+    const body = [m[3] ?? '', ...lines.slice(i + 1, blockEnd(lines, i, column))].join('\n');
     // A name the census does not know as one still counts: the env: uses a secret.
     const secrets = usesSecret(body, names) ? mappedNames(body, names) : [];
-    if (usesSecret(body, names) && secrets.length === 0) secrets.push('(an env: that uses a secret)');
+    if (usesSecret(body, names) && secrets.length === 0)
+      secrets.push('(an env: that uses a secret)');
     if (column === 0) {
       blocks.push({ start: 0, end: lines.length, secrets });
+      continue;
+    }
+    if (m[2]) {
+      // - env: is the step's first key: it reaches that step.
+      blocks.push({ ...stepLines(lines, i, column), secrets });
       continue;
     }
     let parent = i - 1;
@@ -2147,7 +2222,7 @@ function envBlocks(
     )
       parent--;
     if (parent >= 0) {
-      const end = blockEnd(parent, indentOf(lines[parent] ?? ''));
+      const end = blockEnd(lines, parent, indentOf(lines[parent] ?? ''));
       blocks.push({ start: parent, end, secrets });
     }
   }
@@ -2161,12 +2236,47 @@ function envSecrets(lines: string[], index: number, names: ReadonlySet<string>):
     .flatMap((block) => block.secrets);
 }
 
-/** A step that passes a secret to an action the census cannot read. */
+/** Each expression in `text` that uses a secret, as ${{ ... }} with its spaces made single. */
+function secretExpressions(text: string, names: ReadonlySet<string>): string[] {
+  return [...text.matchAll(EXPRESSION)]
+    .filter((m) => expressionUsesSecret(m[1] ?? '', names))
+    .map((m) => `\${{ ${(m[1] ?? '').trim().replace(/\s+/g, ' ')} }}`);
+}
+
+/**
+ * Every secret the job of line `index` uses, in any of its steps (they share
+ * one runner and its disk, so a step can leave a secret in a file for
+ * another), and in the workflow's own env:. Outside `jobs:` (a composite
+ * action), every secret in the file.
+ */
+function jobSecrets(lines: string[], index: number, names: ReadonlySet<string>): string[] {
+  const jobsAt = lines.findIndex((line) => /^jobs:[ \t]*(?:#.*)?$/.test(line));
+  if (jobsAt === -1 || index <= jobsAt) return secretExpressions(lines.join('\n'), names);
+  const column = indentOf(lines.slice(jobsAt + 1).find(meaningful) ?? '');
+  // The job's key: the nearest line above at the column of the keys under jobs:.
+  let start = index;
+  while (
+    start > jobsAt &&
+    !(meaningful(lines[start] ?? '') && indentOf(lines[start] ?? '') <= column)
+  )
+    start--;
+  const job = lines.slice(start, blockEnd(lines, start, column));
+  const workflowEnv = lines.flatMap((line, i) =>
+    /^env:/.test(line) ? lines.slice(i, blockEnd(lines, i, 0)) : [],
+  );
+  return secretExpressions([...workflowEnv, ...job].join('\n'), names);
+}
+
+/**
+ * A step that passes a secret to an action the census cannot read.
+ * `callers` holds what the jobs that call a composite action may hold.
+ */
 function actionsPassedSecrets(
   file: string,
   text: string,
   ctx: Ctx,
   censused: ReadonlySet<string>,
+  callers: { env: string[]; job: string[] },
 ): void {
   const lines = text.split('\n');
   for (const [i, line] of lines.entries()) {
@@ -2176,9 +2286,14 @@ function actionsPassedSecrets(
     const { start, end } = stepLines(lines, i, keyColumn(line));
     const step = lines.slice(start, end).join('\n');
     // A job's or the workflow's env: is in every step's environment.
-    const secrets = [...envSecrets(lines, i, ctx.names), ...mappedNames(step, ctx.names)];
+    const secrets = [
+      ...envSecrets(lines, i, ctx.names),
+      ...mappedNames(step, ctx.names),
+      ...callers.env,
+    ];
     if (/^\s*secrets:\s*inherit\b/m.test(step)) secrets.push('secrets: inherit');
-    if (usesSecret(step, ctx.names) && secrets.length === 0) secrets.push('(a step that uses a secret)');
+    if (usesSecret(step, ctx.names) && secrets.length === 0)
+      secrets.push('(a step that uses a secret)');
     if (secrets.length === 0) continue;
     const local = target.startsWith('./') ? posix.normalize(target) : undefined;
     // A reusable workflow, or a composite action, is read with the workflows.
@@ -2197,6 +2312,7 @@ function actionsPassedSecrets(
         command: `uses: ${target}`,
         why: 'an action passed a secret, which the census cannot read',
         secrets: [...new Set(secrets)].sort(),
+        jobSecrets: [...new Set([...jobSecrets(lines, i, ctx.names), ...callers.job])].sort(),
         runs: {},
       });
     }
@@ -2245,20 +2361,27 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
       io,
       names,
       env: [],
+      jobSecrets: [],
       written: new Set(),
     };
-    // A composite action's steps run in its caller's environment, which the
-    // census does not follow: every secret any env: maps may be in it.
-    const everyEnv = files.flatMap((entry) =>
-      envBlocks(entry.text.split('\n'), names).flatMap((block) => block.secrets),
-    );
+    // A composite action's steps run in its caller's environment and job,
+    // which the census does not follow: every secret that any env: maps, and
+    // that any job uses, may be in them.
+    const every = {
+      env: files.flatMap((entry) =>
+        envBlocks(entry.text.split('\n'), names).flatMap((block) => block.secrets),
+      ),
+      job: files.flatMap((entry) => secretExpressions(entry.text, names)),
+    };
     for (const { file, text } of files) {
       const lines = text.split('\n');
-      const action = /(?:^|\/)action\.ya?ml$/.test(file);
+      const callers = /(?:^|\/)action\.ya?ml$/.test(file) ? every : { env: [], job: [] };
       for (const block of runBlocks(text)) {
         const src = fileSource(file, block.line);
-        const env = [...envSecrets(lines, block.index, names), ...(action ? everyEnv : [])];
+        const env = [...envSecrets(lines, block.index, names), ...callers.env];
         ctx.env = [...new Set(env)].sort();
+        const job = [...jobSecrets(lines, block.index, names), ...callers.job];
+        ctx.jobSecrets = [...new Set(job)].sort();
         if (block.alias) {
           cannotRead(
             ctx,
@@ -2277,11 +2400,17 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
           );
         } else {
           const shell: Shell = { functions: new Map(), reread: new Set() };
-          walk(block.script, src, { secretVars: new Set(names), cwd: block.cwd, depth: 0, shell }, ctx);
+          walk(
+            block.script,
+            src,
+            { secretVars: new Set(names), cwd: block.cwd, depth: 0, shell },
+            ctx,
+          );
         }
       }
       ctx.env = [];
-      actionsPassedSecrets(file, text, ctx, censused);
+      ctx.jobSecrets = [];
+      actionsPassedSecrets(file, text, ctx, censused, callers);
     }
     if (names.size === before) return merged(ctx.out, ctx.written);
     if (round === 10) throw new Error('the secret names did not settle');
@@ -2311,9 +2440,11 @@ function merged(out: Census, written: ReadonlySet<string>): Census {
     const key = `${entry.where}\n${entry.command}\n${entry.why}`;
     const seen = unresolved.get(key);
     const secrets = [...(seen?.secrets ?? []), ...entry.secrets, ...written];
+    const job = [...(seen?.jobSecrets ?? []), ...entry.jobSecrets];
     unresolved.set(key, {
       ...entry,
       secrets: [...new Set(secrets)].sort(),
+      jobSecrets: [...new Set(job)].sort(),
       runs: { ...seen?.runs, ...entry.runs },
     });
   }
@@ -2370,30 +2501,131 @@ function violations(result: Census): string[] {
     .map((curl) => `${curl.where}: ${curl.command} (${curl.prints.join('; ')})`);
 }
 
-/** What the census could not read, less what READ_BY_HAND has read. */
-function openItems(result: Census, read: Readonly<Record<string, string>> = {}): string[] {
-  return result.unresolved
-    .filter((entry) => !(`${entry.file}: ${entry.command}` in read))
-    .map((entry) => `${entry.where}: ${entry.command} (${entry.why})`);
+/** A call the census cannot read, read by hand, and what the reading relies on. */
+interface ReadByHand {
+  /** What runs, and why no answer of a call that sends a secret reaches the log. */
+  reason: string;
+  /** Its Unresolved.secrets when it was read. */
+  secrets: string[];
+  /** Its Unresolved.jobSecrets when it was read. */
+  jobSecrets: string[];
+  /** Its Unresolved.runs when it was read: each file it runs, by the hash of the text read. */
+  runs: Record<string, string>;
+}
+
+/**
+ * What the census could not read, less what READ_BY_HAND has read as it
+ * stands: an entry whose secrets, job or files are not what was read is open
+ * again, and says what changed.
+ */
+function openItems(result: Census, read: Readonly<Record<string, ReadByHand>> = {}): string[] {
+  const open: string[] = [];
+  for (const entry of result.unresolved) {
+    const item = `${entry.where}: ${entry.command} (${entry.why})`;
+    const hand = read[`${entry.file}: ${entry.command}`];
+    const changed = hand === undefined ? [] : changedSince(hand, entry);
+    if (hand === undefined) open.push(item);
+    else if (changed.length > 0) open.push(`${item}: read by hand, but ${changed.join('; ')}`);
+  }
+  return open;
+}
+
+/** How an entry differs from what was read by hand. */
+function changedSince(hand: ReadByHand, now: Unresolved): string[] {
+  const list = (items: readonly string[]) => `[${[...new Set(items)].sort().join(', ')}]`;
+  const changed: string[] = [];
+  if (list(hand.secrets) !== list(now.secrets)) {
+    changed.push(`its environment holds ${list(now.secrets)}, read with ${list(hand.secrets)}`);
+  }
+  if (list(hand.jobSecrets) !== list(now.jobSecrets)) {
+    changed.push(`its job uses ${list(now.jobSecrets)}, read with ${list(hand.jobSecrets)}`);
+  }
+  const files = [...new Set([...Object.keys(hand.runs), ...Object.keys(now.runs)])].sort();
+  for (const file of files) {
+    const then = hand.runs[file];
+    const text = now.runs[file];
+    if (then === text) continue;
+    if (text === undefined) changed.push(`it no longer runs ${file}`);
+    else if (then === undefined) changed.push(`it runs ${file} (${text}), which was not read`);
+    else changed.push(`${file} changed since it was read (read at ${then}, now ${text})`);
+  }
+  return changed;
 }
 
 /**
  * What the real workflows run that the census cannot read, each read by hand.
  * The key is the file and the command as written, so a new call, or a changed
  * one, is unresolved again until someone reads it. Each reason says what runs
- * and why no answer of a call that sends a secret reaches the log.
+ * and why no answer of a call that sends a secret reaches the log, and the
+ * entry records what that relies on (see ReadByHand): when the secrets in
+ * the call's environment or its job, or a file it runs, change, it is open
+ * again. A call whose files the census cannot list (a whole test suite) has
+ * none recorded, so its reason can rest only on its environment and its job.
  */
-const READ_BY_HAND: Readonly<Record<string, string>> = {
+const READ_BY_HAND: Readonly<Record<string, ReadByHand>> = {
   '.github/workflows/security-scan.yml: node scripts/dependency-audit/report.mjs pnpm-audit.json > dependency-audit.md':
-    'Reads pnpm-audit.json and scripts/dependency-audit/allow-list.json and prints advisory metadata. It makes no request, and the workflow maps no secret.',
-  '.github/workflows/smoke-sim.yml: python3 scripts/smoke/smoke.py --ci --udid "$SMOKE_UDID"':
-    'Drives the simulator with idb and xcrun simctl and prints each flow and its result. It makes no request itself; STOCKPILOT_SMOKE_PASSWORD only goes through the simulator pasteboard into the sign-in field and is never printed.',
-  'scripts/security-test.sh: node scripts/gen-place-order-parity-sql.mjs --check':
-    'Reads a fixture and a pgTAP file and compares them. It makes no request and reads no environment; the CI job maps no secret.',
-  'apps/web/package.json scripts["build"]: node ./scripts/copy-maplibre-worker.mjs':
-    'Copies two maplibre-gl files from node_modules into public/. It makes no request.',
-  'packages/config/package.json scripts["test"]: node --test':
-    "Runs node's test runner on packages/config/package.test.mjs, which reads package.json and checks paths on disk. It makes no request.",
+    {
+      reason:
+        'Reads pnpm-audit.json and scripts/dependency-audit/allow-list.json and prints advisory metadata. It makes no request, and its job uses no secret.',
+      secrets: [],
+      jobSecrets: [],
+      runs: { 'scripts/dependency-audit/report.mjs': 'e54994a3609c4426' },
+    },
+  '.github/workflows/smoke-sim.yml: python3 scripts/smoke/smoke.py --ci --udid "$SMOKE_UDID"': {
+    reason:
+      'Drives the simulator with idb and xcrun simctl and prints each flow and its result. It makes no request itself and reads no file; STOCKPILOT_SMOKE_PASSWORD only goes through the simulator pasteboard into the sign-in field and is never printed. EXPO_TOKEN is in the EAS build step alone.',
+    secrets: ['STOCKPILOT_SMOKE_PASSWORD'],
+    jobSecrets: ['${{ secrets.EXPO_TOKEN }}', '${{ secrets.STOCKPILOT_SMOKE_PASSWORD }}'],
+    runs: { 'apps/mobile/scripts/smoke/smoke.py': 'b5ead1f9d31661e2' },
+  },
+  'scripts/security-test.sh: node scripts/gen-place-order-parity-sql.mjs --check': {
+    reason:
+      'Reads a fixture and a pgTAP file and compares them. It makes no request and reads no environment; its job uses no secret.',
+    secrets: [],
+    jobSecrets: [],
+    runs: { 'scripts/gen-place-order-parity-sql.mjs': 'd2b0e2647c1baa30' },
+  },
+  'scripts/security-test.sh: vitest run "$@"': {
+    reason:
+      "run_vitest runs the security suites that scripts/security-test.sh lists, in the web app, the phone app and the shared core (pnpm security:test, in CI's DB pgTAP tests job). No step of that job maps or uses a secret, so no suite has one to send.",
+    secrets: [],
+    jobSecrets: [],
+    runs: {},
+  },
+  'apps/web/package.json scripts["build"]: node ./scripts/copy-maplibre-worker.mjs': {
+    reason: 'Copies two maplibre-gl files from node_modules into public/. It makes no request.',
+    secrets: [],
+    jobSecrets: [],
+    runs: { 'apps/web/scripts/copy-maplibre-worker.mjs': 'c2a1c72f79a3aa6d' },
+  },
+  'apps/web/package.json scripts["test"]: vitest run': {
+    reason:
+      "Runs the web app's unit tests (pnpm test, through turbo, in CI's Lint + Typecheck job). No step of that job maps or uses a secret, so no test has one to send.",
+    secrets: [],
+    jobSecrets: [],
+    runs: {},
+  },
+  'apps/mobile/package.json scripts["test"]: vitest run': {
+    reason:
+      "Runs the phone app's unit tests (pnpm test, through turbo, in CI's Lint + Typecheck job). No step of that job maps or uses a secret, so no test has one to send.",
+    secrets: [],
+    jobSecrets: [],
+    runs: {},
+  },
+  'packages/core/package.json scripts["test"]: vitest run': {
+    reason:
+      "Runs the shared core's unit tests (pnpm test, through turbo, in CI's Lint + Typecheck job). No step of that job maps or uses a secret, so no test has one to send.",
+    secrets: [],
+    jobSecrets: [],
+    runs: {},
+  },
+  'packages/config/package.json scripts["test"]: node --test': {
+    reason:
+      "Runs node's test runner on packages/config/package.test.mjs, which reads package.json and checks paths on disk. It makes no request.",
+    secrets: [],
+    jobSecrets: [],
+    runs: { 'packages/config/package.test.mjs': '7b0b52f9044212dd' },
+  },
 };
 
 // ─── Plants ────────────────────────────────────────────────────────────────
@@ -3259,8 +3491,9 @@ const PLANTS: Plant[] = [
     ].join('\n'),
     finds: { nothing: true },
   },
-  // (6) Third review: a body, form part or query that curl reads from a file
-  // or standard input sends whatever that holds, which the census cannot see.
+  // (6) Third review (of e43f2c33a): a body, form part or query that curl
+  // reads from a file or standard input sends whatever that holds, which the
+  // census cannot see.
   {
     id: 'D1',
     what: 'jq builds a body with the secret and pipes it into curl --data-binary @-',
@@ -3470,7 +3703,303 @@ const PLANTS: Plant[] = [
     env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
     finds: { unresolved: /ava test\/prewarm\.js \(ava runs code/ },
   },
+  // (8) What checking the guard that answered the third review found: more
+  // that curl sends from where the census cannot see (curl's manual, read
+  // 2026-11-01: --url @file since 8.13, --etag-compare, --httpsig-key since
+  // 8.22), an action inside a composite action, and more test runners.
+  {
+    id: 'D14',
+    what: 'a --data value that opens with an expansion, which may hold @file',
+    script: `printf '%s' "$REPORT_TOKEN" > token.txt\nBODY=@token.txt\ncurl -fsS --data "$BODY" ${API}`,
+    env: REPORT_ENV,
+    finds: { violation: /: curl -fsS --data "\$BODY" https/ },
+  },
+  {
+    id: 'D15',
+    what: '-F name=$VALUE and --data-urlencode $VALUE, which may hold @file',
+    script: `curl -fsS -F "token=$PART" --data-urlencode "$FIELD" ${API}`,
+    finds: { violation: /-F "token=\$PART" --data-urlencode "\$FIELD"/ },
+  },
+  {
+    id: 'D16',
+    what: '--etag-compare (a header read from a file)',
+    script: `curl -fsS --etag-compare etag.txt ${API}`,
+    finds: { violation: /--etag-compare etag\.txt/ },
+  },
+  {
+    id: 'D17',
+    what: '--url @file (curl 8.13 and later read the URLs from the file, one transfer each)',
+    script: 'curl -fsS --globoff -o /dev/null --url @report-urls.txt',
+    finds: { violation: /--url @report-urls\.txt: may read its URLs from a file/ },
+  },
+  {
+    id: 'D18',
+    what: "an option curl 8.7's manual does not list, which may send a key (8.22's --httpsig-key)",
+    script: `curl -fsS --httpsig-key @signing.key ${API}`,
+    finds: { violation: /--httpsig-key: an option curl's manual does not list/ },
+  },
+  {
+    id: 'D19',
+    what: 'a list of words, which may hold --data @file',
+    script: `ARGS=(--data @token.txt)\ncurl -fsS "\${ARGS[@]}" ${API}`,
+    finds: { violation: /"\$\{ARGS\[@\]\}": a list of words the census cannot see/ },
+  },
+  {
+    id: 'D20',
+    what: 'control: name=$VALUE for --data-urlencode and +$VALUE for --url-query are sent as text',
+    script: `curl -fsS --data-urlencode "q=$QUERY" --url-query "+$PAGE" --url-query "page=$PAGE" ${API}`,
+    finds: { nothing: true },
+  },
+  {
+    id: 'E13',
+    what: 'an action inside a composite action, called from a job whose env: maps a secret',
+    workflow: [
+      'on: push',
+      'jobs:',
+      '  plant:',
+      '    runs-on: ubuntu-latest',
+      '    env:',
+      '      REPORT_TOKEN: ${{ secrets.REPORT_TOKEN }}',
+      '    steps:',
+      '      - uses: ./.github/actions/notify',
+    ].join('\n'),
+    files: {
+      '.github/actions/notify/action.yml': [
+        'name: Notify',
+        'runs:',
+        '  using: composite',
+        '  steps:',
+        '    - uses: example/notify-action@v1',
+      ].join('\n'),
+    },
+    finds: { unresolved: /uses: example\/notify-action@v1 \(an action passed a secret/ },
+  },
+  {
+    id: 'E14',
+    what: 'maestro, a phone end-to-end runner',
+    script: 'maestro test .maestro/sign-in.yaml',
+    env: { E2E_PASSWORD: '${{ secrets.E2E_PASSWORD }}' },
+    finds: { unresolved: /maestro test \.maestro\/sign-in\.yaml \(maestro runs code/ },
+  },
+  {
+    id: 'E15',
+    what: 'newman, which runs a collection of API requests',
+    script: 'npx newman run postman/report.json',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /newman run postman\/report\.json \(newman runs code/ },
+  },
 ];
+
+/** A workflow, and the repository files it reads, at one moment. */
+interface Moment {
+  workflow: string;
+  files?: Record<string, string>;
+}
+
+/** Everything a census found that it cannot read, read by hand just as it is. */
+function readAsItIs(result: Census): Record<string, ReadByHand> {
+  return Object.fromEntries(
+    result.unresolved.map((entry) => [
+      `${entry.file}: ${entry.command}`,
+      { reason: 'read', secrets: entry.secrets, jobSecrets: entry.jobSecrets, runs: entry.runs },
+    ]),
+  );
+}
+
+function censusAt(moment: Moment): Census {
+  const files = moment.files ?? {};
+  const workflows = [
+    { file: 'plant.yml', text: moment.workflow },
+    ...Object.entries(files)
+      .filter(([file]) => /^\.github\/(?:workflows|actions)\/.*\.ya?ml$/.test(file))
+      .map(([file, text]) => ({ file, text })),
+  ];
+  return census(workflows, plantIo(files));
+}
+
+/** A job whose `Report` step runs a program the census cannot read. */
+function reportJob(reportStep: string[], before: string[] = []): string {
+  return [
+    'on: push',
+    'jobs:',
+    '  plant:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    ...before,
+    '      - name: Report',
+    ...reportStep,
+  ].join('\n');
+}
+
+const REPORT_RUN = '        run: node scripts/report.mjs';
+const REPORT_FILES = { 'scripts/report.mjs': "console.log('report');\n" };
+
+interface Reread {
+  id: string;
+  what: string;
+  before: Moment;
+  after: Moment;
+  /** What the open item says, or null when nothing opens. */
+  opens: RegExp | null;
+}
+
+/**
+ * Review finding 4: a reason read by hand stays accepted after what it
+ * relies on changes. Each plant reads `before` by hand, then changes it.
+ */
+const REREADS: Reread[] = [
+  {
+    id: 'F1',
+    what: 'a secret mapped into the step that runs it',
+    before: { workflow: reportJob([REPORT_RUN]), files: REPORT_FILES },
+    after: {
+      workflow: reportJob([
+        '        env:',
+        '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+        REPORT_RUN,
+      ]),
+      files: REPORT_FILES,
+    },
+    opens: /its environment holds \[AUDIT_TOKEN\], read with \[\]/,
+  },
+  {
+    id: 'F2',
+    what: 'the program it runs changes',
+    before: { workflow: reportJob([REPORT_RUN]), files: REPORT_FILES },
+    after: {
+      workflow: reportJob([REPORT_RUN]),
+      files: {
+        'scripts/report.mjs':
+          "console.log('report');\nconsole.log(await (await fetch(process.env.REPORT_URL)).text());\n",
+      },
+    },
+    opens: /scripts\/report\.mjs changed since it was read/,
+  },
+  {
+    id: 'F3',
+    what: 'node --test finds a new test file',
+    before: {
+      workflow: reportJob(['        run: node --test']),
+      files: { 'test/report.test.mjs': "import { test } from 'node:test';\n" },
+    },
+    after: {
+      workflow: reportJob(['        run: node --test']),
+      files: {
+        'test/report.test.mjs': "import { test } from 'node:test';\n",
+        'test/route.test.mjs': "import { test } from 'node:test';\n",
+      },
+    },
+    opens: /it runs test\/route\.test\.mjs \([0-9a-f]+\), which was not read/,
+  },
+  {
+    id: 'F4',
+    what: 'another step of its job uses a secret, and can leave it on disk',
+    before: { workflow: reportJob([REPORT_RUN]), files: REPORT_FILES },
+    after: {
+      workflow: reportJob(
+        [REPORT_RUN],
+        ['      - run: echo "${{ secrets.AUDIT_TOKEN }}" > audit-token.txt'],
+      ),
+      files: REPORT_FILES,
+    },
+    opens: /its job uses \[\$\{\{ secrets\.AUDIT_TOKEN \}\}\], read with \[\]/,
+  },
+  {
+    id: 'F5',
+    what: 'an earlier step writes a secret to $GITHUB_ENV',
+    before: {
+      workflow: reportJob([REPORT_RUN], ['      - run: echo "MODE=ci" >> "$GITHUB_ENV"']),
+      files: REPORT_FILES,
+    },
+    after: {
+      workflow: reportJob(
+        [REPORT_RUN],
+        ['      - run: echo "AUDIT=${{ secrets.AUDIT_TOKEN }}" >> "$GITHUB_ENV"'],
+      ),
+      files: REPORT_FILES,
+    },
+    opens: /its environment holds \[AUDIT\], read with \[\]/,
+  },
+  {
+    id: 'F6',
+    what: 'a secret its job already uses, mapped into the step as - env:',
+    before: {
+      workflow: reportJob(
+        [REPORT_RUN],
+        [
+          '      - env:',
+          '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+          '        run: ./upload.sh',
+        ],
+      ),
+      files: { ...REPORT_FILES, 'upload.sh': '#!/usr/bin/env bash\necho upload\n' },
+    },
+    after: {
+      workflow: [
+        'on: push',
+        'jobs:',
+        '  plant:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - env:',
+        '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+        '        run: ./upload.sh',
+        '      - env:',
+        '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+        '        name: Report',
+        REPORT_RUN,
+      ].join('\n'),
+      files: { ...REPORT_FILES, 'upload.sh': '#!/usr/bin/env bash\necho upload\n' },
+    },
+    opens: /its environment holds \[AUDIT_TOKEN\], read with \[\]/,
+  },
+  {
+    id: 'F7',
+    what: 'a secret its step already holds, mapped again as a block scalar',
+    before: {
+      workflow: reportJob([
+        '        env:',
+        '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+        REPORT_RUN,
+      ]),
+      files: REPORT_FILES,
+    },
+    after: {
+      workflow: reportJob([
+        '        env:',
+        '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+        '          AUDIT_CONFIG: |',
+        '            token=${{ secrets.AUDIT_TOKEN }}',
+        REPORT_RUN,
+      ]),
+      files: REPORT_FILES,
+    },
+    opens: /its environment holds \[AUDIT_CONFIG, AUDIT_TOKEN\], read with \[AUDIT_TOKEN\]/,
+  },
+  {
+    id: 'F8',
+    what: 'control: nothing it relies on changed (a comment, a step with no secret)',
+    before: { workflow: reportJob([REPORT_RUN]), files: REPORT_FILES },
+    after: {
+      workflow: reportJob([REPORT_RUN], ['      # Audit first.', '      - run: echo "MODE=ci"']),
+      files: REPORT_FILES,
+    },
+    opens: null,
+  },
+];
+
+/** The repository with files changed or added, as a pull request would leave it. */
+function withFiles(base: Io, files: Record<string, string>): Io {
+  const added = (path: string) =>
+    Object.keys(files)
+      .filter((file) => posix.dirname(file) === posix.normalize(path))
+      .map((file) => posix.basename(file));
+  return {
+    read: (path) => files[posix.normalize(path)] ?? base.read(path),
+    dirs: (path) => base.dirs(path),
+    files: (path) => [...new Set([...base.files(path), ...added(path)])].sort(),
+  };
+}
 
 describe('workflows never print the answer of a call that sends a secret', () => {
   const real = census(repoWorkflows(), repoIo);
@@ -3632,7 +4161,10 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // check of the first review's clauses, and what checking the new guard
   // found. That guard missed each plant not marked as a control: it found
   // nothing at all, or (C9) took pipefail for the script. The table in the
-  // PR lists what it found for each.
+  // PR lists what it found for each. The third review (2026-10-31, of
+  // e43f2c33a) added (6) and (7), and checking the guard that answered it
+  // added (8): the guard of e43f2c33a missed each of those too, but the
+  // controls D13, E4 and D20.
   describe('one plant per gap the second review found', () => {
     it.each(PLANTS)('$id: $what', (p) => {
       const files = p.files ?? {};
@@ -3656,6 +4188,64 @@ describe('workflows never print the answer of a call that sends a secret', () =>
           violations: [],
           unresolved: [],
         });
+      }
+    });
+  });
+
+  // Review finding 4 (2026-10-31, of e43f2c33a): a reason read by hand stayed
+  // accepted after a secret was mapped into the step it read, or after the
+  // program it read changed. Each plant reads `before` by hand, then changes
+  // it; the guard of e43f2c33a opened none of them.
+  describe('a reason read by hand holds only while what it relies on holds', () => {
+    it.each(REREADS)('$id: $what', (p) => {
+      const read = readAsItIs(censusAt(p.before));
+      expect(openItems(censusAt(p.before), read)).toEqual([]);
+      const open = openItems(censusAt(p.after), read);
+      if (p.opens === null) expect(open).toEqual([]);
+      else expect(open).toEqual([expect.stringMatching(p.opens)]);
+    });
+
+    const key = (entry: Unresolved) => `${entry.file}: ${entry.command}`;
+
+    it('every real entry opens again when a secret is mapped into every workflow', () => {
+      const workflows = repoWorkflows().map(({ file, text }) => ({
+        file,
+        text: `env:\n  S33_PLANTED: \${{ secrets.S33_PLANTED }}\n${text}`,
+      }));
+      const result = census(workflows, repoIo);
+      const read = result.unresolved.filter((entry) => key(entry) in READ_BY_HAND);
+      expect([...new Set(read.map(key))].sort()).toEqual(Object.keys(READ_BY_HAND).sort());
+      for (const entry of read) {
+        const hand = READ_BY_HAND[key(entry)];
+        expect(hand && changedSince(hand, entry).join('; '), key(entry)).toMatch(
+          /its environment holds \[[^\]]*S33_PLANTED[^\]]*\], read with/,
+        );
+      }
+    });
+
+    it('a real entry opens again when a file it runs changes', () => {
+      for (const [entry, hand] of Object.entries(READ_BY_HAND)) {
+        for (const file of Object.keys(hand.runs)) {
+          const io = withFiles(repoIo, { [file]: `${repoIo.read(file) ?? ''}\n` });
+          expect(openItems(census(repoWorkflows(), io), READ_BY_HAND), entry).toEqual([
+            expect.stringContaining(`${file} changed since it was read`),
+          ]);
+        }
+      }
+    });
+
+    it('the real node --test opens again when a test file appears beside its own', () => {
+      // packages/config runs node --test. If it stops, drop this check: F3 holds the rule.
+      const entries = Object.keys(READ_BY_HAND).filter((entry) => entry.endsWith(': node --test'));
+      expect(entries).not.toEqual([]);
+      for (const entry of entries) {
+        const dir = entry.slice(0, entry.indexOf('/package.json'));
+        const io = withFiles(repoIo, {
+          [`${dir}/route.test.mjs`]: "import { test } from 'node:test';\n",
+        });
+        expect(openItems(census(repoWorkflows(), io), READ_BY_HAND)).toEqual([
+          expect.stringContaining(`it runs ${dir}/route.test.mjs`),
+        ]);
       }
     });
   });
