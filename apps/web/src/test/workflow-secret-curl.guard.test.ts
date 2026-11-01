@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, resolve, sep } from 'node:path';
 
@@ -16,25 +17,37 @@ import { describe, expect, it } from 'vitest';
  * masks the secret in a log, never the answer. The step decides by curl's
  * exit status alone, so the body is discarded and only the status printed.
  *
- * What the census reads: every workflow's and local action's `run:` blocks,
- * and what they run: a shell script (`bash x.sh`, `./x.sh`, `source x.sh`,
- * `bash -c '...'`, an eval or trap string, find -exec), a package.json script
- * run with pnpm, npm or yarn, and a pnpm or turbo fan-out, read in every
- * workspace package that has the script (a filter only narrows that). Each is
- * split into single commands on the shell's own separators (; && || | & and
- * new lines, outside quotes); a $(...) or backquoted substitution is read as
- * commands too, and env, sudo, timeout, nice and the like (also by a path,
- * /usr/bin/env) are read through.
+ * What the census reads: every workflow's and local composite action's
+ * `run:` blocks, and what they run: a shell script (`bash x.sh`, `./x.sh`,
+ * `source x.sh`, `bash -c '...'`, an eval or trap string, find -exec), a
+ * package.json script run with pnpm, npm or yarn, and a pnpm or turbo
+ * fan-out, read in every workspace package that has the script (a filter
+ * only narrows that). Each is split into single commands on the shell's own
+ * separators (; && || | & and new lines, outside quotes); a $(...) or
+ * backquoted substitution is read as commands too, and env, sudo, timeout,
+ * nice and the like (also by a path, /usr/bin/env) are read through. A
+ * function called with a secret is read again with its parameters as
+ * secrets, wherever the shell got it: from the same script, or from a file
+ * that it, or a file it sourced, sourced.
  *
  * What the census cannot read is unresolved, and the test fails until each is
  * read by hand and given a reason in READ_BY_HAND: an interpreter (node,
- * python, ...), make, xargs, a repository program that is not a shell script,
- * a program named by a variable, an HTTP client other than curl, an action
- * passed a secret (in its step, or by its job's or the workflow's env:), a
- * run block in another shell, an npm or yarn workspace fan-out, anything past
- * the depth limit, and a program that has a curl command among its arguments
- * (a wrapper WRAPPERS does not list). Any other program (jq, tar, a CLI that
- * pnpm dlx fetches) is taken for what it is: the census does not read it.
+ * python, ...), a test runner (vitest, jest, playwright, ...), make, xargs, a
+ * repository program that is not a shell script, a program named by a
+ * variable, an HTTP client other than curl, an action passed a secret (in its
+ * step, or by its job's or the workflow's env:) unless it is a local
+ * composite one, a run block in another shell, an npm or yarn workspace
+ * fan-out, anything past the depth limit, and a program that has a curl
+ * command among its arguments (a wrapper WRAPPERS does not list). Any other
+ * program (jq, tar, next build, a CLI that pnpm dlx fetches) is taken for
+ * what it is: the census does not read it.
+ *
+ * A reason read by hand holds only while what it relies on holds. So each
+ * READ_BY_HAND entry also records the secrets in the call's environment
+ * (what the env: of its step, job or workflow maps from a secret, and any
+ * name a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one) and a hash of
+ * each repository file the call runs. When either changes, the call is
+ * unresolved again until someone reads it again.
  *
  * A secret is ${{ secrets }} in any form or github.token; an env., inputs.,
  * vars., steps.<id>.outputs. or needs.<job>.outputs. name that a workflow maps
@@ -46,7 +59,11 @@ import { describe, expect, it } from 'vitest';
  *
  * A curl sends a secret when one of its words uses a secret, or it has an
  * Authorization, Proxy-Authorization or Cookie header, headers read from a
- * file, or a credential, cookie, netrc, config or client-certificate option.
+ * file, a body, form part or query read from a file or standard input
+ * (--data @file, --json @-, -F name=<file, --data-urlencode name@file,
+ * --url-query @file, -T), or a credential, cookie, netrc, config or
+ * client-certificate option. What curl reads from a file or standard input
+ * is not in the workflow, so the census cannot tell that it holds no secret.
  * Such a curl must:
  * - write every answer to exactly /dev/null: one -o /dev/null per URL, after
  *   each --next too. A URL that may expand to several transfers (a {..} or
@@ -686,6 +703,8 @@ interface Curl {
   writeOuts: string[];
   sideOutputs: Array<{ option: string; target: string }>;
   variables: string[];
+  /** A body, form part or query read from a file or standard input: --data @file, -T file. */
+  bodyFiles: string[];
   /** Every other option, by its long name. */
   options: Set<string>;
   /** Options curl's manual does not list. */
@@ -697,6 +716,27 @@ interface Curl {
 /** An expansion into a list of words: $@, $*, ${NAME[@]}, ${NAME[*]}. */
 const LIST_EXPANSION = /\$(?:[@*]|\{(?:[@*]|[!#]?[A-Za-z_][A-Za-z0-9_]*\[[@*]\][^}]*)\})/;
 
+/**
+ * Whether an option's value makes curl read the body, a form part or the
+ * query from a file or standard input (- is standard input): --data @file
+ * and its kin, -F name=@file, name=<file or ;headers=@file, --data-urlencode
+ * and --url-query @file or name@file, and -T.
+ */
+function readsFile(name: string, value: string): boolean {
+  if (['data', 'data-ascii', 'data-binary', 'json'].includes(name)) return value.startsWith('@');
+  if (name === 'data-urlencode' || name === 'url-query') {
+    // --url-query +text is sent as it is written.
+    if (name === 'url-query' && value.startsWith('+')) return false;
+    // =text and name=text are text; @file and name@file read the file.
+    return /[=@]/.exec(value)?.[0] === '@';
+  }
+  if (name === 'form') {
+    const content = value.slice(value.indexOf('=') + 1).replace(/^"/, '');
+    return /^[@<]/.test(content) || /;\s*headers\s*=\s*"?[@<]/.test(value);
+  }
+  return name === 'upload-file';
+}
+
 function readCurl(args: Word[]): Curl {
   const curl: Curl = {
     segments: [],
@@ -704,6 +744,7 @@ function readCurl(args: Word[]): Curl {
     writeOuts: [],
     sideOutputs: [],
     variables: [],
+    bodyFiles: [],
     options: new Set(),
     unknown: [],
     lists: [],
@@ -717,6 +758,7 @@ function readCurl(args: Word[]): Curl {
     else if (name === 'header' || name === 'proxy-header') curl.headers.push(value);
     else if (name === 'variable') curl.variables.push(value);
     else if (SIDE_OUTPUTS.has(name)) curl.sideOutputs.push({ option: name, target: value });
+    if (readsFile(name, value)) curl.bodyFiles.push(`--${name} ${value}`);
     curl.options.add(name);
   };
   const flag = (name: string, on: boolean) => {
@@ -795,6 +837,8 @@ function variableImportsSecret(spec: string, names: ReadonlySet<string>): boolea
 function sendsSecret(args: Word[], curl: Curl, names: ReadonlySet<string>): boolean {
   return (
     curl.headers.some((header) => AUTH_HEADER.test(header) || header.startsWith('@')) ||
+    // What a file or standard input holds is not in the workflow, as with -H @file.
+    curl.bodyFiles.length > 0 ||
     [...curl.options].some((name) => CREDENTIAL_OPTIONS.has(name)) ||
     curl.variables.some((spec) => variableImportsSecret(spec, names)) ||
     args.some((word) => usesSecret(word.raw, names))
@@ -861,6 +905,8 @@ interface Io {
   read(path: string): string | null;
   /** The directories directly inside a repository-relative directory. */
   dirs(path: string): string[];
+  /** The files directly inside a repository-relative directory. */
+  files(path: string): string[];
 }
 
 interface CurlFound {
@@ -877,6 +923,10 @@ interface Unresolved {
   file: string;
   command: string;
   why: string;
+  /** The secrets in its environment, by name: what env: maps or a step writes from one. */
+  secrets: string[];
+  /** The repository files it runs, each with a hash of its text. */
+  runs: Record<string, string>;
 }
 
 interface Census {
@@ -891,6 +941,24 @@ interface Ctx {
   io: Io;
   /** Names that hold a secret anywhere: what the workflows map or write from one. */
   names: Set<string>;
+  /** The secrets in the environment of the run block being read. */
+  env: string[];
+  /** Names a step writes to $GITHUB_ENV or $GITHUB_OUTPUT from a secret. */
+  written: Set<string>;
+}
+
+/** Where the shell got a function: the script that defines it. */
+interface FunctionHome {
+  script: string;
+  src: Source;
+}
+
+/** One shell process: the scripts it runs itself (source, eval, a trap) share it. */
+interface Shell {
+  /** Its functions: its own scripts', and those of the files they sourced. */
+  functions: Map<string, FunctionHome>;
+  /** The scripts already read again with their parameters as secrets. */
+  reread: Set<string>;
 }
 
 interface Scope {
@@ -898,6 +966,24 @@ interface Scope {
   secretVars: Set<string>;
   cwd: string;
   depth: number;
+  shell: Shell;
+}
+
+/**
+ * A new shell process (bash x.sh, bash -c, a package.json script, a
+ * substitution). It starts with this shell's functions, as `export -f` would
+ * give them to it, and what it defines stays its own.
+ */
+function newShell(scope: Scope): Scope {
+  return {
+    ...scope,
+    shell: { functions: new Map(scope.shell.functions), reread: new Set(scope.shell.reread) },
+  };
+}
+
+/** A short hash of a file's text, to tell that it changed. */
+function fileHash(text: string): string {
+  return createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex').slice(0, 16);
 }
 
 interface Source {
@@ -919,6 +1005,8 @@ const RUNNER = new RegExp(
     // Interpreters.
     'node(?:js)?|deno|bun|tsx|ts-node|vite-node|babel-node|(?:python|pypy)[\\d.]*|ruby[\\d.]*',
     'perl[\\d.]*|php[\\d.]*|lua[\\d.]*|Rscript|pwsh|powershell|osascript|expect|tclsh',
+    // Test runners: a test can call a server, and a failed assertion prints what came back.
+    'vitest|jest|playwright|mocha|cypress|ava|jasmine|karma|tap|uvu|pytest|nyc|c8',
     // Task runners and fan-outs.
     'g?make|just|task|mage|rake|gradlew?|mvn|ant|bazel|nx|lerna|rush|npm-run-all|run-[sp]',
     'concurrently',
@@ -1001,8 +1089,54 @@ function text(words: Word[]): string {
   return words.map((word) => word.raw).join(' ');
 }
 
-function cannotRead(ctx: Ctx, src: Source, where: string, command: string, why: string): void {
-  ctx.out.unresolved.push({ where, file: src.file, command, why });
+function cannotRead(
+  ctx: Ctx,
+  src: Source,
+  where: string,
+  command: string,
+  why: string,
+  runs: Record<string, string> = {},
+): void {
+  ctx.out.unresolved.push({ where, file: src.file, command, why, secrets: [...ctx.env], runs });
+}
+
+/**
+ * The test files `node --test` finds when it is given none, by node's own
+ * patterns: *.test.js, *-test.js, *_test.js, test-*.js, test.js and anything
+ * under a test/ directory, as .js, .cjs or .mjs, and as .ts, .cts or .mts.
+ */
+function nodeTestFiles(cwd: string, io: Io): string[] {
+  const found: string[] = [];
+  const visit = (dir: string, inTest: boolean, level: number) => {
+    for (const name of io.files(dir)) {
+      const isTest =
+        /\.[cm]?[jt]s$/.test(name) &&
+        (inTest || /^(?:.*[.\-_]test|test-.*|test)\.[cm]?[jt]s$/.test(name));
+      if (isTest) found.push(posix.join(dir, name));
+    }
+    if (level >= MAX_DEPTH) return;
+    for (const name of io.dirs(dir)) visit(posix.join(dir, name), inTest || name === 'test', level + 1);
+  };
+  visit(cwd, false, 0);
+  return found;
+}
+
+/**
+ * The repository files an interpreter or a test runner is given (any word
+ * that names one), or that `node --test` finds when it is given none, each
+ * with a hash of its text.
+ */
+function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<string, string> {
+  const paths = args
+    .filter((word) => !word.value.startsWith('-'))
+    .map((word) => findFile(word.value, scope, io))
+    .filter((path): path is string => path !== undefined);
+  if (/^node(?:js)?$/.test(name) && paths.length === 0 && args.some((w) => w.value === '--test')) {
+    paths.push(...nodeTestFiles(scope.cwd, io));
+  }
+  return Object.fromEntries(
+    [...new Set(paths)].sort().map((path) => [path, fileHash(io.read(path) ?? '')]),
+  );
 }
 
 /** False, and unresolved, past the depth limit. */
@@ -1117,16 +1251,22 @@ function taintGithubFiles(command: Command, secretVars: ReadonlySet<string>, ctx
   for (const line of lines) {
     // NAME=value, or NAME<<DELIMITER for a value over several lines.
     const m = /^["']?([A-Za-z_][\w-]*)(=|<<)/.exec(line);
-    if (m?.[1] && (m[2] === '<<' ? secret : usesSecret(line, secretVars))) ctx.names.add(m[1]);
+    if (m?.[1] && (m[2] === '<<' ? secret : usesSecret(line, secretVars))) {
+      ctx.names.add(m[1]);
+      ctx.written.add(m[1]);
+    }
   }
   return secret && lines.some((line) => /\bGITHUB_(?:ENV|OUTPUT)\b/.test(line));
 }
 
 function walk(script: string, src: Source, scope: Scope, ctx: Ctx): void {
-  const functions = functionNames(script);
+  // The shell can call what this script defines from here on, and so can a
+  // script that sourced this one: they are the same shell.
+  for (const name of functionNames(script)) scope.shell.functions.set(name, { script, src });
   const writesGithubFiles = /\bGITHUB_(?:ENV|OUTPUT)\b/.test(script);
-  const pass = (secretVars: Set<string>): boolean => {
-    let secretToFunction = false;
+  /** One reading; returns the functions called with a secret, and where. */
+  const pass = (secretVars: Set<string>) => {
+    const called: Array<{ home: FunctionHome; where: string; call: string }> = [];
     let secretToGithubFile = false;
     const multiline: string[] = [];
     for (const command of parseShell(script)) {
@@ -1143,24 +1283,43 @@ function walk(script: string, src: Source, scope: Scope, ctx: Ctx): void {
       for (const nested of command.nested) {
         const at = src.where(nested.line);
         if (!deepEnough(ctx, inner, src, at, `$(${nested.script.trim()})`)) continue;
-        walk(nested.script, fixedSource(src.file, at), inner, ctx);
+        walk(nested.script, fixedSource(src.file, at), newShell(inner), ctx);
       }
       const words = dispatch(command.words, command, src, where, inner, ctx);
-      const name = words?.[0]?.value ?? '';
-      if (
-        functions.has(name) &&
-        (words ?? []).slice(1).some((word) => usesSecret(word.raw, secretVars))
-      ) {
-        secretToFunction = true;
+      const home = scope.shell.functions.get(words?.[0]?.value ?? '');
+      if (home && (words ?? []).slice(1).some((word) => usesSecret(word.raw, secretVars))) {
+        called.push({ home, where, call: text(words ?? []) });
       }
     }
     // NAME<<EOF, then the value written by later commands.
-    if (secretToGithubFile) for (const name of multiline) ctx.names.add(name);
-    return secretToFunction;
+    if (secretToGithubFile) {
+      for (const name of multiline) {
+        ctx.names.add(name);
+        ctx.written.add(name);
+      }
+    }
+    return called;
   };
-  if (pass(new Set(scope.secretVars)) && !POSITIONAL.every((p) => scope.secretVars.has(p))) {
-    // A function was called with a secret: read its $1 and $@ as secrets.
-    pass(new Set([...scope.secretVars, ...POSITIONAL]));
+  const called = pass(new Set(scope.secretVars));
+  // A function was called with a secret: read the script that defines it
+  // again with $1, $@ and the rest as secrets, once for this shell. This
+  // script's own were read that way already when its parameters were secrets.
+  const secretVars = new Set([...scope.secretVars, ...POSITIONAL]);
+  const positionalSecret = POSITIONAL.every((p) => scope.secretVars.has(p));
+  for (let i = 0; i < called.length; i++) {
+    const { home, where, call } = called[i] ?? { home: undefined, where: '', call: '' };
+    if (!home) continue;
+    const own = home.script === script && home.src.file === src.file;
+    const key = `${home.src.where(1)}\n${home.script}`;
+    if ((own && positionalSecret) || scope.shell.reread.has(key)) continue;
+    scope.shell.reread.add(key);
+    if (own) {
+      // Read again, it can pass the secret on to a function from another file.
+      called.push(...pass(secretVars));
+      continue;
+    }
+    const deeper: Scope = { ...scope, secretVars, depth: scope.depth + 1 };
+    if (deepEnough(ctx, deeper, src, where, call)) walk(home.script, home.src, deeper, ctx);
   }
 }
 
@@ -1177,8 +1336,8 @@ function dispatch(
   const program = words?.[0];
   if (!words || !program) return words;
   const args = words.slice(1);
-  const cannot = (why: string) => {
-    cannotRead(ctx, src, where, text(words), why);
+  const cannot = (why: string, runs: Record<string, string> = {}) => {
+    cannotRead(ctx, src, where, text(words), why, runs);
     return words;
   };
   if (expansion(program.raw).expands) return cannot('a program named by an expansion');
@@ -1192,8 +1351,9 @@ function dispatch(
       prints: whyPrinted(curl, command.piped),
     });
   } else if (SHELLS.has(name)) {
-    runShell(args, command, src, where, text(words), scope, ctx);
+    runShell(args, command, src, where, text(words), newShell(scope), ctx);
   } else if (name === 'source' || name === '.') {
+    // The same shell: what the file defines, the caller can call.
     if (args[0]) runFile(args[0], args.slice(1), src, where, text(words), scope, ctx);
   } else if (name === 'eval') {
     if (args.some((word) => expansion(word.raw).expands))
@@ -1223,13 +1383,13 @@ function dispatch(
   } else if (name === 'turbo') {
     runTurbo(args, src, where, text(words), scope, ctx);
   } else if (RUNNER.test(name)) {
-    return cannot(`${name} runs code the census cannot read`);
+    return cannot(`${name} runs code the census cannot read`, filesRun(name, args, scope, ctx.io));
   } else if (HTTP_CLIENTS.has(name) || (name === 'gh' && args[0]?.value === 'api')) {
     return cannot('an HTTP client the census does not judge');
   } else if (/\.(?:ba|z|k|da)?sh$/.test(program.value)) {
-    runFile(program, args, src, where, text(words), scope, ctx);
+    runFile(program, args, src, where, text(words), newShell(scope), ctx);
   } else if (program.value.includes('/') && !program.value.startsWith('/')) {
-    runRepoProgram(program, args, src, where, text(words), scope, ctx);
+    runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
   } else if (!PRINTS_ITS_ARGUMENTS.has(name) && runsCurl(args)) {
     // gtimeout 90 curl ..., retry -- curl ...: a wrapper WRAPPERS does not list.
     return cannot(`${name} has a curl command among its arguments, which it may run`);
@@ -1330,12 +1490,15 @@ function runRepoProgram(
   ctx: Ctx,
 ): void {
   const found = findFile(program.value, scope, ctx.io);
-  if (!found) {
+  const body = found === undefined ? null : ctx.io.read(found);
+  if (found === undefined || body === null) {
     cannotRead(ctx, src, where, call, 'no such file in the repository');
-  } else if (/^#!\S*?(?:\/env\s+)?\S*\b(?:ba|z|k|da|mk)?sh\b/.test(ctx.io.read(found) ?? '')) {
+  } else if (/^#!\S*?(?:\/env\s+)?\S*\b(?:ba|z|k|da|mk)?sh\b/.test(body)) {
     runFile(program, args, src, where, call, scope, ctx);
   } else {
-    cannotRead(ctx, src, where, call, 'a repository program that is not a shell script');
+    cannotRead(ctx, src, where, call, 'a repository program that is not a shell script', {
+      [found]: fileHash(body),
+    });
   }
 }
 
@@ -1492,7 +1655,8 @@ function runScript(
       const file = `${packageJson} scripts["${hook}"]`;
       if (!deepEnough(ctx, scope, src, where, call)) return found;
       noteScript(ctx.out, file);
-      walk(body, fixedSource(file, file), { ...scope, cwd: dir }, ctx);
+      // A package.json script runs in a shell of its own.
+      walk(body, fixedSource(file, file), newShell({ ...scope, cwd: dir }), ctx);
     }
   }
   return found;
@@ -1598,7 +1762,7 @@ function runPackageBin(
         // npx -c 'command': the value is a script.
         const value = inline ?? args[k + 1]?.value ?? '';
         if (deepEnough(ctx, scope, src, where, call)) {
-          walk(value, fixedSource(src.file, where), scope, ctx);
+          walk(value, fixedSource(src.file, where), newShell(scope), ctx);
         }
         return;
       }
@@ -1619,7 +1783,8 @@ function runPackageBin(
   const words = args.slice(k);
   if (shell) {
     if (deepEnough(ctx, scope, src, where, call)) {
-      walk(words.map((word) => word.value).join(' '), fixedSource(src.file, where), scope, ctx);
+      const script = words.map((word) => word.value).join(' ');
+      walk(script, fixedSource(src.file, where), newShell(scope), ctx);
     }
     return;
   }
@@ -1738,6 +1903,8 @@ function runTurbo(
 interface RunBlock {
   /** 1-based line of the block's first script line. */
   line: number;
+  /** 0-based line of its `run:` key. */
+  index: number;
   script: string;
   cwd: string;
   /** The shell the step names, when it is not bash or sh. */
@@ -1853,7 +2020,7 @@ function runBlocks(text: string): RunBlock[] {
     const shell = stepKey(lines, i, column, 'shell') ?? defaultShell;
     const foreignShell = /^(?:\/\S*\/)?(?:bash|sh)\b/.test(shell) ? undefined : shell;
     if (value.startsWith('*')) {
-      blocks.push({ line: i + 1, script: '', cwd, alias: value });
+      blocks.push({ line: i + 1, index: i, script: '', cwd, alias: value });
     } else if (/^[|>]/.test(value)) {
       const body: string[] = [];
       let j = i + 1;
@@ -1865,7 +2032,7 @@ function runBlocks(text: string): RunBlock[] {
       const strip = Math.min(...body.filter((line) => line.trim() !== '').map(indentOf));
       const scriptLines = body.map((line) => line.slice(strip));
       const script = value.startsWith('>') ? folded(scriptLines) : scriptLines.join('\n');
-      blocks.push({ line: i + 2, script, cwd, foreignShell });
+      blocks.push({ line: i + 2, index: i, script, cwd, foreignShell });
       i = j - 1;
     } else if (value !== '') {
       // A plain or quoted scalar may go on over the lines indented under it.
@@ -1875,7 +2042,13 @@ function runBlocks(text: string): RunBlock[] {
         parts.push(lineAt(j).trim());
       }
       // An empty `run:` opens a mapping (defaults.run), not a script.
-      blocks.push({ line: i + 1, script: yamlScalar(parts.join(' ')), cwd, foreignShell });
+      blocks.push({
+        line: i + 1,
+        index: i,
+        script: yamlScalar(parts.join(' ')),
+        cwd,
+        foreignShell,
+      });
       i = j - 1;
     }
   }
@@ -1922,14 +2095,28 @@ function mappedSecrets(texts: string[], names: Set<string>): void {
   }
 }
 
+/** The keys of YAML lines (and of a flow mapping, { A: ... }) whose value uses a secret. */
+function mappedNames(body: string, names: ReadonlySet<string>): string[] {
+  const found = new Set<string>();
+  for (const line of body.split('\n')) {
+    const m = /^[ \t]*-?[ \t]*(['"]?)([A-Za-z_][\w-]*)\1[ \t]*:[ \t]*(.*)$/.exec(line);
+    if (m?.[2] && usesSecret(m[3] ?? '', names)) found.add(m[2]);
+    for (const pair of line.matchAll(/([A-Za-z_][\w-]*)\s*:\s*(\$\{\{[\s\S]*?\}\})/g)) {
+      if (pair[1] && usesSecret(pair[2] ?? '', names)) found.add(pair[1]);
+    }
+  }
+  return [...found];
+}
+
 /**
- * The lines an `env:` that maps a secret reaches: the block of the job (or
- * step) it is on, or the whole workflow for a top-level one.
+ * Every `env:` block: the lines it reaches (the block of the job or step it
+ * is on, or the whole workflow for a top-level one) and the names it maps
+ * from a secret.
  */
-function secretEnvSpans(
+function envBlocks(
   lines: string[],
   names: ReadonlySet<string>,
-): Array<{ start: number; end: number }> {
+): Array<{ start: number; end: number; secrets: string[] }> {
   const meaningful = (line: string) => line.trim() !== '' && !line.trim().startsWith('#');
   const blockEnd = (from: number, column: number) => {
     let end = from + 1;
@@ -1940,15 +2127,17 @@ function secretEnvSpans(
       end++;
     return end;
   };
-  const spans: Array<{ start: number; end: number }> = [];
+  const blocks: Array<{ start: number; end: number; secrets: string[] }> = [];
   for (const [i, line] of lines.entries()) {
     const m = /^(\s*)env:[ \t]*(.*)$/.exec(line);
     if (!m) continue;
     const column = m[1]?.length ?? 0;
     const body = [m[2] ?? '', ...lines.slice(i + 1, blockEnd(i, column))].join('\n');
-    if (!usesSecret(body, names)) continue;
+    // A name the census does not know as one still counts: the env: uses a secret.
+    const secrets = usesSecret(body, names) ? mappedNames(body, names) : [];
+    if (usesSecret(body, names) && secrets.length === 0) secrets.push('(an env: that uses a secret)');
     if (column === 0) {
-      spans.push({ start: 0, end: lines.length });
+      blocks.push({ start: 0, end: lines.length, secrets });
       continue;
     }
     let parent = i - 1;
@@ -1957,10 +2146,19 @@ function secretEnvSpans(
       (!meaningful(lines[parent] ?? '') || indentOf(lines[parent] ?? '') >= column)
     )
       parent--;
-    if (parent >= 0)
-      spans.push({ start: parent, end: blockEnd(parent, indentOf(lines[parent] ?? '')) });
+    if (parent >= 0) {
+      const end = blockEnd(parent, indentOf(lines[parent] ?? ''));
+      blocks.push({ start: parent, end, secrets });
+    }
   }
-  return spans;
+  return blocks;
+}
+
+/** The names that the env: of line `index`'s step, job or workflow maps from a secret. */
+function envSecrets(lines: string[], index: number, names: ReadonlySet<string>): string[] {
+  return envBlocks(lines, names)
+    .filter((block) => index >= block.start && index < block.end)
+    .flatMap((block) => block.secrets);
 }
 
 /** A step that passes a secret to an action the census cannot read. */
@@ -1971,36 +2169,42 @@ function actionsPassedSecrets(
   censused: ReadonlySet<string>,
 ): void {
   const lines = text.split('\n');
-  // A job's or the workflow's env: is in every step's environment.
-  const spans = secretEnvSpans(lines, ctx.names);
   for (const [i, line] of lines.entries()) {
     const m = /^\s*(?:-\s+)?uses:\s*(.+)$/.exec(line);
     if (!m) continue;
     const target = yamlScalar((m[1] ?? '').trim());
     const { start, end } = stepLines(lines, i, keyColumn(line));
     const step = lines.slice(start, end).join('\n');
-    if (
-      !usesSecret(step, ctx.names) &&
-      !/^\s*secrets:\s*inherit\b/m.test(step) &&
-      !spans.some((span) => i >= span.start && i < span.end)
-    ) {
-      continue;
-    }
+    // A job's or the workflow's env: is in every step's environment.
+    const secrets = [...envSecrets(lines, i, ctx.names), ...mappedNames(step, ctx.names)];
+    if (/^\s*secrets:\s*inherit\b/m.test(step)) secrets.push('secrets: inherit');
+    if (usesSecret(step, ctx.names) && secrets.length === 0) secrets.push('(a step that uses a secret)');
+    if (secrets.length === 0) continue;
     const local = target.startsWith('./') ? posix.normalize(target) : undefined;
+    // A reusable workflow, or a composite action, is read with the workflows.
+    // A JavaScript or Docker action is code the census cannot see.
     const readable =
       local !== undefined &&
       (censused.has(local) ||
-        ['action.yml', 'action.yaml'].some((name) => censused.has(posix.join(local, name))));
+        ['action.yml', 'action.yaml'].some((name) => {
+          const action = posix.join(local, name);
+          return censused.has(action) && COMPOSITE.test(ctx.io.read(action) ?? '');
+        }));
     if (!readable) {
       ctx.out.unresolved.push({
         where: `${file}:${i + 1}`,
         file,
         command: `uses: ${target}`,
         why: 'an action passed a secret, which the census cannot read',
+        secrets: [...new Set(secrets)].sort(),
+        runs: {},
       });
     }
   }
 }
+
+/** A composite action: its steps are run blocks the census reads. */
+const COMPOSITE = /^\s*using:\s*['"]?composite\b/m;
 
 /** Every local action a workflow uses, as `uses: ./path`, that is a composite one. */
 function localActions(
@@ -2017,7 +2221,7 @@ function localActions(
         const file = posix.join(dir, name);
         const text = io.read(file);
         if (text === null || found.some((entry) => entry.file === file)) continue;
-        if (/^\s*using:\s*['"]?composite/m.test(text)) found.push({ file, text });
+        if (COMPOSITE.test(text)) found.push({ file, text });
       }
     }
   }
@@ -2036,10 +2240,25 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
       names,
     );
     const before = names.size;
-    const ctx: Ctx = { out: { curls: [], scripts: [], unresolved: [] }, io, names };
+    const ctx: Ctx = {
+      out: { curls: [], scripts: [], unresolved: [] },
+      io,
+      names,
+      env: [],
+      written: new Set(),
+    };
+    // A composite action's steps run in its caller's environment, which the
+    // census does not follow: every secret any env: maps may be in it.
+    const everyEnv = files.flatMap((entry) =>
+      envBlocks(entry.text.split('\n'), names).flatMap((block) => block.secrets),
+    );
     for (const { file, text } of files) {
+      const lines = text.split('\n');
+      const action = /(?:^|\/)action\.ya?ml$/.test(file);
       for (const block of runBlocks(text)) {
         const src = fileSource(file, block.line);
+        const env = [...envSecrets(lines, block.index, names), ...(action ? everyEnv : [])];
+        ctx.env = [...new Set(env)].sort();
         if (block.alias) {
           cannotRead(
             ctx,
@@ -2057,18 +2276,25 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
             'a run block in a shell the census cannot read',
           );
         } else {
-          walk(block.script, src, { secretVars: new Set(names), cwd: block.cwd, depth: 0 }, ctx);
+          const shell: Shell = { functions: new Map(), reread: new Set() };
+          walk(block.script, src, { secretVars: new Set(names), cwd: block.cwd, depth: 0, shell }, ctx);
         }
       }
+      ctx.env = [];
       actionsPassedSecrets(file, text, ctx, censused);
     }
-    if (names.size === before) return merged(ctx.out);
+    if (names.size === before) return merged(ctx.out, ctx.written);
     if (round === 10) throw new Error('the secret names did not settle');
   }
 }
 
-/** One entry per command: the same command can be read twice (a fan-out, a second pass). */
-function merged(out: Census): Census {
+/**
+ * One entry per command: the same command can be read twice (a fan-out, a
+ * second pass, two steps). Its secrets are every reading's, and every name a
+ * step writes to $GITHUB_ENV or $GITHUB_OUTPUT from a secret: the census does
+ * not follow which later steps see it.
+ */
+function merged(out: Census, written: ReadonlySet<string>): Census {
   const curls = new Map<string, CurlFound>();
   for (const curl of out.curls) {
     const key = `${curl.where}\n${curl.command}`;
@@ -2080,9 +2306,17 @@ function merged(out: Census): Census {
       seen.prints = [...new Set([...seen.prints, ...curl.prints])];
     }
   }
-  const unresolved = new Map(
-    out.unresolved.map((entry) => [`${entry.where}\n${entry.command}\n${entry.why}`, entry]),
-  );
+  const unresolved = new Map<string, Unresolved>();
+  for (const entry of out.unresolved) {
+    const key = `${entry.where}\n${entry.command}\n${entry.why}`;
+    const seen = unresolved.get(key);
+    const secrets = [...(seen?.secrets ?? []), ...entry.secrets, ...written];
+    unresolved.set(key, {
+      ...entry,
+      secrets: [...new Set(secrets)].sort(),
+      runs: { ...seen?.runs, ...entry.runs },
+    });
+  }
   return { curls: [...curls.values()], scripts: out.scripts, unresolved: [...unresolved.values()] };
 }
 
@@ -2099,6 +2333,15 @@ const repoIo: Io = {
     return readdirSync(abs, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && entry.name !== 'node_modules')
       .filter((entry) => !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort();
+  },
+  files(path) {
+    const abs = resolve(REPO_ROOT, path);
+    if (abs !== REPO_ROOT && !abs.startsWith(REPO_ROOT + sep)) return [];
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) return [];
+    return readdirSync(abs, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .sort();
   },
@@ -2173,17 +2416,25 @@ function workflow(script: string, env: Record<string, string> = {}): string {
 
 /** The files of a plant's repository, read as the census reads the real one. */
 function plantIo(files: Record<string, string>): Io {
+  const inside = (path: string) => {
+    const prefix = posix.normalize(path) === '.' ? '' : `${posix.normalize(path)}/`;
+    return Object.keys(files)
+      .filter((file) => file.startsWith(prefix))
+      .map((file) => file.slice(prefix.length).split('/'));
+  };
   return {
     read: (path) => files[posix.normalize(path)] ?? null,
     dirs: (path) => {
-      const prefix = posix.normalize(path) === '.' ? '' : `${posix.normalize(path)}/`;
-      const inside = Object.keys(files)
-        .filter((file) => file.startsWith(prefix))
-        .map((file) => file.slice(prefix.length).split('/'))
+      const dirs = inside(path)
         .filter((parts) => parts.length > 1)
         .map((parts) => parts[0] ?? '');
-      return [...new Set(inside)].sort();
+      return [...new Set(dirs)].sort();
     },
+    files: (path) =>
+      inside(path)
+        .filter((parts) => parts.length === 1)
+        .map((parts) => parts[0] ?? '')
+        .sort(),
   };
 }
 
@@ -2214,6 +2465,25 @@ interface Plant {
 
 const NOTIFY_SCRIPT =
   '#!/usr/bin/env bash\ncurl -fsS -H "X-Hook: ${HOOK_TOKEN}" https://example.com/hook\n';
+
+const REPORT_ENV = { REPORT_TOKEN: '${{ secrets.REPORT_TOKEN }}' };
+const HOOK_URL_ENV = { REPORT_HOOK: '${{ secrets.REPORT_HOOK_URL }}' };
+/** A helper file whose function sends its first argument. */
+const LIB_SCRIPT = '#!/usr/bin/env bash\n\npost_report() { curl -fsS -X POST "$1"; }\n';
+
+/** A one-step workflow that passes a secret to the local action at `path`. */
+function actionWorkflow(path: string): string {
+  return [
+    'on: push',
+    'jobs:',
+    '  plant:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    `      - uses: ${path}`,
+    '        with:',
+    '          token: ${{ secrets.REPORT_TOKEN }}',
+  ].join('\n');
+}
 
 function plantWorkspace(script: string): Record<string, string> {
   return {
@@ -2988,6 +3258,217 @@ const PLANTS: Plant[] = [
       '          printf \'%s\\n\' curl "$HOOK_URL"',
     ].join('\n'),
     finds: { nothing: true },
+  },
+  // (6) Third review: a body, form part or query that curl reads from a file
+  // or standard input sends whatever that holds, which the census cannot see.
+  {
+    id: 'D1',
+    what: 'jq builds a body with the secret and pipes it into curl --data-binary @-',
+    script: `jq -n --arg token "$REPORT_TOKEN" '{token: $token}' | curl -fsS --data-binary @- ${API}`,
+    env: REPORT_ENV,
+    finds: { violation: /: curl -fsS --data-binary @- https/ },
+  },
+  {
+    id: 'D2',
+    what: 'a here-document body read with --data @-',
+    script: [`curl -fsS --data @- ${API} <<EOF`, '{"token": "${REPORT_TOKEN}"}', 'EOF'].join('\n'),
+    env: REPORT_ENV,
+    finds: { violation: /: curl -fsS --data @- https/ },
+  },
+  {
+    id: 'D3',
+    what: 'a body written from the secret to a file, then --data @file',
+    script: `printf 'token=%s' "$REPORT_TOKEN" > body.txt\ncurl -fsS --data @body.txt ${API}`,
+    env: REPORT_ENV,
+    finds: { violation: /--data @body\.txt/ },
+  },
+  {
+    id: 'D4',
+    what: '-F name=<file (a form field read from a file)',
+    script: `curl -fsS -F "token=<token.txt" ${API}`,
+    env: REPORT_ENV,
+    finds: { violation: /-F "token=<token\.txt"/ },
+  },
+  {
+    id: 'D5',
+    what: '-F name=@file (a file uploaded in a form)',
+    script: `curl -fsS -F "report=@report.json" ${API}`,
+    finds: { violation: /-F "report=@report\.json"/ },
+  },
+  {
+    id: 'D6',
+    what: "-F with ;headers=@file (a form part's headers read from a file)",
+    script: `curl -fsS -F "meta=report;headers=@part-headers.txt" ${API}`,
+    finds: { violation: /headers=@part-headers\.txt/ },
+  },
+  {
+    id: 'D7',
+    what: '--json @file',
+    script: `curl -fsS --json @payload.json ${API}`,
+    finds: { violation: /--json @payload\.json/ },
+  },
+  {
+    id: 'D8',
+    what: '--data-urlencode name@file',
+    script: `curl -fsS --data-urlencode token@token.txt ${API}`,
+    finds: { violation: /--data-urlencode token@token\.txt/ },
+  },
+  {
+    id: 'D9',
+    what: '--url-query @file (the query read from a file)',
+    script: `curl -fsS --url-query @query.txt ${API}`,
+    finds: { violation: /--url-query @query\.txt/ },
+  },
+  {
+    id: 'D10',
+    what: '-T (a file uploaded as the body)',
+    script: `curl -fsS -T report.json ${API}`,
+    finds: { violation: /-T report\.json/ },
+  },
+  {
+    id: 'D11',
+    what: '--expand-data @file (the expanding form of --data)',
+    script: `curl -fsS --expand-data @body.txt ${API}`,
+    finds: { violation: /--expand-data @body\.txt/ },
+  },
+  {
+    id: 'D12',
+    what: '-d@- (the value attached to the short option)',
+    script: `printf 'token=%s' "$REPORT_TOKEN" | curl -fsS -d@- ${API}`,
+    env: REPORT_ENV,
+    finds: { violation: /curl -fsS -d@-/ },
+  },
+  {
+    id: 'D13',
+    what: 'control: a body that names no file sends nothing hidden (--data-raw @text, -F name=a@b, --data-urlencode name=a@b, --url-query +@text)',
+    script: `curl -fsS --data-raw '@literal' -F 'email=user@example.com' --data-urlencode 'email=user@example.com' --url-query '+@literal' ${API}`,
+    env: REPORT_ENV,
+    finds: { nothing: true },
+  },
+  // (7) Third review: a local action that is not a composite one, a function
+  // from a sourced file, and test runners.
+  {
+    id: 'E1',
+    what: 'a local JavaScript action passed a secret (only a composite action is read)',
+    workflow: actionWorkflow('./.github/actions/report'),
+    files: {
+      '.github/actions/report/action.yml': [
+        'name: Report',
+        'inputs:',
+        '  token:',
+        '    required: true',
+        'runs:',
+        "  using: 'node20'",
+        '  main: index.js',
+      ].join('\n'),
+    },
+    finds: { unresolved: /uses: \.\/\.github\/actions\/report \(an action passed a secret/ },
+  },
+  {
+    id: 'E2',
+    what: 'a local Docker action passed a secret',
+    workflow: actionWorkflow('./.github/actions/notify'),
+    files: {
+      '.github/actions/notify/action.yml': [
+        'name: Notify',
+        'inputs:',
+        '  token:',
+        '    required: true',
+        'runs:',
+        '  using: docker',
+        '  image: Dockerfile',
+        '  args:',
+        '    - curl',
+        '    - -fsS',
+        '    - -H',
+        '    - "Authorization: Bearer ${{ inputs.token }}"',
+        '    - https://example.com/api/report',
+      ].join('\n'),
+    },
+    finds: { unresolved: /uses: \.\/\.github\/actions\/notify \(an action passed a secret/ },
+  },
+  {
+    id: 'E3',
+    what: 'a function from a sourced file, called with a secret',
+    script: 'source scripts/ci/lib.sh\npost_report "$REPORT_HOOK"',
+    env: HOOK_URL_ENV,
+    files: { 'scripts/ci/lib.sh': LIB_SCRIPT },
+    finds: { violation: /^scripts\/ci\/lib\.sh:3: \{ curl -fsS -X POST "\$1"/ },
+  },
+  {
+    id: 'E4',
+    what: "control: the run block's own function passing the secret on to a sourced one",
+    script: '. scripts/ci/lib.sh\nnotify() {\n  post_report "$1"\n}\nnotify "$REPORT_HOOK"',
+    env: HOOK_URL_ENV,
+    files: { 'scripts/ci/lib.sh': LIB_SCRIPT },
+    finds: { violation: /^scripts\/ci\/lib\.sh:3:/ },
+  },
+  {
+    id: 'E5',
+    what: 'a function from a file that a sourced file sources',
+    script: 'source scripts/ci/env.sh\npost_report "$REPORT_HOOK"',
+    env: HOOK_URL_ENV,
+    files: {
+      'scripts/ci/env.sh': '#!/usr/bin/env bash\nsource scripts/ci/lib.sh\n',
+      'scripts/ci/lib.sh': LIB_SCRIPT,
+    },
+    finds: { violation: /^scripts\/ci\/lib\.sh:3:/ },
+  },
+  {
+    id: 'E6',
+    what: 'one sourced function passing the secret on to another',
+    script: 'source scripts/ci/lib.sh\nsource scripts/ci/notify.sh\nnotify "$REPORT_HOOK"',
+    env: HOOK_URL_ENV,
+    files: {
+      'scripts/ci/lib.sh': LIB_SCRIPT,
+      'scripts/ci/notify.sh': '#!/usr/bin/env bash\nnotify() { post_report "$1"; }\n',
+    },
+    finds: { violation: /^scripts\/ci\/lib\.sh:3:/ },
+  },
+  {
+    id: 'E7',
+    what: 'playwright, through pnpm exec',
+    script: 'pnpm --filter web exec playwright test e2e/prewarm.spec.ts',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: {
+      unresolved:
+        /playwright test e2e\/prewarm\.spec\.ts \(playwright runs code the census cannot read\)/,
+    },
+  },
+  {
+    id: 'E8',
+    what: 'vitest, through pnpm exec',
+    script: 'pnpm exec vitest run src/prewarm.test.ts',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /vitest run src\/prewarm\.test\.ts \(vitest runs code/ },
+  },
+  {
+    id: 'E9',
+    what: 'jest, through npx',
+    script: 'npx jest prewarm',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /jest prewarm \(jest runs code/ },
+  },
+  {
+    id: 'E10',
+    what: 'mocha',
+    script: 'mocha test/prewarm.spec.js',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /mocha test\/prewarm\.spec\.js \(mocha runs code/ },
+  },
+  {
+    id: 'E11',
+    what: 'cypress run',
+    script: 'cypress run --spec cypress/e2e/prewarm.cy.ts',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /cypress run --spec .*\(cypress runs code/ },
+  },
+  {
+    id: 'E12',
+    what: 'ava',
+    script: 'ava test/prewarm.js',
+    env: { ROUTE_SECRET: '${{ secrets.ROUTE_SECRET }}' },
+    finds: { unresolved: /ava test\/prewarm\.js \(ava runs code/ },
   },
 ];
 
