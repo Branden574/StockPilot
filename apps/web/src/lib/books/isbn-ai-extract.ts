@@ -9,6 +9,7 @@ import {
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 
 import { extractIsbnsFromText } from './isbn-extract';
 import { lookupIsbn, normalizeIsbn } from './lookup';
@@ -65,6 +66,42 @@ export interface AiExtractResult {
   candidates: Array<AiExtractCandidate & { verified: boolean; source: 'regex' | 'ai' }>;
   /** Short note summarizing what happened — surfaced to the user. */
   notes: string;
+}
+
+/** Who the extraction runs for: the failure report's organization. */
+export interface AiExtractReportContext {
+  organizationId: string;
+}
+
+/**
+ * The notes when the model call fails, whatever the vendor said (S16
+ * review). The route answers `notes` with a 200, and the web chat panel puts
+ * them into the message it sends to the AI chat, so the vendor's own text
+ * (its billing or quota state, a request id, an endpoint with the model's
+ * name, or which API key variable is missing) was shown to the person,
+ * stored in the chat history and sent to the model. The failure itself is
+ * reported instead (reportModelFailure).
+ */
+export const AI_UNAVAILABLE_NOTE = 'AI extraction unavailable.';
+export const AI_UNAVAILABLE_REGEX_ONLY_NOTE =
+  'AI extraction unavailable. Returning regex hits only.';
+
+/**
+ * A failed model call, reported with the organization. A warning: the
+ * person still gets the regex hits (text files) and can try again, as with
+ * the photo routes' vision failures.
+ */
+function reportModelFailure(
+  err: unknown,
+  report: AiExtractReportContext,
+  path: 'multimodal' | 'text',
+): void {
+  void reportError(err instanceof Error ? err : new Error(String(err)), {
+    tag: 'books.extract-isbns-ai.model',
+    organizationId: report.organizationId,
+    level: 'warning',
+    extra: { path },
+  });
 }
 
 const responseSchema = {
@@ -283,26 +320,28 @@ async function mergeRegexAndAi(
 export async function aiExtractIsbnsFromBuffer(
   buffer: Buffer,
   mimeType: string,
+  report: AiExtractReportContext,
 ): Promise<AiExtractResult> {
   let aiCandidates: AiExtractCandidate[] = [];
   try {
     aiCandidates = await callModelOnBuffer(buffer, mimeType);
   } catch (err) {
-    return {
-      isbns: [],
-      candidates: [],
-      notes: `AI extraction unavailable (${err instanceof Error ? err.message : 'error'}).`,
-    };
+    reportModelFailure(err, report, 'multimodal');
+    return { isbns: [], candidates: [], notes: AI_UNAVAILABLE_NOTE };
   }
   return mergeRegexAndAi([], aiCandidates);
 }
 
-export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
+export async function aiExtractIsbns(
+  text: string,
+  report: AiExtractReportContext,
+): Promise<AiExtractResult> {
   const regexHits = extractIsbnsFromText(text);
   let aiCandidates: AiExtractCandidate[] = [];
   try {
     aiCandidates = await callModelOnText(text);
   } catch (err) {
+    reportModelFailure(err, report, 'text');
     return {
       isbns: regexHits,
       candidates: regexHits.map((isbn) => ({
@@ -313,7 +352,7 @@ export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
         verified: true,
         source: 'regex' as const,
       })),
-      notes: `AI extraction unavailable (${err instanceof Error ? err.message : 'error'}). Returning regex hits only.`,
+      notes: AI_UNAVAILABLE_REGEX_ONLY_NOTE,
     };
   }
   return mergeRegexAndAi(regexHits, aiCandidates);

@@ -1018,6 +1018,18 @@ WEB_TESTS=(
   # details (the new-rack question rides them). The file carries the
   # "Security invariant" marker.
   src/server/actions/duplicate-item.test.ts
+  # S16: no API route answers an unexpected error's own text. The caller gets
+  # a fixed sentence with the route's status and code, and the error goes to
+  # reportError with the route's tag (server/lib/api-error-response.ts, whose
+  # suite pins that answer). The guard reads, on the TypeScript syntax tree,
+  # every module under app/api, every response helper and every module a
+  # route imports directly, finds an error's text however it is spelled
+  # (message, stack, String(), a template, a cast, a destructured message, a
+  # whole error in a JSON answer), and lists each line that keeps one with
+  # why it never reaches a caller. The guard carries the "Security invariant"
+  # marker.
+  src/app/api/no-raw-error-text.guard.test.ts
+  src/server/lib/api-error-response.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1362,6 +1374,20 @@ WEB_TESTS=(
   # expression and no install. The file carries the "Security invariant"
   # marker.
   src/test/dependency-audit.guard.test.ts
+  # A workflow that calls a server with a secret never prints the answer
+  # (S16 review): the Actions logs of this public repository are public, and
+  # the deploy hook printed the prewarm route's answer (every warmed
+  # organization's ids, counts and any failed read's text). It reads every
+  # run: block and local action, and the scripts, package scripts and pnpm or
+  # turbo fan-outs they run, one command at a time. It counts a secret in a
+  # header, -u, data, a URL, an expression (secrets, env., inputs., steps.
+  # outputs) or a variable mapped, assigned or named like one. Such a curl
+  # must send every answer to /dev/null (one -o per URL, --globoff for a URL
+  # it cannot see whole), print no headers, trace or URL, and use only
+  # options curl's manual lists. What it cannot read (node, python, make,
+  # xargs, an action passed a secret) fails until it is read by hand. The
+  # file carries the "Security invariant" marker.
+  src/test/workflow-secret-curl.guard.test.ts
 
   # The export budget's trip row (security.export_rate_limited, which the
   # hourly audit-anomaly cron counts to spot sustained export abuse) is

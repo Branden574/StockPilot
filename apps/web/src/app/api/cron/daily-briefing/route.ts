@@ -5,6 +5,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { createNotification } from '@/server/services/notifications';
 import { gatherInsightsForCtx, summarizeInsights } from '@/server/services/insights';
@@ -135,11 +136,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ orgsProcessed, briefingsSent });
   } catch (err) {
-    void reportError(err, { tag: 'cron.daily-briefing' });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Briefing failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.daily-briefing');
   }
 }
 

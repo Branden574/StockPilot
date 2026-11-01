@@ -19,6 +19,12 @@ import {
   sniffImage,
 } from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  forbiddenOrInternalResponse,
+  internalErrorResponse,
+  unreadableRequestResponse,
+  VISION_FAILED_MESSAGE,
+} from '@/server/lib/api-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -92,11 +98,8 @@ export async function POST(
       return NextResponse.json({ error: 'image field is required' }, { status: 400 });
     }
     photoBlob = file;
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'invalid_body' },
-      { status: 400 },
-    );
+  } catch {
+    return unreadableRequestResponse();
   }
   if (photoBlob.size > PHOTO_MAX_BYTES) {
     return NextResponse.json(
@@ -116,7 +119,7 @@ export async function POST(
   try {
     lineSet = await svc.getLineSetForAiScan(cycleCountId);
   } catch (e) {
-    return serviceErrorToResponse(e);
+    return serviceErrorToResponse(e, ctx.organizationId);
   }
   if (lineSet.length === 0) {
     return NextResponse.json(
@@ -176,10 +179,13 @@ export async function POST(
       upsert: false,
     });
   if (uploadErr) {
-    return NextResponse.json(
-      { error: 'storage_failed', message: uploadErr.message },
-      { status: 502 },
-    );
+    // Storage's text names the bucket and the path: reported, never answered.
+    return internalErrorResponse(new Error(uploadErr.message), 'cycle_counts.ai_scan.storage', {
+      organizationId: ctx.organizationId,
+      status: 502,
+      code: 'storage_failed',
+      extra: { step: 'upload' },
+    });
   }
 
   // Mint a signed URL the mobile client can use to render the photo
@@ -189,9 +195,15 @@ export async function POST(
     .from('cycle-count-scans')
     .createSignedUrl(photoStoragePath, SIGNED_URL_TTL_SEC);
   if (signErr || !signed?.signedUrl) {
-    return NextResponse.json(
-      { error: 'storage_failed', message: signErr?.message ?? 'sign_failed' },
-      { status: 502 },
+    return internalErrorResponse(
+      new Error(signErr?.message ?? 'createSignedUrl answered no URL'),
+      'cycle_counts.ai_scan.storage',
+      {
+        organizationId: ctx.organizationId,
+        status: 502,
+        code: 'storage_failed',
+        extra: { step: 'sign' },
+      },
     );
   }
 
@@ -226,10 +238,14 @@ export async function POST(
       rawResponse = result.response.text();
     }
   } catch (e) {
-    return NextResponse.json(
-      { error: 'vision_failed', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 502 },
-    );
+    // The vendor's text names the vendor, the model and its quota: reported.
+    return internalErrorResponse(e, 'cycle_counts.ai_scan.vision', {
+      organizationId: ctx.organizationId,
+      status: 502,
+      code: 'vision_failed',
+      message: VISION_FAILED_MESSAGE,
+      level: 'warning',
+    });
   }
 
   const results = parseShelfScanResponse(rawResponse, lineSet);
@@ -246,7 +262,7 @@ export async function POST(
     });
     scanId = inserted.id;
   } catch (e) {
-    return serviceErrorToResponse(e);
+    return serviceErrorToResponse(e, ctx.organizationId);
   }
 
   return NextResponse.json({
@@ -256,7 +272,7 @@ export async function POST(
   });
 }
 
-function serviceErrorToResponse(e: unknown): NextResponse {
+function serviceErrorToResponse(e: unknown, organizationId: string): NextResponse {
   if (e instanceof ServiceError) {
     const status =
       e.code === 'not_found'
@@ -268,10 +284,11 @@ function serviceErrorToResponse(e: unknown): NextResponse {
             : 500;
     return NextResponse.json({ error: e.code, message: e.message }, { status });
   }
-  return NextResponse.json(
-    { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-    { status: 500 },
-  );
+  // The count's warehouse gate (assertSessionAccess) refuses with a
+  // ForbiddenError: a 403 with its own words, or a 503 to retry when the
+  // caller's own warehouse access could not be read. Not an unexpected error
+  // (S16 review round 1, as distribute).
+  return forbiddenOrInternalResponse(e, 'cycle_counts.ai_scan', { organizationId });
 }
 
 function safeJsonParse(s: string): unknown {
