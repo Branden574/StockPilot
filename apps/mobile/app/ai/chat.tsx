@@ -24,6 +24,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Mono } from '@/components/ui/text';
+import { buildChatRequestBody, chatRefusalSentence, parseChatStream } from '@/lib/ai-chat';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
@@ -73,12 +74,6 @@ export default function AIChat() {
     setBusy(true);
     scrollToBottom();
 
-    // Build the history payload the server expects (excludes the new
-    // user message since it's passed separately).
-    const history = turns
-      .filter((t) => t.content.trim().length > 0)
-      .map((t) => ({ role: t.role, content: t.content }));
-
     try {
       const {
         data: { session },
@@ -90,16 +85,12 @@ export default function AIChat() {
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
           ...(await orgHeader(session?.user.id ?? null)),
         },
-        body: JSON.stringify({
-          message: text,
-          sessionId,
-          history,
-        }),
+        body: JSON.stringify(buildChatRequestBody(text, sessionId, turns)),
       });
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`AI chat ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
+        throw new Error(chatRefusalSentence(res.status, errText, res.statusText));
       }
 
       // React Native's fetch polyfill returns `response.body = null`
@@ -109,36 +100,10 @@ export default function AIChat() {
       // the assistant turn. Loses the typewriter feel; gain is the
       // chat actually works. A real streaming UX needs an
       // XHR-with-onprogress shim — that's a follow-up.
-      const fullText = await res.text();
-      const lines = fullText.split('\n').map((l) => l.trim()).filter(Boolean);
+      const answer = parseChatStream(await res.text());
+      if (answer.sessionId !== null) setSessionId(answer.sessionId);
 
-      let assistantText = '';
-      const tools: { name: string; ok: boolean }[] = [];
-      let errorMessage: string | null = null;
-
-      for (const line of lines) {
-        try {
-          const event = JSON.parse(line) as
-            | { type: 'text'; delta: string }
-            | { type: 'tool'; name: string; ok: boolean }
-            | { type: 'session'; id: string }
-            | { type: 'done' }
-            | { type: 'error'; message?: string };
-          if (event.type === 'text') {
-            assistantText += event.delta;
-          } else if (event.type === 'tool') {
-            tools.push({ name: event.name, ok: event.ok });
-          } else if (event.type === 'session') {
-            setSessionId(event.id);
-          } else if (event.type === 'error') {
-            errorMessage = event.message ?? 'AI error';
-          }
-        } catch (parseErr) {
-          console.warn('[ai] bad line', line.slice(0, 100), parseErr);
-        }
-      }
-
-      if (errorMessage) throw new Error(errorMessage);
+      if (answer.errorMessage) throw new Error(answer.errorMessage);
 
       setTurns((prev) => {
         const next = [...prev];
@@ -146,8 +111,8 @@ export default function AIChat() {
         if (last && last.role === 'assistant') {
           next[next.length - 1] = {
             ...last,
-            content: assistantText || '(no response)',
-            tools,
+            content: answer.text || '(no response)',
+            tools: answer.tools,
           };
         }
         return next;

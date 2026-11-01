@@ -30,6 +30,7 @@ vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn(async () =>
 vi.mock('./account-eviction', () => ({ notifyUnauthorized: vi.fn() }));
 vi.mock('./request-cancellation', () => ({ registerInFlight: vi.fn(() => vi.fn()) }));
 
+import { notifyUnauthorized } from './account-eviction';
 import { api, ApiError } from './api';
 
 function respondWith(status: number, body: string) {
@@ -92,5 +93,42 @@ describe('ApiError carries the structured refusal', () => {
     const e = (await api('/x').catch((x: unknown) => x)) as ApiError;
     expect(e.message).not.toContain('<');
     expect(e.details).toBeUndefined();
+  });
+});
+
+// The body reader and the sentences moved to api-error-body.ts (docket B75),
+// so the AI chat reads a refusal as api() does. api() words every failure as
+// it did: the message, else the code, else the status sentence; an empty
+// message counts as none.
+describe('api() words a failure as before the reader moved', () => {
+  it('a code without a message: the code, as before', async () => {
+    respondWith(400, JSON.stringify({ error: 'validation_error' }));
+    const e = (await api('/x', { method: 'POST', body: {} }).catch((x: unknown) => x)) as ApiError;
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e.message).toBe('validation_error');
+    expect(e.code).toBe('validation_error');
+  });
+
+  it('an empty message at 500: the server sentence', async () => {
+    respondWith(500, '{"message":""}');
+    const e = (await api('/x').catch((x: unknown) => x)) as ApiError;
+    expect(e.message).toBe('The server had a problem. Try again in a moment.');
+    expect(e.code).toBeUndefined();
+  });
+
+  it('an empty body at 403: the access sentence', async () => {
+    respondWith(403, '');
+    const e = (await api('/x').catch((x: unknown) => x)) as ApiError;
+    expect(e.status).toBe(403);
+    expect(e.message).toBe('You do not have access to that.');
+  });
+
+  // The bus probes only on a 401 (account-eviction.ts); api() hands it every
+  // refusal's status.
+  it('a 401 is handed to the account probe', async () => {
+    respondWith(401, JSON.stringify({ error: 'unauthenticated' }));
+    const e = (await api('/x').catch((x: unknown) => x)) as ApiError;
+    expect(e.message).toBe('unauthenticated');
+    expect(vi.mocked(notifyUnauthorized).mock.calls).toEqual([[{ status: 401 }]]);
   });
 });
