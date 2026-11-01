@@ -152,7 +152,7 @@ describe('OrderAttachmentsPanel when a request gets no answer', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it('a file whose attach gets no answer says to check the proof of delivery, reads the order again and frees Add', async () => {
+  it('a file whose attach gets no answer says to check the proof of delivery, leaves the page as it is and frees Add', async () => {
     const upload = vi.fn(async () => ({ data: { path: 'p' }, error: null }));
     vi.mocked(createClient).mockReturnValue({
       storage: { from: () => ({ upload, remove: vi.fn() }) },
@@ -173,8 +173,40 @@ describe('OrderAttachmentsPanel when a request gets no answer', () => {
       ),
     );
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(refresh).toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled());
+    // With no connection a refresh is a full page load (the browser's offline
+    // page), which would take the message with it: the sentence says where to
+    // look instead.
+    expect(refresh).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('reads the order again when one file was attached, while another got no answer', async () => {
+    const upload = vi.fn(async () => ({ data: { path: 'p' }, error: null }));
+    vi.mocked(createClient).mockReturnValue({
+      storage: { from: () => ({ upload, remove: vi.fn() }) },
+    } as never);
+    vi.mocked(addOrderAttachmentAction)
+      .mockResolvedValueOnce({ ok: true, data: null } as never)
+      .mockRejectedValueOnce(offline());
+    const { container } = renderPanel({ canAttach: true, canManage: true });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File(['%PDF'], 'slip.pdf', { type: 'application/pdf' }),
+          new File(['%PDF'], 'note.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Added 1 attachment.'));
+    expect(toast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(
+        offline(),
+        'note.pdf was attached',
+        "the order's proof of delivery",
+      ),
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

@@ -1012,7 +1012,17 @@ export function PoForm({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        toast.error(requestFailedMessage(e, 'save the purchase order'));
+        // Saving a draft again sets the same header and lines, except that a
+        // line typed as a new item makes a new catalog item on every save
+        // (PurchaseOrdersService.update -> resolveLines). If this save went
+        // through and only its answer was lost, a second one would add a
+        // second item and leave the first on no line: look first.
+        const hasNewItemLine = payload.lines.some((l) => 'newItemName' in l);
+        toast.error(
+          hasNewItemLine
+            ? requestUnconfirmedMessage(e, 'the purchase order was saved', 'the purchase order')
+            : requestFailedMessage(e, 'save the purchase order'),
+        );
         return;
       } finally {
         setSubmitting(false);

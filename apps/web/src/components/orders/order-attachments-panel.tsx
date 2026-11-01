@@ -90,7 +90,6 @@ export function OrderAttachmentsPanel({
     setBusy(true);
     const supabase = createClient();
     let uploaded = 0;
-    let unconfirmed = 0;
     try {
       for (const rawFile of Array.from(files)) {
         if (rawFile.size > MAX_BYTES) {
@@ -135,7 +134,6 @@ export function OrderAttachmentsPanel({
           if (isControlFlow(e)) return;
           // No answer (offline, a server error, a deploy): the file is stored,
           // but whether it was attached is unknown, so it is left in place.
-          unconfirmed += 1;
           toast.error(
             requestUnconfirmedMessage(
               e,
@@ -157,11 +155,14 @@ export function OrderAttachmentsPanel({
       setBusy(false);
     }
     if (inputRef.current) inputRef.current.value = '';
+    // Read the page again only after an attach that answered, as the PO
+    // attachments panel does. A file whose attach got no answer has its own
+    // sentence saying where to look: with no connection a refresh is a full
+    // page load (the browser's offline page), which would take it away.
     if (uploaded > 0) {
       toast.success(`Added ${uploaded} attachment${uploaded === 1 ? '' : 's'}.`);
+      router.refresh();
     }
-    // A file whose attach got no answer may be on the order: read it again.
-    if (uploaded > 0 || unconfirmed > 0) router.refresh();
   }
 
   async function onDelete(id: string) {

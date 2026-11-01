@@ -214,6 +214,85 @@ describe('B40: Save view when the request fails', () => {
   });
 });
 
+// The popover can be closed (Escape, a click outside) while Save is still
+// out. Its answer belongs to the popover that asked: a popover opened
+// afterwards starts clean, and is not closed by an earlier save's success.
+describe('B40: Save view when the popover is closed before the answer', () => {
+  function heldSave() {
+    let settle: { resolve: (v: unknown) => void; reject: (e: unknown) => void } = {
+      resolve: () => {},
+      reject: () => {},
+    };
+    actions.createSavedViewAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = { resolve, reject };
+        }),
+    );
+    return () => settle;
+  }
+
+  it('a failure that comes after the popover closed is not shown when it opens again', async () => {
+    const held = heldSave();
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(await openSaveView(user));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByLabelText('Name')).toBeNull());
+
+    held().reject(offline());
+    // The toast still says it: the person pressed Save.
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        "We couldn't save the view. Check your connection and try again.",
+      ),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Save view' }));
+    expect(await screen.findByLabelText('Name')).toHaveValue('');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a failure that comes after the popover was opened again is not shown in the new one', async () => {
+    const held = heldSave();
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(await openSaveView(user));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByLabelText('Name')).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Save view' }));
+    await screen.findByLabelText('Name');
+
+    held().reject(offline());
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        "We couldn't save the view. Check your connection and try again.",
+      ),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+  });
+
+  it('a success that comes after the popover was opened again leaves the new one open', async () => {
+    const held = heldSave();
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(await openSaveView(user));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByLabelText('Name')).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Save view' }));
+    await user.type(await screen.findByLabelText('Name'), 'Markers');
+
+    held().resolve({ ok: true, data: { id: 'view-2' } });
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('View "Pens" saved.'));
+    expect(routerMock.refresh).toHaveBeenCalled();
+    expect(screen.getByLabelText('Name')).toHaveValue('Markers');
+  });
+});
+
 describe('B40: the saved view chip when the request fails', () => {
   it('Share stops its spinner and says the view was not shared', async () => {
     actions.toggleSavedViewShareAction.mockRejectedValueOnce(offline());

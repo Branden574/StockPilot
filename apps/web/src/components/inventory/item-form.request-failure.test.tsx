@@ -35,6 +35,10 @@ vi.mock('@/server/actions/item-images', () => ({
   recordImageAction: vi.fn(),
 }));
 vi.mock('@/server/actions/tags', () => ({ setItemTagsAction: vi.fn() }));
+vi.mock('@/server/actions/item-visibility', () => ({
+  setItemPublicVisibilityAction: vi.fn(),
+  setItemPublicDisplayAction: vi.fn(),
+}));
 // The storage upload is the browser's XHR; here it lands.
 vi.mock('@/lib/upload-with-progress', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/upload-with-progress')>()),
@@ -57,6 +61,10 @@ import {
   createItemAction,
   updateItemAction,
 } from '@/server/actions/inventory';
+import {
+  setItemPublicDisplayAction,
+  setItemPublicVisibilityAction,
+} from '@/server/actions/item-visibility';
 import { setItemTagsAction } from '@/server/actions/tags';
 
 import { ItemForm, type ItemFormDefaults } from './item-form';
@@ -73,6 +81,7 @@ function renderForm(
     defaults?: ItemFormDefaults;
     tags?: Array<{ id: string; name: string; color: null }>;
     categories?: Category[];
+    canManagePublicVisibility?: boolean;
   } = {},
 ) {
   return render(
@@ -93,9 +102,18 @@ function renderForm(
       warehouseLabel="Warehouse"
       charterLabel="Charter"
       {...(opts.tags ? { tags: opts.tags } : {})}
+      {...(opts.canManagePublicVisibility ? { canManagePublicVisibility: true } : {})}
     />,
   );
 }
+
+const EDIT_DEFAULTS: ItemFormDefaults = {
+  id: ITEM_ID,
+  name: 'Spiral notebook',
+  warehouseId: WAREHOUSE_ID,
+};
+
+const SIZES = { categories: [{ id: SHIRTS_ID, name: 'Shirts', supports_sizes: true }] };
 
 const realCreateObjectURL = URL.createObjectURL;
 const realRevokeObjectURL = URL.revokeObjectURL;
@@ -254,5 +272,148 @@ describe('ItemForm when a save gets no answer', () => {
       ),
     );
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  // The run may have been created before the answer was lost, and a second
+  // run would make every size twice: look first.
+  it('a size run whose create gets no answer says to check the Items list before trying again', async () => {
+    vi.mocked(bulkCreateSizedVariantsAction).mockRejectedValueOnce(offline());
+    renderForm({ ...SIZES, defaults: { categoryId: SHIRTS_ID } });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: 'S' }));
+    await user.click(screen.getByRole('button', { name: 'M' }));
+    await user.click(screen.getByRole('button', { name: 'Create item' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the sizes were created', 'the Items list'),
+      ),
+    );
+    expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Create item' })).toBeEnabled();
+  });
+
+  it("a size run's photo answered with a redirect says nothing, and nothing is left to escape", async () => {
+    vi.mocked(bulkCreateSizedVariantsAction).mockResolvedValueOnce({
+      ok: true,
+      data: { created: 2, ids: ['item-s', 'item-m'] },
+    } as never);
+    vi.mocked(createImageUploadAction).mockRejectedValueOnce(signInRedirect());
+    const { container } = renderForm({ ...SIZES, defaults: { categoryId: SHIRTS_ID } });
+    const input = container.querySelector('#item-form-photos') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(['x'], 'front.jpg', { type: 'image/jpeg' })] },
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: 'S' }));
+    await user.click(screen.getByRole('button', { name: 'M' }));
+    await user.click(screen.getByRole('button', { name: 'Create item & upload 1 photo' }));
+    await waitFor(() => expect(createImageUploadAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(createImageUploadAction).toHaveBeenCalledTimes(1);
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('a create answered with a redirect says nothing, and nothing is left to escape', async () => {
+    vi.mocked(createItemAction).mockRejectedValueOnce(signInRedirect());
+    renderForm();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: 'Create item' }));
+    await waitFor(() => expect(createItemAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('an edit answered with a redirect says nothing, and nothing is left to escape', async () => {
+    vi.mocked(updateItemAction).mockRejectedValueOnce(signInRedirect());
+    renderForm({ defaults: EDIT_DEFAULTS });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(updateItemAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// The item is saved first; public visibility and the public display fields
+// are written after it, each on its own. One of those with no answer said
+// nothing before B40 (the rejection escaped). Now it says what was not saved,
+// and an edit stays on the form: Save changes sends the whole edit again (an
+// edit is safe to repeat), while a refresh with no connection would be a full
+// page load (the browser's offline page) that takes the warning and what was
+// typed with it.
+describe('ItemForm when a write after the edit gets no answer', () => {
+  it('public visibility: says it was not saved, and the form stays as it is', async () => {
+    vi.mocked(updateItemAction).mockResolvedValue({ ok: true, data: { id: ITEM_ID } } as never);
+    vi.mocked(setItemPublicVisibilityAction).mockRejectedValueOnce(offline());
+    renderForm({ defaults: EDIT_DEFAULTS, canManagePublicVisibility: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('combobox', { name: 'Public visibility' }));
+    await user.click(await screen.findByRole('option', { name: 'Public' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Item saved, but public visibility couldn't be updated: check your connection and try again.",
+      ),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+    expect(refresh).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByRole('combobox', { name: 'Public visibility' })).toHaveTextContent('Public');
+
+    // Sent again, it is saved and the page is read again.
+    vi.mocked(setItemPublicVisibilityAction).mockResolvedValueOnce({
+      ok: true,
+      data: undefined,
+    } as never);
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(setItemPublicVisibilityAction).toHaveBeenLastCalledWith({
+      itemId: ITEM_ID,
+      visibility: 'public',
+    });
+  });
+
+  it('the public display fields: say they were not saved, and the form keeps what was typed', async () => {
+    vi.mocked(updateItemAction).mockResolvedValueOnce({ ok: true, data: { id: ITEM_ID } } as never);
+    vi.mocked(setItemPublicDisplayAction).mockRejectedValueOnce(offline());
+    renderForm({ defaults: EDIT_DEFAULTS, canManagePublicVisibility: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.type(screen.getByLabelText('Public display name'), 'Ruled notebook');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Item saved, but the public display fields couldn't be updated: check your connection and try again.",
+      ),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+    expect(refresh).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Public display name')).toHaveValue('Ruled notebook');
+  });
+
+  it('says nothing more on the way to sign-in, and nothing is left to escape', async () => {
+    vi.mocked(updateItemAction).mockResolvedValueOnce({ ok: true, data: { id: ITEM_ID } } as never);
+    vi.mocked(setItemPublicDisplayAction).mockRejectedValueOnce(signInRedirect());
+    renderForm({ defaults: EDIT_DEFAULTS, canManagePublicVisibility: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.type(screen.getByLabelText('Public display name'), 'Ruled notebook');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(setItemPublicDisplayAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

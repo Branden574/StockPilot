@@ -5786,11 +5786,16 @@ function SaveCurrentViewButton({
   // Why the last Save failed, in the popover (a toast sits outside it). The
   // name stays. Cleared on each try and when the popover closes.
   const [saveError, setSaveError] = React.useState<string | null>(null);
+  // Counts each opening and closing. The popover can be closed (Escape, a
+  // click outside) while Save is out, and opened again before the answer: an
+  // answer for an earlier one is never shown in, and never closes, a later one.
+  const sessionRef = React.useRef(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const nameId = React.useId();
   const shareNoteId = React.useId();
 
   React.useEffect(() => {
+    sessionRef.current += 1;
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
@@ -5804,6 +5809,9 @@ function SaveCurrentViewButton({
   async function save() {
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
+    const session = sessionRef.current;
+    // Still the popover that asked (not closed, or closed and opened again).
+    const sameSession = () => sessionRef.current === session;
     setSaving(true);
     setSaveError(null);
     let res: Awaited<ReturnType<typeof createSavedViewAction>>;
@@ -5819,15 +5827,16 @@ function SaveCurrentViewButton({
       if (isControlFlow(e)) return;
       // B40: no answer (offline, a server error the action threw, a deploy
       // that no longer has it). The popover stays open with the name kept.
+      // The toast says it even when the popover has closed since.
       const message = requestFailedMessage(e, 'save the view');
-      setSaveError(message);
+      if (sameSession()) setSaveError(message);
       toast.error(message);
       return;
     } finally {
       setSaving(false);
     }
     if (!res.ok) {
-      setSaveError(res.error.message);
+      if (sameSession()) setSaveError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -5836,7 +5845,7 @@ function SaveCurrentViewButton({
         ? `View "${trimmed}" saved and shared with the team.`
         : `View "${trimmed}" saved.`,
     );
-    setOpen(false);
+    if (sameSession()) setOpen(false);
     router.refresh();
   }
 

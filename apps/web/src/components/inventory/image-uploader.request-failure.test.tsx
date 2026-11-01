@@ -123,9 +123,12 @@ describe('ImageUploader when a request gets no answer', () => {
     // The button sits inside the drop zone's label, which names it.
     expect(screen.getByText(/Choose files/).closest('button')).toBeEnabled();
     expect(toast.success).not.toHaveBeenCalled();
+    // The page stays as it is: with no connection a refresh is a full page
+    // load (the browser's offline page), and the message above would go too.
+    expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("a photo whose record gets no answer says to check the item's photos", async () => {
+  it("a photo whose record gets no answer says to check the item's photos, and leaves the page as it is", async () => {
     vi.mocked(createImageUploadAction).mockResolvedValueOnce(PRESIGN);
     vi.mocked(recordImageAction).mockRejectedValueOnce(offline());
     const { container } = render(<ImageUploader itemId={ITEM_ID} initialImages={[]} />);
@@ -135,10 +138,41 @@ describe('ImageUploader when a request gets no answer', () => {
         requestUnconfirmedMessage(offline(), '"front.jpg" was saved', "the item's photos"),
       ),
     );
+    expect(await screen.findByText('Drop images, or click to browse')).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('reads the page again when one photo of the batch was saved, while another got no answer', async () => {
+    vi.mocked(createImageUploadAction)
+      .mockResolvedValueOnce(PRESIGN)
+      .mockRejectedValueOnce(offline());
+    vi.mocked(recordImageAction).mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'img-2' },
+    } as never);
+    const { container } = render(<ImageUploader itemId={ITEM_ID} initialImages={[]} />);
+    const input = container.querySelector('#image-upload') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File(['x'], 'front.jpg', { type: 'image/jpeg' }),
+          new File(['y'], 'back.jpg', { type: 'image/jpeg' }),
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'upload "back.jpg"'),
+      ),
+    );
+    expect(await screen.findByText('Drop images, or click to browse')).toBeInTheDocument();
+    // The saved photo is shown; "Photos uploaded." would contradict the failure.
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it('says "Photos uploaded." only when no photo failed', async () => {
+  it('says "Photos uploaded." only when no photo failed, and reads the page again only after a photo was saved', async () => {
     vi.mocked(createImageUploadAction).mockResolvedValueOnce({
       ok: false,
       error: { code: 'forbidden', message: 'Missing permission: items:update' },
@@ -148,8 +182,10 @@ describe('ImageUploader when a request gets no answer', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Missing permission: items:update'),
     );
-    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(await screen.findByText('Drop images, or click to browse')).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
+    // Nothing was saved, so there is nothing new to show.
+    expect(refresh).not.toHaveBeenCalled();
 
     vi.mocked(createImageUploadAction).mockResolvedValueOnce(PRESIGN);
     vi.mocked(recordImageAction).mockResolvedValueOnce({
@@ -158,6 +194,7 @@ describe('ImageUploader when a request gets no answer', () => {
     } as never);
     chooseFront(container);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Photos uploaded.'));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
   it('an upload answered with a redirect says nothing, and nothing is left to escape', async () => {
     vi.mocked(createImageUploadAction).mockResolvedValueOnce(PRESIGN);

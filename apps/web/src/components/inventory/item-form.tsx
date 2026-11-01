@@ -1628,6 +1628,9 @@ export function ItemForm({
     // the user retry from the tags row instead of rolling back the
     // whole submit.
     const itemId = res.data.id;
+    // Set when a write after the save (tags, public visibility, the public
+    // display fields) got no answer. An edit then stays as it is (below).
+    let followUpUnanswered = false;
 
     // Product analytics (no-op until PostHog is configured).
     if (!isEdit) {
@@ -1643,6 +1646,7 @@ export function ItemForm({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
+        followUpUnanswered = true;
       }
       if (!tagRes?.ok) {
         toast.warning(
@@ -1664,6 +1668,7 @@ export function ItemForm({
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
+        followUpUnanswered = true;
       }
       if (!visRes?.ok) {
         toast.warning(
@@ -1691,6 +1696,7 @@ export function ItemForm({
         } catch (e) {
           // A redirect (the session ended): the router is already navigating.
           if (isControlFlow(e)) return;
+          followUpUnanswered = true;
         }
         if (!displayRes?.ok) {
           toast.warning(
@@ -1745,6 +1751,19 @@ export function ItemForm({
         }),
         { duration: 10000 },
       );
+    }
+
+    // An edit whose later write got no answer stays as it is. Its warning
+    // says what was not saved, the form keeps what was typed, and Save changes
+    // sends the whole edit again (an edit is safe to repeat). A refresh or a
+    // push with no connection is a full page load (the browser's offline
+    // page), which would take the warning and the typed values with it. A
+    // create still opens what it created: the item exists, and staying on the
+    // form would invite creating it a second time.
+    if (isEdit && followUpUnanswered) {
+      // Not saved in full, so leaving the page still asks first.
+      savedRef.current = false;
+      return;
     }
 
     onDone?.();

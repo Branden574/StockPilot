@@ -121,6 +121,8 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // block the others (mirrors the prior `continue` semantics).
       const CONCURRENCY = 3;
       let failed = 0;
+      // Photos whose record step answered ok: the only ones a refresh can show.
+      let saved = 0;
       async function processOne(original: File, index: number): Promise<void> {
         // Validation already ran above, before the progress denominator was
         // fixed — every file reaching here is one we intend to upload.
@@ -209,7 +211,9 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         if (!record.ok) {
           failed++;
           toast.error(record.error.message);
+          return;
         }
+        saved++;
       }
 
       // Drain the list in waves of CONCURRENCY using a worker pool —
@@ -241,7 +245,11 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // Each failed photo has already said so; "Photos uploaded." after one
       // of them would contradict it.
       if (failed === 0) toast.success('Photos uploaded.');
-      router.refresh();
+      // Read the page again only when a photo was saved, as the PO and order
+      // attachment panels do: a batch that saved nothing has nothing new to
+      // show, and with no connection a refresh is a full page load (the
+      // browser's offline page), which would take the messages above with it.
+      if (saved > 0) router.refresh();
     } catch (e) {
       // A redirect (the session ended) ends the batch here: the router is
       // already navigating, so nothing more is said. Left to escape, it was an
