@@ -765,6 +765,20 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
+  # Cycle count release (0423, docket item S42): release_cycle_count refuses
+  # everyone but a manager of the count's organization on a count with no
+  # assignee (the old check was NULL there and refused no one: any signed-in
+  # account of any organization that knew the id released the count and got
+  # its row back past row level security), and refuses the assignee once
+  # has_permission stock:adjust no longer holds for them in the count's
+  # organization (a member removed from it, a disabled account, an expired
+  # act-as seat, a viewer, a member whose stock:adjust was revoked).
+  # Managers are unaffected, with or without stock:adjust. The restated body
+  # is production's with its two added blocks removed, and taking each block
+  # out lets the refused calls through. The two-session proof is
+  # scripts/db-concurrency/0423_release_race.sh; the lock footprint is
+  # scripts/db-concurrency/0423_migration_lock_footprint.sh.
+  supabase/tests/0423_release_cycle_count_assignee_check.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
