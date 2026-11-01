@@ -2262,9 +2262,11 @@ function runFile(
       ? undefined
       : findFile(path.value, scope, ctx.io);
   if (!found) {
-    const why =
-      expansion(path.raw).expands || path.value.startsWith('/')
-        ? 'a script the census cannot find'
+    // bash "$@": the script, or -c and its text, is what the caller passes.
+    const why = expansion(path.raw).expands
+      ? 'a script (or -c text) named by an expansion, which the census cannot follow'
+      : path.value.startsWith('/')
+        ? 'a script outside the repository, which the census cannot read'
         : 'no such file in the repository';
     cannotRead(ctx, scope, src, where, call, why, filesRun('', args, scope, ctx.io));
     return;
@@ -5405,6 +5407,16 @@ const PLANTS: Plant[] = [
       unresolved: /mongoexport --uri "\$DATABASE_URL" --collection orders \(a client that prints/,
     },
   },
+  {
+    id: 'H56',
+    what: 'tools/bash -c "echo ok" (exec bash "$@"): the wrapper\'s own line says what it cannot follow',
+    script: 'tools/bash -c "echo ok"',
+    env: { TOKEN: '${{ secrets.TOKEN }}' },
+    files: { 'tools/bash': '#!/bin/sh\nexec bash "$@"\n' },
+    finds: {
+      unresolved: /^tools\/bash:2: bash "\$@" \(a script \(or -c text\) named by an expansion/,
+    },
+  },
 ];
 
 /** A workflow, and the repository files it reads, at one moment. */
@@ -6241,10 +6253,11 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // of a6b05212c missed each of those but E22 (the guard of e43f2c33a still
   // found E17 and E20; this branch lost them when it named those programs).
   // The review of 1875b129c added (10): the guard of 1875b129c missed each of
-  // those but the controls H33, H47 and H52, and H53 and H54, which pin the
-  // two fallbacks it had (main's guard of 7c28c3a9c found H1 to H4 and H6 to
-  // H15, which go by a program's name: this branch lost them when it read a
-  // program run by its path as a file only).
+  // those but the controls H33, H47 and H52, H53 and H54, which pin the two
+  // fallbacks it had, and H56, which pins a reason it gave in other words
+  // (main's guard of 7c28c3a9c found H1 to H4 and H6 to H15, which go by a
+  // program's name: this branch lost them when it read a program run by its
+  // path as a file only).
   describe('one plant per gap the second review found', () => {
     it.each(PLANTS)('$id: $what', (p) => {
       const files = p.files ?? {};
