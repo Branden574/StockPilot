@@ -30,13 +30,16 @@ const WEB_SRC = path.resolve(__dirname, '..');
 /**
  * Each gate, by the name its module exports, and the module (relative to
  * apps/web/src, no extension) it must come from. withApiContext is the rule
- * itself; the other two are the returns routes' shared plumbing, which call it
- * with their own request (the guard test reads them).
+ * itself; the others call it with their own request (the guard test reads
+ * them): the returns routes' shared plumbing, and the API context gate, which
+ * answers a refusal made before any write as the phone's retryable 503 (docket
+ * S26).
  */
 export const GATE_MODULES: Readonly<Record<string, string>> = {
   withApiContext: 'lib/auth/api-context',
   returnsContext: 'app/api/v1/returns/http',
   memberRequesterGate: 'app/api/v1/orders/[id]/return-request/http',
+  apiContextGate: 'server/lib/api-context-gate',
 };
 
 export interface WriteHandler {

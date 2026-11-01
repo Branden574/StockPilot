@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { contextUnavailableBody, type ModuleId } from '@stockpilot/core';
 
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
@@ -211,5 +213,49 @@ describe('POST /api/v1/rentals', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'conflict', message: sentence });
     expect(vi.mocked(reportError)).not.toHaveBeenCalled();
+  });
+});
+
+// Docket S26. A checkout refused because the caller's access could not be
+// checked (withApiContext's backup reads could not read the account status or
+// the permission overrides) is refused before anything is written. It used to
+// escape as the framework's bare 500, which the phone words as "may or may
+// not have been checked out": a second checkout would lend the same units
+// twice, so it tells the person to look first. It now answers the marker the
+// phone can trust, before the service is ever built.
+describe('POST /api/v1/rentals: access that cannot be checked is refused before any work', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it.each([
+    ['PermissionsUnavailableError', () => new PermissionsUnavailableError()],
+    ['AccountStatusUnavailableError', () => new AccountStatusUnavailableError()],
+  ])('%s from the context answers the marker and never builds the service', async (_name, make) => {
+    vi.mocked(withApiContext).mockRejectedValueOnce(make());
+
+    const res = await POST(buildRequest(validBody()));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual(contextUnavailableBody());
+    expect(res.headers.get('retry-after')).toBe('5');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(RentalsService).not.toHaveBeenCalled();
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
+  });
+
+  // The marker follows the step, not the class: thrown by the service, after
+  // the context, it may follow a write, so it stays the fixed 500.
+  it('the same refusal thrown by the service is still the fixed 500', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    mockCreate(async () => {
+      throw new PermissionsUnavailableError();
+    });
+
+    const res = await POST(buildRequest(validBody()));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual(INTERNAL_BODY);
   });
 });

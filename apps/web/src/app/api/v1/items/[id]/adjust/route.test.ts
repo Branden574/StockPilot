@@ -1,9 +1,14 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, mfaGateError, ServiceError } from '@/server/services/context';
 import { ADJUST_WAREHOUSE_WRITE_REFUSED, InventoryService } from '@/server/services/inventory';
@@ -242,5 +247,72 @@ describe('POST /api/v1/items/[id]/adjust', () => {
     const { status } = await post({ quantityChange: 0, movementType: 'adjust' });
     expect(status).toBe(400);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFUSED BEFORE ANY WRITE (docket S26).
+//
+// When get_request_context() gives no usable answer, withApiContext falls back
+// to separate reads, and refuses the request by throwing when it cannot read
+// the caller's account status or a non-owner's permission overrides. That
+// refusal used to escape as the framework's bare 500, which the phone reads as
+// "may or may not have been saved": online it labelled the on-hand "Not
+// confirmed", and a queued adjustment was parked in Unsent work for good.
+// It now answers the marker (core contextUnavailableBody), which only the API
+// context gate sends, before anything else in the route runs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/v1/items/[id]/adjust: access that cannot be checked is refused before any work', () => {
+  beforeEach(() => {
+    vi.mocked(assertPermission).mockReset();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it.each([
+    ['PermissionsUnavailableError', () => new PermissionsUnavailableError()],
+    ['AccountStatusUnavailableError', () => new AccountStatusUnavailableError()],
+  ])('%s from the context answers the marker, and nothing after it runs', async (_name, make) => {
+    vi.mocked(withApiContext).mockRejectedValueOnce(make());
+    const spy = vi.spyOn(InventoryService.prototype, 'adjustStock');
+    spy.mockClear();
+
+    const res = await POST(req({ quantityChange: 1 }), {
+      params: Promise.resolve({ id: ITEM_ID }),
+    });
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual(contextUnavailableBody());
+    expect(res.headers.get('retry-after')).toBe('5');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(spy).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(revalidateInventoryList).not.toHaveBeenCalled();
+    expect(assertPermission).not.toHaveBeenCalled();
+  });
+
+  // The marker follows the step, not the class: the same error thrown by the
+  // service, after the context was built, may come after a write, so it stays
+  // the 500 it always was (the phone keeps reading it as not confirmed).
+  it('the same refusal thrown after the context is still a plain 500 internal_error, never the marker', async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValueOnce(
+      new PermissionsUnavailableError(),
+    );
+
+    const res = await POST(req({ quantityChange: 1 }), {
+      params: Promise.resolve({ id: ITEM_ID }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal_error' });
+  });
+
+  it('no context is still the 401 unauthenticated', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(401);
+    expect(body).toEqual({ error: 'unauthenticated' });
   });
 });

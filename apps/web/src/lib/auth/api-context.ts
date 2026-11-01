@@ -186,6 +186,12 @@ async function mfaFromPolicy(
  * when the legacy loader cannot read a non-owner's, it throws
  * PermissionsUnavailableError, a 5xx, never the role's defaults and never the
  * `null` every route answers as 401 (docket S19).
+ *
+ * Neither path writes the request's work: this module and everything it loads
+ * only read (lib/auth/api-context.read-only.guard.test.ts). That is what lets
+ * apiContextGate (server/lib/api-context-gate.ts) answer those two throws as a
+ * 503 marked as refused before any write, which the phone may send again
+ * (docket S26). A write added here would make it send a change twice.
  */
 type ApiBundleResolution =
   /** Use the legacy reads. */
@@ -527,7 +533,8 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     // An UNREADABLE status throws instead: it still refuses the request (an
     // authz check that cannot read its input must deny), but as a 5xx the
     // client words as retryable rather than as the 401 it words as "you do not
-    // have access to that".
+    // have access to that". Through apiContextGate that 5xx is the 503 marked
+    // as refused before any write (docket S26), since nothing here writes.
     if (accountIsDisabledOrThrow(status)) return null;
     const mfa = await resolveApiMfaState(
       supabase,
