@@ -455,11 +455,17 @@ export async function POST(req: NextRequest) {
   // own address was withheld from every requester notice, and the sign page
   // offers it as the default signer email, so a signer email equal to it gets
   // no signer receipt either (otherwise the order would still reach that
-  // address, as a receipt instead of a notice).
-  const signerIsWithheldRequester =
-    requester.withheldEmail !== null &&
-    parsed.data.signerEmail.trim().toLowerCase() === requester.withheldEmail.trim().toLowerCase();
-  const signerGetsNoReceipt = signerIsDeletedRequester || signerIsWithheldRequester;
+  // address, as a receipt instead of a notice). When that address could not
+  // be read (withheldEmailUnknown; resolveRequesterContact reported it under
+  // the tag above), no signer email can be told apart from it, so no signer
+  // receipt goes out: a receipt lost to a read error is acceptable (every
+  // email here is best-effort), one to a former member's own address is not.
+  const signerMayBeWithheldRequester =
+    requester.withheldEmailUnknown ||
+    (requester.withheldEmail !== null &&
+      parsed.data.signerEmail.trim().toLowerCase() ===
+        requester.withheldEmail.trim().toLowerCase());
+  const signerGetsNoReceipt = signerIsDeletedRequester || signerMayBeWithheldRequester;
 
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the

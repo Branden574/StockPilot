@@ -31,6 +31,14 @@ export interface RequesterContact {
    * would carry the order all the same (the A3 rule for a kept address).
    */
   withheldEmail: string | null;
+  /**
+   * Docket S36: their own address was withheld, as above, but could not be
+   * read (the profile read failed; reported under `report.tag`), so
+   * `withheldEmail` is null and no signer email can be compared with it. The
+   * sign route then sends no signer receipt at all: the sign page may have
+   * offered that very address.
+   */
+  withheldEmailUnknown: boolean;
 }
 
 /**
@@ -67,23 +75,27 @@ export interface RequesterContact {
  *
  * Fails CLOSED-safe: if the profile read errors we return no address, which
  * degrades to the in-app notification only rather than failing a hand-over
- * the database has already recorded.
+ * the database has already recorded. The failed read is reported under
+ * `report.tag`, and when the address was to be withheld anyway the caller is
+ * told it is unknown (`withheldEmailUnknown`), never that there is none.
  */
 export async function resolveRequesterContact(
   admin: AdminClient,
   order: RequesterColumns,
   report: { tag: string; orderId: string },
 ): Promise<RequesterContact> {
-  if (order.requester_deleted_at) return { email: null, name: null, withheldEmail: null };
+  const nobody = { email: null, name: null, withheldEmail: null, withheldEmailUnknown: false };
+  if (order.requester_deleted_at) return nobody;
   if (order.requester_email) {
     return {
       email: order.requester_email,
       name: order.requester_name ?? null,
       withheldEmail: null,
+      withheldEmailUnknown: false,
     };
   }
-  if (!order.requester_user_id) return { email: null, name: null, withheldEmail: null };
-  const [verdict, profile] = await Promise.all([
+  if (!order.requester_user_id) return nobody;
+  const [verdict, own] = await Promise.all([
     ownAddressVerdict(
       admin,
       { organizationId: order.organization_id, userId: order.requester_user_id },
@@ -91,26 +103,53 @@ export async function resolveRequesterContact(
     ),
     readOwnProfile(admin, order.requester_user_id),
   ]);
+  if (!own.readable) {
+    await reportError(own.failure, {
+      tag: report.tag,
+      level: 'warning',
+      extra: {
+        orderId: report.orderId,
+        organizationId: order.organization_id,
+        userId: order.requester_user_id,
+      },
+    });
+  }
+  const profile = own.readable ? own.profile : null;
   const address = profile?.email ?? null;
   const name = profile?.full_name ?? order.requester_name ?? null;
-  if (verdict !== 'current') return { email: null, name, withheldEmail: address };
-  return { email: address, name, withheldEmail: null };
+  if (verdict !== 'current') {
+    return { email: null, name, withheldEmail: address, withheldEmailUnknown: !own.readable };
+  }
+  return { email: address, name, withheldEmail: null, withheldEmailUnknown: false };
 }
 
-/** The requester's own address and name; null when unreadable. */
-async function readOwnProfile(
-  admin: AdminClient,
-  userId: string,
-): Promise<{ email?: string | null; full_name?: string | null } | null> {
+type OwnProfileRead =
+  | { readable: true; profile: { email?: string | null; full_name?: string | null } | null }
+  /** `failure` is for reportError only: the route never answers with it. */
+  | { readable: false; failure: Error };
+
+/**
+ * The requester's own address and name. A read that errors or throws is
+ * `readable: false`, never "no profile": an ignored error read as no row
+ * would let the sign route's refusal of a withheld address lapse.
+ */
+async function readOwnProfile(admin: AdminClient, userId: string): Promise<OwnProfileRead> {
   try {
-    const { data } = await admin
+    const { data, error } = await admin
       .from('user_profiles')
       .select('email, full_name')
       .eq('id', userId)
       .maybeSingle();
-    return data as { email?: string | null; full_name?: string | null } | null;
-  } catch {
-    return null;
+    if (error) return { readable: false, failure: new Error(`address read: ${error.message}`) };
+    return {
+      readable: true,
+      profile: data as { email?: string | null; full_name?: string | null } | null,
+    };
+  } catch (err) {
+    return {
+      readable: false,
+      failure: new Error(`address read: ${err instanceof Error ? err.message : String(err)}`),
+    };
   }
 }
 

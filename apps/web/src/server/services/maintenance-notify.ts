@@ -118,8 +118,12 @@ async function loadPrefFlags(
         }>,
     );
   } catch (err) {
-    // A read failure is NOT evidence of a mute — fail open, same contract as
-    // createNotification's own disabled_at check.
+    // A read failure is NOT evidence of a mute: fail open (the 0265 pattern
+    // above). This is the opposite of createNotification's membership and
+    // disabled checks, which fail CLOSED (docket S36). Every recipient here
+    // still goes through those checks, so a missed mute costs at most one
+    // unwanted notice, never a notice or push to a former member or a
+    // disabled account.
     void reportError(new Error(rawErrorText(err)), {
       tag: 'maintenance_notify.load_prefs',
       extra: { key },

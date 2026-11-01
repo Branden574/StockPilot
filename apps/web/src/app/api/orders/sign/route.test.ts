@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub, servedLikePostgrest, type QueryResult } from '@/test/supabase-mock';
+import {
+  callArgs,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 /**
  * SP-020 — the QR/digital signature path must reach INTERNAL requesters.
@@ -117,6 +123,10 @@ interface Scenario {
   requesterIsMember?: boolean;
   /** S36: the current-member read fails. */
   membershipReadFails?: boolean;
+  /** S36: the current-member check's disabled_at read (user_profiles) fails. */
+  disabledReadFails?: boolean;
+  /** S36: the requester's own address read (user_profiles email, full_name) fails. */
+  ownAddressReadFails?: boolean;
   /** Returns RX-2: the order is the exchange replacement for this RMA. */
   replacementForReturnId?: string;
 }
@@ -159,9 +169,16 @@ function buildAdmin(s: Scenario) {
     'order_requests.select.single': statusResult,
     'order_request_lines.select': linesResult,
     'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
-    'user_profiles.select.maybeSingle': {
-      data: s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile,
-      error: null,
+    // Two reads, each able to fail on its own (S36): the current-member
+    // check's (disabled_at) and the requester's own address (email, full_name).
+    'user_profiles.select.maybeSingle': (call: MockCall): QueryResult => {
+      const columns = String(callArgs(call, 'select')?.[0] ?? '');
+      const fails = columns.includes('disabled_at') ? s.disabledReadFails : s.ownAddressReadFails;
+      if (fails) return { data: null, error: READ_ERROR };
+      return {
+        data: s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile,
+        error: null,
+      };
     },
     'notification_preferences.select.maybeSingle': s.prefReadFails
       ? { data: null, error: READ_ERROR }
@@ -790,6 +807,96 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
 
     expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
     expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+  });
+
+  // Review of round 2 (security lens): the two refusals above compare the
+  // signer email with the withheld address, which comes from a profile read
+  // of its own. When that read failed, the address was unknown, the refusal
+  // lapsed, and the receipt went to the address the sign page had offered:
+  // the former member's own. With the address unknown, no signer receipt
+  // goes out at all. A receipt lost to a read error is acceptable (every
+  // email here is best-effort); one to a former member's own address is not.
+  it('their own address cannot be read: no completion receipt to it, and the failed read is reported', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    const res = await POST(request('alice@site.org'));
+    expect(res.status).toBe(200);
+
+    expect(sentTo()).toEqual([]);
+    expect(reportedTags()).toEqual(['orders.sign.requester_member_check']);
+  });
+
+  it('their own address cannot be read: no partial receipt to it either', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request('alice@site.org'));
+
+    expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+  });
+
+  it('their own address cannot be read: any other signer email loses its receipt too (it cannot be told apart)', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request());
+
+    expect(sentTo()).toEqual([]);
+  });
+
+  it('both profile reads fail, so the member check cannot answer either: no receipt, each failed read reported', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      disabledReadFails: true,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request('alice@site.org'));
+
+    expect(sentTo()).toEqual([]);
+    expect(reportedTags()).toEqual([
+      'orders.sign.requester_member_check',
+      'orders.sign.requester_member_check',
+    ]);
+  });
+
+  it('a current member whose address read fails: the signer still gets the receipt, and the failed read is reported', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request('alice@site.org'));
+
+    // No requester email (no address), and the signer's receipt as always.
+    expect(sentTo()).toEqual(['alice@site.org']);
+    expect(reportedTags()).toEqual(['orders.sign.requester_member_check']);
   });
 
   it('a membership read that fails: no requester address (fail closed), reported once', async () => {

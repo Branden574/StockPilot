@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
+import {
+  callArgs,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 const reportErrorMock = vi.hoisted(() => vi.fn(async (_err: unknown, _ctx: unknown) => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError: reportErrorMock }));
@@ -62,6 +68,7 @@ describe('resolveRequesterContact', () => {
       email: 'reggie@example.org',
       name: 'Reggie Requester',
       withheldEmail: null,
+      withheldEmailUnknown: false,
     });
   });
 
@@ -78,7 +85,12 @@ describe('resolveRequesterContact', () => {
         },
         REPORT,
       ),
-    ).resolves.toEqual({ email: 'guest@example.org', name: 'Guest', withheldEmail: null });
+    ).resolves.toEqual({
+      email: 'guest@example.org',
+      name: 'Guest',
+      withheldEmail: null,
+      withheldEmailUnknown: false,
+    });
     expect(admin.fromCalls).not.toContain('user_profiles');
     expect(admin.fromCalls).not.toContain('organization_members');
   });
@@ -97,11 +109,16 @@ describe('resolveRequesterContact', () => {
         },
         REPORT,
       ),
-    ).resolves.toEqual({ email: null, name: null, withheldEmail: null });
+    ).resolves.toEqual({
+      email: null,
+      name: null,
+      withheldEmail: null,
+      withheldEmailUnknown: false,
+    });
     expect(admin.fromCalls).toEqual([]);
   });
 
-  it('a profile read that throws: no address (the in-app notice still goes)', async () => {
+  it('every read throws: no address, the withheld one flagged unknown, and both failures reported', async () => {
     const admin = makeSupabaseStub();
     admin.client.from = () => {
       throw new Error('network');
@@ -117,7 +134,14 @@ describe('resolveRequesterContact', () => {
         },
         REPORT,
       ),
-    ).resolves.toEqual({ email: null, name: 'Col', withheldEmail: null });
+    ).resolves.toEqual({
+      email: null,
+      name: 'Col',
+      withheldEmail: null,
+      withheldEmailUnknown: true,
+    });
+    // The member check and the address read, once each.
+    expect(reportErrorMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -153,6 +177,7 @@ describe("resolveRequesterContact: a member's own address follows the current-me
       email: null,
       name: 'Reggie Requester',
       withheldEmail: 'reggie@example.org',
+      withheldEmailUnknown: false,
     });
     // An expected recipient to drop, not an error.
     expect(reportErrorMock).not.toHaveBeenCalled();
@@ -207,6 +232,7 @@ describe("resolveRequesterContact: a member's own address follows the current-me
       email: null,
       name: 'Reggie Requester',
       withheldEmail: 'reggie@example.org',
+      withheldEmailUnknown: false,
     });
     expect(reportErrorMock).toHaveBeenCalledTimes(1);
     expect(reportErrorMock.mock.calls[0]![1]).toEqual(
@@ -241,8 +267,150 @@ describe("resolveRequesterContact: a member's own address follows the current-me
         },
         REPORT,
       ),
-    ).resolves.toEqual({ email: 'buyer@example.com', name: 'Buyer Example', withheldEmail: null });
+    ).resolves.toEqual({
+      email: 'buyer@example.com',
+      name: 'Buyer Example',
+      withheldEmail: null,
+      withheldEmailUnknown: false,
+    });
     expect(admin.fromCalls).not.toContain('organization_members');
+  });
+});
+
+/**
+ * Docket S36, review of round 2 (security lens): the sign route refuses a
+ * signer receipt to a withheld own address by comparing the signer email with
+ * `withheldEmail`, because the sign page offers that address as the default
+ * signer email. The address comes from the requester's own (email, full_name)
+ * profile read, which dropped its `error` and swallowed a throw (an ignored
+ * error read as "no row"): a failed read left `withheldEmail` null, the
+ * refusal lapsed, and the receipt reached a former member's own address,
+ * unreported. A withheld address that could not be read is now flagged
+ * (`withheldEmailUnknown`), and the failed read is reported under the
+ * caller's tag.
+ */
+describe('resolveRequesterContact: an own address that cannot be read (S36)', () => {
+  const OWN_ORDER = {
+    organization_id: ORG,
+    requester_user_id: 'user-req',
+    requester_name: null,
+    requester_email: null,
+    requester_deleted_at: null,
+  };
+  const READ_ERROR = { message: 'connection reset' };
+
+  /** user_profiles, answered per read: the member check selects disabled_at,
+   *  the address read selects email and full_name. */
+  function profiles(answers: {
+    disabledRead?: 'fails';
+    addressRead?: 'fails' | 'throws' | 'no row';
+  }) {
+    return (call: MockCall): QueryResult => {
+      const columns = String(callArgs(call, 'select')?.[0] ?? '');
+      if (columns.includes('disabled_at')) {
+        return answers.disabledRead === 'fails'
+          ? { data: null, error: READ_ERROR }
+          : { data: { disabled_at: null }, error: null };
+      }
+      if (answers.addressRead === 'throws') throw new Error('network');
+      if (answers.addressRead === 'fails') return { data: null, error: READ_ERROR };
+      if (answers.addressRead === 'no row') return { data: null, error: null };
+      return { data: PROFILE, error: null };
+    };
+  }
+
+  /** Each report as its message, tag and extra, in order. */
+  function reports() {
+    return reportErrorMock.mock.calls.map(([err, ctx]) => ({
+      message: (err as Error).message,
+      tag: (ctx as { tag: string }).tag,
+      extra: (ctx as { extra?: Record<string, unknown> }).extra,
+    }));
+  }
+
+  const ADDRESS_READ_REPORT = {
+    tag: 'orders.test.requester_member_check',
+    extra: { orderId: 'ord-1', organizationId: ORG, userId: 'user-req' },
+  };
+
+  it('a former member whose address read fails: no address, the withheld one flagged unknown, the failed read reported', async () => {
+    const admin = makeSupabaseStub({
+      'user_profiles.select.maybeSingle': profiles({ addressRead: 'fails' }),
+      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+    });
+    await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
+      email: null,
+      name: null,
+      withheldEmail: null,
+      withheldEmailUnknown: true,
+    });
+    expect(reports()).toEqual([
+      { message: 'address read: connection reset', ...ADDRESS_READ_REPORT },
+    ]);
+  });
+
+  it('a former member whose address read throws: the same', async () => {
+    const admin = makeSupabaseStub({
+      'user_profiles.select.maybeSingle': profiles({ addressRead: 'throws' }),
+      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+    });
+    await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toMatchObject({
+      email: null,
+      withheldEmail: null,
+      withheldEmailUnknown: true,
+    });
+    expect(reports()).toEqual([{ message: 'address read: network', ...ADDRESS_READ_REPORT }]);
+  });
+
+  it('both profile reads fail, so the member check cannot answer either: flagged unknown, each failed read reported once', async () => {
+    const admin = makeSupabaseStub({
+      'user_profiles.select.maybeSingle': profiles({ disabledRead: 'fails', addressRead: 'fails' }),
+      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+    });
+    await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
+      email: null,
+      name: null,
+      withheldEmail: null,
+      withheldEmailUnknown: true,
+    });
+    expect(
+      reports()
+        .map((r) => [r.tag, r.message])
+        .sort(),
+    ).toEqual([
+      ['orders.test.requester_member_check', 'address read: connection reset'],
+      ['orders.test.requester_member_check', 'profile read: connection reset'],
+    ]);
+  });
+
+  it('a current member whose address read fails: no address, as before, nothing withheld, and the failed read reported', async () => {
+    const admin = makeSupabaseStub({
+      'user_profiles.select.maybeSingle': profiles({ addressRead: 'fails' }),
+      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+    });
+    await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
+      email: null,
+      name: null,
+      withheldEmail: null,
+      withheldEmailUnknown: false,
+    });
+    expect(reports()).toEqual([
+      { message: 'address read: connection reset', ...ADDRESS_READ_REPORT },
+    ]);
+  });
+
+  it('no profile row is an answer, not a failure: nothing to withhold and nothing reported', async () => {
+    const admin = makeSupabaseStub({
+      'user_profiles.select.maybeSingle': profiles({ addressRead: 'no row' }),
+      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+    });
+    await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
+      email: null,
+      name: null,
+      withheldEmail: null,
+      withheldEmailUnknown: false,
+    });
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 });
 
