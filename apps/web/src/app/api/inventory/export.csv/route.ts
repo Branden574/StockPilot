@@ -6,6 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { reportError } from '@/lib/error-reporter';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import {
   buildInventoryExportRows,
   type InventoryExportFilters,
@@ -64,7 +65,12 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
     if (!can(ctx, 'items:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+      // Words with the code (B68): the export dialog and a link opened in the
+      // browser say which permission to ask for, never "forbidden" alone.
+      return NextResponse.json(
+        { error: 'forbidden', message: EXPORT_FORBIDDEN_COPY },
+        { status: 403 },
+      );
     }
 
     const url = new URL(request.url);

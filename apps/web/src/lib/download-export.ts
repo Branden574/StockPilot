@@ -1,4 +1,9 @@
 import type { InventoryExportOptions } from '@/lib/exports/export-request';
+import {
+  EXPORT_FORBIDDEN_COPY,
+  EXPORT_SESSION_ENDED_COPY,
+  ExportRefusedError,
+} from '@/lib/exports/export-refusal';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
 /**
@@ -48,15 +53,33 @@ export interface DownloadExportOptions {
   signal?: AbortSignal;
 }
 
-async function readError(res: Response): Promise<string> {
-  let message = 'Export failed. Please try again.';
+/**
+ * The error a failed answer throws, by what the server answered (B68).
+ *
+ * A 403 `forbidden` (no items:export) and a 401 (the session ended) are
+ * ExportRefusedError: trying again cannot fix them, so the dialog says why and
+ * offers no Try again. The 403 is keyed on its code too, because the export
+ * limiter's cross_site_request is also a 403 and is not about permission. The
+ * server's own sentence is used when it sent one; its code (`error`) is never
+ * the text, so no one reads "forbidden" or "unauthenticated" again.
+ */
+async function errorFromResponse(res: Response): Promise<Error> {
+  let body: unknown = null;
   try {
-    const j = (await res.json()) as { message?: string; error?: string };
-    message = j.message || j.error || message;
+    body = await res.json();
   } catch {
-    /* non-JSON error body — keep the generic message */
+    /* non-JSON error body: no words from the server */
   }
-  return message;
+  const { error: code, message } =
+    body !== null && typeof body === 'object'
+      ? (body as { error?: unknown; message?: unknown })
+      : {};
+  const words = typeof message === 'string' && message.trim() !== '' ? message : null;
+  if (res.status === 403 && code === 'forbidden') {
+    return new ExportRefusedError(words ?? EXPORT_FORBIDDEN_COPY);
+  }
+  if (res.status === 401) return new ExportRefusedError(EXPORT_SESSION_ENDED_COPY);
+  return new Error(words ?? 'Export failed. Please try again.');
 }
 
 export async function downloadInventoryExport(
@@ -71,7 +94,7 @@ export async function downloadInventoryExport(
     signal: opts.signal,
   });
   if (!res.ok) {
-    throw new Error(await readError(res));
+    throw await errorFromResponse(res);
   }
   opts.onStage?.('downloading');
   const blob = await res.blob();
@@ -124,6 +147,6 @@ export async function fetchExportPreview(
     body: JSON.stringify(req),
     signal,
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await errorFromResponse(res);
   return (await res.json()) as ExportPreviewResponse;
 }

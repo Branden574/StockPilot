@@ -213,7 +213,7 @@ vi.mock('@/server/services/suppliers', () => ({
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
 
-import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
 import InventoryPage from './page';
 
@@ -879,6 +879,67 @@ describe('Items page: the Table / Grid choice comes from its cookie', () => {
  * restore an item by editing it and setting its status to Active, but the
  * item form has no status field. The way back is Restore on the selection.
  */
+/**
+ * B68: Export (the toolbar menu and the bulk bar's button) showed to every
+ * member, while the export, its sample and export.csv answer only
+ * items:export, which staff and viewers lack by default. The page passes the
+ * member's EFFECTIVE permission (core can() over the request's set) at both of
+ * its table calls, so a grant and a revoke both count.
+ */
+describe('Items page: Export only for a member who holds items:export', () => {
+  /** Signs in as `role`, with a user-level override of items:export if given. */
+  function signedInAs(role: 'manager' | 'staff', granted?: boolean) {
+    h.role = role;
+    const permissions = effectivePermissions(
+      role,
+      [],
+      granted === undefined ? [] : [{ permission: 'items:export', granted }],
+    );
+    m.requireOrgContext.mockImplementation(() =>
+      logged('ctx', async () => ({ organizationId: 'org-1', userId: 'u-1', role, permissions })),
+    );
+  }
+
+  it('a manager is offered it (the default view)', async () => {
+    signedInAs('manager');
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager is offered it (a deep link, the instant table)', async () => {
+    signedInAs('manager');
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('staff are not: they do not hold it by default', async () => {
+    signedInAs('staff');
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+
+  it('staff granted items:export are', async () => {
+    signedInAs('staff', true);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager whose items:export was revoked is not, at either table call', async () => {
+    signedInAs('manager', false);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+
+    m.tableProps.mockClear();
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+});
+
 describe('Items page: the Archived view says how to restore', () => {
   it('points at Restore on the selection, never at a status field', async () => {
     const { container } = render(await callPage({ status: 'archived' }));

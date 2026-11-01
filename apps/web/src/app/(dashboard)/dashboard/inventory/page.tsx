@@ -487,6 +487,8 @@ async function inventoryTableSection({
   const canStartOrder =
     can(sessionCtx, 'orders:request') &&
     (await getModulesForRequest(sessionCtx.organizationId)).has('orders');
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
 
   // INSTANT MODE (AWAITED) — DEEP LINKS ONLY (see the streaming note
   // below for the default view). For a manager+ deep link at or under
@@ -649,6 +651,7 @@ async function inventoryTableSection({
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
+        canExport={canExport}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -1005,6 +1008,7 @@ async function inventoryTableSection({
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
+      canExport={canExport}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

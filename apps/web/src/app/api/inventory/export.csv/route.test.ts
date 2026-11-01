@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from '@/lib/inventory-export';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError } from '@/server/services/context';
@@ -116,6 +117,15 @@ describe('GET /api/inventory/export.csv — authorization', () => {
     vi.mocked(withApiContext).mockResolvedValue(buildCtx('viewer'));
     const res = await GET(buildRequest());
     expect(res.status).toBe(403);
+  });
+
+  // B68: the AI assistant's link and a bookmarked one open this route in the
+  // browser, which showed {"error":"forbidden"} and nothing else.
+  it('says in the 403 which permission to ask an admin for', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(buildCtx('viewer'));
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: EXPORT_FORBIDDEN_COPY });
   });
 });
 

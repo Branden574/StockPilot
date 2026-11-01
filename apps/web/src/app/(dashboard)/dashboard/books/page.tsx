@@ -351,6 +351,8 @@ async function booksTableSection({
   // sports:manage with the sports module on; the page asked the module gate
   // with the others).
   const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -434,6 +436,7 @@ async function booksTableSection({
         canUngroup={canUngroup}
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
+        canExport={canExport}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -705,6 +708,7 @@ async function booksTableSection({
       canUngroup={canUngroup}
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
+      canExport={canExport}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

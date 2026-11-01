@@ -203,6 +203,30 @@ describe('maintenance permissions', () => {
   });
 });
 
+// B68: the one permission every Items and Books export answers (PDF, Excel and
+// CSV, the file and its sample) was labelled "Export CSV". Settings > Roles &
+// permissions, its matrix and the grant or revoke notice read this label, and
+// the web's refusal sentence names it, so it says what the permission covers.
+// Who holds it is unchanged.
+describe('items:export (B68)', () => {
+  it('is called Export items and covers PDF, Excel and CSV files', () => {
+    expect(PERMISSION_META['items:export']).toEqual({
+      group: 'Items',
+      label: 'Export items',
+      description: 'Download Items and Books as PDF, Excel or CSV files.',
+    });
+  });
+
+  it('keeps its holders: owner, admin and manager by default, not staff or viewer', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(hasPermission(role, 'items:export'), role).toBe(true);
+    }
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(hasPermission(role, 'items:export'), role).toBe(false);
+    }
+  });
+});
+
 describe('movements:edit_notes defaults', () => {
   it('manager has it by default', () => {
     expect(hasPermission('manager', 'movements:edit_notes')).toBe(true);

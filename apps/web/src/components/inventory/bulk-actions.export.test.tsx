@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', () => {
-  it('mounts the dialog with the REAL selection (not []) and scope "selected" even before Export is clicked', () => {
+  it('mounts the dialog with the REAL selection (not []) and scope "selected" even before Export is clicked (for a member who can export)', () => {
     render(
       <BulkActions
         selectedIds={['item-1', 'item-2', 'item-3']}
@@ -59,13 +59,14 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        canExport
         itemType="all"
       />,
     );
 
-    // BulkActions renders <ExportBuilderDialog> unconditionally (open toggles
-    // via state) — the selection must already be threaded through on mount,
-    // not swapped in later.
+    // For a member who can export, BulkActions renders <ExportBuilderDialog>
+    // whether or not it is open (open toggles via state) — the selection must
+    // already be threaded through on mount, not swapped in later.
     expect(exportDialogSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         open: false,
@@ -88,6 +89,7 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        canExport
         itemType="all"
       />,
     );
@@ -116,6 +118,7 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        canExport
       />,
     );
 
@@ -134,6 +137,7 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        canExport
         itemType="book"
       />,
     );
@@ -145,5 +149,61 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
     expect(exportDialogSpy).toHaveBeenCalledWith(
       expect.objectContaining({ itemType: 'book' }),
     );
+  });
+});
+
+// B68: Export showed to every member, and the export answers only items:export
+// (staff and viewers lack it by default), so they were shown a sample that
+// failed and then the bare code "forbidden". The page passes the member's
+// EFFECTIVE permission through the table (can(ctx, 'items:export')).
+describe('BulkActions: Export only for a member who can export (B68)', () => {
+  function bar(canExport?: boolean) {
+    return (
+      <BulkActions
+        selectedIds={['item-1', 'item-2']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        itemType="all"
+        {...(canExport === undefined ? {} : { canExport })}
+      />
+    );
+  }
+
+  it.each([
+    ['omitted', undefined],
+    ['false', false],
+  ])(
+    'with canExport %s there is no Export, and the dialog is never rendered',
+    (_label, canExport) => {
+      render(bar(canExport));
+      expect(screen.queryByRole('button', { name: /^Export$/i })).toBeNull();
+      expect(exportDialogSpy).not.toHaveBeenCalled();
+      // The rest of the bar is still there.
+      expect(screen.getByRole('link', { name: /Print labels/ })).toBeInTheDocument();
+    },
+  );
+
+  it('a revoke closes an open dialog, and a later grant does not bring it back open', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(bar(true));
+    await user.click(screen.getByRole('button', { name: /^Export$/i }));
+    expect(screen.getByTestId('export-dialog-mock')).toBeInTheDocument();
+
+    // Revoked (PermissionsRealtime refreshes the page): Export and its dialog go.
+    exportDialogSpy.mockClear();
+    rerender(bar(false));
+    expect(screen.queryByRole('button', { name: /^Export$/i })).toBeNull();
+    expect(screen.queryByTestId('export-dialog-mock')).toBeNull();
+    expect(exportDialogSpy).not.toHaveBeenCalled();
+
+    // Granted again: Export is back, its dialog closed until it is clicked.
+    rerender(bar(true));
+    expect(screen.getByRole('button', { name: /^Export$/i })).toBeInTheDocument();
+    expect(exportDialogSpy).toHaveBeenLastCalledWith(expect.objectContaining({ open: false }));
+    expect(screen.queryByTestId('export-dialog-mock')).toBeNull();
   });
 });

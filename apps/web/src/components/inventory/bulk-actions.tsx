@@ -135,6 +135,11 @@ interface BulkActionsProps {
       action. Pages pass can(ctx, 'public_links:manage'); the server action
       re-asserts. Default false → hidden for older callers. */
   canSetPublicVisibility?: boolean;
+  /** Shows Export (B68): the viewer holds items:export, the permission the
+      export and its sample answer. Pages pass can(ctx, 'items:export')
+      through InventoryTable. Default false → hidden: the export would be
+      refused. */
+  canExport?: boolean;
   /** Threaded straight to ExportBuilderDialog's itemType. inventory-table.tsx
       (the only caller with a Books tab) passes 'book' when showBookFields is
       true; every other caller defaults to 'all'. Without this the Books page's
@@ -224,6 +229,7 @@ export function BulkActions({
   hasElsewhereSelection,
   onCycleCount,
   canSetPublicVisibility = false,
+  canExport = false,
   itemType = 'all',
   ungroupItemIds = [],
   ungroupShownUnder,
@@ -340,6 +346,10 @@ export function BulkActions({
     }
   }
   const [exportOpen, setExportOpen] = React.useState(false);
+  // A revoke while the dialog is open (PermissionsRealtime refreshes the page)
+  // unmounts it below. Close it too, during render (React's "adjusting state
+  // when a prop changes" pattern), or a later grant would bring it back open.
+  if (!canExport && exportOpen) setExportOpen(false);
 
   async function createDraftPos() {
     setDraftBusy(true);
@@ -598,15 +608,17 @@ export function BulkActions({
           </a>
         </Button>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={ACTION}
-          onClick={() => setExportOpen(true)}
-        >
-          <Download aria-hidden strokeWidth={1.6} /> Export
-        </Button>
+        {canExport ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={ACTION}
+            onClick={() => setExportOpen(true)}
+          >
+            <Download aria-hidden strokeWidth={1.6} /> Export
+          </Button>
+        ) : null}
 
         <Button type="button" variant="ghost" size="sm" className={ACTION} onClick={onCycleCount}>
           <ClipboardCheck aria-hidden strokeWidth={1.6} /> Cycle count
@@ -845,14 +857,16 @@ export function BulkActions({
         />
       ) : null}
 
-      <ExportBuilderDialog
-        open={exportOpen}
-        onOpenChange={setExportOpen}
-        scope="selected"
-        itemType={itemType}
-        selectedIds={selectedIds}
-        rowCountHint={selectedIds.length}
-      />
+      {canExport ? (
+        <ExportBuilderDialog
+          open={exportOpen}
+          onOpenChange={setExportOpen}
+          scope="selected"
+          itemType={itemType}
+          selectedIds={selectedIds}
+          rowCountHint={selectedIds.length}
+        />
+      ) : null}
 
       {/* Archive confirmation */}
       <DestructiveConfirm

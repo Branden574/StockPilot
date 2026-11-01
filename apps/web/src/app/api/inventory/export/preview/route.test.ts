@@ -6,6 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
 import { countRowsWithImages } from '@/lib/exports/export-images';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import {
   inventoryExportPreviewRequestSchema,
   inventoryExportRequestSchema,
@@ -120,6 +121,15 @@ describe('POST /api/inventory/export/preview', () => {
     expect((await POST(buildRequest({ scope: 'all' }))).status).toBe(401);
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('viewer'));
     expect((await POST(buildRequest({ scope: 'all' }))).status).toBe(403);
+  });
+
+  // B68: a refused sample read as "Could not load a sample of this export.
+  // You can still export the file.", with a Try again that failed again.
+  it('says in the 403 which permission to ask an admin for', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('viewer'));
+    const res = await POST(buildRequest({ scope: 'all' }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: EXPORT_FORBIDDEN_COPY });
   });
 
   it('returns at most 10 sample rows regardless of the result size', async () => {

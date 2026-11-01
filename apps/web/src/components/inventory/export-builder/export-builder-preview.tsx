@@ -46,6 +46,10 @@ export interface ExportBuilderPreviewProps {
   /** The preview request failed. Without this a failure read as loading for
    *  ever. It never blocks the export. */
   failed?: boolean;
+  /** The sample was refused for good (B68: no permission to export, or the
+   *  session ended): the sentence to show in its place. Try again cannot
+   *  help, so none is offered. It never blocks the export either. */
+  refusal?: string | null;
   /** Asks for the sample again after a failure. */
   onRetry?: () => void;
   rowCount: number | null;
@@ -56,6 +60,7 @@ export function ExportBuilderPreview({
   itemTypeKind,
   preview,
   failed = false,
+  refusal = null,
   onRetry,
   rowCount,
 }: ExportBuilderPreviewProps) {
@@ -71,7 +76,11 @@ export function ExportBuilderPreview({
   return (
     <div className="flex flex-col gap-3">
       <div className="border-border overflow-x-auto rounded-lg border">
-        {preview === null && failed ? (
+        {preview === null && refusal ? (
+          <p role="status" className="p-3 text-[13px] text-[var(--ed-ink-2)]">
+            {refusal}
+          </p>
+        ) : preview === null && failed ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3">
             <p role="status" className="text-[13px] text-[var(--ed-ink-2)]">
               Could not load a sample of this export. You can still export the file.

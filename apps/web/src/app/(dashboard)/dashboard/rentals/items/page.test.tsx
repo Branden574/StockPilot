@@ -90,6 +90,8 @@ vi.mock('@/server/services/movements', () => ({ getItemTrends: vi.fn(async () =>
 
 import RentalItemsPage from './page';
 
+import { requireOrgContext } from '@/lib/auth/session';
+
 function rentalItem(id: string) {
   return { id, name: `Canopy ${id}`, sku: id, quantity_on_hand: 5, is_rental: true };
 }
@@ -183,5 +185,25 @@ describe('Rentals items: header, tabs and states', () => {
       '/dashboard/rentals/items',
     );
     expect(h.tableProps).not.toHaveBeenCalled();
+  });
+});
+
+// B68: the toolbar and the bulk bar draw Export only when the page passes
+// canExport, and this page passes none, even to a manager who holds
+// items:export: every export reads only non-rental items (list() keeps
+// is_rental = false without rentalsOnly, and the selected read filters it), so
+// Export here saved items from the Items list, or a file with no rows. The
+// table's default (false) is pinned in inventory-table.export-permission.test.tsx.
+describe('Rentals items: no Export, for anyone (B68)', () => {
+  it('even a manager who holds items:export gets no canExport', async () => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'manager',
+      permissions: new Set(['items:create', 'items:export']),
+    } as never);
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.canExport ?? false).toBe(false);
   });
 });

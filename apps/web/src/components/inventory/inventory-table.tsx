@@ -407,6 +407,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Viewer holds items:export, the permission the export and its sample
+   *  answer (B68). Shows Export in the toolbar and in the bulk bar. Page
+   *  passes can(ctx, 'items:export'). Default false → hidden. */
+  canExport?: boolean;
   /** Ungroup (0399): the viewer holds items:update, so the bulk bar may offer
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
@@ -756,6 +760,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canExport = false,
   canUngroup = false,
   canUnlinkFamilies = false,
   canRenameGroups = false,
@@ -2845,10 +2850,12 @@ export function InventoryTable({
             label={stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
           />
 
-          <ExportMenu
-            params={params}
-            itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
-          />
+          {canExport ? (
+            <ExportMenu
+              params={params}
+              itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
+            />
+          ) : null}
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -2934,6 +2941,7 @@ export function InventoryTable({
             locations={locations}
             tags={tags}
             canSetPublicVisibility={canSetPublicVisibility}
+            canExport={canExport}
             // Books tab and Items tab share this table (see the onCycleCount
             // itemType inference below) — thread the same signal into the
             // bulk Export dialog so a books bulk-selection gets ISBN/Author/

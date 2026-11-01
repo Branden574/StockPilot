@@ -177,7 +177,7 @@ vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   },
 }));
 
-import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
 import BooksPage from './page';
 
@@ -587,6 +587,71 @@ describe('Books page: a staff page is planned group-aware', () => {
  * Redesign P3.2: the Books list keeps its own Table / Grid choice
  * (sp_view_books), read on the server for the first paint.
  */
+/**
+ * B68: Export (the toolbar menu and the bulk bar's button) showed to every
+ * member, while the export, its sample and export.csv answer only
+ * items:export, which staff and viewers lack by default. The page passes the
+ * member's EFFECTIVE permission (core can() over the request's set) at both of
+ * its table calls, so a grant and a revoke both count.
+ */
+describe('Books page: Export only for a member who holds items:export', () => {
+  /** Signs in as `role`, with a user-level override of items:export if given. */
+  function signedInAs(role: 'manager' | 'staff', granted?: boolean) {
+    h.role = role;
+    const permissions = effectivePermissions(
+      role,
+      [],
+      granted === undefined ? [] : [{ permission: 'items:export', granted }],
+    );
+    const ctx = { organizationId: 'org-1', userId: 'u-1', role, permissions };
+    m.requireOrgContext.mockImplementation(() => logged('ctx', async () => ctx));
+    m.withContext.mockImplementation(() => logged('withContext', async () => ctx));
+  }
+  /** Over the instant cap: the live list and the page's second table call. */
+  function overTheCap() {
+    m.loadInventoryDataset.mockImplementation(() => logged('dataset', async () => null));
+  }
+
+  it('a manager is offered it (instant mode)', async () => {
+    signedInAs('manager');
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager is offered it (over the cap, the live list)', async () => {
+    signedInAs('manager');
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('staff are not: they do not hold it by default', async () => {
+    signedInAs('staff');
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+
+  it('staff granted items:export are', async () => {
+    signedInAs('staff', true);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager whose items:export was revoked is not, at either table call', async () => {
+    signedInAs('manager', false);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+
+    m.tableProps.mockClear();
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+});
+
 describe('Books page: the Table / Grid choice comes from its cookie', () => {
   it.each<[string, Record<string, string>, 'table' | 'grid']>([
     ['no cookie: Table, the default', {}, 'table'],
