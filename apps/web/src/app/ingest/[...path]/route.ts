@@ -254,6 +254,16 @@ function remoteConfig(path: string): Target | null {
  * (@posthog/browser-common surveys.js:254, logs.js:449; posthog-product-
  * tours.js:108); another project's would make this function a relay for
  * that project. With no key set, no token passes.
+ *
+ * THE QUERY ONLY. A request body names its project too (an event batch's
+ * api_key, each event's properties.token; gzip or base64 encoded), and the
+ * route passes bodies on as they came, unread, so anyone can still send
+ * events for any PostHog project through /ingest, as the rewrites this
+ * route replaced let them on every path. Nor is a `Bearer phc_`
+ * Authorization (upstreamHeaders) tied to this key. Abuse of that relay
+ * (cost, other projects' events laundered through our origin) is left to
+ * an edge rate limit (docket S38) and a check of the body's key (S38 part
+ * 3).
  */
 function ownTokens(query: URLSearchParams): boolean {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
