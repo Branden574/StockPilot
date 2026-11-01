@@ -37,7 +37,7 @@ const COMPANY_ID = 'ACME-CO';
 
 function userClient(
   overrides: Record<string, QueryResult> = {},
-  user: { id: string } | null = { id: USER_ID },
+  user: { id: string; factors?: Array<{ status: string }> } | null = { id: USER_ID },
 ) {
   const stub = makeSupabaseStub({
     'org_connections.select': {
@@ -130,6 +130,63 @@ describe('GET /api/integrations/sage_intacct/callback', () => {
     expect(putConnectionSecret).not.toHaveBeenCalled();
     expect(createAdminClient).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  // ── Authenticator code (docket S43a) ──────────────────────────────────────
+  // This route builds its own principal, so withApiContext's refusal of a
+  // session that still owes its authenticator code never sees it. It asks the
+  // same question (cookieSessionOwesStepUp, the shared rule) right after
+  // getUser: an enrolled member signed in with the password alone cannot finish
+  // a connect, and nothing is read, exchanged or written for them.
+  it('refuses an enrolled session that has not entered its code, before reading or exchanging anything', async () => {
+    const stub = userClient({}, { id: USER_ID, factors: [{ status: 'verified' }] });
+    stub.client.auth.mfa.getAuthenticatorAssuranceLevel = vi.fn(async () => ({
+      data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+      error: null,
+    }));
+    vi.mocked(createClient).mockResolvedValueOnce(stub.client as never);
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(res.status).toBe(302);
+    expect(location(res).pathname).toBe(SETTINGS_PATH);
+    expect(location(res).searchParams.get('error')).toBe('forbidden');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(createAdminClient).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    // Not the account status, not the pending row: no table at all.
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('refuses an enrolled session whose level cannot be read (fail closed)', async () => {
+    const stub = userClient({}, { id: USER_ID, factors: [{ status: 'verified' }] });
+    stub.client.auth.mfa.getAuthenticatorAssuranceLevel = vi.fn(async () => ({
+      data: null,
+      error: { message: 'session unreadable' },
+    }));
+    vi.mocked(createClient).mockResolvedValueOnce(stub.client as never);
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(location(res).searchParams.get('error')).toBe('forbidden');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('an enrolled session that entered its code (aal2) finishes the connect', async () => {
+    const stub = userClient({}, { id: USER_ID, factors: [{ status: 'verified' }] });
+    stub.client.auth.mfa.getAuthenticatorAssuranceLevel = vi.fn(async () => ({
+      data: { currentLevel: 'aal2', nextLevel: 'aal2' },
+      error: null,
+    }));
+    vi.mocked(createClient).mockResolvedValueOnce(stub.client as never);
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(location(res).searchParams.get('connected')).toBe('sage_intacct');
+    expect(exchangeCode).toHaveBeenCalledWith('auth-code');
+    expect(putConnectionSecret).toHaveBeenCalledTimes(1);
   });
 
   it('refuses with internal_error (not forbidden) when the account status cannot be read', async () => {

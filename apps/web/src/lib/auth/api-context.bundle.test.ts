@@ -663,12 +663,23 @@ describe('MFA is decided from the policy that came back with the membership', ()
 
   it('an enrolled factor escalates even under an optional policy', async () => {
     world.verifiedFactor = true;
-    world.aal = 'aal1';
+    world.aal = 'aal2';
     const { fast, legacy } = await both(cookie());
     expect(shape(fast)).toEqual(shape(legacy));
     expect(fast?.mfaRequired).toBe(true);
     expect(fast?.mfaEnrolled).toBe(true);
-    expect(fast?.mfaSatisfied).toBe(false);
+    expect(fast?.mfaSatisfied).toBe(true);
+  });
+
+  it('an enrolled AAL1 session is refused on both paths before either one reads (docket S43a)', async () => {
+    world.verifiedFactor = true;
+    world.aal = 'aal1';
+    const { fast, legacy, fastCalls, legacyCalls } = await both(cookie());
+    expect(fast).toBeNull();
+    expect(legacy).toBeNull();
+    // Only the session's own level: no context RPC, no table.
+    expect(fastCalls).toEqual(['auth:aal']);
+    expect(legacyCalls).toEqual(['auth:aal']);
   });
 
   it('asks the client for its assurance level only when MFA is actually required', async () => {
@@ -709,16 +720,18 @@ describe('the bearer path gets the same treatment', () => {
     // HI-6: a verified factor must be satisfied whatever the org policy says,
     // or a stolen password alone reaches /api/v1 at AAL1 untouched. The factor
     // is read off the GoTrue user the bearer token was validated against.
+    // Since docket S43a an AAL1 token is refused outright, before the context
+    // RPC or any table.
     world.verifiedFactor = true;
     world.aal = 'aal1';
-    const ctx = await withApiContext(bearer());
-    expect(ctx?.mfaRequired).toBe(true);
-    expect(ctx?.mfaEnrolled).toBe(true);
-    expect(ctx?.mfaSatisfied).toBe(false);
+    world.calls = [];
+    expect(await withApiContext(bearer())).toBeNull();
+    expect(world.calls).toEqual([]);
 
     world.aal = 'aal2';
     const stepped = await withApiContext(bearer());
     expect(stepped?.mfaRequired).toBe(true);
+    expect(stepped?.mfaEnrolled).toBe(true);
     expect(stepped?.mfaSatisfied).toBe(true);
   });
 

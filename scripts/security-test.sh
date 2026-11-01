@@ -912,6 +912,20 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # A password alone reads nothing through the API (docket S43a): withApiContext
+  # refuses an account with a verified authenticator factor whose session is
+  # not aal2, on both paths, right after the identity check and before any
+  # read (the route's own 401); the phone's snapshot end to end; the client
+  # crash beacon, the one route on the AAL1 allowlist; the two OAuth callbacks
+  # that build their own principal ask the same question; and the sweep that
+  # holds every route handler under src/app to the rule or to a reviewed list
+  # (core's stepUpOwed truth table is in MANIFEST 4).
+  src/lib/auth/api-context.step-up.test.ts
+  src/app/api/v1/mobile/snapshot/route.step-up.test.ts
+  src/app/api/client-error/route.test.ts
+  src/app/api/integrations/quickbooks/callback/route.test.ts
+  src/app/api/integrations/sage_intacct/callback/route.test.ts
+  src/test/api-step-up.guard.test.ts
   # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
   # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
   # Origin names another host, or when neither header is present),
@@ -1638,6 +1652,9 @@ CORE_TESTS=(
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts
+  # S43a: the one rule for "this session still owes its authenticator code"
+  # (web API context now; the phone's code gate next).
+  src/auth/step-up.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone

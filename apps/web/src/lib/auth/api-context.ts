@@ -18,7 +18,7 @@ import {
 } from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
-import { effectivePermissions, isAdminRole } from '@stockpilot/core';
+import { effectivePermissions, isAdminRole, stepUpOwed } from '@stockpilot/core';
 
 import { enforcedMfaPolicy, type MfaPolicy } from '@/lib/auth/mfa-policy';
 
@@ -292,6 +292,40 @@ function userHasVerifiedFactor(user: { factors?: Array<{ status?: string }> | nu
 }
 
 /**
+ * Whether a COOKIE session still owes its authenticator code (docket S43a):
+ * core's stepUpOwed() over the user getUser() just returned and the session's
+ * own assurance level.
+ *
+ * The level is read only for an account with a verified factor: the rule owes
+ * nothing to any other account at any level, so a caller who never enrolled
+ * pays no extra read. getAuthenticatorAssuranceLevel() decodes the stored
+ * access token, which is safe only AFTER getUser() succeeded on this same
+ * client: the token is then one the Auth server just accepted, the bearer
+ * path's rule. An error, a throw or a missing level counts as not aal2 (fail
+ * closed).
+ *
+ * Exported for the routes that build their own principal from the cookie
+ * session instead of calling withApiContext (the QuickBooks and Sage Intacct
+ * OAuth callbacks), so they ask the same question the same way
+ * (src/test/api-step-up.guard.test.ts holds them to it).
+ */
+export async function cookieSessionOwesStepUp(
+  supabase: any,
+  user: { factors?: Array<{ status?: string }> | null },
+): Promise<boolean> {
+  // Owed at no level at all means never owed: no verified factor, no read.
+  if (!stepUpOwed(user.factors, null)) return false;
+  let level: string | null = null;
+  try {
+    const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (!error) level = data?.currentLevel ?? null;
+  } catch {
+    // Unreadable: the level stays null, which the rule counts as not aal2.
+  }
+  return stepUpOwed(user.factors, level);
+}
+
+/**
  * Mirror of the enabled-module query in withContext() (services/context.ts),
  * parameterized over an arbitrary Supabase client so both the cookie and
  * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
@@ -434,6 +468,29 @@ function logRefusedCrossSiteWrite(req: Request): void {
 }
 
 /**
+ * One info line per request refused because its session still owes the
+ * authenticator code (docket S43a), so the refusal of a real person's phone or
+ * tab shows in the runtime logs. Info, not a report: a phone that is not
+ * updated yet makes a few of these a minute at its code screen, and that is
+ * the rule working, not a fault. The method, the path and which way the
+ * session came (bearer or cookie): never the query string, a token, a cookie
+ * or an address.
+ */
+function logStepUpRefused(req: Request | undefined, via: 'bearer' | 'cookie'): void {
+  let path = '(unreadable)';
+  try {
+    if (req) path = new URL(req.url).pathname;
+  } catch {
+    // Keep the placeholder.
+  }
+  console.info('[api-context] refused a session that still owes its authenticator code', {
+    method: req?.method ?? '(none)',
+    path,
+    via,
+  });
+}
+
+/**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
  *
  *   1. Cookie-based (web fetches from the dashboard) — uses the SSR
@@ -454,8 +511,25 @@ function logRefusedCrossSiteWrite(req: Request): void {
  * Sec-Fetch-Site at all (docket S14, lib/auth/cross-site-request.ts). Pass the
  * request the route received, or one built from it with the same method, URL
  * and headers: the rule reads all three.
+ *
+ * Both paths return null, right after the identity check and before anything
+ * is read, for an account with a verified authenticator factor whose session
+ * is not aal2 (docket S43a, core stepUpOwed): a password alone reads nothing
+ * through the API. Before, the session was only labelled (mfaRequired,
+ * mfaSatisfied) and the refusal was left to assertPermission, which the
+ * snapshot, the order reads and the exports never call. Null, not a 403:
+ * every route answers it as its own 401, and phones already installed retry a
+ * 401 and keep their queued work, where a 403 would drop it.
+ * `opts.allowStepUpPending` skips that one refusal, for a route that must
+ * answer before the code (AAL1_ROUTES in src/test/api-step-up.guard.test.ts,
+ * the only files allowed to pass it). Such a route gets the context as
+ * before, labelled mfaSatisfied false, so assertPermission still refuses it
+ * every permission.
  */
-export async function withApiContext(req?: Request): Promise<ServiceContext | null> {
+export async function withApiContext(
+  req?: Request,
+  opts?: { allowStepUpPending?: true },
+): Promise<ServiceContext | null> {
   const bearer = bearerTokenFrom(req);
 
   if (bearer) {
@@ -467,6 +541,15 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     );
     const { data: userRes, error } = await adminAuth.auth.getUser(bearer);
     if (error || !userRes.user) return null;
+
+    // THE AUTHENTICATOR CODE (docket S43a). The factors are GoTrue's answer for
+    // this token's user; the level is the token's own claim, safe to read now
+    // that GoTrue accepted the token. Refused before the client below exists,
+    // so nothing is read for it.
+    if (!opts?.allowStepUpPending && stepUpOwed(userRes.user.factors, aalFromJwt(bearer))) {
+      logStepUpRefused(req, 'bearer');
+      return null;
+    }
 
     const supabase = createSupabaseClient<Database>(
       env.NEXT_PUBLIC_SUPABASE_URL,
@@ -602,6 +685,13 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+
+  // The same rule as the bearer path, with this session's own level, before
+  // the context read below (docket S43a).
+  if (!opts?.allowStepUpPending && (await cookieSessionOwesStepUp(supabase, user))) {
+    logStepUpRefused(req, 'cookie');
+    return null;
+  }
 
   const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
 

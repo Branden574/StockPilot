@@ -5,9 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the HI-6 inversion on BOTH auth paths:
  *
  *   - ENROLLED (verified TOTP factor on the GoTrue user) under an 'optional'
- *     org policy -> mfaRequired=true. Org policy alone must NOT decide
- *     enforcement for an enrolled user; a stolen password produces an AAL1
- *     token that must be refused by the permission gates.
+ *     org policy, at AAL1 -> no context at all (null, the route's 401). Org
+ *     policy alone must NOT decide enforcement for an enrolled user, and a
+ *     stolen password's AAL1 token is refused before anything is read, not
+ *     only by the permission gates (docket S43a, api-context.step-up.test.ts).
  *   - ENROLLED + an AAL2 token -> required=true, satisfied=true (no block).
  *   - UNENROLLED under 'optional' -> required=false — the unattended-login
  *     path (the demo QA account has NO factors) stays open.
@@ -39,7 +40,7 @@ vi.mock('@/lib/auth/effective-permissions', () => ({
 vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
-import { assertPermission, ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { withApiContext } from './api-context';
 
 const USER_ID = '99999999-9999-9999-9999-999999999999';
@@ -137,9 +138,15 @@ beforeEach(() => {
 });
 
 describe('withApiContext BEARER — enrolled-TOTP enforcement (HI-6)', () => {
-  it('ENROLLED under optional policy + AAL1 token -> required=true, satisfied=false', async () => {
+  it('ENROLLED under optional policy + AAL1 token -> refused outright (null, the 401; docket S43a)', async () => {
     state.factors = [{ status: 'verified' }];
     const ctx = await withApiContext(bearerRequest('aal1'));
+    expect(ctx).toBeNull();
+  });
+
+  it('ENROLLED + AAL1 token on the reviewed AAL1 allowlist -> required=true, satisfied=false', async () => {
+    state.factors = [{ status: 'verified' }];
+    const ctx = await withApiContext(bearerRequest('aal1'), { allowStepUpPending: true });
     expect(ctx).not.toBeNull();
     expect(ctx?.mfaRequired).toBe(true);
     expect(ctx?.mfaSatisfied).toBe(false);
@@ -180,12 +187,24 @@ describe('withApiContext BEARER — enrolled-TOTP enforcement (HI-6)', () => {
     expect(ctx?.mfaSatisfied).toBe(false);
   });
 
-  it('ENROLLED + AAL1 token: assertPermission refuses with reason=aal2_required (the step-up shape)', async () => {
-    state.factors = [{ status: 'verified' }];
-    const ctx = await withApiContext(bearerRequest('aal1'));
+  it('an ENROLLED AAL1 context: assertPermission refuses with reason=aal2_required (the step-up shape)', () => {
+    // withApiContext no longer hands this context to a route (docket S43a), but
+    // the allowlist's labelled context and every page and action context still
+    // reach assertPermission, so its answer for one is pinned on a built context.
+    const ctx: ServiceContext = {
+      organizationId: ORG_ID,
+      userId: USER_ID,
+      role: 'admin',
+      permissions: new Set(['items:read']),
+      supabase: makeClient() as never,
+      mfaRequired: true,
+      mfaSatisfied: false,
+      mfaEnrolled: true,
+      enabledModules: new Set(),
+    };
     let thrown: unknown;
     try {
-      assertPermission(ctx!, 'items:read');
+      assertPermission(ctx, 'items:read');
     } catch (e) {
       thrown = e;
     }
@@ -194,19 +213,25 @@ describe('withApiContext BEARER — enrolled-TOTP enforcement (HI-6)', () => {
     expect((thrown as ServiceError).details).toEqual({ reason: 'aal2_required' });
   });
 
-  it('a token with NO aal claim fails CLOSED for an enrolled user', async () => {
+  it('a token with NO aal claim fails CLOSED for an enrolled user (refused outright)', async () => {
     state.factors = [{ status: 'verified' }];
     const ctx = await withApiContext(bearerRequest(undefined));
-    expect(ctx?.mfaRequired).toBe(true);
-    expect(ctx?.mfaSatisfied).toBe(false);
+    expect(ctx).toBeNull();
   });
 });
 
 describe('withApiContext COOKIE — enrolled-TOTP enforcement (HI-6)', () => {
-  it('ENROLLED under optional policy + AAL1 session -> required=true, satisfied=false', async () => {
+  it('ENROLLED under optional policy + AAL1 session -> refused outright (null, the 401; docket S43a)', async () => {
     state.factors = [{ status: 'verified' }];
     state.cookieAal = 'aal1';
     const ctx = await withApiContext(cookieRequest());
+    expect(ctx).toBeNull();
+  });
+
+  it('ENROLLED + AAL1 session on the reviewed AAL1 allowlist -> required=true, satisfied=false', async () => {
+    state.factors = [{ status: 'verified' }];
+    state.cookieAal = 'aal1';
+    const ctx = await withApiContext(cookieRequest(), { allowStepUpPending: true });
     expect(ctx).not.toBeNull();
     expect(ctx?.mfaRequired).toBe(true);
     expect(ctx?.mfaSatisfied).toBe(false);
