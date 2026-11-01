@@ -854,8 +854,12 @@ select is(
 insert into public.order_requests (organization_id, warehouse_id, status, source, requester_user_id, requester_name, requester_email, fulfillment_type, delivery_charter_id, created_at)
 select :orgA, :whA, 'pending_approval', 'internal', null, 'Person ' || g, 'person' || g || '@example.org', 'pickup', null, now() - make_interval(days => g)
   from generate_series(1, 55) g;
+-- RR3's two older names for P10's email sort on either side of P10's name
+-- ('Old name' before it, 'Previous name' after it), so a latest-name pick that
+-- orders by name instead of by time fails whichever way it sorts.
 insert into public.order_requests (organization_id, warehouse_id, status, source, requester_user_id, requester_name, requester_email, fulfillment_type, delivery_charter_id, created_at) values
   (:orgA, :whA, 'pending_approval', 'internal', null, 'Old name', ' PIXIE@example.ORG ', 'delivery', :chA, now() - interval '2 hours'),
+  (:orgA, :whA, 'pending_approval', 'internal', null, 'Previous name', 'pixie@EXAMPLE.org', 'delivery', :chA, now() - interval '3 hours'),
   (:orgA, :whA, 'pending_approval', 'internal', null, 'Gone', 'gone@example.org', 'pickup', null, now() - interval '400 days'),
   (:orgB, :whB, 'pending_approval', 'internal', null, 'Org B person', 'orgb@example.org', 'pickup', null, now() - interval '1 hour');
 select is(
@@ -877,8 +881,8 @@ select is(
   (select e->>'name' || '/' || (e->>'orders') || '/' || (e->>'lastFulfillment') || '/' || coalesce(e->>'lastSiteId', 'null')
      from jsonb_array_elements(pg_temp.run('authenticated', :mgr, format('select public.order_recent_requesters(%L)::text', :orgA))::jsonb) e
     where lower(e->>'email') = 'pixie@example.org'),
-  'Pixie Quill/2/delivery/' || :chA,
-  'RR3: Pixie''s two orders (two spellings of one email, the older named Old name) are one row: the latest name, 2 orders, the last method and the last delivery site');
+  'Pixie Quill/3/delivery/' || :chA,
+  'RR3: Pixie''s three orders (three spellings of one email; the older two named Old name and Previous name, one sorting before the latest name and one after it) are one row: the latest name by time, never the first or last by name, 3 orders, the last method and the last delivery site');
 
 -- ═══ Z. Frozen ═══════════════════════════════════════════════════════════
 select is(
