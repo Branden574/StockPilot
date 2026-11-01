@@ -71,11 +71,16 @@ export function itemsTypeNarrowing(type: string | null | undefined): string | nu
  * records that narrowing leaves out, and on the Archived or Discontinued view it
  * would count active records the view does not list.
  *
- * Review of batch D (2026-10-20): every empty view with a warehouse filter
- * waited for that count on the render path, though the page then threw it away
- * whenever another narrowing was on; and an Archived view with nothing archived
- * in the warehouse said "N items match in your other warehouses" for the active
- * ones, instead of "No archived items".
+ * Before (main 7c28c3a9c): every empty Items view with a warehouse filter
+ * waited for that count on the render path, and once it was above 0 the page
+ * showed the hint ahead of everything else, whatever narrowed the view. So an
+ * empty Category, stock, Expected, type, Archived or Discontinued view said "N
+ * items match in your other warehouses", counting records that view leaves out
+ * (on Archived and Discontinued, active ones), with the filter bar hidden.
+ * Batch D first kept the count and dropped the hint for another narrowing; its
+ * review (2026-10-20) had the count asked only when the hint can show, and kept
+ * the hint off Archived and Discontinued, where "No archived items" or the list
+ * with its chip answers.
  */
 export function otherWarehouseHintApplies(
   params: ListFilterParams & { type?: string },
