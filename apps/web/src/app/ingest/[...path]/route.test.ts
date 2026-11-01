@@ -411,3 +411,81 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/ECONNREFUSED|socket hang up|aborted/);
   });
 });
+
+describe('/ingest lets a shared cache keep only the /static/ bundles', () => {
+  // Vercel's CDN stores a function's answer when its Cache-Control allows a
+  // shared cache. The /static/ bundles are the same files for everyone; no
+  // other answer may be stored for the next visitor, whatever PostHog says.
+  const ELSEWHERE: Array<[string, 'GET' | 'POST']> = [
+    ['/ingest/array/phc_placeholder/config.js', 'GET'],
+    ['/ingest/array/phc_placeholder/config', 'GET'],
+    ['/ingest/api/surveys/?token=phc_placeholder', 'GET'],
+    ['/ingest/e/', 'POST'],
+  ];
+
+  function postHogAnswers(headers: Record<string, string>) {
+    upstream.mockImplementation(
+      async () =>
+        new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json', ...headers },
+        }),
+    );
+  }
+
+  function ask(path: string, method: 'GET' | 'POST') {
+    return method === 'GET'
+      ? route.GET(incoming(path))
+      : route.POST(incoming(path, { method: 'POST', body: new Uint8Array([1]) }));
+  }
+
+  it.each([
+    ['public, max-age=300'],
+    ['s-maxage=60'],
+    ['public, max-age=31536000, immutable'],
+    ['no cache policy at all'],
+  ])(
+    "answers 'private, no-store' on every path but /static/ when PostHog says %s",
+    async (policy) => {
+      postHogAnswers(policy === 'no cache policy at all' ? {} : { 'cache-control': policy });
+
+      for (const [path, method] of ELSEWHERE) {
+        const res = await ask(path, method);
+        expect(res.status, path).toBe(200);
+        expect(res.headers.get('cache-control'), path).toBe('private, no-store');
+      }
+    },
+  );
+
+  it("keeps PostHog's cache policy on a /static/ bundle, and only there", async () => {
+    postHogAnswers({ 'cache-control': 'public, max-age=31536000, immutable' });
+
+    const bundle = await route.GET(incoming('/ingest/static/array.js'));
+    const head = await route.HEAD(incoming('/ingest/static/array.js', { method: 'HEAD' }));
+    const config = await route.GET(incoming('/ingest/array/phc_placeholder/config.js'));
+
+    expect(bundle.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(head.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(config.headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it('never passes on Vary, CDN-Cache-Control or Vercel-CDN-Cache-Control', async () => {
+    postHogAnswers({
+      'cache-control': 'public, max-age=60',
+      vary: 'Cookie, Accept-Encoding',
+      'cdn-cache-control': 'public, max-age=600',
+      'vercel-cdn-cache-control': 'max-age=600',
+    });
+
+    const bundle = await route.GET(incoming('/ingest/static/array.js'));
+    const config = await route.GET(incoming('/ingest/array/phc_placeholder/config.js'));
+
+    for (const res of [bundle, config]) {
+      expect(res.headers.get('vary')).toBeNull();
+      expect(res.headers.get('cdn-cache-control')).toBeNull();
+      expect(res.headers.get('vercel-cdn-cache-control')).toBeNull();
+    }
+    expect(bundle.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(config.headers.get('cache-control')).toBe('private, no-store');
+  });
+});

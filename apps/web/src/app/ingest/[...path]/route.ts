@@ -39,12 +39,14 @@ export const dynamic = 'force-dynamic';
  *   - the body's bytes as they came: gzip and base64 batches are binary.
  *
  * The answer is PostHog's status and body, with its content type (scripts
- * need it: X-Content-Type-Options is nosniff), its cache policy and its
- * Retry-After (the SDK waits that long before it retries), and never a
- * Set-Cookie. fetch has already decoded the body, so Content-Encoding and
- * Content-Length are not copied. A failure of ours answers with no body: 400
- * for a path that is not PostHog's, 502 when PostHog does not answer within
- * 10 seconds. The SDK retries; analytics is never worth an error page.
+ * need it: X-Content-Type-Options is nosniff) and its Retry-After (the SDK
+ * waits that long before it retries), and never a Set-Cookie. Its cache
+ * policy is kept for /static/* only; every other answer is private, no-store
+ * (cacheControl below). fetch has already decoded the body, so
+ * Content-Encoding and Content-Length are not copied. A failure of ours
+ * answers with no body: 400 for a path that is not PostHog's, 502 when
+ * PostHog does not answer within 10 seconds. The SDK retries; analytics is
+ * never worth an error page.
  *
  * /ingest stays out of the proxy's matcher (src/proxy.ts): no session refresh
  * runs for analytics. route.test.ts and route.sdk.test.ts pin this route;
@@ -66,8 +68,8 @@ const REQUEST_HEADERS = new Set([
   'x-conversations-token',
 ]);
 
-/** Answer headers passed on from PostHog. */
-const ANSWER_HEADERS = ['cache-control', 'content-type', 'retry-after'] as const;
+/** Answer headers passed on from PostHog (Cache-Control: see cacheControl). */
+const ANSWER_HEADERS = ['content-type', 'retry-after'] as const;
 
 /** Statuses whose answer has no body (the Response constructor refuses one). */
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
@@ -91,6 +93,21 @@ function upstreamUrl(requestUrl: string): URL | null {
   url.pathname = path;
   url.search = incoming.search;
   return url.origin === origin ? url : null;
+}
+
+/**
+ * The Cache-Control of our answer. Vercel's CDN stores a function's answer
+ * when its Cache-Control allows a shared cache (max-age, s-maxage) and no
+ * CDN-Cache-Control says otherwise, and serves it to the next visitor. Only
+ * the /static/* bundles are the same files for everyone, so only they keep
+ * PostHog's policy (the CDN keeping them saves function calls). Every other
+ * answer is private, no-store whatever PostHog sent: one visitor's answer is
+ * never stored for another. Vary, CDN-Cache-Control and
+ * Vercel-CDN-Cache-Control are never passed on (ANSWER_HEADERS).
+ */
+function cacheControl(target: URL, upstream: Response): string | null {
+  if (target.origin === ASSETS_ORIGIN) return upstream.headers.get('cache-control');
+  return 'private, no-store';
 }
 
 function upstreamHeaders(request: NextRequest): Headers {
@@ -139,6 +156,8 @@ async function proxy(request: NextRequest): Promise<Response> {
     const value = upstream.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+  const policy = cacheControl(target, upstream);
+  if (policy !== null) headers.set('cache-control', policy);
   return new Response(body, { status: upstream.status, headers });
 }
 
