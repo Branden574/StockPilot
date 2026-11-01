@@ -1033,20 +1033,22 @@ WEB_TESTS=(
   # S34: a member's session never leaves with an analytics request. PostHog's
   # SDK sends to /ingest on our own origin, so the browser attaches every
   # cookie of this host. app/ingest/[...path]/route.ts builds each request to
-  # PostHog from a list of headers: never a cookie, Authorization only as a
-  # PostHog project key (Bearer phc_), no Set-Cookie back. It passes on only
-  # the requests posthog-js makes with the app's init options, each by the
-  # method the SDK uses (404 for any other path, 405 for another method),
-  # the remote config only for the app's own project key and with no query
-  # (another project's config.js would run that project's code as ours), a
-  # token= only when it is that key, PostHog's content type only when it is
-  # JSON, a script or text, every answer nosniff, and no body over the
-  # platform's request body limit (413); each refusal is logged with its
-  # path only. The census test fails when an installed posthog-js names a
-  # path or ships a bundle the list has not been checked against, and checks
-  # each request with its method. The guard fails if a /ingest rewrite (which
-  # forwards the browser's headers as they came) or a proxy matcher for
-  # /ingest comes back; it carries the "Security invariant" marker.
+  # PostHog from a list of headers: never a cookie, Authorization only as the
+  # app's own PostHog project key (Bearer <key>), no Set-Cookie back. It
+  # passes on only the requests posthog-js makes with the app's init options,
+  # each by the method the SDK uses (404 for any other path, 405 for another
+  # method; OPTIONS, PUT, PATCH and DELETE are answered by the route, not by
+  # Next), the remote config only for the app's own project key and with no
+  # query (another project's config.js would run that project's code as
+  # ours), a query token= or api_key= only when it is that key, PostHog's
+  # content type only when it is JSON, a script or text, every answer
+  # nosniff, and no body over the platform's request body limit (413); each
+  # refusal is logged with its path only. The census test fails when an
+  # installed posthog-js names a path or ships a bundle the list has not been
+  # checked against, and checks each request by every method. The guard
+  # fails if a /ingest rewrite (which forwards the browser's headers as they
+  # came) or a proxy matcher for /ingest comes back; it carries the
+  # "Security invariant" marker.
   src/test/ingest-proxy.guard.test.ts
   'src/app/ingest/[...path]/route.test.ts'
   'src/app/ingest/[...path]/route.census.test.ts'

@@ -5,6 +5,8 @@
 // them, so it cannot pass by never seeing a cookie.
 import { gunzipSync, gzipSync } from 'node:zlib';
 
+import { autoImplementMethods } from 'next/dist/server/route-modules/app-route/helpers/auto-implement-methods';
+import { HTTP_METHODS, type HTTP_METHOD } from 'next/dist/server/web/http';
 import { NextRequest } from 'next/server';
 import type { MockInstance } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +33,21 @@ vi.mock('@/lib/env.client', () => ({ env: postHogEnv }));
 
 import * as route from './route';
 
+/**
+ * The route's handlers as Next hands a request to them: the route's own for
+ * each method it exports, and Next's own answer for each it does not (for
+ * OPTIONS a 204 with an Allow of the exported methods, for the rest a 405
+ * with no Allow; the route never runs, so nothing is logged).
+ * next/dist/server/route-modules/app-route/helpers/auto-implement-methods.js
+ * builds them; app-route/module.js calls it on the route module and answers
+ * each request with the handler for its method (a method not in HTTP_METHODS
+ * gets Next's own 400 before any handler). Every test that names a method
+ * asks through this, so a method the route leaves to Next is tested as Next
+ * answers it. If an upgrade moves it, this file fails to load rather than
+ * passing without looking.
+ */
+const viaNext = autoImplementMethods(route);
+
 const SITE = 'https://app.example.com';
 // What a signed-in member's browser attaches to a same-origin request: the
 // Supabase session (and a chunk of it), PostHog's own cookie and the
@@ -41,8 +58,9 @@ const MEMBER_BEARER = 'Bearer eyJplaceholder';
 // A PostHog project key, as a capture v1 SDK sends it, and a personal API key.
 const PROJECT_BEARER = `Bearer ${PROJECT_REF}`;
 const PERSONAL_BEARER = 'Bearer phx_placeholder';
-// Another PostHog project's key.
+// Another PostHog project's key, and as a capture v1 SDK would send it.
 const OTHER_PROJECT = 'phc_other';
+const OTHER_PROJECT_BEARER = `Bearer ${OTHER_PROJECT}`;
 // The Conversations widget's value from the public remote config.
 const WIDGET_REF = 'placeholder-widget';
 // A Conversations ticket id, as PostHog hands them out (a UUID), and the
@@ -125,7 +143,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type Method = 'GET' | 'HEAD' | 'POST';
+/** A method Next hands to a route handler (HTTP_METHODS). */
+type Method = HTTP_METHOD;
+/** The methods whose requests carry a body here: a small one, which a refusal must not read. */
+const WITH_BODY: ReadonlySet<Method> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function incoming(
   path: string,
@@ -144,12 +165,15 @@ function incoming(
   } as ConstructorParameters<typeof NextRequest>[1]);
 }
 
-/** The route's answer to a request of this method, a POST with a small body. */
+/** The answer to a request, from the handler Next picks for its method (viaNext). */
+async function answerOf(request: NextRequest): Promise<Response> {
+  return (await viaNext[request.method as Method](request, {})) as Response;
+}
+
+/** The answer to a request of this method; a POST, PUT, PATCH or DELETE carries a small body. */
 function ask(method: Method, path: string): Promise<Response> {
-  if (method === 'POST') {
-    return route.POST(incoming(path, { method, body: new Uint8Array([1]) }));
-  }
-  return method === 'HEAD' ? route.HEAD(incoming(path, { method })) : route.GET(incoming(path));
+  const body = WITH_BODY.has(method) ? new Uint8Array([1]) : undefined;
+  return answerOf(incoming(path, { method, body }));
 }
 
 /** The request fetch was asked to make, with its input and init merged as fetch merges them. */
@@ -243,23 +267,46 @@ describe('/ingest sends PostHog no member credential', () => {
     }
   });
 
-  it('forwards Authorization only as a PostHog project key (Bearer phc_), never another bearer', async () => {
+  it("forwards Authorization only as this app's own project key (Bearer <key>), never another project's key or another bearer", async () => {
+    for (const authorization of [
+      PROJECT_BEARER,
+      PERSONAL_BEARER,
+      PROJECT_BEARER.toLowerCase(),
+      OTHER_PROJECT_BEARER,
+      `${PROJECT_BEARER}x`,
+    ]) {
+      await route.POST(incoming('/ingest/i/v0/e/', { method: 'POST', headers: { authorization } }));
+    }
+    // With no project key set, not even this app's.
+    postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
     await route.POST(
       incoming('/ingest/i/v0/e/', { method: 'POST', headers: { authorization: PROJECT_BEARER } }),
     );
+
+    expect(upstream).toHaveBeenCalledTimes(6);
+    expect((await sentToPostHog(0)).headers.get('authorization')).toBe(PROJECT_BEARER);
+    for (const call of [1, 2, 3, 4, 5]) {
+      expect((await sentToPostHog(call)).headers.get('authorization'), `call ${call}`).toBeNull();
+    }
+  });
+
+  it("sends no other project's key as Authorization to the console logs intake, which takes its project from that header before the query's token", async () => {
+    // PostHog's logs intake (capture-logs, authorizer.rs resolve_token) reads
+    // Authorization first, so another project's key there would undo the
+    // token check on /i/v1/logs.
     await route.POST(
-      incoming('/ingest/i/v0/e/', { method: 'POST', headers: { authorization: PERSONAL_BEARER } }),
-    );
-    await route.POST(
-      incoming('/ingest/i/v0/e/', {
+      incoming(`/ingest/i/v1/logs?token=${PROJECT_REF}`, {
         method: 'POST',
-        headers: { authorization: PROJECT_BEARER.toLowerCase() },
+        headers: { authorization: OTHER_PROJECT_BEARER },
+        body: new Uint8Array([1]),
       }),
     );
 
-    expect((await sentToPostHog(0)).headers.get('authorization')).toBe(PROJECT_BEARER);
-    expect((await sentToPostHog(1)).headers.get('authorization')).toBeNull();
-    expect((await sentToPostHog(2)).headers.get('authorization')).toBeNull();
+    expect(upstream).toHaveBeenCalledTimes(1);
+    const sent = await sentToPostHog();
+    expect(sent.url).toBe(`https://us.i.posthog.com/i/v1/logs?token=${PROJECT_REF}`);
+    expect(sent.headers.get('authorization')).toBeNull();
+    expect(everythingIn(sent)).not.toContain(OTHER_PROJECT);
   });
 
   it('takes the visitor address from x-real-ip when x-forwarded-for is missing, and off Vercel never from an x-forwarded-for the client could have typed (lib/client-ip.ts)', async () => {
@@ -453,7 +500,7 @@ describe('/ingest sends no member credential and passes back no cookie, on every
       // The route is handed the member's cookie: this cannot pass by never seeing one.
       expect(req.headers.get('cookie'), method).toBe(MEMBER_COOKIE);
 
-      const res = await route[method](req);
+      const res = await answerOf(req);
 
       const sent = await sentToPostHog(call);
       expect(sent.method).toBe(method);
@@ -475,30 +522,43 @@ describe('/ingest sends no member credential and passes back no cookie, on every
 
 describe('/ingest takes each path only by the method the SDK uses for it', () => {
   // POST for events, flags, replay, logs and the Conversations writes; GET
-  // (and HEAD) for the lists, the remote config and the bundles. Next answers
-  // HEAD with the GET handler when a route exports no HEAD
-  // (auto-implement-methods.js), so the route checks the method itself.
+  // (and HEAD) for the lists, the remote config and the bundles. Every other
+  // method Next hands to a route is the route's to refuse, OPTIONS, PUT,
+  // PATCH and DELETE included: left to Next, OPTIONS would get Next's 204
+  // with one Allow for every path, and the others a 405 with no Allow and no
+  // log line. Next answers HEAD with the GET handler when a route exports no
+  // HEAD, so the route checks the method itself.
   it.each(SDK_REQUESTS)(
-    '%s /ingest%s: any other method answers 405, no body, and PostHog is not asked',
+    "%s /ingest%s: any other method answers 405 with the path's Allow, no body and one log line, and PostHog is not asked",
     async (sdkMethod, path) => {
-      const others: Method[] = sdkMethod === 'GET' ? ['POST'] : ['GET', 'HEAD'];
+      const allowed: Method[] = sdkMethod === 'GET' ? ['GET', 'HEAD'] : ['POST'];
+      const others = HTTP_METHODS.filter((method) => !allowed.includes(method));
+      expect(others).toEqual(expect.arrayContaining(['OPTIONS', 'PUT', 'PATCH', 'DELETE']));
       for (const method of others) {
         const res = await ask(method, `/ingest${path}`);
 
         expect(res.status, method).toBe(405);
         expect(await res.text(), method).toBe('');
         expect(res.headers.get('x-content-type-options'), method).toBe('nosniff');
-        expect(res.headers.get('allow'), method).toBe(sdkMethod === 'GET' ? 'GET, HEAD' : 'POST');
+        expect(res.headers.get('allow'), method).toBe(allowed.join(', '));
       }
       expect(upstream).not.toHaveBeenCalled();
+      const pathname = new URL(`/ingest${path}`, SITE).pathname;
+      expect(refusals()).toEqual(
+        others.map((method) => ['[ingest] refused', { status: 405, method, path: pathname }]),
+      );
     },
   );
 
-  it('answers 405 to a POST on a GET path before reading a byte of its body', async () => {
+  it.each([
+    ['POST', `/ingest/static/${SDK_VERSION}/surveys.js`],
+    ['PUT', '/ingest/e/'],
+    ['PATCH', '/ingest/e/'],
+    ['DELETE', '/ingest/e/'],
+    ['PUT', `/ingest/array/${PROJECT_REF}/config.js`],
+  ] as const)('answers 405 to %s %s before reading a byte of its body', async (method, path) => {
     const { stream, seen } = chunkedBody(1024, 256);
-    const res = await route.POST(
-      incoming(`/ingest/static/${SDK_VERSION}/surveys.js`, { method: 'POST', body: stream }),
-    );
+    const res = await answerOf(incoming(path, { method, body: stream }));
 
     expect(res.status).toBe(405);
     expect(seen.pulled).toBe(0);
@@ -611,8 +671,8 @@ describe('/ingest refuses every other path with 404, no body and no request to P
     ['an encoded slash', '/ingest/static/..%2F..%2Fapi%2Fprojects%2F'],
     ['an encoded slash in lower case', '/ingest/e%2f'],
     ['an encoded backslash', '/ingest/static/%5C..%5Capi'],
-  ])('refuses %s (%s)', async (_label, path) => {
-    for (const method of ['GET', 'HEAD', 'POST'] as const) {
+  ])('refuses %s (%s), by every method', async (_label, path) => {
+    for (const method of HTTP_METHODS) {
       const res = await ask(method, path);
 
       expect(res.status, method).toBe(404);
@@ -620,6 +680,9 @@ describe('/ingest refuses every other path with 404, no body and no request to P
       expect(res.headers.get('x-content-type-options'), method).toBe('nosniff');
     }
     expect(upstream).not.toHaveBeenCalled();
+    expect(refusals().map(([, line]) => line)).toEqual(
+      HTTP_METHODS.map((method) => expect.objectContaining({ status: 404, method })),
+    );
   });
 
   it('refuses every /array/ path when no project key is set', async () => {
@@ -638,7 +701,7 @@ describe('/ingest refuses every other path with 404, no body and no request to P
   });
 });
 
-describe("/ingest passes on a query only where the SDK sends one, and no other project's token", () => {
+describe("/ingest passes on a query only where the SDK sends one, and no other project's key in it", () => {
   it('asks for the remote config with no query, whatever the request carried (the SDK sends none)', async () => {
     for (const path of [`/array/${PROJECT_REF}/config.js`, `/array/${PROJECT_REF}/config`]) {
       for (const method of ['GET', 'HEAD'] as const) {
@@ -663,8 +726,24 @@ describe("/ingest passes on a query only where the SDK sends one, and no other p
     ['GET', `/api/surveys/?%74oken=${OTHER_PROJECT}`],
     // A token on a path the SDK sends none on is held to the same rule.
     ['POST', `/e/?token=${OTHER_PROJECT}`],
+    // PostHog takes a GET's project from api_key when the query has no token
+    // (posthog/api/utils.py get_token, which the product tours view uses; the
+    // surveys service's extract_token: token, then api_key), so api_key is
+    // held to the same rule: alone, by HEAD, after an empty token, next to
+    // our token, after ours (Django reads the last value), spelled encoded,
+    // empty, and on the POST paths.
+    ['GET', `/api/surveys/?api_key=${OTHER_PROJECT}&_=1700000000000`],
+    ['GET', `/api/product_tours/?api_key=${OTHER_PROJECT}&_=1700000000000`],
+    ['HEAD', `/api/surveys/?api_key=${OTHER_PROJECT}`],
+    ['GET', `/api/product_tours/?token=&api_key=${OTHER_PROJECT}`],
+    ['GET', `/api/surveys/?token=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
+    ['GET', `/api/product_tours/?api_key=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
+    ['GET', `/api/surveys/?%61pi_key=${OTHER_PROJECT}`],
+    ['GET', '/api/product_tours/?api_key=&_=1700000000000'],
+    ['POST', `/i/v1/logs?token=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
+    ['POST', `/e/?api_key=${OTHER_PROJECT}`],
   ] as const)(
-    "refuses %s /ingest%s with 404: a token that is not this app's key",
+    "refuses %s /ingest%s with 404: a project key in the query that is not this app's",
     async (method, path) => {
       const res = await ask(method, `/ingest${path}`);
 
@@ -672,8 +751,24 @@ describe("/ingest passes on a query only where the SDK sends one, and no other p
       expect(await res.text()).toBe('');
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
       expect(upstream).not.toHaveBeenCalled();
+      expect(refusals()).toHaveLength(1);
     },
   );
+
+  it("passes on a query whose token and api_key are this app's own key", async () => {
+    // The SDK sends no api_key in a query; one that names this app's project
+    // is held to the rule a token is, not refused for its name.
+    for (const path of [
+      `/api/surveys/?api_key=${PROJECT_REF}&_=1700000000000`,
+      `/api/product_tours/?token=${PROJECT_REF}&api_key=${PROJECT_REF}`,
+    ]) {
+      upstream.mockClear();
+      const res = await ask('GET', `/ingest${path}`);
+
+      expect(res.status, path).toBe(200);
+      expect((await sentToPostHog()).url, path).toBe(`${API}${path}`);
+    }
+  });
 
   it('refuses every token when no project key is set', async () => {
     postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
@@ -682,6 +777,8 @@ describe("/ingest passes on a query only where the SDK sends one, and no other p
       ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
       ['GET', '/ingest/api/product_tours/?token=&_=1700000000000'],
       ['POST', '/ingest/i/v1/logs?token=&compression=base64'],
+      ['GET', `/ingest/api/surveys/?api_key=${PROJECT_REF}`],
+      ['GET', '/ingest/api/product_tours/?api_key=&_=1700000000000'],
     ] as const) {
       const res = await ask(method, path);
       expect(res.status, path).toBe(404);
@@ -800,12 +897,20 @@ describe('/ingest logs each request it refuses, with the path only', () => {
     [405, 'GET', '/ingest/e/?compression=base64'],
     [405, 'HEAD', '/ingest/s/'],
     [405, 'POST', `/ingest/array/${PROJECT_REF}/config.js?callback=placeholder-query`],
+    [404, 'GET', `/ingest/api/surveys/?api_key=${OTHER_PROJECT}&q=placeholder-query`],
+    // Methods the SDK never sends, which Next would otherwise answer itself.
+    [405, 'PUT', '/ingest/e/?q=placeholder-query'],
+    [405, 'PATCH', '/ingest/s/'],
+    [405, 'DELETE', `/ingest/api/surveys/?token=${PROJECT_REF}&q=placeholder-query`],
+    [405, 'OPTIONS', `/ingest/array/${PROJECT_REF}/config.js?q=placeholder-query`],
+    [404, 'OPTIONS', '/ingest/login?q=placeholder-query'],
+    [404, 'DELETE', `/ingest/api/projects/1/?token=${OTHER_PROJECT}`],
   ] as const)('a %i to %s %s writes one line', async (status, method, path) => {
-    const res = await route[method](
+    const res = await answerOf(
       incoming(path, {
         method,
         headers: BROWSER_HEADERS,
-        body: method === 'POST' ? new TextEncoder().encode('placeholder-body') : undefined,
+        body: WITH_BODY.has(method) ? new TextEncoder().encode('placeholder-body') : undefined,
       }),
     );
 

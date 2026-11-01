@@ -31,23 +31,25 @@ export const dynamic = 'force-dynamic';
  *     /array/<key>/config.js, a script that carries that project's site apps,
  *     so our origin would serve their JavaScript.
  *   - the method: the one the SDK uses for that path (a GET path takes HEAD
- *     too); any other answers 405.
+ *     too); any other answers 405. Every method Next hands to a route comes
+ *     here (the handlers at the end), so each refusal is the route's own.
  *   - headers: the ones PostHog's proxy reference names (content-type,
  *     content-encoding, user-agent, every posthog-*), accept, and
  *     x-conversations-token (posthog-js sets it on its Conversations calls:
  *     the widget's value from the public remote config). Authorization only
- *     as `Bearer phc_...`, the project key a capture v1 SDK sends; posthog-js
- *     sends none. Never a cookie, and nothing else the browser or the
- *     platform added (Referer, Origin, x-vercel-*).
+ *     as `Bearer <this app's project key>`, the form a capture v1 SDK sends
+ *     a key in; posthog-js sends none. Never a cookie, and nothing else the
+ *     browser or the platform added (Referer, Origin, x-vercel-*).
  *   - x-forwarded-for: the visitor's address as the platform gave it
  *     (lib/client-ip.ts), so PostHog places the visitor and not this
  *     function's region.
  *   - the query as it came (/flags/?v=2; skipTrailingSlashRedirect in
  *     next.config.ts keeps the slash before it), but none for the remote
- *     config, where the SDK sends none, and a token in it only if it is this
- *     app's project key (ownTokens below; 404 otherwise), on the host the SDK
- *     itself uses for that path: the assets host for /static/ and /array/,
- *     the API host for the rest (posthog-js utils/request-router.js:145-159).
+ *     config, where the SDK sends none, and a project key in it (token or
+ *     api_key) only if it is this app's (ownTokens below; 404 otherwise), on
+ *     the host the SDK itself uses for that path: the assets host for
+ *     /static/ and /array/, the API host for the rest (posthog-js
+ *     utils/request-router.js:145-159).
  *   - the body's bytes as they came (gzip and base64 batches are binary), up
  *     to the platform's request body limit (BODY_CAP below); a larger one
  *     answers 413.
@@ -58,11 +60,11 @@ export const dynamic = 'force-dynamic';
  * cache policy is kept for /static/ only; every other answer is private,
  * no-store (Target.shared). Every answer is nosniff. fetch has already
  * decoded the body, so Content-Encoding and Content-Length are not copied. A
- * failure of ours answers with no body: 404 for a path or a token not on the
- * list, 405 for another method, 413 for a body over the cap (each of these
- * three logged with its path: refuse below), 400 for a body that could not
- * be read, 502 when PostHog does not answer within 10 seconds. Analytics is
- * never worth an error page.
+ * failure of ours answers with no body: 404 for a path or a project key not
+ * on the list, 405 for another method, 413 for a body over the cap (each of
+ * these three logged with its path: refuse below), 400 for a body that could
+ * not be read, 502 when PostHog does not answer within 10 seconds. Analytics
+ * is never worth an error page.
  *
  * /ingest stays out of the proxy's matcher (src/proxy.ts): no session refresh
  * runs for analytics. route.test.ts, route.census.test.ts and
@@ -149,8 +151,9 @@ interface Target {
   origin: typeof API_ORIGIN | typeof ASSETS_ORIGIN;
   /**
    * The one method the SDK uses for the path; a GET path takes HEAD too.
-   * Checked here, not by which handlers the module exports: Next answers
-   * HEAD with the GET handler when there is no HEAD one
+   * Checked here, not by which handlers the module exports: it exports one
+   * for every method (the end of this file), and Next answers HEAD with the
+   * GET handler when there is no HEAD one
    * (next/dist/server/route-modules/app-route/helpers/
    * auto-implement-methods.js:36-45).
    */
@@ -249,25 +252,40 @@ function remoteConfig(path: string): Target | null {
 }
 
 /**
- * Every token in the query is this app's project key. The SDK puts its own
- * key there on the surveys, product tours and console logs calls
+ * Every project key in the query is this app's. PostHog takes a GET's
+ * project from the query's token, or from its api_key when it has no token
+ * (posthog/api/utils.py get_token, which the product tours view calls; the
+ * surveys service, rust/hypercache-server surveys.rs extract_token: token,
+ * then api_key), so both names are held to the key, every value of each
+ * (URLSearchParams decodes an encoded name too). The SDK puts its own key in
+ * token= on the surveys, product tours and console logs calls
  * (@posthog/browser-common surveys.js:254, logs.js:449; posthog-product-
- * tours.js:108); another project's would make this function a relay for
- * that project. With no key set, no token passes.
+ * tours.js:108) and never sends an api_key in a query (only in an event
+ * batch's body, request.js:545); another project's key under either name
+ * would make this function a relay for that project. With no key set, no
+ * key passes. Authorization is held to the same key (upstreamHeaders).
  *
- * THE QUERY ONLY. A request body names its project too (an event batch's
- * api_key, each event's properties.token; gzip or base64 encoded), and the
- * route passes bodies on as they came, unread, so anyone can still send
- * events for any PostHog project through /ingest, as the rewrites this
- * route replaced let them on every path. Nor is a `Bearer phc_`
- * Authorization (upstreamHeaders) tied to this key. Abuse of that relay
- * (cost, other projects' events laundered through our origin) is left to
- * an edge rate limit (docket S38) and a check of the body's key (S38 part
- * 3).
+ * NOT THE PAYLOAD, NOR THE WIDGET'S TOKEN. An event payload names its
+ * project too (a batch's api_key, each event's properties.token; gzip or
+ * base64 encoded), whether it comes as the body or as a data= query field,
+ * which PostHog's capture reads before the body (rust/capture payload
+ * common.rs extract_payload_bytes), and the route passes both on as they
+ * came, unread. X-Conversations-Token picks the project for the
+ * Conversations widget's calls (posthog/auth.py WidgetAuthentication) and
+ * is passed on as it came too: its value is the widget's own, from the
+ * remote config, which the route cannot know. So anyone can still send
+ * events for any PostHog project through /ingest, and reach another
+ * project's Conversations widget, as the rewrites this route replaced let
+ * them on every path. Abuse of that relay (cost, other projects' events
+ * laundered through our origin) is left to an edge rate limit (docket
+ * S38), the refusal of the paths S22 turns off, the Conversations ones
+ * among them (S38 part 2), and a check of the payload's key (S38 part 3).
  */
 function ownTokens(query: URLSearchParams): boolean {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
-  return query.getAll('token').every((token) => key !== '' && token === key);
+  return [...query.getAll('token'), ...query.getAll('api_key')].every(
+    (value) => key !== '' && value === key,
+  );
 }
 
 /**
@@ -299,8 +317,15 @@ function upstreamHeaders(request: NextRequest): Headers {
     const name = header.toLowerCase();
     if (REQUEST_HEADERS.has(name) || name.startsWith('posthog-')) headers.set(name, value);
   });
+  // Authorization only as this app's own project key: PostHog's console log
+  // intake takes the project from it before the query's token
+  // (rust/capture-logs authorizer.rs resolve_token), so another project's
+  // key there would undo ownTokens on /i/v1/logs. posthog-js sends none.
+  const key = env.NEXT_PUBLIC_POSTHOG_KEY;
   const authorization = request.headers.get('authorization');
-  if (authorization?.startsWith('Bearer phc_')) headers.set('authorization', authorization);
+  if (key !== '' && authorization === `Bearer ${key}`) {
+    headers.set('authorization', authorization);
+  }
   const visitor = clientIpFromRequest(request);
   if (visitor !== 'unknown') headers.set('x-forwarded-for', visitor);
   return headers;
@@ -370,10 +395,10 @@ function emptyAnswer(status: 400 | 404 | 405 | 413 | 502, allow?: string): Respo
 }
 
 /**
- * A request not passed on: 404 for a path or a token not on the list, 405
- * (with Allow) for a method the SDK does not use on the path, 413 for a body
- * over the cap. One log line each, with the path only: never the query (it
- * can carry a token), a header or the body. The SDK drops what is refused
+ * A request not passed on: 404 for a path or a project key not on the list,
+ * 405 (with Allow) for a method the SDK does not use on the path, 413 for a
+ * body over the cap. One log line each, with the path only: never the query
+ * (it can carry a token), a header or the body. The SDK drops what is refused
  * without retrying, and /i/v0/e/ and /s/ come from the project's remote
  * config, so this line is where a config that names a new path shows,
  * instead of events vanishing.
@@ -452,5 +477,30 @@ export async function HEAD(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  return proxy(request);
+}
+
+// posthog-js sends none of the methods below. They are exported so that the
+// route, not Next, refuses them like any method a path does not take: 405
+// with the path's Allow, or 404 off the list, each logged (refuse). Left
+// out, Next would answer OPTIONS itself with a 204 and one Allow for every
+// path, and PUT, PATCH and DELETE with a bare 405, and nothing would be
+// logged (next/dist/server/route-modules/app-route/helpers/
+// auto-implement-methods.js:16-28, :48-74). A method Next does not know is
+// answered 400 by Next before any route (app-route/module.js
+// resolveHandler).
+export async function PUT(request: NextRequest) {
+  return proxy(request);
+}
+
+export async function PATCH(request: NextRequest) {
+  return proxy(request);
+}
+
+export async function DELETE(request: NextRequest) {
+  return proxy(request);
+}
+
+export async function OPTIONS(request: NextRequest) {
   return proxy(request);
 }

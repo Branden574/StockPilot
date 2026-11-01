@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
+import { autoImplementMethods } from 'next/dist/server/route-modules/app-route/helpers/auto-implement-methods';
+import { HTTP_METHODS, type HTTP_METHOD } from 'next/dist/server/web/http';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,14 +18,18 @@ vi.mock('@/lib/env.client', () => ({ env: postHogEnv }));
 
 import * as route from './route';
 
+/** The route's handlers as Next hands a request to them (route.test.ts says why). */
+const viaNext = autoImplementMethods(route);
+
 /**
  * The /ingest list against the posthog-js this app installs (docket S34).
  * The route passes on only the requests the SDK makes with this app's init
  * options, each by the one method the SDK uses for it. Here every path the
  * SDK's code names, in the bundle the app imports and in each bundle the
  * route lets it load, is one the route passes on by that method and refuses
- * by any other with 405 (SENT), or one these options never send through
- * /ingest (NOT_SENT, with the reason), and every bundle the package ships is
+ * by every other method Next hands to a route with 405 (SENT), or one these
+ * options never send through /ingest and the route refuses by every method
+ * with 404 (NOT_SENT, with the reason), and every bundle the package ships is
  * one the route serves or one it refuses. A posthog-js update that adds a
  * path or a bundle fails here until someone reads where the SDK sends it and
  * adds it to the route or to a list below with the reason. fetch is a stub:
@@ -98,7 +104,8 @@ const REFUSED_NOT_SHIPPED: Record<string, string> = {
 const NOT_LOADED_BY_NAME =
   /^(?:array|module|main|customizations|default-extensions|extension-bundles|external-scripts-loader|all-external-dependencies|element-inference|rrweb|rrweb-types|rrweb-plugin-console-record|surveys-preview|product-tours-preview)(?:\.[0-9a-z.-]+)?\.js$/;
 
-type Method = 'GET' | 'HEAD' | 'POST';
+/** Every method Next hands to a route (HTTP_METHODS), each asked as Next asks it. */
+type Method = HTTP_METHOD;
 type Sample = ['GET' | 'POST', string, string];
 
 /**
@@ -216,12 +223,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function ask(method: Method, at: string): Promise<Response> {
+async function ask(method: Method, at: string): Promise<Response> {
   const request = new NextRequest(`https://app.example.com/ingest${at}`, {
     method,
-    body: method === 'POST' ? new Uint8Array([1]) : undefined,
+    body: ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? new Uint8Array([1]) : undefined,
   });
-  return route[method](request);
+  return (await viaNext[method](request, {})) as Response;
 }
 
 /**
@@ -238,14 +245,15 @@ async function outcome(method: Method, at: string): Promise<string> {
 
 /**
  * What the route must do with a request the SDK makes by `method`, and with
- * the same address by the other methods: a GET goes on as GET and as HEAD and
- * a POST is refused; a POST goes on as POST and a GET or HEAD is refused.
+ * the same address by every other method: a GET goes on as GET and as HEAD,
+ * a POST as POST, and any other method (OPTIONS, PUT, PATCH and DELETE
+ * among them) is refused with 405.
  */
 function expectedFor(method: 'GET' | 'POST', at: string, host: string): Array<[Method, string]> {
-  const sent = (m: Method): [Method, string] => [m, `sent ${m} to ${host}${at}`];
-  return method === 'GET'
-    ? [sent('GET'), sent('HEAD'), ['POST', 'answered 405']]
-    : [sent('POST'), ['GET', 'answered 405'], ['HEAD', 'answered 405']];
+  const allowed: Method[] = method === 'GET' ? ['GET', 'HEAD'] : ['POST'];
+  return HTTP_METHODS.map((m): [Method, string] =>
+    allowed.includes(m) ? [m, `sent ${m} to ${host}${at}`] : [m, 'answered 405'],
+  );
 }
 
 describe('/ingest against the installed posthog-js', () => {
@@ -277,7 +285,7 @@ describe('/ingest against the installed posthog-js', () => {
       ]) {
         const expected: Array<[Method, string]> = SERVED_BUNDLES.includes(name)
           ? expectedFor('GET', at, ASSETS)
-          : (['GET', 'HEAD', 'POST'] as const).map((m) => [m, 'answered 404']);
+          : HTTP_METHODS.map((m): [Method, string] => [m, 'answered 404']);
         for (const [method, want] of expected) {
           const got = await outcome(method, at);
           if (got !== want) wrong.push(`${method} ${at}: ${got}, not ${want}`);
@@ -312,8 +320,8 @@ describe('/ingest against the installed posthog-js', () => {
     }
 
     // Each request by the SDK's own method goes on with that method (a GET's
-    // HEAD too); by any other it is refused with 405. A path never sent is
-    // refused with 404 by every method.
+    // HEAD too); by any other method Next hands to a route it is refused with
+    // 405. A path never sent is refused with 404 by every method.
     const wrong: string[] = [];
     for (const p of named) {
       const samples: Array<[Method, string, string]> =
@@ -325,7 +333,7 @@ describe('/ingest against the installed posthog-js', () => {
                 want,
               ]),
             )
-          : (['GET', 'HEAD', 'POST'] as const).map((method) => [
+          : HTTP_METHODS.map((method): [Method, string, string] => [
               method,
               NOT_SENT[p]![0],
               'answered 404',
