@@ -66,6 +66,14 @@ export default function AIChat() {
   // when it runs, so the photo flow's send() (from the render attachPhoto
   // started in) sends this chat's current id too.
   const sessionRef = React.useRef<string | null>(null);
+  // Which chat is on screen: New chat counts it up. send() keeps an answer,
+  // or says why a message failed, only in the chat the message was sent in.
+  const chatRef = React.useRef(0);
+  // Messages sent and not answered yet. Two can be on their way at once:
+  // Send stays enabled while a photo uploads, and the photo's message goes
+  // when the upload ends. So busy holds until the last answer is in. It
+  // never refuses a send (that would drop the photo's message).
+  const pendingRef = React.useRef(0);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
@@ -83,6 +91,8 @@ export default function AIChat() {
     const userTurn: Turn = { role: 'user', content: text };
     const assistantTurn: Turn = { role: 'assistant', content: '', streaming: true, tools: [] };
     setTurns((prev) => [...prev, userTurn, assistantTurn]);
+    const chat = chatRef.current;
+    pendingRef.current += 1;
     setBusy(true);
     scrollToBottom();
 
@@ -117,6 +127,10 @@ export default function AIChat() {
       // chat actually works. A real streaming UX needs an
       // XHR-with-onprogress shim — that's a follow-up.
       const answer = parseChatStream(await res.text());
+      // New chat was taken while this answer was on its way: the answer is
+      // the old chat's (the route stored it there, on the web). Its session
+      // id, words and error stay out of the new chat.
+      if (chatRef.current !== chat) return;
       // Kept before an error is shown: the route names the session after an
       // error event too, and the next message belongs to this chat.
       if (answer.sessionId) sessionRef.current = answer.sessionId;
@@ -138,11 +152,15 @@ export default function AIChat() {
     } catch (err) {
       // Anything without a sentence of its own got no answer from the server
       // (offline, a dropped connection): the network layer's text is never
-      // shown (connection-copy.ts).
+      // shown (connection-copy.ts). Said only in the chat it was sent in.
+      if (chatRef.current !== chat) return;
       Alert.alert('Chat error', err instanceof ChatFailure ? err.message : CONNECTION_FAILURE_COPY);
       setTurns((prev) => prev.slice(0, -1)); // remove the empty assistant bubble
     } finally {
-      setBusy(false);
+      pendingRef.current -= 1;
+      setBusy(pendingRef.current > 0);
+      // After New chat this finds the new chat empty: busy held until now,
+      // so nothing has been sent there yet.
       setTurns((prev) =>
         prev.map((t, i) => (i === prev.length - 1 ? { ...t, streaming: false } : t)),
       );
@@ -153,10 +171,13 @@ export default function AIChat() {
   /**
    * New chat: empties the screen and forgets the session, so the next
    * message starts a chat of its own. Nothing is deleted: the chat it leaves
-   * stays in the AI Assistant on the web. Offered only between answers, so a
-   * late reply never lands in the new chat.
+   * stays in the AI Assistant on the web. Offered only while no answer is on
+   * its way (busy holds until the last one is in). An answer that still
+   * lands after it, from a tap taken before the chip was hidden, is the old
+   * chat's: send() leaves it out of the new one (chatRef).
    */
   function startNewChat() {
+    chatRef.current += 1;
     sessionRef.current = null;
     setTurns([]);
     setInput('');

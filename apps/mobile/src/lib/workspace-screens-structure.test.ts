@@ -697,8 +697,11 @@ describe('AI chat: one session per chat, a sentence for every failure, New chat'
     expect(otherwise.getText(sf)).toBe('<View style={{ width: 44 }} />');
   });
 
+  // The chat counter keeps an answer still on its way out of the new chat;
+  // ai-chat-screen.test.ts runs send(), startNewChat() and attachPhoto().
   it('New chat empties the chat, the box and the session; the old chat stays on the web', () => {
     const start = functionBody(CHAT, 'startNewChat');
+    expect(start).toContain('chatRef.current += 1;');
     expect(start).toContain('sessionRef.current = null;');
     expect(start).toContain('setTurns([]);');
     expect(start).toContain("setInput('');");
