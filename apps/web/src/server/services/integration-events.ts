@@ -16,6 +16,7 @@ import {
 } from './context';
 import { keepAlive } from './lib/defer';
 import { listRows } from './lib/list-rows';
+import { postgrestErrorText } from './lib/postgrest-error';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -468,20 +469,28 @@ async function dispatchEventNow(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    const { data: endpoints, error } = await admin
+    const endpointsRes = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
       .eq('organization_id', organizationId)
       .eq('enabled', true)
       .contains('event_types', [eventType]);
-    if (error || !endpoints || endpoints.length === 0) return;
+    // A failed read, or an answer that is not a list (an empty body), is not
+    // "no endpoints": the event's deliveries are never inserted, and the cron
+    // retries only rows that exist. The catch below reports it (docket S27).
+    if (endpointsRes.error) {
+      throw new Error(
+        `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
+      );
+    }
+    const eps = listRows<EndpointRow>('integration_endpoints', endpointsRes);
+    if (eps.length === 0) return;
 
     // Batch-insert one pending delivery per endpoint (single round trip), then
     // fire the immediate attempts in PARALLEL. Previously this was a per-endpoint
     // insert + sequential await — O(N) round trips that blocked each other on the
     // 8s delivery timeout (audit 2026-06-09). Failures stay 'pending' for the cron.
-    const eps = endpoints as EndpointRow[];
-    const { data: rows, error: insErr } = await admin
+    const insertRes = await admin
       .from('integration_deliveries')
       .insert(
         eps.map((ep) => ({
@@ -494,7 +503,14 @@ async function dispatchEventNow(
         })),
       )
       .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
-    if (insErr || !rows || rows.length === 0) return;
+    // A failed insert lost the event's deliveries just the same: reported below.
+    if (insertRes.error) {
+      throw new Error(
+        `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
+      );
+    }
+    const rows = insertRes.data;
+    if (!rows || rows.length === 0) return;
     const epById = new Map(eps.map((e) => [e.id, e]));
     await Promise.allSettled(
       (rows as DeliveryRow[]).map((row) => {

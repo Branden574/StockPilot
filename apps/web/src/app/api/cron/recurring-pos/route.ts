@@ -9,6 +9,7 @@ import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { createNotification } from '@/server/services/notifications';
 import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 import {
   RecurringPoTemplatesService,
   recurringRunNotice,
@@ -208,7 +209,8 @@ async function notifyAdmins(
     .is('impersonation_expires_at', null);
   const recipients = new Set<string>();
   if (adminsRes.error) {
-    void reportError(new Error(adminsRes.error.message), {
+    // postgrestErrorText: a gateway's 502 with an empty body has an empty message.
+    void reportError(new Error(postgrestErrorText(adminsRes.error, adminsRes)), {
       tag: 'cron.recurring-pos.admins',
       level: 'warning',
       extra: { orgId },
@@ -298,9 +300,10 @@ async function creatorsWhoEditTemplates(
       // in-list-bound: the same creators
       .in('user_id', creatorIds),
   ]);
-  const readError = membersRes.error ?? roleOvRes.error ?? userOvRes.error;
-  if (readError) {
-    void reportError(new Error(readError.message), {
+  const failedRead = [membersRes, roleOvRes, userOvRes].find((res) => res.error);
+  if (failedRead?.error) {
+    // postgrestErrorText: a gateway's 502 with an empty body has an empty message.
+    void reportError(new Error(postgrestErrorText(failedRead.error, failedRead)), {
       tag: 'cron.recurring-pos.creator_permissions',
       level: 'warning',
       extra: { orgId },

@@ -11,6 +11,7 @@ import { reportError } from '@/lib/error-reporter';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 
+import { MappingReadError } from './mapping-read-error';
 import { getConnectionSecret, putConnectionSecret } from './secret-store';
 
 /**
@@ -415,10 +416,14 @@ function makeDeps(admin: any) {
       // FAIL CLOSED: this read is the idempotency guard for connectors without
       // a provider-side dedupe key (Intacct has no QBO-style requestid). A
       // transient query error must NOT read as "no mapping" — that would
-      // re-POST and duplicate the document in the customer's ERP. Throwing
-      // surfaces as a failed attempt (retry/dead-letter), which is always
-      // recoverable; a duplicate export is not.
-      if (res.error) throw new Error(`connection_mappings select: ${res.error.message}`);
+      // re-POST and duplicate the document in the customer's ERP. Every
+      // failure throws a MappingReadError, which fails the attempt into
+      // 'error' with backoff wherever the connector reads it, even inside the
+      // try around its provider calls (mapping-read-error.ts); a duplicate
+      // export is not recoverable.
+      if (res.error) {
+        throw new MappingReadError(new Error(`connection_mappings select: ${res.error.message}`));
+      }
       let rows: Array<{ external_id: string; external_meta: Record<string, unknown> | null }>;
       try {
         rows = listRows('connection_mappings', res);
@@ -430,11 +435,14 @@ function makeDeps(admin: any) {
             tag: 'cron.drain-outbox.mapping',
             extra: { connectionId, entityType },
           });
+          throw new MappingReadError(err);
         }
         throw err;
       }
       // Two rows for one local id is no answer either (maybeSingle refused it too).
-      if (rows.length > 1) throw new Error('connection_mappings answered more than one mapping');
+      if (rows.length > 1) {
+        throw new MappingReadError(new Error('connection_mappings answered more than one mapping'));
+      }
       const data = rows[0];
       return data
         ? { externalId: data.external_id, externalMeta: data.external_meta ?? {} }

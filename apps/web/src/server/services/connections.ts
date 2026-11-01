@@ -253,6 +253,14 @@ export class ConnectionsService {
    * 0152 admin-only RLS policy (org-scoped, with-check status='pending') is the
    * load-bearing boundary; the .eq(organization_id)/.in(status) filters here are
    * defense in depth + give a clean not_found when the row isn't eligible.
+   *
+   * A replay the row rule refused changes 0 rows too, but the row is on the
+   * member's screen: the sync log's select rule is member-level, and this view
+   * opens to every member given either key (assertSyncLogManage). So a 0-row
+   * replay takes a second look with the same client: a failed sync the member
+   * can still see was refused, and says so (docket S27). Anything else, or a
+   * second look that fails or answers nothing, stays not_found; nothing
+   * changed either way.
    */
   async replaySync(id: string): Promise<void> {
     this.assertSyncLogManage();
@@ -273,8 +281,18 @@ export class ConnectionsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     // No row updated → the id doesn't exist for this org, isn't in a replayable
-    // state, or RLS hid it. Surface not_found rather than a silent success.
+    // state, or the row rule refused it. Surface it rather than a silent success.
     if (!data) {
+      const { data: seen } = await this.ctx.supabase
+        .from('connection_sync_log')
+        .select('id, status')
+        .eq('id', id)
+        .eq('organization_id', this.ctx.organizationId)
+        .maybeSingle();
+      const status = (seen as { status?: string } | null)?.status;
+      if (status === 'error' || status === 'dead') {
+        throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
+      }
       throw new ServiceError('not_found', 'No replayable failed sync was found for that id.');
     }
 

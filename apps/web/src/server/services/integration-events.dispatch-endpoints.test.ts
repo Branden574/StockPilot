@@ -11,7 +11,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const reportError = vi.hoisted(() => vi.fn(async () => {}));
+const reportError = vi.hoisted(() =>
+  vi.fn(async (_error: unknown, _context: { tag: string; extra?: Record<string, unknown> }) => {}),
+);
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
@@ -47,7 +49,7 @@ async function dispatchWith(
   adminHolder.client = stub.client;
   await dispatchEvent('org-1', 'order.approved', { orderId: 'order-1' });
   const dispatchReports = reportError.mock.calls.filter(
-    ([, context]) => (context as { tag?: string }).tag === 'integration-events.dispatch',
+    ([, context]) => context.tag === 'integration-events.dispatch',
   );
   return { stub, dispatchReports };
 }
