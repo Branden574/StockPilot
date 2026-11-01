@@ -17,6 +17,22 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }
 vi.mock('@/lib/auth/session', () => ({
   requireSession: vi.fn(async () => ({ userId: 'user-1', email: 'owner@example.test' })),
 }));
+// S20 (#424) puts the platform-admin gate in front of this action. The gate is
+// not under test here (organization.create-gate.test.ts runs the real one), so
+// it lets this caller through.
+vi.mock('@/lib/auth/platform-admin', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/platform-admin')>()),
+  checkPlatformAdmin: vi.fn(async () => ({
+    ok: true,
+    session: {
+      userId: 'user-1',
+      email: 'owner@example.test',
+      fullName: null,
+      avatarUrl: null,
+      defaultOrganizationId: null,
+    },
+  })),
+}));
 
 const h = vi.hoisted(() => ({ stub: null as SupabaseStub | null }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => h.stub!.client }));
