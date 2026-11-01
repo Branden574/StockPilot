@@ -31,8 +31,14 @@ const PINS: Record<string, string> = {
   // checked at read time from the call site's list.
   loadCatalogItemsCached: '44e54eeed6837b7fca2492c2bfa3ced644137e2d05630a37fb4d84295a3ce142',
   loadCatalogThumbMapCached: '0ee26062232644ab2e21a3379c154d2333b751409951bc58cc1bff90218a3708',
+  // Re-pinned 2026-11-01 (B47 part B): the warehouse's links are read page by
+  // page, ordered by charter, and a failed page names its PostgREST cause, so
+  // a warehouse past 1000 links lists every delivery site (here and in the
+  // phone's order sites). The value's shape and the key parts are unchanged;
+  // the callback edit rotates the key once on deploy, and the first visit per
+  // warehouse after it is cold (the prewarm cron refills it).
   loadChartersForWarehouseCached:
-    'fa6e125852a2258d819a6fe9fdd72b9179eb76afcca4adf82d0044379e1d512b',
+    '927ba032e3e5dc8afe11694149c4ff46b38ef614ee05a4d5558a72e3073f1cc4',
 };
 
 function initializerHashes(): Record<string, string> {

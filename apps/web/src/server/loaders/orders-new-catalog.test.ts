@@ -1160,6 +1160,86 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
       { id: CHARTER_A, name: 'Alpha', code: 'A', address: null },
     ]);
   });
+
+  it('charters: the failed read keeps the PostgREST text in its message, for the log', async () => {
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': FAILED });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadChartersForWarehouse(WH)).rejects.toThrow(
+      /\[orders-new\] warehouse charters read failed: fetch failed/,
+    );
+  });
+});
+
+/* ---- delivery sites past 1000 links on one warehouse (B47 part B) ---- */
+
+// Orders > New lists a warehouse's delivery sites from its warehouse_charters
+// links (and serves the phone's order sites through /api/v1/orders/catalog).
+// That read had no order and no range, and archived charters' links count
+// too (the active filter runs after the read), so past 1000 links on one
+// warehouse PostgREST answered an arbitrary 1000 and the rest were missing.
+// It is now read page by page, ordered by charter.
+describe('loadChartersForWarehouse: every delivery site, past 1000 links', () => {
+  const charterId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const link = (i: number, status: string, warehouseId = WH) => ({
+    warehouse_id: warehouseId,
+    charter_id: charterId(i),
+    charter: {
+      id: charterId(i),
+      name: `Site ${String(i).padStart(4, '0')}`,
+      code: null,
+      status,
+      address: null,
+    },
+  });
+  // 1,200 active and 30 archived links on WH, stored with the archived ones
+  // first, and another warehouse's links that must never be listed.
+  const LINKS = [
+    ...Array.from({ length: 30 }, (_, i) => link(5000 + i, 'archived')),
+    ...Array.from({ length: 1200 }, (_, i) => link(i, 'active')),
+    ...Array.from({ length: 5 }, (_, i) => link(8000 + i, 'active', WH2)),
+  ];
+
+  function argsOf(stub: ReturnType<typeof makeSupabaseStub>, page: number, method: string) {
+    const methods = stub.chainsAll.get('warehouse_charters.select')?.[page] ?? [];
+    const args = stub.chainArgsAll.get('warehouse_charters.select')?.[page] ?? [];
+    return methods.flatMap((m, i) => (m === method ? [args[i]] : []));
+  }
+
+  it('lists the 1,200 active sites, in two pages ordered by charter, keeping the warehouse on every page', async () => {
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(LINKS) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    expect(sites).toHaveLength(1200);
+    expect(new Set(sites.map((s) => s.id))).toEqual(
+      new Set(Array.from({ length: 1200 }, (_, i) => charterId(i))),
+    );
+    expect(stub.chainsAll.get('warehouse_charters.select')).toHaveLength(2);
+    expect(argsOf(stub, 0, 'order').map((a) => a![0])).toEqual(['charter_id']);
+    expect(argsOf(stub, 0, 'range')).toEqual([[0, 999]]);
+    expect(argsOf(stub, 1, 'range')).toEqual([[1000, 1999]]);
+    for (const page of [0, 1]) {
+      expect(argsOf(stub, page, 'eq')).toContainEqual(['warehouse_id', WH]);
+    }
+  });
+
+  it('a failed second page rejects with the PostgREST text, never a partial list cached for 5 minutes', async () => {
+    const served = servedLikePostgrest(LINKS);
+    let calls = 0;
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select': (call) => {
+        calls += 1;
+        return calls === 1 ? served(call) : { data: null, error: { message: 'statement timeout' } };
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    await expect(loadChartersForWarehouse(WH)).rejects.toThrow(
+      /\[orders-new\] warehouse charters read failed: .*statement timeout/,
+    );
+    expect(calls).toBe(2);
+  });
 });
 
 /* ---- the thumb map stays bounded ---- */
