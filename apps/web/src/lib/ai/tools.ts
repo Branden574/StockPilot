@@ -758,20 +758,28 @@ const inventoryByCategoryTool: ToolExecutor = {
   },
   async execute(_args, ctx) {
     // SP-040 — paged, same rationale as inventoryByWarehouse above.
-    const [{ rows: items, truncated }, { data: cats }] = await Promise.all([
+    const [{ rows: items, truncated }, cats] = await Promise.all([
       fetchAggregationItems<{
         category_id: string | null;
         quantity_on_hand: number;
         unit_cost: number;
       }>(ctx, 'id, category_id, quantity_on_hand, unit_cost'),
-      ctx.supabase
-        .from('categories')
-        .select('id, name')
-        .eq('organization_id', ctx.organizationId),
+      // Every category's name, page by page by id (B47): one read with no
+      // order answered an arbitrary 1000 past 1000 categories, and each
+      // category left out was called "(deleted)". A failed page fails the
+      // call instead of naming every category "(deleted)".
+      fetchAllRows<{ id: string; name: string }>((from, to) =>
+        ctx.supabase
+          .from('categories')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .order('id')
+          .range(from, to),
+      ),
     ]);
 
     const nameById = new Map<string, string>();
-    for (const c of (cats ?? []) as Array<{ id: string; name: string }>) {
+    for (const c of cats) {
       nameById.set(c.id, c.name);
     }
 

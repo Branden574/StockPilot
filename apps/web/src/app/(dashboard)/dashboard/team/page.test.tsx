@@ -69,7 +69,13 @@ vi.mock('@/components/team/team-manager', () => ({
   },
 }));
 
-import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import {
+  callArgs,
+  inFilters,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import TeamPage from './page';
 
@@ -119,6 +125,64 @@ describe('Team page: 250 viewers', () => {
       'user_category_assignments.select': { data: [], error: null },
     }).client;
     await expect(TeamPage()).rejects.toThrow(/categories read failed/);
+  });
+
+  it('the failed categories read keeps the PostgREST text in its message, for the log', async () => {
+    stubRef.current = makeSupabaseStub({
+      'organizations.select': { data: { terminology: null }, error: null },
+      'categories.select': { data: null, error: { message: 'fetch failed' } },
+      'user_category_assignments.select': { data: [], error: null },
+    }).client;
+    await expect(TeamPage()).rejects.toThrow(/\[team\] categories read failed: fetch failed/);
+  });
+});
+
+/**
+ * B47: the Category access dialog lists the categories to grant from ONE read
+ * ordered by name with no range, so past 1000 categories PostgREST cut it at
+ * the first 1000 with no error and a later category could not be granted or
+ * unticked on its own. The read is now paged, ordered by name and then id.
+ */
+describe('Team page: more than 1000 categories', () => {
+  it("lists all 1200 categories in the viewer's Category access, the last by name included", async () => {
+    const cats = Array.from({ length: 1200 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      organization_id: 'org-1',
+      name: `A category ${String(i).padStart(4, '0')}`,
+      deleted_at: null,
+    }));
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: { terminology: null }, error: null },
+      'categories.select': servedLikePostgrest([
+        ...cats,
+        {
+          id: 'ffffffff-0000-4000-8000-000000000001',
+          organization_id: 'org-1',
+          name: 'Zebra',
+          deleted_at: null,
+        },
+        {
+          id: 'eeeeeeee-0000-4000-8000-000000000001',
+          organization_id: 'org-1',
+          name: 'B gone',
+          deleted_at: '2026-01-01T00:00:00Z',
+        },
+      ]),
+      'user_category_assignments.select': { data: [], error: null },
+    });
+    stubRef.current = stub.client;
+
+    render(await TeamPage());
+
+    const props = managerProps.mock.calls.at(-1)?.[0] as {
+      allCategories: Array<{ id: string; name: string }>;
+    };
+    expect(props.allCategories).toHaveLength(1201);
+    expect(props.allCategories.at(-1)).toEqual({
+      id: 'ffffffff-0000-4000-8000-000000000001',
+      name: 'Zebra',
+    });
+    expect(stub.chainsAll.get('categories.select')).toHaveLength(2);
   });
 });
 

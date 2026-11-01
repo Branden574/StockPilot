@@ -25,6 +25,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRows } from './lib/paginate';
 import { assertStoredColor } from './lib/stored-color';
 
 export const createCategorySchema = z.object({
@@ -94,27 +95,35 @@ export class CategoriesService {
   /**
    * Lists active categories by default. When `opts.includeArchived` is true,
    * returns ONLY archived rows (rows with `deleted_at` set).
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable (names are not unique). It was one read, so PostgREST's
+   * 1000-row max_rows cut it off with no error: an organization with more than
+   * 1000 categories lost every category whose name sorts past them from the
+   * Category filter, the item forms and the Categories page (B47). One request
+   * still answers an organization under 1000 categories.
    */
   async list(opts: { includeArchived?: boolean } = {}) {
-    let query = this.ctx.supabase
-      .from('categories')
-      // A single string literal, deliberately not built via `+` concatenation:
-      // postgrest-js's select-string parser needs a literal type to resolve
-      // column-by-column, and splitting this across `+` widens it to plain
-      // `string` — which the parser can't narrow, so it falls back to
-      // `GenericStringError` for the whole row type (surfaced everywhere this
-      // service's return value is destructured, not just here).
-      .select(
-        'id, parent_id, name, description, color, icon, supports_sizes, public_visibility, tracking_mode, size_scale_id, default_unit_of_measure, sports_subcategory_key, tracking_profile, deleted_at, created_at, updated_at',
+    return fetchAllRows((from, to) => {
+      const query = this.ctx.supabase
+        .from('categories')
+        // A single string literal, deliberately not built via `+` concatenation:
+        // postgrest-js's select-string parser needs a literal type to resolve
+        // column-by-column, and splitting this across `+` widens it to plain
+        // `string` — which the parser can't narrow, so it falls back to
+        // `GenericStringError` for the whole row type (surfaced everywhere this
+        // service's return value is destructured, not just here).
+        .select(
+          'id, parent_id, name, description, color, icon, supports_sizes, public_visibility, tracking_mode, size_scale_id, default_unit_of_measure, sports_subcategory_key, tracking_profile, deleted_at, created_at, updated_at',
+        )
+        .eq('organization_id', this.ctx.organizationId);
+      return (
+        opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
       )
-      .eq('organization_id', this.ctx.organizationId)
-      .order('name', { ascending: true });
-    query = opts.includeArchived
-      ? query.not('deleted_at', 'is', null)
-      : query.is('deleted_at', null);
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return data ?? [];
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to);
+    });
   }
 
   /**

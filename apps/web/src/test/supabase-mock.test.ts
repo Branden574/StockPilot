@@ -103,4 +103,26 @@ describe('servedLikePostgrest', () => {
       Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
     ).rejects.toThrow(/cannot evaluate \.or\(\)/);
   });
+
+  it('evaluates .not(col, "is", null): keeps only the rows whose col is set (an archived-only list)', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const { data } = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .not('gone', 'is', null)
+      .order('id')
+      .range(0, 999);
+    expect((data as Array<{ id: string }>).map((r) => r.id)).toEqual(['d']);
+  });
+
+  it('still refuses any other .not() rather than ignoring it', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').not('n', 'eq', 1)),
+    ).rejects.toThrow(/cannot evaluate \.not\(n, eq, 1\)/);
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').not('gone', 'is', true)),
+    ).rejects.toThrow(/cannot evaluate \.not\(gone, is, true\)/);
+  });
 });

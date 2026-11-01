@@ -2,6 +2,7 @@ import 'server-only';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface WarehouseCharterPair {
   warehouse_id: string;
@@ -19,14 +20,24 @@ export class WarehouseChartersService {
    * Lists every (warehouse, charter) pairing in the current org. Used by the
    * item form to filter charter options once a warehouse is picked. Pairs are
    * already constrained by RLS to the user's visible orgs.
+   *
+   * Every row, page by page (fetchAllRows), ordered by warehouse and then
+   * charter: the table has no id column, and (warehouse_id, charter_id) is its
+   * key. It was one read with no order, so past 1000 links (four warehouses
+   * that each serve 251 charters; archived charters keep their links) PostgREST
+   * answered an arbitrary 1000 with no error, and the item forms, Team's member
+   * Charters dialog and the warehouse page could not offer the rest (B47).
    */
   async listPairs(): Promise<WarehouseCharterPair[]> {
-    const { data, error } = await this.ctx.supabase
-      .from('warehouse_charters')
-      .select('warehouse_id, charter_id')
-      .eq('organization_id', this.ctx.organizationId);
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as WarehouseCharterPair[];
+    return fetchAllRows<WarehouseCharterPair>((from, to) =>
+      this.ctx.supabase
+        .from('warehouse_charters')
+        .select('warehouse_id, charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .order('warehouse_id', { ascending: true })
+        .order('charter_id', { ascending: true })
+        .range(from, to),
+    );
   }
 
   /**

@@ -91,14 +91,16 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
 
 /**
  * A select result that answers like PostgREST: it applies the query's OWN
- * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`), its `.order()`
+ * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`, and
+ * `.not(col, 'is', null)`, the archived-only lists' filter), its `.order()`
  * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
  * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
  * FIRST is the primary key and each later one only breaks its ties.
  * So a test fails when the code under test forgets a filter, instead of the
  * stub handing back every row whatever was asked. Any other method in the
- * chain (an `.or()` it cannot evaluate) throws, so nothing is ignored
- * silently. `rows` may be a function, to change the data between calls.
+ * chain (an `.or()`, or any other `.not()`, it cannot evaluate) throws, so
+ * nothing is ignored silently. `rows` may be a function, to change the data
+ * between calls.
  */
 export function servedLikePostgrest(
   rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
@@ -140,6 +142,17 @@ export function servedLikePostgrest(
         case 'in':
           out = out.filter((r) => (value as unknown[]).includes(r[col]));
           break;
+        case 'not': {
+          // Only `.not(col, 'is', null)`: the rows whose col is set.
+          const operand = call.args[i]?.[2];
+          if (value !== 'is' || operand !== null) {
+            throw new Error(
+              `servedLikePostgrest cannot evaluate .not(${col}, ${String(value)}, ${String(operand)})`,
+            );
+          }
+          out = out.filter((r) => (r[col] ?? null) !== null);
+          break;
+        }
         case 'order':
           // Collected, not applied here: re-sorting per call would make the
           // LAST .order() the primary key (a stable sort keeps only the

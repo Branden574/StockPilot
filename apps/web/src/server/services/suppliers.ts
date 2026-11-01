@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -35,12 +36,6 @@ export class SuppliersService {
     return new SuppliersService(await withContext());
   }
 
-  /**
-   * Lists active suppliers by default. When `opts.includeArchived` is true,
-   * returns ONLY archived rows (rows with `deleted_at` set). The active
-   * vs. archived view is a binary toggle — there's no combined "show all"
-   * mode.
-   */
   /**
    * Active suppliers for a PICKER, FILTER or LABEL on a page that is not
    * itself about suppliers (item forms, the Items and Books filters, purchase
@@ -92,19 +87,35 @@ export class SuppliersService {
     );
   }
 
+  /**
+   * Lists active suppliers by default. When `opts.includeArchived` is true,
+   * returns ONLY archived rows (rows with `deleted_at` set). The active
+   * vs. archived view is a binary toggle — there's no combined "show all"
+   * mode.
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable (names are not unique). It was one read, so PostgREST's
+   * 1000-row max_rows cut it off with no error: past 1000 suppliers (a Sage 50
+   * import can create that many at once), every supplier whose name sorts
+   * after them was missing from the Supplier pickers, the purchase orders and
+   * the Suppliers page (B47). The module gate still refuses before any read.
+   */
   async list(opts: { includeArchived?: boolean } = {}) {
     assertModuleEnabled(this.ctx, 'suppliers');
-    let query = this.ctx.supabase
-      .from('suppliers')
-      .select('id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('name', { ascending: true });
-    query = opts.includeArchived
-      ? query.not('deleted_at', 'is', null)
-      : query.is('deleted_at', null);
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return data ?? [];
+    return fetchAllRows((from, to) => {
+      const query = this.ctx.supabase
+        .from('suppliers')
+        .select(
+          'id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at',
+        )
+        .eq('organization_id', this.ctx.organizationId);
+      return (
+        opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null)
+      )
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to);
+    });
   }
 
   async create(input: CreateSupplierInput) {

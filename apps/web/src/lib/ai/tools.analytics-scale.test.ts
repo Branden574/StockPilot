@@ -78,10 +78,12 @@ import { TOOL_CATALOG } from './tools';
 // hands back the FIRST 1000-row window — which is precisely what the real API
 // does, silently.
 type Rows = Array<Record<string, unknown>>;
-type TableSource = Rows | ((from: number, to: number) => Rows);
+/** A window function may answer a failed read instead of rows. */
+type TableSource = Rows | ((from: number, to: number) => Rows | { error: { message: string } });
 
 function makeSupabase(sources: Record<string, TableSource>) {
   const rangeCalls: Array<{ table: string; from: number; to: number }> = [];
+  const orderCalls: Array<{ table: string; column: string }> = [];
   const from = (table: string) => {
     let range: { from: number; to: number } | null = null;
     const chain: Record<string | symbol, unknown> = {};
@@ -90,22 +92,25 @@ function makeSupabase(sources: Record<string, TableSource>) {
         if (prop === 'then') {
           const src = sources[table] ?? [];
           const win = range ?? { from: 0, to: 999 };
-          const data = typeof src === 'function' ? src(win.from, win.to) : src;
-          return (onFulfilled: (v: unknown) => unknown) =>
-            Promise.resolve({ data, error: null }).then(onFulfilled);
+          const out = typeof src === 'function' ? src(win.from, win.to) : src;
+          const res = Array.isArray(out)
+            ? { data: out, error: null }
+            : { data: null, error: out.error };
+          return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(res).then(onFulfilled);
         }
         return (...args: unknown[]) => {
           if (prop === 'range') {
             range = { from: args[0] as number, to: args[1] as number };
             rangeCalls.push({ table, from: range.from, to: range.to });
           }
+          if (prop === 'order') orderCalls.push({ table, column: args[0] as string });
           return proxy;
         };
       },
     });
     return proxy;
   };
-  return { client: { from } as unknown as ServiceContext['supabase'], rangeCalls };
+  return { client: { from } as unknown as ServiceContext['supabase'], rangeCalls, orderCalls };
 }
 
 function ctxWith(supabase: ServiceContext['supabase']): ServiceContext {
@@ -181,6 +186,66 @@ describe('SP-040: inventory aggregation tools page past the 1000-row clamp', () 
     expect(res.totals.itemCount).toBe(1500);
     expect(res.rows.map((r) => r.categoryId).sort()).toEqual(['c1', 'c2']);
     expect(res.truncated).toBe(false);
+  });
+
+  /**
+   * B47: inventoryByCategory named its categories from ONE read with no order
+   * and no range, so past 1000 categories PostgREST answered an arbitrary
+   * 1000 and the rest were called "(deleted)". The names are now read page by
+   * page, ordered by id, and a failed page fails the tool call instead.
+   */
+  describe('inventoryByCategory names every category, past the first 1000', () => {
+    const catId = (i: number) => `cat-${String(i).padStart(5, '0')}`;
+    /** 1,200 categories, ordered by id as the paged read asks; a window past
+     *  the last row is empty. */
+    const categoryWindows = (from: number, to: number): Rows =>
+      Array.from({ length: Math.max(0, Math.min(to, 1199) - from + 1) }, (_, k) => ({
+        id: catId(from + k),
+        name: `Category ${from + k}`,
+      }));
+    /** Three items, all in the 1,200th category by id. */
+    const lastCategoryItems = (from: number): Rows =>
+      from > 0
+        ? []
+        : [0, 1, 2].map((i) => ({
+            id: `item-${i}`,
+            category_id: catId(1199),
+            quantity_on_hand: 2,
+            unit_cost: 5,
+          }));
+
+    it('names the 1,200th category by id, not "(deleted)", reading more than one window', async () => {
+      const { client, rangeCalls, orderCalls } = makeSupabase({
+        inventory_items: lastCategoryItems,
+        categories: categoryWindows,
+      });
+
+      const res = (await TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client))) as {
+        rows: Array<{ categoryId: string | null; categoryName: string; itemCount: number }>;
+      };
+
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0]!.categoryId).toBe(catId(1199));
+      expect(res.rows[0]!.categoryName).toContain('Category 1199');
+      expect(res.rows[0]!.categoryName).not.toContain('(deleted)');
+      expect(rangeCalls.filter((r) => r.table === 'categories').length).toBeGreaterThan(1);
+      // Ordered by id, so a window boundary never repeats or skips a category.
+      expect(
+        new Set(orderCalls.filter((o) => o.table === 'categories').map((o) => o.column)),
+      ).toEqual(new Set(['id']));
+    });
+
+    it('a failed categories window fails the tool call, never "(deleted)" for every category', async () => {
+      const { client } = makeSupabase({
+        inventory_items: lastCategoryItems,
+        categories: (from, to) =>
+          from === 0 ? categoryWindows(from, to) : { error: { message: 'statement timeout' } },
+      });
+
+      await expect(
+        TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client)),
+      ).rejects.toThrow();
+    });
   });
 
   it('listCategories counts items past the clamp (its comment claimed "≤500 rows max")', async () => {
