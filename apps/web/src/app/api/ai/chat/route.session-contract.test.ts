@@ -17,14 +17,14 @@ import { POST } from './route';
  * The route answers from the session's own stored turns whenever the request
  * names a session it can read, and reads the client's `history` only for a
  * request without one. Yet the schema checked that history first, and refused
- * it past 40 turns or a turn over 8,000 characters. Every phone build sends
- * its whole on-screen transcript with every message (apps/mobile/app/ai/
- * chat.tsx), so once a phone held a session, about the 22nd message of a chat
- * was refused, and every message after a reply over 8,000 characters, for a
- * history the route would not have read. And no phone held one: phones adopt
- * the id from a `session` event that nothing sent (the route named the session
- * only in its last event, `done`), so each phone message started a chat of its
- * own in the person's list.
+ * it past 40 turns or a turn over 8,000 characters. Every phone build before
+ * B75 sends its whole on-screen transcript with every message (apps/mobile/
+ * app/ai/chat.tsx), so once such a phone held a session, about the 22nd
+ * message of a chat was refused, and every message after a reply over 8,000
+ * characters, for a history the route would not have read. And none held one:
+ * those builds adopt the id from a `session` event that nothing sent (the
+ * route named the session only in its last event, `done`), so each phone
+ * message started a chat of its own in the person's list.
  *
  * Pinned here: a request that names a session is read without its history, and
  * every answer names its session first, then again in `done`. A request

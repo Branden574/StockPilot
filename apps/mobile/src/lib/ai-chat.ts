@@ -19,8 +19,9 @@ import { readErrorBody, statusSentence } from './api-error-body';
  * early `session` event), and while it holds one it sends no history: the
  * route answers from the session's own stored turns, as for the web chat
  * (components/ai/chat-panel.tsx sends message, sessionId and pageContext).
- * Without one (the first message, or after a lost session) it sends at most
- * what the route accepts. A refusal reads as a sentence.
+ * Without one (a chat's first message, or a chat whose first answer never
+ * arrived) it sends at most what the route accepts. A refusal reads as a
+ * sentence.
  */
 
 /**
@@ -39,10 +40,10 @@ const AI_CHAT_FAILED = 'The AI assistant ran into a problem. Try again in a mome
 /**
  * A session id the route accepts, in the form gen_random_uuid() produces (an
  * RFC 9562 UUID: version 1 to 8, variant 8 to b). The route's schema checks
- * `z.string().uuid()`; zod 3 accepts any 8-4-4-4-12 hex and zod 4 only this
- * form (and the nil and max ids, which the database never makes). A chat
- * that kept anything else would send it with every message and be refused
- * every time, so anything else is not an id.
+ * `z.string().uuid()`; zod 3 accepts any 8-4-4-4-12 hex, and zod 4 only this
+ * form and special ids such as the nil one, which the database never makes.
+ * A chat that kept anything else would send it with every message and be
+ * refused every time, so anything else is not an id.
  */
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -87,10 +88,10 @@ function cutTurn(content: string): string {
  * cut to 40) and never reads a history sent beside a session it holds.
  *
  * Holding none: `{ message, history }` with the last AI_CHAT_LIMITS.historyTurns
- * non-empty turns on screen, each cut to AI_CHAT_LIMITS.turnChars, so a long
- * reply or a long pasted message the route refused (the screen keeps the
- * question) cannot get the next message refused. No `history` key when there
- * is none. `turns` excludes the new message, which travels as `message`.
+ * non-empty turns on screen, each cut to AI_CHAT_LIMITS.turnChars, so neither
+ * a long reply nor a long pasted message the route refused (the screen keeps
+ * it) can get the next message refused. No `history` key when there is none.
+ * `turns` excludes the new message, which travels as `message`.
  */
 export function buildChatRequestBody(
   message: string,
