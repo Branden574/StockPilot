@@ -272,6 +272,8 @@ describe('OrderItemsAccessDialog: saving', () => {
       ok: true,
       data: { before: 'allow', after: 'deny', targetRole: 'staff', changed: true },
     });
+    // As in the busy case: Save comes back one commit after the sentence.
+    await waitFor(() => expect(saveButton()).toBeEnabled());
     await user.click(saveButton());
     await waitFor(() => expect(h.action).toHaveBeenCalledTimes(2));
     expect(h.action).toHaveBeenLastCalledWith(
@@ -294,7 +296,10 @@ describe('OrderItemsAccessDialog: saving', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(ORDER_ITEMS_ACCESS_BUSY_COPY);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(saveButton()).toBeEnabled();
+    // The sentence lands one commit before the save's transition ends: the
+    // dialog sets it after an await, so for that commit Save is still off.
+    // findByRole can resolve on it, so wait for Save to come back.
+    await waitFor(() => expect(saveButton()).toBeEnabled());
     expect(h.refresh).not.toHaveBeenCalled();
   });
 

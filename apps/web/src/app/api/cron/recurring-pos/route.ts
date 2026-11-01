@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { createNotification } from '@/server/services/notifications';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import {
@@ -127,14 +128,7 @@ export async function GET(req: Request) {
       candidates: modRows.length,
     });
   } catch (e) {
-    void reportError(e, { tag: 'cron.recurring-pos' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: e instanceof Error ? e.message : 'Recurring-PO cron failed',
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'cron.recurring-pos');
   }
 }
 
