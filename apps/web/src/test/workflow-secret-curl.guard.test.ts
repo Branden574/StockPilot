@@ -55,10 +55,10 @@ import { describe, expect, it } from 'vitest';
  * in a file for another), and a hash of each repository file the call runs
  * (a repository program run by its path, the files named on its command line
  * or what `node --test` finds, and what they import from the repository).
- * When any of these changes, the call is
- * unresolved again until someone reads it again. A call whose files the
- * census cannot list (a whole test suite) records none, so its reason can
- * rest only on its environment and its job.
+ * When any of these changes, the call is unresolved again until someone
+ * reads it again. A call whose files the census cannot list (a whole test
+ * suite) records none, so its reason can rest only on its environment and
+ * its job.
  *
  * A secret is ${{ secrets }} in any form or github.token; an env., inputs.,
  * vars., steps.<id>.outputs. or needs.<job>.outputs. name that a workflow maps
@@ -4447,7 +4447,8 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // e43f2c33a) added (6) and (7), and checking the guard that answered it
   // added (8): the guard of e43f2c33a missed each of those too, but the
   // controls D13, E4 and D20. The review of a6b05212c added (9): the guard
-  // of a6b05212c missed each of those but E22.
+  // of a6b05212c missed each of those but E22 (the guard of e43f2c33a still
+  // found E17 and E20; this branch lost them when it named those programs).
   describe('one plant per gap the second review found', () => {
     it.each(PLANTS)('$id: $what', (p) => {
       const files = p.files ?? {};
