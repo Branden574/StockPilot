@@ -6,6 +6,7 @@ import { isUuid } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { resolveCapturedAt } from '@/lib/cycle-counts/capture-time';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -129,9 +130,11 @@ export async function POST(
               : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    // A warehouse refusal (assertSessionAccess's ForbiddenError) is a 403,
+    // final on the phone, or a 503 when the access could not be read;
+    // anything else is the fixed sentence, and reported (S16).
+    return forbiddenOrInternalResponse(e, 'api.v1.cycle_counts.record', {
+      organizationId: ctx.organizationId,
+    });
   }
 }

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ItemImagesService } from '@/server/services/item-images';
 
 export const runtime = 'nodejs';
@@ -50,10 +51,12 @@ export async function GET(req: NextRequest) {
     { p_warehouse_id: warehouseId, p_days: days, p_limit: limit },
   );
   if (rpcErr) {
-    return NextResponse.json(
-      { error: 'internal_error', message: rpcErr.message },
-      { status: 500 },
-    );
+    // Postgres's text names the function and its tables: reported, never
+    // answered (S16).
+    return internalErrorResponse(new Error(rpcErr.message), 'orders.freq', {
+      organizationId: ctx.organizationId,
+      extra: { code: rpcErr.code ?? null },
+    });
   }
   const top = (topRows ?? []) as Array<{ item_id: string; request_count: number }>;
   if (top.length === 0) return NextResponse.json({ items: [] }, { status: 200 });

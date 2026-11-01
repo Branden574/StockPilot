@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 
@@ -43,9 +44,8 @@ export async function GET(req: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'api.v1.bundles.list', {
+      organizationId: ctx.organizationId,
+    });
   }
 }
