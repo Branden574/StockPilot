@@ -142,8 +142,13 @@ describe('po/[id].tsx wiring', () => {
     expect(screen).toMatch(
       /const receivable =\s*!readOnly && lines\.some\(\(l\) => l\.quantity_ordered - l\.quantity_received > 0\);/,
     );
-    expect(screen).toMatch(/\{receivable \? \(\s*<View style=\{styles\.notesBlock\}>/);
-    expect(screen).toMatch(/disabled=\{posting \|\| !receivable\}/);
+    // Re-pinned by F4-1 (receive gating): the footer is receiveFooter({ ...,
+    // anyReceivable: receivable }), whose Post shows only on a known yes from
+    // the gate (canEditQuantities), so the Notes field follows both rules.
+    expect(screen).toMatch(
+      /\{receivable && canEditQuantities \? \(\s*<View style=\{styles\.notesBlock\}>/,
+    );
+    expect(screen).toMatch(/anyReceivable: receivable,/);
     expect(screen).not.toContain('const anyReceivable');
   });
 

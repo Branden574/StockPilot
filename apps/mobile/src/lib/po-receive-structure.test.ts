@@ -404,21 +404,37 @@ describe('the receipt is posted once, as before', () => {
     expect(code).toContain(
       'if (!idemKeyRef.current) { idemKeyRef.current = `mobile-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; } const idempotencyKey = idemKeyRef.current;',
     );
+    // Re-pinned by F4-1 (was: the plain "Posted" alert written out here,
+    // leaving by router.back()): the key is still retired the moment a post
+    // lands; the alert's words come from postedAlertPlan, the plain
+    // "Posted" / "Received N lines." unless a checklist is offered
+    // (receiving-checks-view.test.ts pins both), and leaving goes through
+    // goBack, which also works when nothing is behind the screen.
     expect(code).toContain(
-      "idemKeyRef.current = null; Alert.alert( 'Posted', `Received ${payloadLines.length} line${payloadLines.length === 1 ? '' : 's'}.`, [{ text: 'OK', onPress: () => router.back() }], );",
+      "idemKeyRef.current = null; const receiptId = typeof posted?.receiptId === 'string' ? posted.receiptId : null; const plan = postedAlertPlan({ lineCount: payloadLines.length,",
+    );
+    expect(code).toContain(
+      "Alert.alert(plan.title, plan.body, [{ text: 'OK', onPress: goBack }]);",
     );
   });
 
   // Mutation caught: a second ink button, or Post receipt back to a custom
-  // green bar.
+  // green bar. Re-pinned by F4-1 (was: its words and its disabled rule
+  // written out on the button): both come from receiveFooter's 'post' kind,
+  // "Post receipt", "Posting…" or "Fully received", off while posting or
+  // with nothing left (receive-gate.test.ts pins them), and the button shows
+  // only on a known yes from the receiving gate.
   it('Post receipt is the one ink button on the screen, off while posting or with nothing left', () => {
     const { sf, els } = elements(PO, (el, s) => tagOf(el, s) === 'Button');
     const ink = els.filter((el) => attrText(el, 'variant', sf) === undefined);
-    expect(ink.map((el) => textOf(el, sf))).toEqual(['Posting… Post receipt Fully received']);
-    expect(attrText(ink[0]!, 'disabled', sf)).toBe('posting || !receivable');
+    expect(ink).toHaveLength(1);
+    expect(attrText(ink[0]!, 'disabled', sf)).toBe('footer.disabled');
     expect(attrText(ink[0]!, 'onPress', sf)).toBe('postReceipt');
     expect(code).toContain(
-      "{posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}",
+      '<Button block onPress={postReceipt} disabled={footer.disabled}> {footer.label} </Button>',
+    );
+    expect(code).toContain(
+      'const footer = receiveFooter({ reviewOnly: readOnly, gate: gateView, posting, anyReceivable: receivable, });',
     );
     // The other one is the failed load's Try again, outlined.
     expect(
@@ -426,10 +442,14 @@ describe('the receipt is posted once, as before', () => {
     ).toEqual(['Try again']);
   });
 
+  // Re-pinned by F4-1 (was: readOnly around a footer holding only the
+  // button): the footer is receiveFooter's, Post receipt or the words in its
+  // place (who posts, "Checking…", or why it could not check), and either
+  // way it ends clear of the home indicator.
   it('the footer clears the home indicator', () => {
     expect(code).toContain('const insets = useSafeAreaInsets();');
     expect(code).toMatch(
-      /\{readOnly \? null : \( <View style=\{styles\.footer\}> <Button block onPress=\{postReceipt\}[^>]*>[^<]*<\/Button> <View style=\{\{ height: Math\.max\(0, insets\.bottom - SPACE\.md\) \}\} \/> <\/View> \)\}/,
+      /\{footer\.kind === 'none' \? null : \( <View style=\{styles\.footer\}> \{footer\.kind === 'post' \? \( <Button block onPress=\{postReceipt\}[^>]*>[^<]*<\/Button> \) : \( <View style=\{styles\.gateRow\}>.*?<\/View> \)\} <View style=\{\{ height: Math\.max\(0, insets\.bottom - SPACE\.md\) \}\} \/> <\/View> \)\}/,
     );
   });
 
@@ -474,8 +494,11 @@ describe('every control on the receive screen is a 44pt target with a role and a
   // the button left without a role.
   it('Scan is a button with a camera icon beside the same word; no emoji or check glyphs in the words', () => {
     const code = flatCode(PO);
+    // Re-pinned by F4-1 (was: readOnly): Scan follows canEditQuantities,
+    // given readOnly as its review-only flag (order-f2-5-wiring.test.ts), so
+    // it is false whenever readOnly is (receive-gate.test.ts).
     expect(code).toMatch(
-      /\{readOnly \? null : \( <Pressable onPress=\{openScanner\} accessibilityRole="button" style=\{\(\{ pressed \}\) => \[styles\.scanBtn, pressed && \{ opacity: 0\.7 \}\]\} > <Camera size=\{16\} color=\{c\.ink\} strokeWidth=\{1\.75\} \/> <Text style=\{styles\.scanBtnText\} numberOfLines=\{1\} maxFontSizeMultiplier=\{SCAN_CAP\}> Scan <\/Text> <\/Pressable> \)\}/,
+      /\{!canEditQuantities \? null : \( <Pressable onPress=\{openScanner\} accessibilityRole="button" style=\{\(\{ pressed \}\) => \[styles\.scanBtn, pressed && \{ opacity: 0\.7 \}\]\} > <Camera size=\{16\} color=\{c\.ink\} strokeWidth=\{1\.75\} \/> <Text style=\{styles\.scanBtnText\} numberOfLines=\{1\} maxFontSizeMultiplier=\{SCAN_CAP\}> Scan <\/Text> <\/Pressable> \)\}/,
     );
     expect(code).not.toMatch(/📷|✓/u);
     // Fully received and Full keep their words, with a check icon beside them.

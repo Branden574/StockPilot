@@ -1,5 +1,5 @@
-import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
-import { ArrowLeft, Camera, Menu, TriangleAlert } from 'lucide-react-native';
+import { type Href, useFocusEffect, useNavigation, useRouter } from 'expo-router';
+import { ArrowLeft, Camera, ListChecks, Menu, TriangleAlert } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -12,17 +12,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
-import { formatCalendarDate } from '@stockpilot/core';
+import { formatCalendarDate, isManagerOrAbove, RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { dataListReloadNote, type DataListFailure } from '@/components/ui/data-list-state';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { readOrgTimeZone } from '@/lib/order-readiness';
 import { nextKnownOrgZone, receiveOverdueCount, type KnownOrgZone } from '@/lib/receive-overdue';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -71,6 +73,12 @@ export default function Receive() {
   const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const { orgId, loading: workspaceLoading } = useOrg();
+  // The receiving checklist (F4-1) for managers where Receiving is on, as on
+  // the web's Purchase orders header. Anyone else reaches it read only from
+  // Procedures; the screen and the server decide what each person may do.
+  const { role } = useRole();
+  const receivingOn = useEnabledModules().has('receiving');
+  const showChecklistLink = receivingOn && role !== null && isManagerOrAbove(role);
   const [stored, setStored] = React.useState<ListState<OpenPo> | null>(null);
   // organizations.timezone, for the OVERDUE count (null: core's default zone).
   const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
@@ -207,6 +215,14 @@ export default function Receive() {
             />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
+          {showChecklistLink ? (
+            <IconChip
+              icon={ListChecks}
+              onPress={() => router.push('/receiving-checklist' as Href)}
+              accessibilityLabel={RECEIVING_CHECKLIST_COPY.editorTitle}
+              minTap
+            />
+          ) : null}
         </View>
         <View style={styles.head}>
           {countKnown ? (

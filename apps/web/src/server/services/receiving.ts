@@ -14,8 +14,13 @@ import {
   writeInIdBatches,
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { receivingGateFor } from './lib/receiving-gate';
 
-import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
+import {
+  DELETED_USER_LABEL,
+  isDeletedPerson,
+  RECEIVE_POST_MANAGER_ONLY_COPY,
+} from '@stockpilot/core';
 import type {
   PostReceiptInput,
   ReverseReceiptInput,
@@ -219,6 +224,20 @@ export class ReceivingService {
   async postReceipt(input: PostReceiptInput): Promise<ReceiptRow> {
     assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
+    // Manager or above (F4-1's Receive gating fix). ledger.post_receipt_v2
+    // refuses anyone below manager, but staff with stock:adjust reached the
+    // RPC and read "You cannot post receipts for this PO." The same predicate
+    // hides Receive and Post receipt on the web page and the phone.
+    //
+    // The sentence only, no details: the phone's receipts route forwards a
+    // refusal's details, and every installed PO screen (since #185) alerts
+    // details.reason in place of the sentence whenever it is a string,
+    // through a mapper that knows only the ledger's tokens. A reason here
+    // reached staff as an alert reading "manager_posts" (review 2026-11-01;
+    // route.phone-contract.test.ts).
+    if (!receivingGateFor(this.ctx).canPostReceipt) {
+      throw new ServiceError('forbidden', RECEIVE_POST_MANAGER_ONLY_COPY);
+    }
 
     const requestHash = hashReceiptRequest(input);
 

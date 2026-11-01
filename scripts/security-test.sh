@@ -765,6 +765,22 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
+  # Receiving checklist (0419, F4-1, INV-C8): the two tables are read-only for
+  # authenticated (TRUNCATE, REFERENCES and TRIGGER revoked too) and closed to
+  # anon; every write goes through four SECURITY DEFINER functions that take
+  # the organization from the row (a receipt or run of another organization
+  # reads as not found) and gate in this order: signed in, member, receiving
+  # on, then a manager with purchase_orders:manage (publish, turn off) or with
+  # stock:adjust and purchase_orders:read (start, save). A run is visible
+  # exactly when its purchase order is: under purchase_orders_select
+  # (purchase_orders:read, and the warehouse scope below manager) or
+  # purchase_orders_write, whose FOR ALL USING lets a manager or a holder of
+  # purchase_orders:manage read every purchase order and so every run (L7);
+  # versions follow membership. Person keys are SET NULL with the
+  # 0393 marker. The start, save and publish races are
+  # scripts/db-concurrency/0419_checklist_races.sh; the lock footprint is
+  # scripts/db-concurrency/0419_migration_lock_footprint.sh.
+  supabase/tests/0419_receiving_checklist.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1462,6 +1478,22 @@ WEB_TESTS=(
   src/server/services/platform/permission-exceptions.test.ts
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
+
+  # Receiving checklist (0419, F4-1, INV-C8): ReceivingChecklistService checks
+  # the module, the permission (and its MFA step-up) and core receivingGate
+  # before every write, reads through the caller's client (a run only where
+  # its PO is visible), maps every refusal by SQLSTATE and hint (never
+  # database text), and audits only a real change. The routes answer cookie
+  # and Bearer callers, never cached, a PO the caller cannot see is a 404,
+  # and internal errors carry no details. ReceivingService.postReceipt
+  # refuses anyone below manager before the ledger does, with the sentence
+  # and no reason (an installed phone shows a details.reason in place of the
+  # sentence); the PO page shows Receive only on that same gate.
+  src/server/services/receiving-checklist.test.ts
+  src/app/api/v1/receiving-checks/routes.test.ts
+  'src/app/api/v1/po/[id]/receipts/route.test.ts'
+  'src/app/api/v1/po/[id]/receipts/route.phone-contract.test.ts'
+  'src/app/(dashboard)/dashboard/purchase-orders/[id]/po-detail-receive-gate.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1628,6 +1660,13 @@ MOBILE_TESTS=(
   # shown; the select bar offers a size family only with sports:manage and
   # the sports module on.
   src/lib/ungroup-selected.test.ts
+  # Receiving checklist (0419, F4-1): who may post and record is core
+  # receivingGate fed /api/v1/me/permissions, never guessed (a draft asks
+  # nothing), the answer kept per account and workspace; the checklist
+  # routes are read strictly and a malformed id never reaches the server.
+  src/lib/receive-gate.test.ts
+  src/lib/receiving-checks-api.test.ts
+  src/lib/receiving-checklist-wiring.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1678,6 +1717,11 @@ CORE_TESTS=(
   # link, so a link can add no recipient or parameter and opens only the
   # address the screen shows.
   src/email/mailto-link.test.ts
+  # Receiving checklist (0419, F4-1): the one gate for posting, recording and
+  # publishing (web page, service and phone), and the validation rules whose
+  # case table the pgTAP file is tied to by `-- case:` markers.
+  src/purchasing/receiving-gate.test.ts
+  src/purchasing/receiving-checklist.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

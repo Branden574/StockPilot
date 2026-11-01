@@ -1,11 +1,16 @@
-import { BookOpen } from 'lucide-react-native';
+import { type Href, useRouter } from 'expo-router';
+import { BookOpen, ChevronRight } from 'lucide-react-native';
 import * as React from 'react';
 import { Linking, Pressable, View } from 'react-native';
+
+import { RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { useEnabledModules } from '@/lib/enabled-modules';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
@@ -152,7 +157,44 @@ export default function ProceduresScreen() {
       onRefresh={() => void refresh()}
       keyExtractor={(p) => p.id}
       renderItem={(p) => <ProcedureCard proc={p} />}
+      header={<ReceivingChecklistRow />}
     />
+  );
+}
+
+/**
+ * The receiving checklist (F4-1), from Procedures: the brief puts checklists
+ * with procedures. Shown where Receiving is on to anyone who can read
+ * purchase orders (the web's Procedures card); the screen shows it read only
+ * to anyone who may not publish. Nothing while the permissions are unknown.
+ */
+function ReceivingChecklistRow() {
+  const router = useRouter();
+  const { c } = useTheme();
+  const receivingOn = useEnabledModules().has('receiving');
+  const perms = useEffectivePermissions();
+  if (!receivingOn || !perms?.has('purchase_orders:read')) return null;
+  return (
+    <Pressable
+      onPress={() => router.push('/receiving-checklist' as Href)}
+      accessibilityRole="button"
+      accessibilityLabel={`${RECEIVING_CHECKLIST_COPY.procedureCard}. ${RECEIVING_CHECKLIST_COPY.procedureCardBody}`}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      <Card padding={14}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
+              {RECEIVING_CHECKLIST_COPY.procedureCard}
+            </Body>
+            <Body muted size={12.5} style={{ marginTop: 4 }}>
+              {RECEIVING_CHECKLIST_COPY.procedureCardBody}
+            </Body>
+          </View>
+          <ChevronRight size={18} color={c.ink3} strokeWidth={1.5} />
+        </View>
+      </Card>
+    </Pressable>
   );
 }
 

@@ -103,6 +103,37 @@ describe('POST /api/v1/po/[id]/receipts', () => {
     });
   });
 
+  // F4-1 changes nothing installed phones read: the success body is exactly
+  // these four keys (the receipt id and number the Posted alert starts the
+  // checklist from), pinned so a change to them is a decision.
+  it('answers exactly the success body installed phones read', async () => {
+    postReceipt.mockResolvedValue({ id: 'r1', receipt_number: 'RCV-1', status: 'posted' });
+    const res = await post(validBody);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      receiptId: 'r1',
+      receiptNumber: 'RCV-1',
+      receiptStatus: 'posted',
+      lineCount: 2,
+    });
+  });
+
+  // F4-1: below manager the service refuses before the RPC, with the
+  // sentence and no details; the phone shows the sentence and keeps its key
+  // (the mapper's default arm). A details.reason would be shown in place of
+  // the sentence (route.phone-contract.test.ts runs the real service).
+  it('answers the manager refusal as a 403 with its sentence and no details', async () => {
+    postReceipt.mockRejectedValue(
+      new ServiceError('forbidden', 'Only a manager can post a receipt.'),
+    );
+    const res = await post(validBody);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: 'Only a manager can post a receipt.',
+    });
+  });
+
   it('accepts a non-uuid, mobile-style idempotency key', async () => {
     const res = await post(validBody);
     expect(res.status).toBe(200);

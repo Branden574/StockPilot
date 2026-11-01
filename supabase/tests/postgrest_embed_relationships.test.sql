@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 404 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 415 foreign keys, 9 junctions, 37 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -82,6 +82,17 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('categories', 'categories_size_scale_id_fkey', 'size_scales', 'size_scale_id', 'id'),
   ('charters', 'charters_created_by_fkey', 'user_profiles', 'created_by', 'id'),
   ('charters', 'charters_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('checklist_runs', 'checklist_runs_completed_by_fkey', 'user_profiles', 'completed_by', 'id'),
+  ('checklist_runs', 'checklist_runs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('checklist_runs', 'checklist_runs_purchase_order_id_fkey', 'purchase_orders', 'purchase_order_id', 'id'),
+  ('checklist_runs', 'checklist_runs_receipt_id_fkey', 'receipts', 'receipt_id', 'id'),
+  ('checklist_runs', 'checklist_runs_started_by_fkey', 'user_profiles', 'started_by', 'id'),
+  ('checklist_runs', 'checklist_runs_version_id_fkey', 'checklist_versions', 'version_id', 'id'),
+  ('checklist_runs', 'checklist_runs_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('checklist_versions', 'checklist_versions_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('checklist_versions', 'checklist_versions_procedure_id_fkey', 'procedures', 'procedure_id', 'id'),
+  ('checklist_versions', 'checklist_versions_published_by_fkey', 'user_profiles', 'published_by', 'id'),
+  ('checklist_versions', 'checklist_versions_retired_by_fkey', 'user_profiles', 'retired_by', 'id'),
   ('connection_mappings', 'connection_mappings_connection_id_fkey', 'org_connections', 'connection_id', 'id'),
   ('connection_mappings', 'connection_mappings_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('connection_sync_log', 'connection_sync_log_connection_id_fkey', 'org_connections', 'connection_id', 'id'),
@@ -466,6 +477,8 @@ insert into expected_pairs (a, b, relationships) values
   ('bins', 'putaway_moves', 'putaway_moves_from_bin_id_fkey,putaway_moves_to_bin_id_fkey'),
   ('bundles', 'inventory_items', 'bundle_components,bundles_phantom_item_id_fkey'),
   ('bundles', 'user_profiles', 'bundles_created_by_fkey,bundles_updated_by_fkey'),
+  ('checklist_runs', 'user_profiles', 'checklist_runs_completed_by_fkey,checklist_runs_started_by_fkey'),
+  ('checklist_versions', 'user_profiles', 'checklist_versions_published_by_fkey,checklist_versions_retired_by_fkey'),
   ('cycle_count_ai_scans', 'user_profiles', 'cycle_count_ai_scans_confirmed_by_fkey,cycle_count_ai_scans_created_by_fkey'),
   ('cycle_counts', 'exception_occurrences', 'exception_occurrences_confirmed_cycle_count_id_fkey,exception_occurrences_recount_cycle_count_id_fkey'),
   ('cycle_counts', 'user_profiles', 'cycle_counts_assigned_to_fkey,cycle_counts_assignment_claimed_by_fkey,cycle_counts_canceled_by_fkey,cycle_counts_completed_by_fkey,cycle_counts_started_by_fkey'),
