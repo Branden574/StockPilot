@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { createClient } from '@/lib/supabase/client';
 
@@ -66,6 +67,11 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
           if (isAuthRetryableFetchError(error)) return;
           // Per-person state kept for the browser session goes with the session.
           forgetTourState();
+          // So does what an interrupted run kept in this tab
+          // (lib/interrupted-run): a revoke ends the session on purpose (the
+          // account did it, on another device or tab, or an admin did), so
+          // nothing is kept for after signing in again.
+          purgeInterruptedRuns();
           // scope:'local' clears ONLY this browser. The authoritative server-side
           // revoke already happened (the broadcaster deleted our auth.sessions
           // row); a default global signOut here would cascade and revoke the

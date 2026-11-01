@@ -88,7 +88,7 @@ export default function AIChat() {
         headers: {
           'Content-Type': 'application/json',
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
-          ...(await orgHeader()),
+          ...(await orgHeader(session?.user.id ?? null)),
         },
         body: JSON.stringify({
           message: text,
@@ -228,7 +228,7 @@ export default function AIChat() {
         ],
         headers: {
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
-          ...(await orgHeader()),
+          ...(await orgHeader(session?.user.id ?? null)),
         },
       });
       const json = (await res.json().catch(() => null)) as

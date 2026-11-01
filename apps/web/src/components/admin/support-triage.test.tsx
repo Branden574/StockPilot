@@ -193,8 +193,55 @@ describe('SupportTriage keeps each ticket card working in the redesign', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('link', { name: 'Reply by email' })).toHaveAttribute(
       'href',
-      `mailto:dana@example.com?subject=Re: ${encodeURIComponent('Scanner stops after one scan')}`,
+      `mailto:dana@example.com?subject=${encodeURIComponent('Re: Scanner stops after one scan')}`,
     );
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * SECURITY: the reply link was built from the stored text,
+ * `mailto:${ticket.email}?subject=...`, so an address such as
+ * "dana@example.com?bcc=eve@evil.test" opened a reply copied to someone the
+ * ticket never names, and an address with an invisible or look-alike
+ * character opened a reply to an address other than the one shown. The link
+ * is made only from one plain ASCII address (core plainAddressMailtoUrl);
+ * anything else gets no link, and the address stays readable in the summary.
+ */
+describe('SupportTriage: the reply link opens only the address the ticket shows', () => {
+  const open = (email: string) => {
+    render(<SupportTriage tickets={[{ ...TICKET, email }]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
+  };
+
+  // Mutation caught: the old template, which linked every one of these.
+  it.each([
+    ['a hidden copy', 'dana@example.com?bcc=eve@evil.test'],
+    ['a second recipient', 'dana@example.com,eve@evil.test'],
+    ['a zero-width joiner', 'da\u200Dna@example.com'],
+    ['a tag character', 'dana\u{E0041}@example.com'],
+    ['fullwidth letters', 'dana@\uFF45xample.com'],
+  ])('%s: no link, and the panel says why', (_label, email) => {
+    open(email);
+    expect(screen.queryByRole('link', { name: 'Reply by email' })).toBeNull();
+    expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
+    expect(
+      screen.getByText('No email link: the stored address is not one plain address.'),
+    ).toBeInTheDocument();
+    // The stored address is still on screen, as it was.
+    expect(document.body.textContent).toContain(email);
+  });
+
+  it('a subject cannot add a recipient to the reply', () => {
+    render(
+      <SupportTriage
+        tickets={[{ ...TICKET, subject: 'Broken&bcc=eve@evil.test' }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Broken&bcc=eve@evil.test/ }));
+    const href = screen.getByRole('link', { name: 'Reply by email' }).getAttribute('href')!;
+    const query = new URLSearchParams(href.slice(href.indexOf('?') + 1));
+    expect([...query.keys()]).toEqual(['subject']);
+    expect(query.get('subject')).toBe('Re: Broken&bcc=eve@evil.test');
   });
 });

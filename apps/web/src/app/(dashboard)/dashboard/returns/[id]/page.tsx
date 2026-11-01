@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ReturnWorkbench, type WorkbenchReturnLabel } from '@/components/returns/return-workbench';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -25,7 +25,7 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
 
   const moduleAccess = await checkModuleAccess('returns');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="returns" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="returns" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   if (!can(ctx, 'returns:read') && !can(ctx, 'returns:manage')) {

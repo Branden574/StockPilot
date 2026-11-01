@@ -54,15 +54,15 @@ function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryReque
       name: 'CVW Clovis',
       code: 'CVW-CLO',
       address: {
-        line1: '1295 Shaw Ave',
+        line1: '1200 Test Ave',
         city: 'Fresno',
         region: 'California',
         postalCode: '93612',
         country: 'United States',
       },
     },
-    requestedFor: 'Branden Vincent-Walker',
-    requesterEmail: 'branden@cvwest.org',
+    requestedFor: 'Carsten Hartley-Fowler',
+    requesterEmail: 'carsten@site1.test',
     neededByLocal: '2026-08-05T09:00',
     orgTimezone: 'America/Los_Angeles',
     notes: 'Please stage these by Friday.',
@@ -206,8 +206,8 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const url = new URL(rawUrl);
     expect(url.origin + url.pathname).toBe('https://outlook.cloud.microsoft/mail/deeplink/compose');
     const decoded = decodeCompose(rawUrl);
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
     // The subject no longer carries the order number (owner decision
     // 2026-08-02) — it lives in the body's Order: line only.
     expect(decoded.subject).toBe('Delivery Request — CVW Clovis');
@@ -295,9 +295,9 @@ describe('DeliveryRequestAction — popup blocked', () => {
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
     const mailto = String(assign.mock.calls[0]![0]);
-    expect(mailto.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+    expect(mailto.startsWith('mailto:dc4@sampleorg.test?')).toBe(true);
     const params = new URLSearchParams(mailto.slice(mailto.indexOf('?') + 1));
-    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('cc')).toBe('jstone@site1.test');
   });
 
   it('surfaces the copy fallback and NAMES BOTH recipients in the instructions', async () => {
@@ -309,8 +309,8 @@ describe('DeliveryRequestAction — popup blocked', () => {
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     const fallback = await screen.findByTestId('delivery-request-fallback');
-    expect(fallback).toHaveTextContent('dc4@learn4life.org');
-    expect(fallback).toHaveTextContent('arosas@cvwest.org');
+    expect(fallback).toHaveTextContent('dc4@sampleorg.test');
+    expect(fallback).toHaveTextContent('jstone@site1.test');
     expect(fallback).toHaveTextContent(
       'Outlook did not open — your browser may have blocked the popup.',
     );
@@ -419,8 +419,8 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const copied = String(writeText.mock.calls[0]![0]);
-    expect(copied).toContain('TO: dc4@learn4life.org');
-    expect(copied).toContain('CC: arosas@cvwest.org');
+    expect(copied).toContain('TO: dc4@sampleorg.test');
+    expect(copied).toContain('CC: jstone@site1.test');
     expect(copied).toContain('SUBJECT: Delivery Request — CVW Clovis');
     expect(copied).not.toContain('StockPilot Order');
     expect(copied).toContain('MESSAGE:');
@@ -439,7 +439,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const msg = String(toastSuccess.mock.calls.at(-1)![0]);
     expect(msg).toBe(
-      'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+      'Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
     );
   });
 
@@ -454,8 +454,8 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
     const box = await screen.findByLabelText(/Delivery request text to copy manually/i);
-    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
-    expect((box as HTMLTextAreaElement).value).toContain('CC: arosas@cvwest.org');
+    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
+    expect((box as HTMLTextAreaElement).value).toContain('CC: jstone@site1.test');
     expect(toastError).toHaveBeenCalled();
   });
 
@@ -494,8 +494,8 @@ describe('DeliveryRequestAction — link too long even condensed (linkFits=false
     expect(open).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
     const fallback = await screen.findByTestId('delivery-request-fallback');
-    expect(fallback).toHaveTextContent('dc4@learn4life.org');
-    expect(fallback).toHaveTextContent('arosas@cvwest.org');
+    expect(fallback).toHaveTextContent('dc4@sampleorg.test');
+    expect(fallback).toHaveTextContent('jstone@site1.test');
     // The oversized-draft path never touched a popup, so it must not blame
     // one — that copy belongs only to the blocked-open branch.
     expect(fallback).toHaveTextContent(
@@ -566,7 +566,7 @@ describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
     await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
     await waitFor(() =>
       expect(String(toastSuccess.mock.calls.at(-1)![0])).toBe(
-        'Pickup request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Pickup request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     );
   });
@@ -578,7 +578,7 @@ describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent(
-      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@sampleorg.test. A copy will also be sent to jstone@site1.test.',
     );
   });
 });
@@ -635,7 +635,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     // the subject without that collision.
     expect(within(dialog).getByText('Delivery Request — CVW Clovis')).toBeInTheDocument();
     expect(dialog).toHaveTextContent('Order: SO-000049');
-    expect(dialog).toHaveTextContent('1295 Shaw Ave');
+    expect(dialog).toHaveTextContent('1200 Test Ave');
   });
 
   it('shows BOTH recipients under an EMAIL RECIPIENTS heading', async () => {
@@ -645,8 +645,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('EMAIL RECIPIENTS');
-    expect(dialog).toHaveTextContent('dc4@learn4life.org');
-    expect(dialog).toHaveTextContent('arosas@cvwest.org');
+    expect(dialog).toHaveTextContent('dc4@sampleorg.test');
+    expect(dialog).toHaveTextContent('jstone@site1.test');
   });
 
   it('carries the exact CC helper text and never claims assignment', async () => {
@@ -659,7 +659,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     // (deliveryRequestCcNotice) — generic wording, no tenant-specific
     // Zendesk claims, both addresses interpolated from the routing in use.
     expect(dialog).toHaveTextContent(
-      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@sampleorg.test. A copy will also be sent to jstone@site1.test.',
     );
     expect(dialog.textContent?.toLowerCase()).not.toContain('assigned to');
   });
@@ -688,8 +688,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
 
     const decoded = decodeCompose(open.mock.calls[0]![0] as string);
-    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
-    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@sampleorg.test>');
+    expect(decoded.cc).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('offers copy from inside the dialog, copying both recipients', async () => {
@@ -702,7 +702,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Copy the details/i }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(String(writeText.mock.calls[0]![0])).toContain('CC: arosas@cvwest.org');
+    expect(String(writeText.mock.calls[0]![0])).toContain('CC: jstone@site1.test');
   });
 
   it('Finding 1: shows the manual-copy textarea INSIDE the dialog when the clipboard is denied, with no need for the standalone fallback panel', async () => {
@@ -721,8 +721,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
 
     const box = await within(dialog).findByLabelText(/Delivery request text to copy manually/i);
-    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
-    expect((box as HTMLTextAreaElement).value).toContain('CC: arosas@cvwest.org');
+    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
+    expect((box as HTMLTextAreaElement).value).toContain('CC: jstone@site1.test');
     expect((box as HTMLTextAreaElement).value).toContain('MESSAGE:');
     expect((box as HTMLTextAreaElement).value).toContain('CVW Clovis');
     // The standalone fallback panel (Finding 1's OLD only render site) was
@@ -995,7 +995,7 @@ describe('DeliveryRequestAction accessibility', () => {
     expect(live).toHaveAttribute('aria-atomic', 'true');
     await waitFor(() =>
       expect(live).toHaveTextContent(
-        'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     );
   });
@@ -1022,7 +1022,7 @@ describe('DeliveryRequestAction accessibility', () => {
     expect(liveInDialog).toHaveAttribute('aria-atomic', 'true');
     await waitFor(() =>
       expect(liveInDialog).toHaveTextContent(
-        'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Delivery request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     );
   });

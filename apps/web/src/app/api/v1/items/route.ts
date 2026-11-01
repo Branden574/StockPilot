@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { createItemSchema } from '@stockpilot/core';
+import { bodyAnswersNewRack, createItemSchema } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
@@ -68,7 +68,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const svc = new InventoryService(ctx);
-    const item = await svc.create(parsed.data);
+    // ═══ THE PHONE IN THE FIELD ASKS ON ITS OWN SCREEN (2026-10-24) ═══
+    // create() now refuses a new rack the request does not confirm
+    // (`confirmNewRack`). The phone build in the field asks "Create new rack
+    // 1-B?" before it sends (apps/mobile/app/item/new.tsx, confirmRackForCreate)
+    // and sends no answer at all. So a body WITHOUT the key is that phone,
+    // which has already asked: its create keeps creating the rack, as before.
+    // A body WITH the key, whatever its value, gets the server's question.
+    const item = await svc.create(
+      parsed.data,
+      bodyAnswersNewRack(json) ? {} : { allowUnconfirmedNewRack: true },
+    );
 
     // A new item changes the org's cached Items/Books list — invalidate so
     // the next dashboard view sees it (mirrors remove-stock/transfer/restore).

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinksManager } from '@/components/settings/public-links-manager';
@@ -21,7 +21,7 @@ export default async function PublicRequestsSettingsPage() {
   // not-enabled state instead of the dashboard error boundary.
   const access = await checkModuleAccess('public_requests');
   if (!access.enabled) {
-    return <ModuleNotEnabled moduleId="public_requests" canManage={access.canManage} />;
+    return <ModuleUnavailable moduleId="public_requests" access={access} />;
   }
 
   // Two independent capabilities live on this page (review finding

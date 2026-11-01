@@ -126,3 +126,25 @@ describe('POST /api/v1/size-counts/training — garbage is refused with a 400', 
     expect(recordTrainingSample).not.toHaveBeenCalled();
   });
 });
+
+// S16: a body that could not be read answered the parser's own text in `error`.
+describe('POST /api/v1/size-counts/training — an unreadable body', () => {
+  it('is a 400 with the fixed sentence, not the parser text', async () => {
+    const unreadable = {
+      url: 'https://test.local/api/v1/size-counts/training',
+      headers: new Headers({ 'content-type': 'multipart/form-data; boundary=x' }),
+      formData: async () => {
+        throw new TypeError('Failed to parse body as FormData: unexpected end of multipart stream');
+      },
+    } as unknown as Parameters<typeof POST>[0];
+    const res = await POST(unreadable);
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'invalid_body',
+      message: 'The request could not be read.',
+    });
+    expect(text).not.toContain('multipart');
+    expect(recordTrainingSample).not.toHaveBeenCalled();
+  });
+});

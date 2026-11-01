@@ -79,7 +79,7 @@ async function call(load: () => Promise<Record<string, unknown>>, method: 'GET' 
   } catch {
     json = null;
   }
-  return { status: res.status, json };
+  return { status: res.status, json, req };
 }
 
 /** A pick-slip-ready order for the slip routes' permitted path. */
@@ -311,6 +311,22 @@ describe('export routes check the caller before the shared export budget', () =>
     expect(exportRateLimited).toHaveBeenCalledTimes(1);
   });
 
+  // The limiter refuses an export another origin's page asked for (docket S14
+  // review) by reading the request's Fetch Metadata, so it must be handed the
+  // request the route was given, never one built for the call.
+  it.each(ROUTES.map((r) => [r.name, r] as const))(
+    '%s: the limiter is handed the request the route was given',
+    async (_n, r) => {
+      r.permit();
+      vi.mocked(exportRateLimited).mockResolvedValue(
+        new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429 }) as never,
+      );
+      const { req } = await call(r.load, r.method, r.permitPath ?? r.path, r.params, r.body);
+      expect(exportRateLimited).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(exportRateLimited).mock.calls[0]?.[0]).toBe(req);
+    },
+  );
+
   it('no session: 401 on every route, the budget untouched', async () => {
     for (const r of ROUTES) {
       vi.mocked(withApiContext).mockResolvedValue(null);
@@ -429,6 +445,28 @@ describe('every route that calls the export limiter is covered', () => {
   it('lists exactly the routes that call it', () => {
     const covered = [...new Set([...ROUTES.map((r) => r.file), ...REPORT_ROUTES_WITH_OWN_TESTS])].sort();
     expect(limiterRoutes).toEqual(covered);
+  });
+
+  // Static half of "handed the request the route was given", for every
+  // limiter route (the report routes with their own tests included): the
+  // limiter's first argument is the identifier the same file hands
+  // withApiContext, which test/cookie-write-routes.guard.test.ts holds to the
+  // handler's own request parameter.
+  it('every limiter call is handed the request the file hands withApiContext', () => {
+    for (const rel of limiterRoutes) {
+      const src = readFileSync(join(API, rel), 'utf8');
+      const contextArgs = new Set(
+        [...src.matchAll(/withApiContext\(\s*(\w+)\s*\)/g)].map((m) => m[1]),
+      );
+      const limiterArgs = [...src.matchAll(/exportRateLimited\(\s*([^,()]*?)\s*,/g)].map(
+        (m) => m[1],
+      );
+      expect([rel, limiterArgs.length]).toEqual([
+        rel,
+        (src.match(/exportRateLimited\(/g) ?? []).length,
+      ]);
+      expect([rel, limiterArgs.every((a) => !!a && contextArgs.has(a))]).toEqual([rel, true]);
+    }
   });
 
   it('no route runs the limiter before it knows the caller', () => {

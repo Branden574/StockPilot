@@ -11,7 +11,10 @@
  * URLs by real clients (Chrome, `curl -L`), which handed a phishing landing page
  * control over where a freshly-signed-in user lands.
  *
- * Fixing one copy is not a fix. One implementation, imported by all four.
+ * Fixing one copy is not a fix. One implementation, imported by the other
+ * three. `app/auth/confirm/route.ts` no longer takes a free destination at
+ * all: each link type lands on a fixed list (lib/auth/confirm-landing.ts,
+ * docket S14 review), which is stricter than any path check.
  *
  * Pure and dependency-free on purpose: this is imported by client components, so
  * it must not drag anything server-only into the browser bundle.

@@ -234,12 +234,41 @@ export interface NewRackPlacementDecision {
 }
 
 /**
+ * Why a person's yes could NOT put the stock on a new rack (2026-10-25), for
+ * the item create's question (see new-rack-confirmation.ts, newRackBlockerFor):
+ * - 'create_rack': creating the rack needs Manage locations
+ *   (`locations:manage`). The Staff preset does not have it.
+ * - 'move_stock': moving the stock onto it needs Transfer stock
+ *   (`stock:transfer`).
+ */
+export type NewRackBlocker = 'create_rack' | 'move_stock';
+
+/**
+ * The reason, as a clause: "creating a rack needs the Manage locations
+ * permission". One source for the question below and for the phone's own
+ * question when it could not check the racks.
+ */
+export function newRackBlockerReason(
+  blocker: NewRackBlocker,
+  noun: 'rack' | 'crate' = 'rack',
+): string {
+  return blocker === 'create_rack'
+    ? `creating a ${noun} needs the Manage locations permission`
+    : `moving stock onto a ${noun} needs the Transfer stock permission`;
+}
+
+/**
  * The SINGLE source of the confirmation words, so web and mobile show identical
  * copy for the identical situation (constraint: "Both platforms show the same
  * words for the same situation"). Given the label a put-away is about to create,
  * the warehouse, how many units are about to go into it, and the warehouse's
  * existing labels, it returns whether the label already exists and, if not, the
  * exact sentence to show plus the near-match alternatives.
+ *
+ * `blockedBy` (2026-10-25): the person's yes cannot put the stock on the new
+ * rack, so the words say what saving does instead of "Continuing creates it".
+ * The put-away dialogs never pass it: they offer a new rack only to a member
+ * who may mint one.
  */
 export function describeNewRackPlacement(input: {
   label: string;
@@ -249,6 +278,7 @@ export function describeNewRackPlacement(input: {
   /** 'rack' (default) or 'crate' — only the noun in the copy changes. */
   noun?: 'rack' | 'crate';
   suggestLimit?: number;
+  blockedBy?: NewRackBlocker | null;
 }): NewRackPlacementDecision {
   const noun = input.noun ?? 'rack';
   const nm = findRackNearMatches(input.label, input.existingLabels, {
@@ -269,8 +299,12 @@ export function describeNewRackPlacement(input: {
 
   const where = input.warehouseName?.trim() ? ` in ${input.warehouseName.trim()}` : '';
   const units = input.quantity === 1 ? '1 unit' : `${input.quantity} units`;
-  const title = `Create new ${noun} ${label}?`;
+  let title = `Create new ${noun} ${label}?`;
   let message = `${label} does not exist${where} yet. Continuing creates it and moves ${units} into it.`;
+  if (input.blockedBy) {
+    title = `${noun === 'crate' ? 'Crate' : 'Rack'} ${label} does not exist`;
+    message = `${label} does not exist${where} yet, and ${newRackBlockerReason(input.blockedBy, noun)}. Saving does not put the ${units} on a ${noun}.`;
+  }
   if (nm.suggestions.length > 0) {
     message += ` Did you mean ${joinOr(nm.suggestions)}?`;
   }

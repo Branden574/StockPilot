@@ -56,6 +56,7 @@ describe('checkCreateRack — the New Item screen must ask before a rack is mint
       '1-B does not exist in DC4 yet. Continuing creates it and moves 130 units into it. Did you mean 17-B or 18-B?',
     );
     expect(check.suggestions[0]).toBe('17-B');
+    expect(check.createsRack).toBe(true);
   });
 
   it('"Use 17-B instead" rebuilds the same fields the operator meant', () => {
@@ -116,6 +117,77 @@ describe('checkCreateRack — the New Item screen must ask before a rack is mint
     if (check.kind !== 'new') return;
     expect(check.message).toBe('4-C does not exist yet. Continuing creates it and moves 2 units into it.');
     expect(check.suggestions).toEqual([]);
+  });
+});
+
+// 2026-10-25 review. Creating the rack needs Manage locations and moving the
+// stock onto it needs Transfer stock. A Staff member has no Manage locations,
+// so "Create rack and save" created no rack: the server refused the create and
+// the stock stayed in Unplaced. The question says what saving really does.
+describe('checkCreateRack — a member whose yes cannot put the stock on the new rack', () => {
+  it('a Staff member is told they cannot create the rack, and the yes does not create it', () => {
+    const check = checkCreateRack({
+      binLocation: '1-B',
+      units: 130,
+      warehouseName: 'DC4',
+      existingRacks: DC4,
+      blockedBy: 'create_rack',
+    });
+    expect(check).toEqual({
+      kind: 'new',
+      label: '1-B',
+      title: 'Rack 1-B does not exist',
+      message:
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?',
+      suggestions: ['17-B', '18-B'],
+      createsRack: false,
+    });
+  });
+
+  it('says the same when the racks could not be checked', () => {
+    expect(
+      checkCreateRack({
+        binLocation: '17-B',
+        units: 1,
+        warehouseName: 'DC4',
+        existingRacks: null,
+        blockedBy: 'create_rack',
+      }),
+    ).toEqual({
+      kind: 'unchecked',
+      label: '17-B',
+      title: 'Put the stock on 17-B?',
+      message:
+        'Could not check the racks in DC4 just now. If 17-B does not exist yet, saving does not put the 1 unit on it, because creating a rack needs the Manage locations permission.',
+    });
+  });
+
+  it('a member without Transfer stock is told that instead', () => {
+    const check = checkCreateRack({
+      binLocation: '4-C',
+      units: 2,
+      warehouseName: null,
+      existingRacks: [],
+      blockedBy: 'move_stock',
+    });
+    expect(check).toMatchObject({
+      kind: 'new',
+      message:
+        '4-C does not exist yet, and moving stock onto a rack needs the Transfer stock permission. Saving does not put the 2 units on a rack.',
+      createsRack: false,
+    });
+  });
+
+  it('an existing rack still goes straight through', () => {
+    expect(
+      checkCreateRack({
+        binLocation: '17-b',
+        units: 5,
+        warehouseName: 'DC4',
+        existingRacks: DC4,
+        blockedBy: 'create_rack',
+      }),
+    ).toEqual({ kind: 'existing', label: '17-B' });
   });
 });
 
@@ -200,5 +272,32 @@ describe('New Item screen wiring (source pins)', () => {
     const fn = src.slice(src.indexOf('async function confirmRackForCreate'), src.indexOf('async function save()'));
     expect(fn).toMatch(/await loadWarehouseRackNames\(orgId, whId\)/);
     expect(fn).toMatch(/checkCreateRack\(/);
+  });
+
+  // 2026-10-25: the words follow what this member's yes can do, by the
+  // server's own rule (newRackBlockerFor), and only once the role and the
+  // effective permissions are known. Until then the screen keeps the words a
+  // yes that creates the rack was written for: the other wrong answer, "no
+  // rack is created" over a yes that creates one, is the one that matters.
+  it('words the question by what the yes can do, once the role and permissions are known', () => {
+    const fn = src.slice(
+      src.indexOf('async function confirmRackForCreate'),
+      src.indexOf('async function save()'),
+    );
+    expect(fn).toMatch(
+      /blockedBy: role && permissions \? newRackBlockerFor\(\{ role, permissions \}\) : null,/,
+    );
+    expect(src).toMatch(/const \{ role \} = useRole\(\);/);
+    expect(src).toMatch(/const permissions = useEffectivePermissions\(\);/);
+  });
+
+  it('the alert button names the create only when the check says the yes creates the rack', () => {
+    const ask = src.slice(
+      src.indexOf('function askAboutNewRack'),
+      src.indexOf('function PhotosSection'),
+    );
+    expect(ask).toMatch(
+      /text: check\.kind === 'new' && check\.createsRack \? 'Create rack and save' : 'Save anyway',/,
+    );
   });
 });

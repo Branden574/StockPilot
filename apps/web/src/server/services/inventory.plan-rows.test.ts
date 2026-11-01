@@ -275,6 +275,8 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
     ['item types', { itemTypes: ['product', 'asset'] }],
     ['every type', { itemType: 'all' }],
     ['no bundles', { excludeBundles: true }],
+    // Ordering visibility (0413): the order Add items picker's opt-in.
+    ['shown in Orders only', { orderCatalogVisibleOnly: true }],
     ['rentals', { rentalsOnly: true }],
     [
       'dates',
@@ -304,6 +306,7 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
         hasUnitCost: true,
         itemType: 'book',
         excludeBundles: true,
+        orderCatalogVisibleOnly: true,
         createdSince: '2026-01-01',
         updatedUntil: '2026-04-01',
         expected: 'any',
@@ -350,6 +353,13 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
       expect(scans).toHaveLength(2);
       const want = filtersOf(methods[page]!, args[page]!);
       for (const k of scans) expect(filtersOf(methods[k]!, args[k]!)).toEqual(want);
+      // 0413: the opt-in narrows the page and every scan; absent, none of them.
+      const shownOnly = 'eq:["order_catalog_visible",true]';
+      if ((filters as { orderCatalogVisibleOnly?: boolean }).orderCatalogVisibleOnly) {
+        expect(want).toContain(shownOnly);
+      } else {
+        expect(want).not.toContain(shownOnly);
+      }
     });
   }
 

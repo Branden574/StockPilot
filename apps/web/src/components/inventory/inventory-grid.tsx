@@ -2,6 +2,7 @@ import { ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import { CardGrid, CardGridItem, GridCard } from '@/components/patterns/grid-card';
+import { textActionTouchGapY } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -258,8 +259,18 @@ function GroupCardItems({
           className="bg-sunk"
           footer={
             <div className="flex flex-col gap-2">
+              {/* Rename and Remove, 18 px text actions with the shared 44 px
+                  touch target: where it is on (below sm, a coarse pointer)
+                  wrapped actions keep 14 px between them, so neither target
+                  lies over the other action (W8: at 390 px a tap on Rename
+                  landed on Remove). A fine pointer keeps the 4 px. */}
               {card.actions ? (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{card.actions}</div>
+                <div
+                  data-slot="grid-card-actions"
+                  className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', textActionTouchGapY)}
+                >
+                  {card.actions}
+                </div>
               ) : null}
               <FactList facts={card.facts} />
               {card.coverage ? <div className="flex items-center">{card.coverage}</div> : null}

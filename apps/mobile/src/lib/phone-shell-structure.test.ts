@@ -399,6 +399,8 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     ['order/new/browse', "{ presentation: 'card' }"],
     ['order/new/checkout', "{ presentation: 'card' }"],
     ['order/new/placed', "{ presentation: 'card', gestureEnabled: false }"],
+    // Manage order items (ordering visibility, 0413; design 8.6).
+    ['order/manage-items', "{ presentation: 'card' }"],
     ['scan-po/index', "{ presentation: 'card' }"],
     ['cycle-count/scan/[id]', "{ presentation: 'fullScreenModal' }"],
     ['bundles/index', "{ presentation: 'card' }"],
@@ -427,10 +429,11 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     expect(attrText(els[0]!, 'options', sf) ?? null).toBe(options);
   });
 
-  // Re-pinned by F4-1 (was: 24): the receiving checklist's two screens.
+  // Re-pinned by F4-1 (was: 25, main's 24 plus order/manage-items from
+  // 0413): the receiving checklist's two screens.
   it('registers no other screen', () => {
     const { els } = elements(ROOT_LAYOUT, (el, s) => tagOf(el, s) === 'Stack.Screen');
-    expect(els).toHaveLength(26);
+    expect(els).toHaveLength(27);
   });
 });
 

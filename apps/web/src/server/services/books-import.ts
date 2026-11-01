@@ -10,7 +10,7 @@ import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
 
-import { PLANS, bookCoverPath, isUnlimited, type PlanId } from '@stockpilot/core';
+import { PLANS, bookCoverPath, isbnSearchKeys, isUnlimited, type PlanId } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
@@ -301,21 +301,32 @@ export class BooksImportService {
 
     // Phase 1 — normalize + tag duplicates within the list. We track
     // the FIRST occurrence as the "ready" candidate; subsequent copies
-    // become duplicate_in_list rows.
+    // become duplicate_in_list rows. A book is matched by EITHER form of its
+    // ISBN (core isbnSearchKeys: a checksum-valid ISBN-10 and its ISBN-13),
+    // so a list that gives one book as 0306406152 and 9780306406157 creates
+    // it once (B26); a value that is not a checksum-valid ISBN matches only
+    // itself, as before.
     const seenInList = new Set<string>();
-    const normalized: Array<{ raw: string; isbn: string | null; dupeInList: boolean }> = [];
+    const normalized: Array<{
+      raw: string;
+      isbn: string | null;
+      keys: string[];
+      dupeInList: boolean;
+    }> = [];
     for (const raw of rawIsbns) {
       const isbn = normalizeIsbn(raw);
       if (!isbn) {
-        normalized.push({ raw, isbn: null, dupeInList: false });
+        normalized.push({ raw, isbn: null, keys: [], dupeInList: false });
         continue;
       }
-      const dupe = seenInList.has(isbn);
-      if (!dupe) seenInList.add(isbn);
-      normalized.push({ raw, isbn, dupeInList: dupe });
+      const keys = isbnSearchKeys(isbn) ?? [isbn];
+      const dupe = keys.some((k) => seenInList.has(k));
+      if (!dupe) for (const k of keys) seenInList.add(k);
+      normalized.push({ raw, isbn, keys, dupeInList: dupe });
     }
 
-    // Phase 2 — DB existence check for the unique normalized ISBNs.
+    // Phase 2 — DB existence check for every form of the listed ISBNs, so a
+    // book stocked under its ISBN-13 is found from its ISBN-10 and back.
     const uniqueIsbns = [...seenInList];
     const existingByIsbn = new Map<
       string,
@@ -375,7 +386,7 @@ export class BooksImportService {
         row.error = 'Already appears earlier in this list.';
         continue;
       }
-      const dbHit = existingByIsbn.get(n.isbn);
+      const dbHit = n.keys.map((k) => existingByIsbn.get(k)).find((hit) => hit !== undefined);
       if (dbHit) {
         row.status = 'duplicate_in_db';
         row.existing = dbHit;
@@ -555,13 +566,21 @@ export class BooksImportService {
 
     const resolvedCharterId = options.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
+      const { data: pair, error: pairError } = await this.ctx.supabase
         .from('warehouse_charters')
         .select('charter_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('warehouse_id', resolvedWarehouseId)
         .eq('charter_id', resolvedCharterId)
         .maybeSingle();
+      // A failed read refuses (fail closed) and says so, rather than telling
+      // the person the warehouse does not service the charter (B26).
+      if (pairError) {
+        throw new ServiceError(
+          'internal_error',
+          `Could not check that the warehouse services this charter: ${pairError.message}`,
+        );
+      }
       if (!pair) {
         throw new ServiceError(
           'validation_error',

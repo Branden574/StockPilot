@@ -28,6 +28,17 @@ vi.mock('@/lib/auth/warehouse', () => ({
   ForbiddenError: class extends Error {},
 }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+// A SKU edit first reads, with the service-role client, the other records of
+// the SKU it moves and the records already on the new one: none here.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    const p: Record<string, unknown> = {};
+    for (const m of ['from', 'select', 'eq', 'neq', 'is', 'order', 'range']) p[m] = () => p;
+    (p as { then: unknown }).then = (res: (v: unknown) => unknown) =>
+      res({ data: [], error: null });
+    return p;
+  },
+}));
 
 import { InventoryService } from './inventory';
 

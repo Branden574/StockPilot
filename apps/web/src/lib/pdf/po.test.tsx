@@ -263,31 +263,32 @@ describe('PurchaseOrderPdf', () => {
     expect(allText).toContain('Widget');
   });
 
-  // The owner's real Microix PO (PO-KVAII-001690): $46,995 of goods + 4 charges
-  // (Shipping 475, Sales tax 3999.23, White Glove 900, E-Waste 400) = $52,769.23.
+  // A synthetic PO in the shape of an imported purchase-system PO: $24,990 of
+  // goods + 4 charges (Shipping 150, Sales tax 2061.68, White Glove 900,
+  // E-Waste 400) = $28,501.68.
   const ownerCharges: PoPdfCharge[] = [
-    { label: 'Shipping', quantity: null, unitCost: null, amount: 475 },
-    { label: 'Sales tax 8.35%', quantity: null, unitCost: null, amount: 3999.23 },
+    { label: 'Shipping', quantity: null, unitCost: null, amount: 150 },
+    { label: 'Sales tax 8.25%', quantity: null, unitCost: null, amount: 2061.68 },
     { label: 'White Glove Service', quantity: 100, unitCost: 9, amount: 900 },
     { label: 'CA E-Waste Fee', quantity: 100, unitCost: 4, amount: 400 },
   ];
 
   it('renders each charge as a labeled line row and a Charges roll-up', () => {
     const nodes = render({
-      header: { subtotal: 46995, total: 52769.23 },
+      header: { subtotal: 24990, total: 28501.68 },
       lines: [
-        { sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511', quantityOrdered: 100, quantityReceived: 0, unitCost: 469.95, lineTotal: 46995 },
+        { sku: 'SP-EDEM1-AAA', name: 'Acer Chromebook 511', quantityOrdered: 100, quantityReceived: 0, unitCost: 249.9, lineTotal: 24990 },
       ],
       charges: ownerCharges,
     });
     const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
     // Every charge label appears (as a line row in the table).
-    for (const label of ['Shipping', 'Sales tax 8.35%', 'White Glove Service', 'CA E-Waste Fee']) {
+    for (const label of ['Shipping', 'Sales tax 8.25%', 'White Glove Service', 'CA E-Waste Fee']) {
       expect(allText).toContain(label);
     }
     // Roll-up row + the true grand total.
     expect(allText).toContain('Charges');
-    expect(allText).toContain('$52,769.23');
+    expect(allText).toContain('$28,501.68');
     // The White Glove qty (100) shows on its charge row.
     expect(allText).toContain('100');
   });
@@ -311,9 +312,9 @@ describe('PurchaseOrderPdf', () => {
   // table-fit.test.ts; these guard the SHAPE those widths were budgeted for,
   // so a future edit cannot invalidate the budget without going red.
   const postedReceipt: PoPdfReceipt = {
-    receiptNumber: 'R-20260721-223330-e7a08b',
+    receiptNumber: 'R-20260721-223330-0e0e05',
     receivedAt: '2026-07-21T18:00:00Z',
-    receivedByName: 'Andrew Rosas',
+    receivedByName: 'Jordan Stone',
     status: 'posted',
     totalAccepted: 12,
     totalRejected: 0,
@@ -329,9 +330,9 @@ describe('PurchaseOrderPdf', () => {
     const nodes = render({ receipts: [postedReceipt] });
     const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
     expect(allText).toContain('Receipts');
-    expect(allText).toContain('R-20260721-223330-e7a08b');
+    expect(allText).toContain('R-20260721-223330-0e0e05');
     expect(allText).toContain('Jul 21, 2026');
-    expect(allText).toContain('Andrew Rosas');
+    expect(allText).toContain('Jordan Stone');
   });
 
   it('never renders the status inline with the receipt number', () => {
@@ -341,11 +342,11 @@ describe('PurchaseOrderPdf', () => {
     // has to stay on its own non-mono line for the width budget to hold.
     const nodes = render({
       receipts: [
-        { ...postedReceipt, receiptNumber: 'R-20260721-223330-e7a08b-REV', status: 'reversal' },
+        { ...postedReceipt, receiptNumber: 'R-20260721-223330-0e0e05-REV', status: 'reversal' },
       ],
     });
     const mono = monoTexts(nodes).map((n) => textOf(n.props.children));
-    expect(mono).toContain('R-20260721-223330-e7a08b-REV');
+    expect(mono).toContain('R-20260721-223330-0e0e05-REV');
     // No mono cell carries the status, the parentheses, or the two glued together.
     for (const text of mono) {
       expect(text).not.toContain('reversal');
@@ -363,7 +364,7 @@ describe('PurchaseOrderPdf', () => {
     expect(status).toBeUndefined();
   });
 
-  // ── Itemized receipt breakdown — owner ask 2026-08-20 (CVLYII-001460) ──
+  // ── Itemized receipt breakdown — owner ask 2026-08-20 ──
   // A receipt row saying "Accepted 200" answers how much but not WHAT: a
   // five-size shirt receipt printed one opaque number. The breakdown under
   // each receipt is the traceability the printout exists for.
@@ -396,7 +397,7 @@ describe('PurchaseOrderPdf', () => {
     // (or a test fixture) does not crash the whole PDF export.
     const nodes = render({ receipts: [postedReceipt] });
     const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
-    expect(allText).toContain('R-20260721-223330-e7a08b');
+    expect(allText).toContain('R-20260721-223330-0e0e05');
   });
 
   it('caps an over-long item name instead of letting it run into Accepted', () => {
@@ -422,9 +423,9 @@ describe('PurchaseOrderPdf', () => {
   });
 
   it('caps an over-long received-by value instead of letting it run into Accepted', () => {
-    const email = 'branden.vincent-walker@subdomain.example.com';
+    const email = 'carsten.hartley-fowler@subdomain.example.com';
     const nodes = render({ receipts: [{ ...postedReceipt, receivedByName: email }] });
-    const cell = nodes.find((n) => textOf(n.props.children).startsWith('branden.vincent-walker@'));
+    const cell = nodes.find((n) => textOf(n.props.children).startsWith('carsten.hartley-fowler@'));
     expect(cell).toBeDefined();
     const text = textOf(cell?.props.children);
     expect(text.length).toBeLessThanOrEqual(RECEIVED_BY_MAX);

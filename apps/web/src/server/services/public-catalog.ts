@@ -1,11 +1,13 @@
 import 'server-only';
 
-import { unstable_cache } from 'next/cache';
+import { revalidateTag, unstable_cache } from 'next/cache';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
 import { fetchAllRowsByIds, reportDegradedRead, settleAsDataError } from './lib/fetch-by-ids';
+import { withoutRecentlyHidden } from './lib/order-catalog-hidden';
+import { fetchAllRows } from './lib/paginate';
 import type { PublicAvailability, PublicCatalogItem } from '@/components/orders/public-v2/types';
 
 import { publicCatalogTag } from './public-links';
@@ -35,6 +37,14 @@ import { publicCatalogTag } from './public-links';
  * revalidateTag(tag, 'max') so config changes surface immediately; the 60s
  * window only covers organic stock drift. Submit always re-validates fresh,
  * so a stale render fails closed.
+ *
+ * ORDERING VISIBILITY (0413, design 7.2 item 5). The predicate leaves out an
+ * item hidden from new ordering, and a Show or Hide expires every link of the
+ * organization with { expire: 0 } (expireOrgPublicCatalogs). An entry read
+ * before a hide can still be served after it, so the cached value carries
+ * `readStartedAt` and every render removes, uncached, the items hidden since
+ * (withoutRecentlyHidden). This page has no request context and so no hide
+ * mark: the check runs on every render that has rows.
  */
 
 // ── Public schema ───────────────────────────────────────────────────────────
@@ -243,6 +253,12 @@ export function isLinkOpen(
 
 // ── Link-aware catalog ──────────────────────────────────────────────────────
 
+interface CachedPublicCatalog {
+  items: PublicCatalogItem[];
+  /** Epoch ms, taken before the entry's eligibility read. */
+  readStartedAt: number;
+}
+
 export async function getPublicCatalogForLink(
   link: Pick<PublicLinkConfig, 'id' | 'organizationId' | 'availabilityDisplay'>,
   warehouseId: string,
@@ -250,11 +266,62 @@ export async function getPublicCatalogForLink(
   // The wrapper is created per call so the cache TAG can carry the linkId
   // (unstable_cache tags are fixed at wrap time). The cache KEY is keyParts +
   // the serialized args, so entries stay per-(link, warehouse).
-  const cached = unstable_cache(loadPublicCatalogUncached, ['public-link-catalog-v1'], {
-    revalidate: 60,
-    tags: [publicCatalogTag(link.id)],
+  // v2 (2026-10-26, ordering visibility 0413): the value is
+  // { items, readStartedAt } and the eligibility leaves out hidden items.
+  const cached = unstable_cache(
+    async (
+      linkId: string,
+      orgId: string,
+      whId: string,
+      availabilityDisplay: 'exact' | 'bucket' | 'none',
+    ): Promise<CachedPublicCatalog> => {
+      const readStartedAt = Date.now();
+      const items = await loadPublicCatalogUncached(linkId, orgId, whId, availabilityDisplay);
+      return { items, readStartedAt };
+    },
+    ['public-link-catalog-v2'],
+    {
+      revalidate: 60,
+      tags: [publicCatalogTag(link.id)],
+    },
+  );
+  const entry = await cached(link.id, link.organizationId, warehouseId, link.availabilityDisplay);
+  return withoutRecentlyHidden(entry.items, {
+    organizationId: link.organizationId,
+    warehouseId,
+    readStartedAt: entry.readStartedAt,
+    // No request context here, so the mark is unknown: always check.
+    lastHideAt: undefined,
   });
-  return cached(link.id, link.organizationId, warehouseId, link.availabilityDisplay);
+}
+
+/**
+ * Expires every public request link's catalog of `organizationId` NOW
+ * (`{ expire: 0 }`): a Show or Hide changes what each link's eligibility
+ * answers. The PublicLinksService helpers expire with 'max' (serve stale once,
+ * recompute in the background), which is right for a link's own settings but
+ * not for a hide; the overlay in getPublicCatalogForLink covers the stale
+ * window either way. Admin client: the links table is read for its ids only.
+ * Answers how many links were expired; THROWS on a failed read (the caller
+ * logs it: the write already committed and the overlay still holds).
+ */
+export async function expireOrgPublicCatalogs(organizationId: string): Promise<number> {
+  const admin = createAdminClient();
+  const rows = await fetchAllRows<{ id: string }>(
+    (from, to) =>
+      admin
+        .from('public_request_links')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: Array<{ id: string }> | null;
+        error: { message: string } | null;
+      }>,
+    { cap: 10_000 },
+  );
+  for (const row of rows) revalidateTag(publicCatalogTag(row.id), { expire: 0 });
+  return rows.length;
 }
 
 async function loadPublicCatalogUncached(

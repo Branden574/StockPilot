@@ -31,6 +31,7 @@ import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { UpdateCenter } from '@/components/updates/update-center';
 import { identify } from '@/lib/analytics';
+import { sweepInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 
 import type { ModuleId, NavOverrides, NavSectionKey, Permission, Role } from '@stockpilot/core';
@@ -250,6 +251,16 @@ export function DashboardShell({
   React.useEffect(() => {
     forgetTourState(userId);
   }, [userId]);
+
+  // What an interrupted run kept in this tab (lib/interrupted-run) is only
+  // ever for the account that wrote it. As this shell renders for an account
+  // (and again when the user or organization changes: an org switch, or a
+  // sign-in as someone else in another tab), every record that is another
+  // account's, too old or unreadable goes, and nothing is handed out. This
+  // account's records stay for their own pages to take.
+  React.useEffect(() => {
+    sweepInterruptedRuns({ userId, organizationId });
+  }, [userId, organizationId]);
 
   // Pin the body to exactly viewport-height-without-overflow. We used to
   // do this with `overflow-hidden + h-dvh`, but on iOS Safari that

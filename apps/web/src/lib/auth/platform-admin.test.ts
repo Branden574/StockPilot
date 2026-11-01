@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   currentUserIsPlatformAdminFromRequestHeader,
   isPlatformAdmin,
-  mfaAssertionAgeFromToken,
+  mfaAssertionAgeFromAmr,
 } from './platform-admin';
 
 /**
@@ -22,12 +22,6 @@ vi.mock('@/lib/env', () => ({
     NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon',
   },
 }));
-
-/** Build a JWT-shaped string whose payload carries the given `amr` claim. */
-function tokenWithAmr(amr: unknown): string {
-  const payload = Buffer.from(JSON.stringify({ amr }), 'utf8').toString('base64url');
-  return `header.${payload}.sig`;
-}
 
 describe('currentUserIsPlatformAdminFromRequestHeader (P1d link-visibility trust chain)', () => {
   beforeEach(() => {
@@ -66,37 +60,37 @@ describe('isPlatformAdmin allowlist matching', () => {
   });
 });
 
-describe('mfaAssertionAgeFromToken (#8 fresh platform step-up)', () => {
+describe('mfaAssertionAgeFromAmr (#8 fresh platform step-up)', () => {
   const NOW = 1_700_000_000;
 
   it('returns the age since the latest totp assertion (ignores password)', () => {
-    const t = tokenWithAmr([
+    const amr = [
       { method: 'password', timestamp: NOW - 3600 },
       { method: 'totp', timestamp: NOW - 120 },
-    ]);
-    expect(mfaAssertionAgeFromToken(t, NOW)).toBe(120);
+    ];
+    expect(mfaAssertionAgeFromAmr(amr, NOW)).toBe(120);
   });
 
   it('uses the most recent of multiple MFA assertions', () => {
-    const t = tokenWithAmr([
+    const amr = [
       { method: 'totp', timestamp: NOW - 600 },
       { method: 'totp', timestamp: NOW - 60 },
-    ]);
-    expect(mfaAssertionAgeFromToken(t, NOW)).toBe(60);
+    ];
+    expect(mfaAssertionAgeFromAmr(amr, NOW)).toBe(60);
   });
 
   it('returns null when there is no second-factor assertion (password only)', () => {
-    const t = tokenWithAmr([{ method: 'password', timestamp: NOW - 10 }]);
-    expect(mfaAssertionAgeFromToken(t, NOW)).toBeNull();
+    expect(mfaAssertionAgeFromAmr([{ method: 'password', timestamp: NOW - 10 }], NOW)).toBeNull();
   });
 
   it('returns null when amr is absent', () => {
-    const payload = Buffer.from(JSON.stringify({ sub: 'x' }), 'utf8').toString('base64url');
-    expect(mfaAssertionAgeFromToken(`h.${payload}.s`, NOW)).toBeNull();
+    expect(mfaAssertionAgeFromAmr(undefined, NOW)).toBeNull();
   });
 
-  it('returns null on a malformed token (fail-closed)', () => {
-    expect(mfaAssertionAgeFromToken('not-a-jwt', NOW)).toBeNull();
-    expect(mfaAssertionAgeFromToken('', NOW)).toBeNull();
+  it('returns null on a malformed claim (fail-closed)', () => {
+    expect(mfaAssertionAgeFromAmr('totp', NOW)).toBeNull();
+    // RFC 8176's bare-string form carries no timestamp, so no age.
+    expect(mfaAssertionAgeFromAmr(['password', 'totp'], NOW)).toBeNull();
+    expect(mfaAssertionAgeFromAmr([null, { method: 'totp', timestamp: 'x' }], NOW)).toBeNull();
   });
 });

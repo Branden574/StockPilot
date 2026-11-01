@@ -1376,7 +1376,9 @@ describe('Admin · Users', () => {
     expect(attrText(card.el, 'onPress', sf)).toBe('canEdit ? onPress : undefined');
     expect(attrText(card.el, 'disabled', sf)).toBe('!canEdit');
     expect(attrText(card.el, 'accessibilityRole', sf)).toBe("canEdit ? 'button' : undefined");
-    expect(attrText(card.el, 'accessibilityActions', sf)).toBe('userCardActions(canEdit, email)');
+    expect(attrText(card.el, 'accessibilityActions', sf)).toBe(
+      'userCardActions(canEdit, mailto ? email : null)',
+    );
     const actions = functionNamed(ADMIN_USERS, 'userCardActions');
     const js = ts.transpileModule(actions.fn.getText(actions.sf), {
       compilerOptions: { target: ts.ScriptTarget.ES2020 },
@@ -1395,8 +1397,22 @@ describe('Admin · Users', () => {
     expect(users).toContain(
       "if (e.nativeEvent.actionName === 'email') openEmail(); else if (e.nativeEvent.actionName === 'activate' && canEdit) onPress();",
     );
+    expect(users).toContain('if (mailto) Linking.openURL(mailto).catch(() => undefined);');
+  });
+
+  // SECURITY (B6): the card opened `mailto:${email}` from the stored text, so
+  // an address such as "a@b.com?bcc=x@y.z", or one with a zero-width joiner,
+  // a tag character or fullwidth letters, opened a message to someone the
+  // card does not show. The link is made only by core's plainAddressMailtoUrl
+  // (one plain ASCII address; its cases are in packages/core): any other text
+  // is the same words with no touchable, and VoiceOver offers no Email action.
+  it("a member's email is a link only for one plain address, else the same words with no link", () => {
+    expect(users).toContain("import { plainAddressMailtoUrl } from '@stockpilot/core';");
+    expect(users).toContain('const mailto = plainAddressMailtoUrl(email);');
+    expect(users).not.toMatch(/`mailto:\$\{/);
+    expect(users).toMatch(/\{email && mailto \? \( <Pressable onPress=\{openEmail\}/);
     expect(users).toContain(
-      'if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);',
+      ") : email ? ( <View style={{ minHeight: 44, justifyContent: 'center' }}> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}",
     );
     expect(users).toContain("const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;");
   });

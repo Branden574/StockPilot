@@ -114,8 +114,11 @@ export interface SignOutFlowDeps extends EndSessionDeps {
   holdForAccount(): Promise<void>;
   /** Delete this account's unsynced rows (only after the session is gone). */
   discardUnsynced(): Promise<void>;
-  /** Clear the org-scoped cache. Never touches the outbox. */
-  wipeCache(): Promise<void>;
+  /** Clear the org-scoped cache. Never touches the outbox. Its answer (the
+   *  photo wipe's, photo-cache-wipe.ts) is not needed here: the sign-out
+   *  forgets whose cache it was either way, and the next account's pull clears
+   *  photos a failed clear left. */
+  wipeCache(): Promise<unknown>;
   /**
    * Remove this account's saved workspace keys from AsyncStorage (the active
    * organization and the per-organization warehouse). They outlived an

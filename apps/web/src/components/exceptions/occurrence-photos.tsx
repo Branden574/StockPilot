@@ -13,6 +13,7 @@ import {
 } from '@/components/maintenance/maintenance-photos-panel';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import {
   finalizeExceptionEvidenceAction,
   removeExceptionEvidenceAction,
@@ -106,7 +107,9 @@ export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndp
       let res: Awaited<ReturnType<typeof startExceptionEvidenceUploadAction>>;
       try {
         res = await startExceptionEvidenceUploadAction(occurrenceId, { fileExt });
-      } catch {
+      } catch (e) {
+        // A redirect (the session ended) goes up as it is: the panel stops.
+        if (isControlFlow(e)) throw e;
         throw new Error(EVIDENCE_CONNECTION_COPY);
       }
       if ('error' in res) throw answered(res.error);
@@ -122,7 +125,8 @@ export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndp
           capturedAt: null,
           note,
         });
-      } catch {
+      } catch (e) {
+        if (isControlFlow(e)) throw e;
         throw new PhotoAnswerLostError(EVIDENCE_NOT_CONFIRMED_COPY);
       }
       if ('error' in res) {
@@ -137,7 +141,8 @@ export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndp
       let res: Awaited<ReturnType<typeof removeExceptionEvidenceAction>>;
       try {
         res = await removeExceptionEvidenceAction(occurrenceId, photoId, reason);
-      } catch {
+      } catch (e) {
+        if (isControlFlow(e)) throw e;
         throw new Error(EVIDENCE_CONNECTION_COPY);
       }
       if ('error' in res) throw new Error(res.error.message);

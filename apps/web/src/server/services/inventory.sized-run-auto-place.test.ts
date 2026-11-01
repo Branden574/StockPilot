@@ -477,7 +477,10 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    const created = await svc.bulkCreateSizedVariants({ ...RUN });
+    // Confirmed, so the run reaches the rack create (which then fails). An
+    // unconfirmed run is refused before its first write instead
+    // (inventory.new-rack-question.test.ts).
+    const created = await svc.bulkCreateSizedVariants({ ...RUN, confirmNewRack: true });
 
     // The create is never a casualty of placement.
     expect(created.rows).toHaveLength(3);

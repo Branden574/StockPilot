@@ -1,6 +1,6 @@
 # StockPilot site rollout roadmap
 
-*Learn4Life · Prepared August 18, 2026 · For Superintendent Gill*
+*Learn4Life · Prepared August 18, 2026 · For the Superintendent*
 
 How StockPilot goes from the Central Valley West pilot to every Learn4Life site, in what order, by when, and what has to be true before each step. Every number below is taken from the live system today.
 
@@ -10,7 +10,7 @@ How StockPilot goes from the Central Valley West pilot to every Learn4Life site,
 
 ## Where we are today: DC4 since May, CVW sites since last week
 
-Two different clocks are running. DC4, the central distribution center, has run its warehouse on StockPilot since the first week of May: receiving, put-away, counts, picking and shipping. CVW site staff, the first requesters outside the warehouse, were signed up between August 5 and 12: Marissa, Crystal and Doua, three accounts across the four CVW campuses, with two site orders placed in the first week. The warehouse figures over 15 weeks:
+Two different clocks are running. DC4, the central distribution center, has run its warehouse on StockPilot since the first week of May: receiving, put-away, counts, picking and shipping. CVW site staff, the first requesters outside the warehouse, were signed up between August 5 and 12: three requester accounts across the four CVW campuses, with two site orders placed in the first week. The warehouse figures over 15 weeks:
 
 | | Since go-live | Last 30 days |
 |---|---|---|
@@ -54,7 +54,7 @@ Each region gets the same four-week sequence. Nothing new is invented per region
 | 2 | **Go-live** | The region's first orders are placed for real. DC4 shadows each one end to end. A ten-minute daily check-in between the site champion and DC4 catches confusion the same day. | Site champion, DC4 |
 | 3–4 | **Hypercare and exit** | Daily monitoring of orders, deliveries and defects; a written exit review against the same six criteria used for CVW, scaled to the region. The next region opens only when this review is green. | DC4 lead, StockPilot |
 
-Roles: **DC4 lead** — Andrew Rosas; **warehouse operations** — Peter Mathis and the DC4 team; **site champion** — one named person per region, chosen by the region; **StockPilot** — Branden Vincent-Walker (training, configuration, fixes, weekly status).
+Roles: **DC4 lead** — DC4's warehouse lead; **warehouse operations** — DC4's operations lead and the DC4 team; **site champion** — one named person per region, chosen by the region; **StockPilot** — Branden Vincent-Walker (training, configuration, fixes, weekly status).
 
 ## Timeline
 

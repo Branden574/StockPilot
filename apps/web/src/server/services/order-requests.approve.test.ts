@@ -33,8 +33,8 @@ const APPROVED_ROW = {
   order_number: 21,
   status: 'approved',
   fulfillment_type: 'delivery',
-  requester_name: 'Doua Vang',
-  requester_email: 'doua@example.org',
+  requester_name: 'Lena Hale',
+  requester_email: 'lena@example.org',
   needed_by: '2026-09-11T02:00:00.000Z',
 };
 

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { effectivePermissions, withoutPlatformManaged } from '@stockpilot/core';
+
 /**
  * PARITY: a request resolved through `get_request_context()` (one round trip,
  * migration 0355) must come out IDENTICAL to the same request resolved through
@@ -23,6 +25,9 @@ vi.mock('next/headers', () => ({
   ),
   cookies: vi.fn(async () => ({ get: () => undefined, set: () => {}, delete: () => {} })),
 }));
+// One function across vi.resetModules(), so a test can read what was reported.
+const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => {}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 interface Fixture {
   profile: Record<string, unknown> | null;
@@ -44,11 +49,19 @@ const ORG_FIELDS = {
   dashboard_layout: null,
   order_status_config: null,
   all_modules_comp: false,
+  order_catalog_last_hide_at: '2026-10-26T18:04:05.123456+00:00',
 };
 
 let fixture: Fixture;
 let rpcAvailable = true;
 const calls = { rpc: 0, from: [] as string[] };
+/** One override table answers an error, or its request throws (docket S19). */
+let overrideRead: {
+  table: 'role_permission_overrides' | 'user_permission_overrides';
+  mode: 'error' | 'reject';
+} | null = null;
+/** Stands for the PostgREST message, which can quote request details. */
+const SECRET = 'relation secret-detail is not readable';
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
@@ -110,7 +123,11 @@ vi.mock('@/lib/supabase/server', () => ({
             const org = fixture.members.find((m) => m.organization_id === filters.id)?.org;
             if (!org) return null;
             const { id: _id, name: _name, ...settings } = org;
-            return settings;
+            // Only the columns the read asked for, as PostgREST answers: a
+            // legacy read that forgets a column cannot pass for the bundle.
+            if (!selected) return settings;
+            const cols = selected.split(',').map((c) => c.trim());
+            return Object.fromEntries(Object.entries(settings).filter(([k]) => cols.includes(k)));
           }
           case 'organization_modules':
             return (member?.modules ?? []).map((module_id) => ({ module_id }));
@@ -119,11 +136,20 @@ vi.mock('@/lib/supabase/server', () => ({
         }
       };
       const builder: Record<string, unknown> = {};
-      for (const m of ['select', 'not', 'is', 'limit', 'neq']) builder[m] = () => builder;
+      let selected: string | null = null;
+      for (const m of ['not', 'is', 'limit', 'neq', 'in']) builder[m] = () => builder;
+      builder.select = (cols?: string) => ((selected = cols ?? null), builder);
       builder.order = (col: string) => ((ordered = ordered || col === 'created_at'), builder);
       builder.eq = (col: string, val: unknown) => ((filters[col] = val), builder);
       builder.maybeSingle = async () => ({ data: result(), error: null });
-      builder.then = (res: (v: unknown) => unknown) => res({ data: result(), error: null });
+      builder.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
+        const fail = overrideRead?.table === table ? overrideRead.mode : null;
+        if (fail === 'reject')
+          return Promise.reject(new TypeError(`fetch failed: ${SECRET}`)).then(res, rej);
+        if (fail === 'error')
+          return res({ data: null, error: { code: '503', message: SECRET }, status: 503 });
+        return res({ data: result(), error: null });
+      };
       return builder;
     },
   }),
@@ -138,9 +164,11 @@ async function resolve(path: 'bundle' | 'legacy', orgId?: string) {
   const requestCache = await import('@/lib/dashboard/request-cache');
   let ctx: Awaited<ReturnType<typeof session.requireOrgContext>> | null = null;
   let redirected: string | null = null;
+  let error: unknown = null;
   try {
     ctx = await session.requireOrgContext(orgId);
   } catch (e) {
+    error = e;
     redirected = String((e as Error).message);
   }
   const out = {
@@ -153,7 +181,7 @@ async function resolve(path: 'bundle' | 'legacy', orgId?: string) {
     orgRow: ctx ? await requestCache.getOrgRowForRequest(ctx.organizationId) : null,
     modules: ctx ? [...(await requestCache.getModulesForRequest(ctx.organizationId))].sort() : null,
   };
-  return { out, rpcCalls: calls.rpc, tables: [...calls.from] };
+  return { out, rpcCalls: calls.rpc, tables: [...calls.from], error };
 }
 
 const member = (id: string, role: string, extra: Partial<Fixture['members'][number]> = {}) => ({
@@ -178,6 +206,7 @@ const profile = (extra: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  overrideRead = null;
 });
 
 describe('one round trip gives the same answer as seven', () => {
@@ -237,6 +266,69 @@ describe('one round trip gives the same answer as seven', () => {
     const bundle = await resolve('bundle');
     expect(bundle.out).toEqual((await resolve('legacy')).out);
     expect(bundle.out.permissions).toContain('items:delete');
+  });
+
+  // ── Ordering visibility (0413): orders:manage_catalog_visibility is
+  // platform-managed. An explicit deny holds for the OWNER too, a role row for
+  // it is ignored, and the org row carries the hide mark, on both paths.
+  const KEY = 'orders:manage_catalog_visibility';
+
+  it('an owner whom StockPilot denied the platform-managed key lacks it, and only it, on both paths', async () => {
+    fixture = {
+      profile: profile(),
+      members: [
+        member('A', 'owner', {
+          roleOverrides: [{ permission: 'items:delete', granted: false }],
+          userOverrides: [
+            { permission: KEY, granted: false },
+            { permission: 'items:delete', granted: false },
+          ],
+        }),
+      ],
+    };
+    const bundle = await resolve('bundle');
+    const legacy = await resolve('legacy');
+    expect(bundle.out).toEqual(legacy.out);
+    expect(bundle.out.permissions).not.toContain(KEY);
+    expect(bundle.out.permissions).toContain('items:delete'); // still immutable for every other key
+    expect(legacy.tables).toContain('user_permission_overrides'); // the owner's one read
+  });
+
+  it('a manager: a role row for the key is ignored, an explicit deny is not', async () => {
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'manager', { roleOverrides: [{ permission: KEY, granted: false }] })],
+    };
+    const roleRowOnly = await resolve('bundle');
+    expect(roleRowOnly.out).toEqual((await resolve('legacy')).out);
+    expect(roleRowOnly.out.permissions).toContain(KEY);
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'manager', { userOverrides: [{ permission: KEY, granted: false }] })],
+    };
+    const denied = await resolve('bundle');
+    expect(denied.out).toEqual((await resolve('legacy')).out);
+    expect(denied.out.permissions).not.toContain(KEY);
+  });
+
+  it('a staff member StockPilot allowed holds the key on both paths, and nothing else extra', async () => {
+    fixture = {
+      profile: profile(),
+      members: [member('A', 'staff', { userOverrides: [{ permission: KEY, granted: true }] })],
+    };
+    const bundle = await resolve('bundle');
+    expect(bundle.out).toEqual((await resolve('legacy')).out);
+    expect(bundle.out.permissions).toContain(KEY);
+    expect(bundle.out.permissions).not.toContain('orders:approve');
+  });
+
+  it('the organization row carries the hide mark on both paths', async () => {
+    fixture = { profile: profile(), members: [member('A', 'staff')] };
+    const bundle = await resolve('bundle');
+    const legacy = await resolve('legacy');
+    expect(bundle.out.orgRow?.order_catalog_last_hide_at).toBe('2026-10-26T18:04:05.123456+00:00');
+    expect(legacy.out.orgRow?.order_catalog_last_hide_at).toBe('2026-10-26T18:04:05.123456+00:00');
+    expect(bundle.out.orgRow).toEqual(legacy.out.orgRow);
   });
 
   it('the organization comes from a MEMBERSHIP, never from the stale default in the profile', async () => {
@@ -367,5 +459,61 @@ describe('one round trip gives the same answer as seven', () => {
       expect.arrayContaining(['organizations', 'organization_modules']),
     );
     expect(bundle.out.orgRow).toBeNull();
+  });
+});
+
+/**
+ * Docket S19: without the function, a permission set the legacy reads could
+ * not read REFUSES the request. Never the role's defaults (every revoke the
+ * organization set would be lifted for that request), and never a redirect:
+ * the page's error boundary says to try again. The owner keeps working.
+ */
+describe('an override read that fails on the legacy path (docket S19)', () => {
+  const UNAVAILABLE = { name: 'PermissionsUnavailableError', code: 'PERMISSIONS_UNAVAILABLE' };
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  it('a manager whose role override read errors is refused as unavailable, and nothing redirects', async () => {
+    fixture = { profile: profile(), members: [member('A', 'manager')] };
+    overrideRead = { table: 'role_permission_overrides', mode: 'error' };
+    const legacy = await resolve('legacy');
+    expect(legacy.error).toMatchObject(UNAVAILABLE);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(legacy.out.permissions).toBeNull();
+    // The legacy reads got that far: the membership answered first.
+    expect(legacy.tables).toContain('organization_members');
+    expect(legacy.tables).toContain('role_permission_overrides');
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain('secret-detail');
+  });
+
+  it('a staff member whose user override read throws is refused the same way', async () => {
+    fixture = { profile: profile(), members: [member('A', 'staff')] };
+    overrideRead = { table: 'user_permission_overrides', mode: 'reject' };
+    const legacy = await resolve('legacy');
+    expect(legacy.error).toMatchObject(UNAVAILABLE);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(legacy.out.permissions).toBeNull();
+  });
+
+  it('an owner whose own override read fails still gets a context: every key but the platform-managed one', async () => {
+    fixture = { profile: profile(), members: [member('A', 'owner')] };
+    overrideRead = { table: 'user_permission_overrides', mode: 'error' };
+    const legacy = await resolve('legacy');
+    expect(legacy.error).toBeNull();
+    expect(legacy.out.role).toBe('owner');
+    expect(legacy.out.permissions).toEqual(
+      [...withoutPlatformManaged(effectivePermissions('owner'))].sort(),
+    );
+  });
+
+  it('the bundle path reads no table, so the same failure changes nothing there', async () => {
+    fixture = { profile: profile(), members: [member('A', 'manager')] };
+    overrideRead = { table: 'role_permission_overrides', mode: 'reject' };
+    const bundle = await resolve('bundle');
+    expect(bundle.error).toBeNull();
+    expect(bundle.tables).toEqual([]);
+    expect(bundle.out.permissions).toEqual([...effectivePermissions('manager')].sort());
   });
 });

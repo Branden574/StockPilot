@@ -1,8 +1,8 @@
 'use server';
 
-import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { cleanLabelIds, isUuid, LABELS_MAX_ITEMS } from '@/lib/inventory/labels-selection';
 import { mfaGateError, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -62,7 +62,7 @@ export async function loadLabelItemsAction(input: {
     return ok(items);
   } catch (e) {
     // A signed-out session redirects to sign-in; that is not a failure.
-    unstable_rethrow(e);
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) {
       // internal_error's message is already the generic one (S13); its cause
       // stays in the server log, as the page's error boundary would log it.

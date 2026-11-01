@@ -19,11 +19,27 @@ export const metadata = {
  * email + redirect after submit, but we also expose blank inputs so
  * someone with the tracking link can paste both in by hand.
  *
- * The token (`?t=`) is required because the GET endpoint scopes the
- * lookup to a single org. We DON'T render the org name on this page —
- * doing so would make the token-leak case worse. The status payload
- * itself comes back redacted, so even with a token + id + matching
- * email an attacker only learns the requester's own state.
+ * The token (`?t=`) is required: the GET endpoint
+ * (api/v1/public/order-requests/[id]) accepts the request's own track token
+ * (what the status emails embed, migration 0330), the organization's catalog
+ * token or one of its order links' tokens, each only for an order of that
+ * organization. We DON'T render the org name on this page — doing so would
+ * make the token-leak case worse. The status payload itself comes back
+ * redacted, so even with a token + id + matching email an attacker only
+ * learns the requester's own state.
+ *
+ * Inactive links are accepted ON PURPOSE (923f8350c, #110): the token of an
+ * order link that was turned off or has expired still opens this page and its
+ * live map for an order of that link's organization, so an order someone
+ * placed through the link stays trackable. Turning a link off stops new
+ * requests through it; it must not strand an order already placed: the key
+ * this page asks for when the URL carries none is that link's token (the
+ * "Tracking link key" field), and the Track button the order page showed
+ * after a submit before migration 0330 carries it too (c827ac612). The caller
+ * still needs the order id and the requester's email, and only a read by the
+ * request's own track token gets the return link. Making a turned-off link
+ * stop tracking too is a product decision: add the filter to both routes and
+ * say so.
  */
 export default async function PublicOrderTrackPage({
   searchParams,

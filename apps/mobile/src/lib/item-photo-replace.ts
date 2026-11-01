@@ -38,9 +38,10 @@ import type { Database } from '@stockpilot/core';
  *
  *   1. INSERT FIRST, with row proof (`.select('id').single()` — a 0-row write
  *      returning a null error is recurring bug pattern #2). Only once the new
- *      row exists is anything removed. If the insert fails, the ONLY thing
- *      cleaned up is the object we just uploaded; every existing row and
- *      object is left exactly as it was, so the item keeps the photo it had.
+ *      row exists is anything removed. If the insert fails, the ONLY things
+ *      cleaned up are the objects we just uploaded (the photo and, since B31,
+ *      its thumbnail); every existing row and object is left exactly as it
+ *      was, so the item keeps the photo it had.
  *   2. DELETE ROWS, NEVER OLD OBJECTS. The old rows go; their objects stay
  *      as invisible orphans (nothing reads a bucket it has no row for), so no
  *      row ever points at nothing (failure (b)). The objects are not removed
@@ -78,27 +79,33 @@ export async function replacePrimaryPhoto(args: {
   itemId: string;
   /** Storage path of the object the caller has ALREADY uploaded. */
   newPath: string;
+  /** Its thumbnail, already uploaded beside it (item-photo-upload.ts), or
+   *  null when none was stored: the row is then written without one. */
+  newThumbPath?: string | null;
 }): Promise<ReplacePrimaryPhotoResult> {
   const { supabase, orgId, itemId, newPath } = args;
+  const newThumbPath = args.newThumbPath ?? null;
   const warnings: string[] = [];
 
-  // 1) The row that makes the uploaded object findable, first.
+  // 1) The row that makes the uploaded objects findable, first.
   const { data: inserted, error: insErr } = await supabase
     .from('item_images')
     .insert({
       organization_id: orgId,
       item_id: itemId,
       storage_path: newPath,
+      thumb_path: newThumbPath,
       is_primary: true,
     })
     .select('id')
     .single();
 
   if (insErr || !inserted?.id) {
-    // No row means nothing will ever reference this object — remove it rather
-    // than leave paid-for bytes nobody can reach. Every EXISTING row and
-    // object is deliberately untouched: the item keeps the photo it had.
-    const { error: rmErr } = await supabase.storage.from(ITEM_IMAGES_BUCKET).remove([newPath]);
+    // No row means nothing will ever reference these objects — remove them
+    // rather than leave paid-for bytes nobody can reach. Every EXISTING row
+    // and object is deliberately untouched: the item keeps the photo it had.
+    const uploaded = newThumbPath ? [newPath, newThumbPath] : [newPath];
+    const { error: rmErr } = await supabase.storage.from(ITEM_IMAGES_BUCKET).remove(uploaded);
     if (rmErr) warnings.push(`orphan cleanup failed: ${rmErr.message}`);
     return { ok: false, error: insErr?.message ?? 'The photo could not be saved. Try again.' };
   }

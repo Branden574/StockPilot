@@ -12,6 +12,7 @@ import {
   outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { clearCountPath, isClearCountPayload } from './cycle-count-clear';
 import { recordCountBody } from './cycle-count-record-body';
 import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
@@ -290,8 +291,10 @@ class CycleCountSyncEngine {
           break;
         }
         // WHOSE row, decided now, for THIS row (outbox-scope.ts, the same
-        // predicate engine 1 uses). Another account's queued count, or any row
-        // with nobody signed in, is HELD: skipped, neither failed nor rejected.
+        // predicate engine 1 uses). Another account's queued count, any row
+        // with nobody signed in, and a row with no workspace of its own while
+        // this account's is not saved yet, is HELD: skipped, neither failed
+        // nor rejected.
         const decision = outboxSendDecision(row, await liveOutboxScope());
         if (!decision.send) continue;
         try {
@@ -355,18 +358,32 @@ class CycleCountSyncEngine {
   private async sendRecordCount(
     payload: Record<string, unknown>,
     signal: AbortSignal,
-    scope: { orgId: string | null; asUserId: string; createdAt: number | null },
+    // orgId is never empty (outboxSendDecision): a count always names its workspace.
+    scope: { orgId: string; asUserId: string; createdAt: number | null },
   ): Promise<void> {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =
       typeof payload.cycleCountId === 'string' ? payload.cycleCountId : '';
+    if (!lineId || !cycleCountId) {
+      throw new Error('record_count: missing ids');
+    }
+    // A clear of the line's saved count (B4a, cycle-count-clear.ts): the line
+    // is uncounted again on the server, through the service the web count
+    // screen's emptied box uses, with the same gates as a count. No body.
+    // It names no countedQuantity, so it never reaches the count path below.
+    if (isClearCountPayload(payload)) {
+      await api(clearCountPath(cycleCountId, lineId), {
+        method: 'POST',
+        signal,
+        orgId: scope.orgId,
+        asUserId: scope.asUserId,
+      });
+      return;
+    }
     const counted =
       typeof payload.countedQuantity === 'number'
         ? payload.countedQuantity
         : Number(payload.countedQuantity);
-    if (!lineId || !cycleCountId) {
-      throw new Error('record_count: missing ids');
-    }
     if (!Number.isFinite(counted) || counted < 0) {
       throw new Error('record_count: invalid counted quantity');
     }

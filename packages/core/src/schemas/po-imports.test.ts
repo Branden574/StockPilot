@@ -58,7 +58,7 @@ describe('canonicalPoLineSchema — sports variant fields', () => {
       variantFit: 'mens',
       variantColor: 'Black/White',
       jerseyNumber: '07',
-      playerName: 'A. Rosas',
+      playerName: 'J. Stone',
       groupHint: 'Nike Pegasus 41 FD2722',
       mappingConfidence: 0.62,
     });

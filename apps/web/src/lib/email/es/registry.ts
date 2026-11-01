@@ -3,10 +3,17 @@
  *
  * Typed port of `ES.EMAILS` from `docs/design/email-system/es-tokens.js`.
  * Every subject / preheader / badge label / CTA string is byte-identical
- * to the registry; the sample-world merge values (WO-04292026, L4L North
- * Region, ...) become builder parameters. Do NOT reword any string here —
+ * to the registry; the sample-world merge values (WO-04292026, Sample
+ * Org, ...) become builder parameters. Do NOT reword any string here —
  * the registry is normative. Where the design lists a `rec:` refined
  * subject it is kept as a comment for product sign-off, not implemented.
+ *
+ * SAMPLE VALUES (docket S17, 2026-10-31): the sample organization,
+ * warehouse and destination (ES_SAMPLE) and the two "<org> via StockPilot"
+ * senders below are synthetic. They no longer mirror es-tokens.js, whose
+ * samples named a real customer; no sender reads either of those two
+ * `from` values (the portal invite and the partial receipt build theirs
+ * from the organization's own name).
  *
  * FLAG (count): the design package consistently says "28 templates"
  * (IMPLEMENTATION_PROMPT.md "ALL 24 live emails, 2 latent templates, and
@@ -21,7 +28,15 @@
  * package — the resolution email for the maintenance-requests module
  * (docs/superpowers/plans/2026-08-06-maintenance-resolved.md, spec §6.1).
  * 29 -> 30 total; 25 -> 26 live; the `maintenance` family is new.
+ *
+ * COUNTS (2026-10-24, B9): a count's noun (and the verb after it) follows the
+ * number, so one unit or line reads "1 unit", "1 line is", "The remaining
+ * unit" instead of "1 units", "1 lines are". Every count above one is
+ * byte-identical to the design package (registry.test.ts feeds the sample
+ * world: 46 units, 5 lines, 8 units).
  */
+
+import { countOf } from './count';
 
 import type { EsStatusVariant } from './tokens';
 
@@ -110,12 +125,13 @@ export interface EsEmailDefinition {
 
 // Sample-world values (ES.W) used by the registry strings — exported so
 // tests can assert byte-identical reproduction of the registry copy.
+// Synthetic since S17 (see the header): they no longer mirror ES.W.
 export const ES_SAMPLE = {
-  org: 'L4L North Region',
+  org: 'Sample Org',
   wo: 'WO-04292026',
   po: '#7741-2205',
-  warehouse: 'DCIV — Fresno',
-  destination: 'CVW — Manchester',
+  warehouse: 'Main Warehouse',
+  destination: 'Site 1',
 } as const;
 
 const d = <T extends EsEmailDefinition>(def: T): T => def;
@@ -316,7 +332,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     tag: 'Supplier Portal',
     trigger: 'Supplier invites a B2B customer to their portal',
     to: 'External customer contact — may not know StockPilot',
-    from: 'L4L North Region via StockPilot <portal@stockpilotusa.com>',
+    from: 'Sample Org via StockPilot <portal@stockpilotusa.com>',
     replyTo: 'Replies go to the supplier',
     subject: (p: { org: string }) =>
       `You’re invited to order from ${p.org}’s supplier portal`,
@@ -394,7 +410,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     subject: (p: { orderId: string }) =>
       `${p.orderId} is approved — packing has started`,
     preheader: (p: { units: number; lines: number; shipDate: string; warehouse: string }) =>
-      `Reserved ${p.units} units across ${p.lines} lines. Ships ${p.shipDate} from ${p.warehouse}.`,
+      `Reserved ${countOf(p.units, 'unit')} across ${countOf(p.lines, 'line')}. Ships ${p.shipDate} from ${p.warehouse}.`,
     badge: { variant: 'ok', label: () => 'Approved' },
     cta: 'Track this order',
     motionNote: 'L3 · Boxes settle',
@@ -500,7 +516,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     replyTo: 'Not monitored',
     subject: (p: { orderId: string }) => `${p.orderId} is being packaged`,
     preheader: (p: { lines: number; warehouse: string }) =>
-      `${p.lines} lines are being picked and packed at ${p.warehouse}. Next: staged for delivery.`,
+      `${countOf(p.lines, 'line')} ${p.lines === 1 ? 'is' : 'are'} being picked and packed at ${p.warehouse}. Next: staged for delivery.`,
     badge: { variant: 'info', label: () => 'Packing' },
     cta: 'View request',
     motionNote: 'L2 · Scanner sweep',
@@ -549,7 +565,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     subject: (p: { orderNumber: string }) =>
       `Order ${p.orderNumber}: partially fulfilled`,
     preheader: (p: { delivered: number; total: number; back: number; eta: string }) =>
-      `${p.delivered} of ${p.total} units delivered. ${p.back} backordered — expected ${p.eta}.`,
+      `${p.delivered} of ${countOf(p.total, 'unit')} delivered. ${p.back} backordered — expected ${p.eta}.`,
     badge: { variant: 'warn', label: () => 'Partially fulfilled' },
     cta: 'View order',
     // FLAG: registry motion "L2 · Split progress" has NO corresponding
@@ -572,7 +588,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     subject: (p: { orderNumber: string }) =>
       `Order ${p.orderNumber}: backordered items shipped`,
     preheader: (p: { units: number; warehouse: string; shipDate: string; method: string }) =>
-      `The remaining ${p.units} units left ${p.warehouse} ${p.shipDate} via ${p.method}.`,
+      `The remaining ${p.units === 1 ? 'unit' : `${p.units} units`} left ${p.warehouse} ${p.shipDate} via ${p.method}.`,
     badge: { variant: 'info', label: () => 'Backorder shipped' },
     cta: 'Track shipment',
     motionNote: 'L2 · Route progress',
@@ -588,12 +604,12 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     tag: 'Delivery Receipt',
     trigger: 'Signature captured on a partial delivery',
     to: 'Signer — may not be the requester or a StockPilot user',
-    from: 'L4L North Region via StockPilot <orders@stockpilotusa.com>',
+    from: 'Sample Org via StockPilot <orders@stockpilotusa.com>',
     replyTo: 'Replies go to the supplier',
     subject: (p: { orderNumber: string }) =>
       `Order ${p.orderNumber}: partial delivery receipt`,
     preheader: (p: { units: number; destination: string; date: string }) =>
-      `Receipt for ${p.units} units received and signed at ${p.destination}, ${p.date}.`,
+      `Receipt for ${countOf(p.units, 'unit')} received and signed at ${p.destination}, ${p.date}.`,
     badge: { variant: 'neutral', label: () => 'Receipt' },
     cta: 'View receipt',
     motionNote: 'None — receipt is static',

@@ -165,14 +165,80 @@ describe('GET /api/v1/items/lookup', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.matches).toHaveLength(1);
-    // placementLabel still carries the (now potentially misleading) label —
-    // additive field, existing consumers reading only placementLabel are
-    // unaffected — but rackHoldings tells a caller the whole truth.
-    expect(body.matches[0].placementLabel).toBe('Rack 1-A');
+    // The label follows the one placement rule (core resolvePlacement): stock
+    // split across two racks is named by both, not by the one rack the stored
+    // text names. It used to be that text, "Rack 1-A", which sends a picker to
+    // one shelf while the stock sits on two.
+    expect(body.matches[0].placementLabel).toBe('2-C ×20 · 5-A ×5');
     expect(body.matches[0].rackHoldings).toEqual([
       { name: '2-C', quantity: 20, kind: 'rack' },
       { name: '5-A', quantity: 5, kind: 'rack' },
     ]);
+  });
+
+  describe('placementLabel: where the stock is, by the one placement rule', () => {
+    function lookupRow(extra: Record<string, unknown>) {
+      return {
+        id: 'item-1',
+        sku: 'SKU-3',
+        name: 'Into Algebra 1',
+        barcode: null,
+        quantity_on_hand: 12,
+        charter_id: null,
+        bin_location: null,
+        item_type: 'product',
+        custom_fields: {},
+        charter: null,
+        ...extra,
+      };
+    }
+    async function labelFor(row: Record<string, unknown>, holdings: unknown[] = []) {
+      const stub = makeSupabaseStub({
+        'inventory_items.select': { data: [row], error: null },
+        'item_stock_levels.select': { data: holdings, error: null },
+      });
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
+      const res = await GET(req('SKU-3'));
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { matches: Array<{ placementLabel: string | null }> })
+        .matches[0]!.placementLabel;
+    }
+
+    it("names a book's rack from its rack keys when it has no rack text", async () => {
+      // A book's rack lives in its book_rack keys; bin_location can be blank.
+      // The label was the blank text: null, as if the book had no place.
+      expect(
+        await labelFor(
+          lookupRow({
+            item_type: 'book',
+            custom_fields: { book_rack_number: '37', book_rack_row: 'B' },
+          }),
+        ),
+      ).toBe('Rack 37-B');
+    });
+
+    it("names an item's rack from its rack keys", async () => {
+      expect(
+        await labelFor(lookupRow({ custom_fields: { rack_number: '22', rack_row: 'C' } })),
+      ).toBe('Rack 22-C');
+    });
+
+    it('names the crate when all of the stock is in a crate, not the rack it left', async () => {
+      expect(
+        await labelFor(lookupRow({ bin_location: '38-A' }), [
+          {
+            item_id: 'item-1',
+            quantity: 12,
+            locations: { name: 'Blue Shelf', kind: 'crate', warehouse_id: 'wh-1' },
+          },
+        ]),
+      ).toBe('Blue Shelf ×12');
+    });
+
+    it('keeps the rack text when that is all there is', async () => {
+      expect(await labelFor(lookupRow({ bin_location: ' 14-D ' }))).toBe('14-D');
+      expect(await labelFor(lookupRow({}))).toBeNull();
+    });
   });
 
   it('an exact barcode match is unambiguous and wins over a same-code sku-only row', async () => {

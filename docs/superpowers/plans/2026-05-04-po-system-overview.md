@@ -105,7 +105,7 @@ After each phase ships:
 
 ## "Done" criteria for the whole 5-phase project
 
-- [ ] Uploading PO-CVSII-001824.pdf produces a parsed preview with 12+ inventory lines and 1 TAX line correctly classified
+- [ ] Uploading a Staples-format PO PDF produces a parsed preview with 12+ inventory lines and 1 TAX line correctly classified
 - [ ] Approving the preview creates an `expected_inbound` PO; inventory unchanged
 - [ ] Receiving 6 of 10 ordered batteries increases stock by 6, leaves PO `partially_received` with 4 open
 - [ ] Posting the same receipt twice (same idempotency key) returns the original receipt; stock unchanged second time

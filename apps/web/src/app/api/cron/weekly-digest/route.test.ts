@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -68,6 +68,8 @@ vi.mock('@/server/services/digest', () => ({
 }));
 
 import { GET } from './route';
+import { env } from '@/lib/env';
+import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
 function buildRequest(authHeader?: string) {
   return new Request('https://test.local/api/cron/weekly-digest', {
@@ -532,6 +534,176 @@ describe('GET /api/cron/weekly-digest — overdue in the organization zone', () 
       }
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("GET /api/cron/weekly-digest — each organization's own date (small fixes slice 8)", () => {
+  // The subject was built ONCE per run, in the server's zone (UTC on Vercel):
+  // the Monday 14:00 UTC run is already Tuesday from UTC+10 east, so such an
+  // organization's digest arrived dated the day before. Now each
+  // organization's subject, HTML and text carry its own date, as of the run's
+  // start.
+  it("dates each organization's subject and text in that organization's zone, as of the run's start", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-12T14:00:00.000Z'));
+      const sydneyRow = {
+        ...recipientRow('user-b', 'b@harbour.test'),
+        organization_members: [
+          {
+            organization_id: 'org-2',
+            accepted_at: '2026-01-01T00:00:00Z',
+            organizations: { id: 'org-2', name: 'Harbour', timezone: 'Australia/Sydney' },
+          },
+        ],
+      };
+      const stub = makeSupabaseStub({
+        'user_profiles.select': { data: [recipientRow('user-a', 'a@acme.test'), sydneyRow], error: null },
+        'user_profiles.select.maybeSingle': { data: { email_digest_optin: true, disabled_at: null }, error: null },
+        'organization_members.select.maybeSingle': {
+          data: { user_id: 'whichever', accepted_at: '2026-01-01T00:00:00Z', role: 'owner' },
+          error: null,
+        },
+      });
+      adminHolder.client = stub.client;
+      const digest = await import('@/lib/email/es/families/digest');
+      vi.mocked(digest.weeklyDigestSubject).mockImplementation(
+        (_now?: Date, timeZone?: string | null) => `digest for ${timeZone}`,
+      );
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      const at = new Date('2026-10-12T14:00:00.000Z');
+      expect(vi.mocked(digest.weeklyDigestSubject).mock.calls).toEqual([
+        [at, 'America/Los_Angeles'],
+        [at, 'Australia/Sydney'],
+      ]);
+      const sent = sendEmailMock.mock.calls.map(([args]) => [args.to, args.subject]);
+      expect(sent).toEqual([
+        ['a@acme.test', 'digest for America/Los_Angeles'],
+        ['b@harbour.test', 'digest for Australia/Sydney'],
+      ]);
+      expect(digest.weeklyDigestText).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ orgName: 'Harbour', now: at, timeZone: 'Australia/Sydney' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * B15: each digest carries the recipient's own signed one-click link for the
+ * organization it is about, dated with the run's UTC day (it works for 90
+ * days), in List-Unsubscribe (with List-Unsubscribe-Post) and as the footer's
+ * and the text part's Unsubscribe. The signing value is a dull one under a
+ * neutral name (src/test/secret-shaped-fixtures.guard.test.ts); without one
+ * the digest keeps the settings page.
+ */
+describe('GET /api/cron/weekly-digest — one-click unsubscribe', () => {
+  // Monday 7 AM in Los Angeles; the run's UTC day is Oct 26.
+  const RUN_AT = new Date('2026-10-26T14:00:00.000Z');
+  const DIGEST_SIGNING_VALUE = 'digest-cron-' + 'v'.repeat(22);
+  const ORG_ID = '00000000-0000-4000-8000-00000000c0c0';
+  const USER_ID = '00000000-0000-4000-8000-0000000000a1';
+  const SETTINGS = 'https://stockpilotusa.com/dashboard/settings/notifications';
+  const signable = env as Record<string, string | undefined>;
+
+  function stubOneRecipient() {
+    const row = recipientRow(USER_ID, 'a@acme.test');
+    row.organization_members[0]!.organization_id = ORG_ID;
+    row.organization_members[0]!.organizations = {
+      id: ORG_ID,
+      name: 'Acme',
+      timezone: 'America/Los_Angeles',
+    };
+    return makeSupabaseStub({
+      'user_profiles.select': { data: [row], error: null },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: USER_ID, accepted_at: '2026-01-01T00:00:00Z', role: 'staff' },
+        error: null,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(RUN_AT);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    delete signable.UNSUBSCRIBE_SECRET;
+  });
+
+  it("names the recipient and the digest's organization, dated the run's day, with one-click", async () => {
+    signable.UNSUBSCRIBE_SECRET = DIGEST_SIGNING_VALUE;
+    adminHolder.client = stubOneRecipient().client;
+    const digest = await import('@/lib/email/es/families/digest');
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const link = mintMemberUnsubscribeToken(
+      { userId: USER_ID, organizationId: ORG_ID, kind: 'weekly_digest' },
+      RUN_AT,
+    );
+    expect(link).toContain(`.${ORG_ID}.20261026.`);
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0]![0].headers).toEqual({
+      'List-Unsubscribe': `<${url}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    });
+    expect(digest.renderWeeklyDigestHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ settingsUrl: SETTINGS, unsubscribeUrl: url }),
+    );
+    expect(digest.weeklyDigestText).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ unsubscribeUrl: url }),
+    );
+  });
+
+  it('keeps the settings page, with no one-click header, when no link can be signed', async () => {
+    adminHolder.client = stubOneRecipient().client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(sendEmailMock.mock.calls[0]![0].headers).toEqual({
+      'List-Unsubscribe': `<${SETTINGS}>`,
+    });
+  });
+
+  it("gives the HTML and the text part the one-click link and the organization's date together", async () => {
+    // Merged with small fixes slice 8: both parts take the run's moment and
+    // the organization's zone with the recipient's link, so neither is lost.
+    signable.UNSUBSCRIBE_SECRET = DIGEST_SIGNING_VALUE;
+    adminHolder.client = stubOneRecipient().client;
+    const digest = await import('@/lib/email/es/families/digest');
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const link = mintMemberUnsubscribeToken(
+      { userId: USER_ID, organizationId: ORG_ID, kind: 'weekly_digest' },
+      RUN_AT,
+    );
+    const url = `https://stockpilotusa.com/unsubscribe?m=${link}`;
+    expect(digest.weeklyDigestSubject).toHaveBeenCalledWith(RUN_AT, 'America/Los_Angeles');
+    for (const rendered of [digest.renderWeeklyDigestHtml, digest.weeklyDigestText]) {
+      expect(rendered).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          settingsUrl: SETTINGS,
+          unsubscribeUrl: url,
+          now: RUN_AT,
+          timeZone: 'America/Los_Angeles',
+        }),
+      );
     }
   });
 });

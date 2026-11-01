@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -37,7 +37,7 @@ const SEVERITY_DOT: Record<InsightSeverity, string> = {
 export default async function InsightsPage() {
   const access = await checkModuleAccess('ai');
   if (!access.enabled) {
-    return <ModuleNotEnabled moduleId="ai" canManage={access.canManage} />;
+    return <ModuleUnavailable moduleId="ai" access={access} />;
   }
   const ctx = await requireOrgContext();
   if (!can(ctx, 'items:update')) redirect('/dashboard');

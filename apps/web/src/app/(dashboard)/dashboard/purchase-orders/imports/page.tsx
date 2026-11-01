@@ -6,7 +6,7 @@ import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { effectiveNavLabel } from '@/lib/nav-labels';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PoImportSearch } from '@/components/po-imports/po-import-search';
 import { PoImportStatusBadge } from '@/components/po-imports/po-import-status-badge';
 import { FilterBar } from '@/components/patterns/filter-bar';
@@ -63,7 +63,7 @@ export default async function PoImportsPage({
 }) {
   const moduleAccess = await checkModuleAccess('po_imports');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="po_imports" access={moduleAccess} />;
   }
 
   const params = await searchParams;

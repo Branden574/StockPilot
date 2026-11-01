@@ -63,6 +63,19 @@ describe('ItemCard stock label', () => {
   });
 });
 
+describe('ItemCard photo', () => {
+  // The redesign (#369) drew the photo whole on a white backing
+  // (object-contain bg-white), so a tall photo showed white bars down both
+  // sides. It fills its box again, as before the redesign.
+  it('fills its box, with no white backing', () => {
+    const { container } = renderCard(item({ imageUrl: 'https://example.org/photo.jpg' }));
+    const img = container.querySelector('img')!;
+    expect(img).toBeTruthy();
+    expect(img.className).toContain('object-cover');
+    expect(img.className).not.toMatch(/object-contain|bg-white/);
+  });
+});
+
 describe('CatalogGrid with no match', () => {
   it('is the shared no-match panel with its words and Clear filters', () => {
     const onClear = vi.fn();

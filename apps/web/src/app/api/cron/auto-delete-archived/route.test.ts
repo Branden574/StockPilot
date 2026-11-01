@@ -81,4 +81,15 @@ describe('GET /api/cron/auto-delete-archived', () => {
     // Counts only: no ids or org ids in the line.
     expect(String(lines[0]?.[1])).not.toMatch(/o1|o2|"a"|"b"/);
   });
+
+  it("deletes as the system: the context says so, so its delete rows are not the owner's own", async () => {
+    // B9: the owner's id is only borrowed (service code needs a user). The
+    // purge hands this context to auditMany, which stamps is_system from it.
+    purge.mockResolvedValue({ deleted: 0, ids: [], truncated: false, failed: 0, skipped: 0 });
+    await GET(req() as unknown as Request);
+    expect(purge).toHaveBeenCalledTimes(2);
+    for (const [ctx] of purge.mock.calls as Array<[Record<string, unknown>]>) {
+      expect(ctx).toMatchObject({ userId: 'u1', isSystem: true });
+    }
+  });
 });

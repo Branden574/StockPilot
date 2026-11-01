@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
@@ -49,8 +50,10 @@ interface BulkResult {
  * function ceiling.
  *
  * ISBN collisions with existing items are detected via the service's
- * pre-flight barcode lookup and counted as `skipped`, matching the prior
- * per-row "conflict = skip" semantic.
+ * pre-flight lookup and counted as `skipped`, matching the prior per-row
+ * "conflict = skip" semantic. A book matches in either ISBN form (ISBN-10 or
+ * ISBN-13), and a book listed twice in one import (or in both forms) is
+ * created once.
  */
 export async function bulkCreateBooksAction(
   input: BulkBookInput,
@@ -115,6 +118,7 @@ export async function bulkCreateBooksAction(
       errors: result.errors.map((e) => ({ isbn: e.barcode, reason: e.reason })),
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

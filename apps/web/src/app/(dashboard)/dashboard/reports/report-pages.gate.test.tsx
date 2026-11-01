@@ -17,10 +17,24 @@ import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
  */
 
 const ctxBox = vi.hoisted(() => ({ ctx: null as unknown }));
+// What the page gate says of a module the context does not hold: off, or
+// (checkFailed) its state could not be read. Read from the same
+// request-cached module set as the context, so it costs no read here.
+const gateBox = vi.hoisted(() => ({
+  access: { enabled: false, canManage: false } as {
+    enabled: boolean;
+    canManage: boolean;
+    checkFailed?: boolean;
+  },
+}));
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => gateBox.access),
+}));
 vi.mock('@/server/services/context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/context')>();
   return { ...actual, withContext: vi.fn(async () => ctxBox.ctx) };
 });
+const { routerRefresh } = vi.hoisted(() => ({ routerRefresh: vi.fn() }));
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
@@ -28,7 +42,7 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: routerRefresh }),
   usePathname: () => '/dashboard/reports',
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -118,6 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   reads.calls = [];
   ctxBox.ctx = ctx();
+  gateBox.access = { enabled: false, canManage: false };
 });
 
 describe('report pages: reports:read is checked by the page itself', () => {
@@ -150,6 +165,33 @@ describe('report pages: the modules each report reads', () => {
       const el = (await Page(props)) as React.ReactElement;
       render(el);
       expect(screen.getByText(/isn.t enabled/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(reads.calls).toEqual([]);
+    },
+  );
+
+  // A module set that could not be read is not "off": the report says it
+  // could not check, with Try again, and is still closed. It used to show
+  // the module-off card, which sent an admin to switch on a module that was
+  // on.
+  it.each(PAGES.filter(([, , m]) => m.length > 0))(
+    '%s: its module state unread says it could not check, with Try again, nothing read',
+    async (_s, Page, modules) => {
+      ctxBox.ctx = ctx({
+        role: 'admin',
+        enabledModules: new Set<ModuleId>(
+          [...DEFAULT_MODULE_IDS, 'lot_serial' as ModuleId].filter((m) => m !== modules[0]),
+        ),
+      });
+      gateBox.access = { enabled: false, canManage: true, checkFailed: true };
+      render((await Page(props)) as React.ReactElement);
+      expect(
+        screen.getByRole('heading', { level: 1, name: /^We couldn.t check whether .+ is on$/ }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/isn.t enabled/)).toBeNull();
+      expect(screen.queryByRole('link', { name: /Enable in Settings/ })).toBeNull();
+      screen.getByRole('button', { name: 'Try again' }).click();
+      expect(routerRefresh).toHaveBeenCalledTimes(1);
       expect(reads.calls).toEqual([]);
     },
   );

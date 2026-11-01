@@ -1,6 +1,7 @@
 'use server';
 import { z } from 'zod';
 import { err, ok, type ActionResult } from '@stockpilot/core';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { DeliveryTrackingService } from '@/server/services/delivery-tracking';
 import { ServiceError } from '@/server/services/context';
 
@@ -21,6 +22,7 @@ export async function shareDeliveryLocationAction(input: z.input<typeof schema>)
     await svc.shareLocation(orderId, point);
     return ok({ ok: true });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

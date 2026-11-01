@@ -7,6 +7,7 @@ import { COUNT_THIS_ITEM_LABEL, recountUnavailableCopy, type RecountUnavailableR
 
 import { RecountDialog } from '@/components/exceptions/recount-dialog';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
 import { listItemRecountTargetsAction } from '@/server/actions/exceptions';
 
 type Targets =
@@ -44,7 +45,9 @@ export function CountThisItemButton({ itemId, timeZone }: { itemId: string; time
     let res: Awaited<ReturnType<typeof listItemRecountTargetsAction>> | null;
     try {
       res = await listItemRecountTargetsAction(itemId);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // The action request itself failed (a dropped connection, a deploy
       // that no longer has this action): the same as a failed read, never a
       // dialog stuck on "Checking...".

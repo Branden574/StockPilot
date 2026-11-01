@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, planLimitBudget, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -219,6 +220,7 @@ export async function prepareItemImportAction(
       duplicate,
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -559,6 +561,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

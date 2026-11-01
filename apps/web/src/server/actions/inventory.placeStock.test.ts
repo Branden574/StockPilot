@@ -367,3 +367,101 @@ describe('placeStockAction', () => {
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// B38: stock in the organization-level Staging bucket (0194, a location with
+// no warehouse) is placed through THIS action, unchanged. The action never
+// reads the source's warehouse: the destination is verified in the caller's
+// org (and, for a new rack or crate, its warehouse), and transfer_stock rules
+// on the move (0365: below manager, a source with no warehouse is writable and
+// the destination's warehouse must be the caller's). These pin that the page's
+// new warehouse choice adds no new write path.
+// ---------------------------------------------------------------------------
+
+describe('placeStockAction: out of the organization-level bucket (B38)', () => {
+  const ORG_STAGING = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+
+  it('moves the units from the organization bucket into the rack picked in the chosen warehouse', async () => {
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: ORG_STAGING,
+      quantity: 6,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(mockTransferStock).toHaveBeenCalledWith({
+      itemId: ITEM_ID,
+      fromLocationId: ORG_STAGING,
+      toLocationId: EXISTING_LOC,
+      quantity: 6,
+      notes: undefined,
+    });
+    // A put-away like any other: the rack label follows the stock.
+    expect(mockStampPlacementBin).toHaveBeenCalledOnce();
+  });
+
+  it('a new rack for it is resolved and created in the warehouse the person chose', async () => {
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: ORG_STAGING,
+      quantity: 6,
+      destination: { newRack: { warehouseId: WAREHOUSE_ID, rackNumber: '14', rackRow: 'D' } },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockFindRackOrCrate).toHaveBeenCalledOnce();
+    expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
+    expect(
+      (mockFindOrCreateRackOrCrate.mock.calls[0] as unknown as [Record<string, unknown>])[0],
+    ).toMatchObject({
+      kind: 'rack',
+      warehouseId: WAREHOUSE_ID,
+      name: '14-D',
+    });
+    expect(mockTransferStock).toHaveBeenCalledWith(
+      expect.objectContaining({ fromLocationId: ORG_STAGING, toLocationId: 'new-loc-99' }),
+    );
+  });
+
+  // The warehouse is read under the caller's own access (warehouses_select:
+  // a manager, or someone assigned to it), so no row is also what a staff
+  // member gets for a warehouse they are not assigned to. On the web that is
+  // where their new rack in another warehouse stops, before the mint's check.
+  it("a chosen warehouse the caller cannot read (another organization's, or for staff one they are not assigned to) is refused before anything is resolved or moved", async () => {
+    installContext({ warehouseRow: null });
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: ORG_STAGING,
+      quantity: 6,
+      destination: { newRack: { warehouseId: WAREHOUSE_ID, rackNumber: '14' } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.error.message).toMatch(/warehouse not found in your organization/i);
+    expect(mockFindRackOrCrate).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it("the mint's warehouse refusal reaches the person as a sentence, and nothing moves", async () => {
+    mockFindOrCreateRackOrCrate.mockRejectedValueOnce(
+      new ServiceError('forbidden', 'You can only move stock between warehouses you work in.'),
+    );
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: ORG_STAGING,
+      quantity: 6,
+      destination: { newRack: { warehouseId: WAREHOUSE_ID, rackNumber: '14' } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.message).toBe('You can only move stock between warehouses you work in.');
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+});

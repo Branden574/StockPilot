@@ -119,13 +119,24 @@ export function LocationsManager({
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<LocationRow | null>(null);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
-  // The stock guard's refusal, held so the operator can READ what is on the
-  // rack before deciding. Cleared whenever the dialog closes or a new target is
-  // chosen — a stale message next to a different location's name is worse than
-  // none, because the whole point is that they act on the specific number.
-  const [archiveStockBlock, setArchiveStockBlock] = React.useState<string | null>(null);
+  // Why the last archive try was refused, shown inside the confirm as its
+  // role="alert" line: a dialog's description is not read again when it
+  // changes, and a toast sits behind an open dialog (L112). `holdsStock` marks
+  // the stock guard's refusal, held so the operator can READ what is on the
+  // rack before deciding: the confirm becomes Archive anyway and the next press
+  // acknowledges the stock. Cleared on open, on close and on each try, so the
+  // acknowledgement is only sent while the guard's words for THIS location are
+  // on screen — a stale message next to a different location's name is worse
+  // than none, because the whole point is that they act on the specific number.
+  const [archiveRefusal, setArchiveRefusal] = React.useState<{
+    message: string;
+    holdsStock: boolean;
+  } | null>(null);
   const [restoreTarget, setRestoreTarget] = React.useState<LocationRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  // Why the last restore try was refused, inside its confirm for the same
+  // reason. Cleared on open, on close and on each try.
+  const [restoreError, setRestoreError] = React.useState<string | null>(null);
   const [tab, setTab] = React.useState<LocationGroup>('site');
 
   // Partition the loaded rows into Sites / Racks & shelves / System once, so
@@ -149,38 +160,43 @@ export function LocationsManager({
   }
 
   /**
-   * `acknowledgeStock` is only ever true on the SECOND press, after the guard
-   * has refused and its message is on screen. Never sent optimistically: the
-   * override's entire justification is that a human read the units first.
+   * `acknowledgeStock` is only ever true on a press made while the guard's
+   * refusal is on screen. Never sent optimistically: the override's entire
+   * justification is that a human read the units first.
    */
-  async function confirmArchive(acknowledgeStock = false) {
+  async function confirmArchive() {
     if (!archiveTarget) return;
+    const acknowledgeStock = archiveRefusal?.holdsStock === true;
+    setArchiveRefusal(null);
     setArchiveBusy(true);
     const res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
     setArchiveBusy(false);
     if (!res.ok) {
-      // A stock refusal is rendered INSIDE the dialog, persistently, because it
-      // is the thing being decided — a toast auto-dismisses outside the modal
-      // and takes the quantities with it. Anything else stays a toast.
+      // The guard's own words, verbatim: they name the units and the items,
+      // which is precisely what the decision turns on. Not a toast as well,
+      // because it is a question, not a failure.
       if (res.error.details?.locationHoldsStock === true) {
-        setArchiveStockBlock(res.error.message);
+        setArchiveRefusal({ message: res.error.message, holdsStock: true });
         return;
       }
+      setArchiveRefusal({ message: res.error.message, holdsStock: false });
       toast.error(res.error.message);
       return;
     }
     toast.success(`"${archiveTarget.name}" archived.`);
     setArchiveTarget(null);
-    setArchiveStockBlock(null);
+    setArchiveRefusal(null);
     router.refresh();
   }
 
   async function confirmRestore() {
     if (!restoreTarget) return;
+    setRestoreError(null);
     setRestoreBusy(true);
     const res = await restoreLocationAction(restoreTarget.id);
     setRestoreBusy(false);
     if (!res.ok) {
+      setRestoreError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -292,7 +308,10 @@ export function LocationsManager({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => setRestoreTarget(row)}
+                                onClick={() => {
+                                  setRestoreError(null);
+                                  setRestoreTarget(row);
+                                }}
                               >
                                 <RotateCcw className="h-3.5 w-3.5" /> Restore
                               </Button>
@@ -313,7 +332,7 @@ export function LocationsManager({
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => {
-                                    setArchiveStockBlock(null);
+                                    setArchiveRefusal(null);
                                     setArchiveTarget(row);
                                   }}
                                   aria-label={`Archive ${row.name}`}
@@ -340,38 +359,37 @@ export function LocationsManager({
         onOpenChange={(v) => {
           if (!v) {
             setArchiveTarget(null);
-            setArchiveStockBlock(null);
+            setArchiveRefusal(null);
           }
         }}
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive location?'}
         description={
-          archiveStockBlock ? (
-            // The guard's own words, verbatim — they name the units and the
-            // items, which is precisely what the decision turns on.
-            <span className="text-destructive">{archiveStockBlock}</span>
-          ) : (
-            <>
-              The location is hidden from pick lists and item forms. Items currently assigned to it
-              keep their assignment until you move them. You can restore it from the{' '}
-              <strong>Archived view</strong>.
-            </>
-          )
+          <>
+            The location is hidden from pick lists and item forms. Items currently assigned to it
+            keep their assignment until you move them. You can restore it from the{' '}
+            <strong>Archived view</strong>.
+          </>
         }
-        confirmLabel={archiveStockBlock ? 'Archive anyway' : 'Archive'}
+        confirmLabel={archiveRefusal?.holdsStock ? 'Archive anyway' : 'Archive'}
         pending={archiveBusy}
-        onConfirm={() => confirmArchive(archiveStockBlock !== null)}
+        error={archiveRefusal?.message ?? null}
+        onConfirm={confirmArchive}
       />
 
       <DestructiveConfirm
         open={restoreTarget !== null}
         onOpenChange={(v) => {
-          if (!v) setRestoreTarget(null);
+          if (!v) {
+            setRestoreTarget(null);
+            setRestoreError(null);
+          }
         }}
         title={restoreTarget ? `Restore "${restoreTarget.name}"?` : 'Restore location?'}
         description="This brings the location back into the active list."
         confirmLabel="Restore"
         tone="primary"
         pending={restoreBusy}
+        error={restoreError}
         onConfirm={confirmRestore}
       />
     </>

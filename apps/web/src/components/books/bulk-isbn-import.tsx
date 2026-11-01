@@ -30,6 +30,8 @@ import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn } from '@/lib/utils';
 import { bulkCreateBooksAction } from '@/server/actions/books-bulk-import';
 
+import { isbnSearchKeys } from '@stockpilot/core';
+
 interface Resolved {
   isbn: string;
   status: 'pending' | 'looking_up' | 'ready' | 'failed';
@@ -160,14 +162,18 @@ export function BulkIsbnImport({
       .split(/[\s,;\n\r]+/)
       .map((s) => s.replace(/[^0-9Xx]/g, '').toUpperCase())
       .filter((s) => s.length === 10 || s.length === 13);
-    // Dedupe, preserve order.
+    // Dedupe by BOOK, preserve order: an ISBN-10 and its ISBN-13 are one book
+    // (isbnSearchKeys gives both forms of a checksum-valid ISBN), so a list
+    // carrying both makes one row and one lookup, under the form listed first.
+    // As two rows they were looked up twice and imported as two records. The
+    // server applies the same rule (InventoryService.bulkCreate).
     const seen = new Set<string>();
     const out: string[] = [];
     for (const v of lines) {
-      if (!seen.has(v)) {
-        seen.add(v);
-        out.push(v);
-      }
+      const keys = isbnSearchKeys(v) ?? [v];
+      if (keys.some((k) => seen.has(k))) continue;
+      for (const k of keys) seen.add(k);
+      out.push(v);
     }
     return out;
   }

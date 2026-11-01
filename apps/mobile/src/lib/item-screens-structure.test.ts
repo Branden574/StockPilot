@@ -15,6 +15,12 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import {
+  ITEM_TAB_WIDEST_LABEL_EM,
+  itemTabLabelRoom,
+  itemTabLabelSize,
+  itemTabStackedLabelRoom,
+} from './dynamic-type-layout';
 import { SERIAL_STATUSES } from './serials';
 import { TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
@@ -1314,19 +1320,29 @@ describe('Dynamic Type policy unchanged', () => {
     const code = flat(codeOnly(sourceOf(ITEM)));
     expect(code).toContain('const TAB_CAP = capTo(13, TYPE_CEILING.control);');
     expect(code).toContain('maxFontSizeMultiplier={TAB_CAP}');
-    // A label that outgrows its segment shrinks instead of being cut.
+    // Re-pinned by docket B10 (was `numberOfLines={1} maxFontSizeMultiplier=
+    // {TAB_CAP} adjustsFontSizeToFit minimumFontScale={TAB_MIN_FONT_SCALE}`):
+    // a label is never shrunk below the size the user chose (the Dynamic Type
+    // policy forbids adjustsFontSizeToFit). A label wider than its segment
+    // stacks the tabs instead (the next two tests).
     expect(code).toContain(
-      'numberOfLines={1} maxFontSizeMultiplier={TAB_CAP} adjustsFontSizeToFit minimumFontScale={TAB_MIN_FONT_SCALE}',
+      'numberOfLines={1} maxFontSizeMultiplier={TAB_CAP} color={active ? c.ink : c.ink3}',
     );
+    expect(code).not.toContain('adjustsFontSizeToFit');
+    expect(code).not.toContain('minimumFontScale');
+    expect(code).not.toContain('TAB_MIN_FONT_SCALE');
     expect(code).toContain('maxFontSizeMultiplier={capTo(17, TYPE_CEILING.control)}');
     expect(code).toContain('maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}');
   });
 
-  // The segmented track takes about 23pt from each column. Measured with
-  // fontkit on the bundled InterTight_600SemiBold.ttf: Movements advances
-  // 117.3pt at 22pt (the cap), without the negative tracking that narrows it.
-  it('the widest tab label fits the narrowest segment at its shrink floor', () => {
-    const MOVEMENTS_SEMIBOLD_AT_CAP = 117.3;
+  // The segmented track takes about 23pt from each column. Re-pinned by
+  // docket B10 (was: Movements fits the narrowest segment at the shrink floor
+  // TAB_MIN_FONT_SCALE): the stacking rule (shouldStackItemTabs,
+  // dynamic-type-layout.test.ts) measures the segment these styles draw, at
+  // the label's cap. Measured with fontkit on the bundled
+  // InterTight_600SemiBold.ttf: Movements advances 117.3pt at 22pt (the cap),
+  // without the negative tracking that narrows it.
+  it('the stacking rule measures the segments these styles draw, at the label cap', () => {
     const num = (block: string, key: string) => {
       const m = new RegExp(`(?:^|[ ,])${key}: (\\d+(?:\\.\\d+)?),`).exec(block);
       expect(m, `${key} in ${block}`).not.toBeNull();
@@ -1334,22 +1350,46 @@ describe('Dynamic Type policy unchanged', () => {
     };
     const row = styleBlock(ITEM, 'tabsRow');
     const tab = styleBlock(ITEM, 'tab');
+    const trackSide = num(row, 'marginHorizontal') + num(row, 'borderWidth') + num(row, 'padding');
+    const tabSide = num(tab, 'borderWidth') + num(tab, 'paddingHorizontal');
     const segment = (screen: number) =>
-      (screen -
-        2 * num(row, 'marginHorizontal') -
-        2 * num(row, 'borderWidth') -
-        2 * num(row, 'padding') -
-        2 * num(row, 'gap')) /
-        3 -
-      2 * num(tab, 'borderWidth') -
-      2 * num(tab, 'paddingHorizontal');
+      (screen - 2 * trackSide - 2 * num(row, 'gap')) / 3 - 2 * tabSide;
+    const stackedLine = (screen: number) => screen - 2 * trackSide - 2 * tabSide;
+    for (const screen of [320, 375, 390, 393, 402, 430, 440, 744, 1024]) {
+      expect(itemTabLabelRoom(screen), `${screen}pt`).toBeCloseTo(segment(screen), 10);
+      expect(itemTabStackedLabelRoom(screen), `${screen}pt`).toBeCloseTo(stackedLine(screen), 10);
+    }
     expect(segment(320)).toBeCloseTo(70, 5);
-    const floor = /const TAB_MIN_FONT_SCALE = (\d+(?:\.\d+)?);/.exec(codeOnly(sourceOf(ITEM)));
-    expect(floor).not.toBeNull();
-    // A 320pt zoomed screen at the cap, and at the default 13pt with no shrink.
-    expect(Number(floor![1]) * MOVEMENTS_SEMIBOLD_AT_CAP).toBeLessThanOrEqual(segment(320));
-    expect((MOVEMENTS_SEMIBOLD_AT_CAP * 13) / 22).toBeLessThanOrEqual(segment(320));
+    // The rule's label cap is the screen's TAB_CAP.
     expect(capTo(13, TYPE_CEILING.control) * 13).toBe(22);
+    expect(itemTabLabelSize(capTo(13, TYPE_CEILING.control))).toBeCloseTo(22, 10);
+    expect(itemTabLabelSize(10)).toBeCloseTo(22, 10);
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 22).toBeCloseTo(117.3, 1);
+    // The default 13pt fits a 320pt zoomed screen side by side; stacked, the
+    // ceiling fits it with room.
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 13).toBeLessThanOrEqual(segment(320));
+    expect(ITEM_TAB_WIDEST_LABEL_EM * 22).toBeLessThanOrEqual(stackedLine(320));
+  });
+
+  // Mutations caught: the stacking rule left unread (the tabs cut or shrunk
+  // again), read with a stale scale, or a stacked tab still flex: 1 in a
+  // column (each tab would share a height the track does not have).
+  it('the tabs stack, one per line, when the widest label is wider than its segment', () => {
+    const screen = flat(codeOnly(functionNamed(treeOf(ITEM), 'ItemDetail').getText(treeOf(ITEM))));
+    expect(screen).toContain('const { width: windowWidth, fontScale } = useWindowDimensions();');
+    expect(screen).toContain('const stackTabs = shouldStackItemTabs(windowWidth, fontScale);');
+    expect(screen).toContain(
+      'style={[ styles.tabsRow, stackTabs ? styles.tabsStacked : null, { backgroundColor: c.sunk, borderColor: c.hair }, ]}',
+    );
+    expect(screen.split('stacked={stackTabs}').length - 1).toBe(3);
+    const button = flat(codeOnly(functionNamed(treeOf(ITEM), 'TabButton').getText(treeOf(ITEM))));
+    expect(button).toContain('stacked: boolean;');
+    expect(button).toContain('styles.tab, stacked ? styles.tabStacked : null,');
+    expect(styleBlock(ITEM, 'tabsStacked')).toBe(" flexDirection: 'column', ");
+    expect(styleBlock(ITEM, 'tabStacked')).toBe(' flex: 0, ');
+    // A stacked tab keeps its 44pt and its centred label.
+    expect(styleBlock(ITEM, 'tab')).toContain('minHeight: MIN_TAP');
+    expect(styleBlock(ITEM, 'tab')).toContain("alignItems: 'center',");
   });
 
   // A fixed height clipped the typed text: every typed box grows with it.
@@ -1369,6 +1409,129 @@ describe('Dynamic Type policy unchanged', () => {
     expect(flat(codeOnly(sourceOf(NEW_ITEM)))).toContain(
       "flexDirection: stacked ? 'column' : 'row'",
     );
+  });
+});
+
+/**
+ * A live text-size change remounts the item screen's hero, the words of its
+ * photo tile (Replace, or Tap to add photo on an item with no photo) and its
+ * tab track (docket B60). With an item open, the simulator walk of 2026-10-31
+ * saw the tab labels cut ('Over…', 'Movem…', 'Acti…'), the name's descender,
+ * 'REPLAC' and, at the accessibility sizes, the SKU and category lines
+ * clipped, until a tab changed state or the item was opened again. It is the
+ * stale measurement B10 fixed in the shared list chrome (fontScaleKey,
+ * primitives-structure.test.ts); since B10 no tab label shrinks to fit, so a
+ * stale segment cuts it. Tap to add photo is the same Mono as Replace (11pt,
+ * the same tracking, upper case, uncapped), in the same tile.
+ */
+describe("the item screen measures its header, its photo tile's words and its tabs again at a new text size", () => {
+  const inScreen = (sf: ts.SourceFile) => functionNamed(sf, 'ItemDetail');
+
+  it('turns the text size the tabs already read into a key', () => {
+    expect(flat(codeOnly(sourceOf(ITEM)))).toMatch(
+      /import \{[^}]*\bfontScaleKey\b[^}]*\} from '@\/lib\/dynamic-type-layout';/,
+    );
+    const screen = flat(codeOnly(inScreen(treeOf(ITEM)).getText(treeOf(ITEM))));
+    expect(screen).toContain('const { width: windowWidth, fontScale } = useWindowDimensions();');
+    expect(screen).toContain('const scaleKey = fontScaleKey(fontScale);');
+  });
+
+  // Mutations caught: any of the three keys dropped, or the chip's key moved
+  // to the photo above it.
+  it('the hero, Replace and the tab track are keyed on it', () => {
+    const one = (match: (el: JsxNode, sf: ts.SourceFile) => boolean) => {
+      const found = elements(ITEM, match, inScreen);
+      expect(found).toHaveLength(1);
+      return attrText(found[0]!.el, 'key', found[0]!.sf);
+    };
+    expect(one((el, sf) => attrText(el, 'style', sf) === 'styles.hero')).toBe('`hero-${scaleKey}`');
+    expect(one((el, sf) => attrText(el, 'accessibilityLabel', sf) === 'Replace photo')).toBe(
+      '`replace-${scaleKey}`',
+    );
+    expect(one((el, sf) => attrText(el, 'accessibilityRole', sf) === 'tablist')).toBe(
+      '`tabs-${scaleKey}`',
+    );
+  });
+
+  // Review of B60 (2026-10-31): on an item with no photo the tile shows Tap to
+  // add photo, the same Mono as Replace, which the walk saw cut ('REPLAC').
+  // Its View holds only the camera icon and those words: no image to load
+  // again. Mutations caught: the key dropped, or moved up to the tile (the
+  // photo would load again on every text-size change).
+  it("with no photo, the tile's Tap to add photo is keyed on it too", () => {
+    const words = elements(
+      ITEM,
+      (el, sf) =>
+        tagOf(el, sf) === 'View' &&
+        jsxChildren(el).some(
+          (ch) => tagOf(ch, sf) === 'Mono' && textOf(ch, sf) === 'Tap to add photo',
+        ),
+      inScreen,
+    );
+    expect(words).toHaveLength(1);
+    expect(attrText(words[0]!.el, 'key', words[0]!.sf), where(words[0]!)).toBe(
+      '`add-photo-${scaleKey}`',
+    );
+    expect(jsxChildren(words[0]!.el).map((ch) => tagOf(ch, words[0]!.sf))).toEqual([
+      'Camera',
+      'Mono',
+    ]);
+  });
+
+  // A remount resets whatever a subtree holds. These four hold words, badges
+  // and buttons whose state lives in ItemDetail; the scroll view (its place,
+  // pull to refresh), the photo (it would load again), the tab contents (the
+  // serials, a movement's note sheet, the count card's retry) and the sheets
+  // keep theirs. Mutations caught: the key moved to the ScrollView, the photo
+  // or a tab's contents, or a stateful element moved into a keyed subtree.
+  it('nothing keyed on it holds state a remount would lose', () => {
+    const keyed = elements(
+      ITEM,
+      (el, sf) => (attrText(el, 'key', sf) ?? '').includes('scaleKey'),
+      inScreen,
+    );
+    expect(keyed.map((k) => attrText(k.el, 'key', k.sf))).toEqual([
+      '`hero-${scaleKey}`',
+      '`add-photo-${scaleKey}`',
+      '`replace-${scaleKey}`',
+      '`tabs-${scaleKey}`',
+    ]);
+    const stateless = new Set([
+      'View',
+      'Mono',
+      'Display',
+      'Body',
+      'Pill',
+      'Button',
+      'ActivityIndicator',
+      'RotateCcw',
+      'Pressable',
+      'Camera',
+      'TabButton',
+    ]);
+    for (const k of keyed) {
+      walkJsx(k.el, (el) => {
+        expect(stateless.has(tagOf(el, k.sf)), `${where(k)} holds <${tagOf(el, k.sf)}>`).toBe(true);
+      });
+    }
+    // TabButton and the shared parts it and the hero draw keep no state.
+    const hooks = /\b(useState|useReducer|useRef|useEffect|useLayoutEffect)\b/;
+    expect(functionNamed(treeOf(ITEM), 'TabButton').getText(treeOf(ITEM))).not.toMatch(hooks);
+    for (const part of ['button', 'pill', 'text']) {
+      expect(sourceOf(`src/components/ui/${part}.tsx`), part).not.toMatch(hooks);
+    }
+    for (const tag of ['ScrollView', 'CachedImage']) {
+      const found = elements(ITEM, (el, sf) => tagOf(el, sf) === tag, inScreen);
+      expect(found.length, tag).toBeGreaterThan(0);
+      for (const f of found) expect(attrText(f.el, 'key', f.sf), where(f)).toBeUndefined();
+    }
+    const roots = elements(
+      ITEM,
+      (el, sf) => /^\[\s*styles\.root,/.test(attrText(el, 'style', sf) ?? ''),
+      inScreen,
+    );
+    expect(roots.length).toBeGreaterThan(0);
+    for (const r of roots) expect(attrText(r.el, 'key', r.sf), where(r)).toBeUndefined();
   });
 });
 

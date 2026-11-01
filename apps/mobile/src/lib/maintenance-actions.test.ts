@@ -184,7 +184,7 @@ describe('resolveNoteHelperText', () => {
 describe('resolveNoteAuthorName', () => {
   const members = [
     { userId: 'u-1', name: 'Dana Keeler' },
-    { userId: 'u-2', name: 'Andrew Rosas' },
+    { userId: 'u-2', name: 'Jordan Stone' },
   ];
 
   it('resolves a known author to their display name', () => {
@@ -248,7 +248,6 @@ describe('exported copy — forbidden vocabulary sweep (§GC-4)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
     'Ticket closed',
@@ -302,6 +301,8 @@ describe('exported copy — forbidden vocabulary sweep (§GC-4)', () => {
       for (const banned of FORBIDDEN) {
         expect(text).not.toContain(banned);
       }
+      // A named person notified, whatever the name (`<Name> notified`).
+      expect(text).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     }
   });
 

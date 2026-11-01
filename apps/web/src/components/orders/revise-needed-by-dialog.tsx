@@ -47,6 +47,7 @@ import {
   type NeededByChangeView,
 } from '@/lib/orders/needed-by-change';
 import { openNeededByChange, registerNeededByChangeOpener } from '@/lib/orders/needed-by-change-opener';
+import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import { reviseOrderNeededByAction } from '@/server/actions/order-requests';
 
@@ -253,7 +254,9 @@ export function ReviseNeededByDialog({
         expectedNeededBy: neededByExpectedToSend(seen, live.neededBy),
         reason,
       });
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       res = null;
     }
     setSaving(false);

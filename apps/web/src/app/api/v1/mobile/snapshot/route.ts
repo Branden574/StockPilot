@@ -35,19 +35,10 @@ function dbError(
       hint: err.hint ?? null,
     },
   });
-  return NextResponse.json(
-    {
-      error: 'internal_error',
-      query: tag,
-      // Include the supabase error message in the body too — this
-      // endpoint is only callable by authenticated org members so
-      // the message isn't leaking to an outside attacker, and it
-      // turns a 60s "something's wrong" loop into a 60s "exactly
-      // this query is broken" loop.
-      detail: err.message ?? null,
-    },
-    { status: 500 },
-  );
+  // The query's name and nothing more. The body used to carry the database's
+  // own text as `detail` (table, column and policy names, S16); the phone
+  // never read it, and the report above has it.
+  return NextResponse.json({ error: 'internal_error', query: tag }, { status: 500 });
 }
 
 /**

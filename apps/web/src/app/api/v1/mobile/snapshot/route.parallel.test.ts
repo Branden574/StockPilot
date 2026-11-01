@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -462,6 +463,21 @@ describe('rate limit and authentication still deny', () => {
     expect(getWarehouseAccess).not.toHaveBeenCalled();
     expect(queries).toHaveLength(0);
   });
+
+  it('answers 500, never 401 or 403, and reads nothing when the permission set could not be read', async () => {
+    // Docket S19: the phone keeps its cache and its last good permission set
+    // on any non-2xx, and says "You do not have access to that." only for a
+    // 401 or 403.
+    vi.mocked(withApiContext).mockRejectedValue(new PermissionsUnavailableError());
+
+    const res = await GET(request());
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal_error', code: 'snapshot_uncaught' });
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+    expect(queries).toHaveLength(0);
+  });
 });
 
 // ── 2b. An access lookup that failed is a refusal ───────────────────────
@@ -883,18 +899,19 @@ describe('an error in one read behaves as before', () => {
       const res = await GET(request(`?since=${SINCE}`));
 
       expect(res.status).toBe(500);
-      // fetchAllRows turns the items error into a thrown ServiceError, whose
-      // message is the generic one; the route has always sent that one.
-      const detail =
-        tag === 'items' ? 'An internal error occurred. Please try again.' : `boom-${tag}`;
-      expect(await res.text()).toBe(
-        JSON.stringify({ error: 'internal_error', query: tag, detail }),
-      );
+      // S16: the answer names the read and nothing else. It used to carry the
+      // database's own text in `detail`; that text goes to the report only.
+      expect(await res.text()).toBe(JSON.stringify({ error: 'internal_error', query: tag }));
       expect(reportError).toHaveBeenCalledTimes(1);
       expect(vi.mocked(reportError).mock.calls[0]?.[1]).toMatchObject({
         tag: `mobile.snapshot.${tag}`,
         organizationId: 'org-1',
       });
+      // fetchAllRows turns the items error into a thrown ServiceError, whose
+      // message is the generic one.
+      expect((vi.mocked(reportError).mock.calls[0]?.[0] as Error).message).toBe(
+        tag === 'items' ? 'An internal error occurred. Please try again.' : `boom-${tag}`,
+      );
     });
   }
 
@@ -947,9 +964,9 @@ describe('an error in one read behaves as before', () => {
   it('an items page that throws is reported as the items read, as before', async () => {
     mockContext(respondFor({ items: { reject: new Error('page 1 threw') } }));
     const res = await GET(request(`?since=${SINCE}`));
-    expect(await res.text()).toBe(
-      JSON.stringify({ error: 'internal_error', query: 'items', detail: 'page 1 threw' }),
-    );
+    // S16: its text is reported, never answered.
+    expect(await res.text()).toBe(JSON.stringify({ error: 'internal_error', query: 'items' }));
+    expect((vi.mocked(reportError).mock.calls[0]?.[0] as Error).message).toBe('page 1 threw');
   });
 
   it('a failed removal read still OMITS its field on an otherwise good pull', async () => {

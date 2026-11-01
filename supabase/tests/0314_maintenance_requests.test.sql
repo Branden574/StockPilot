@@ -8,13 +8,13 @@ select plan(40);
 \set requester '''10000000-0000-0000-0000-000000000001'''
 \set other_staff '''10000000-0000-0000-0000-000000000002'''
 \set mgr '''10000000-0000-0000-0000-000000000003'''
-\set andrew '''10000000-0000-0000-0000-000000000004'''
+\set jordan '''10000000-0000-0000-0000-000000000004'''
 \set outsider '''10000000-0000-0000-0000-000000000005'''
 \set org_owner '''10000000-0000-0000-0000-000000000006'''
 
 insert into auth.users (id, email) values
   (:requester, 'req@test.local'), (:other_staff, 'staff2@test.local'),
-  (:mgr, 'mgr@test.local'), (:andrew, 'andrew@test.local'), (:outsider, 'out@test.local'),
+  (:mgr, 'mgr@test.local'), (:jordan, 'jordan@test.local'), (:outsider, 'out@test.local'),
   (:org_owner, 'owner@test.local');
 -- DEVIATION from the brief's literal fixture: `insert ... on conflict (id) do
 -- nothing` unconditionally 23502s here, because user_profiles.email is NOT
@@ -29,7 +29,7 @@ insert into auth.users (id, email) values
 update public.user_profiles set full_name = v.full_name
 from (values
   (:requester::uuid, 'Req One'), (:other_staff::uuid, 'Staff Two'), (:mgr::uuid, 'Mgr Three'),
-  (:andrew::uuid, 'Andrew Rosas'), (:outsider::uuid, 'Out Sider'), (:org_owner::uuid, 'Org Owner')
+  (:jordan::uuid, 'Jordan Stone'), (:outsider::uuid, 'Out Sider'), (:org_owner::uuid, 'Org Owner')
 ) as v(id, full_name)
 where public.user_profiles.id = v.id;
 
@@ -41,7 +41,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:org_a, :requester, 'staff',  now()),
   (:org_a, :other_staff, 'staff', now()),
   (:org_a, :mgr, 'manager', now()),
-  (:org_a, :andrew, 'viewer', now()),
+  (:org_a, :jordan, 'viewer', now()),
   (:org_a, :org_owner, 'owner', now()),
   (:org_b, :outsider, 'staff', now());
 
@@ -234,16 +234,16 @@ select throws_ok(
         and request_number = 1 $$,
   '42501', null, 'module-off org blocks attachment insert at RLS');
 
--- ── Andrew: viewer + per-user override grant of read_all sees everything ────
+-- ── Jordan: viewer + per-user override grant of read_all sees everything ────
 set local role to postgres;
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
-values (:org_a, :andrew, 'maintenance_requests:read_all', true);
+values (:org_a, :jordan, 'maintenance_requests:read_all', true);
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000004';
 set local role to 'authenticated';
 select is((select count(*)::int from public.maintenance_requests), 3,
-  'per-user override grants Andrew all-request visibility');
+  'per-user override grants Jordan all-request visibility');
 select is((select count(*)::int from public.maintenance_request_notes), 0,
-  'read_all-only holder (Andrew) reads requests but zero notes');
+  'read_all-only holder (Jordan) reads requests but zero notes');
 
 -- ── Owner: full access always (has_permission owner short-circuit) ──────────
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000006';

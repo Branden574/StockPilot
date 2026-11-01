@@ -58,14 +58,14 @@ vi.mock('expo-linking', () => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-// The COMPILED pair (L4L's mailboxes) — what the pre-migration 'fallback'
+// The COMPILED sample pair — what the pre-migration 'fallback'
 // state resolves to, and therefore what the transport/CC-gate blocks below
 // compose with: those tests pin CC mechanics, not tenancy, so they use the
 // value whose addresses the assertions already name.
 const RECIPIENTS = DELIVERY_REQUEST_RECIPIENTS;
 
-// A CONFIGURED, non-L4L pair (per-org email routing, migration 0337) built
-// through the only constructor there is — used by the routing tests to prove
+// A CONFIGURED pair, not the compiled one (per-org email routing, migration
+// 0337), built through the only constructor there is — used by the routing tests to prove
 // the org's stored value actually reaches the composed URL, and that nothing
 // silently substitutes the compiled constants for it.
 const CONFIGURED = deliveryRequestRecipients({
@@ -107,7 +107,7 @@ function order(over: Partial<DeliveryRequestOrderData> = {}): DeliveryRequestOrd
     warehouseName: 'Fresno DC4',
     requesterName: 'Jane Smith',
     requesterLabel: 'Jane Smith',
-    requesterEmail: 'jane@cvwest.org',
+    requesterEmail: 'jane@site1.test',
     requesterProfileEmail: null,
     neededBy: '2026-08-20T17:00:00.000Z',
     notes: 'Please deliver to the back gate; the front is under construction.',
@@ -161,7 +161,7 @@ const ccOf = (url: string) => paramOf(url, 'cc');
 const toOf = (url: string) => paramOf(url, 'to');
 
 // =========================================================================
-// THE ACCEPTANCE GATE. The workflow depends on arosas@cvwest.org receiving a
+// THE ACCEPTANCE GATE. The workflow depends on jstone@site1.test receiving a
 // copy of every delivery request. "Outlook opened" is not success — a compose
 // screen that opens with the CC missing is a WORSE failure than not opening
 // at all, because nobody notices. Everything below asserts the cc that
@@ -225,12 +225,12 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
 
   it('every transport the planner can choose carries the cc — native, web fallback, and mailto', () => {
     const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS);
-    expect(ccOf(prepared.outlookMobileUrl)).toBe('arosas@cvwest.org');
+    expect(ccOf(prepared.outlookMobileUrl)).toBe('jstone@site1.test');
     // The OWA web url carries it as the tenant-verified name-addr chip.
-    expect(ccOf(prepared.outlookUrl)).toBe('Andrew Rosas <arosas@cvwest.org>');
-    expect(ccOf(prepared.mailtoUrl)).toBe('arosas@cvwest.org');
+    expect(ccOf(prepared.outlookUrl)).toBe('Jordan Stone <jstone@site1.test>');
+    expect(ccOf(prepared.mailtoUrl)).toBe('jstone@site1.test');
     // And the clipboard escape hatch names it in plain text.
-    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('CC: jstone@site1.test');
   });
 });
 
@@ -246,7 +246,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
     expect(url.startsWith('http')).toBe(false);
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('CONDENSED draft still opens the native link WITH the cc', async () => {
@@ -254,7 +254,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     await openDeliveryRequestDraft('outlook', prepared, 'android', () => {});
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('no native Outlook installed: falls back to the tenant-verified WEB url, cc intact', async () => {
@@ -265,7 +265,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(
       true,
     );
-    expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(ccOf(url)).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('the probe has not answered yet (null): opens the WEB url, which is what the worst-case budget measured', async () => {
@@ -296,7 +296,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     });
     expect(res).toEqual({ outcome: 'opened', used: 'default-mail' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
-    expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test')).toBe(true);
   });
 
   it('exactly ONE openURL per tap — never auto-retried into a duplicate request to DC4', async () => {
@@ -313,6 +313,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
@@ -324,6 +325,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(Linking.openURL).not.toHaveBeenCalled();
   });
@@ -411,7 +413,11 @@ describe('the double-tap latch — one unresolved open swallows every call behin
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
     ).resolves.toEqual({ outcome: 'in_flight', used: null });
     rejectOpen(new Error('no handler'));
-    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    await expect(first).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    });
     // ...and after the rejection settles, the button works again.
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
@@ -979,9 +985,9 @@ describe('deliveryRoutingFromOrgRow', () => {
     expect(deliveryRecipientsForRouting(routing)).toBeNull();
   });
 
-  it('MUTATION PIN: unset/invalid resolve to NULL recipients, never the compiled L4L pair', () => {
+  it('MUTATION PIN: unset/invalid resolve to NULL recipients, never the compiled pair', () => {
     // A mutant that maps 'unset' or 'invalid' to the compiled constants —
-    // silently mailing another tenant's warehouse — fails here by name.
+    // composing with mailboxes the org never configured — fails here by name.
     for (const routing of [
       deliveryRoutingFromOrgRow(null),
       deliveryRoutingFromOrgRow({ email_routing: { delivery_request: { to: 'x', cc: 'y' } } }),
@@ -1018,7 +1024,7 @@ describe('the CONFIGURED recipients actually reach the composed URL', () => {
     expect(toOf(prepared.outlookMobileUrl)).toBe('warehouse-intake@acme-tenant.invalid');
     expect(ccOf(prepared.outlookMobileUrl)).toBe('ops-copy@acme-tenant.invalid');
     // The ROUTING params carry nothing of the compiled pair. (The body may
-    // legitimately mention a requester's own @cvwest.org reply-to — routing
+    // legitimately mention a requester's own @site1.test reply-to — routing
     // is what this feature moves, not the order's facts.)
     expect(toOf(prepared.outlookMobileUrl)).not.toBe(DELIVERY_REQUEST_EMAIL.to);
     expect(ccOf(prepared.outlookMobileUrl)).not.toBe(DELIVERY_REQUEST_EMAIL.cc);
@@ -1030,7 +1036,7 @@ describe('the CONFIGURED recipients actually reach the composed URL', () => {
     // The OWA url carries the configured chip name, validated by the factory.
     expect(ccOf(prepared.outlookUrl)).toBe('Acme Ops <ops-copy@acme-tenant.invalid>');
     expect(prepared.clipboardText).toContain('CC: ops-copy@acme-tenant.invalid');
-    expect(prepared.clipboardText).not.toContain('arosas@cvwest.org');
+    expect(prepared.clipboardText).not.toContain('jstone@site1.test');
   });
 
   it('the helper sentence under the button names the SAME configured mailboxes', () => {
@@ -1051,8 +1057,8 @@ describe('buildDeliveryRequestInput', () => {
     // mapping copies it verbatim and reads nothing recipient-shaped off the
     // order row.
     const input = buildDeliveryRequestInput(order(), RECIPIENTS);
-    expect(input.recipients.to).toBe('dc4@learn4life.org');
-    expect(input.recipients.cc).toBe('arosas@cvwest.org');
+    expect(input.recipients.to).toBe('dc4@sampleorg.test');
+    expect(input.recipients.cc).toBe('jstone@site1.test');
     const configured = buildDeliveryRequestInput(order(), CONFIGURED);
     expect(configured.recipients.to).toBe('warehouse-intake@acme-tenant.invalid');
     expect(configured.recipients.cc).toBe('ops-copy@acme-tenant.invalid');
@@ -1067,13 +1073,13 @@ describe('buildDeliveryRequestInput', () => {
     // and the profile email was already fetched but thrown away — so most
     // internal orders would have drafted with no contact for DC4 at all.
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: null, requesterProfileEmail: 'jane@cvwest.org' }), RECIPIENTS);
-    expect(input.requesterEmail).toBe('jane@cvwest.org');
+      order({ requesterEmail: null, requesterProfileEmail: 'jane@site1.test' }), RECIPIENTS);
+    expect(input.requesterEmail).toBe('jane@site1.test');
   });
 
   it('prefers the denormalized on-behalf-of email over the profile email', () => {
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@cvwest.org' }), RECIPIENTS);
+      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@site1.test' }), RECIPIENTS);
     expect(input.requesterEmail).toBe('onbehalf@site.org');
   });
 
@@ -1328,7 +1334,7 @@ describe('the on-screen notice gates', () => {
       ['nothing attempted yet', null],
       ['opened natively', { outcome: 'opened', used: 'outlook-native' }],
       ['opened in the default mail app', { outcome: 'opened', used: 'default-mail' }],
-      ['refused by the OS', { outcome: 'blocked', used: null }],
+      ['refused by the OS', { outcome: 'blocked', used: null, attempted: 'outlook-native' }],
       // A swallowed double-tap. NOT a refusal: the first tap's open is still
       // in flight and will surface its own outcome, so showing retry copy for
       // the second tap would tell the user the send failed while it is
@@ -1372,7 +1378,11 @@ describe('the on-screen notice gates', () => {
    * show "nothing can open this" and "try again" one under the other.
    */
   it('the blocked notice and the oversized message can never appear together', () => {
-    const blocked: DeliveryOpenResult = { outcome: 'blocked', used: null };
+    const blocked: DeliveryOpenResult = {
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    };
     for (const prepared of [
       prepareOrderDeliveryRequest(order(), RECIPIENTS),
       prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS),
@@ -1483,7 +1493,7 @@ describe('the phone adds only its recipients to the shared mapping', () => {
     const { DELIVERY_REQUEST_EMAIL_NAMES } = await import('@stockpilot/core');
     const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS);
     expect(prepared.draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
-    expect(prepared.draft.cc).toBe('arosas@cvwest.org');
+    expect(prepared.draft.cc).toBe('jstone@site1.test');
     expect(prepared.draft.ccName).toBe(DELIVERY_REQUEST_EMAIL_NAMES.cc);
   });
 });

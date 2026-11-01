@@ -53,12 +53,12 @@ const row = (o: Partial<{ id: string; sku: string; name: string; lineQuantity: n
 describe('groupPlacementsBySku', () => {
   it('sums placements of one SKU into a single group total, preserving each placement', () => {
     const groups = groupPlacementsBySku([
-      row({ id: 'a', sku: 'SP-G69UU-05H', lineQuantity: 75, charterName: 'CVW-Manchester' }),
-      row({ id: 'b', sku: 'SP-G69UU-05H', lineQuantity: 100, charterName: 'CVLYII-Visalia' }),
-      row({ id: 'c', sku: 'SP-G69UU-05H', lineQuantity: 106, charterName: 'CVSII-Madera' }),
+      row({ id: 'a', sku: 'SP-GDEM4-G01', lineQuantity: 75, charterName: 'CVW-Manchester' }),
+      row({ id: 'b', sku: 'SP-GDEM4-G01', lineQuantity: 100, charterName: 'CVLYII-Visalia' }),
+      row({ id: 'c', sku: 'SP-GDEM4-G01', lineQuantity: 106, charterName: 'CVSII-Madera' }),
     ]);
     expect(groups).toHaveLength(1);
-    expect(groups[0].sku).toBe('SP-G69UU-05H');
+    expect(groups[0].sku).toBe('SP-GDEM4-G01');
     expect(groups[0].total).toBe(281);
     expect(groups[0].placements).toHaveLength(3);
   });
@@ -153,7 +153,7 @@ export function groupPlacementsBySku(rows: PlacementRow[]): SkuGroup[] {
 it('groups placements of one SKU into a single row showing the summed total, expandable', async () => {
   const user = userEvent.setup();
   getSearchParams(''); window.history.replaceState(null, '', '/dashboard/inventory');
-  const rows = [item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 281 })];
+  const rows = [item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-GDEM4-G01', quantity_on_hand: 281 })];
   render(
     <InventoryTable items={rows} lookups={EMPTY_LOOKUPS} total={1} pageSize={30}
       instant={{ items: rows, view: 'items', placement: { g: [
@@ -166,7 +166,7 @@ it('groups placements of one SKU into a single row showing the summed total, exp
   expect(screen.getByText('281')).toBeInTheDocument();
   expect(screen.getAllByRole('link', { name: 'Acer Chromebook' })).toHaveLength(1);
   // Expand → placements visible
-  await user.click(screen.getByRole('button', { name: /expand|show placements|SP-G69UU-05H/i }));
+  await user.click(screen.getByRole('button', { name: /expand|show placements|SP-GDEM4-G01/i }));
   expect(screen.getByText('CVW-Manchester · 1-A')).toBeInTheDocument();
   expect(screen.getByText('CVSII-Madera · 2-A')).toBeInTheDocument();
 });

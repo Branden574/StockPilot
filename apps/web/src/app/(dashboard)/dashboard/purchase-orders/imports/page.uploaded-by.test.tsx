@@ -47,8 +47,8 @@ vi.mock('@/components/ui/pagination', () => ({ Pagination: () => null }));
 
 import PoImportsPage from './page';
 
-const MARISSA = '11111111-0000-4000-8000-000000000001';
-const CRYSTAL = '11111111-0000-4000-8000-000000000002';
+const REBECCA = '11111111-0000-4000-8000-000000000001';
+const ROBIN = '11111111-0000-4000-8000-000000000002';
 const GONE = '11111111-0000-4000-8000-000000000003';
 
 const row = (id: string, uploadedBy: string) => ({
@@ -70,17 +70,17 @@ async function renderList() {
 beforeEach(() => {
   vi.clearAllMocks();
   svc.list.mockResolvedValue([
-    row('imp-1', MARISSA),
-    row('imp-2', CRYSTAL),
+    row('imp-1', REBECCA),
+    row('imp-2', ROBIN),
     row('imp-3', GONE),
-    row('imp-4', MARISSA),
+    row('imp-4', REBECCA),
   ]);
   svc.count.mockResolvedValue(4);
   svc.searchCapped.mockResolvedValue(false);
   svc.uploaderProfiles.mockResolvedValue(
     new Map([
-      [MARISSA, { full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' }],
-      [CRYSTAL, { full_name: null, email: 'crystal@cvwest.org' }],
+      [REBECCA, { full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' }],
+      [ROBIN, { full_name: null, email: 'robin@site1.test' }],
     ]),
   );
 });
@@ -88,20 +88,20 @@ beforeEach(() => {
 describe('PO imports list: who uploaded each import', () => {
   it('shows the uploader under the date: name, else email, else "Former member"', async () => {
     await renderList();
-    expect(screen.getAllByText('by Marissa Lopez')).toHaveLength(2);
-    expect(screen.getByText('by crystal@cvwest.org')).toBeInTheDocument();
+    expect(screen.getAllByText('by Rebecca Lowry')).toHaveLength(2);
+    expect(screen.getByText('by robin@site1.test')).toBeInTheDocument();
     expect(screen.getByText('by Former member')).toBeInTheDocument();
     // The full label is on the hover as well, for a name the cell truncates.
-    expect(screen.getByText('by crystal@cvwest.org')).toHaveAttribute(
+    expect(screen.getByText('by robin@site1.test')).toHaveAttribute(
       'title',
-      'Uploaded by crystal@cvwest.org',
+      'Uploaded by robin@site1.test',
     );
   });
 
   it('looks up the uploaders of the rows on the page, once', async () => {
     await renderList();
     expect(svc.uploaderProfiles).toHaveBeenCalledTimes(1);
-    expect(svc.uploaderProfiles).toHaveBeenCalledWith([MARISSA, CRYSTAL, GONE, MARISSA]);
+    expect(svc.uploaderProfiles).toHaveBeenCalledWith([REBECCA, ROBIN, GONE, REBECCA]);
   });
 
   it('keeps the list up and shows "—" when the lookup failed', async () => {
@@ -117,6 +117,6 @@ describe('PO imports list: who uploaded each import', () => {
   it('never prints a raw user id', async () => {
     await renderList();
     const text = document.body.textContent ?? '';
-    for (const id of [MARISSA, CRYSTAL, GONE]) expect(text).not.toContain(id);
+    for (const id of [REBECCA, ROBIN, GONE]) expect(text).not.toContain(id);
   });
 });

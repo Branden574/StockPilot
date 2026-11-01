@@ -119,6 +119,7 @@ function renderTeam(currentUserRole: Role, opts: Partial<Parameters<typeof TeamM
       grantsByUser={{}}
       charterSingular="Charter"
       warehouseSingular="Warehouse"
+      timeZone="America/Los_Angeles"
       {...opts}
     />,
   );

@@ -51,10 +51,11 @@ const OPEN_HEADER = {
   order_number: 12,
 };
 
-describe('OrderRequestsService.addLines with 250 new lines', () => {
-  const lines = Array.from({ length: 250 }, (_, i) => ({ itemId: uuid(i), quantity: 1 }));
+describe('OrderRequestsService.addLines with 200 new lines', () => {
+  // 200 is the most one change may add (both callers and add_order_request_lines).
+  const lines = Array.from({ length: 200 }, (_, i) => ({ itemId: uuid(i), quantity: 1 }));
 
-  it('validates the items in batches of at most 100 and adds every line', async () => {
+  it('validates the items in batches of at most 100 and adds every line in one call', async () => {
     const lists: string[][] = [];
     const stub = makeSupabaseStub({
       'order_requests.select': { data: OPEN_HEADER, error: null },
@@ -68,16 +69,20 @@ describe('OrderRequestsService.addLines with 250 new lines', () => {
             warehouse_id: 'wh-1',
             unit_cost: 1,
             awaiting_first_receipt: false,
+            order_catalog_visible: true,
           })),
           error: null,
         };
       },
-      'order_request_lines.select': { data: [], error: null },
-      'order_request_lines.insert': { data: null, error: null },
+      'rpc:add_order_request_lines': {
+        data: { orderId: 'order-1', added: lines.map((l) => l.itemId), merged: [] },
+        error: null,
+      },
     });
     const res = await svc(stub).addLines('order-1', lines);
-    expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
-    expect(res.added).toBe(250);
+    expect(lists.map((l) => l.length)).toEqual([100, 100]);
+    expect(res.added).toBe(200);
+    expect(stub.rpcCalls.filter((c) => c.name === 'add_order_request_lines')).toHaveLength(1);
   });
 
   it('throws internal_error and writes nothing when an item batch fails', async () => {
@@ -90,11 +95,11 @@ describe('OrderRequestsService.addLines with 250 new lines', () => {
           ? { data: null, error: { message: 'fetch failed' } }
           : { data: [], error: null };
       },
-      'order_request_lines.select': { data: [], error: null },
     });
     await expect(svc(stub).addLines('order-1', lines)).rejects.toMatchObject({
       code: 'internal_error',
     });
+    expect(stub.rpcCalls).toEqual([]);
     expect(stub.chainsAll.get('order_request_lines.insert')).toBeUndefined();
   });
 });

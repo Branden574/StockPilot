@@ -125,15 +125,15 @@ found and reused:
    StockPilot. Outlook will open with the email details filled in, but the
    email will not be sent automatically."
 5. The employee clicks **Open in Outlook**. A new tab opens with a fully
-   prefilled Outlook Web compose window (To `dc4@learn4life.org`, CC
-   `arosas@cvwest.org`, subject, body). StockPilot records that a draft was
+   prefilled Outlook Web compose window (To `dc4@sampleorg.test`, CC
+   `jstone@site1.test`, subject, body). StockPilot records that a draft was
    opened; it does not and cannot know whether the employee actually presses
    Send.
 6. The employee reviews the draft, optionally downloads and attaches the
    photos (Outlook compose links cannot pre-attach files), and clicks Send
    themselves.
-7. Sending to `dc4@learn4life.org` creates the Zendesk ticket through the
-   org's existing Zendesk email intake. Andrew's CC gives him a copy.
+7. Sending to `dc4@sampleorg.test` creates the Zendesk ticket through the
+   org's existing Zendesk email intake. The CC gives the DC4 lead a copy.
 8. All further conversation happens in the Outlook/Zendesk email thread — not
    inside StockPilot.
 
@@ -158,7 +158,7 @@ explicit shape of this phase, enforced at multiple levels:
   `Cancelled` (`MAINTENANCE_STATUS_LABELS`,
   `packages/core/src/maintenance/constants.ts:52-57`). A repo-wide forbidden-phrase
   sweep (`Ticket created`, `Request submitted to Zendesk`, `DC4 notified`,
-  `Andrew notified`, `Ticket assigned`, `Email sent`) returns zero matches in
+  `Jordan notified`, `Ticket assigned`, `Email sent`) returns zero matches in
   production source; the only hits anywhere are inside the sweep tests' own
   banned-word arrays, which have to spell the phrase to assert it never
   renders.
@@ -286,9 +286,9 @@ Four permissions, each with a narrow, product-accurate meaning:
   rather than a parallel grants UI.
 - **Owner.** The organization owner role always has full access through the
   existing owner short-circuit in `has_permission()` — no separate code path.
-- **Andrew's grant.** Verified end to end against the shipped code: Settings
+- **The DC4 lead's grant.** Verified end to end against the shipped code: Settings
   → Maintenance requests → "Manage who can view or manage all requests" →
-  `/dashboard/settings/roles` → Per-user exceptions → select Andrew → toggle
+  `/dashboard/settings/roles` → Per-user exceptions → select the DC4 lead → toggle
   "View all maintenance requests" and "Manage maintenance requests". This
   works because all four maintenance permissions carry
   `group: 'Maintenance'` in `packages/core/src/constants/permissions.ts:651-669`,
@@ -732,9 +732,9 @@ check 21) all failed on the single bug above and all four passed on re-verify
 after the fix. Every no-send safety property held throughout: `window.open`
 was proven patched before every click of Open in Outlook, exactly one
 compose URL was ever captured (never opened), the network log was audited
-clean of any request to `outlook.cloud.microsoft` / `learn4life.org` /
-`cvwest.org`, and the real mailto path was never clicked at all. The
-double-encoded `dc4%2540learn4life.org` To and `arosas%2540cvwest.org` CC,
+clean of any request to `outlook.cloud.microsoft` or the customer's mail
+domains, and the real mailto path was never clicked at all. The
+double-encoded `dc4%2540sampleorg.test` To and `jstone%2540site1.test` CC,
 the correct subject with request number, the description and `/m/<token>`
 share link in the body, the draft-opened stamp and audit row, cross-org
 isolation (a second org sees the module-off fallback, not a 404 that would
@@ -756,7 +756,7 @@ remains open:
   the email body, and a **Download Photos for Outlook** action lets the
   employee attach them manually.
 - Photo links in the email require either StockPilot access or the share
-  link; DC4 and Andrew are expected to use the share link, since they are
+  link; DC4 and its lead are expected to use the share link, since they are
   not necessarily StockPilot users.
 - The employee must manually click Send in Outlook — nothing sends
   automatically, ever.
@@ -767,8 +767,8 @@ remains open:
   later without a rewrite), another organization's own owner *could*
   self-enable it through the same configuration surface an owner already has
   for every other optional module. If that happened, the drafted emails
-  would still target the L4L-specific constants (`dc4@learn4life.org` /
-  `arosas@cvwest.org`) — a real, if unlikely, misconfiguration risk that has
+  would still target the L4L-specific constants (`dc4@sampleorg.test` /
+  `jstone@site1.test`) — a real, if unlikely, misconfiguration risk that has
   no code-level guard today beyond "no other org's owner has a reason to
   enable it." Worth a per-org recipient override in a future phase if this
   becomes a real concern (see §30 in the master brief's own OPEN note on
@@ -1046,9 +1046,9 @@ disconnected during this program's audit phase).
    NEVER click Open in Outlook in prod), verify mobile drawer + deep link,
    then DISABLE the module for Demo Co again and record both SQL statements
    and timestamps in the ship log.
-7. Andrew's grant via the UI (zero new code): /dashboard/settings/roles ->
+7. The DC4 lead's grant via the UI (zero new code): /dashboard/settings/roles ->
    per-user exceptions -> grant maintenance_requests:read_all + :manage to
-   Andrew's member row; confirm his session updates WITHOUT re-login
+   the DC4 lead's member row; confirm their session updates WITHOUT re-login
    (broadcastPermissionsChanged / PermissionsRealtime + use-permissions-realtime)
    on both web and mobile.
 8. Owner hand-test on the live L4L tenant: one real request, owner reviews

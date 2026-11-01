@@ -49,6 +49,7 @@ import {
   section,
   statusPill,
 } from '../components';
+import { countOf } from '../count';
 import { esEmailById } from '../registry';
 import { ES_LIGHT, esAssetUrl } from '../tokens';
 
@@ -222,7 +223,7 @@ function lineTableSection(
   if (!items || items.length === 0) return '';
   const overflow =
     items.length > MAX_TABLE_LINES
-      ? `\n      ${ctaNote(`+ ${items.length - MAX_TABLE_LINES} more lines — the full order is available online.`)}`
+      ? `\n      ${ctaNote(`+ ${countOf(items.length - MAX_TABLE_LINES, 'more line')} — the full order is available online.`)}`
       : '';
   return section(
     '0 36px 28px',
@@ -242,7 +243,7 @@ function lineTextRows(
     return `- ${l.name}${l.sku ? ` (${l.sku})` : ''} x${l.qtyFulfilled} — ${status}`;
   });
   if (items.length > MAX_TABLE_LINES) {
-    rows.push(`+ ${items.length - MAX_TABLE_LINES} more lines`);
+    rows.push(`+ ${countOf(items.length - MAX_TABLE_LINES, 'more line')}`);
   }
   return rows;
 }
@@ -295,25 +296,28 @@ export function renderPartialFulfilledEmail(p: PartialFulfilledParams): Rendered
         eta: p.backorderEta,
       })
     : // Missing-ETA fallback: the registry preheader minus its ETA clause.
-      `${p.delivered} of ${p.requested} units delivered. ${p.backordered} backordered.`;
+      `${p.delivered} of ${countOf(p.requested, 'unit')} delivered. ${p.backordered} backordered.`;
 
   const hi = greeting(p.recipientFirstName);
+  const oneBack = p.backordered === 1;
+  const remaining = oneBack ? 'The remaining unit is' : `The remaining ${p.backordered} units are`;
   const backClause = p.backorderEta
-    ? `The remaining ${p.backordered} units are backordered &mdash; expected ${escapeHtml(p.backorderEta)}.`
-    : `The remaining ${p.backordered} units are backordered and will ship as soon as they&rsquo;re back in stock.`;
-  const body = `${hi} ${strong(`${p.delivered} of ${p.requested} units`)} were delivered and signed for. ${backClause}`;
+    ? `${remaining} backordered &mdash; expected ${escapeHtml(p.backorderEta)}.`
+    : `${remaining} backordered and will ship as soon as ${oneBack ? 'it&rsquo;s' : 'they&rsquo;re'} back in stock.`;
+  const deliveredVerb = p.delivered === 1 ? 'was' : 'were';
+  const body = `${hi} ${strong(`${p.delivered} of ${countOf(p.requested, 'unit')}`)} ${deliveredVerb} delivered and signed for. ${backClause}`;
 
   const stats = kpiGrid([
     {
       label: 'Delivered',
       valueHtml: String(p.delivered),
-      noteHtml: p.deliveredOn ? `units &middot; signed ${escapeHtml(p.deliveredOn)}` : 'units',
+      noteHtml: `${p.delivered === 1 ? 'unit' : 'units'}${p.deliveredOn ? ` &middot; signed ${escapeHtml(p.deliveredOn)}` : ''}`,
       tone: 'ok',
     },
     {
       label: 'Backordered',
       valueHtml: String(p.backordered),
-      noteHtml: p.backorderEta ? `units &middot; expected ${escapeHtml(p.backorderEta)}` : 'units',
+      noteHtml: `${oneBack ? 'unit' : 'units'}${p.backorderEta ? ` &middot; expected ${escapeHtml(p.backorderEta)}` : ''}`,
       tone: 'warn',
     },
   ]);
@@ -357,15 +361,15 @@ export function renderPartialFulfilledEmail(p: PartialFulfilledParams): Rendered
   });
 
   const backClauseText = p.backorderEta
-    ? `The remaining ${p.backordered} units are backordered — expected ${p.backorderEta}.`
-    : `The remaining ${p.backordered} units are backordered and will ship as soon as they're back in stock.`;
+    ? `${remaining} backordered — expected ${p.backorderEta}.`
+    : `${remaining} backordered and will ship as soon as ${oneBack ? "it's" : "they're"} back in stock.`;
   const text = [
     `${greetingText(p.recipientFirstName)}`,
     '',
-    `${p.delivered} of ${p.requested} units were delivered and signed for. ${backClauseText}`,
+    `${p.delivered} of ${countOf(p.requested, 'unit')} ${deliveredVerb} delivered and signed for. ${backClauseText}`,
     '',
-    `Delivered: ${p.delivered} units${p.deliveredOn ? ` (signed ${p.deliveredOn})` : ''}`,
-    `Backordered: ${p.backordered} units${p.backorderEta ? ` (expected ${p.backorderEta})` : ''}`,
+    `Delivered: ${countOf(p.delivered, 'unit')}${p.deliveredOn ? ` (signed ${p.deliveredOn})` : ''}`,
+    `Backordered: ${countOf(p.backordered, 'unit')}${p.backorderEta ? ` (expected ${p.backorderEta})` : ''}`,
     ...(p.items && p.items.length > 0 ? ['', ...lineTextRows(p.items, 'Delivered', 'backordered')] : []),
     '',
     `View order: ${p.orderUrl}`,
@@ -480,7 +484,9 @@ export function renderBackorderShippedEmail(p: BackorderShippedParams): Rendered
         method: p.method,
       })
     : p.unitsShipped != null
-      ? `The remaining ${p.unitsShipped} units are on the way.`
+      ? p.unitsShipped === 1
+        ? 'The remaining unit is on the way.'
+        : `The remaining ${p.unitsShipped} units are on the way.`
       : 'The remaining units are on the way.';
 
   const hi = greeting(p.recipientFirstName);
@@ -496,7 +502,9 @@ export function renderBackorderShippedEmail(p: BackorderShippedParams): Rendered
 
   const lead =
     p.unitsShipped != null
-      ? `The last ${p.unitsShipped} units are moving.`
+      ? p.unitsShipped === 1
+        ? 'The last unit is moving.'
+        : `The last ${p.unitsShipped} units are moving.`
       : 'The rest of your order is moving.';
 
   const heroAlt = p.destination
@@ -608,7 +616,7 @@ export function renderPartialReceiptEmail(p: PartialReceiptParams): RenderedEmai
   const subject = def.subject({ orderNumber: p.orderNumber });
   const preheader = p.destination
     ? def.preheader({ units: p.unitsReceived, destination: p.destination, date: p.signedAt })
-    : `Receipt for ${p.unitsReceived} units received and signed ${p.signedAt}.`;
+    : `Receipt for ${countOf(p.unitsReceived, 'unit')} received and signed ${p.signedAt}.`;
 
   const base = p.appUrl.replace(/\/+$/, '');
   const supplier = p.supplierName?.trim() ? escapeHtml(p.supplierName.trim()) : null;
@@ -625,7 +633,7 @@ export function renderPartialReceiptEmail(p: PartialReceiptParams): RenderedEmai
     { k: 'Units received', vHtml: `${p.unitsReceived} of ${p.unitsTotal}`, strong: true },
     {
       k: 'Still pending',
-      vHtml: `${p.unitsPending} units${p.pendingEta ? ` &middot; expected ${escapeHtml(p.pendingEta)}` : ''}`,
+      vHtml: `${countOf(p.unitsPending, 'unit')}${p.pendingEta ? ` &middot; expected ${escapeHtml(p.pendingEta)}` : ''}`,
       last: true,
     },
   ]);
@@ -680,7 +688,7 @@ export function renderPartialReceiptEmail(p: PartialReceiptParams): RenderedEmai
     ...(p.destination ? [`Delivery location: ${p.destination}`] : []),
     ...(p.supplierName?.trim() ? [`Supplier: ${p.supplierName.trim()} (via StockPilot)`] : []),
     `Units received: ${p.unitsReceived} of ${p.unitsTotal}`,
-    `Still pending: ${p.unitsPending} units${p.pendingEta ? ` (expected ${p.pendingEta})` : ''}`,
+    `Still pending: ${countOf(p.unitsPending, 'unit')}${p.pendingEta ? ` (expected ${p.pendingEta})` : ''}`,
     ...(p.items && p.items.length > 0 ? ['', ...lineTextRows(p.items, 'Received', 'pending')] : []),
     '',
     'The pending units ship separately — the supplier will notify the original requester.',

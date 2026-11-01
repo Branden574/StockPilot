@@ -25,10 +25,9 @@ import { ServiceError } from '../context';
  * written before it in the same request: then the whole write rolled back
  * (an idempotency key's row with it), so the same request is safe to send
  * again, which is what "Busy. Try again." tells the person. A request that
- * already COMMITTED an earlier write (Add items tops up the lines already on
- * the order before it inserts the new ones) must not use it: a resend would
- * repeat what was saved. It answers its own non-retryable refusal instead
- * (order-requests.ts addLinesPartialRefusal; returns RX-3 fix round 1, F1).
+ * already COMMITTED an earlier write must not use it: a resend would repeat
+ * what was saved. (Add items was such a request until 0413 made it one call,
+ * add_order_request_lines, so its busy answer is now always true.)
  */
 export function isOrderBusyError(error: { code?: string | null } | null | undefined): boolean {
   const code = (error?.code ?? '').toUpperCase();

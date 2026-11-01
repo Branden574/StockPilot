@@ -8,6 +8,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { humanizeChargeType } from '@/lib/po-imports/charges';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import {
   PurchaseOrderPdf,
   type PoPdfBillToCharter,
@@ -53,7 +54,7 @@ export async function GET(
     }
     // The export budget is spent only once the caller may have this export
     // (a refused caller must not spend it or trip the abuse alert).
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const poSvc = new PurchaseOrdersService(ctx);
@@ -230,7 +231,10 @@ export async function GET(
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
     const orgPoTerms = ((org as { po_terms?: string | null })?.po_terms ?? null) || null;
 
     // Bill-to charter → "Bill to" block. Org-scoped fetch by the PO's

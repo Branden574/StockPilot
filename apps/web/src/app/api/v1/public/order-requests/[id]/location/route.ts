@@ -66,9 +66,12 @@ export async function GET(
 
   // Same three accepted credentials as the status read (mig 0330): the
   // request's own track token (the service-only side table: 0389 for new
-  // ones, 0392 moved the older ones and nulled the order column), or a live
-  // org/link catalog token compared as sha256(token) against the hashed
-  // at-rest columns.
+  // ones, 0392 moved the older ones and nulled the order column), or the
+  // org's catalog token or one of its link tokens, compared as sha256(token)
+  // against the hashed at-rest columns. Like the status read, the link check
+  // is NOT filtered on active or expires_at, on purpose (923f8350c, #110): a
+  // link turned off or expired stops new requests, not the tracking of an
+  // order already placed through it (see the status read's note).
   const tokenHash = sha256Hex(token);
   const trackToken = await resolveTrackToken(admin, id);
   let authorized = trackToken !== null && token === trackToken;

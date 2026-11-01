@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { FilterChipLink } from '@/components/patterns/chip';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -67,7 +67,7 @@ export default async function ReturnsPage({
 }) {
   const moduleAccess = await checkModuleAccess('returns');
   if (!moduleAccess.enabled) {
-    return <ModuleNotEnabled moduleId="returns" canManage={moduleAccess.canManage} />;
+    return <ModuleUnavailable moduleId="returns" access={moduleAccess} />;
   }
   const ctx = await requireOrgContext();
   if (!can(ctx, 'returns:read') && !can(ctx, 'returns:manage')) {

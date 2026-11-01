@@ -62,6 +62,7 @@ import {
 } from '@/lib/display-groups';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
+import { onlySiteLocations } from '@/lib/location-filter';
 import { signListThumbnails } from '@/lib/image-cache';
 import { readErrorMessage } from '@/lib/id-batches';
 import { readPrimaryPhotos } from '@/lib/id-reads';
@@ -181,31 +182,6 @@ const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, ca
            awaiting_first_receipt, group_id, variant_size,
            category:categories!category_id (name),
            product_group:product_groups!group_id (default_counting_unit)`;
-
-/**
- * ITEM_COLUMNS plus an INNER embed of the item's stock levels, used only when
- * the LOCATION filter is on. The filter lists sites, but an item's real
- * placement lives in item_stock_levels, not primary_location_id (a home/zone
- * hint that is usually null). Filtering the list read through this embed
- * (`.in('item_stock_levels.location_id', …)` plus quantity > 0) keeps only
- * items that hold stock there, in the SAME request, so no id list rides in the
- * URL.
- *
- * It replaced a two-step read: item_stock_levels first, then `.in('id', ids)`
- * on the list. That id list reached 1000 uuids for a busy site and broke the
- * request (past about 215 locally), the first read ignored its error (a failure
- * became "No items match") and it was never paged. With `!inner`, PostgREST
- * keeps only parents with a matching child, never duplicates a parent, and
- * `count: 'exact'` counts the filtered parents. The embed is NOT aliased so the
- * filter paths can use the table name. The extra `item_stock_levels` field on
- * each row is ignored by the mapper below.
- *
- * DERIVED from ITEM_COLUMNS, never copied: a column added to one list and not
- * the other would come back undefined, and only while a location filter is
- * on. `as const` keeps it a literal type, so the typed select still parses it.
- */
-const ITEM_COLUMNS_AT_LOCATIONS = `${ITEM_COLUMNS},
-           item_stock_levels!inner(location_id)` as const;
 
 /** One definition of the Items tab, shared with the web list. */
 const ITEMS_VIEW = inventoryViewPredicate('items');
@@ -341,15 +317,16 @@ export default function Inventory() {
         .eq('organization_id', orgIdParam)
         .is('deleted_at', null)
         .order('name', { ascending: true }),
-      supabase
-        .from('locations')
-        .select('id, name')
-        .eq('organization_id', orgIdParam)
-        .is('deleted_at', null)
-        // Sites only — racks/shelves/crates and the staging/unplaced system
-        // slots aren't stocking locations to filter or assign items by.
-        .in('type', ['warehouse', 'room', 'vehicle', 'jobsite'])
-        .order('name', { ascending: true }),
+      // Sites only, as the web's filter offers them (core isSiteLocation, see
+      // lib/location-filter.ts): never a rack, shelf, crate, bin or area, never
+      // the Staging or Unplaced bucket.
+      onlySiteLocations(
+        supabase
+          .from('locations')
+          .select('id, name')
+          .eq('organization_id', orgIdParam)
+          .is('deleted_at', null),
+      ).order('name', { ascending: true }),
       supabase
         .from('charters')
         .select('id, name, code')
@@ -442,13 +419,14 @@ export default function Inventory() {
           r = r.in('category_id', f.categoryIds);
         }
         if (f.locationIds.length > 0) {
-          // Items holding stock at the selected locations, through the inner
-          // embed in ITEM_COLUMNS_AT_LOCATIONS (see there). The chips are
-          // user-picked sites, so this list stays short.
-          r = r
-            // in-list-bound: user-picked location filter chips, a handful of sites
-            .in('item_stock_levels.location_id', f.locationIds)
-            .gt('item_stock_levels.quantity', 0);
+          // The record's LOCATION, as the web and the Books tab filter (B28,
+          // 2026-10-25; see lib/location-filter.ts). An item's primary location
+          // is a site label, and stock no longer sits AT a site: since the
+          // no-rack rule (#253) stock nobody placed waits in Unplaced, and a
+          // rack is its own location with no parent site. Matching stock HELD
+          // at the chosen site found only stock left there by mistake.
+          // in-list-bound: user-picked location filter chips, a handful of sites
+          r = r.in('primary_location_id', f.locationIds);
         }
         if (f.charterIds.length > 0) {
           const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
@@ -481,10 +459,6 @@ export default function Inventory() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
-      // The location filter needs the stock-levels embed in the SELECT, so it
-      // reads the wider column list; every predicate is still the one builder.
-      // Two literal calls rather than a union-typed column list: the typed
-      // select parser cannot parse a union of select strings.
       const listRead = <Q extends string>(columns: Q) =>
         scoped(columns, { count: 'exact' })
           .order(ord.col, { ascending: ord.asc })
@@ -494,10 +468,7 @@ export default function Inventory() {
       // column of them). It never fails the list: a failed read groups
       // nothing, and the rows render as they always did.
       const groupsRead = readDisplayGroups(supabase as never, orgIdParam);
-      const { data, count, error, status: listStatus } =
-        f.locationIds.length > 0
-          ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
-          : await listRead(ITEM_COLUMNS);
+      const { data, count, error, status: listStatus } = await listRead(ITEM_COLUMNS);
       if (seq !== loadSeq.current) return;
       const nextDisplayGroups = await groupsRead;
       if (seq !== loadSeq.current) return;

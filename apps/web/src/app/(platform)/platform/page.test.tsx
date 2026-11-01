@@ -228,4 +228,34 @@ describe('platform Organizations directory', () => {
     await renderPage();
     expect(screen.getByTestId('passphrase-form')).toHaveTextContent('true');
   });
+
+  it("prints each organization's Created day in its own zone, whatever the server's zone (B9)", async () => {
+    // The page renders on the server (UTC on Vercel). A bare
+    // toLocaleDateString() listed an org created at 6:30 PM Pacific on 24 Oct
+    // as created "10/25/2026".
+    const original = process.env.TZ;
+    process.env.TZ = 'UTC';
+    try {
+      h.listOrgsForPlatform.mockResolvedValue({
+        capped: false,
+        orgs: [
+          org(1, { createdAt: '2026-10-25T01:30:00Z', timezone: 'America/Los_Angeles' }),
+          org(2, { createdAt: '2026-10-25T01:30:00Z', timezone: 'UTC' }),
+        ],
+      });
+      await renderPage();
+      const region = screen.getByRole('region', { name: 'Organizations' });
+      const createdOf = (name: string) =>
+        within(region).getByText(name).closest('tr')!.lastElementChild;
+      expect(createdOf('Org 1')).toHaveTextContent(/^24 Oct 2026$/);
+      expect(createdOf('Org 2')).toHaveTextContent(/^25 Oct 2026$/);
+      expect(within(region).getByRole('columnheader', { name: 'Created' })).toHaveAttribute(
+        'title',
+        'The day each organization was created, in its own time zone.',
+      );
+    } finally {
+      if (original === undefined) delete process.env.TZ;
+      else process.env.TZ = original;
+    }
+  });
 });

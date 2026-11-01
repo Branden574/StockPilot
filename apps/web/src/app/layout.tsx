@@ -3,6 +3,8 @@ import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/
 import type { ReactNode } from 'react';
 
 import { PostHogProvider } from '@/components/analytics/posthog-provider';
+import { InterruptedRunExpiry } from '@/components/auth/interrupted-run-expiry';
+import { SessionFragmentScrub } from '@/components/auth/session-fragment-scrub';
 import { WebVitalsReporter } from '@/components/perf/web-vitals-reporter';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components/theme/theme-provider';
@@ -124,6 +126,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             taken before anyone was listening). See web-vitals-reporter.tsx.
           */}
           <WebVitalsReporter />
+          {/*
+            Removes what an interrupted run kept in this tab once it is over
+            an hour old, whatever page the tab shows (the sign-in page a
+            session that expired leaves it on above all). Renders nothing. See
+            interrupted-run-expiry.tsx.
+          */}
+          <InterruptedRunExpiry />
+          {/*
+            Takes a session that a link Supabase verified itself left in the
+            URL fragment out of the address bar, whatever page the link's
+            redirect reached: /signin, /dashboard and the landing page among
+            them. Here and on no single page, so no landing is missed
+            (layout.session-fragment-scrub.guard.test.ts). Renders nothing. See
+            session-fragment-scrub.tsx.
+          */}
+          <SessionFragmentScrub />
           <PostHogProvider>{children}</PostHogProvider>
           <Toaster />
         </ThemeProvider>

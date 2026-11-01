@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { adjustSendGate, UNCONFIRMED_ADJUST_PREFIX } from './adjust-outbox';
 import { OutboxSessionChangedError } from './outbox-scope';
-import { drainQueue, syncNow } from './sync';
+import { drainQueue, syncAfterRunning, syncNow } from './sync';
 import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
@@ -71,6 +71,13 @@ vi.mock('./db', () => ({
   currentCacheGeneration: vi.fn(() => 0),
   getMeta: vi.fn(async () => null),
   setMeta: vi.fn(async () => {}),
+  // getMeta records no owner, so every pull here adopts: it clears the photo
+  // caches, marks the cached rows unconfirmed and records the account before
+  // it is sent (sync.ts). No clear is ever owed, so markPhotosCleared is
+  // never reached; stubbed so the module's imports all resolve.
+  setCacheOwner: vi.fn(async () => {}),
+  markCacheUnconfirmed: vi.fn(async () => {}),
+  markPhotosCleared: vi.fn(async () => {}),
 }));
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
@@ -83,6 +90,17 @@ vi.mock('./use-effective-permissions', () => ({
 vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',
   refreshWarehouseScope: vi.fn(),
+}));
+// photo-cache-wipe.ts pulls in expo-image (native). The drain never resets the
+// cache (getMeta records no owner), so the wipe is only passed through, and
+// the adopt's photo clear does nothing; the reset and the adopt are tested in
+// sync.snapshot-removals.test.ts and cache-owner.sqlite.test.ts.
+vi.mock('./photo-cache-wipe', () => ({
+  wipeWithPhotoCaches: async (wipe: () => Promise<void>) => {
+    await wipe();
+    return true;
+  },
+  clearPhotoCaches: async () => true,
 }));
 
 type Row = {
@@ -300,6 +318,91 @@ describe('drainQueue — every row is sent under its own org, and only as its ow
     pending([RECEIPT]);
     await drainQueue();
     expect(queueMock.markSending).toHaveBeenCalledWith(1, { orgId: 'org-live', userId: 'u1' });
+  });
+
+  // docket B10, integrator decision 3: the live workspace is the account's
+  // OWN saved one (null while it is not saved yet). A row with none of its own
+  // used to be sent with that null, so api() sent no X-Organization-Id and the
+  // server applied it in the account's default organization.
+  it("a row with no workspace of its own is HELD while the account's own is unknown, then sent under it once saved", async () => {
+    live.orgId = null;
+    const ownBeforeAnySave: Row = { ...BUNDLE, organizationId: null, userId: 'u1' };
+    pending([RECEIPT, ownBeforeAnySave]);
+
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(apiMock.api).not.toHaveBeenCalled();
+    // Left exactly as it was: not marked sending, failed or rejected (pending).
+    expect(calls.log).toEqual([]);
+
+    live.orgId = 'org-own'; // this account's workspace load saved its choice
+    expect(await drainQueue()).toEqual({ ok: 2, failed: 0, rejected: 0 });
+    expect(queueMock.markSending).toHaveBeenCalledWith(1, { orgId: 'org-own', userId: 'u1' });
+    expect(queueMock.markSending).toHaveBeenCalledWith(3, { orgId: 'org-own', userId: 'u1' });
+    expect(apiMock.api.mock.calls.map(([, opts]) => opts)).toEqual([
+      expect.objectContaining({ orgId: 'org-own', asUserId: 'u1' }),
+      expect.objectContaining({ orgId: 'org-own', asUserId: 'u1' }),
+    ]);
+  });
+
+  it('a row with its own workspace is not held: it goes under that one while the live one is unknown', async () => {
+    live.orgId = null;
+    pending([OWN_ROW_ORG_A]);
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/po/po1/receive-line',
+      expect.objectContaining({ orgId: 'org-a', asUserId: 'u1' }),
+    );
+  });
+
+  // The workspace load asks for this pass once it has saved the account's
+  // workspace, unless it also clears the cache: its forced full pull then
+  // does the same (use-workspace.ts). syncNow() would JOIN a sync already
+  // running, whose drain may already have passed the held row; this one
+  // starts after it.
+  it('syncAfterRunning: a pass asked for during a running sync starts after it, so the row that sync held goes out', async () => {
+    live.orgId = null;
+    const held: Row = { ...BUNDLE, organizationId: null, userId: 'u1' };
+    queueMock.listPending.mockResolvedValueOnce([held, OWN_ROW_ORG_A]).mockResolvedValue([held]);
+    let releaseReceipt!: () => void;
+    const receiptAnswer = new Promise<void>((resolve) => {
+      releaseReceipt = resolve;
+    });
+    apiMock.api.mockImplementation(async (path: string, opts?: { orgId?: string | null }) => {
+      calls.log.push(`api:${path}@${opts?.orgId ?? 'none'}`);
+      // The pull is answered (an error status still opens the send gate).
+      if (path.startsWith('/api/v1/mobile/snapshot')) throw httpError(500, 'internal_error');
+      if (path === '/api/v1/po/po1/receive-line') await receiptAnswer;
+    });
+
+    const running = syncNow();
+    try {
+      // The running drain has passed the held row and is sending the receipt.
+      await vi.waitFor(() => expect(calls.log).toContain('api:/api/v1/po/po1/receive-line@org-a'));
+      expect(calls.log).not.toContain('markSending:3');
+      live.orgId = 'org-own'; // the workspace load saved this account's workspace
+      const after = syncAfterRunning();
+      releaseReceipt();
+      await Promise.all([running, after]);
+    } finally {
+      // Never leave a sync running for the tests after this one.
+      releaseReceipt();
+      await running;
+    }
+
+    expect(calls.log.filter((l) => l.startsWith('api:/api/v1/bundles/'))).toEqual([
+      'api:/api/v1/bundles/b1/distribute@org-own',
+    ]);
+    expect(queueMock.markSending).toHaveBeenCalledWith(3, { orgId: 'org-own', userId: 'u1' });
+  });
+
+  it('syncAfterRunning with no sync running starts one at once', async () => {
+    pending([OWN_ROW_ORG_A]);
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (path.startsWith('/api/v1/mobile/snapshot')) throw httpError(500, 'internal_error');
+    });
+    await syncAfterRunning();
+    expect(calls.log).toContain('api:/api/v1/po/po1/receive-line');
   });
 
   it('with nobody signed in nothing is sent and nothing is marked', async () => {

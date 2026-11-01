@@ -154,6 +154,8 @@ describe('POST /api/v1/items/sized-variants', () => {
           { size: '10', quantity: 3 },
         ],
       }),
+      // No confirmNewRack key: the phone in the field (2026-10-24), see below.
+      { allowUnconfirmedNewRack: true },
     );
   });
 
@@ -257,5 +259,93 @@ describe('POST /api/v1/items/sized-variants', () => {
     const result = bulkCreateSizedVariantsSchema.safeParse(VALID_BODY);
     expect(result.success).toBe(true);
     expect(typeof bulkCreateSizedVariantsAction).toBe('function');
+  });
+});
+
+// ═══ THE NEW-RACK ANSWER AND THE PHONE IN THE FIELD (2026-10-24) ═══
+// The service now refuses a new rack the request does not confirm. The phone
+// in the field (the current OTA) asks "Create new rack?" on its own screen and
+// posts buildSizedVariantsInput's output with NO confirmNewRack key, so a body
+// without the key keeps creating the rack as before; a body with the key gets
+// the server's question.
+describe('POST /api/v1/items/sized-variants — the new-rack answer', () => {
+  /** A run typed onto rack 1-B, exactly as today's phone sends it. */
+  const PHONE_TODAY = {
+    ...VALID_BODY,
+    binLocation: '1-B',
+    rackNumber: '1',
+    rackRow: 'B',
+  };
+
+  function stubBulk(impl: () => Promise<unknown>) {
+    const bulkCreateSizedVariants = vi.fn(impl);
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
+    return bulkCreateSizedVariants;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 60_000,
+    });
+    vi.mocked(withApiContext).mockResolvedValue(buildCtx());
+  });
+
+  it("today's phone (no key): the run is created, and the rack as before", async () => {
+    const bulk = stubBulk(async () => ({
+      rows: [{ id: 'v-1', name: 'n', sku: 's' }],
+      placementFailed: null,
+    }));
+
+    const res = await POST(buildRequest(PHONE_TODAY));
+
+    expect(res.status).toBe(201);
+    const [input, opts] = bulk.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+    expect(input).not.toHaveProperty('confirmNewRack');
+    expect(input.binLocation).toBe('1-B');
+    expect(opts).toEqual({ allowUnconfirmedNewRack: true });
+  });
+
+  it('a client that answers no gets the strict rule, and the refusal reaches it whole (409 + details)', async () => {
+    const detail = {
+      reason: 'NEW_RACK_REQUIRES_CONFIRMATION',
+      label: '1-B',
+      title: 'Create new rack 1-B?',
+      message: '1-B does not exist yet. Continuing creates it and moves 5 units into it.',
+      suggestions: [],
+    };
+    const bulk = stubBulk(async () => {
+      throw new ServiceError('conflict', detail.message, detail);
+    });
+
+    const res = await POST(buildRequest({ ...PHONE_TODAY, confirmNewRack: false }));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: 'conflict',
+      message: detail.message,
+      details: detail,
+    });
+    const [input, opts] = bulk.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+    expect(input.confirmNewRack).toBe(false);
+    expect(opts).toEqual({});
+  });
+
+  it('a yes is passed on, with no legacy allowance', async () => {
+    const bulk = stubBulk(async () => ({
+      rows: [{ id: 'v-1', name: 'n', sku: 's' }],
+      placementFailed: null,
+    }));
+
+    const res = await POST(buildRequest({ ...PHONE_TODAY, confirmNewRack: true }));
+
+    expect(res.status).toBe(201);
+    const [input, opts] = bulk.mock.calls[0] as unknown as [Record<string, unknown>, unknown];
+    expect(input.confirmNewRack).toBe(true);
+    expect(opts).toEqual({});
   });
 });

@@ -144,12 +144,12 @@ describe('ActivityService.forItem', () => {
   });
 
   // Pre-0306 pick rows stringified the ORDER'S UUID into the reason, so the
-  // item feed read "Order pick (order_request b3c7390a-…)" while the item
+  // item feed read "Order pick (order_request a0000060-…)" while the item
   // history dialog showed a bare "Order pick" for the SAME event. Both now
   // resolve the number, and the legacy row gets the clickable source that
   // 0306-era rows get from their reference columns.
   it('resolves a pre-0306 order-pick reason and gives the row a linkable order reference', async () => {
-    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const orderId = 'a0000060-0000-4000-8000-000000000060';
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -1242,7 +1242,7 @@ function movementRow(overrides: Record<string, unknown> = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('ActivityService.forItem masks the receipt sentinel by SHAPE, not by reason', () => {
   const cases: Array<{ label: string; reason: string }> = [
-    { label: '0231+ receipt row', reason: 'PO CVW-002201' },
+    { label: '0231+ receipt row', reason: 'PO DEMO-002201' },
     { label: 'receipt reversal row', reason: 'receipt_reversal' },
     { label: 'pre-0231 receipt row', reason: 'receipt_line' },
   ];
@@ -1270,7 +1270,7 @@ describe('ActivityService.forItem masks the receipt sentinel by SHAPE, not by re
   it('a genuine note on a 0231+ receipt row still shows and stays editable', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
-        data: [movementRow({ reason: 'PO CVW-002201', notes: 'Pallet arrived damp' })],
+        data: [movementRow({ reason: 'PO DEMO-002201', notes: 'Pallet arrived damp' })],
         error: null,
       },
       'audit_logs.select': { data: [], error: null },

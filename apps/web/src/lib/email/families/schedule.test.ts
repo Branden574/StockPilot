@@ -34,6 +34,18 @@ const BASE: ScheduleReminderParams = {
     unsubscribe: 'https://stockpilotusa.com/dashboard/settings/notifications',
     support: 'https://stockpilotusa.com/support',
   },
+  // The sender had no signed link: the settings page, without one-click.
+  oneClickUnsubscribe: false,
+};
+
+/** The sender's signed one-click link for this recipient (B15). */
+const SIGNED: ScheduleReminderParams = {
+  ...BASE,
+  urls: {
+    ...BASE.urls,
+    unsubscribe: 'https://stockpilotusa.com/unsubscribe?m=schedule_reminders.example',
+  },
+  oneClickUnsubscribe: true,
 };
 
 describe('subjects and senders — byte-equal to the es registry', () => {
@@ -65,21 +77,44 @@ describe('preference footer + List-Unsubscribe', () => {
       expect(html).toContain(
         'href="https://stockpilotusa.com/dashboard/settings/notifications"',
       );
+      // B15 (integrator decision 2): the reminder email switch is an account
+      // setting, and Gmail's own Unsubscribe button posts without showing our
+      // confirm page, so the email itself says it stops in every workspace.
       expect(html).toContain(
-        'Unsubscribing stops this notification type only — security and account emails still arrive.',
+        'Unsubscribing stops schedule reminder emails only, in every workspace you belong to — security and account emails still arrive.',
       );
+      expect(html).not.toContain('Unsubscribing stops this notification type only');
       expect(html).toContain('Schedule reminders are on for theo@l4l.example');
     }
   });
 
-  it('returns a List-Unsubscribe header pointing at the settings page (digest precedent, no -Post)', () => {
+  it('without a signed link: List-Unsubscribe at the settings page, and no -Post', () => {
     for (const r of [renderSchedTomorrow(BASE), renderSchedHour(BASE)]) {
       expect(r.headers).toEqual({
         'List-Unsubscribe': '<https://stockpilotusa.com/dashboard/settings/notifications>',
       });
-      // No one-click POST endpoint exists for signed-in preferences —
-      // advertising RFC 8058 one-click would be a lie.
+      // The settings page is behind sign-in and ignores a POST — advertising
+      // RFC 8058 one-click there would be a lie.
       expect(r.headers['List-Unsubscribe-Post']).toBeUndefined();
+    }
+  });
+
+  it('with a signed link: List-Unsubscribe and List-Unsubscribe-Post name it, and the footer Unsubscribe opens it', () => {
+    const href = (html: string, label: string) =>
+      html.match(new RegExp(`<a class="ink2" href="([^"]*)"[^>]*>${label}</a>`))?.[1];
+    for (const r of [renderSchedTomorrow(SIGNED), renderSchedHour(SIGNED)]) {
+      expect(r.headers).toEqual({
+        'List-Unsubscribe': `<${SIGNED.urls.unsubscribe}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      });
+      expect(href(r.html, 'Unsubscribe')).toBe(SIGNED.urls.unsubscribe);
+      expect(href(r.html, 'Manage email preferences')).toBe(SIGNED.urls.manage);
+      // A text-only reader can unsubscribe too.
+      expect(r.text).toContain(`Manage email preferences: ${SIGNED.urls.manage}`);
+      expect(r.text.endsWith(`Unsubscribe: ${SIGNED.urls.unsubscribe}`)).toBe(true);
+    }
+    for (const r of [renderSchedTomorrow(BASE), renderSchedHour(BASE)]) {
+      expect(r.text).not.toContain('Unsubscribe:');
     }
   });
 });

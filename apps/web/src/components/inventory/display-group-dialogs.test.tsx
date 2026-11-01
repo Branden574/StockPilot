@@ -18,6 +18,23 @@ vi.mock('@/server/actions/item-grouping', () => ({
   previewGroupingAction: h.preview,
   applyGroupingAction: h.apply,
 }));
+// The done message's "Show it" link (B5) is a next/link: a plain anchor here.
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    children,
+    prefetch: _prefetch,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+    prefetch?: boolean;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
 import {
   GroupSelectedDialog,
@@ -1029,6 +1046,82 @@ describe('GroupSelectedDialog', () => {
       itemIds: [A],
       target: { kind: 'existing', groupId: G, expectedVersion: 4 },
     });
+  });
+});
+
+// B5 (2026-10-25): after Group selected, the new group's header can be on
+// another page. A list paged on the server cannot tell which page that is, so
+// it hands the dialog the address of the page that draws the header, and the
+// done message links to it; a list that turns to the page itself hands none.
+describe('GroupSelectedDialog: the done message links to the group (B5)', () => {
+  const href = (groupId: string) => `/dashboard/inventory?group=${groupId}`;
+
+  async function groupTwo(props: Partial<React.ComponentProps<typeof GroupSelectedDialog>>) {
+    h.preview.mockResolvedValueOnce(review([A, B], [rec(A), rec(B)]));
+    h.apply.mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+        {...props}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    await screen.findByText(GROUP_COPY.done('Polo XXXL'));
+  }
+
+  it('says where the group is with a "Show it" link named for the group, to the page the list hands over', async () => {
+    const showGroupHref = vi.fn(href);
+    await groupTwo({ showGroupHref });
+    const link = screen.getByRole('link', { name: GROUP_COPY.showItFor('Polo XXXL') });
+    expect(link).toHaveTextContent(GROUP_COPY.showIt);
+    expect(link).toHaveAttribute('href', `/dashboard/inventory?group=${G}`);
+    expect(showGroupHref).toHaveBeenCalledWith(G);
+    // Inside the announced result, after its sentence.
+    expect(screen.getByRole('status')).toContainElement(link);
+    // Focus still moves to Done.
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('following it closes the dialog', async () => {
+    const onOpenChange = vi.fn();
+    await groupTwo({ showGroupHref: href, onOpenChange });
+    const link = screen.getByRole('link', { name: GROUP_COPY.showItFor('Polo XXXL') });
+    // The anchor's own navigation is not what is under test.
+    link.addEventListener('click', (e) => e.preventDefault());
+    await userEvent.click(link);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('no link when the list hands over no address (it turns to the page itself)', async () => {
+    await groupTwo({});
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('a repeat that changes nothing still links to the group the records are in', async () => {
+    const inG = { displayGroup: { id: G, name: 'Polo XXXL', version: 1 } };
+    h.preview.mockResolvedValueOnce(review([A, B], [rec(A, inG), rec(B, inG)]));
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+        showGroupHref={href}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(screen.getByRole('button', { name: GROUP_COPY.noopConfirm }));
+    expect(screen.getByRole('link', { name: GROUP_COPY.showItFor('Polo XXXL') })).toHaveAttribute(
+      'href',
+      `/dashboard/inventory?group=${G}`,
+    );
+    expect(h.apply).not.toHaveBeenCalled();
   });
 });
 

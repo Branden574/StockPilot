@@ -210,7 +210,7 @@ export function PoScanForm() {
             value={names[0] ?? ''}
             onChange={(e) => setName(0, e.target.value)}
             maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
-            placeholder="Example: August DC4 Book Order"
+            placeholder="Example: August Restock Order"
             disabled={busy}
           />
           <p className="text-muted-foreground text-[12.5px]">
@@ -321,7 +321,7 @@ export function PoScanForm() {
                     value={names[i] ?? ''}
                     onChange={(e) => setName(i, e.target.value)}
                     maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
-                    placeholder="Example: August DC4 Book Order"
+                    placeholder="Example: August Restock Order"
                     disabled={busy}
                   />
                 </div>

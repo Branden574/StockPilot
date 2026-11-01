@@ -32,7 +32,7 @@ describe('StartCycleCountForm', () => {
     expect(screen.getByRole('combobox', { name: 'Warehouse' })).toHaveTextContent('All warehouses');
     expect(screen.getByRole('textbox', { name: 'Notes (optional)' })).toHaveAttribute(
       'placeholder',
-      'e.g. Quarterly count · DC4 · Q2 2026',
+      'e.g. Quarterly count · Main warehouse · Q2 2026',
     );
   });
 

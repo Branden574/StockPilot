@@ -6,7 +6,7 @@
  *
  * THE DEFECT THIS EXISTS FOR. `complete_picking` has written
  *
- *     Order pick (order_request b3c7390a-b114-4839-a100-a008d3f3fde0)
+ *     Order pick (order_request a0000060-0000-4000-8000-000000000060)
  *
  * since migration 0111. `order_requests.order_number` — the number a human
  * actually says out loud — only arrived in 0254, so the note had nothing but

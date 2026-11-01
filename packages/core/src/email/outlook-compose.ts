@@ -163,7 +163,7 @@ export function normalizeDisplayName(name: string | undefined): string | undefin
  * `"`" — which ACCEPTS `? & = % / + # ! $ ' ( ) * | \ ^ { } [ ] ~` and
  * backtick. `a?cc=attacker@evil.test` therefore validated clean, and
  * `composeMailtoUrl` interpolated it into the URL PATH raw. A URL parser then
- * reads that as `to = a`, `cc = attacker@evil.test?cc=arosas@cvwest.org` — the
+ * reads that as `to = a`, `cc = attacker@evil.test?cc=jstone@site1.test` — the
  * attacker gets the copy and THE MANDATORY CC IS SWALLOWED INTO THEIR VALUE.
  * Not "a second recipient appears"; the acceptance gate silently disappears.
  *

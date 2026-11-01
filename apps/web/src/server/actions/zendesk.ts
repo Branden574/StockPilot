@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ConnectionsService } from '@/server/services/connections';
 import { ServiceError } from '@/server/services/context';
 
@@ -33,6 +34,7 @@ export async function connectZendeskAction(
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -58,6 +60,7 @@ export async function setZendeskSubdomainAction(
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -71,6 +74,7 @@ export async function disconnectZendeskAction(): Promise<ActionResult> {
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

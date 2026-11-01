@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { sessionIdFromJwt } from '@/lib/auth/api-context';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { audit } from '@/server/services/audit';
 import { ServiceContext, ServiceError, withContext } from '@/server/services/context';
@@ -20,11 +21,15 @@ const renameSchema = z.object({
   name: z.string().max(60),
 });
 
+/**
+ * The caller's own session id: the `session_id` claim of the access token,
+ * once its signature checks out (lib/auth/verified-claims). It used to be
+ * decoded from getSession()'s token unchecked. A token that does not verify
+ * gives no id, and "sign out other devices" then refuses rather than guess
+ * which session to keep.
+ */
 async function currentSessionId(ctx: ServiceContext): Promise<string | null> {
-  const {
-    data: { session },
-  } = await ctx.supabase.auth.getSession();
-  return session?.access_token ? sessionIdFromJwt(session.access_token) : null;
+  return (await readVerifiedSessionClaims(ctx.supabase))?.sessionId ?? null;
 }
 
 export async function revokeSessionAction(input: {
@@ -47,6 +52,7 @@ export async function revokeSessionAction(input: {
     revalidatePath('/dashboard/settings/security');
     return ok(null);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to sign out device');
   }
@@ -69,6 +75,7 @@ export async function renameSessionAction(input: {
     revalidatePath('/dashboard/settings/security');
     return ok(null);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to rename device');
   }
@@ -93,6 +100,7 @@ export async function revokeOtherSessionsAction(): Promise<ActionResult<{ revoke
     revalidatePath('/dashboard/settings/security');
     return ok({ revoked: 'others' });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to sign out devices');
   }

@@ -218,44 +218,53 @@ export async function createOrgForCustomerAction(
   //    — generateLink minted the link but sent nothing). If the send fails,
   //    the org is still provisioned; surface the failure to the operator
   //    instead of rolling back.
-  // Same /auth/confirm construction as the password-reset email: the raw
-  // action_link returns the session in a URL fragment that the server-side
-  // callback can't read, bouncing invitees to /signin.
+  // Same /auth/confirm construction as the password-reset email, and NEVER
+  // the raw action_link: that returns the session in a URL fragment, which
+  // the server-side callback can't read and the browser client refuses
+  // (PKCE-only, lib/supabase/client.test.ts), so the owner would land on
+  // /signin, not signed in, with live tokens in the address bar. With no
+  // hashed token there is no link of ours to send.
   const inviteHashedToken = invited.properties?.hashed_token;
-  const actionLink = inviteHashedToken
-    // next=/reset/complete, NOT /dashboard: the invite creates a
-    // PASSWORD-LESS auth user. Landing them on the dashboard leaves them
-    // with no credential — once that session expires, their only way back
-    // in is guessing to use "Forgot password". Force the set-a-password
-    // form while the invite session is live.
-    ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/reset/complete')}`
-    : invited.properties?.action_link;
-  if (actionLink) {
-    // ws-ready (es invitations family) — previously reused the generic
-    // invite template; now renders the dedicated workspace-ready design.
-    const message = renderWorkspaceReadyEmail({
-      email: parsed.data.email,
-      org: parsed.data.name,
-      openUrl: actionLink,
-      appUrl: env.NEXT_PUBLIC_APP_URL,
+  if (!inviteHashedToken) {
+    await reportError(new Error('generateLink(invite) returned no hashed_token'), {
+      tag: 'platform-admin.invite-link',
+      extra: { orgId },
     });
-    const sent = await sendEmail({
-      to: parsed.data.email,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-      from: message.from,
+    return err(
+      'internal_error',
+      'Org created, but no invite link could be made, so no email was sent. Open the org in the platform console and choose Send password reset for the owner.',
+    );
+  }
+  // next=/reset/complete, NOT /dashboard: the invite creates a
+  // PASSWORD-LESS auth user. Landing them on the dashboard leaves them
+  // with no credential — once that session expires, their only way back
+  // in is guessing to use "Forgot password". Force the set-a-password
+  // form while the invite session is live.
+  const inviteUrl = `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/reset/complete')}`;
+  // ws-ready (es invitations family) — previously reused the generic
+  // invite template; now renders the dedicated workspace-ready design.
+  const message = renderWorkspaceReadyEmail({
+    email: parsed.data.email,
+    org: parsed.data.name,
+    openUrl: inviteUrl,
+    appUrl: env.NEXT_PUBLIC_APP_URL,
+  });
+  const sent = await sendEmail({
+    to: parsed.data.email,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+    from: message.from,
+  });
+  if (!sent.ok) {
+    await reportError(new Error(sent.error ?? 'invite email send failed'), {
+      tag: 'platform-admin.invite-email',
+      extra: { orgId, email: parsed.data.email },
     });
-    if (!sent.ok) {
-      await reportError(new Error(sent.error ?? 'invite email send failed'), {
-        tag: 'platform-admin.invite-email',
-        extra: { orgId, email: parsed.data.email },
-      });
-      return err(
-        'internal_error',
-        'Org created, but the invite email failed to send. Re-send it manually or check Resend.',
-      );
-    }
+    return err(
+      'internal_error',
+      'Org created, but the invite email failed to send. Re-send it manually or check Resend.',
+    );
   }
 
   revalidatePath('/dashboard/admin/orgs');

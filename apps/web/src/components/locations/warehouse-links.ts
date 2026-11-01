@@ -1,8 +1,9 @@
 /**
  * Links on a warehouse's page: "New order from here", and the contact lines
  * (Address & contact, and the manager's email). Ported from the phone Suppliers screen (P5.8,
- * `supplierTelUrl` / `supplierMailtoUrl`), so one plain number or address
- * becomes a link and anything else is shown as the stored words with no link.
+ * `supplierTelUrl`), so one plain number becomes a link and anything else is
+ * shown as the stored words with no link. The email links use the one shared
+ * rule for stored addresses, plainAddressMailtoUrl in @stockpilot/core.
  *
  * Before, the page built `tel:${contact_phone}` and `mailto:${email}` from the
  * stored text, so letters, '*', '#', ',' or ';' reached the dialler ("555-1234
@@ -66,32 +67,6 @@ export function warehouseTelUrl(phone: string | null | undefined): string | null
   const dialled = digits(rest);
   if (dialled.startsWith('7')) return dialled.length === 11 ? `tel:+${dialled}` : null;
   return dialled.length >= 8 && dialled.length <= 15 ? `tel:+${dialled}` : null;
-}
-
-/**
- * The mailto: link for a stored email, or null when the text is not one plain
- * address. Plain is an allow-list, so anything not named here fails closed:
- * the text without its outer spaces is one '@' between a name and a domain,
- * both ASCII only. The name is dot-separated runs of letters, digits and
- * ! $ ' * + = ^ _ ` { | } ~ - (never '?', '&', ',', ';', '#', '%', '/',
- * quotes, brackets, colons or spaces, which make a mailto: link do more than
- * address one person). The domain is two or more dot-separated labels of
- * letters, digits and inner hyphens. The name is at most 64 characters, each
- * domain label at most 63 and the whole address at most 254 (RFC 5321). The
- * name and the domain go out percent-encoded on either side of a literal '@'
- * (RFC 6068).
- */
-export function warehouseMailtoUrl(email: string | null | undefined): string | null {
-  const address = (email ?? '').trim();
-  if (address.length > 254) return null;
-  const parts = address.split('@');
-  if (parts.length !== 2) return null;
-  const [name = '', domain = ''] = parts;
-  const atom = "[A-Za-z0-9!$'*+=^_`{|}~-]+";
-  const label = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
-  if (!new RegExp(`^${atom}(?:\\.${atom})*$`).test(name) || name.length > 64) return null;
-  if (!new RegExp(`^${label}(?:\\.${label})+$`).test(domain)) return null;
-  return `mailto:${encodeURIComponent(name)}@${encodeURIComponent(domain)}`;
 }
 
 /**

@@ -467,13 +467,14 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
       'Ticket assigned',
       'Email sent',
     ];
     for (const banned of FORBIDDEN) {
       expect(src).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(src).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('`canReadAll` is actually ASSIGNED FROM showWriteCta(read_all/manage), not left dangling next to a hardcoded value', () => {
@@ -722,6 +723,14 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(src).not.toMatch(/Copy Email Details below/);
   });
 
+  it('the blocked-state headline follows the transport the opener tried, never the bare Outlook constant (F1-5 phone walk, 2026-09-27)', () => {
+    // A refused "Open in Default Email App" used to say "Outlook could not be
+    // opened automatically." blockedHeadlineFor (maintenance-email-actions.ts,
+    // its own tests) picks the words from the result's `attempted` transport.
+    expect(src).toContain('{blockedHeadlineFor(lastResult.attempted)}');
+    expect(src).not.toContain('{BLOCKED_HEADLINE}');
+  });
+
   it('renders the detail-page StockPilot-activity note (web page.tsx\'s own verbatim sentence) — no fake ticket-conversation timeline', () => {
     expect(src).toContain(
       'Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here.',
@@ -733,7 +742,6 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
       'Ticket assigned',
       'Email sent',
       // §GC-4 additions (Maintenance Resolved plan) — this surface gains
@@ -748,6 +756,8 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     for (const banned of FORBIDDEN) {
       expect(src).not.toContain(banned);
     }
+    // A named person notified, whatever the name (`<Name> notified`).
+    expect(src).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   });
 
   it('derives status labels from MAINTENANCE_STATUS_LABELS, never a hand-copied literal', () => {

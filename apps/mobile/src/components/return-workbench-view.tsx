@@ -381,6 +381,7 @@ export function ReturnWorkbenchView({
             {actions.primary ? (
               <Button
                 block
+                wrap
                 disabled={disabled}
                 accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}
                 onPress={() => onAction(actions.primary!)}
@@ -402,6 +403,7 @@ export function ReturnWorkbenchView({
                     key={a}
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
+                    wrap
                     disabled={disabled}
                     style={{ minHeight: MIN_TAP }}
                     accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}

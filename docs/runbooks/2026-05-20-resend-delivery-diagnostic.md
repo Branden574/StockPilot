@@ -1,7 +1,7 @@
 # Resend Email Not Reaching Org Recipients — Diagnostic Runbook
 
 **Date:** 2026-05-20
-**Symptom:** Resend dashboard marks an email as "sent" / "delivered", but recipients on company / school org domains (e.g. `@cvsouth.org`) never see the message — not in inbox, not in spam.
+**Symptom:** Resend dashboard marks an email as "sent" / "delivered", but recipients on company / school org domains (e.g. a school district's own domain) never see the message — not in inbox, not in spam.
 
 This runbook walks through the most likely causes in order of likelihood. Code changes already shipped (commit `ac17340` — auto Reply-To header) handle the small mechanical wins. The remaining causes are infrastructure / DNS / recipient-side gateway.
 

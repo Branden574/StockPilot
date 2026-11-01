@@ -178,13 +178,13 @@ const MACHINE_TOKEN_RE = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
  *  `movement-note-sentinel.ts`, which is the one definition in the repo. */
 const UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
 
-/** `PO CVW-002201` — machine-composed by the receipt writer. The PO number is
+/** `PO DEMO-002201` — machine-composed by the receipt writer. The PO number is
  *  already carried structurally in `poNumber`, so echoing it as a "note" both
  *  duplicates and misrepresents it as typed prose. */
 const PO_REASON_RE = /^PO\s+[\w-]+$/i;
 
 /** Trailing internal reference a reason writer appends, e.g.
- *  "Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)".
+ *  "Order pick (order_request 5000000c-0000-4000-8000-00000000000c)".
  *  The prefix is real prose; the parenthetical is a raw id and must go. */
 const TRAILING_REF_RE =
   /\s*\((?:order_request|order|return|receipt|purchase_order|cycle_count|item)\s+[0-9a-f-]{36}\)\s*$/i;
@@ -305,7 +305,7 @@ export interface FormattedHistoryMovement {
   whenIso: string;
   /** The operator's typed words, or null (rule 2). */
   noteLabel: string | null;
-  /** "Receipt R-20260722-175600-e56648 - PO CVW-002201 (cancelled)" style
+  /** "Receipt R-20260722-175600-0a0a01 - PO DEMO-002201 (cancelled)" style
    *  provenance, or null when the movement did not come from receiving. */
   sourceLabel: string | null;
   /** "Reversed later by R-...-REV" / "Reverses R-..." plus the typed reversal

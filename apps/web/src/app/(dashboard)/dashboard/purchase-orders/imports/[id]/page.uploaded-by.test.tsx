@@ -37,6 +37,14 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
 }));
+// The page reads the organization's zone for the lineage notice
+// (page.lineage-timezone.test.tsx covers it).
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1' })),
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 vi.mock('@/server/services/context', () => ({
   ServiceError: class ServiceError extends Error {
     constructor(
@@ -110,7 +118,7 @@ beforeEach(() => {
   });
   svc.resolveLineResults.mockResolvedValue({});
   svc.uploaderProfiles.mockResolvedValue(
-    new Map([[UPLOADER, { full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' }]]),
+    new Map([[UPLOADER, { full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' }]]),
   );
 });
 
@@ -120,16 +128,16 @@ const sourceLine = () => screen.getByText(/^Source file: fall\.pdf/);
 describe('PO import detail: who uploaded it', () => {
   it('says "Uploaded by <full name>" beside the source file', async () => {
     await renderDetail();
-    expect(sourceLine()).toHaveTextContent('Source file: fall.pdf · Uploaded by Marissa Lopez');
+    expect(sourceLine()).toHaveTextContent('Source file: fall.pdf · Uploaded by Rebecca Lowry');
     expect(svc.uploaderProfiles).toHaveBeenCalledWith([UPLOADER]);
   });
 
   it('falls back to the email', async () => {
     svc.uploaderProfiles.mockResolvedValue(
-      new Map([[UPLOADER, { full_name: null, email: 'marissa@cvwest.org' }]]),
+      new Map([[UPLOADER, { full_name: null, email: 'rebecca@site1.test' }]]),
     );
     await renderDetail();
-    expect(sourceLine()).toHaveTextContent('Uploaded by marissa@cvwest.org');
+    expect(sourceLine()).toHaveTextContent('Uploaded by rebecca@site1.test');
   });
 
   it('says "Former member" when the profile is no longer readable', async () => {

@@ -37,8 +37,9 @@ export const SITE_URL = 'https://stockpilotusa.com';
  * reads these as "the recipients": routing is resolved per org from
  * `organizations.email_routing` (`getOrgEmailRouting` +
  * `deliveryRecipientsForRouting`), and the constants remain only as the
- * compiled code-before-migration fallback and the migration seed's source of
- * truth — the full record is on the core module.
+ * compiled code-before-migration fallback and the tests' validated pair, a
+ * sample pair on reserved `.test` domains since 2026-10-25 — the full record
+ * is on the core module.
  *
  * Re-exported rather than re-declared so `Object.freeze` identity, this file's
  * importers, and `site.test.ts` all keep working untouched.

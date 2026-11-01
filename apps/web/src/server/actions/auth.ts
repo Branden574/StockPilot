@@ -5,9 +5,9 @@ import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
-import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { noteLoginDevice } from '@/lib/auth/login-device';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
@@ -663,12 +663,11 @@ export async function changePasswordAction(
   // keepId spares the tab that made the change. A `keepId: null` payload means
   // "evict EVERY session" (signOutAction's semantics), so when the current
   // session id can't be derived we SKIP the broadcast rather than send a null
-  // we don't mean and bounce the user to /signin mid-flow.
+  // we don't mean and bounce the user to /signin mid-flow. The id is the
+  // access token's `session_id` claim once its signature checks out
+  // (lib/auth/verified-claims), not getSession()'s token decoded unchecked.
   try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const keepId = session?.access_token ? sessionIdFromJwt(session.access_token) : null;
+    const keepId = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
     if (keepId) {
       await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
     } else {

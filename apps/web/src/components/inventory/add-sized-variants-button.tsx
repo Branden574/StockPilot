@@ -11,8 +11,11 @@ import {
   stripSizeSuffix,
   stripSkuSuffix,
   type ApparelAlphaSize,
+  type NewRackConfirmationDetail,
 } from '@stockpilot/core';
 
+import { newRackConfirmContent, newRackQuestion } from '@/components/inventory/new-rack-question';
+import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,6 +80,10 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
     stripSkuSuffix(source.sku, source.name) ?? '',
   );
   const [selected, setSelected] = React.useState<Array<{ size: SizeCode; quantity: number }>>([]);
+  // "Create new rack 1-B?" (2026-10-24): the new sizes inherit this item's rack
+  // label, and when no such rack exists the server asks before it creates one,
+  // the same question as the New item form (see new-rack-question.ts).
+  const [rackQuestion, setRackQuestion] = React.useState<NewRackConfirmationDetail | null>(null);
 
   React.useEffect(() => {
     if (open) {
@@ -84,10 +91,15 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       setBaseName(stripSizeSuffix(source.name));
       setBaseSku(stripSkuSuffix(source.sku, source.name) ?? '');
       setSelected([]);
+      setRackQuestion(null);
     }
   }, [open, source.name, source.sku]);
 
-  async function apply() {
+  /**
+   * `answer` is the person's reply to the server's new-rack question, for this
+   * one save: yes, or the near-match to put the stock on instead.
+   */
+  async function apply(answer: { confirmNewRack?: true; binLocation?: string } = {}) {
     if (selected.length === 0) {
       toast.error('Pick at least one size.');
       return;
@@ -108,18 +120,24 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         warehouseId: source.warehouseId,
         charterId: source.charterId,
         primaryLocationId: source.primaryLocationId,
-        binLocation: source.binLocation,
+        binLocation: answer.binLocation ?? source.binLocation,
         retailPrice: source.retailPrice,
         unitCost: source.unitCost,
         reorderPoint: source.reorderPoint,
         reorderQuantity: source.reorderQuantity,
         unitOfMeasure: source.unitOfMeasure,
         variants: selected,
+        // Only after the person said yes to creating the new rack.
+        ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
       });
       if (!res.ok) {
+        const question = newRackQuestion(res.error);
+        setRackQuestion(question);
+        if (question) return;
         toast.error(res.error.message);
         return;
       }
+      setRackQuestion(null);
       const lead = `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}`;
       if (res.data.placementFailed) {
         // This entry point inherits `binLocation` from the SOURCE item rather
@@ -246,11 +264,20 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
             <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               Cancel
             </Button>
-            <Button type="button" onClick={apply} disabled={busy}>
+            <Button type="button" onClick={() => void apply()} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create variants'}
             </Button>
           </DialogFooter>
         </DialogContent>
+
+        <PlacementConfirmDialog
+          open={rackQuestion !== null}
+          content={rackQuestion ? newRackConfirmContent(rackQuestion) : null}
+          submitting={busy}
+          onCancel={() => setRackQuestion(null)}
+          onConfirm={() => void apply({ confirmNewRack: true })}
+          onUseSuggestion={(label) => void apply({ binLocation: label })}
+        />
       </Dialog>
     </>
   );

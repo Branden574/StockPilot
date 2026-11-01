@@ -17,10 +17,11 @@ import { invalidateInventoryListAfterWrite, runStreamedStockWrites } from './inv
  * revalidateTag): which inventory-list tags a deployment would actually
  * expire, and when.
  *
- * The CONTROL cases pin the two Next behaviours runStreamedStockWrites exists
- * for. If an upgrade makes either of them start expiring the tag, the control
- * fails, and the scope (and the chat route's use of it) can be revisited
- * rather than kept on faith.
+ * The CONTROL cases pin the Next behaviours runStreamedStockWrites is built
+ * on: a tag recorded inside a streamed body is never sent (why the scope
+ * exists), and what after() does with a tag recorded a second time. If an
+ * upgrade changes either, the control fails, and the scope (and the chat
+ * route's use of it) can be revisited rather than kept on faith.
  */
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -79,10 +80,18 @@ describe('invalidating the Items/Books cache from a Route Handler', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('CONTROL: recording the tag in the stream and again from after() is dropped too', async () => {
-    // Why the scope queues orgs instead of letting the write record the tag:
-    // after() flushes only tags new since its callbacks started, compared by
-    // tag + profile, so the second record matches the dead first one.
+  it('CONTROL: a tag recorded in the stream and again from after() is sent once the stream closes', async () => {
+    // Next 16.3 dropped this one too: after() sent only tags whose tag +
+    // profile were not in the work store when its callbacks started (16.3.8
+    // revalidation-utils.js diffRevalidationState, a Set of tag:profile), and
+    // the stream had already put this tag there. Since 16.4
+    // (vercel/next.js#99499, "propagate repeated tag revalidation from
+    // after()"), cloneRevalidationState copies each entry with its
+    // revalidatedAt, revalidateTag moves revalidatedAt on in place for a
+    // repeat (revalidate.js, the existingIndex branch), and
+    // diffRevalidationState sends any entry whose revalidatedAt moved on.
+    // So the flush no longer depends on the scope holding the orgs back
+    // until after(); runStreamedStockWrites still records each one there.
     const { after } = await import('next/server');
     const { expired } = await runRouteThroughNext(
       {
@@ -95,7 +104,33 @@ describe('invalidating the Items/Books cache from a Route Handler', () => {
       },
       post(),
     );
-    expect(inventoryExpiries(expired)).toEqual([]);
+    expect(inventoryExpiries(expired)).toEqual([
+      { tags: ['inventory-list-org-a'], durations: { expire: 0 }, phase: 'after-close' },
+    ]);
+  });
+
+  it('an org expired before the handler returned is expired again after a write in the scope', async () => {
+    // Next 16.3 de-duplicated the second expiry away (the after() flush
+    // matched the entry recorded before the return). Since 16.4 it is sent,
+    // and it is needed: the write in the stream came after the first expiry,
+    // so a list read in between would otherwise be served for up to the TTL.
+    const { expired } = await runRouteThroughNext(
+      {
+        POST: async () => {
+          invalidateInventoryListAfterWrite('org-a', 'test.before_return');
+          return streamedRoute(() =>
+            runStreamedStockWrites('test.stream', async () => {
+              invalidateInventoryListAfterWrite('org-a', 'test.write');
+            }),
+          ).POST();
+        },
+      },
+      post(),
+    );
+    expect(inventoryExpiries(expired)).toEqual([
+      { tags: ['inventory-list-org-a'], durations: { expire: 0 }, phase: 'before-close' },
+      { tags: ['inventory-list-org-a'], durations: { expire: 0 }, phase: 'after-close' },
+    ]);
   });
 
   it('runStreamedStockWrites makes the in-stream write take effect once the stream closes', async () => {

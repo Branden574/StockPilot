@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
 import { traceLotAction } from '@/server/actions/lot-trace';
 import type { LotTraceResult } from '@/server/services/lots';
 
@@ -44,6 +45,8 @@ export function LotTraceSearch() {
       }
       setResult(res.data);
     } catch (caught) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(caught)) return;
       setError(caught instanceof Error ? caught.message : String(caught));
       setResult(null);
     } finally {

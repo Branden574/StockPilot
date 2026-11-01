@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
@@ -28,6 +29,7 @@ const pointSchema = z.object({ id: z.string().uuid() });
  * screens act on.
  */
 function refusal(e: unknown, internalWords: string): ActionResult<never> {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     const reason =
       e.details && typeof e.details === 'object'

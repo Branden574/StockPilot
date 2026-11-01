@@ -549,6 +549,38 @@ describe('Books page: a staff page is planned group-aware', () => {
       (m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null,
     ).toBeNull();
   });
+
+  // B5 (2026-10-25): the "Show it" link after Group selected opens the list
+  // with ?group=<id>, planned to the page that draws that group's header.
+  it('?group=: the page that draws the group header is read and is the page on screen', async () => {
+    const G = '0e5f2c1a-3b4d-4e6f-8a9b-0c1d2e3f4a5b';
+    h.role = 'staff';
+    const rows: unknown[] = [];
+    for (let i = 1; i <= 90; i++) rows.push(book(`b${String(i).padStart(3, '0')}`, i * 2));
+    h.planRows = { rows, total: rows.length, valueOnHand: 90 };
+    m.forOrgAsMember.mockResolvedValue(
+      new Map([
+        ['b070', { id: G, name: 'Set', version: 1 }],
+        ['b071', { id: G, name: 'Set', version: 1 }],
+      ]),
+    );
+    m.inventoryList.mockImplementation((filters: { ids?: string[] }) =>
+      logged('liveList', async () => ({
+        items: (filters.ids ?? []).map((id) => ({ ...BOOK, id })),
+        total: 1,
+        valueOnHand: 0,
+      })),
+    );
+    render(await callPage({ group: G }));
+    const ids = (m.inventoryList.mock.calls[0]![0] as { ids: string[] }).ids;
+    expect(ids).toEqual(expect.arrayContaining(['b070', 'b071']));
+    const props = m.tableProps.mock.calls[0]![0] as {
+      page: number;
+      plannedPage: { page: number };
+    };
+    expect(props.plannedPage.page).toBe(3);
+    expect(props.page).toBe(3);
+  });
 });
 
 /**

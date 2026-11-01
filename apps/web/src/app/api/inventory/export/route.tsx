@@ -4,7 +4,6 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import {
@@ -28,7 +27,9 @@ import {
 } from '@/lib/exports/export-request';
 import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
+import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { buildExportPdfRows, InventoryExportPdf } from '@/lib/pdf/inventory-export-pdf';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
 
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest) {
     // Compute-heavy (up to 10k rows -> in-memory xlsx/pdf render). Cap like
     // every other export route so one account can't sustain a serverless-cost
     // DoS; this also emits the security.export_rate_limited audit event.
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const json = await request.json().catch(() => null);
@@ -234,7 +235,10 @@ export async function POST(request: NextRequest) {
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
-    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    // The logo as bytes, never the stored URL (prefetchPdfLogo): react-pdf
+    // fetches a URL, or reads a path, itself, and an org admin can store any
+    // value in logo_url.
+    const orgLogoUrl = await prefetchPdfLogo((org as { logo_url?: string | null })?.logo_url);
 
     const layout = computeExportPdfLayout({
       fields,
@@ -296,12 +300,6 @@ export async function POST(request: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    void reportError(e, { tag: 'inventory.export' });
-    // Surface the actual message (not just an opaque "internal_error") so a
-    // failed export is diagnosable from the toast instead of silently generic.
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : String(e) },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'inventory.export');
   }
 }

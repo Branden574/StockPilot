@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     const since = url.searchParams.get('since') ?? undefined;
     const until = url.searchParams.get('until') ?? undefined;
 
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(request, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     const data = await svc.itemCostHistoryReport(itemId, { since, until });

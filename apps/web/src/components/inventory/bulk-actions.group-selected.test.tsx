@@ -20,9 +20,14 @@ const h = vi.hoisted(() => ({
   group: [] as Array<{
     itemIds: readonly string[];
     view: string;
-    onDone: (o: { outcome: string; group?: { id: string } | null }) => void;
+    onDone: (o: {
+      outcome: string;
+      group?: { id: string } | null;
+      changes?: Array<{ itemId: string; fromGroupId: string | null; toGroupId: string | null }>;
+    }) => void;
     onOpenChange: (v: boolean) => void;
     onAddToSelection?: (ids: string[]) => void;
+    showGroupHref?: (groupId: string) => string;
   }>,
   remove: [] as Array<{
     itemIds: readonly string[];
@@ -62,7 +67,8 @@ function bar(p: {
   ungroupItemIds?: string[];
   onClear?: () => void;
   onAddToSelection?: (ids: string[]) => void;
-  onGrouped?: (groupId: string) => void;
+  onGrouped?: (groupId: string, changedItemIds: readonly string[]) => void;
+  showGroupHref?: (groupId: string) => string;
 }) {
   return (
     <BulkActions
@@ -72,6 +78,7 @@ function bar(p: {
       groupingView="books"
       onAddToSelection={p.onAddToSelection}
       onGrouped={p.onGrouped}
+      showGroupHref={p.showGroupHref}
       categories={[]}
       suppliers={[]}
       locations={[]}
@@ -128,18 +135,44 @@ describe('BulkActions: Group selected and Remove from group', () => {
 
   // Completeness review C3 (design 5: on success the list opens the group):
   // after the review closes on a grouping, the table is told which group to
-  // open; a no-op or a plain close tells it nothing.
-  it('after a grouping, closing the review tells the table which group to open', async () => {
+  // open, and (B5, 2026-10-25) which records the grouping changed, so a list
+  // holding every record knows when its refreshed rows carry the grouping and
+  // can turn to the page that draws the header; a no-op or a plain close
+  // tells it nothing.
+  it('after a grouping, closing the review tells the table which group to open and which records changed', async () => {
     const onGrouped = vi.fn();
     render(bar({ selectedIds: ['a', 'b'], groupItemIds: ['a', 'b'], onGrouped }));
     await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
-    h.group.at(-1)!.onDone({ outcome: 'noop', group: { id: 'g0' } });
+    h.group.at(-1)!.onDone({ outcome: 'noop', group: { id: 'g0' }, changes: [] });
     h.group.at(-1)!.onOpenChange(false);
     expect(onGrouped).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
-    h.group.at(-1)!.onDone({ outcome: 'applied', group: { id: 'g1' } });
+    h.group.at(-1)!.onDone({
+      outcome: 'applied',
+      group: { id: 'g1' },
+      changes: [
+        { itemId: 'a', fromGroupId: null, toGroupId: 'g1' },
+        { itemId: 'b', fromGroupId: 'g0', toGroupId: 'g1' },
+      ],
+    });
     h.group.at(-1)!.onOpenChange(false);
-    expect(onGrouped).toHaveBeenCalledWith('g1');
+    expect(onGrouped).toHaveBeenCalledTimes(1);
+    expect(onGrouped).toHaveBeenCalledWith('g1', ['a', 'b']);
+  });
+
+  // B5: a list paged on the server hands over the address of the page that
+  // draws a group's header, for the done message's "Show it" link.
+  it("hands the review the table's address for a group's page, or none", async () => {
+    const showGroupHref = (id: string) => `/dashboard/books?group=${id}`;
+    const { unmount } = render(
+      bar({ selectedIds: ['a', 'b'], groupItemIds: ['a', 'b'], showGroupHref }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    expect(h.group.at(-1)!.showGroupHref).toBe(showGroupHref);
+    unmount();
+    render(bar({ selectedIds: ['a', 'b'], groupItemIds: ['a', 'b'] }));
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    expect(h.group.at(-1)!.showGroupHref).toBeUndefined();
   });
 
   it('"Add them to the selection" adds the records to the table\'s selection and to what the review covers', async () => {

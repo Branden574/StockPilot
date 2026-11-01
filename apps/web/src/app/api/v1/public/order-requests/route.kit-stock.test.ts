@@ -103,11 +103,11 @@ function wire({ viaLink }: { viaLink: boolean }) {
     },
     // Answers like PostgREST: only the rows the request names.
     'inventory_items.select': servedLikePostgrest(rows),
-    'order_requests.insert.single': {
+    // The header, side row and lines: one transaction (0413 review fix round).
+    'rpc:insert_order_request_with_lines': {
       data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
       error: null,
     },
-    'order_request_lines.insert': { data: null, error: null },
     'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
   });
   adminHolder.client = stub.client;
@@ -139,6 +139,7 @@ describe('POST /api/v1/public/order-requests: kit stock is refused', () => {
       });
       expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
       expect(stub.chainsAll.get('order_request_lines.insert')).toBeUndefined();
+      expect(stub.rpcCalls.map((c) => c.name)).not.toContain('insert_order_request_with_lines');
     });
 
     it(`through ${how}: an order without kit stock still goes through`, async () => {

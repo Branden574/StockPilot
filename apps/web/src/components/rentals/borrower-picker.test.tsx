@@ -15,8 +15,8 @@ import { BorrowerPicker, type BorrowerValue } from './borrower-picker';
 // member list, behind a "Use as typed" row at the bottom of it.
 
 const MEMBERS = [
-  { userId: 'u-jane', displayName: 'Jane Doe', email: 'jane@l4l.org' },
-  { userId: 'u-ravi', displayName: 'Ravi Patel', email: 'ravi@l4l.org' },
+  { userId: 'u-jane', displayName: 'Jane Doe', email: 'jane@example.org' },
+  { userId: 'u-ravi', displayName: 'Ravi Patel', email: 'ravi@example.org' },
 ];
 
 const EMPTY: BorrowerValue = { borrowerUserId: null, borrowerName: '', borrowerEmail: null };
@@ -74,8 +74,8 @@ describe('BorrowerPicker', () => {
     const [first, ...rest] = options();
     expect(first!.textContent).toContain('Someone not in StockPilot');
     expect(rest.map((o) => o.textContent)).toEqual([
-      'Jane Doejane@l4l.org',
-      'Ravi Patelravi@l4l.org',
+      'Jane Doejane@example.org',
+      'Ravi Patelravi@example.org',
     ]);
   });
 
@@ -87,11 +87,11 @@ describe('BorrowerPicker', () => {
     expect(last()).toEqual({
       borrowerUserId: 'u-jane',
       borrowerName: 'Jane Doe',
-      borrowerEmail: 'jane@l4l.org',
+      borrowerEmail: 'jane@example.org',
     });
     expect(list()).toBeNull();
     expect(emailBox()).toBeNull();
-    expect(screen.getByText(/Team member selected\. Rental emails go to jane@l4l\.org\./)).toBeTruthy();
+    expect(screen.getByText(/Team member selected\. Rental emails go to jane@example\.org\./)).toBeTruthy();
   });
 
   it('typed name: kept as typed, offered first as "Someone else", then the email is next', () => {
@@ -147,7 +147,7 @@ describe('BorrowerPicker', () => {
     expect(last()).toEqual({
       borrowerUserId: 'u-ravi',
       borrowerName: 'Ravi Patel',
-      borrowerEmail: 'ravi@l4l.org',
+      borrowerEmail: 'ravi@example.org',
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Rent to someone not in StockPilot' }));
@@ -163,7 +163,7 @@ describe('BorrowerPicker', () => {
     const { last } = renderPicker({
       borrowerUserId: 'u-jane',
       borrowerName: 'Jane Doe',
-      borrowerEmail: 'jane@l4l.org',
+      borrowerEmail: 'jane@example.org',
     });
     fireEvent.change(nameBox(), { target: { value: 'Jane Doe (site lead)' } });
     expect(last()).toEqual({
@@ -175,7 +175,7 @@ describe('BorrowerPicker', () => {
   });
 
   it('with a member picked, the list shows every member to switch to', () => {
-    renderPicker({ borrowerUserId: 'u-jane', borrowerName: 'Jane Doe', borrowerEmail: 'jane@l4l.org' });
+    renderPicker({ borrowerUserId: 'u-jane', borrowerName: 'Jane Doe', borrowerEmail: 'jane@example.org' });
     fireEvent.focus(nameBox());
     expect(options()).toHaveLength(3);
     expect(screen.getByRole('option', { name: /Jane Doe/ }).getAttribute('aria-selected')).toBe('true');
@@ -254,7 +254,7 @@ describe('BorrowerPicker', () => {
   });
 
   it('only the chosen borrower is announced as selected, not the highlighted option', () => {
-    renderPicker({ borrowerUserId: 'u-jane', borrowerName: 'Jane Doe', borrowerEmail: 'jane@l4l.org' });
+    renderPicker({ borrowerUserId: 'u-jane', borrowerName: 'Jane Doe', borrowerEmail: 'jane@example.org' });
     fireEvent.focus(nameBox());
     // Highlight "Someone not in StockPilot": highlighted, not selected.
     fireEvent.keyDown(nameBox(), { key: 'ArrowDown' });
@@ -264,7 +264,7 @@ describe('BorrowerPicker', () => {
         .filter((o) => o.getAttribute('aria-selected') === 'true')
         .map((o) => o.textContent);
     expect(options()[0]!.getAttribute('aria-selected')).toBe('false');
-    expect(selected()).toEqual(['Jane Doejane@l4l.org']);
+    expect(selected()).toEqual(['Jane Doejane@example.org']);
 
     // The picked member, highlighted, shows it (a ring over the picked fill).
     fireEvent.keyDown(nameBox(), { key: 'ArrowDown' });

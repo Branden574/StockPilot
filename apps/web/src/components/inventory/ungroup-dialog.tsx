@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
 import { labelsItemsHref } from '@/lib/inventory/labels-selection';
 import { previewUngroupAction, ungroupItemsAction } from '@/server/actions/item-grouping';
 import type { UngroupCandidate } from '@/server/services/item-grouping';
@@ -144,7 +145,9 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
         setIdentity({ organizationId: r.data.organizationId, actorUserId: r.data.actorUserId });
         setPhase({ kind: 'ready' });
       },
-      () => {
+      (e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         // No answer at all: reads only, so a second look is safe.
         if (mine !== seq.current) return;
         setCandidates([]);
@@ -191,7 +194,9 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     let r: Awaited<ReturnType<typeof ungroupItemsAction>>;
     try {
       r = await ungroupItemsAction(body);
-    } catch {
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       // No answer (the network, a deploy): the split may or may not have
       // applied. Back to the review with the SAME body and key pending, so
       // Save replays it if it did (fix round 1, D6). Never the raw error.

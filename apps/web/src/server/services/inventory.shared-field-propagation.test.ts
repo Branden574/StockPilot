@@ -167,10 +167,12 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
     },
   };
 
-  // createAdminClient() — service-role, bypasses RLS. Only ever sees the
-  // sibling fan-out UPDATE. Its only trailing call is .select('id') (the ids
-  // it rewrote, for their search data); the result is awaited directly off
-  // the query builder, so this stub only needs that and to be thenable.
+  // createAdminClient() — service-role, bypasses RLS. Sees the sibling
+  // fan-out UPDATE, whose only trailing call is .select('id') (the ids it
+  // rewrote, for their search data); the result is awaited directly off the
+  // query builder, so this stub only needs that and to be thenable. A SKU edit
+  // first READS the records it moves (paged: .order().range()); those reads
+  // find nothing in the way and are not updates.
   const adminSupabase = {
     from: (table: string) => {
       if (table !== 'inventory_items') return emptyChain();
@@ -178,9 +180,11 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
       let payload: Record<string, unknown> = {};
       let filterSku: string | undefined;
       let filterOrg: string | undefined;
+      let isUpdate = false;
 
       const p: Record<string, unknown> = {};
       p.update = (data: Record<string, unknown>) => {
+        isUpdate = true;
         payload = data;
         return p;
       };
@@ -192,8 +196,11 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
       p.is = () => p;
       p.neq = () => p;
       p.select = () => p;
+      p.order = () => p;
+      p.range = () => p;
 
       const resolve = () => {
+        if (!isUpdate) return { data: [], error: null };
         adminUpdates.push({ scope: 'siblings', payload, filterSku, filterOrg });
         if (opts.siblingFails23505) {
           return { data: null, error: { code: '23505', message: 'duplicate key value' } };

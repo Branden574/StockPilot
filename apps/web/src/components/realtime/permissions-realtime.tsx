@@ -1,6 +1,6 @@
 'use client';
 
-import { PERMISSION_META, type Permission } from '@stockpilot/core';
+import { isPlatformManagedPermission, PERMISSION_META, type Permission } from '@stockpilot/core';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -43,7 +43,15 @@ export function permissionChangeMessage(
   if (granted === false) {
     return { title: 'Access updated', description: `"${label}" was revoked — refreshing.` };
   }
-  // granted === null → the per-user/role override row was removed
+  // granted === null → the per-user/role override row was removed. For a
+  // platform-managed key (Manage order items) StockPilot support reset the
+  // member's exception: a manager gets it back, a staff member loses it.
+  if (permission && isPlatformManagedPermission(permission)) {
+    return {
+      title: 'Access updated',
+      description: `"${label}" returned to your role's default — refreshing.`,
+    };
+  }
   return { title: 'Access updated', description: `"${label}" was reset to your role default — refreshing.` };
 }
 

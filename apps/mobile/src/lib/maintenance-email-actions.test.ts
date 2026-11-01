@@ -15,6 +15,7 @@ import {
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
+  MAIL_APP_BLOCKED_HEADLINE,
   MAIL_APP_SUCCESS_MESSAGE,
   NATIVE_OUTLOOK_CC_TRUSTED,
   OVERSIZED_MESSAGE,
@@ -28,6 +29,7 @@ import {
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
   shouldShowRoutingAdminNotice,
+  blockedHeadlineFor,
   successMessageFor,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
@@ -100,7 +102,7 @@ function ccOf(url: string): string | undefined {
  *  it: BARE on the native/mailto links, and as the tenant-verified OWA
  *  name-addr chip on the web one. Anything else — absent, empty, split into a
  *  second recipient — fails. */
-const ACCEPTED_CC_FORMS = ['arosas@cvwest.org', 'Andrew Rosas <arosas@cvwest.org>'];
+const ACCEPTED_CC_FORMS = ['jstone@site1.test', 'Jordan Stone <jstone@site1.test>'];
 
 describe('mobile email actions (string assertions ONLY — never a real open in tests)', () => {
   it('THE FIX: on a native-stamped draft the outlook button opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
@@ -112,7 +114,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
     expect(url.startsWith('http')).toBe(false);
     // CC GATE at the actual call site — not just in the composer:
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('CC GATE: exactly ONE openURL invocation per tap — the deep link is never auto-retried (duplicate compose screens)', async () => {
@@ -128,7 +130,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(true);
-    expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(ccOf(url)).toBe('Jordan Stone <jstone@site1.test>');
   });
 
   it('a canOpenURL rejection is read as "not installed", so the probe can never hand this feature a false true', async () => {
@@ -148,7 +150,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
       used: 'default-mail',
     });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
-    expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
+    expect(url.startsWith('mailto:dc4@sampleorg.test?cc=jstone%40site1.test')).toBe(true);
   });
 
   it('linkFits=false refuses to open either transport', async () => {
@@ -156,10 +158,12 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     await expect(openMaintenanceDraft('outlook', oversized, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     await expect(openMaintenanceDraft('mailto', oversized, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(Linking.openURL).not.toHaveBeenCalled();
   });
@@ -177,6 +181,7 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
@@ -242,7 +247,11 @@ describe('the double-tap latch — one unresolved open swallows every call behin
       used: null,
     });
     rejectOpen(new Error('no handler'));
-    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    await expect(first).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+      attempted: 'outlook-native',
+    });
     // ...and after the rejection settles, the button works again.
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
       outcome: 'opened',
@@ -333,6 +342,7 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
     await expect(openMaintenanceDraft('outlook', oversized, 'ios', onOpened)).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: null,
     });
     expect(onOpened).not.toHaveBeenCalled();
   });
@@ -343,6 +353,7 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
     await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
       outcome: 'blocked',
       used: null,
+      attempted: 'outlook-native',
     });
     expect(onOpened).not.toHaveBeenCalled();
     // One tap, one invocation — no automatic second attempt down another
@@ -376,7 +387,7 @@ describe('the maintenance email is fitted against the url this phone will open',
       'Two staff members have reported headaches from the noise, and the afternoon study group has been moved to the library as a result.',
     ].join(' '),
     category: 'Heating or air conditioning',
-    requesterEmail: 'jane.smith@learn4life.org',
+    requesterEmail: 'jane.smith@sampleorg.test',
     requesterPhone: '(555) 555-0199',
     siteName: 'Fresno Learning Center',
     department: 'Operations',
@@ -488,7 +499,7 @@ describe('the maintenance email is fitted against the url this phone will open',
     expect(res).toEqual({ outcome: 'opened', used: 'default-mail' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
-    expect(ccOf(url)).toBe('arosas@cvwest.org');
+    expect(ccOf(url)).toBe('jstone@site1.test');
   });
 
   it('composeTransportForProbe: only a PROVED native app selects the shorter budget', () => {
@@ -599,7 +610,6 @@ describe('exported copy is the literal, brief-pinned text', () => {
       'Ticket created',
       'Request submitted to Zendesk',
       'DC4 notified',
-      'Andrew notified',
       'Ticket assigned',
       'Email sent',
     ];
@@ -607,6 +617,7 @@ describe('exported copy is the literal, brief-pinned text', () => {
       SUCCESS_MESSAGE,
       MAIL_APP_SUCCESS_MESSAGE,
       BLOCKED_HEADLINE,
+      MAIL_APP_BLOCKED_HEADLINE,
       BLOCKED_RETRY_MESSAGE,
       DUPLICATE_WARNING,
       OVERSIZED_MESSAGE,
@@ -616,6 +627,8 @@ describe('exported copy is the literal, brief-pinned text', () => {
       for (const banned of FORBIDDEN) {
         expect(text).not.toContain(banned);
       }
+      // A named person notified, whatever the name (`<Name> notified`).
+      expect(text).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
     }
   });
 });
@@ -673,8 +686,8 @@ const { recipients: _dropped, ...CONTENT } = INPUT;
 
 describe('maintenanceRoutingFromResponse (the REST payload parser + the deploy-window rule)', () => {
   it('an ABSENT field (a pre-feature server) is the ONE fail-open state: fallback', () => {
-    // DEPLOY-ORDER SAFETY: this is byte-identical pre-feature behavior — the
-    // compiled constants — and nothing else may ever produce it.
+    // DEPLOY-ORDER SAFETY: this state composes with the compiled constants,
+    // and nothing else may ever produce it.
     expect(maintenanceRoutingFromResponse(undefined)).toEqual({ state: 'fallback' });
   });
 
@@ -740,7 +753,7 @@ describe('maintenanceEmailInputForRouting (THE matrix cell: compose input or not
     expect(prepared.draft.to).toBe('facilities-intake@acme-tenant.invalid');
   });
 
-  it("'fallback' (pre-feature server ONLY) composes with the compiled pair — byte-identical to pre-feature behavior", () => {
+  it("'fallback' (pre-feature server ONLY) composes with the compiled pair", () => {
     const input = maintenanceEmailInputForRouting(CONTENT, { state: 'fallback' });
     expect(input).not.toBeNull();
     expect(input!.recipients).toBe(L4L_MAINTENANCE_RECIPIENTS);
@@ -798,5 +811,63 @@ describe('the unconfigured-admin experience (parity with the web maintenance sur
   it('routable states produce NO notice text at all', () => {
     expect(routingAdminNotice({ state: 'valid', recipients: ROUTED_DTO })).toBeNull();
     expect(routingAdminNotice({ state: 'fallback' })).toBeNull();
+  });
+});
+
+// =========================================================================
+// THE BLOCKED CARD NAMES THE APP THE PHONE TRIED TO OPEN (F1-5 phone walk,
+// 2026-09-27): after "Open in Default Email App" failed, the request screen
+// said "Outlook could not be opened automatically." The opener now reports
+// which transport it tried, and the headline follows it, the way the success
+// copy follows the transport that carried the draft.
+// =========================================================================
+
+describe('the blocked headline names the app the phone tried to open', () => {
+  it('a refused Open in Default Email App: the email app could not be opened, and Outlook is not named', async () => {
+    vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+    const res = await openMaintenanceDraft('mailto', PREPARED, 'ios', () => {});
+    expect(res).toEqual({ outcome: 'blocked', used: null, attempted: 'default-mail' });
+    const headline = blockedHeadlineFor(res.outcome === 'blocked' ? res.attempted : null);
+    expect(headline).toBe(MAIL_APP_BLOCKED_HEADLINE);
+    expect(headline.toLowerCase()).not.toContain('outlook');
+  });
+
+  it.each([
+    ['the Outlook app', PREPARED, 'outlook-native'],
+    ['Outlook on the web', PREPARED_WEB, 'outlook-web'],
+  ] as const)(
+    'a refused Open in Outlook (%s) keeps the Outlook headline (brief section 19)',
+    async (_label, prepared, transport) => {
+      vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+      const res = await openMaintenanceDraft('outlook', prepared, 'ios', () => {});
+      expect(res).toEqual({ outcome: 'blocked', used: null, attempted: transport });
+      expect(blockedHeadlineFor(transport)).toBe(BLOCKED_HEADLINE);
+    },
+  );
+
+  it('Open in Outlook sent to the email app (cc not trusted on this platform) and refused: worded as the email app', async () => {
+    vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
+    const res = await openMaintenanceDraft('outlook', PREPARED, 'ios', () => {}, {
+      ios: false,
+      android: true,
+    });
+    expect(res).toEqual({ outcome: 'blocked', used: null, attempted: 'default-mail' });
+    expect(blockedHeadlineFor('default-mail')).toBe(MAIL_APP_BLOCKED_HEADLINE);
+  });
+
+  it('nothing tried (a draft no link can carry): the result says no app was asked', async () => {
+    const oversized = { ...PREPARED, linkFits: false };
+    for (const button of ['outlook', 'mailto'] as const) {
+      await expect(openMaintenanceDraft(button, oversized, 'ios', () => {})).resolves.toEqual({
+        outcome: 'blocked',
+        used: null,
+        attempted: null,
+      });
+    }
+    expect(Linking.openURL).not.toHaveBeenCalled();
+  });
+
+  it('MAIL_APP_BLOCKED_HEADLINE is the email-app twin of the Outlook headline (literal pin)', () => {
+    expect(MAIL_APP_BLOCKED_HEADLINE).toBe('Your email app could not be opened automatically.');
   });
 });

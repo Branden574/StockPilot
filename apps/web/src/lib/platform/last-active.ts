@@ -29,6 +29,8 @@
  * wording is testable to the second and identical on every server.
  */
 
+import { formatDayInZone, formatMomentInZone } from './dates';
+
 export interface LastActiveSignals {
   lastSignInAt?: string | null;
   lastSessionAt?: string | null;
@@ -76,8 +78,6 @@ const RELATIVE_DAYS = 30;
  */
 const SEEN_VOUCHES_MS = 10 * 60 * 1000;
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /** Epoch millis for an ISO instant, or null for anything that is not one. */
 function toMillis(iso: string | null | undefined): number | null {
   if (typeof iso !== 'string' || iso.length === 0) return null;
@@ -122,18 +122,23 @@ export function resolveLastActive(signals: LastActiveSignals): ResolvedLastActiv
 }
 
 function utcDate(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return formatDayInZone(ms, 'UTC');
 }
 
 /**
  * COARSE on purpose. The underlying signal has about an hour of resolution,
  * so "4 minutes ago" would claim accuracy the data does not have. Ages are
  * whole elapsed hours and days, which need no time zone; from thirty days on
- * it is a UTC calendar date. Never throws: this renders on the only surface
- * that can disable an account, which has no error boundary.
+ * it is the calendar day in the ORGANIZATION's zone (`timeZone`, its stored
+ * zone). It used to be the UTC day, unlabelled, so a Pacific evening read as
+ * the next day (B9). Never throws: this renders on the only surface that can
+ * disable an account, which has no error boundary.
  */
-export function formatLastActive(iso: string | null | undefined, now: Date): string {
+export function formatLastActive(
+  iso: string | null | undefined,
+  now: Date,
+  timeZone: string | null | undefined,
+): string {
   const ms = toMillis(iso);
   if (ms === null) return 'Never';
 
@@ -146,13 +151,15 @@ export function formatLastActive(iso: string | null | undefined, now: Date): str
   }
   const days = Math.floor(age / DAY_MS);
   if (days < RELATIVE_DAYS) return days === 1 ? '1 day ago' : `${days} days ago`;
-  return utcDate(ms);
+  return formatDayInZone(ms, timeZone);
 }
 
 /**
- * The exact instant, in UTC and LABELLED as UTC. This page is a server
- * component, so an unlabelled toLocaleString() would print the server's wall
- * clock and show a 6:30 PM Pacific session as 1:30 AM the next day.
+ * The exact instant, in UTC and LABELLED as UTC, for an instant that belongs to
+ * no one organization (the platform audit trail). The console's pages are
+ * server components, so an unlabelled toLocaleString() would print the
+ * server's wall clock and show a 6:30 PM Pacific session as 1:30 AM the next
+ * day.
  */
 export function formatExactUtc(iso: string | null | undefined): string | null {
   const ms = toMillis(iso);
@@ -170,17 +177,27 @@ export function formatExactUtc(iso: string | null | undefined): string | null {
  * operator may be reading it to decide an account is dormant. The wording
  * avoids "signed out": a platform disable and a password change end a sign-in
  * too, and the person did neither.
+ *
+ * Every instant is in the ORGANIZATION's zone (`timeZone`), the zone the
+ * cell's thirty-day date is in, and names it ("24 Oct 2026, 18:30 PDT"). In
+ * UTC, a Pacific evening more than a month back read "Signed in 24 Oct 2026"
+ * on the cell and "25 Oct 2026, 01:30 UTC" here (B9 review).
  */
-export function describeLastActive(signals: LastActiveSignals): string {
+export function describeLastActive(
+  signals: LastActiveSignals,
+  timeZone: string | null | undefined,
+): string {
   const { source, floor } = resolveLastActive(signals);
   if (source === 'never') {
     return 'This person has never signed in and has no recorded activity in this organization.';
   }
 
-  const session = formatExactUtc(signals.lastSessionAt);
-  const seen = formatExactUtc(signals.lastSeenAt);
-  const action = formatExactUtc(signals.lastActionAt);
-  const signIn = formatExactUtc(signals.lastSignInAt);
+  const exact = (iso: string | null | undefined): string | null =>
+    toMillis(iso) === null ? null : formatMomentInZone(iso, timeZone);
+  const session = exact(signals.lastSessionAt);
+  const seen = exact(signals.lastSeenAt);
+  const action = exact(signals.lastActionAt);
+  const signIn = exact(signals.lastSignInAt);
 
   const parts: string[] = [];
   if (session) {

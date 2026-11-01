@@ -360,3 +360,97 @@ describe('OrderTimeline — on the shared history rail (P4.B1)', () => {
     }
   });
 });
+
+// B22: the only writer of order_request.status_changed since 2026-07-09 is the
+// paper hand-over (OrderRequestsService.confirmPhysicalSignature, for the web
+// and the phone): its row carries signatureMethod 'physical', signerName and
+// the status the hand-over left, with before and after null. The entry read
+// "Status changed" with no detail, because the detail branch looked for
+// before.status and after.status, which no writer ever wrote. The legacy
+// setStatus (deleted 2026-05-15) wrote after.from and after.to.
+describe('OrderTimeline — a paper hand-over and the legacy status change (B22)', () => {
+  const statusChanged = (id: string, md: Record<string, unknown>) => ({
+    id,
+    event: 'order_request.status_changed',
+    created_at: '2026-10-05T17:00:00Z',
+    user_id: 'u1',
+    metadata: {
+      entity_type: 'order_request',
+      entity_id: 'order-1',
+      warehouse_id: null,
+      before: null,
+      after: null,
+      reason: null,
+      ...md,
+    },
+  });
+  const paper = (id: string, status: unknown, signerName: unknown = 'Pat Receiver') =>
+    statusChanged(id, { signatureMethod: 'physical', signerName, status });
+
+  it('says a physical signature was recorded, who signed the paper, and that the order is completed', async () => {
+    await renderTimeline([paper('a', 'completed')]);
+    expect(screen.getByText('Physical signature recorded')).toBeInTheDocument();
+    expect(screen.getByText('Signed on paper by Pat Receiver.')).toBeInTheDocument();
+    expect(screen.getByText('The order is marked completed.')).toBeInTheDocument();
+    expect(screen.queryByText('Status changed')).toBeNull();
+    // The one who recorded it is the entry's actor.
+    expect(document.querySelector('[data-slot="timeline-entry"]')).toHaveTextContent('Dana Diaz');
+  });
+
+  it("a short paper hand-over says the rest stays on backorder, in the sign page's words", async () => {
+    await renderTimeline([paper('a', 'backordered')]);
+    expect(screen.getByText('Physical signature recorded')).toBeInTheDocument();
+    expect(
+      screen.getByText('What was handed over is recorded. The rest stays on backorder.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('The order is marked completed.')).toBeNull();
+  });
+
+  it('a signer whose name ends with a full stop gets no second one', async () => {
+    await renderTimeline([paper('a', 'completed', '  Pat Receiver Jr. ')]);
+    expect(screen.getByText('Signed on paper by Pat Receiver Jr.')).toBeInTheDocument();
+  });
+
+  it('a status or a signer it cannot read claims nothing beyond the paper signature', async () => {
+    await renderTimeline([paper('a', 'surprise', '   '), paper('b', null, 42)]);
+    expect(screen.getAllByText('Physical signature recorded')).toHaveLength(2);
+    expect(screen.getAllByText('Signed on paper.')).toHaveLength(2);
+    expect(screen.queryByText(/marked completed|on backorder|surprise|42/)).toBeNull();
+  });
+
+  it('a legacy status change says from and to in the status words', async () => {
+    await renderTimeline([
+      statusChanged('a', { after: { from: 'approved', to: 'packing_slip_generated' } }),
+      statusChanged('b', { after: { from: 'packing_slip_generated', to: 'staged_for_delivery' } }),
+    ]);
+    expect(screen.getAllByText('Status changed')).toHaveLength(2);
+    expect(screen.getByText('Approved → Packaging.')).toBeInTheDocument();
+    expect(screen.getByText('Packaging → Ready.')).toBeInTheDocument();
+  });
+
+  it('a status change with nothing it can read stays a bare Status changed, never a guessed detail', async () => {
+    await renderTimeline([statusChanged('a', {})]);
+    expect(screen.getByText('Status changed')).toBeInTheDocument();
+    expect(screen.queryByText(/→|Signed on paper/)).toBeNull();
+  });
+
+  it('a digital signature keeps its own entry', async () => {
+    await renderTimeline([
+      {
+        id: 'd',
+        event: 'order.signature_collected',
+        created_at: '2026-10-05T17:00:00Z',
+        user_id: null,
+        metadata: {
+          entity_type: 'order_request',
+          entity_id: 'order-1',
+          signatureMethod: 'digital',
+          via: 'link',
+        },
+      },
+    ]);
+    expect(screen.getByText('Signature collected')).toBeInTheDocument();
+    expect(screen.getByText('Signature captured at hand-over.')).toBeInTheDocument();
+    expect(screen.queryByText('Physical signature recorded')).toBeNull();
+  });
+});

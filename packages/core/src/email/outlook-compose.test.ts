@@ -320,9 +320,9 @@ describe('composeOutlookMobileUrl — native ms-outlook: transport (CC regressio
  * To address into the URL PATH raw:
  *
  *   to = 'a?cc=attacker@evil.test'
- *     -> mailto:a?cc=attacker@evil.test?cc=arosas%40cvwest.org&subject=S&body=B
+ *     -> mailto:a?cc=attacker@evil.test?cc=jstone%40site1.test&subject=S&body=B
  *
- * A URL parser reads that as To `a`, cc `attacker@evil.test?cc=arosas@cvwest.org`
+ * A URL parser reads that as To `a`, cc `attacker@evil.test?cc=jstone@site1.test`
  * — one cc, belonging to the attacker, with the MANDATORY CC swallowed into
  * their value. Not "an extra recipient appears": the acceptance gate silently
  * disappears, which is the exact failure this whole feature is built around.
@@ -347,7 +347,7 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
     ['whitespace only', '   '],
   ] as const;
 
-  const GOOD = { to: 'dc4@example.test', cc: 'arosas@example.test', subject: 'S', body: 'B' };
+  const GOOD = { to: 'dc4@example.test', cc: 'jstone@example.test', subject: 'S', body: 'B' };
 
   const TRANSPORTS = [
     ['outlook web', composeOutlookWebUrl],
@@ -376,7 +376,7 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
       // unconditionally.
       const out = compose(GOOD);
       expect(out).toContain('dc4');
-      expect(out).toContain('arosas');
+      expect(out).toContain('jstone');
     });
   }
 
@@ -390,9 +390,9 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
     }
     // and the practical set it keeps, so this is a narrowing and not a ban
     for (const ok of [
-      'dc4@learn4life.org',
-      'arosas@cvwest.org',
-      'user+tag@learn4life.org',
+      'dc4@sampleorg.test',
+      'jstone@site1.test',
+      'user+tag@sampleorg.test',
       'first.last@sub.domain.example',
       'a_b-c@x-y.co.uk',
     ]) {
@@ -418,11 +418,11 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
    */
   it('ENCODER: a poisoned address in the mailto PATH still yields exactly one cc — the real one', () => {
     const poisoned = 'a?cc=attacker@evil.test';
-    const url = `mailto:${encodeMailtoPathAddress(poisoned)}?cc=${encodeURIComponent('arosas@example.test')}&subject=S`;
+    const url = `mailto:${encodeMailtoPathAddress(poisoned)}?cc=${encodeURIComponent('jstone@example.test')}&subject=S`;
 
     expect(encodeMailtoPathAddress(poisoned)).toBe('a%3Fcc%3Dattacker@evil.test');
     const parsed = new URLSearchParams(new URL(url).search);
-    expect(parsed.getAll('cc')).toEqual(['arosas@example.test']);
+    expect(parsed.getAll('cc')).toEqual(['jstone@example.test']);
     expect(parsed.getAll('subject')).toEqual(['S']);
   });
 
@@ -432,17 +432,17 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
     // what ships. It does not: the accepted grammar is a strict subset of the
     // path-safe set.
     for (const address of [
-      'dc4@learn4life.org',
-      'arosas@cvwest.org',
-      'user+tag@learn4life.org',
+      'dc4@sampleorg.test',
+      'jstone@site1.test',
+      'user+tag@sampleorg.test',
       'first.last@sub.domain.example',
       'a_b-c@x-y.co.uk',
     ]) {
       expect(encodeMailtoPathAddress(assertRoutableAddress('to', address))).toBe(address);
     }
 
-    expect(composeMailtoUrl({ to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org', subject: 'S', body: 'B' })).toBe(
-      'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=S&body=B',
+    expect(composeMailtoUrl({ to: 'dc4@sampleorg.test', cc: 'jstone@site1.test', subject: 'S', body: 'B' })).toBe(
+      'mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=S&body=B',
     );
   });
 
@@ -472,15 +472,15 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
       'x@y.test\nCC: attacker@evil.test',
     ]) {
       expect(() =>
-        composeMailtoUrl({ to: poison, cc: 'arosas@example.test', subject: 'S', body: 'B' }),
+        composeMailtoUrl({ to: poison, cc: 'jstone@example.test', subject: 'S', body: 'B' }),
       ).toThrow(/recipient "to" must be exactly one plain email address/);
     }
     // And the well-formed pair still composes, byte-for-byte as the owner
     // tenant-verified it — so the refusals above mean something and the fusion
     // changed no output.
     expect(
-      composeMailtoUrl({ to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org', subject: 'S', body: 'B' }),
-    ).toBe('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=S&body=B');
+      composeMailtoUrl({ to: 'dc4@sampleorg.test', cc: 'jstone@site1.test', subject: 'S', body: 'B' }),
+    ).toBe('mailto:dc4@sampleorg.test?cc=jstone%40site1.test&subject=S&body=B');
   });
 
   /**
@@ -496,7 +496,7 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
   it('TYPE-LEVEL PIN: an unencoded address cannot be spliced into the mailto path', () => {
     const build = () =>
       // @ts-expect-error a raw string has not been through encodeMailtoPathAddress
-      mailtoUrlFromPath('a?cc=attacker@evil.test', 'cc=arosas%40example.test');
+      mailtoUrlFromPath('a?cc=attacker@evil.test', 'cc=jstone%40example.test');
     // Never invoked: the point is that this line does not typecheck.
     expect(typeof build).toBe('function');
     expect(mailtoUrlFromPath(encodeMailtoPathAddress('a?cc=attacker@evil.test'), 'cc=x%40y.test')).toBe(

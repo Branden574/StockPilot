@@ -12,6 +12,18 @@ port = 54321
 schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
+# Keep the old default privileges on the local stack and in CI: anon,
+# authenticated and service_role get ALL on new public tables, views and
+# sequences. Supabase stops that for hosted projects on 2026-10-30
+# (changelog 45329), and under the new defaults a fresh database built from
+# these migrations stops at 0373 and 0398, whose checks need privileges only
+# the old defaults gave. CLI 2.117.0 treats unset as true; setting it pins
+# that for a later CLI whose default is false (a CLI that drops the key
+# ignores it, and CI then fails at 0373). Production is not affected: nothing
+# here sends config.toml to a hosted project. New migrations still decide
+# their grants (apps/web/src/test/migration-grants.guard.test.ts). Remove
+# this only once the chain builds under the new defaults (D1 follow-up).
+auto_expose_new_tables = true
 
 [db]
 port = 54322

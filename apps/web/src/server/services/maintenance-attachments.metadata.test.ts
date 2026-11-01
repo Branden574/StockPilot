@@ -45,16 +45,32 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 const notify = vi.hoisted(() => vi.fn(async (_e: Record<string, unknown>) => undefined));
 vi.mock('./maintenance-notify', () => ({ notifyMaintenanceEvent: notify }));
 
+/** The limiter as increment_rate_limit (0048) answers it: a count per key
+ *  within one window, allowed below the limit, refused at it without counting
+ *  further. `refuse` makes one key say no (a spent budget, a held claim);
+ *  `allowed = false` makes every key say no (the limiter cannot answer, in
+ *  closed mode); `windowsLapse` starts a new window on every call. */
 const limiter = vi.hoisted(() => ({
   allowed: true,
+  refuse: new Set<string>(),
+  windowsLapse: false,
+  counts: new Map<string, number>(),
   calls: [] as Array<{ key: string; limit: number; windowMs: number; mode: string | undefined }>,
 }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
     limiter.calls.push({ key, limit, windowMs, mode });
-    return { allowed: limiter.allowed, count: 1, resetAt: Date.now() + windowMs };
+    const resetAt = Date.now() + windowMs;
+    const count = limiter.windowsLapse ? 0 : (limiter.counts.get(key) ?? 0);
+    if (!limiter.allowed || limiter.refuse.has(key) || count >= limit) {
+      return { allowed: false, count: Math.max(count, limit), resetAt };
+    }
+    limiter.counts.set(key, count + 1);
+    return { allowed: true, count: count + 1, resetAt };
   }),
 }));
+/** The per-person finalize limit's key for the tests' user. */
+const PERSON_KEY = 'maintenance:finalize:user-test';
 
 vi.mock('@/lib/image-reencode', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/image-reencode')>();
@@ -71,6 +87,8 @@ const REQ = '11111111-1111-4111-8111-111111111111';
 const FILE = '33333333-3333-4333-8333-333333333333';
 const stem = `${ORG}/${REQ}/${FILE}`;
 const THUMB = `${stem}-thumb.webp`;
+/** The one-finalize-per-upload claim's key: the upload's name, every extension. */
+const UPLOAD_KEY = `maintenance:finalize-upload:${stem}`;
 const ENABLED = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'maintenance_requests']);
 const OPEN_REQUEST = {
   id: REQ,
@@ -321,6 +339,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   cap.bytes = null;
   limiter.allowed = true;
+  limiter.refuse = new Set();
+  limiter.windowsLapse = false;
+  limiter.counts = new Map();
   limiter.calls = [];
   bucket = new FakeBucket();
   vi.stubGlobal('fetch', vi.fn(storageFetch));
@@ -660,17 +681,18 @@ describe('refusals: nothing recorded, and the upload (still the original) delete
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe('the finalize limiter (each finalize now decodes and re-encodes up to 10 MB)', () => {
-  it('is 30 a minute per person and FAILS CLOSED (literal pin)', async () => {
+  it('is 30 a minute per person and FAILS CLOSED, after the one-finalize-per-upload claim (literal pin)', async () => {
     bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
     const { svc } = setup();
     await svc.finalize(REQ, finalizeArgs('jpeg'));
     expect(limiter.calls).toEqual([
-      { key: 'maintenance:finalize:user-test', limit: 30, windowMs: 60_000, mode: 'closed' },
+      { key: UPLOAD_KEY, limit: 1, windowMs: 15 * 60_000, mode: 'closed' },
+      { key: PERSON_KEY, limit: 30, windowMs: 60_000, mode: 'closed' },
     ]);
   });
 
   it('refused: conflict, nothing read or re-encoded, the upload and the client thumbnail deleted (a maintenance retry starts from a new mint)', async () => {
-    limiter.allowed = false;
+    limiter.refuse.add(PERSON_KEY);
     bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
     bucket.put(THUMB, clientThumb, 'image/jpeg');
     const { svc, inserted } = setup();
@@ -681,6 +703,153 @@ describe('the finalize limiter (each finalize now decodes and re-encodes up to 1
     expect(vi.mocked(reencodeWithoutMetadata)).not.toHaveBeenCalled();
     expect(bucket.objects.size).toBe(0);
     expect(inserted).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * B29: one finalize per upload at a time. Two finalizes of one upload at once
+ * each re-encoded the photo and wrote it back; two extensions of one uuid (a
+ * direct PUT) each wrote their own thumbnail to the name they share; and a
+ * duplicate refused by the per-person limit deleted the upload the other was
+ * saving. The first finalize past step 0 claims the upload's name (every
+ * extension); any other is refused with "already being saved" before it
+ * reads anything, and deletes nothing.
+ */
+describe('one finalize per upload at a time', () => {
+  /** Starts finalize A for `kind` and holds it at its whole read (the first
+   *  download), after its range read, so another call runs while A is in
+   *  flight. */
+  async function startHeld(
+    svc: MaintenanceAttachmentsService,
+    kind: Kind,
+  ): Promise<{ a: Promise<unknown>; release: () => void }> {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const realDownload = bucket.download.bind(bucket);
+    let downloads = 0;
+    bucket.download = async (p: string) => {
+      downloads += 1;
+      if (downloads === 1) await held;
+      return realDownload(p);
+    };
+    const a = svc.finalize(REQ, finalizeArgs(kind));
+    a.catch(() => {});
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+    return { a, release };
+  }
+
+  /** Larger than the 4 KB range window, so finalize reads it whole. */
+  const largeJpeg = () => phonePhoto('jpeg', { width: 320, height: 240, noise: true });
+
+  it('a second finalize of the same upload while the first runs: "already being saved" before it reads anything; the photo is re-encoded once and recorded once, nothing deleted', async () => {
+    bucket.put(`${stem}.jpg`, await largeJpeg(), 'image/jpeg');
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    const { svc, inserted } = setup();
+    const { a, release } = await startHeld(svc, 'jpeg');
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo is already being saved.',
+    });
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    expect(bucket.calls.remove).toEqual([]);
+
+    release();
+    await expect(a).resolves.toEqual({ id: 'att-1', width: 320, height: 240 });
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(1);
+    expect(bucket.calls.upload.map((u) => u.path)).toEqual([`${stem}.jpg`, THUMB]);
+    expect(inserted).toHaveLength(1);
+    expect(bucket.calls.remove).toEqual([]);
+    await expectNoMetadata(bucket.bytes(`${stem}.jpg`)!, 'photo');
+    await expectNoMetadata(bucket.bytes(THUMB)!, 'thumbnail');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('a sibling upload (the same uuid as .png) finalized while the first runs: refused, nothing deleted, and the shared thumbnail name holds only the first photo; once that is recorded the sibling is refused for good', async () => {
+    bucket.put(`${stem}.jpg`, await largeJpeg(), 'image/jpeg');
+    bucket.put(`${stem}.png`, await phonePhoto('png', { color: '#ff00ff' }), 'image/png');
+    const { svc, inserted, table } = setup();
+    const { a, release } = await startHeld(svc, 'jpeg');
+
+    await expect(svc.finalize(REQ, finalizeArgs('png'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo is already being saved.',
+    });
+    expect(bucket.calls.remove).toEqual([]);
+    expect(bucket.calls.upload).toEqual([]);
+
+    release();
+    await expect(a).resolves.toMatchObject({ id: 'att-1' });
+    expect(inserted).toHaveLength(1);
+    expect(table.map((r) => [r.storage_path, r.thumbnail_path])).toEqual([[`${stem}.jpg`, THUMB]]);
+    const thumb = await sharp(Buffer.from(bucket.bytes(THUMB)!)).metadata();
+    expect([thumb.width, thumb.height]).toEqual([320, 240]);
+
+    // Step 0 comes before the claim: the sibling is refused for good, and
+    // only its own upload is deleted.
+    await expect(svc.finalize(REQ, finalizeArgs('png'))).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(bucket.calls.remove).toEqual([[`${stem}.png`]]);
+    expect(bucket.objects.has(THUMB)).toBe(true);
+  });
+
+  it("a duplicate refused by the person's minute limit no longer deletes the upload the first finalize is saving", async () => {
+    bucket.put(`${stem}.jpg`, await largeJpeg(), 'image/jpeg');
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    const { svc, inserted } = setup();
+    const { a, release } = await startHeld(svc, 'jpeg');
+    limiter.refuse.add(PERSON_KEY);
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo is already being saved.',
+    });
+    expect(bucket.calls.remove).toEqual([]);
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
+
+    release();
+    await expect(a).resolves.toEqual({ id: 'att-1', width: 320, height: 240 });
+    expect(inserted).toHaveLength(1);
+    await expectNoMetadata(bucket.bytes(`${stem}.jpg`)!, 'photo');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('refused at the claim (or the limiter cannot answer: closed): nothing read, written or deleted, the per-person budget untouched, the uploader not told', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    limiter.refuse.add(UPLOAD_KEY);
+    const { svc, inserted } = setup();
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo is already being saved.',
+    });
+    expect(limiter.calls.map((c) => c.key)).toEqual([UPLOAD_KEY]);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    expect(bucket.calls.download).toEqual([]);
+    expect(bucket.calls.upload).toEqual([]);
+    expect(bucket.calls.remove).toEqual([]);
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
+    expect(bucket.objects.has(THUMB)).toBe(true);
+    expect(inserted).toHaveLength(0);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('sent again after the photo is recorded, inside the claim\'s window: "already recorded" (step 0 comes first), the files untouched', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc } = setup();
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+    const stored = bucket.bytes(`${stem}.jpg`);
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo was already recorded.',
+    });
+    expect(limiter.calls.map((c) => c.key)).toEqual([UPLOAD_KEY, PERSON_KEY]);
+    expect(bucket.bytes(`${stem}.jpg`)).toBe(stored);
+    expect(bucket.calls.remove).toEqual([]);
   });
 });
 
@@ -934,6 +1103,10 @@ describe('a refusal never deletes the files of a photo another finalize recorded
     bucket.put(path, photo, 'image/jpeg');
     bucket.put(THUMB, clientThumb, 'image/jpeg');
     const { svc, inserted, table } = setup();
+    // Since B29 the one-finalize-per-upload claim refuses B before it reads
+    // anything (next describe). Here every limiter call starts a new window,
+    // as if the claim did not hold, so the defence behind it stays covered.
+    limiter.windowsLapse = true;
 
     // Hold the SECOND whole read until the first finalize's write-back of the
     // photo has landed (B measured the original, then reads A's clean file).
@@ -973,7 +1146,7 @@ describe('a refusal never deletes the files of a photo another finalize recorded
   const REFUSALS: Array<
     [string, { kind: Kind; declaredMime?: string; live?: number; bytes?: () => Promise<Uint8Array>; arrange?: () => void }]
   > = [
-    ['the finalize limiter', { kind: 'jpeg', arrange: () => (limiter.allowed = false) }],
+    ['the finalize limiter', { kind: 'jpeg', arrange: () => limiter.refuse.add(PERSON_KEY) }],
     ['the byte checks (declared type)', { kind: 'jpeg', declaredMime: 'image/png' }],
     ['the cap', { kind: 'jpeg', live: 8 }],
     [

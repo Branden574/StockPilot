@@ -124,7 +124,7 @@ function SFSidebar() {
       <div className="sidebar-foot">
         <div className="avatar">BV</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="user-name">Branden Vincent Walker</div>
+          <div className="user-name">Carsten Hartley Fowler</div>
           <div className="user-role">Super Admin · L4L North Region</div>
         </div>
       </div>

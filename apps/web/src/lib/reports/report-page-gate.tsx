@@ -2,8 +2,9 @@ import 'server-only';
 
 import { redirect } from 'next/navigation';
 
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ReportMfaCard } from '@/components/reports/report-mfa-state';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { isModuleEnabled, withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
@@ -19,7 +20,10 @@ export const REPORT_MFA_VERIFY = 'Verify with your authenticator app to open thi
  * checks reports:read too, but a layout's check does not stop its page from
  * rendering, so every report page asks for itself:
  *   - no reports:read: back to the dashboard (what the layout does);
- *   - a module the report reads is off: the module-not-enabled card;
+ *   - a module the report reads is off: the module-not-enabled card, or,
+ *     when the module set could not be read, "We couldn't check whether this
+ *     module is on" with Try again (checkModuleAccess's checkFailed, read
+ *     from the same request-cached set, so no extra round trip);
  *   - the MFA step-up the service gate would refuse with: a state that says
  *     what to do, never an error page.
  * Returns null when the page may render. The data path checks again
@@ -35,7 +39,10 @@ export async function reportPageGate(report: ReportSlug): Promise<React.ReactEle
   const canManage = ctx.role === 'owner' || ctx.role === 'admin';
   for (const moduleId of reportModules(report)) {
     if (!isModuleEnabled(ctx, moduleId)) {
-      return <ModuleNotEnabled moduleId={moduleId} canManage={canManage} />;
+      // Off, or unknown: still closed either way. Only whether the read
+      // failed is taken from the page gate.
+      const { checkFailed } = await checkModuleAccess(moduleId);
+      return <ModuleUnavailable moduleId={moduleId} access={{ canManage, checkFailed }} />;
     }
   }
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {

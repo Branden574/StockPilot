@@ -94,6 +94,25 @@ describe('Pagination row range', () => {
     expect(container).toHaveTextContent('Showing 51–60 of 60');
   });
 
+  // B9: the figures came out raw ("of 12345"), while every other count on the
+  // page (the movements summary, the Items summary line) is formatted.
+  it('prints the range, the total and the page count with thousands separators', () => {
+    const { container } = render(
+      <Pagination page={45} pageSize={25} total={12345} basePath="/dashboard/movements" />,
+    );
+    expect(container).toHaveTextContent('Showing 1,101–1,125 of 12,345');
+    expect(screen.getByRole('button', { name: 'Jump to page' })).toHaveTextContent(
+      'Page 45 of 494',
+    );
+  });
+
+  it('formats a page number past 999 in the Page X of Y trigger', () => {
+    render(<Pagination page={1000} totalPages={1200} onPageChange={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Jump to page' })).toHaveTextContent(
+      'Page 1,000 of 1,200',
+    );
+  });
+
   it('with total 0 there is no range (never "Showing 1–0 of 0"); Prev, Page 1 of 1 and Next stay', () => {
     const { container } = render(
       <Pagination page={1} pageSize={25} total={0} basePath="/dashboard/movements" />,

@@ -6,6 +6,7 @@ import { can } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -53,7 +54,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     }
     // The export budget is spent only once the caller may have this export
     // (a refused caller must not spend it or trip the abuse alert).
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     // PO number (for the file names) — also validates the PO is in-org.
@@ -121,10 +122,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         { status: serviceErrorStatus(e.code) },
       );
     }
-    void reportError(e, { tag: 'po.attachments_zip' });
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : String(e) },
-      { status: 500 },
-    );
+    return internalErrorResponse(e, 'po.attachments_zip');
   }
 }

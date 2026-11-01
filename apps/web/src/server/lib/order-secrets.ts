@@ -352,7 +352,7 @@ export function handOverLinkWanted(v: {
 /**
  * Did the order capture a signature IMAGE (drives the panel's "View
  * signature")? A digital hand-over always did; the method says so even once
- * 0393 moves the image off the order row. A paper signature has no image.
+ * 0414 moves the image off the order row. A paper signature has no image.
  */
 export function hasCapturedSignature(row: {
   signature_method?: string | null;

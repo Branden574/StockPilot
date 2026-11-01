@@ -15,7 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   getOrgMembers: vi.fn(),
+  getOrgMembersOrderItemsAccess: vi.fn(),
   recordPlatformAudit: vi.fn(async () => true),
+  menuProps: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('@/lib/auth/platform-admin', () => ({
@@ -32,6 +34,7 @@ vi.mock('@/server/services/platform/orgs', () => ({
   DETAIL_PREVIEW_LIMIT: 100,
   MEMBERS_PAGE_SIZE: 50,
   getOrgMembers: (...a: unknown[]) => h.getOrgMembers(...a),
+  getOrgMembersOrderItemsAccess: (...a: unknown[]) => h.getOrgMembersOrderItemsAccess(...a),
   getOrgOverview: vi.fn(async () => ({
     id: ORG,
     name: 'Acme',
@@ -54,7 +57,10 @@ vi.mock('@/components/platform/act-as-button', () => ({ ActAsButton: () => null 
 vi.mock('@/components/platform/billing-panel', () => ({ BillingPanel: () => null }));
 vi.mock('@/components/platform/remove-org-dialog', () => ({ RemoveOrgDialog: () => null }));
 vi.mock('@/components/platform/user-actions-menu', () => ({
-  UserActionsMenu: ({ userId }: { userId: string }) => <button>actions {userId}</button>,
+  UserActionsMenu: (props: { userId: string }) => {
+    h.menuProps.push(props);
+    return <button>actions {props.userId}</button>;
+  },
 }));
 
 import PlatformOrgDetailPage from './page';
@@ -108,6 +114,8 @@ async function renderUsersTab(query: Record<string, string | string[]> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.menuProps = [];
+  h.getOrgMembersOrderItemsAccess.mockResolvedValue(new Map());
   armMembers({});
 });
 
@@ -214,6 +222,7 @@ describe('platform org detail — Users tab last active', () => {
       'Role',
       'Joined',
       'Last active',
+      'Order items',
       'Actions',
     ]);
   });
@@ -232,10 +241,12 @@ describe('platform org detail — Users tab last active', () => {
 
     const row = rowOf('user1@acme.test');
     const cell = row.getByText('3 hours ago');
+    // In the organization's zone, named, as the cell's own dates are (B9
+    // review). This overview's zone did not arrive: the documented default.
     expect(cell.getAttribute('title')).toBe(
-      'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, any organization; accurate to about an hour). ' +
-        'Last recorded action in this organization 17 Sep 2026, 23:30 UTC. ' +
-        'Last signed in 22 Jul 2026, 08:00 UTC.',
+      'Sign-in last renewed 18 Sep 2026, 02:00 PDT (any device, any organization; accurate to about an hour). ' +
+        'Last recorded action in this organization 17 Sep 2026, 16:30 PDT. ' +
+        'Last signed in 22 Jul 2026, 01:00 PDT.',
     );
     expect(row.queryByText(/signed in|last action/i)).toBeNull();
   });
@@ -302,7 +313,7 @@ describe('platform org detail — Users tab last active', () => {
     const row = rowOf('user1@acme.test');
     const cell = row.getByText('1 day ago');
     expect(cell.getAttribute('title')).toContain(
-      'Last had StockPilot open in this organization 17 Sep 2026, 12:00 UTC.',
+      'Last had StockPilot open in this organization 17 Sep 2026, 05:00 PDT.',
     );
     expect(cell.getAttribute('title')).not.toContain(HEDGE);
     expect(row.queryByText(/signed in|last action/i)).toBeNull();
@@ -418,5 +429,153 @@ describe('platform org detail — which views are audited', () => {
   it.each(['inventory', 'orders', 'billing'])('does not audit the %s tab', async (tab) => {
     await renderTab(tab);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ORDER ITEMS (orders:manage_catalog_visibility, migration 0413). God Admin
+ * reads each member's effective access here and changes it from the row's
+ * actions (design 8.4). Pinned: one batched read for the page; the chip and
+ * the source line come from the core preview; the row's menu receives exactly
+ * what its dialog needs; and a failed read says so instead of guessing "Role
+ * default" (a deny that is not shown is the one mistake this column must not
+ * make), while every other column and every account action stays.
+ */
+describe('platform org detail — Users tab order items access', () => {
+  type Access = {
+    role: string;
+    exception: 'default' | 'allow' | 'deny';
+    disabled: boolean;
+    ordersModuleEnabled: boolean;
+    canRequestOrders: boolean;
+    preview: Record<string, unknown>;
+  };
+  async function armAccess(entries: Record<string, Partial<Access>> | null) {
+    const { orderCatalogAccessPreview } = await import('@stockpilot/core');
+    if (entries === null) {
+      h.getOrgMembersOrderItemsAccess.mockResolvedValue(null);
+      return;
+    }
+    const map = new Map<string, Access>();
+    for (const [id, over] of Object.entries(entries)) {
+      const base = {
+        role: 'staff',
+        exception: 'default' as const,
+        disabled: false,
+        ordersModuleEnabled: true,
+        canRequestOrders: true,
+        ...over,
+      };
+      map.set(id, {
+        ...base,
+        preview: orderCatalogAccessPreview({
+          role: base.role as 'staff',
+          exception: base.exception,
+          disabled: base.disabled,
+          ordersModuleEnabled: base.ordersModuleEnabled,
+          canRequestOrders: base.canRequestOrders,
+        }) as unknown as Record<string, unknown>,
+      });
+    }
+    h.getOrgMembersOrderItemsAccess.mockResolvedValue(map);
+  }
+  const rowOf = (email: string) => within(screen.getByText(email).closest('tr')!);
+  const MEMBERS = [
+    { ...member(1), role: 'manager' },
+    { ...member(2), role: 'manager' },
+    { ...member(3), role: 'staff' },
+    { ...member(4), role: 'staff' },
+  ];
+
+  it('reads the page in one batch and shows the effective access with where it comes from', async () => {
+    armMembers({ members: MEMBERS });
+    await armAccess({
+      'u-1': { role: 'manager' },
+      'u-2': { role: 'manager', exception: 'deny' },
+      'u-3': { role: 'staff' },
+      'u-4': { role: 'staff', exception: 'allow' },
+    });
+    await renderUsersTab();
+
+    expect(h.getOrgMembersOrderItemsAccess).toHaveBeenCalledTimes(1);
+    expect(h.getOrgMembersOrderItemsAccess).toHaveBeenCalledWith(ORG, MEMBERS);
+
+    const cell = (email: string) => rowOf(email).getByTestId('order-items-access-cell').textContent;
+    expect(cell('user1@acme.test')).toBe('AllowedRole default');
+    expect(cell('user2@acme.test')).toBe('Not allowedDenied by StockPilot');
+    expect(cell('user3@acme.test')).toBe('Not allowedRole default');
+    expect(cell('user4@acme.test')).toBe('AllowedAllowed by StockPilot');
+  });
+
+  it('says why an allowed capability cannot be used yet', async () => {
+    armMembers({ members: [{ ...member(1), role: 'manager' }] });
+    await armAccess({ 'u-1': { role: 'manager', ordersModuleEnabled: false } });
+    await renderUsersTab();
+
+    const chip = rowOf('user1@acme.test').getByText('Not allowed');
+    expect(chip.getAttribute('title')).toBe(
+      'The Orders module is off for this organization, so nobody can manage order items until it is turned on.',
+    );
+  });
+
+  it('hands each row menu exactly what its dialog needs', async () => {
+    armMembers({
+      members: [
+        { ...member(1), role: 'manager', fullName: null },
+        { ...member(4), role: 'staff', disabledAt: '2026-10-01T00:00:00Z' },
+      ],
+    });
+    await armAccess({
+      'u-1': { role: 'manager', exception: 'deny' },
+      'u-4': { role: 'staff', exception: 'allow', disabled: true, canRequestOrders: false },
+    });
+    await renderUsersTab();
+
+    const byUser = Object.fromEntries(h.menuProps.map((p) => [p.userId, p.orderItemsAccess]));
+    expect(byUser['u-1']).toEqual({
+      organizationId: ORG,
+      userId: 'u-1',
+      name: 'user1@acme.test',
+      role: 'manager',
+      disabled: false,
+      exception: 'deny',
+      ordersModuleEnabled: true,
+      canRequestOrders: true,
+    });
+    expect(byUser['u-4']).toEqual({
+      organizationId: ORG,
+      userId: 'u-4',
+      name: 'User 4',
+      role: 'staff',
+      disabled: true,
+      exception: 'allow',
+      ordersModuleEnabled: true,
+      canRequestOrders: false,
+    });
+  });
+
+  it('a failed read says so, guesses nothing, and keeps every account action', async () => {
+    armMembers({ members: [member(1), member(2)] });
+    await armAccess(null);
+    await renderUsersTab();
+
+    expect(screen.getByText(/order items access could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByText('Role default')).toBeNull();
+    expect(screen.queryByText('Allowed')).toBeNull();
+    expect(screen.queryByText('Not allowed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'actions u-1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'actions u-2' })).toBeInTheDocument();
+    expect(h.menuProps.every((p) => p.orderItemsAccess === null)).toBe(true);
+  });
+
+  it('a member the read left out (an unknown role) gets a dash and no dialog', async () => {
+    armMembers({ members: [member(1), { ...member(2), role: 'customer' }] });
+    await armAccess({ 'u-1': { role: 'staff' } });
+    await renderUsersTab();
+
+    expect(rowOf('user2@acme.test').getByTestId('order-items-access-cell')).toHaveTextContent('—');
+    const byUser = Object.fromEntries(h.menuProps.map((p) => [p.userId, p.orderItemsAccess]));
+    expect(byUser['u-2']).toBeNull();
+    expect(byUser['u-1']).not.toBeNull();
   });
 });

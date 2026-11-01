@@ -43,6 +43,11 @@ describe('VendorMappingsManager', () => {
     for (const label of ['Vendor', 'Internal item', 'Vendor item number', /Vendor description/]) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
     }
+    // Every organization sees the example, so it names no real brand (S17).
+    expect(screen.getByLabelText(/Vendor description/)).toHaveAttribute(
+      'placeholder',
+      'AA batteries, 24 pack',
+    );
     const table = screen.getByRole('table');
     // The page's title (titleId="vendor-mappings-title") names the table's scroll region.
     expect(table.parentElement).toHaveAttribute('role', 'region');

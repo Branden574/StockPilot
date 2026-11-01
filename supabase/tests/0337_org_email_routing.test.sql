@@ -12,11 +12,12 @@
 --     succeeds as a statement but affects 0 rows and the value is unchanged;
 --     an admin's UPDATE lands; an admin targeting a FOREIGN org affects 0
 --     rows.
---   • SEED SHAPE: the exact jsonb_build_object expressions the migration
---     seeds prod with are admitted by the CHECK against fixture orgs. (The
---     PROD seed rows themselves cannot exist on a local reset; they are
---     verified post-push by a read-only SELECT against the linked db —
---     recorded in the PR as the deploy-verification step.)
+--   • SEED SHAPE: the jsonb_build_object expressions the migration seeds
+--     prod with (same keys and value kinds; sample addresses and names
+--     stand in for the customer's) are admitted by the CHECK against
+--     fixture orgs. (The PROD seed rows themselves cannot exist on a local
+--     reset; they are verified post-push by a read-only SELECT against the
+--     linked db — recorded in the PR as the deploy-verification step.)
 --
 -- HOW THE ROLES ARE SIMULATED — house convention (0191/0282/0322/0331):
 -- `set local role` + request.jwt.claim.sub. Namespace: 03370000. Wrapped in
@@ -230,25 +231,28 @@ select is(
 );
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 5. SEED SHAPE — the migration's exact prod expressions pass the CHECK.
---    (Local resets have no prod orgs; the prod rows are verified post-push
---    by read-only SELECT against the linked db.)
+-- 5. SEED SHAPE — the migration's seed expressions pass the CHECK. The
+--    customer expression keeps its keys and value kinds, with sample
+--    addresses and names in place of the real ones (the CHECK is a shape
+--    floor, so any well-formed values prove the same). (Local resets have
+--    no prod orgs; the prod rows are verified post-push by read-only SELECT
+--    against the linked db.)
 -- ══════════════════════════════════════════════════════════════════════════
 
 select lives_ok(
   format($$update public.organizations set email_routing = jsonb_build_object(
     'delivery_request', jsonb_build_object(
-      'to', 'dc4@learn4life.org',
-      'cc', 'arosas@cvwest.org',
+      'to', 'dc4@sampleorg.test',
+      'cc', 'jstone@site1.test',
       'toName', 'Fresno Warehouse DC4',
-      'ccName', 'Andrew Rosas'),
+      'ccName', 'Jordan Stone'),
     'maintenance_request', jsonb_build_object(
-      'to', 'dc4@learn4life.org',
-      'cc', 'arosas@cvwest.org',
+      'to', 'dc4@sampleorg.test',
+      'cc', 'jstone@site1.test',
       'toName', 'Fresno Warehouse DC4',
-      'ccName', 'Andrew Rosas'))
+      'ccName', 'Jordan Stone'))
   where id = %L$$, :orgA),
-  '0337 seed: the L4L seed expression is admitted by the CHECK'
+  '0337 seed: the customer seed expression shape is admitted by the CHECK'
 );
 
 select lives_ok(

@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { cn } from '@/lib/utils';
@@ -40,7 +41,8 @@ export interface PhotoUploadTicket {
   path: string;
   signedUrl: string;
   /** Where the browser-made thumbnail goes. Absent when the server makes the
-   *  thumbnail itself (exception evidence), and then none is sent. */
+   *  thumbnail itself, and then none is sent: exception evidence, and since
+   *  B29 maintenance too. */
   thumbSignedUrl?: string | null;
 }
 
@@ -113,16 +115,15 @@ function unsettled(e: unknown, input: PhotoFinalizeInput): unknown {
     : e;
 }
 
-/** Mint-response shape from POST .../attachments (maintenance-attachments.ts
- *  createUploadUrl). Declared locally — this is a client fetch boundary, not
- *  a shared type, matching the rest of this panel's fetch calls. */
+/** The part of POST .../attachments's answer (maintenance-attachments.ts
+ *  createUploadUrl) this panel uses. Declared locally — this is a client
+ *  fetch boundary, not a shared type, matching the rest of this panel's fetch
+ *  calls. The answer also carries a thumbnail ticket (thumbPath,
+ *  thumbSignedUrl, thumbToken), kept for phones on older updates; the panel
+ *  does not use it (see maintenancePhotoEndpoints). */
 interface MintResponse {
   path: string;
   signedUrl: string;
-  token: string;
-  thumbPath: string;
-  thumbSignedUrl: string;
-  thumbToken: string;
 }
 
 interface QueuedUpload {
@@ -187,7 +188,10 @@ export function maintenancePhotoEndpoints(
         throw new Error(await humanizeUploadError(mintRes, 'Upload not allowed right now.'));
       }
       const mint = (await mintRes.json()) as MintResponse;
-      return { path: mint.path, signedUrl: mint.signedUrl, thumbSignedUrl: mint.thumbSignedUrl };
+      // No thumbSignedUrl (B29): finalize makes the thumbnail from the
+      // cleaned photo and writes it over anything sent to that name
+      // (2026-09-27), so a browser-made one was a second upload for nothing.
+      return { path: mint.path, signedUrl: mint.signedUrl };
     },
     async finalize({ path, originalFilename, declaredMime }) {
       // Finalize: server downloads + magic-byte-verifies before recording.
@@ -256,6 +260,8 @@ async function uploadOne(endpoints: PhotoPanelEndpoints, file: File, note: strin
   try {
     await endpoints.finalize(input);
   } catch (e) {
+    // A redirect (the session ended) is not an unsettled finalize.
+    if (isControlFlow(e)) throw e;
     throw unsettled(e, input);
   }
 }
@@ -393,6 +399,7 @@ export function MaintenancePhotosPanel(props: Props) {
         try {
           await endpoints.finalize(item.pendingFinalize);
         } catch (e) {
+          if (isControlFlow(e)) throw e;
           throw unsettled(e, item.pendingFinalize);
         }
       } else {
@@ -401,6 +408,9 @@ export function MaintenancePhotosPanel(props: Props) {
       setUploads((prev) => prev.filter((u) => u.key !== item.key));
       onChange();
     } catch (e) {
+      // A redirect (the session ended): the router is already on its way to
+      // sign-in, so the row is not marked failed and nothing is shown.
+      if (isControlFlow(e)) return;
       const message = e instanceof Error ? e.message : 'Photo upload failed.';
       // Any settling answer from the server ends the finalize: the next Retry
       // starts again from the mint. Only an unsettled one keeps it.
@@ -475,6 +485,7 @@ export function MaintenancePhotosPanel(props: Props) {
     try {
       await endpoints.remove(id, null);
     } catch (e) {
+      if (isControlFlow(e)) return;
       toast.error(e instanceof Error ? e.message : 'Could not remove the photo.');
       return;
     }
@@ -497,6 +508,7 @@ export function MaintenancePhotosPanel(props: Props) {
     try {
       await endpoints.remove(removing.id, trimmedReason || null);
     } catch (e) {
+      if (isControlFlow(e)) return;
       setRemoveError(e instanceof Error ? e.message : 'Could not remove the photo.');
       setRemovePending(false);
       return;

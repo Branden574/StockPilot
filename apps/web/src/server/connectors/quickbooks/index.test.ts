@@ -215,12 +215,12 @@ describe('quickbooksConnector.handleOutboxEvent — PO commitment books GOODS, n
     aggregateId: 'po-1',
   };
 
-  it('books subtotal ($46,995) for a PO whose total ($52,769.23) includes charges', async () => {
+  it('books subtotal ($24,990) for a PO whose total ($28,501.68) includes charges', async () => {
     postSpy.mockResolvedValue({ PurchaseOrder: { Id: 'qbo-po-1' } });
     const admin = makeAdmin({
       tables: {
         purchase_orders: {
-          data: { id: 'po-1', supplier_id: 'sup-1', subtotal: 46995, total: 52769.23 },
+          data: { id: 'po-1', supplier_id: 'sup-1', subtotal: 24990, total: 28501.68 },
           error: null,
         },
         suppliers: { data: { id: 'sup-1', name: 'Acme' }, error: null },
@@ -235,8 +235,8 @@ describe('quickbooksConnector.handleOutboxEvent — PO commitment books GOODS, n
     expect(res.ok).toBe(true);
     expect(postSpy).toHaveBeenCalledTimes(1);
     const [, body] = postSpy.mock.calls[0] as [string, { Line: Array<{ Amount: number }> }];
-    // GOODS, not the $52,769.23 charge-inclusive total.
-    expect(body.Line[0]?.Amount).toBe(46995);
+    // GOODS, not the $28,501.68 charge-inclusive total.
+    expect(body.Line[0]?.Amount).toBe(24990);
   });
 
   it('falls back to total for a legacy PO whose subtotal was never populated', async () => {

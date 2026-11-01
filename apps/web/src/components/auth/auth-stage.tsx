@@ -63,7 +63,7 @@ export function AuthStage() {
     <div className="auth-stage" data-phase={phase} aria-hidden>
       <div className="auth-stage-head">
         <span className="auth-live" />
-        <span className="auth-stage-org">DC4 Warehouse</span>
+        <span className="auth-stage-org">Main Warehouse</span>
         <span className="auth-stage-sep">/</span>
         <span className="auth-stage-view">
           {phase === 'submitting'

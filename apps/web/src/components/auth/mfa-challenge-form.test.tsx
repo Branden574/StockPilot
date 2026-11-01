@@ -1,5 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
 
 /**
  * /signin/mfa (P5.1). The recovery-code dialog is portalled, but React still
@@ -126,5 +132,29 @@ describe('MfaChallengeForm', () => {
     ]);
     fireEvent.change(picker, { target: { value: 'factor-2abcdef' } });
     expect(code.value).toBe('');
+  });
+});
+
+describe('MfaChallengeForm: Cancel and sign out', () => {
+  // A sign-out on purpose: what an interrupted run kept in this tab
+  // (lib/interrupted-run) goes before the sign-out request leaves, because
+  // the request answers with a redirect and nothing after it runs.
+  afterEach(() => sessionStorage.clear());
+
+  it('removes every interrupted-run record in this tab before the sign-out request leaves', async () => {
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    let keysAtSignOut: string[] | null = null;
+    signOutAction.mockImplementationOnce(async () => {
+      keysAtSignOut = interruptedRunKeys();
+    });
+    render(<MfaChallengeForm factors={FACTORS} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel and sign out' }));
+
+    await waitFor(() => expect(signOutAction).toHaveBeenCalledTimes(1));
+    expect(keysAtSignOut).toEqual([]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/signin'));
   });
 });

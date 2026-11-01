@@ -26,6 +26,7 @@ import {
   REVIEW_SUBTITLE_COPY,
   REVIEW_TITLE_COPY,
   STOREFRONT_DELIVER_TO_COPY,
+  STOREFRONT_LINE_NOT_LISTED_COPY,
   SUCCESS_DONE_COPY,
   SUCCESS_REVIEW_AND_APPROVE_COPY,
   SUCCESS_TITLE_COPY,
@@ -245,7 +246,7 @@ interface ReviewModalProps {
    * The org's delivery-request email routing (per-org, migration 0337),
    * resolved server-side; null = no valid routing, so the success screen
    * renders NO email action. Fail closed by construction: with no
-   * recipients there is nothing to compose against, and the compiled L4L
+   * recipients there is nothing to compose against, and the compiled
    * constants are reachable only through the server's own
    * code-before-migration fallback, never from here.
    */
@@ -535,7 +536,9 @@ export function ReviewModal({
                         {item ? <SfPhoto item={item} /> : <div className="sf-ph" />}
                       </div>
                       <div style={{ minWidth: 0 }}>
-                        <div className="nm">{item?.name ?? line.itemId}</div>
+                        {/* A line this catalog no longer lists is named in
+                            core's words, never by its id (design 6.5). */}
+                        <div className="nm">{item?.name ?? STOREFRONT_LINE_NOT_LISTED_COPY}</div>
                         <div className="sk2">{item?.sku ?? ''}</div>
                         {item && <CharterTag item={item} />}
                       </div>

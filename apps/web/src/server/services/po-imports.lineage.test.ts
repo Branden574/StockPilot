@@ -56,7 +56,7 @@ function baseHeader(over: Record<string, unknown> = {}) {
   return {
     id: SELF,
     organization_id: 'org-1',
-    file_name: 'PO-CVW-002201.pdf',
+    file_name: 'PO-DEMO-002201.pdf',
     status: 'approved',
     approved_po_id: null,
     reimported_from_id: null,
@@ -90,7 +90,7 @@ describe('PoImportsService.get — re-import lineage', () => {
       [
         {
           id: PRED,
-          file_name: 'PO-CVW-002201.pdf',
+          file_name: 'PO-DEMO-002201.pdf',
           display_name: 'July Curriculum Restock',
           created_at: '2026-07-01T00:00:00Z',
           status: 'approved',
@@ -98,20 +98,20 @@ describe('PoImportsService.get — re-import lineage', () => {
           reimported_from_id: null,
         },
       ],
-      [{ id: 'po-1', po_number: 'CVW-002201', status: 'cancelled' }],
+      [{ id: 'po-1', po_number: 'DEMO-002201', status: 'cancelled' }],
     );
     const res = await svc(stub).get(SELF);
 
     expect(res.lineage.predecessor).toEqual({
       id: PRED,
-      fileName: 'PO-CVW-002201.pdf',
+      fileName: 'PO-DEMO-002201.pdf',
       // mig 0333: the human name rides along so the lineage notice can label
       // the predecessor by it instead of the raw camera filename.
       displayName: 'July Curriculum Restock',
       createdAt: '2026-07-01T00:00:00Z',
       status: 'approved',
       poId: 'po-1',
-      poNumber: 'CVW-002201',
+      poNumber: 'DEMO-002201',
       poStatus: 'cancelled',
     });
     expect(res.lineage.successors).toEqual([]);
@@ -126,7 +126,7 @@ describe('PoImportsService.get — re-import lineage', () => {
       [
         {
           id: SUCC,
-          file_name: 'PO-CVW-002201.pdf',
+          file_name: 'PO-DEMO-002201.pdf',
           created_at: '2026-07-21T00:00:00Z',
           status: 'parsed',
           approved_po_id: null,
@@ -156,7 +156,7 @@ describe('PoImportsService.get — re-import lineage', () => {
       [
         {
           id: PRED,
-          file_name: 'PO-CVW-002201.pdf',
+          file_name: 'PO-DEMO-002201.pdf',
           created_at: '2026-07-01T00:00:00Z',
           status: 'approved',
           approved_po_id: 'po-1',
@@ -164,7 +164,7 @@ describe('PoImportsService.get — re-import lineage', () => {
         },
         {
           id: SUCC,
-          file_name: 'PO-CVW-002201.pdf',
+          file_name: 'PO-DEMO-002201.pdf',
           created_at: '2026-07-21T00:00:00Z',
           status: 'approved',
           approved_po_id: 'po-3',
@@ -172,8 +172,8 @@ describe('PoImportsService.get — re-import lineage', () => {
         },
       ],
       [
-        { id: 'po-1', po_number: 'CVW-002201', status: 'cancelled' },
-        { id: 'po-3', po_number: 'CVW-002299', status: 'active' },
+        { id: 'po-1', po_number: 'DEMO-002201', status: 'cancelled' },
+        { id: 'po-3', po_number: 'DEMO-002299', status: 'active' },
       ],
     );
     const res = await svc(stub).get(SELF);
@@ -182,7 +182,7 @@ describe('PoImportsService.get — re-import lineage', () => {
     expect(res.lineage.predecessor?.poStatus).toBe('cancelled');
     expect(res.lineage.successors).toHaveLength(1);
     expect(res.lineage.successors[0]?.id).toBe(SUCC);
-    expect(res.lineage.successors[0]?.poNumber).toBe('CVW-002299');
+    expect(res.lineage.successors[0]?.poNumber).toBe('DEMO-002299');
     // The row matched by id must NOT also be counted as a successor.
     expect(res.lineage.successors.map((s) => s.id)).not.toContain(PRED);
     // Both directions in ONE query: the .or() form.
@@ -214,7 +214,7 @@ describe('PoImportsService.get — re-import lineage', () => {
           reimported_from_id: SELF,
         },
       ],
-      [{ id: 'po-1', po_number: 'CVW-002201', status: 'cancelled' }],
+      [{ id: 'po-1', po_number: 'DEMO-002201', status: 'cancelled' }],
     );
     await svc(stub).get(SELF);
 
@@ -236,7 +236,7 @@ describe('PoImportsService.get — re-import lineage', () => {
           reimported_from_id: null,
         },
       ],
-      [{ id: 'po-1', po_number: 'CVW-002201', status: 'cancelled' }],
+      [{ id: 'po-1', po_number: 'DEMO-002201', status: 'cancelled' }],
     );
     await svc(stub).get(SELF);
 

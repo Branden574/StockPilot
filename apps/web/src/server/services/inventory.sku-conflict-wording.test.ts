@@ -121,15 +121,21 @@ function harness(opts: {
       return p;
     },
   };
+  // The service-role client: the check a SKU edit makes of the records it
+  // moves (reads that find nothing in the way), then the fan-out UPDATE.
   const admin = {
     from: () => {
+      let isUpdate = false;
       const p: Record<string, unknown> = {};
-      for (const m of ['update', 'eq', 'neq', 'is', 'select']) p[m] = () => p;
+      for (const m of ['eq', 'neq', 'is', 'select', 'order', 'range']) p[m] = () => p;
+      p.update = () => ((isUpdate = true), p);
       (p as { then: unknown }).then = (res: (v: unknown) => unknown) =>
         res(
-          opts.siblingFails
-            ? { data: null, error: { code: '23505', message: 'dup' } }
-            : { data: null, error: null },
+          !isUpdate
+            ? { data: [], error: null }
+            : opts.siblingFails
+              ? { data: null, error: { code: '23505', message: 'dup' } }
+              : { data: null, error: null },
         );
       return p;
     },
@@ -189,6 +195,8 @@ describe('InventoryService.update: a SKU already taken at this charter and rack'
     expect(err.details).not.toHaveProperty('conflictItemId');
   });
 
+  // A record that takes the slot between the check before the writes and the
+  // fan-out (inventory.sku-rekey-preflight.test.ts covers the check itself).
   it('a sibling that cannot follow a re-key is told honestly: this record moved, the others kept the old SKU', async () => {
     const { svc } = harness({ conflict: null, siblingFails: true });
     const err = (await svc.update('row-a', { sku: 'SP-NEW' }).catch((e: unknown) => e)) as {

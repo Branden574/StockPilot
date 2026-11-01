@@ -3,7 +3,9 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -28,9 +30,13 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     // codes are not org-scoped, and withContext() → requireOrgContext() throws
     // NEXT_REDIRECT for an org-less caller, which this catch would swallow into a
     // generic internal_error.
+    //
+    // The level is the access token's `aal` claim once its signature checks
+    // out (lib/auth/verified-claims), not getAuthenticatorAssuranceLevel()'s
+    // unchecked decode of the cookie: a token that does not verify is refused.
     const supabase = await createClient();
-    const { data: aal, error: aalErr } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aalErr || aal?.currentLevel !== 'aal2') {
+    const claims = await readVerifiedSessionClaims(supabase);
+    if (claims?.aal !== 'aal2') {
       return err('forbidden', 'Re-authenticate with MFA before regenerating recovery codes.');
     }
     // Rate-limit regeneration: defends against a loop that repeatedly invalidates
@@ -45,6 +51,7 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     revalidatePath('/dashboard/settings/security');
     return ok({ codes });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -73,7 +80,8 @@ export async function getMfaRecoveryCodeStatus(): Promise<{
         .is('used_at', null),
     ]);
     return { total: allRes.count ?? 0, unused: unusedRes.count ?? 0 };
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     return { total: 0, unused: 0 };
   }
 }
@@ -172,6 +180,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

@@ -31,8 +31,6 @@ import {
   formatPlacementLabel,
   getCrateColor,
   holdingsContradictRack,
-  itemPhotoPath,
-  randomPhotoFileBase,
   readDisplayStorage,
   resolvePlacement,
   type ItemElsewhere,
@@ -55,12 +53,20 @@ import { signItemImage } from '@/lib/image-cache';
 import { departureConfirmButtons } from '@/lib/order-departure';
 import { resizeForUpload } from '@/lib/image-resize';
 import { SCAN_ADJUST_REASON, submitItemAdjust } from '@/lib/item-adjust';
+import { uploadItemPhoto } from '@/lib/item-photo-upload';
 import {
   elsewhereRow,
   elsewhereUnavailableNote,
   holdingsKnownInFull,
 } from '@/lib/placement-rows';
-import { resolveScanMatches, sanitizeScanCode, scanPickerSubtitle } from '@/lib/scan-resolve';
+import {
+  resolveScanMatches,
+  sanitizeScanCode,
+  scanCandidatePlacementLabel,
+  scanHoldingsByItem,
+  scanPickerSubtitle,
+  type ScanHoldingRow,
+} from '@/lib/scan-resolve';
 import { readSignatureOrder, scanSignatureDeparture } from '@/lib/scan-signature-departure';
 import { supabase } from '@/lib/supabase';
 import {
@@ -124,6 +130,11 @@ interface ScanCandidate {
   charterId: string | null;
   charterName: string | null;
   binLocation: string | null;
+  itemType: string | null;
+  customFields: Record<string, unknown> | null;
+  /** Where the record's stock is, for the picker's line
+   *  (scanCandidatePlacementLabel). Filled in only when the picker shows. */
+  placementLabel: string | null;
   quantityOnHand: number;
 }
 
@@ -165,17 +176,6 @@ function looksLikeIsbn(raw: string): boolean {
 function formatCurrency(n: number): string {
   return `$${n.toFixed(2)}`;
 }
-
-/** Maps a file extension to an image MIME type for storage uploads. */
-function mimeForExt(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
-  if (e === 'png') return 'image/png';
-  if (e === 'heic') return 'image/heic';
-  if (e === 'webp') return 'image/webp';
-  return `image/${e}`;
-}
-
 
 export default function Scan() {
   const router = useRouter();
@@ -357,7 +357,7 @@ export default function Scan() {
     const { data: rows } = await supabase
       .from('inventory_items')
       .select(
-        `id, sku, barcode, charter_id, bin_location, quantity_on_hand,
+        `id, sku, barcode, charter_id, bin_location, quantity_on_hand, item_type, custom_fields,
          charter:charters!charter_id (name)`,
       )
       .eq('organization_id', orgId)
@@ -374,6 +374,9 @@ export default function Scan() {
         charterId: (r.charter_id as string | null) ?? null,
         charterName: charterObj?.name ?? null,
         binLocation: (r.bin_location as string | null) ?? null,
+        itemType: (r.item_type as string | null) ?? null,
+        customFields: (r.custom_fields as Record<string, unknown> | null) ?? null,
+        placementLabel: null,
         quantityOnHand: Number(r.quantity_on_hand) || 0,
       };
     });
@@ -381,10 +384,48 @@ export default function Scan() {
     const resolution = resolveScanMatches(candidates, safe);
     if (resolution.kind === 'not_found') return null;
     if (resolution.kind === 'multiple') {
-      setPlacementChoices(resolution.matches);
+      setPlacementChoices(await withPlacementLabels(orgId, resolution.matches));
       return 'ambiguous';
     }
     return loadItemById(resolution.match.id);
+  }
+
+  /**
+   * The picker's rows, each with where its stock is (B26): the rack and crate
+   * holdings of the rows in one read (the first 100, which bounds the URL; a
+   * code shared by more records is not seen in practice), the same read
+   * loadItemById makes for one item, then the one placement rule
+   * (scanCandidatePlacementLabel). A failed read, or a row past the first 100,
+   * leaves the line to the record's own rack keys and text, as before; it
+   * never holds the picker back.
+   */
+  async function withPlacementLabels(org: string, rows: ScanCandidate[]): Promise<ScanCandidate[]> {
+    let holdings = new Map<string, RackHoldingLike[]>();
+    try {
+      const { data, error } = await supabase
+        .from('item_stock_levels')
+        .select('item_id, quantity, locations!inner(name, kind)')
+        .eq('organization_id', org)
+        // in-list-bound: the records one scanned code matches, at most 100
+        .in(
+          'item_id',
+          rows.slice(0, 100).map((r) => r.id),
+        )
+        .in('locations.kind', ['rack', 'crate'])
+        .gt('quantity', 0);
+      if (!error) holdings = scanHoldingsByItem((data ?? []) as unknown as ScanHoldingRow[]);
+    } catch {
+      // The rack keys and text still say something true enough to choose by.
+    }
+    return rows.map((r) => ({
+      ...r,
+      placementLabel: scanCandidatePlacementLabel({
+        itemType: r.itemType,
+        customFields: r.customFields,
+        binLocation: r.binLocation,
+        holdings: holdings.get(r.id) ?? [],
+      }),
+    }));
   }
 
   /** User picked a specific placement from the disambiguation sheet. */
@@ -836,21 +877,12 @@ export default function Scan() {
     setBusy(true);
     try {
       const asset = result.assets[0];
-      // Resize on-device so the bucket only stores list-friendly sizes
-      // (~400 KB JPEGs instead of multi-megapixel phone photos).
-      const resized = await resizeForUpload(asset.uri);
-      // The one path builder every writer uses; the database (0381) refuses
-      // any other shape (packages/core item-photo-path.test.ts pins it).
-      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
-
-      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
-      // in React Native/Expo, which is why captured photos never showed
-      // up. See item/new.tsx mimeForExt note.
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const { error: upErr } = await supabase.storage
-        .from('item-images')
-        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) throw new Error(upErr.message);
+      // The photo, resized on the device (~400 KB JPEGs instead of
+      // multi-megapixel phone photos), and its thumbnail beside it, so lists
+      // never need the full photo (lib/item-photo-upload.ts builds both paths).
+      const upload = await uploadItemPhoto({ supabase, orgId, itemId, uri: asset.uri });
+      if (!upload.ok) throw new Error(upload.error);
+      const path = upload.path;
 
       const { data: existing } = await supabase
         .from('item_images')
@@ -864,6 +896,7 @@ export default function Scan() {
         organization_id: orgId,
         item_id: itemId,
         storage_path: path,
+        thumb_path: upload.thumbPath,
         is_primary: isFirst,
       });
       if (insErr) throw new Error(insErr.message);
@@ -1354,7 +1387,7 @@ export default function Scan() {
                     SKU {c.sku}
                   </Text>
                   <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
-                    {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
+                    {c.placementLabel ?? 'No bin set'} · {c.quantityOnHand} on hand
                   </Text>
                 </Pressable>
               ))}

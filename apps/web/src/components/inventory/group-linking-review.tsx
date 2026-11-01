@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import { linkFamilyAction } from '@/server/actions/product-group-linking';
 
 /**
@@ -344,8 +344,8 @@ function FamilyCard({
             </select>
             {groupsTruncated ? (
               <span className="text-muted-foreground max-w-[320px] text-[12px]">
-                Showing the first {existingGroups.length.toLocaleString()} groups. Rename or
-                archive groups you no longer use, or link into a new group instead.
+                Showing the first {formatNumber(existingGroups.length)} groups. Rename or archive
+                groups you no longer use, or link into a new group instead.
               </span>
             ) : null}
           </label>

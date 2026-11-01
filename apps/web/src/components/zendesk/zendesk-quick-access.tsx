@@ -70,7 +70,7 @@ export function ZendeskQuickAccess({
               <input
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="learn4life"
+                placeholder="yourcompany"
                 className="placeholder:text-muted-foreground h-[30px] w-44 min-w-0 bg-transparent px-2.5 text-[13px] outline-none max-sm:h-[42px] max-sm:text-base"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void save();
