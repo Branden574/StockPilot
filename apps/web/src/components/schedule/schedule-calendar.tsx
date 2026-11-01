@@ -222,10 +222,19 @@ function DayMore({ ymd, events, overflow, timeZone }: DayMoreProps) {
             <X aria-hidden />
           </Button>
         </div>
-        {/* role="list" keeps it a list for VoiceOver in Safari. The padding
-            leaves room inside the scroller for a row's focus ring. */}
+        {/* role="list" keeps it a list for VoiceOver in Safari. The padding,
+            and the rows' scroll margin when one is scrolled to, leave room
+            inside the scroller for a row's focus ring. */}
         <ul
           role="list"
+          // Radix keeps Tab inside the list, and its wrap from Close back to
+          // the last row (Shift+Tab) focuses with preventScroll
+          // (@radix-ui/react-focus-scope), which leaves that row out of view
+          // in a list that scrolls, as orders-placed-control.tsx found. A row
+          // that takes focus is brought into the list's view.
+          onFocus={(e) => {
+            if (e.target !== e.currentTarget) e.target.scrollIntoView({ block: 'nearest' });
+          }}
           className="-mx-1 mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1"
         >
           {events.map((ev) => (
@@ -236,7 +245,7 @@ function DayMore({ ymd, events, overflow, timeZone }: DayMoreProps) {
                 href={`/dashboard/schedule/${ev.id}`}
                 data-status={ev.status}
                 className={cn(
-                  'focus-visible:ring-ring pointer-coarse:min-h-11 flex min-h-8 items-center rounded-[4px] border px-2 py-1.5 text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 max-sm:min-h-11',
+                  'focus-visible:ring-ring pointer-coarse:min-h-11 flex min-h-8 scroll-my-1 items-center rounded-[4px] border px-2 py-1.5 text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 max-sm:min-h-11',
                   STATUS_TONE[ev.status],
                 )}
               >

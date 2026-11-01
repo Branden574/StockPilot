@@ -227,6 +227,32 @@ describe('"+N more" on a busy day of the team calendar', () => {
     expect(dialog).toHaveClass('max-h-[min(24rem,var(--radix-popover-content-available-height))]');
   });
 
+  // Radix keeps Tab inside the list, and its wrap (Shift+Tab from Close to the
+  // last row, @radix-ui/react-focus-scope 1.3.1) focuses with preventScroll:
+  // in a list that scrolls, the row with focus would be out of view.
+  it("Shift+Tab from Close wraps to the last event and brings it into the list's view", async () => {
+    const start = Date.parse('2026-07-14T14:00:00Z');
+    const many = Array.from({ length: 30 }, (_, i) =>
+      event(`ev-m${i + 1}`, `Delivery ${i + 1}`, new Date(start + i * 10 * 60_000).toISOString()),
+    );
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => undefined);
+    const { user } = renderJuly(many);
+    await user.click(screen.getByRole('button', { name: '27 more events on Tuesday, July 14' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Tuesday, July 14' });
+    const close = within(dialog).getByRole('button', { name: 'Close' });
+    await waitFor(() => expect(close).toHaveFocus());
+    scrollIntoView.mockClear();
+    await user.tab({ shift: true });
+    const last = within(dialog).getAllByRole('link')[29]!;
+    expect(last).toHaveFocus();
+    expect(scrollIntoView.mock.contexts.some((el) => el === last)).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    // And its focus ring with it: a scroll margin as wide as the ring's room.
+    expect(last).toHaveClass('scroll-my-1');
+  });
+
   // One set of words and tones for the cell's chip and the list's row
   // (recurring pattern 26): each keeps its own layout (the chip truncates to
   // one line with its title as a tooltip, the row wraps).
