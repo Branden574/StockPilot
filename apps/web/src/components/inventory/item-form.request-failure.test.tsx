@@ -85,9 +85,9 @@ function renderForm(
       }}
       itemType="product"
       categories={opts.categories ?? []}
-      locations={[{ id: SITE_ID, name: 'DC4' }]}
+      locations={[{ id: SITE_ID, name: 'North site' }]}
       suppliers={[]}
-      warehouses={[{ id: WAREHOUSE_ID, name: 'DC4' }]}
+      warehouses={[{ id: WAREHOUSE_ID, name: 'Main' }]}
       warehouseCharters={[]}
       charters={[]}
       warehouseLabel="Warehouse"
