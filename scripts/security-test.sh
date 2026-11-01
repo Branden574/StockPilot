@@ -1035,13 +1035,16 @@ WEB_TESTS=(
   # cookie of this host. app/ingest/[...path]/route.ts builds each request to
   # PostHog from a list of headers: never a cookie, Authorization only as a
   # PostHog project key (Bearer phc_), no Set-Cookie back. It passes on only
-  # the paths posthog-js requests with the app's init options (404 for any
-  # other), the remote config only for the app's own project key (another
-  # project's config.js would run that project's code as ours), PostHog's
-  # content type only when it is JSON, a script or text, every answer
-  # nosniff, and no body over the SDK's largest (413). The census test fails
-  # when an installed posthog-js names a path or ships a bundle the list has
-  # not been checked against. The guard fails if a /ingest rewrite (which
+  # the requests posthog-js makes with the app's init options, each by the
+  # method the SDK uses (404 for any other path, 405 for another method),
+  # the remote config only for the app's own project key and with no query
+  # (another project's config.js would run that project's code as ours), a
+  # token= only when it is that key, PostHog's content type only when it is
+  # JSON, a script or text, every answer nosniff, and no body over the
+  # platform's request body limit (413); each refusal is logged with its
+  # path only. The census test fails when an installed posthog-js names a
+  # path or ships a bundle the list has not been checked against, and checks
+  # each request with its method. The guard fails if a /ingest rewrite (which
   # forwards the browser's headers as they came) or a proxy matcher for
   # /ingest comes back; it carries the "Security invariant" marker.
   src/test/ingest-proxy.guard.test.ts

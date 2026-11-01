@@ -30,6 +30,8 @@ export const dynamic = 'force-dynamic';
  *     asked: a rewrite of every path let anyone's project key into
  *     /array/<key>/config.js, a script that carries that project's site apps,
  *     so our origin would serve their JavaScript.
+ *   - the method: the one the SDK uses for that path (a GET path takes HEAD
+ *     too); any other answers 405.
  *   - headers: the ones PostHog's proxy reference names (content-type,
  *     content-encoding, user-agent, every posthog-*), accept, and
  *     x-conversations-token (posthog-js sets it on its Conversations calls:
@@ -41,11 +43,14 @@ export const dynamic = 'force-dynamic';
  *     (lib/client-ip.ts), so PostHog places the visitor and not this
  *     function's region.
  *   - the query as it came (/flags/?v=2; skipTrailingSlashRedirect in
- *     next.config.ts keeps the slash before it), on the host the SDK itself
- *     uses for that path: the assets host for /static/ and /array/, the API
- *     host for the rest (posthog-js utils/request-router.js:145-159).
+ *     next.config.ts keeps the slash before it), but none for the remote
+ *     config, where the SDK sends none, and a token in it only if it is this
+ *     app's project key (ownTokens below; 404 otherwise), on the host the SDK
+ *     itself uses for that path: the assets host for /static/ and /array/,
+ *     the API host for the rest (posthog-js utils/request-router.js:145-159).
  *   - the body's bytes as they came (gzip and base64 batches are binary), up
- *     to the largest the SDK sends (readBody below); a larger one answers 413.
+ *     to the platform's request body limit (BODY_CAP below); a larger one
+ *     answers 413.
  *
  * The answer is PostHog's status and body, with its Retry-After (the SDK
  * waits that long before it retries) and its content type when that is one a
@@ -53,9 +58,10 @@ export const dynamic = 'force-dynamic';
  * cache policy is kept for /static/ only; every other answer is private,
  * no-store (Target.shared). Every answer is nosniff. fetch has already
  * decoded the body, so Content-Encoding and Content-Length are not copied. A
- * failure of ours answers with no body: 404 for a path not on the list, 413
- * for a body over the cap, 400 for a body that could not be read, 502 when
- * PostHog does not answer within 10 seconds. The SDK retries; analytics is
+ * failure of ours answers with no body: 404 for a path or a token not on the
+ * list, 405 for another method, 413 for a body over the cap (each of these
+ * three logged with its path: refuse below), 400 for a body that could not
+ * be read, 502 when PostHog does not answer within 10 seconds. Analytics is
  * never worth an error page.
  *
  * /ingest stays out of the proxy's matcher (src/proxy.ts): no session refresh
@@ -69,36 +75,54 @@ const ASSETS_ORIGIN = 'https://us-assets.i.posthog.com';
 const PREFIX = '/ingest';
 const TIMEOUT_MS = 10_000;
 
-const MIB = 1024 * 1024;
 /**
- * The largest request body taken, past which the answer is 413. The SDK's
- * largest are its event batches: everything captured in one 3 second flush
- * (request-queue.js:54, :115-131), at most about 130 events (10 a second,
- * bursts of 100: rate-limiter.js:11-12), each string cut to 65,535
- * characters (posthog-core.js:218, :1629-1630), gzipped (:658, :1687). Log
- * batches are at most 100 records of 10,000 characters, gzipped
- * (@posthog/browser-common logs-config.js:38, console-logs.js:37). A
- * mebibyte is far above both.
+ * The largest request body taken, on every POST path; past it the answer is
+ * 413. It is the platform's own limit, because posthog-js 1.438.15 caps no
+ * request body by size and never retries a 4xx (retry-queue.js:110), so any
+ * lower cap would drop, for good, bodies the SDK legitimately sends: an
+ * event batch has no size limit (raw JSON once a remote config fails,
+ * posthog-core.js:1097; $exception events are never cut,
+ * posthog-exceptions.js:168), the console log drain at unload posts the
+ * whole queue, up to 2,048 records, at once (@posthog/browser-common
+ * logs.js:445-458, logs-config.js:37), and one replay event is never split
+ * (extensions/replay/external/sessionrecording-utils.js:204-205).
+ *
+ * The limit: "The maximum payload size for the request body or the response
+ * body of a Vercel Function is 4.5 MB", and a larger one is answered 413
+ * FUNCTION_PAYLOAD_TOO_LARGE before this route runs (Vercel docs, Functions
+ * limits, Request body size). The docs give no byte count, so 4.5 MB is
+ * read as 4.5 MiB, the larger reading: the route refuses nothing the
+ * platform lets through, and stops reading there wherever no platform
+ * limit applies (next start).
  */
-const BODY_CAP = MIB;
-/**
- * Replay snapshots are bigger: the recorder sends a buffer once it passes
- * 0.9 MiB (extensions/replay/external/lazy-loaded-session-recorder.js:141,
- * :2054, :2101) and one event of up to 6.3 MiB unsplit (sessionrecording-
- * utils.js:201-205), and a 3 second flush can hold more than one send. The
- * platform refuses a function body over 4.5 MB before this route runs, so on
- * Vercel that is the cap.
- */
-const REPLAY_BODY_CAP = 8 * MIB;
+const BODY_CAP = 4.5 * 1024 * 1024;
 
-/** A posthog.version, the segment the SDK puts in /static/<version>/. */
+/**
+ * A posthog.version, the segment the SDK puts in /static/<version>/. Any
+ * version, not only the installed one: a tab still open on an older SDK
+ * after an update asks for its own.
+ */
 const VERSION = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?`;
+
+/**
+ * A Conversations ticket id: a UUID. PostHog issues them, and the SDK sends
+ * back the one it was given (extensions/conversations/external/index.js:
+ * 567-569, :839-840; its own example is getMessages('ticket-uuid'),
+ * posthog-conversations.js:320).
+ */
+const TICKET = '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}';
 
 /**
  * The bundles the SDK can load by name with this app's init options
  * (entrypoints/external-scripts-loader.js:117-158). None of the settings
  * that would keep one off is set, so the project's remote config can turn
  * each on: the call, then that setting.
+ *
+ * Not toolbar: a #__posthog= link launches it (extensions/toolbar.js:25,
+ * :153) and it talks to ui_host, which the CSP's connect-src does not allow
+ * (next.config.ts), so it cannot work here; served, a crafted link would
+ * load PostHog's toolbar from our origin, and on every later page too, as
+ * the SDK keeps the link's state (toolbar.js:146).
  */
 const BUNDLES = [
   'surveys', // browser-surveys.js:57; disable_surveys
@@ -110,23 +134,29 @@ const BUNDLES = [
   // The one web vitals bundle capture_performance unset picks
   // (extensions/web-vitals/index.js:401-409, :424).
   'web-vitals-with-attribution',
-  // The recorder: lazy-recorder unless the remote config names another of
-  // the four the package ships (extensions/replay/session-recording.js:196,
-  // :318-322); disable_session_recording.
+  // The recorder: lazy-recorder unless the remote config names another
+  // (extensions/replay/session-recording.js:196, :318-322);
+  // disable_session_recording. Only these two define initSessionRecording,
+  // without which the SDK records nothing (session-recording.js:357-363);
+  // the package's recorder and recorder-v2 define rrweb only, so they are
+  // refused.
   'lazy-recorder',
   'posthog-recorder',
-  'recorder',
-  'recorder-v2',
-  // Launched from PostHog's app with #__posthog=... in the address
-  // (extensions/toolbar.js:25, :153); no init option.
-  'toolbar',
 ] as const;
 
 /** Where a request goes, and how its answer comes back. */
 interface Target {
   origin: typeof API_ORIGIN | typeof ASSETS_ORIGIN;
-  /** The largest request body passed on. */
-  maxBody: number;
+  /**
+   * The one method the SDK uses for the path; a GET path takes HEAD too.
+   * Checked here, not by which handlers the module exports: Next answers
+   * HEAD with the GET handler when there is no HEAD one
+   * (next/dist/server/route-modules/app-route/helpers/
+   * auto-implement-methods.js:36-45).
+   */
+  method: 'GET' | 'POST';
+  /** The query is passed on; false for a path the SDK sends no query to. */
+  query: boolean;
   /**
    * PostHog's Cache-Control is kept. Vercel's CDN stores a function's answer
    * when its Cache-Control allows a shared cache (max-age, s-maxage) and no
@@ -143,8 +173,8 @@ interface Endpoint extends Target {
   path: RegExp;
 }
 
-function api(path: RegExp, maxBody = BODY_CAP): Endpoint {
-  return { path, origin: API_ORIGIN, maxBody, shared: false };
+function api(method: Target['method'], path: RegExp): Endpoint {
+  return { path, origin: API_ORIGIN, method, query: true, shared: false };
 }
 
 /**
@@ -161,53 +191,73 @@ function api(path: RegExp, maxBody = BODY_CAP): Endpoint {
  * options, extensions/tracing-headers.js:75, external-integration.js:70).
  */
 const ENDPOINTS: readonly Endpoint[] = [
-  // Events: the SDK's own path (posthog-core.js:353, sent at :1685) and the
-  // one the project's remote config names instead (:1107-1108), /i/v0/e/ for
-  // this project. Heatmaps, exceptions, web vitals and dead clicks are events.
-  api(/^\/e\/$/),
-  api(/^\/i\/v0\/e\/$/),
-  // Feature flags, ?v=2 (@posthog/browser-common feature-flags.js:683, :897);
-  // advanced_disable_flags, advanced_disable_feature_flags.
-  api(/^\/flags\/$/),
-  // Replay snapshots (extensions/replay/external/lazy-loaded-session-
-  // recorder.js:115, :2224); disable_session_recording.
-  api(/^\/s\/$/, REPLAY_BODY_CAP),
-  // Console logs (@posthog/browser-common logs.js:393, :449);
+  // Events, POST: the SDK's own path (posthog-core.js:353, sent at :1685-
+  // 1687) and the one the project's remote config names instead
+  // (:1107-1108), /i/v0/e/ for this project. Heatmaps, exceptions, web vitals
+  // and dead clicks are events.
+  api('POST', /^\/e\/$/),
+  api('POST', /^\/i\/v0\/e\/$/),
+  // Feature flags, POST ?v=2 (@posthog/browser-common feature-flags.js:683,
+  // :897-899); advanced_disable_flags, advanced_disable_feature_flags.
+  api('POST', /^\/flags\/$/),
+  // Replay snapshots, POST, like events (extensions/replay/external/
+  // lazy-loaded-session-recorder.js:115, :2224); disable_session_recording.
+  api('POST', /^\/s\/$/),
+  // Console logs, POST (@posthog/browser-common logs.js:393, :449-450);
   // logs.captureConsoleLogs.
-  api(/^\/i\/v1\/logs$/),
-  // Surveys (@posthog/browser-common surveys.js:254); disable_surveys.
-  api(/^\/api\/surveys\/$/),
-  // Product tours (posthog-product-tours.js:108); disable_product_tours.
-  api(/^\/api\/product_tours\/$/),
-  // Conversations (extensions/conversations/external/index.js:147-148, :549,
-  // :637, :681, :807, :1390, :1435); disable_conversations. The one segment
-  // after messages/ is the ticket's id.
-  api(/^\/api\/conversations\/v1\/widget\/(?:message|tickets|restore|restore\/request)$/),
-  api(/^\/api\/conversations\/v1\/widget\/messages\/[0-9A-Za-z_-]+(?:\/read)?$/),
-  // The bundles: /static/<version>/<name>.js (entrypoints/external-scripts-
-  // loader.js:128), and /static/<name>.js?v=<version> when that fails
-  // (:104-114, :137-153; strict_script_versioning is 'fallback',
-  // posthog-core.js:218).
+  api('POST', /^\/i\/v1\/logs$/),
+  // Surveys, GET (@posthog/browser-common surveys.js:254-255);
+  // disable_surveys.
+  api('GET', /^\/api\/surveys\/$/),
+  // Product tours, GET (posthog-product-tours.js:108-109);
+  // disable_product_tours.
+  api('GET', /^\/api\/product_tours\/$/),
+  // Conversations (extensions/conversations/external/index.js:147-148);
+  // disable_conversations. POST a message (:549), mark a ticket read
+  // (:681), restore (:807) and ask for a restore link (:1435); GET a
+  // ticket's messages (:637) and the tickets (:1390-1391).
+  api('POST', /^\/api\/conversations\/v1\/widget\/(?:message|restore|restore\/request)$/),
+  api('POST', new RegExp(`^/api/conversations/v1/widget/messages/${TICKET}/read$`)),
+  api('GET', /^\/api\/conversations\/v1\/widget\/tickets$/),
+  api('GET', new RegExp(`^/api/conversations/v1/widget/messages/${TICKET}$`)),
+  // The bundles, by script tag (GET): /static/<version>/<name>.js
+  // (entrypoints/external-scripts-loader.js:128), and
+  // /static/<name>.js?v=<version> when that fails (:104-114, :137-153;
+  // strict_script_versioning is 'fallback', posthog-core.js:218).
   {
     path: new RegExp(`^/static/(?:${VERSION}/)?(?:${BUNDLES.join('|')})\\.js$`),
     origin: ASSETS_ORIGIN,
-    maxBody: BODY_CAP,
+    method: 'GET',
+    query: true,
     shared: true,
   },
 ];
 
 /**
- * The remote config, as a script (entrypoints/external-scripts-loader.js:120)
- * or as JSON when the script carried none (remote-config.js:31-37, :53-60),
- * for this app's own project key only: the provider's key, read the same
- * way. Another project's config.js carries that project's site apps, so it
- * would run their code as ours; with no key set, analytics is off and no
- * /array/ path is passed on.
+ * The remote config, by GET: as a script (entrypoints/external-scripts-
+ * loader.js:120) or as JSON when the script carried none (remote-config.js:
+ * 31-37, :53-60), for this app's own project key only: the provider's key,
+ * read the same way. Another project's config.js carries that project's
+ * site apps, so it would run their code as ours; with no key set, analytics
+ * is off and no /array/ path is passed on. The SDK sends no query here, so
+ * none is passed on (a ?callback= never reaches PostHog).
  */
 function remoteConfig(path: string): Target | null {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
   if (!key || (path !== `/array/${key}/config.js` && path !== `/array/${key}/config`)) return null;
-  return { origin: ASSETS_ORIGIN, maxBody: BODY_CAP, shared: false };
+  return { origin: ASSETS_ORIGIN, method: 'GET', query: false, shared: false };
+}
+
+/**
+ * Every token in the query is this app's project key. The SDK puts its own
+ * key there on the surveys, product tours and console logs calls
+ * (@posthog/browser-common surveys.js:254, logs.js:449; posthog-product-
+ * tours.js:108); another project's would make this function a relay for
+ * that project. With no key set, no token passes.
+ */
+function ownTokens(query: URLSearchParams): boolean {
+  const key = env.NEXT_PUBLIC_POSTHOG_KEY;
+  return query.getAll('token').every((token) => key !== '' && token === key);
 }
 
 /**
@@ -247,16 +297,13 @@ function upstreamHeaders(request: NextRequest): Headers {
 }
 
 /**
- * The request's body, or null when it is larger than `cap`: by its
+ * The request's body, or null when it is larger than BODY_CAP: by its
  * Content-Length before a byte is read, and by the bytes read when it has
  * none (a chunked body), stopping at the first byte over.
  */
-async function readBody(
-  request: NextRequest,
-  cap: number,
-): Promise<Uint8Array<ArrayBuffer> | null> {
+async function readBody(request: NextRequest): Promise<Uint8Array<ArrayBuffer> | null> {
   const declared = request.headers.get('content-length');
-  if (declared !== null && !(Number(declared) <= cap)) return null;
+  if (declared !== null && !(Number(declared) <= BODY_CAP)) return null;
   const chunks: Uint8Array[] = [];
   let size = 0;
   if (request.body) {
@@ -265,7 +312,7 @@ async function readBody(
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > cap) {
+      if (size > BODY_CAP) {
         reader.cancel().catch(() => {});
         return null;
       }
@@ -306,36 +353,58 @@ function answerContentType(value: string | null): string {
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 /** An answer of our own: no body, nothing PostHog said. */
-function emptyAnswer(status: 400 | 404 | 413 | 502): Response {
-  return new Response(null, { status, headers: { 'x-content-type-options': 'nosniff' } });
+function emptyAnswer(status: 400 | 404 | 405 | 413 | 502, allow?: string): Response {
+  const headers = new Headers({ 'x-content-type-options': 'nosniff' });
+  if (allow) headers.set('allow', allow);
+  return new Response(null, { status, headers });
+}
+
+/**
+ * A request not passed on: 404 for a path or a token not on the list, 405
+ * (with Allow) for a method the SDK does not use on the path, 413 for a body
+ * over the cap. One log line each, with the path only: never the query (it
+ * can carry a token), a header or the body. The SDK drops what is refused
+ * without retrying, and /i/v0/e/ and /s/ come from the project's remote
+ * config, so this line is where a config that names a new path shows,
+ * instead of events vanishing.
+ */
+function refuse(status: 404 | 405 | 413, method: string, path: string, allow?: string): Response {
+  console.warn('[ingest] refused', { status, method, path });
+  return emptyAnswer(status, allow);
 }
 
 async function proxy(request: NextRequest): Promise<Response> {
   const incoming = new URL(request.url);
-  const destination = targetFor(incoming.pathname);
-  if (!destination) return emptyAnswer(404);
+  const path = incoming.pathname;
+  const { method } = request;
+  const destination = targetFor(path);
+  if (!destination) return refuse(404, method, path);
+  if (method !== destination.method && !(method === 'HEAD' && destination.method === 'GET')) {
+    return refuse(405, method, path, destination.method === 'GET' ? 'GET, HEAD' : 'POST');
+  }
+  if (destination.query && !ownTokens(incoming.searchParams)) return refuse(404, method, path);
 
   let requestBody: Uint8Array<ArrayBuffer> | undefined;
-  if (request.method === 'POST') {
+  if (method === 'POST') {
     let read: Uint8Array<ArrayBuffer> | null;
     try {
-      read = await readBody(request, destination.maxBody);
+      read = await readBody(request);
     } catch {
       return emptyAnswer(400);
     }
-    if (read === null) return emptyAnswer(413);
+    if (read === null) return refuse(413, method, path);
     requestBody = read;
   }
 
   const target = new URL(destination.origin);
-  target.pathname = incoming.pathname.slice(PREFIX.length);
-  target.search = incoming.search;
+  target.pathname = path.slice(PREFIX.length);
+  if (destination.query) target.search = incoming.search;
 
   let upstream: Response;
   let body: ArrayBuffer | null;
   try {
     upstream = await fetch(target, {
-      method: request.method,
+      method,
       headers: upstreamHeaders(request),
       body: requestBody,
       redirect: 'manual',
@@ -343,7 +412,7 @@ async function proxy(request: NextRequest): Promise<Response> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     body =
-      request.method === 'HEAD' || NULL_BODY_STATUSES.has(upstream.status)
+      method === 'HEAD' || NULL_BODY_STATUSES.has(upstream.status)
         ? null
         : await upstream.arrayBuffer();
   } catch (err) {

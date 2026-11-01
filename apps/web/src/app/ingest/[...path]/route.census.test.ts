@@ -19,13 +19,15 @@ import * as route from './route';
 /**
  * The /ingest list against the posthog-js this app installs (docket S34).
  * The route passes on only the requests the SDK makes with this app's init
- * options. Here every path the SDK's code names, in the bundle the app
- * imports and in each bundle the route lets it load, is one the route passes
- * on (SENT) or one these options never send through /ingest (NOT_SENT, with
- * the reason), and every bundle the package ships is one the route serves or
- * one it refuses. A posthog-js update that adds a path or a bundle fails here
- * until someone reads where the SDK sends it and adds it to the route or to
- * a list below with the reason. fetch is a stub: nothing reaches PostHog.
+ * options, each by the one method the SDK uses for it. Here every path the
+ * SDK's code names, in the bundle the app imports and in each bundle the
+ * route lets it load, is one the route passes on by that method and refuses
+ * by any other with 405 (SENT), or one these options never send through
+ * /ingest (NOT_SENT, with the reason), and every bundle the package ships is
+ * one the route serves or one it refuses. A posthog-js update that adds a
+ * path or a bundle fails here until someone reads where the SDK sends it and
+ * adds it to the route or to a list below with the reason. fetch is a stub:
+ * nothing reaches PostHog.
  */
 
 const require = createRequire(import.meta.url);
@@ -60,13 +62,14 @@ const SERVED_BUNDLES = [
   'web-vitals-with-attribution',
   'lazy-recorder',
   'posthog-recorder',
-  'recorder',
-  'recorder-v2',
-  'toolbar',
 ];
 
-/** Bundles the package ships that these init options never load: refused. */
+/** Bundles the package ships that these init options never load, or that do nothing here: refused. */
 const REFUSED_BUNDLES: Record<string, string> = {
+  recorder:
+    'defines rrweb only, never initSessionRecording, so it cannot record (extensions/replay/session-recording.js:357-363); only lazy-recorder and posthog-recorder can',
+  'recorder-v2':
+    'defines rrweb only, never initSessionRecording, so it cannot record (extensions/replay/session-recording.js:357-363); only lazy-recorder and posthog-recorder can',
   'tracing-headers': 'tracing_headers is unset (extensions/tracing-headers.js:75)',
   'intercom-integration': 'integrations is unset (extensions/external-integration.js:70)',
   'crisp-chat-integration': 'integrations is unset (extensions/external-integration.js:70)',
@@ -78,6 +81,16 @@ const REFUSED_BUNDLES: Record<string, string> = {
 };
 
 /**
+ * Bundles the SDK loads by a name the package does not ship (PostHog serves
+ * them): refused, each with the reason. The scan below checks the SDK still
+ * names each, so the list cannot go stale in silence.
+ */
+const REFUSED_NOT_SHIPPED: Record<string, string> = {
+  toolbar:
+    "launched by a #__posthog= link (extensions/toolbar.js:25, :153), it talks to ui_host, which the CSP's connect-src does not allow (next.config.ts), so it cannot work here; served, such a link would load it from our origin on every later page (toolbar.js:146)",
+};
+
+/**
  * Files in dist that are never loaded by name: the entry bundles (the app
  * imports module.mjs; the others are for script tags and other builds) and
  * modules other packages import.
@@ -85,8 +98,8 @@ const REFUSED_BUNDLES: Record<string, string> = {
 const NOT_LOADED_BY_NAME =
   /^(?:array|module|main|customizations|default-extensions|extension-bundles|external-scripts-loader|all-external-dependencies|element-inference|rrweb|rrweb-types|rrweb-plugin-console-record|surveys-preview|product-tours-preview)(?:\.[0-9a-z.-]+)?\.js$/;
 
-type Method = 'GET' | 'POST';
-type Sample = [Method, string, string];
+type Method = 'GET' | 'HEAD' | 'POST';
+type Sample = ['GET' | 'POST', string, string];
 
 /**
  * Every path the SDK names that it sends through /ingest with these options,
@@ -208,16 +221,31 @@ function ask(method: Method, at: string): Promise<Response> {
     method,
     body: method === 'POST' ? new Uint8Array([1]) : undefined,
   });
-  return method === 'POST' ? route.POST(request) : route.GET(request);
+  return route[method](request);
 }
 
-/** What the route does with a request: the host it went to, or its status when PostHog was not asked. */
+/**
+ * What the route does with a request: the method and the address PostHog
+ * was asked with, or the route's status when PostHog was not asked.
+ */
 async function outcome(method: Method, at: string): Promise<string> {
   upstream.mockClear();
   const res = await ask(method, at);
   if (upstream.mock.calls.length === 0) return `answered ${res.status}`;
-  const [input] = upstream.mock.calls[0]!;
-  return `sent to ${String(input)}`;
+  const [input, init] = upstream.mock.calls[0]!;
+  return `sent ${init?.method} to ${String(input)}`;
+}
+
+/**
+ * What the route must do with a request the SDK makes by `method`, and with
+ * the same address by the other methods: a GET goes on as GET and as HEAD and
+ * a POST is refused; a POST goes on as POST and a GET or HEAD is refused.
+ */
+function expectedFor(method: 'GET' | 'POST', at: string, host: string): Array<[Method, string]> {
+  const sent = (m: Method): [Method, string] => [m, `sent ${m} to ${host}${at}`];
+  return method === 'GET'
+    ? [sent('GET'), sent('HEAD'), ['POST', 'answered 405']]
+    : [sent('POST'), ['GET', 'answered 405'], ['HEAD', 'answered 405']];
 }
 
 describe('/ingest against the installed posthog-js', () => {
@@ -235,18 +263,28 @@ describe('/ingest against the installed posthog-js', () => {
     expect(SDK.module).toBe('dist/module.mjs');
     expect(names.length).toBeGreaterThan(10);
 
+    // The SDK still loads each refused name the package does not ship.
+    const entry = readFileSync(path.join(DIST, SDK.module.slice('dist/'.length)), 'utf8');
+    for (const name of Object.keys(REFUSED_NOT_SHIPPED)) {
+      expect(entry, name).toContain(`"${name}"`);
+    }
+
     const wrong: string[] = [];
-    for (const name of names) {
+    for (const name of [...names, ...Object.keys(REFUSED_NOT_SHIPPED)]) {
       for (const at of [
         `/static/${SDK.version}/${name}.js`,
         `/static/${name}.js?v=${SDK.version}`,
       ]) {
-        const expected = SERVED_BUNDLES.includes(name) ? `sent to ${ASSETS}${at}` : 'answered 404';
-        const got = await outcome('GET', at);
-        if (got !== expected) wrong.push(`${at}: ${got}, not ${expected}`);
+        const expected: Array<[Method, string]> = SERVED_BUNDLES.includes(name)
+          ? expectedFor('GET', at, ASSETS)
+          : (['GET', 'HEAD', 'POST'] as const).map((m) => [m, 'answered 404']);
+        for (const [method, want] of expected) {
+          const got = await outcome(method, at);
+          if (got !== want) wrong.push(`${method} ${at}: ${got}, not ${want}`);
+        }
       }
     }
-    expect(wrong).toEqual([]);
+    expect(wrong, wrong.join('\n')).toEqual([]);
   });
 
   it('passes on every path the SDK names that it sends through /ingest, and refuses the rest', async () => {
@@ -273,17 +311,30 @@ describe('/ingest against the installed posthog-js', () => {
       expect(named.has(p), p).toBe(true);
     }
 
+    // Each request by the SDK's own method goes on with that method (a GET's
+    // HEAD too); by any other it is refused with 405. A path never sent is
+    // refused with 404 by every method.
     const wrong: string[] = [];
     for (const p of named) {
       const samples: Array<[Method, string, string]> =
         p in SENT
-          ? SENT[p]!.map(([method, at, host]) => [method, at, `sent to ${host}${at}`])
-          : (['GET', 'POST'] as const).map((method) => [method, NOT_SENT[p]![0], 'answered 404']);
+          ? SENT[p]!.flatMap(([method, at, host]) =>
+              expectedFor(method, at, host).map(([m, want]): [Method, string, string] => [
+                m,
+                at,
+                want,
+              ]),
+            )
+          : (['GET', 'HEAD', 'POST'] as const).map((method) => [
+              method,
+              NOT_SENT[p]![0],
+              'answered 404',
+            ]);
       for (const [method, at, expected] of samples) {
         const got = await outcome(method, at);
         if (got !== expected) wrong.push(`${p}: ${method} ${at}: ${got}, not ${expected}`);
       }
     }
-    expect(wrong).toEqual([]);
+    expect(wrong, wrong.join('\n')).toEqual([]);
   });
 });

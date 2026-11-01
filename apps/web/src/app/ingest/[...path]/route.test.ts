@@ -6,6 +6,7 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { NextRequest } from 'next/server';
+import type { MockInstance } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -14,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * cookie of this host, the Supabase session among them. The next.config.ts
  * rewrites this route replaced forwarded the request's headers as they came,
  * on any path; the route builds a new request from lists, and only for the
- * requests the SDK makes. fetch is a stub: nothing here reaches PostHog.
- * Placeholder values only.
+ * requests the SDK makes, each by the method the SDK uses. fetch is a stub:
+ * nothing here reaches PostHog. Placeholder values only.
  */
 
 // The project key the provider reads (lib/env.client.ts), as the route reads
@@ -44,8 +45,10 @@ const PERSONAL_BEARER = 'Bearer phx_placeholder';
 const OTHER_PROJECT = 'phc_other';
 // The Conversations widget's value from the public remote config.
 const WIDGET_REF = 'placeholder-widget';
-// A Conversations ticket id, as PostHog hands them out.
+// A Conversations ticket id, as PostHog hands them out (a UUID), and the
+// widget_session_id the SDK makes for a visitor (a UUID v7).
 const TICKET = '00000000-0000-4000-8000-000000000000';
+const WIDGET_VISIT = '00000000-0000-7000-8000-000000000000';
 const SDK_VERSION = '1.438.15';
 
 // Everything a signed-in member's browser sends with a same-origin request, and
@@ -92,8 +95,12 @@ const NEVER_SENT = [
 ];
 
 const MIB = 1024 * 1024;
+// The platform's request body limit (Vercel: "4.5 MB"), as the route reads it.
+const CAP = 4.5 * MIB;
 
 const upstream = vi.fn<typeof fetch>();
+// The route's log lines. Quiet here; the refusal line is asserted on below.
+let warn: MockInstance<Console['warn']>;
 
 beforeEach(() => {
   upstream.mockReset();
@@ -109,6 +116,7 @@ beforeEach(() => {
   // address, and lib/client-ip.ts reads it only there.
   vi.stubEnv('VERCEL', '1');
   postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = PROJECT_REF;
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -171,21 +179,25 @@ function encodedWhole(text: string): string {
 }
 
 /**
- * A body sent in chunks with no Content-Length, that counts the chunks asked
- * for and says whether it was cancelled. It makes a chunk only when one is
- * read (no high-water mark), so `pulled` is what the route read.
+ * A body of `total` bytes sent in chunks of `chunkSize` (the last one shorter)
+ * with no Content-Length, that counts the chunks asked for and says whether it
+ * was cancelled. It makes a chunk only when one is read (no high-water mark),
+ * so `pulled` is what the route read.
  */
-function chunkedBody(chunks: number, chunkSize: number) {
+function chunkedBody(total: number, chunkSize: number) {
   const seen = { pulled: 0, cancelled: false };
+  let left = total;
   const stream = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
-        if (seen.pulled === chunks) {
+        if (left === 0) {
           controller.close();
           return;
         }
+        const size = Math.min(chunkSize, left);
+        left -= size;
         seen.pulled += 1;
-        controller.enqueue(new Uint8Array(chunkSize));
+        controller.enqueue(new Uint8Array(size));
       },
       cancel() {
         seen.cancelled = true;
@@ -194,6 +206,11 @@ function chunkedBody(chunks: number, chunkSize: number) {
     { highWaterMark: 0 },
   );
   return { stream, seen };
+}
+
+/** The refusal lines the route logged. */
+function refusals() {
+  return warn.mock.calls.filter(([first]) => first === '[ingest] refused');
 }
 
 describe('/ingest sends PostHog no member credential', () => {
@@ -262,11 +279,14 @@ describe('/ingest sends PostHog no member credential', () => {
   });
 });
 
-// Every request posthog-js 1.438.15 makes with this app's init options, as it
-// writes them, and where the SDK itself sends it when nothing proxies it
-// (utils/request-router.js: the assets host for /static/ and /array/).
+// Every request posthog-js 1.438.15 makes with this app's init options, by the
+// one method it uses for it and with the queries it builds, and where the SDK
+// itself sends it when nothing proxies it (utils/request-router.js: the assets
+// host for /static/ and /array/).
 const API = 'https://us.i.posthog.com';
 const ASSETS = 'https://us-assets.i.posthog.com';
+// The bundles it can load by name. Not toolbar, recorder or recorder-v2: the
+// route refuses those (the refusal table below says why).
 const BUNDLES = [
   'surveys',
   'product-tours',
@@ -277,40 +297,52 @@ const BUNDLES = [
   'web-vitals-with-attribution',
   'lazy-recorder',
   'posthog-recorder',
-  'recorder',
-  'recorder-v2',
-  'toolbar',
 ];
-const SDK_REQUESTS: Array<[Method, string, string]> = [
-  // Events: the SDK's own path, and the one this project's remote config names.
+const SDK_REQUESTS: Array<['GET' | 'POST', string, string]> = [
+  // Events: the SDK's own path, and the one this project's remote config
+  // names. A gzip batch carries no query flag, a base64 one does, a retry
+  // counts itself; an older SDK in a tab still open sent more.
+  ['POST', '/e/', API],
+  ['POST', '/e/?compression=base64', API],
+  ['POST', '/e/?retry_count=1', API],
   ['POST', `/e/?ip=0&_=1700000000000&ver=${SDK_VERSION}&compression=gzip-js`, API],
   ['POST', '/i/v0/e/?_=1700000000000', API],
+  ['POST', '/flags/?v=2', API],
   ['POST', `/flags/?v=2&_=1700000000000&ver=${SDK_VERSION}&compression=base64`, API],
   ['POST', '/flags/?v=2&only_evaluate_survey_feature_flags=true', API],
   ['POST', '/s/?_=1700000000000', API],
+  ['POST', '/s/?compression=base64&retry_count=2', API],
   ['POST', `/i/v1/logs?token=${PROJECT_REF}`, API],
-  ['GET', `/api/surveys/?token=${PROJECT_REF}`, API],
-  ['GET', `/api/product_tours/?token=${PROJECT_REF}`, API],
+  ['POST', `/i/v1/logs?token=${PROJECT_REF}&compression=base64`, API],
+  ['GET', `/api/surveys/?token=${PROJECT_REF}&_=1700000000000`, API],
+  ['GET', `/api/product_tours/?token=${PROJECT_REF}&_=1700000000000`, API],
   ['POST', '/api/conversations/v1/widget/message', API],
-  ['GET', `/api/conversations/v1/widget/messages/${TICKET}?after=1700000000000`, API],
+  [
+    'GET',
+    `/api/conversations/v1/widget/messages/${TICKET}?limit=50&widget_session_id=${WIDGET_VISIT}&after=2026-01-01T00%3A00%3A00Z&_=1700000000000`,
+    API,
+  ],
   ['POST', `/api/conversations/v1/widget/messages/${TICKET}/read`, API],
-  ['GET', '/api/conversations/v1/widget/tickets?limit=20', API],
+  [
+    'GET',
+    `/api/conversations/v1/widget/tickets?limit=20&offset=0&widget_session_id=${WIDGET_VISIT}&_=1700000000000`,
+    API,
+  ],
   ['POST', '/api/conversations/v1/widget/restore', API],
   ['POST', '/api/conversations/v1/widget/restore/request', API],
   ['GET', `/array/${PROJECT_REF}/config.js`, ASSETS],
   ['GET', `/array/${PROJECT_REF}/config`, ASSETS],
-  ...BUNDLES.map((name): [Method, string, string] => [
+  ...BUNDLES.map((name): ['GET', string, string] => [
     'GET',
     `/static/${SDK_VERSION}/${name}.js`,
     ASSETS,
   ]),
   // The SDK's fallback when the versioned file does not load.
-  ...BUNDLES.map((name): [Method, string, string] => [
+  ...BUNDLES.map((name): ['GET', string, string] => [
     'GET',
     `/static/${name}.js?v=${SDK_VERSION}`,
     ASSETS,
   ]),
-  ['GET', `/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`, ASSETS],
   // A tab still running an older or a pre-release SDK.
   ['GET', '/static/1.433.5/surveys.js', ASSETS],
   ['GET', '/static/1.439.0-beta.1/surveys.js', ASSETS],
@@ -390,14 +422,14 @@ describe('/ingest passes on the requests posthog-js makes, to the host the SDK i
   });
 });
 
-describe('/ingest sends no member credential and passes back no cookie, on every path the SDK asks for and by every method', () => {
+describe('/ingest sends no member credential and passes back no cookie, on every request the SDK makes', () => {
   // The first test is one POST of events. Most of the requests that carry the
   // session cookies are GETs: the remote config on every page load, the
   // bundles (a script tag with crossOrigin 'anonymous' still sends this
-  // origin's cookies), the surveys and tours lists. For each path the SDK asks
-  // for, by GET, HEAD and POST: only SENT_HEADERS go out, and PostHog's
-  // Set-Cookie and its other headers do not come back.
-  it.each(SDK_REQUESTS.map(([, path]) => [path]))('/ingest%s', async (path) => {
+  // origin's cookies), the surveys and tours lists. For each request the SDK
+  // makes, by its method (and a GET's by HEAD too): only SENT_HEADERS go out,
+  // and PostHog's Set-Cookie and its other headers do not come back.
+  it.each(SDK_REQUESTS)('%s /ingest%s', async (sdkMethod, path) => {
     upstream.mockImplementation(
       async () =>
         new Response('{}', {
@@ -411,7 +443,8 @@ describe('/ingest sends no member credential and passes back no cookie, on every
         }),
     );
 
-    for (const [call, method] of (['GET', 'HEAD', 'POST'] as const).entries()) {
+    const methods: Method[] = sdkMethod === 'GET' ? ['GET', 'HEAD'] : ['POST'];
+    for (const [call, method] of methods.entries()) {
       const req = incoming(`/ingest${path}`, {
         method,
         headers: BROWSER_HEADERS,
@@ -436,6 +469,40 @@ describe('/ingest sends no member credential and passes back no cookie, on every
         'x-content-type-options',
       ]);
     }
+    expect(upstream).toHaveBeenCalledTimes(methods.length);
+  });
+});
+
+describe('/ingest takes each path only by the method the SDK uses for it', () => {
+  // POST for events, flags, replay, logs and the Conversations writes; GET
+  // (and HEAD) for the lists, the remote config and the bundles. Next answers
+  // HEAD with the GET handler when a route exports no HEAD
+  // (auto-implement-methods.js), so the route checks the method itself.
+  it.each(SDK_REQUESTS)(
+    '%s /ingest%s: any other method answers 405, no body, and PostHog is not asked',
+    async (sdkMethod, path) => {
+      const others: Method[] = sdkMethod === 'GET' ? ['POST'] : ['GET', 'HEAD'];
+      for (const method of others) {
+        const res = await ask(method, `/ingest${path}`);
+
+        expect(res.status, method).toBe(405);
+        expect(await res.text(), method).toBe('');
+        expect(res.headers.get('x-content-type-options'), method).toBe('nosniff');
+        expect(res.headers.get('allow'), method).toBe(sdkMethod === 'GET' ? 'GET, HEAD' : 'POST');
+      }
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
+
+  it('answers 405 to a POST on a GET path before reading a byte of its body', async () => {
+    const { stream, seen } = chunkedBody(1024, 256);
+    const res = await route.POST(
+      incoming(`/ingest/static/${SDK_VERSION}/surveys.js`, { method: 'POST', body: stream }),
+    );
+
+    expect(res.status).toBe(405);
+    expect(seen.pulled).toBe(0);
+    expect(upstream).not.toHaveBeenCalled();
   });
 });
 
@@ -458,6 +525,31 @@ describe('/ingest refuses every other path with 404, no body and no request to P
     ['an extra segment under /static/<version>/', `/ingest/static/${SDK_VERSION}/extra/surveys.js`],
     ['a bundle these options never load', `/ingest/static/${SDK_VERSION}/tracing-headers.js`],
     ['a bundle these options never load, unversioned', '/ingest/static/intercom-integration.js'],
+    // The toolbar talks to PostHog's app host, which the CSP's connect-src
+    // does not allow, so it cannot work here; served, a crafted #__posthog=
+    // link would load it from our origin on every later page.
+    ['the toolbar', `/ingest/static/${SDK_VERSION}/toolbar.js`],
+    ['the toolbar, by its fallback address', `/ingest/static/toolbar.js?v=${SDK_VERSION}`],
+    [
+      'the toolbar, by its fallback address with its time',
+      `/ingest/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`,
+    ],
+    // recorder and recorder-v2 define no initSessionRecording, so with
+    // posthog-js 1.438.15 they cannot record: only lazy-recorder and
+    // posthog-recorder can.
+    ['a recorder bundle that cannot record', `/ingest/static/${SDK_VERSION}/recorder.js`],
+    [
+      'a recorder bundle that cannot record, unversioned',
+      `/ingest/static/recorder.js?v=${SDK_VERSION}`,
+    ],
+    [
+      'the other recorder bundle that cannot record',
+      `/ingest/static/${SDK_VERSION}/recorder-v2.js`,
+    ],
+    [
+      'the other recorder bundle that cannot record, unversioned',
+      `/ingest/static/recorder-v2.js?v=${SDK_VERSION}`,
+    ],
     ['a file that is not a bundle', '/ingest/static/array.js'],
     ['a source map', `/ingest/static/${SDK_VERSION}/surveys.js.map`],
     ['a version that is not one', '/ingest/static/latest/surveys.js'],
@@ -475,6 +567,26 @@ describe('/ingest refuses every other path with 404, no body and no request to P
       `/ingest/api/early_access_features/?token=${PROJECT_REF}`,
     ],
     ['a second segment after a ticket', `/ingest/api/conversations/v1/widget/messages/${TICKET}/x`],
+    // A ticket id is a UUID: PostHog issues them, and the SDK sends back the
+    // one it was given.
+    ['a ticket id that is no id', '/ingest/api/conversations/v1/widget/messages/undefined'],
+    [
+      'a ticket id that is no id, before /read',
+      '/ingest/api/conversations/v1/widget/messages/undefined/read',
+    ],
+    [
+      'a ticket id of letters, digits, _ and - that is not a UUID',
+      '/ingest/api/conversations/v1/widget/messages/abc_DEF-123',
+    ],
+    ['a UUID with a character too many', `/ingest/api/conversations/v1/widget/messages/${TICKET}0`],
+    [
+      'a UUID without its dashes',
+      `/ingest/api/conversations/v1/widget/messages/${TICKET.replaceAll('-', '')}`,
+    ],
+    [
+      'a UUID with a dash out of place',
+      '/ingest/api/conversations/v1/widget/messages/0000000-00000-4000-8000-000000000000',
+    ],
     // The ticket id and the version under /static/ are the only segments not
     // spelled out whole. Each takes only the characters those ids are made of,
     // never a '%', so no encoded slash inside one reaches PostHog.
@@ -526,85 +638,141 @@ describe('/ingest refuses every other path with 404, no body and no request to P
   });
 });
 
-describe('/ingest takes no request body larger than the SDK sends', () => {
-  it('answers 413 to a Content-Length over 1 MiB before reading the body, and asks PostHog nothing', async () => {
-    const { stream, seen } = chunkedBody(1, 16);
-    const res = await route.POST(
-      incoming('/ingest/e/', {
-        method: 'POST',
-        headers: { 'content-length': String(MIB + 1) },
-        body: stream,
-      }),
-    );
+describe("/ingest passes on a query only where the SDK sends one, and no other project's token", () => {
+  it('asks for the remote config with no query, whatever the request carried (the SDK sends none)', async () => {
+    for (const path of [`/array/${PROJECT_REF}/config.js`, `/array/${PROJECT_REF}/config`]) {
+      for (const method of ['GET', 'HEAD'] as const) {
+        upstream.mockClear();
+        const res = await ask(method, `/ingest${path}?callback=placeholder&token=${OTHER_PROJECT}`);
 
-    expect(res.status).toBe(413);
-    expect(await res.text()).toBe('');
-    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-    expect(seen.pulled).toBe(0);
-    expect(upstream).not.toHaveBeenCalled();
+        expect(res.status, `${method} ${path}`).toBe(200);
+        expect((await sentToPostHog()).url, `${method} ${path}`).toBe(`${ASSETS}${path}`);
+      }
+    }
   });
 
-  it('answers 413 to a body with no Content-Length once more than 1 MiB has been read, and stops reading there', async () => {
-    const typed = await route.POST(
-      incoming('/ingest/flags/?v=2', { method: 'POST', body: new Uint8Array(MIB + 1) }),
-    );
-    // 256 KiB at a time: the fifth chunk passes the cap, the sixth is never asked for.
-    const { stream, seen } = chunkedBody(8, 256 * 1024);
-    const chunked = await route.POST(incoming('/ingest/e/', { method: 'POST', body: stream }));
+  it.each([
+    ['GET', `/api/surveys/?token=${OTHER_PROJECT}&_=1700000000000`],
+    ['GET', `/api/product_tours/?token=${OTHER_PROJECT}&_=1700000000000`],
+    ['POST', `/i/v1/logs?token=${OTHER_PROJECT}`],
+    ['POST', `/i/v1/logs?compression=base64&token=${OTHER_PROJECT}`],
+    // A second token, an empty one, ours with a space, a name spelled encoded.
+    ['GET', `/api/surveys/?token=${PROJECT_REF}&token=${OTHER_PROJECT}`],
+    ['GET', '/api/surveys/?token=&_=1700000000000'],
+    ['GET', `/api/surveys/?token=${PROJECT_REF}%20`],
+    ['GET', `/api/surveys/?%74oken=${OTHER_PROJECT}`],
+    // A token on a path the SDK sends none on is held to the same rule.
+    ['POST', `/e/?token=${OTHER_PROJECT}`],
+  ] as const)(
+    "refuses %s /ingest%s with 404: a token that is not this app's key",
+    async (method, path) => {
+      const res = await ask(method, `/ingest${path}`);
 
-    for (const res of [typed, chunked]) {
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe('');
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses every token when no project key is set', async () => {
+    postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
+
+    for (const [method, path] of [
+      ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
+      ['GET', '/ingest/api/product_tours/?token=&_=1700000000000'],
+      ['POST', '/ingest/i/v1/logs?token=&compression=base64'],
+    ] as const) {
+      const res = await ask(method, path);
+      expect(res.status, path).toBe(404);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('/ingest takes a request body up to the platform limit on every POST path, and no more', () => {
+  // posthog-js caps no request body by size and never retries a 4xx, so a
+  // cap below the platform's would drop batches the SDK sent for good: event
+  // batches (raw JSON after a failed remote config), the console log drain at
+  // unload (the whole queue in one POST), a replay snapshot (never split).
+  const OVER: Array<[string]> = [
+    ['/ingest/e/'],
+    [`/ingest/i/v1/logs?token=${PROJECT_REF}`],
+    ['/ingest/s/'],
+  ];
+
+  it('passes on a body just under the limit and one of exactly the limit on /e/ and /i/v1/logs, by Content-Length and in chunks', async () => {
+    const sizes: number[] = [];
+    for (const path of ['/ingest/e/', `/ingest/i/v1/logs?token=${PROJECT_REF}`]) {
+      for (const size of [CAP - 1, CAP]) {
+        const declared = await route.POST(
+          incoming(path, {
+            method: 'POST',
+            headers: { 'content-length': String(size) },
+            body: new Uint8Array(size),
+          }),
+        );
+        const chunked = await route.POST(
+          incoming(path, { method: 'POST', body: chunkedBody(size, 256 * 1024).stream }),
+        );
+
+        for (const res of [declared, chunked]) {
+          expect(res.status, `${path} ${size}`).toBe(200);
+          expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+        }
+        sizes.push(size, size);
+      }
+    }
+    expect(upstream).toHaveBeenCalledTimes(sizes.length);
+    for (const [call, size] of sizes.entries()) {
+      expect((await sentToPostHog(call)).body, `call ${call}`).toHaveLength(size);
+    }
+  });
+
+  it.each(OVER)(
+    'answers 413 to a Content-Length one byte over the limit on %s before reading the body, and asks PostHog nothing',
+    async (path) => {
+      const { stream, seen } = chunkedBody(16, 16);
+      const res = await route.POST(
+        incoming(path, {
+          method: 'POST',
+          headers: { 'content-length': String(CAP + 1) },
+          body: stream,
+        }),
+      );
+
       expect(res.status).toBe(413);
       expect(await res.text()).toBe('');
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-    }
-    expect(seen.pulled).toBeLessThan(8);
-    expect(seen.cancelled).toBe(true);
-    expect(upstream).not.toHaveBeenCalled();
-  });
+      expect(seen.pulled).toBe(0);
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
 
-  it('passes on a body of exactly 1 MiB, by Content-Length and in chunks', async () => {
-    const declared = await route.POST(
-      incoming('/ingest/e/', {
-        method: 'POST',
-        headers: { 'content-length': String(MIB) },
-        body: new Uint8Array(MIB),
-      }),
-    );
-    const { stream } = chunkedBody(4, 256 * 1024);
-    const chunked = await route.POST(
-      incoming('/ingest/i/v1/logs', { method: 'POST', body: stream }),
-    );
+  it.each(OVER)(
+    'answers 413 to a body with no Content-Length one byte over the limit on %s, and stops reading at the first byte over',
+    async (path) => {
+      const typed = await route.POST(
+        incoming(path, { method: 'POST', body: new Uint8Array(CAP + 1) }),
+      );
+      // The limit in 256 KiB chunks and then one byte.
+      const oneOver = chunkedBody(CAP + 1, 256 * 1024);
+      const chunked = await route.POST(incoming(path, { method: 'POST', body: oneOver.stream }));
+      // Two chunks more than the limit: the first one over is the last one read.
+      const longer = chunkedBody(CAP + 2 * 256 * 1024, 256 * 1024);
+      const stopped = await route.POST(incoming(path, { method: 'POST', body: longer.stream }));
 
-    for (const res of [declared, chunked]) {
-      expect(res.status).toBe(200);
-      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-    }
-    expect(upstream).toHaveBeenCalledTimes(2);
-    expect((await sentToPostHog(0)).body).toHaveLength(MIB);
-    expect((await sentToPostHog(1)).body).toHaveLength(MIB);
-  });
-
-  it('takes replay snapshots up to 8 MiB (the SDK sends one event of up to 6.3 MiB unsplit) and no more', async () => {
-    const big = await route.POST(
-      incoming('/ingest/s/', { method: 'POST', body: new Uint8Array(7 * MIB) }),
-    );
-    const over = await route.POST(
-      incoming('/ingest/s/', { method: 'POST', body: new Uint8Array(8 * MIB + 1) }),
-    );
-    const overDeclared = await route.POST(
-      incoming('/ingest/s/', {
-        method: 'POST',
-        headers: { 'content-length': String(8 * MIB + 1) },
-        body: new Uint8Array(1),
-      }),
-    );
-
-    expect(big.status).toBe(200);
-    expect(over.status).toBe(413);
-    expect(overDeclared.status).toBe(413);
-    expect(upstream).toHaveBeenCalledTimes(1);
-    expect((await sentToPostHog(0)).body).toHaveLength(7 * MIB);
-  });
+      for (const res of [typed, chunked, stopped]) {
+        expect(res.status).toBe(413);
+        expect(await res.text()).toBe('');
+        expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      }
+      expect(oneOver.seen.cancelled).toBe(true);
+      expect(longer.seen.pulled).toBe(CAP / (256 * 1024) + 1);
+      expect(longer.seen.cancelled).toBe(true);
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
 
   it('answers 400 with no body when the request body breaks off, and asks PostHog nothing', async () => {
     const broken = new ReadableStream<Uint8Array>({
@@ -618,6 +786,72 @@ describe('/ingest takes no request body larger than the SDK sends', () => {
     expect(await res.text()).toBe('');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('/ingest logs each request it refuses, with the path only', () => {
+  // The SDK drops what is refused without retrying, so a remote config that
+  // moves /i/v0/e/ or /s/ shows here instead of events vanishing. Never the
+  // query (it can carry a token), a header or the body.
+  it.each([
+    [404, 'GET', `/ingest/api/projects/1/?token=${OTHER_PROJECT}&q=placeholder-query`],
+    [404, 'POST', `/ingest/i/v1/logs?token=${OTHER_PROJECT}`],
+    [404, 'HEAD', `/ingest/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`],
+    [405, 'GET', '/ingest/e/?compression=base64'],
+    [405, 'HEAD', '/ingest/s/'],
+    [405, 'POST', `/ingest/array/${PROJECT_REF}/config.js?callback=placeholder-query`],
+  ] as const)('a %i to %s %s writes one line', async (status, method, path) => {
+    const res = await route[method](
+      incoming(path, {
+        method,
+        headers: BROWSER_HEADERS,
+        body: method === 'POST' ? new TextEncoder().encode('placeholder-body') : undefined,
+      }),
+    );
+
+    expect(res.status).toBe(status);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[ingest] refused', {
+      status,
+      method,
+      path: new URL(path, SITE).pathname,
+    });
+    const line = JSON.stringify(warn.mock.calls);
+    for (const piece of [...NEVER_SENT, OTHER_PROJECT, 'placeholder-query', 'placeholder-body']) {
+      expect(line).not.toContain(piece);
+    }
+  });
+
+  it('logs a 413 once, by Content-Length and by the bytes read, with the path only', async () => {
+    await route.POST(
+      incoming(`/ingest/i/v1/logs?token=${PROJECT_REF}`, {
+        method: 'POST',
+        headers: { ...BROWSER_HEADERS, 'content-length': String(CAP + 1) },
+        body: chunkedBody(16, 16).stream,
+      }),
+    );
+    await route.POST(
+      incoming('/ingest/e/?compression=base64', {
+        method: 'POST',
+        headers: BROWSER_HEADERS,
+        body: new Uint8Array(CAP + 1),
+      }),
+    );
+
+    expect(warn.mock.calls).toEqual([
+      ['[ingest] refused', { status: 413, method: 'POST', path: '/ingest/i/v1/logs' }],
+      ['[ingest] refused', { status: 413, method: 'POST', path: '/ingest/e/' }],
+    ]);
+  });
+
+  it('logs nothing for a request it passes on', async () => {
+    for (const [method, path] of SDK_REQUESTS) {
+      await ask(method, `/ingest${path}`);
+    }
+
+    expect(upstream).toHaveBeenCalledTimes(SDK_REQUESTS.length);
+    expect(refusals()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
@@ -721,7 +955,6 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
         ),
     ],
   ])('answers 502 with no body when %s', async (_label, failure) => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     upstream.mockImplementationOnce(failure);
 
     const res = await route.POST(
@@ -732,6 +965,7 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
     expect(await res.text()).toBe('');
     expect([...res.headers.keys()]).toEqual(['x-content-type-options']);
     // The server log names the kind of failure, not its text.
+    expect(warn).toHaveBeenCalled();
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/ECONNREFUSED|socket hang up|aborted/);
   });
 });

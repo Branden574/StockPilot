@@ -2,12 +2,21 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { tryToParsePath } from 'next/dist/lib/try-to-parse-path';
+import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 
 // Only the matcher is read; the session refresh behind it is not.
 vi.mock('@/lib/supabase/middleware', () => ({ updateSession: vi.fn() }));
+// The project key the route pins /array/ and token= to, under a neutral name
+// (route.test.ts says why it is typed this way).
+const { PROJECT_REF, postHogEnv } = vi.hoisted(() => {
+  const PROJECT_REF = 'phc_placeholder';
+  return { PROJECT_REF, postHogEnv: { NEXT_PUBLIC_POSTHOG_KEY: PROJECT_REF } };
+});
+vi.mock('@/lib/env.client', () => ({ env: postHogEnv }));
 
 import nextConfig from '../../next.config';
+import * as ingestRoute from '../app/ingest/[...path]/route';
 import { config as proxyConfig } from '../proxy';
 
 /**
@@ -50,14 +59,26 @@ function analyticsRewrites(list: Rewrite[]): Rewrite[] {
   );
 }
 
-/** Paths posthog-js 1.438.15 asks for under api_host '/ingest'. */
-const INGEST_PATHS = [
-  '/ingest/e/',
-  '/ingest/i/v0/e/',
-  '/ingest/flags/',
-  '/ingest/array/phc_placeholder/config.js',
-  '/ingest/static/array.js',
+/**
+ * Requests posthog-js 1.438.15 makes under api_host '/ingest', by the method
+ * it makes each with: events, flags, replay, logs, the surveys list, the
+ * remote config and a bundle by both of its addresses. (The npm SDK never
+ * asks for /static/array.js: that is the script-tag snippet's file.)
+ */
+const INGEST_REQUESTS: Array<['GET' | 'POST', string]> = [
+  ['POST', '/ingest/e/'],
+  ['POST', '/ingest/i/v0/e/'],
+  ['POST', '/ingest/flags/?v=2'],
+  ['POST', '/ingest/s/'],
+  ['POST', `/ingest/i/v1/logs?token=${PROJECT_REF}`],
+  ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
+  ['GET', `/ingest/array/${PROJECT_REF}/config.js`],
+  ['GET', '/ingest/static/1.438.15/surveys.js'],
+  ['GET', '/ingest/static/surveys.js?v=1.438.15'],
 ];
+const INGEST_PATHS = INGEST_REQUESTS.map(
+  ([, at]) => new URL(at, 'https://app.example.com').pathname,
+);
 
 describe('/ingest reaches PostHog only through the route handler', () => {
   it('next.config.ts has no rewrite for /ingest or to PostHog', async () => {
@@ -113,5 +134,24 @@ describe('/ingest reaches PostHog only through the route handler', () => {
     expect(new RegExp(tryToParsePath('/((?!api|_next).*)').regexStr!).test('/ingest/e/')).toBe(
       true,
     );
+  });
+
+  it('the paths checked above are requests the route passes on, so the check is not of paths nobody asks for', async () => {
+    const upstream = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', upstream);
+    try {
+      for (const [method, at] of INGEST_REQUESTS) {
+        upstream.mockClear();
+        const request = new NextRequest(`https://app.example.com${at}`, {
+          method,
+          body: method === 'POST' ? new Uint8Array([1]) : undefined,
+        });
+        const res = await ingestRoute[method](request);
+        expect(res.status, at).toBe(200);
+        expect(upstream, at).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
