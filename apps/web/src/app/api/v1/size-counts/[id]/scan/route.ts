@@ -13,6 +13,11 @@ import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { env } from '@/lib/env';
 import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
+import {
+  internalErrorResponse,
+  unreadableRequestResponse,
+  VISION_FAILED_MESSAGE,
+} from '@/server/lib/api-error-response';
 import { SizeCountsService } from '@/server/services/size-counts';
 
 import { sizeCountError } from '../../route';
@@ -117,11 +122,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'image field is required' }, { status: 400 });
     }
     photo = file;
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'invalid_body' },
-      { status: 400 },
-    );
+  } catch {
+    return unreadableRequestResponse();
   }
   if (photo.size > SCAN_MAX_BYTES) {
     return NextResponse.json(
@@ -206,10 +208,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       raw = result.response.text();
     }
   } catch (e) {
-    return NextResponse.json(
-      { error: 'vision_failed', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 502 },
-    );
+    // The vendor's text names the vendor, the model and its quota: reported.
+    return internalErrorResponse(e, 'api.v1.size_counts.scan.vision', {
+      organizationId: ctx.organizationId,
+      status: 502,
+      code: 'vision_failed',
+      message: VISION_FAILED_MESSAGE,
+      level: 'warning',
+    });
   }
 
   const result = parseSizeScanResponse(raw);

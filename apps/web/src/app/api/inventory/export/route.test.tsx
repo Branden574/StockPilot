@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
 import {
   attachExportImages,
@@ -42,6 +43,7 @@ vi.mock('@react-pdf/renderer', () => ({
 }));
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/export-rate-limit', () => ({
   exportRateLimited: vi.fn().mockResolvedValue(null),
 }));
@@ -80,6 +82,8 @@ vi.mock('@/lib/pdf/image-prefetch', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pdf/image-prefetch')>()),
   prefetchPdfLogo: vi.fn(async () => null),
 }));
+
+import { renderToStream } from '@react-pdf/renderer';
 
 import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 
@@ -645,5 +649,24 @@ describe('POST /api/inventory/export — the PDF header logo is bytes, never the
     await POST(buildRequest({ format: 'csv', scope: 'all', itemType: 'book', fields: ['name'] }));
     await POST(buildRequest({ format: 'xlsx', scope: 'all', itemType: 'book', fields: ['name'] }));
     expect(prefetchPdfLogo).not.toHaveBeenCalled();
+  });
+});
+
+// S16: the last catch used to answer the error's own text ("so a failed export
+// is diagnosable from the toast"); the report carries it now.
+describe('POST /api/inventory/export — an unexpected failure', () => {
+  it("a render failure answers the fixed sentence, never the error's own text, and is reported", async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new Error('Unknown font format at /var/task/node_modules/fontkit/dist/main.cjs');
+    vi.mocked(renderToStream).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ format: 'pdf', scope: 'all', itemType: 'book' }));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('fontkit');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export' });
   });
 });
