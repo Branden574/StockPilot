@@ -116,8 +116,11 @@ const nextConfig: NextConfig = {
   // this host's cookies, the Supabase session among them, and an external
   // rewrite forwards the request's headers as they came. The route builds a
   // new request from a list of headers instead: never a cookie, never a
-  // member's Authorization. src/test/ingest-proxy.guard.test.ts fails if a
-  // /ingest rewrite comes back.
+  // member's Authorization. It passes on only the paths posthog-js requests
+  // with the provider's init options (any other answers 404), so turning an
+  // SDK feature on, or a posthog-js update, means checking the route's list
+  // (route.census.test.ts fails on a path or bundle it has not seen).
+  // src/test/ingest-proxy.guard.test.ts fails if a /ingest rewrite comes back.
   // skipTrailingSlashRedirect stops Next from 308-redirecting PostHog's
   // /e/ and /flags/ style paths, so they reach the route as the SDK spelled
   // them. Hosts are US Cloud (the project's region, set in the route) and the
