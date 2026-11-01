@@ -208,11 +208,13 @@ export class WarehouseChartersService {
   /**
    * The friendly form of inventory_items_warehouse_charter_fk (ON DELETE
    * RESTRICT): removing a link that items use is refused. It counts what the
-   * key sees, deleted items included (archiving an item only sets
-   * deleted_at, and the key still holds it), so "archive them" never cleared
-   * it. A failed count refuses instead of counting as none (B47 decisions
-   * round, lead L-7): it used to run the delete into the key, and the toast
-   * said "An internal error occurred".
+   * key sees, deleted items included: deleting an item only sets deleted_at
+   * and archiving one only sets its status, and the key holds both. The
+   * count used to skip deleted items, so a link that only deleted items held
+   * ran the delete into the key and the toast said "An internal error
+   * occurred"; and its advice to archive the items never cleared it. A
+   * failed count refuses too, instead of counting as none (B47 decisions
+   * round, lead L-7).
    */
   private async assertNoItemsOnRemovedCharters(
     warehouseId: string,
