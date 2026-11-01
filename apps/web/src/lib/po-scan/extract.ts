@@ -327,10 +327,12 @@ export const SCAN_MODEL_NAME =
  * multi-frame captures (the model will merge them into one logical PO).
  *
  * Throws when:
- *   • GEMINI_API_KEY is not configured
- *   • The model returns invalid JSON or a payload missing required fields
- *   • The model emits an empty `lines` array AND overallConfidence < 0.3
- *     (treat as "not a PO" — don't waste a po_imports row)
+ *   • the provider's API key is not configured
+ *   • the model returns invalid JSON (a payload missing fields is normalised
+ *     below instead: no `lines` array reads as no lines, a missing
+ *     overallConfidence as 0)
+ *   • there are no lines AND overallConfidence < 0.3: "not a PO" (don't waste
+ *     a po_imports row), a ServiceError whose sentence the scan route shows
  */
 export async function extractPoFromMedia(inputs: ScanInput[]): Promise<ExtractedPo> {
   if (inputs.length === 0) {
@@ -473,9 +475,18 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
   }));
 
   if (parsed.lines.length === 0 && parsed.overallConfidence < 0.3) {
+    // Not reported (a person's photo, not our fault), so one log line keeps a
+    // spike visible, for example a model or prompt change that makes every
+    // page read as not a purchase order.
+    console.warn('[po-scan] not a purchase order:', {
+      model: SCAN_MODEL_NAME,
+      overallConfidence: parsed.overallConfidence,
+      frames: inputs.length,
+    });
     // A ServiceError: the one sentence here written for the person, which the
-    // scan route answers as it is (a plain Error there is answered with the
-    // fixed sentence and reported, which hid this one since S16).
+    // scan route answers as it is. As a plain Error it was answered with the
+    // route's fixed sentence and reported: since S16 on a single scan, while
+    // separate mode always put its own sentence in its place.
     throw new ServiceError(
       'validation_error',
       "This doesn't look like a purchase order — try a clearer photo of the full document.",
