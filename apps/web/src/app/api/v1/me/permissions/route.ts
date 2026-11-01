@@ -2,8 +2,7 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-
-import { ROLE_PERMISSIONS } from '@stockpilot/core';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,19 +14,20 @@ export const dynamic = 'force-dynamic';
  * the same way the web sidebar does via ctx.permissions. Honors the
  * X-Organization-Id header through withApiContext.
  *
- * Falls back to the static role permissions if ctx.permissions is somehow unset
- * (withApiContext loads them fail-safe, so this is belt-and-suspenders).
+ * Never the static role permissions (docket S19). withApiContext always sets
+ * the effective set, and refuses the request when it cannot read it. A context
+ * without one is refused the same way, as a 5xx the phone retries while it
+ * keeps its last good set: the role's defaults would hand back every
+ * permission the organization took away, and a platform-managed key
+ * StockPilot may have denied this member.
  */
 export async function GET(req: Request): Promise<Response> {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-
-  const permissions = ctx.permissions
-    ? [...ctx.permissions]
-    : [...ROLE_PERMISSIONS[ctx.role]];
+  if (!ctx.permissions) throw new PermissionsUnavailableError();
 
   return NextResponse.json(
-    { role: ctx.role, permissions },
+    { role: ctx.role, permissions: [...ctx.permissions] },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

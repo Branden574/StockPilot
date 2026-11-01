@@ -4,11 +4,11 @@
 -- Owner-authorised 2026-08-17. NOT a migration: run by hand, once, with psql.
 --
 -- WHAT IT CORRECTS
---   stock_movements row b1ee9bac-cf69-4b42-a79d-8c44b1b9044c (2026-07-23
---   17:30 UTC, post_cycle_count v3, cycle count dd5f2630-...) wrote
---   adjust -35 / previous 124 / new 89 where -20 / previous 109 / new 89 was
---   true: the 15-unit order pick at 16:26 (row 2d9b07ba, 124 -> 109) had
---   already left the shelf when the counter entered 89, and v3 measured the
+--   The item's cycle-count adjust row (-v bad_row; 2026-07-23 17:30 UTC,
+--   post_cycle_count v3, cycle count -v cc_id) wrote adjust -35 / previous
+--   124 / new 89 where -20 / previous 109 / new 89 was true: the 15-unit
+--   order pick at 16:26 (124 -> 109) had already left the shelf when the
+--   counter entered 89, and v3 measured the
 --   variance against the START snapshot (124), so the pick was subtracted a
 --   second time on the ledger and the count row's previous_quantity (124)
 --   does not chain from the pick row's new_quantity (109). Full diagnosis:
@@ -16,15 +16,21 @@
 --   (post_cycle_count v4 prevents the recurrence; this script repairs the
 --   one row it already wrote).
 --
+--   The four ids it needs (the item, its organization, the cycle count and
+--   that adjust row) are production row keys, so this public file does not
+--   hold them: they are passed with -v (HOW TO RUN), and without all four
+--   the script stops before it reads or writes anything.
+--
 -- WHAT IT WRITES (owner-authorised shape, exactly)
 --   * ONE corrective stock_movements row for the item:
 --       movement_type   'adjust'
 --       quantity_change +15
 --       previous_quantity = the item's on-hand at run time
 --       new_quantity      = on-hand + 15
---       reason  'Corrects cycle-count double-count of 2026-07-23 (row b1ee9bac:
---                -35 written where -20 was true; see diagnosis)'
---       reference_type 'cycle_count', reference_id dd5f2630-9e62-438b-b1b6-49ef44c4e40c
+--       reason  'Corrects cycle-count double-count of 2026-07-23 (row <the first
+--                8 characters of bad_row>: -35 written where -20 was true;
+--                see diagnosis)'
+--       reference_type 'cycle_count', reference_id = the cycle count (cc_id)
 --       user_id NULL (system correction, no acting user)
 --   * inventory_items.quantity_on_hand + 15 (updated_by NULL).
 --   * item_stock_levels reconciled through the EXISTING helper
@@ -39,23 +45,22 @@
 --     user_id NULL. apply_level_delta explicitly allows the null-subject
 --     connection (0331 header).
 --
--- PETER'S RECOUNT — READ BEFORE RUNNING
---   Peter is recounting Maus. If his recount posts BEFORE this runs, this
---   correction is STILL valid — it fixes the ledger's chain (Σ quantity_change
---   is 15 short of the on-hand progression because of the -35 row), not the
---   shelf — but the ON-HAND delta must then be re-evaluated by the
---   coordinator: a recount is an authoritative statement of what the shelf
---   holds, and adding 15 to on-hand on top of it would over-state the shelf
---   by 15 unless the coordinator has established otherwise. The ledger row
---   as authorised (+15 with previous/new = on-hand/on-hand+15) is only
---   internally consistent if on-hand also moves +15, so "ledger only" is
---   not a mode this script offers; if the on-hand delta is judged wrong the
---   script must not be run as-is.
---   OBSERVED AT WRITE TIME (prod, SELECT only, 2026-08-17 ~19:20 UTC):
---     325f8e05  2026-08-17 18:06 UTC  adjust  +40  39 -> 79  "Recounted for
---               accuracy. Added 40 to current on hand, for a total of 79."
---     i.e. a recount-style adjustment has ALREADY posted; on-hand is 79,
---     Σ item_stock_levels is 79 (38-B rack 79, 100-A 0, Staging 0).
+-- THE STAFF RECOUNT — READ BEFORE RUNNING
+--   A staff member is recounting Maus. If that recount posts BEFORE this runs,
+--   this correction is STILL valid — it fixes the ledger's chain (Σ
+--   quantity_change is 15 short of the on-hand progression because of the -35
+--   row), not the shelf — but the ON-HAND delta must then be re-evaluated by
+--   the coordinator: a recount is an authoritative statement of what the shelf
+--   holds, and adding 15 to on-hand on top of it would over-state the shelf by
+--   15 unless the coordinator has established otherwise. The ledger row as
+--   authorised (+15 with previous/new = on-hand/on-hand+15) is only internally
+--   consistent if on-hand also moves +15, so "ledger only" is not a mode this
+--   script offers; if the on-hand delta is judged wrong the script must not be
+--   run as-is.
+--   OBSERVED AT WRITE TIME (prod, SELECT only, 2026-08-17 ~19:20 UTC): a
+--     recount adjustment posted at 18:06 UTC (adjust +40, 39 -> 79, its note
+--     saying so), i.e. a recount-style adjustment has ALREADY posted; on-hand
+--     is 79, Σ item_stock_levels is 79 (38-B rack 79, 100-A 0, Staging 0).
 --   Because of that, the script REFUSES to apply while any movement for the
 --   item is dated after 2026-08-17 18:00 UTC unless the coordinator passes
 --   -v ACK_POST_RECOUNT=1, which records that the on-hand delta was
@@ -64,10 +69,10 @@
 -- HOW TO RUN (psql only — the \if flow does not exist in the MCP/SQL editor)
 --   Dry run (previews + applies inside a transaction, then ROLLS BACK):
 --     psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 \
+--       -v item_id=<item id> -v org_id=<organization id> \
+--       -v cc_id=<cycle count id> -v bad_row=<the -35 adjust row's id> \
 --       -f supabase/repairs/2026-08-17-maus-cycle-count-ledger-correction.sql
---   Apply (COMMITS):
---     psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 -v APPLY=1 [-v ACK_POST_RECOUNT=1] \
---       -f supabase/repairs/2026-08-17-maus-cycle-count-ledger-correction.sql
+--   Apply (COMMITS): the same, plus -v APPLY=1 [-v ACK_POST_RECOUNT=1].
 --   Connect as postgres (bypassrls; auth.uid() is null). Never as an
 --   application user.
 --
@@ -95,15 +100,40 @@
   \set ACK_POST_RECOUNT 0
 \endif
 
-\set item_id   '9c481921-db94-42fe-8189-24a7c47a3937'
-\set org_id    '63c13e64-92a6-4ea4-9936-6a2c26a85b4a'
-\set cc_id     'dd5f2630-9e62-438b-b1b6-49ef44c4e40c'
-\set bad_row   'b1ee9bac-cf69-4b42-a79d-8c44b1b9044c'
+-- The four ids come in with -v (see HOW TO RUN). Stop before anything is
+-- read or written unless all four are given.
+\set have_ids 1
+\if :{?item_id}
+\else
+  \set have_ids 0
+\endif
+\if :{?org_id}
+\else
+  \set have_ids 0
+\endif
+\if :{?cc_id}
+\else
+  \set have_ids 0
+\endif
+\if :{?bad_row}
+\else
+  \set have_ids 0
+\endif
+\if :have_ids
+\else
+  do $refuse$ begin
+    raise exception 'REFUSED: pass -v item_id, -v org_id, -v cc_id and -v bad_row (see HOW TO RUN).';
+  end $refuse$;
+\endif
 
 begin;
 
 set local repair.apply            = :'APPLY';
 set local repair.ack_post_recount = :'ACK_POST_RECOUNT';
+set local repair.item_id          = :'item_id';
+set local repair.org_id           = :'org_id';
+set local repair.cc_id            = :'cc_id';
+set local repair.bad_row          = :'bad_row';
 
 \echo
 \echo '=== PREVIEW (before) ==================================================='
@@ -137,14 +167,16 @@ select id, created_at, quantity_change, previous_quantity, new_quantity, notes
 \echo '=== APPLY ==============================================================='
 do $repair$
 declare
-  -- Literals are repeated here on purpose: psql does not interpolate :vars
-  -- inside a dollar-quoted DO body. Keep them identical to the \set block.
-  v_item_id  constant uuid    := '9c481921-db94-42fe-8189-24a7c47a3937';
-  v_org_id   constant uuid    := '63c13e64-92a6-4ea4-9936-6a2c26a85b4a';
-  v_cc_id    constant uuid    := 'dd5f2630-9e62-438b-b1b6-49ef44c4e40c';
-  v_bad_row  constant uuid    := 'b1ee9bac-cf69-4b42-a79d-8c44b1b9044c';
+  -- psql does not interpolate :vars inside a dollar-quoted DO body, so the
+  -- ids arrive through the repair.* settings set above.
+  v_item_id  constant uuid    := current_setting('repair.item_id')::uuid;
+  v_org_id   constant uuid    := current_setting('repair.org_id')::uuid;
+  v_cc_id    constant uuid    := current_setting('repair.cc_id')::uuid;
+  v_bad_row  constant uuid    := current_setting('repair.bad_row')::uuid;
   v_delta    constant numeric := 15;
-  v_reason   constant text    := 'Corrects cycle-count double-count of 2026-07-23 (row b1ee9bac: -35 written where -20 was true; see diagnosis)';
+  v_reason   constant text    := 'Corrects cycle-count double-count of 2026-07-23 (row '
+                                 || left(v_bad_row::text, 8)
+                                 || ': -35 written where -20 was true; see diagnosis)';
   v_item     public.inventory_items%rowtype;
   v_prev     numeric(14,4);
   v_new      numeric(14,4);
@@ -178,7 +210,7 @@ begin
     raise exception 'REFUSED: row % is not the -35 / 124 -> 89 cycle-count row this script corrects; re-check the diagnosis.', v_bad_row;
   end if;
 
-  -- Peter's recount guard (see header): any movement after 2026-08-17 18:00 UTC
+  -- The staff recount guard (see header): any movement after 2026-08-17 18:00 UTC
   -- means a recount-era adjustment may already have posted; the coordinator
   -- must re-evaluate the on-hand delta and pass -v ACK_POST_RECOUNT=1.
   select count(*) into v_later
@@ -215,7 +247,7 @@ begin
     v_reason,
     '[repair 2026-08-17] Ledger correction for cycle count ' || v_cc_id::text
       || ': row ' || v_bad_row::text
-      || ' recorded adjust -35 (previous 124, new 89) at post time, but the -15 order pick of 16:26 UTC (row 2d9b07ba, 124 -> 109) had already left the shelf when 89 was counted, so the true count adjustment was -20 (previous 109, new 89). This row restores the 15 units subtracted twice. Levels reconciled via apply_level_delta(+15, placed): the units land in Staging. Diagnosis: migration 0339 header.',
+      || ' recorded adjust -35 (previous 124, new 89) at post time, but the -15 order pick of 16:26 UTC (124 -> 109) had already left the shelf when 89 was counted, so the true count adjustment was -20 (previous 109, new 89). This row restores the 15 units subtracted twice. Levels reconciled via apply_level_delta(+15, placed): the units land in Staging. Diagnosis: migration 0339 header.',
     null,
     'cycle_count', v_cc_id
   );

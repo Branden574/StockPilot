@@ -175,7 +175,7 @@ export default function NewScheduleEvent() {
               accessibilityLabel="Title"
               value={title}
               onChangeText={setTitle}
-              placeholder="Delivery to L4L Fresno"
+              placeholder="Delivery to the main office"
               autoCapitalize="sentences"
               maxFontSizeMultiplier={0}
             />
@@ -239,7 +239,7 @@ export default function NewScheduleEvent() {
               accessibilityLabel="Location text"
               value={location}
               onChangeText={setLocation}
-              placeholder="DC4 dock 2, customer HQ, etc."
+              placeholder="Dock 2, customer HQ, etc."
               maxFontSizeMultiplier={0}
             />
           </FormSection>

@@ -66,6 +66,7 @@ vi.mock('@/server/services/platform/orgs', () => ({
     search: null,
     activityAvailable: true,
   })),
+  getOrgMembersOrderItemsAccess: vi.fn(async () => new Map()),
   getOrgBillingState: vi.fn(async () => null),
 }));
 vi.mock('@/components/platform/act-as-button', () => ({

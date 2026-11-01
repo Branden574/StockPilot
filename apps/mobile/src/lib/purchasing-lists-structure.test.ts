@@ -4,6 +4,8 @@ import * as vm from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { plainAddressMailtoUrl } from '@stockpilot/core';
+
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
 import {
   TOUCHABLE_TAG,
@@ -495,7 +497,7 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
       "link: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },",
     );
     expect(code).toContain(
-      '{supplier.email ? ( <ContactLine text={supplier.email} url={supplierMailtoUrl(supplier.email)} /> ) : null}',
+      '{supplier.email ? ( <ContactLine text={supplier.email} url={plainAddressMailtoUrl(supplier.email)} /> ) : null}',
     );
     expect(code).toContain(
       '{supplier.phone ? ( <ContactLine text={supplier.phone} url={supplierTelUrl(supplier.phone)} /> ) : null}',
@@ -630,13 +632,17 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
  * rule (its helpers do not exist and its links were built from the raw text).
  */
 describe('security: a supplier link opens only what the card shows', () => {
-  // Compiled on first use, inside each case, so on a screen without the
-  // helpers every case fails on its own rather than the whole file.
+  // The tel: helper is compiled from the screen on first use, inside each
+  // case, so on a screen without it every case fails on its own rather than
+  // the whole file. The mailto: rule moved to @stockpilot/core
+  // (plainAddressMailtoUrl, its own suite in packages/core) when the Team and
+  // Users cards and the web took it too; the cases below still run it, and
+  // the last case pins that the card calls it.
   type LinkFor = (text: string | null) => string | null;
-  const compiled: Partial<Record<'supplierMailtoUrl' | 'supplierTelUrl', LinkFor>> = {};
-  const helper = (name: 'supplierMailtoUrl' | 'supplierTelUrl'): LinkFor =>
+  const compiled: Partial<Record<'supplierTelUrl', LinkFor>> = {};
+  const helper = (name: 'supplierTelUrl'): LinkFor =>
     (compiled[name] ??= screenFunction(SUPPLIERS, name) as LinkFor);
-  const mailto: LinkFor = (email) => helper('supplierMailtoUrl')(email);
+  const mailto: LinkFor = (email) => plainAddressMailtoUrl(email);
   const tel: LinkFor = (phone) => helper('supplierTelUrl')(phone);
 
   it('a plain address becomes a mailto: link, trimmed and percent-encoded', () => {
@@ -839,6 +845,9 @@ describe('security: a supplier link opens only what the card shows', () => {
     expect(code).not.toMatch(/openURL\(\s*`(mailto|tel):/);
     expect(code).not.toContain('${supplier.email}');
     expect(code).not.toContain('${supplier.phone}');
+    // The one shared mailto: rule, never a second copy on this screen.
+    expect(code).toContain("import { plainAddressMailtoUrl } from '@stockpilot/core';");
+    expect(code).not.toMatch(/function \w*[Mm]ailto\w*\(/);
     // A line with no safe link is the same words in the same frame, with no
     // touchable around them.
     expect(code).toContain('if (!url) return <View style={styles.link}>{words}</View>;');

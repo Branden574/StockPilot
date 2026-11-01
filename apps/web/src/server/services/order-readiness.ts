@@ -50,6 +50,7 @@ import {
   type ServiceContext,
 } from './context';
 import { dispatchEvent } from './integration-events';
+import { keepAlive } from './lib/defer';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { postgrestErrorText, type PostgrestLikeError } from './lib/postgrest-error';
 
@@ -511,14 +512,19 @@ export class OrderReadinessService {
     ];
     await auditMany(payloads, ctx);
     // Fan out to configured webhooks / Slack / Teams (best-effort), as
-    // createDraftPo does for every draft; dispatchEvent never throws.
-    void mapWithConcurrency(result.created, PO_CREATED_DISPATCH_CONCURRENCY, (c) =>
-      dispatchEvent(ctx.organizationId, 'po.created', {
-        id: c.purchaseOrderId,
-        poNumber: c.poNumber,
-        lineCount: c.lineCount,
-      }),
-    ).catch(() => {});
+    // createDraftPo does for every draft; dispatchEvent never throws. Each
+    // dispatch keeps itself alive, but the later ones only START as earlier
+    // ones settle, so the whole fan-out is kept alive too (lib/defer.ts
+    // keepAlive): a bare `void` held nothing once the action returned.
+    keepAlive(
+      mapWithConcurrency(result.created, PO_CREATED_DISPATCH_CONCURRENCY, (c) =>
+        dispatchEvent(ctx.organizationId, 'po.created', {
+          id: c.purchaseOrderId,
+          poNumber: c.poNumber,
+          lineCount: c.lineCount,
+        }),
+      ).catch(() => {}),
+    );
     return result;
   }
 }

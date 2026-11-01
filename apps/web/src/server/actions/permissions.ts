@@ -11,9 +11,11 @@ import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   PERMISSIONS,
+  PLATFORM_MANAGED_PERMISSION_COPY,
   can,
   err,
   isAdminRole,
+  isPlatformManagedPermission,
   ok,
   type ActionResult,
   type Permission,
@@ -24,7 +26,31 @@ import {
 // granted: true = grant a permission the role/user lacks; false = revoke one it
 // has; null = clear the override (revert to the static role default).
 // Owner role is NOT editable (immutable, the org's lockout escape hatch).
+//
+// PLATFORM-MANAGED keys (orders:manage_catalog_visibility, migration 0413) are
+// not editable here at all, for any role, person or value: only StockPilot
+// support sets them, per member, from the platform console
+// (platform_set_permission_exception). Refused before anything is read, with
+// the same words the database's guard raises (42501
+// permission_platform_managed), which is mapped to the same answer.
 // ---------------------------------------------------------------------------
+
+const PLATFORM_MANAGED_HINT = 'permission_platform_managed';
+
+function platformManagedRefusal(): ActionResult<never> {
+  return err('forbidden', PLATFORM_MANAGED_PERMISSION_COPY, { reason: PLATFORM_MANAGED_HINT });
+}
+
+/** A write error from an override table: the platform-managed guard's refusal
+ *  is said in its own words; anything else stays an internal error. */
+function overrideWriteError(error: { message: string; hint?: string | null }): ServiceError {
+  if (error.hint === PLATFORM_MANAGED_HINT) {
+    return new ServiceError('forbidden', PLATFORM_MANAGED_PERMISSION_COPY, {
+      reason: PLATFORM_MANAGED_HINT,
+    });
+  }
+  return new ServiceError('internal_error', error.message);
+}
 
 const permissionEnum = z.enum([...PERMISSIONS] as [Permission, ...Permission[]]);
 
@@ -76,10 +102,12 @@ async function requireConfigurer() {
  * The owner-lockout escape hatch is preserved, but note WHERE it lives: NOT in
  * `can()`, which simply reads ctx.permissions when present. It is
  * effectivePermissions() / loadEffectivePermissions() that short-circuit role
- * 'owner' to the FULL permission set (with no DB round-trip), so an owner's
- * effective set always contains every permission and this guard always passes
- * for them. Anything that ever lets an owner context carry a narrowed
- * permission set would silently close the escape hatch here.
+ * 'owner' to the FULL permission set, so an owner's effective set contains
+ * every permission an org editor can touch and this guard always passes for
+ * them. The one key an owner can lack (a platform-managed key StockPilot
+ * denied them, migration 0413) is refused by every action here before this
+ * guard runs. Anything that ever lets an owner context carry any OTHER
+ * narrowed permission set would silently close the escape hatch here.
  *
  * The database enforces the same invariant independently — see the
  * *_overrides_delete policies in migration 0322, which allow deleting a
@@ -108,6 +136,8 @@ export async function setRolePermissionOverrideAction(input: {
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   const { role, permission, granted } = parsed.data;
+  // Never a role row: one would grant every member of the role.
+  if (isPlatformManagedPermission(permission)) return platformManagedRefusal();
 
   try {
     const ctx = await requireConfigurer();
@@ -121,7 +151,7 @@ export async function setRolePermissionOverrideAction(input: {
         .eq('organization_id', ctx.organizationId)
         .eq('role', role)
         .eq('permission', permission);
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) throw overrideWriteError(error);
     } else {
       const { error } = await supabase.from('role_permission_overrides').upsert(
         {
@@ -134,7 +164,7 @@ export async function setRolePermissionOverrideAction(input: {
         },
         { onConflict: 'organization_id,role,permission' },
       );
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) throw overrideWriteError(error);
     }
 
     await audit(
@@ -151,7 +181,7 @@ export async function setRolePermissionOverrideAction(input: {
     return ok(null);
   } catch (e) {
     rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
+    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
   }
 }
@@ -172,6 +202,7 @@ export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
     // themselves (matches assertCanGrant on the single-toggle path). Checked
     // for the WHOLE set before any write so a partial apply can't happen.
     for (const permission of AUDITOR_PRESET_PERMISSIONS) {
+      if (isPlatformManagedPermission(permission)) return platformManagedRefusal();
       assertCanGrant(ctx, permission, true);
     }
 
@@ -187,7 +218,7 @@ export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
       })),
       { onConflict: 'organization_id,role,permission' },
     );
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) throw overrideWriteError(error);
 
     await audit(
       {
@@ -205,7 +236,7 @@ export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
     return ok(null);
   } catch (e) {
     rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
+    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to apply preset');
   }
 }
@@ -219,6 +250,8 @@ export async function setUserPermissionOverrideAction(input: {
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   const { userId, permission, granted } = parsed.data;
+  // StockPilot support's exception, set only from the platform console.
+  if (isPlatformManagedPermission(permission)) return platformManagedRefusal();
 
   try {
     const ctx = await requireConfigurer();
@@ -247,7 +280,7 @@ export async function setUserPermissionOverrideAction(input: {
         .eq('organization_id', ctx.organizationId)
         .eq('user_id', userId)
         .eq('permission', permission);
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) throw overrideWriteError(error);
     } else {
       const { error } = await supabase.from('user_permission_overrides').upsert(
         {
@@ -260,7 +293,7 @@ export async function setUserPermissionOverrideAction(input: {
         },
         { onConflict: 'organization_id,user_id,permission' },
       );
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) throw overrideWriteError(error);
     }
 
     await audit(
@@ -277,7 +310,7 @@ export async function setUserPermissionOverrideAction(input: {
     return ok(null);
   } catch (e) {
     rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
+    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
   }
 }

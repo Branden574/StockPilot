@@ -74,7 +74,7 @@ describe('recordDeliveryRequestDraftedAction', () => {
       'outlook.cloud.microsoft',
       'mailto:',
       'DELIVERY REQUEST',
-      'Shaw Ave',
+      'Test Ave',
       'body',
       'compose_url',
       'notes',
@@ -88,8 +88,8 @@ describe('recordDeliveryRequestDraftedAction', () => {
     await recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false });
 
     const serialized = JSON.stringify(auditSpy.mock.calls[0]![0]);
-    expect(serialized).not.toContain('dc4@learn4life.org');
-    expect(serialized).not.toContain('arosas@cvwest.org');
+    expect(serialized).not.toContain('dc4@sampleorg.test');
+    expect(serialized).not.toContain('jstone@site1.test');
   });
 
   it('never claims a ticket was created or assigned', async () => {

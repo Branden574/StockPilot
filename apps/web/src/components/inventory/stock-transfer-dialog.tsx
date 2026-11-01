@@ -258,10 +258,10 @@ export function StockTransferDialog({
   // ═══ DESTINATIONS: STAGING IS OUT, UNPLACED IS IN — rack 100-A ═══
   //
   // This list used to filter BOTH system buckets, and that omission is what
-  // made the 2026-07-23 write-off inevitable. Andrew had 242 units on a test
+  // made the 2026-07-23 write-off inevitable. A manager had 242 units on a test
   // rack that does not physically exist and needed them off it; the only two
   // affordances in the whole app were "move to another REAL rack" and the
-  // PackageMinus beside each holding, which is a WRITE-OFF. He took the second
+  // PackageMinus beside each holding, which is a WRITE-OFF. They took the second
   // one four times and 220 real books left the system under reason "test".
   //
   // STAGING stays out: it is the RECEIVING inbox, and stock arriving there

@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
 import { countRowsWithImages } from '@/lib/exports/export-images';
+import {
+  inventoryExportPreviewRequestSchema,
+  inventoryExportRequestSchema,
+} from '@/lib/exports/export-request';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilterFor: vi.fn().mockResolvedValue(null),
 }));
@@ -99,7 +105,9 @@ beforeEach(() => {
   vi.mocked(withApiContext).mockResolvedValue(buildCtx('admin'));
   vi.mocked(countRowsWithImages).mockResolvedValue(0);
   vi.mocked(buildInventoryExportSourceRows).mockResolvedValue({
-    rows: Array.from({ length: 25 }, (_, i) => sourceRow(`i${i}`, i < 20 ? `978026203384${i % 10}` : '')),
+    rows: Array.from({ length: 25 }, (_, i) =>
+      sourceRow(`i${i}`, i < 20 ? `978026203384${i % 10}` : ''),
+    ),
     total: 25,
     truncated: false,
     slug: 'books',
@@ -153,5 +161,83 @@ describe('POST /api/inventory/export/preview', () => {
 
   it('400s a selected preview with no ids', async () => {
     expect((await POST(buildRequest({ scope: 'selected', ids: [] }))).status).toBe(400);
+  });
+});
+
+/**
+ * The preview reads the selection with the export's own schema. It used to
+ * carry a copy of the filters without .strict(), so it answered with a sample
+ * for a request the export then refused with a 400.
+ */
+describe('POST /api/inventory/export/preview — the export request schema', () => {
+  it('builds on the export request schema rather than a copy of it', () => {
+    expect(inventoryExportPreviewRequestSchema.shape.filters).toBe(
+      inventoryExportRequestSchema.shape.filters,
+    );
+    expect(inventoryExportPreviewRequestSchema.shape.ids).toBe(
+      inventoryExportRequestSchema.shape.ids,
+    );
+  });
+
+  it('refuses a filter the export refuses', async () => {
+    const preview = await POST(
+      buildRequest({
+        scope: 'filtered',
+        itemType: 'book',
+        filters: { q: 'algebra', colour: 'red' },
+      }),
+    );
+    expect(preview.status).toBe(400);
+    expect(
+      inventoryExportRequestSchema.safeParse({
+        format: 'csv',
+        scope: 'filtered',
+        filters: { q: 'algebra', colour: 'red' },
+      }).success,
+    ).toBe(false);
+    expect(buildInventoryExportSourceRows).not.toHaveBeenCalled();
+  });
+
+  it('refuses a field the request does not have', async () => {
+    expect((await POST(buildRequest({ scope: 'all', itemType: 'book', limit: 5 }))).status).toBe(
+      400,
+    );
+  });
+
+  it('still takes every filter the dialog sends and passes them on', async () => {
+    const filters = {
+      q: 'algebra',
+      status: 'active',
+      stock: null,
+      expected: true,
+      sort: 'name',
+      categoryIds: ['c-1'],
+      locationIds: ['l-1'],
+      charterIds: ['ch-1'],
+    };
+    const res = await POST(buildRequest({ scope: 'filtered', itemType: 'book', filters }));
+    expect(res.status).toBe(200);
+    const passed = vi.mocked(buildInventoryExportSourceRows).mock.calls[0]![1];
+    expect(passed.scope).toBe('filtered');
+    expect(passed.itemType).toBe('book');
+    expect(passed.filters).toMatchObject(filters);
+  });
+});
+
+// S16: the last catch used to answer the error's own text.
+describe('POST /api/inventory/export/preview — an unexpected failure', () => {
+  it("answers the fixed sentence, never the error's own text, and is reported", async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new Error('column inventory_items.order_catalog_visible does not exist');
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ scope: 'all', itemType: 'book' }));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('order_catalog_visible');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export.preview' });
   });
 });

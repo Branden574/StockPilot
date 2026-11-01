@@ -444,9 +444,16 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
  * From the bundle when it holds this organization WITH THIS ROLE: the override
  * rows are the same rows `loadEffectivePermissions` selects, read in the same
  * round trip as the membership they belong to, and fed to the same
- * `effectivePermissions`. Owner is never overridable, in either path. Any
- * disagreement (no bundle, organization not in it, a different role) goes to the
- * legacy loader, which keeps its own failure behaviour.
+ * `effectivePermissions`. Owner is never overridable, in either path, EXCEPT
+ * for a platform-managed key StockPilot support explicitly denied to them
+ * (orders:manage_catalog_visibility, migration 0413): the owner's own user
+ * rows are handed over, and core applies only that deny. Any disagreement (no
+ * bundle, organization not in it, a different role) goes to the legacy loader.
+ * When it cannot read a non-owner's overrides it REFUSES the request
+ * (PermissionsUnavailableError, docket S19) rather than answer with the role's
+ * defaults, which would hand back every permission the organization took away.
+ * The error is not a redirect: it reaches the page's error boundary, which
+ * offers to try again, and a Server Action's own catch.
  */
 async function resolvePermissions(
   bundle: RequestContextBundle | null,
@@ -458,9 +465,7 @@ async function resolvePermissions(
   // overrides that modify it can never be from two different moments.
   const held = bundleMembership(bundle, organizationId);
   if (held && held.role === role) {
-    return role === 'owner'
-      ? effectivePermissions('owner')
-      : effectivePermissions(role, held.role_overrides, held.user_overrides);
+    return effectivePermissions(role, held.role_overrides, held.user_overrides);
   }
   const supabase = await createClient();
   return loadEffectivePermissions(supabase, organizationId, userId, role);

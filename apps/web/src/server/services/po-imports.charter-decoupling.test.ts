@@ -82,7 +82,14 @@ beforeEach(() => {
  * counter — and every test that relies on it ALSO asserts the ids that were
  * actually queried, so a reordering can never quietly pass.
  */
-function makeStub(opts: { sibling?: { id: string } | null; locationRow?: { id: string } | null } = {}) {
+function makeStub(
+  opts: {
+    sibling?: { id: string } | null;
+    locationRow?: { id: string } | null;
+    /** The pre-existing item's ordering visibility (0413); omitted = shown. */
+    linkedVisible?: boolean;
+  } = {},
+) {
   const charterAnswers = [{ id: CHARTER_B }, { id: CHARTER_A }];
   let charterCall = 0;
   let lineSelectCall = 0;
@@ -133,6 +140,7 @@ function makeStub(opts: { sibling?: { id: string } | null; locationRow?: { id: s
           unit_of_measure: 'unit',
           item_type: 'product',
           tracking_type: 'none',
+          ...('linkedVisible' in opts ? { order_catalog_visible: opts.linkedVisible } : {}),
         },
       ],
       error: null,
@@ -362,6 +370,47 @@ describe('approve — charter-sibling capability (B7) sources from itemCharterId
     // The PO line receives against that sibling, and the PO still bills B.
     expect(committedItems(stub)).toEqual(['itm-new-sibling']);
     expect(commitArgs(stub).p_charter_id).toBe(CHARTER_B);
+  });
+
+  // Ordering visibility (0413, design 2.3): the sibling is a clone of the
+  // source under another charter and becomes orderable on its first receipt,
+  // so it COPIES the source's choice. A default of shown would bring a hidden
+  // product back to Place an Order with nobody choosing that.
+  const approveInput = {
+    poImportId: IMPORT_ID,
+    vendorId: 'vendor-1',
+    warehouseId: WH,
+    locationId: LOC_A,
+    itemCharterId: CHARTER_A,
+    charterId: CHARTER_B,
+    lineOverrides: [],
+  } as never;
+
+  it('reads the source item\'s ordering visibility with the rest of its identity', async () => {
+    const stub = makeStub({ sibling: null });
+    await svc(stub).approve(approveInput);
+    const select = stub.chainArgsAll.get('inventory_items.select')?.[0]?.[0]?.[0] as string;
+    expect(select).toContain('order_catalog_visible');
+  });
+
+  it('a sibling of an item hidden from ordering is born hidden', async () => {
+    const stub = makeStub({ sibling: null, linkedVisible: false });
+    await svc(stub).approve(approveInput);
+    expect(mockInvCreate).toHaveBeenCalledTimes(1);
+    const [, createOpts] = mockInvCreate.mock.calls[0]!;
+    expect(createOpts).toEqual({ awaitingFirstReceipt: true, orderCatalogVisible: false });
+  });
+
+  it('a sibling of a shown item takes the default (no visibility option sent)', async () => {
+    for (const linkedVisible of [true, undefined]) {
+      mockInvCreate.mockClear();
+      const stub = makeStub(
+        linkedVisible === undefined ? { sibling: null } : { sibling: null, linkedVisible },
+      );
+      await svc(stub).approve(approveInput);
+      const [, createOpts] = mockInvCreate.mock.calls[0]!;
+      expect(createOpts).toEqual({ awaitingFirstReceipt: true });
+    }
   });
 });
 

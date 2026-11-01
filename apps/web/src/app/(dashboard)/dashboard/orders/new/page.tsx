@@ -15,6 +15,7 @@ import {
   loadCatalogBundle,
   loadChartersForWarehouse,
 } from '@/server/loaders/orders-new-catalog';
+import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
 
 // NOTE (perf plan P3): the cached data loaders deliberately live in
 // src/server/loaders/orders-new-catalog.ts, NOT here. unstable_cache's
@@ -57,12 +58,14 @@ export default async function NewOrderPage({
   //   - viewer identity: ctx fields — no extra query.
   //   - modules: getModulesForRequest, request-cached and read off the same
   //     context bundle requireOrgContext resolved (the dashboard layout reads
-  //     it too), so no extra round trip on the normal path. Only decides
-  //     whether the Kits row keeps its place while the kits stream in.
+  //     it too), so no extra round trip on the normal path. Decides whether
+  //     the Kits row keeps its place while the kits stream in, and (with the
+  //     rollout switch and the effective permission) whether the header
+  //     offers Manage order items.
   // Anything only the CATALOG needs (items, media map, and the
   // access-key queries that build the catalog cache key) runs inside
   // catalogPromise, which is never awaited here.
-  const [params, warehouseRows, orgTimezoneRaw, deliveryRouting, kitsEnabled] = await Promise.all([
+  const [params, warehouseRows, orgTimezoneRaw, deliveryRouting, modules] = await Promise.all([
     searchParams,
     getWarehousesForRequest(ctx.organizationId),
     getCachedOrgTimezone(ctx.organizationId),
@@ -71,13 +74,27 @@ export default async function NewOrderPage({
     // which mailboxes. One cheap single-row read, batched with the rest of
     // the shell path.
     getOrgEmailRouting(ctx.organizationId, 'delivery_request'),
-    // A failed module read keeps no place for the row: the kits loader makes
-    // the same read and then says the kits could not be loaded.
+    // A failed module read keeps no place for the Kits row (the kits loader
+    // makes the same read and then says the kits could not be loaded) and
+    // offers no Manage order items: fail closed.
     getModulesForRequest(ctx.organizationId).then(
-      (modules) => modules.has('bundles'),
-      () => false,
+      (set) => set,
+      () => null,
     ),
   ]);
+  const kitsEnabled = modules?.has('bundles') ?? false;
+  // Ordering visibility (design 8.1): the Orders module, the rollout switch
+  // and the EFFECTIVE orders:manage_catalog_visibility (an explicit deny from
+  // StockPilot holds for a manager or the owner). The management page and its
+  // action check it again on every call.
+  const manageOrderItems =
+    modules !== null &&
+    canManageOrderItems({
+      organizationId: ctx.organizationId,
+      enabledModules: modules,
+      role: ctx.role,
+      permissions: ctx.permissions,
+    });
   // Used as-is. getCachedOrgTimezone resolves its own fallback through core's
   // `resolveOrgTimezone` and never returns null or '', so a second
   // `|| ORG_TIMEZONE_DEFAULT` here would be dead code — and, worse, would
@@ -179,6 +196,7 @@ export default async function NewOrderPage({
       // The order page's approve gate (security slice D): the effective
       // orders:approve, never for a viewer.
       canApproveOrders={can(ctx, 'orders:approve') && ctx.role !== 'viewer'}
+      canManageOrderItems={manageOrderItems}
     />
   );
 }

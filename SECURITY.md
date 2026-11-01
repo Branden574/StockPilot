@@ -50,8 +50,24 @@ Tracked across migrations 0040–0048 and the security commits in May
 - Persistent rate limit (Postgres-backed atomic counter, migration
   0048).
 - Storage buckets pinned with `allowed_mime_types` + `file_size_limit`.
-- CSP with `strict-dynamic`, HSTS preload, redacted error messages,
-  CSV formula-injection guard, scheme allowlists on link rendering.
+- A Content Security Policy (`apps/web/next.config.ts`) that names
+  where scripts, images, media, network requests and frames may load
+  from, and sets `object-src 'none'`, `frame-ancestors 'none'`,
+  `base-uri 'self'` and `form-action 'self'`. It is not a
+  `strict-dynamic` or nonce policy: `script-src` still allows
+  `'unsafe-inline'` and `'unsafe-eval'`, because Next.js's inline
+  bootstrap script carries no nonce, and an earlier attempt to add
+  `strict-dynamic` on its own made browsers ignore `'unsafe-inline'`,
+  which blocked that script and broke the dashboard. So the policy does
+  not stop an injected inline script from running. It limits where
+  scripts load from, and where fetch, XHR and WebSocket requests,
+  images, media, frames and form posts can go. It does not stop an
+  injected script from sending data away, for example by navigating
+  the page or opening a window to an address carrying the data: no
+  directive in this policy governs navigation. A per-request nonce
+  policy is planned and not yet built.
+- HSTS preload, redacted error messages, CSV formula-injection guard,
+  scheme allowlists on link rendering.
 - `signOut({ scope: 'global' })` revokes all refresh tokens for the
   user across every device.
 

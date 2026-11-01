@@ -3,10 +3,17 @@
  *
  * Typed port of `ES.EMAILS` from `docs/design/email-system/es-tokens.js`.
  * Every subject / preheader / badge label / CTA string is byte-identical
- * to the registry; the sample-world merge values (WO-04292026, L4L North
- * Region, ...) become builder parameters. Do NOT reword any string here —
+ * to the registry; the sample-world merge values (WO-04292026, Sample
+ * Org, ...) become builder parameters. Do NOT reword any string here —
  * the registry is normative. Where the design lists a `rec:` refined
  * subject it is kept as a comment for product sign-off, not implemented.
+ *
+ * SAMPLE VALUES (docket S17, 2026-10-31): the sample organization,
+ * warehouse and destination (ES_SAMPLE) and the two "<org> via StockPilot"
+ * senders below are synthetic. They no longer mirror es-tokens.js, whose
+ * samples named a real customer; no sender reads either of those two
+ * `from` values (the portal invite and the partial receipt build theirs
+ * from the organization's own name).
  *
  * FLAG (count): the design package consistently says "28 templates"
  * (IMPLEMENTATION_PROMPT.md "ALL 24 live emails, 2 latent templates, and
@@ -118,12 +125,13 @@ export interface EsEmailDefinition {
 
 // Sample-world values (ES.W) used by the registry strings — exported so
 // tests can assert byte-identical reproduction of the registry copy.
+// Synthetic since S17 (see the header): they no longer mirror ES.W.
 export const ES_SAMPLE = {
-  org: 'L4L North Region',
+  org: 'Sample Org',
   wo: 'WO-04292026',
   po: '#7741-2205',
-  warehouse: 'DCIV — Fresno',
-  destination: 'CVW — Manchester',
+  warehouse: 'Main Warehouse',
+  destination: 'Site 1',
 } as const;
 
 const d = <T extends EsEmailDefinition>(def: T): T => def;
@@ -324,7 +332,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     tag: 'Supplier Portal',
     trigger: 'Supplier invites a B2B customer to their portal',
     to: 'External customer contact — may not know StockPilot',
-    from: 'L4L North Region via StockPilot <portal@stockpilotusa.com>',
+    from: 'Sample Org via StockPilot <portal@stockpilotusa.com>',
     replyTo: 'Replies go to the supplier',
     subject: (p: { org: string }) =>
       `You’re invited to order from ${p.org}’s supplier portal`,
@@ -596,7 +604,7 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     tag: 'Delivery Receipt',
     trigger: 'Signature captured on a partial delivery',
     to: 'Signer — may not be the requester or a StockPilot user',
-    from: 'L4L North Region via StockPilot <orders@stockpilotusa.com>',
+    from: 'Sample Org via StockPilot <orders@stockpilotusa.com>',
     replyTo: 'Replies go to the supplier',
     subject: (p: { orderNumber: string }) =>
       `Order ${p.orderNumber}: partial delivery receipt`,

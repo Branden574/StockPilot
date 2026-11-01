@@ -739,6 +739,32 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Ordering visibility (0413): order_catalog_visible is written only by
+  # set_order_catalog_visibility (SECURITY DEFINER, EXECUTE to authenticated):
+  # the item guard refuses every other UPDATE of the column, service_role
+  # included. The write checks can_manage_order_catalog (explicit deny, then
+  # allow, then role default, the owner included), the app's MFA rule (a
+  # 48-case parity table) and the caller's read scope (set-based, held equal
+  # to caller_can_read_item and RLS per persona; a foreign or unreadable id
+  # refuses the whole call naming only the caller's ids). The key's exception
+  # rows are written only by platform_set_permission_exception (service_role):
+  # org admins, owners and service-role writes of the key, role rows and the
+  # global defaults are refused in the database. The new-demand gate on
+  # order_request_lines refuses a hidden item for every writer and leaks
+  # nothing about an item the writer cannot read. The two-session proofs are
+  # scripts/db-concurrency/0413_hide_vs_submit.sh and 0413_exchange_reissue_vs_hide.sh.
+  supabase/tests/0413_order_catalog_visibility.test.sql
+  # Order signature images (0414, owner decision O1): the data block, replayed
+  # from the recorded statements, copies every stored image to the side table
+  # byte for byte BEFORE it nulls the row, and each abort check raises on a
+  # planted mismatch with nothing applied; the capture trigger (SECURITY
+  # INVOKER, executable by nobody, BEFORE UPDATE OF signature_data_url,
+  # signed_at) moves an image confirm_order_signature writes before the row
+  # is stored, so no member (a viewer included) reads it, and clears it when
+  # resume_fulfillment resets the hand-over. The two-session proofs are
+  # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
+  # scripts/db-concurrency/0414_migration_lock_footprint.sh.
+  supabase/tests/0414_order_signature_images.test.sql
   # Grants and policy clean-up (0407, docket S9): anon and authenticated hold
   # no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN on any public relation or in
   # the postgres role's default privileges (the class is INV-42..INV-44 in the
@@ -832,6 +858,25 @@ WEB_TESTS=(
   # The book-cover rehost is the one place the server fetches a caller-supplied
   # URL and stores the bytes; these pin the host allowlist and redirect posture.
   src/server/services/books-import.ssrf.test.ts
+  # The inventory export's image fetch (lib/item-image-fetch.ts, shared with the
+  # PDF image prefetch): the project's storage by plain fetch, any other http(s)
+  # URL only through safeFetch with the cover allowlist, anything else refused
+  # before a request, and a refused URL a final skip that is never retried,
+  # while a failed lookup of an allowed host is retried and a lookup still out
+  # when the attempt times out is cut off with it.
+  src/lib/exports/export-images.test.ts
+  # That routing itself, with the real fetch against loopback servers: plain
+  # fetch only for a Storage read on the exact project origin, and it never
+  # follows a redirect (the origin's GoTrue verify answers a bogus token with a
+  # 303 to an allow-listed redirect_to); any other path there, or another
+  # project's host, goes through the guard and is refused.
+  src/lib/item-image-fetch.test.ts
+  # The org logo in branded PDF headers is bytes, never a URL or path that
+  # react-pdf would fetch or read itself: the headers draw only a PNG or JPEG
+  # data: URI, and every route that reads logo_url for a PDF fetches it as
+  # bytes through the guarded image fetch first.
+  src/lib/pdf/branding.test.tsx
+  src/lib/pdf/org-logo-bytes.guard.test.ts
 
   # Authorization gates on server actions and routes.
   # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
@@ -984,6 +1029,18 @@ WEB_TESTS=(
   # details (the new-rack question rides them). The file carries the
   # "Security invariant" marker.
   src/server/actions/duplicate-item.test.ts
+  # S16: no API route answers an unexpected error's own text. The caller gets
+  # a fixed sentence with the route's status and code, and the error goes to
+  # reportError with the route's tag (server/lib/api-error-response.ts, whose
+  # suite pins that answer). The guard reads, on the TypeScript syntax tree,
+  # every module under app/api, every response helper and every module a
+  # route imports directly, finds an error's text however it is spelled
+  # (message, stack, String(), a template, a cast, a destructured message, a
+  # whole error in a JSON answer), and lists each line that keeps one with
+  # why it never reaches a caller. The guard carries the "Security invariant"
+  # marker.
+  src/app/api/no-raw-error-text.guard.test.ts
+  src/server/lib/api-error-response.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1307,6 +1364,60 @@ WEB_TESTS=(
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
 
+  # The catalog photo maps: /api/v1/public/catalog-thumbnails is rate limited
+  # per IP before the link token is looked up, closed on a limiter outage,
+  # with a 429 the CDN never caches; /api/orders/catalog-thumbnails per user
+  # before any read, and it answers only the New rental page's rentalsOnly=1
+  # (the two old shapes that signed every orderable item are refused). The
+  # same two suites pin ordering visibility (0413, step 2b, below): the
+  # legacy public token answers an empty map, a link signs only its eligible
+  # items, and the refused picker set signs no hidden item.
+  src/app/api/v1/public/catalog-thumbnails/route.test.ts
+  src/app/api/orders/catalog-thumbnails/route.test.ts
+
+  # The Security Scan's dependency audit (scripts/dependency-audit): a
+  # critical advisory in a production dependency fails the job unless the
+  # allow-list dismisses it by advisory id and package until its review date,
+  # and only as it was reviewed (at or below the severity the entry records,
+  # and for an untilPatched entry only while no patched version is listed);
+  # unreadable audit output or a malformed allow-list entry fails it closed;
+  # registry text cannot form a runner command; the job holds no secret, no
+  # expression and no install. The file carries the "Security invariant"
+  # marker.
+  src/test/dependency-audit.guard.test.ts
+  # A workflow that calls a server with a secret never prints the answer
+  # (S16 review): the Actions logs of this public repository are public, and
+  # the deploy hook printed the prewarm route's answer (every warmed
+  # organization's ids, counts and any failed read's text). It reads every
+  # run: block and local action, and the scripts, package scripts and pnpm or
+  # turbo fan-outs they run, one command at a time. It counts a secret in a
+  # header, -u, data, a URL, an expression (secrets, env., inputs., steps.
+  # outputs) or a variable mapped, assigned or named like one. Such a curl
+  # must send every answer to /dev/null (one -o per URL, --globoff for a URL
+  # it cannot see whole), print no headers, trace or URL, and use only
+  # options curl's manual lists. What it cannot read (node, python, make,
+  # xargs, an action passed a secret) fails until it is read by hand. The
+  # file carries the "Security invariant" marker.
+  src/test/workflow-secret-curl.guard.test.ts
+
+  # The export budget's trip row (security.export_rate_limited, which the
+  # hourly audit-anomaly cron counts to spot sustained export abuse) is
+  # written through insertAuditRowReported: kept alive past the 429 and
+  # reported when lost. A service client that cannot be made never turns the
+  # 429 into a 500. Its suite, src/lib/export-rate-limit.test.ts, is listed
+  # once, with the cross-site cookie checks (docket S14) above.
+
+  # Server code leaves nothing running with `void` that the response can cut
+  # off: the error reporter (security alerts), dispatchEvent (the security
+  # feed to Slack, Teams and webhooks), the audit writers and the realtime
+  # broadcasts keep their own work alive, and every other `void` call is
+  # reviewed. Every module that can run on the server is scanned, Server
+  # Component pages and modules without the 'server-only' marker included;
+  # the few browser-only modules skipped are checked to be imported only from
+  # client code. Client code reports through the isomorphic core reporter,
+  # never the server one, which is server-only and would fail the build.
+  src/server/fire-and-forget.guard.test.ts
+
   # One-click unsubscribe in member emails (B15): a link names one member, one
   # organization and one email kind under an HMAC keyed on UNSUBSCRIBE_SECRET,
   # domain-separated from the address links; a changed part, an unknown kind,
@@ -1321,6 +1432,47 @@ WEB_TESTS=(
   src/server/services/member-email-unsubscribe.test.ts
   src/app/unsubscribe/route.members.test.ts
   src/app/unsubscribe/route.settings-parity.test.tsx
+
+  # Ordering visibility (0413, step 2b). Manage order items checks the Orders
+  # module, the rollout switch (ORDER_ITEMS_MANAGE_ORGS), the MFA floor and the
+  # platform-managed orders:manage_catalog_visibility before any read or write;
+  # its list and family reads use the caller's own client (RLS is the scope);
+  # Show or Hide goes through set_order_catalog_visibility only, refusals are
+  # mapped by hint and never carry database text, foreign ids are echoed only
+  # when the caller sent them, and the catalog tags are expired with
+  # { expire: 0 } (never 'max' or the global tag). No requester surface offers
+  # a hidden item: the storefront loader filters and overlays recent hides, the
+  # public link page overlays every render, the legacy public thumbnails answer
+  # an empty map, Frequently ordered filters and the picker thumbnails' set is
+  # refused outright (both thumbnail suites are listed once, with the catalog
+  # photo maps' rate limits above); Add items is one atomic database call, and
+  # a raise, the portal and the public form refuse a hidden item; PO-import
+  # charter siblings and restore points keep a hidden choice.
+  src/server/services/order-catalog-visibility.test.ts
+  src/server/actions/order-catalog-visibility.test.ts
+  src/app/api/v1/orders/catalog-visibility/route.test.ts
+  src/server/services/order-requests.add-lines.test.ts
+  src/server/services/order-requests.edit-lines.test.ts
+  src/server/services/portal.pricing-mode.test.ts
+  src/app/api/v1/public/order-requests/route.order-visibility.test.ts
+  src/server/services/public-catalog.order-visibility.test.ts
+  src/app/api/orders/freq/route.test.ts
+  src/server/services/po-imports.charter-decoupling.test.ts
+  src/server/services/po-imports-lines.charter-sibling.test.ts
+  src/server/services/restore-points.test.ts
+  src/server/services/inventory.order-catalog-visible.test.ts
+
+  # Ordering visibility (0413, step 2a): orders:manage_catalog_visibility is
+  # platform-managed. Only setOrderItemsAccessAction (fresh step-up) reaches
+  # PermissionExceptionsService.set (GoTrue-verified allowlisted actor), the one
+  # caller of platform_set_permission_exception; every other override writer
+  # refuses the key first (the guard pins the single caller and the writers).
+  # The web resolvers honour an explicit deny for the owner too, and fail
+  # closed for the key when the permission read fails.
+  src/server/services/platform/permission-exceptions.guard.test.ts
+  src/server/services/platform/permission-exceptions.test.ts
+  src/server/actions/platform/permission-exceptions.test.ts
+  src/lib/auth/effective-permissions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1362,6 +1514,38 @@ MOBILE_TESTS=(
   src/lib/sync.snapshot-removals.test.ts
   src/lib/draft-debouncer.test.ts
 
+  # A sign-out, an account eviction and a pull for another account (where the
+  # fallback sign-outs, a revoked session and an expired refresh token, which
+  # never wipe, all arrive) clear the photo caches (expo-image's memory and
+  # disk caches, and the item-photo links held in memory) with the SQLite
+  # wipe, even when that wipe fails, so the next account on a shared phone
+  # finds no photo the previous one saw. The record of whose cache it is
+  # outlives the wipes that keep the photos (a workspace switch, the
+  # workspace repair, Clear offline cache), is forgotten only after the
+  # photos are gone, and names the new account once a reset has cleared the
+  # old one. A photo clear that failed is recorded beside it as still owed:
+  # that account's own pulls clear the photos again, and do nothing else,
+  # while any other account still resets. A pull that finds no record clears
+  # the photos and trusts none of the rows: its full pull keeps only what it
+  # returns and the counts with this account's unsent work. The count screen
+  # stores a count only for the cache, the account and the workspace it
+  # fetched it for, never into a cache still recorded as another account's,
+  # and fetches it once more when one of them changed while it was loading.
+  # The next account's first sync never joins a pull still out for the
+  # previous one, whose answer is discarded once the account has changed: it
+  # runs after that pull and resets at once. A clear of a line's count,
+  # queued from an emptied count box, follows every rule of an unsent count:
+  # another account's is held for it, never sent under the next account, and
+  # gives way at that account's pull. A stored file's one-hour link
+  # (proof of delivery, purchase order files) is signed again at the tap once
+  # it is about to expire, never opened stale.
+  src/lib/photo-cache-wipe.test.ts
+  src/lib/cache-owner.sqlite.test.ts
+  src/lib/db-clear-keys.wiring.test.ts
+  src/lib/photo-links-wiring.test.ts
+  src/lib/cycle-count-detail-wiring.test.ts
+  src/lib/stored-file-link.test.ts
+
   # S4 review — WHO holds the session is read from the stored session, never
   # from getSession(), which answers "no session" offline once the access token
   # has expired while auth-js keeps it: a sign-out that failed offline must not
@@ -1373,6 +1557,22 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # The saved workspace records the account that saved it, and only that
+  # account's requests, queued work and workspace load use it: another
+  # account's, left by a fallback sign-out or a session the server ended, is
+  # never sent as this account's organization (docket B10, the 401 burst).
+  # A cache repair (another account's workspace, one the account has left,
+  # an older app's key) is recorded as owed before the save that erases its
+  # signal, and recorded done only after a wipe that worked, so a wipe that
+  # failed or never ran is run again by the next load (the switch too).
+  src/lib/workspace-keys.test.ts
+  src/lib/api.org-header.test.ts
+  src/lib/use-workspace.owner.test.ts
+  # Every screen that calls fetch itself passes the account of the session
+  # whose token it sends, so the workspace it names is never another
+  # account's, nor dropped when the stored session cannot be read.
+  src/lib/org-header-wiring.test.ts
 
   # Book Order Totals on the phone: an answer for another workspace, warehouse
   # or account (a sign-out, a switch) is dropped, never shown; remembered
@@ -1484,6 +1684,11 @@ CORE_TESTS=(
   # payload is pinned against, the words no key may carry, two-state
   # availability, and the tracking sentences.
   src/returns/requester-exchange-types.test.ts
+  # The one mailto rule for stored addresses (web support triage and order
+  # emails, phone Team, Users and Suppliers): one plain ASCII address or no
+  # link, so a link can add no recipient or parameter and opens only the
+  # address the screen shows.
+  src/email/mailto-link.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

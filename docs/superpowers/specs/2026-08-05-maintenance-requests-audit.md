@@ -18,7 +18,7 @@ tenant 2026-08-01), %20-based `encodeDraftQuery` (never URLSearchParams), name-a
 selectable textarea, duplicate-draft warning, dual aria-live regions)
 (`apps/web/src/components/orders/storefront/storefront-logic.ts:577-789`,
 `delivery-request-action.tsx:158-224`). The L4L recipient addresses the maintenance module needs
-(`dc4@learn4life.org` / `arosas@cvwest.org`) already live as frozen constants in
+(`dc4@sampleorg.test` / `jstone@site1.test`) already live as frozen constants in
 `apps/web/src/lib/site.ts:48-51`. Module gating (`organization_modules` + MODULE_REGISTRY +
 resolveSurface), the configurable-permission system (registry + role/user overrides + realtime
 propagation without re-login), attachment buckets with org-prefix storage RLS, signed-URL services,
@@ -59,7 +59,7 @@ The binding mechanics — each one an owner-proven correction of a naive approac
   extraction must export or relocate it. Byte pins: `%20` never `+` at test 1077-1091, 1157-1169,
   1217-1229.
 - **Display-name chips**: To rides in the mailto PATH position as name-addr
-  (`Fresno Warehouse DC4 <dc4@learn4life.org>`) — an OWA-only parser extension; Cc name-addr rides
+  (`Fresno Warehouse DC4 <dc4@sampleorg.test>`) — an OWA-only parser extension; Cc name-addr rides
   in the RFC-legal `cc=` value. `buildMailtoUrl` and `buildClipboardText` deliberately stay
   bare-address (untested on desktop clients — a documented do-not-extend boundary,
   `storefront-logic.ts:625-664`; names constant `lib/site.ts:85-88` with the RFC 5322 specials
@@ -136,7 +136,7 @@ one hardcoded call site.
   `has_org_role(org,'manager') OR has_permission(org, perm)` (0208:8-39). pgTAP pins
   `role_default_permissions` at exactly **111 rows** with an itemized provenance message
   (`supabase/tests/0207_permission_overrides.test.sql:41-45`).
-- Andrew's grant needs ZERO new code: once the permissions are registered they appear in the
+- The DC4 lead's grant needs ZERO new code: once the permissions are registered they appear in the
   per-user exceptions matrix at `/dashboard/settings/roles`
   (`apps/web/src/server/actions/permissions.ts:189-258`,
   `role-permission-matrix.tsx:112-116,346-391`); changes propagate live via
@@ -363,7 +363,7 @@ one hardcoded call site.
 | 4 | Hidden nav when disabled (web+mobile) | resolveSurface filtering; drawer auto-derives | `packages/core/src/modules/resolve.ts:63-106`; `apps/mobile/src/lib/drawer-nav.ts:63-78` |
 | 4 | Rejected by server actions/APIs when disabled | checkModuleAccess (pages) + assertModuleEnabled (services/APIs) | `apps/web/src/lib/modules/module-gate.ts:18-33`; `apps/web/src/server/services/context.ts:208-227` |
 | 5 | Four permissions, defaults, grantability | PERMISSIONS registry + ROLE_PERMISSIONS + FULLY_GRANTABLE + 0207 SQL mirror | `packages/core/src/constants/permissions.ts`; `supabase/migrations/0207_permission_overrides.sql` |
-| 6 | Andrew's per-user grant, live propagation | Per-user exceptions UI + user_permission_overrides + broadcast | `apps/web/src/server/actions/permissions.ts:189-258`; `apps/web/src/lib/realtime/broadcast.ts:10-29`; `apps/mobile/src/lib/use-permissions-realtime.ts` |
+| 6 | The DC4 lead's per-user grant, live propagation | Per-user exceptions UI + user_permission_overrides + broadcast | `apps/web/src/server/actions/permissions.ts:189-258`; `apps/web/src/lib/realtime/broadcast.ts:10-29`; `apps/mobile/src/lib/use-permissions-realtime.ts` |
 | 7 | Form conventions + validation | RHF+zod (big) / useState+action (simple); core schemas | `apps/web/src/components/inventory/item-form.tsx:328-338,2248-2350`; `start-cycle-count-form.tsx` |
 | 7 | Client-side control-char sanitizer | toPlainTextLine (C0+DEL strip; COLLAPSES newlines — description needs a newline-preserving variant) | `storefront-logic.ts:272-275` |
 | 8 | Launch points web (item/book/rental/order) | ItemDetail action row (covers 3 routes); orders/[id] header action row | `item-detail.tsx:379-437`; `orders/[id]/page.tsx:551-583` |
@@ -431,7 +431,7 @@ one hardcoded call site.
 8. **Never claim send/ticket/assignment anywhere.** Forbidden-phrase sweeps already exist at four
    layers (`delivery-request-action.test.tsx:742-756`, `site.test.ts:74-79`, overlays test 100-105,
    server-action test 95-103) — clone them for maintenance with the brief §20 list (`Ticket
-   created`, `Request submitted to Zendesk`, `DC4 notified`, `Andrew notified`, `Ticket assigned`,
+   created`, `Request submitted to Zendesk`, `DC4 notified`, `Jordan notified`, `Ticket assigned`,
    `Email sent`). Audit event semantics pin "draft OPENED", never wider (`audit.ts:160-172`). A
    fetch spy proves no network call happens on the open click (test 514-528).
 

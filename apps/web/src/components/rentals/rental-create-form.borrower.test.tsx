@@ -75,7 +75,7 @@ function renderForm() {
       warehouseId="wh-1"
       items={[TENT]}
       aisles={[]}
-      members={[{ userId: 'u-jane', displayName: 'Jane Doe', email: 'jane@l4l.org' }]}
+      members={[{ userId: 'u-jane', displayName: 'Jane Doe', email: 'jane@example.org' }]}
       viewerRole="admin"
     />,
   );
@@ -143,7 +143,7 @@ describe('RentalCreateForm — the borrower', () => {
     expect(createRentalAction.mock.calls[0]![0]).toMatchObject({
       borrowerUserId: 'u-jane',
       borrowerName: 'Jane Doe',
-      borrowerEmail: 'jane@l4l.org',
+      borrowerEmail: 'jane@example.org',
     });
   });
 

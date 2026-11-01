@@ -1,6 +1,6 @@
 /**
  * Shared vocabulary for REMOVING STOCK FROM A RACK and for the ARCHIVE
- * STOCK-GUARD — the two halves of the "Andrew archived a book to clear one
+ * STOCK-GUARD — the two halves of the "a manager archived a book to clear one
  * rack and it vanished from the whole system" fix.
  *
  * WHY THIS LIVES IN packages/core. Web (item-detail rack list + archive dialog)
@@ -57,7 +57,7 @@ export interface StockHoldingSummary {
  * stock — names the TOTAL and WHERE it sits so the operator knows exactly what
  * to remove or move first, and that they can override deliberately.
  *
- * Example (Andrew's Persepolis record):
+ * Example (a real Persepolis record):
  *   "Cannot archive: 181 units still on hand (140 in 100-A, 41 in 38-B).
  *    Remove or move the stock first, or archive it anyway to write it off."
  */

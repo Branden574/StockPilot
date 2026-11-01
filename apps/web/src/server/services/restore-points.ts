@@ -61,6 +61,13 @@ export interface SnapshotItem {
   categoryName: string | null;
   supplierName: string | null;
   locationName: string | null;
+  /**
+   * Ordering visibility (snapshot version 3, migration 0413): false when the
+   * record was hidden from new ordering. A re-created record keeps it; a
+   * record matched alive keeps its own live choice. Absent from versions 1
+   * and 2, which re-create shown, as before.
+   */
+  orderCatalogVisible?: boolean;
 }
 
 /** Stable reconcile key matching the (sku, bin_location) uniqueness index. */
@@ -69,14 +76,23 @@ function itemKey(sku: string, bin: string | null): string {
 }
 
 export interface RestoreSnapshot {
-  /** 1: items keyed by (SKU, bin) only. 2: each item also carries its id. */
-  version: 1 | 2;
+  /** 1: items keyed by (SKU, bin) only. 2: each item also carries its id.
+   *  3: each item also carries its ordering visibility (0413). */
+  version: 1 | 2 | 3;
   capturedAt: string;
   items: SnapshotItem[];
 }
 
-/** The version new snapshots are written with (Ungroup D1: item ids). */
-export const SNAPSHOT_VERSION = 2 as const;
+/** The version new snapshots are written with (Ungroup D1: item ids;
+ *  ordering visibility 0413: each record's order_catalog_visible). */
+export const SNAPSHOT_VERSION = 3 as const;
+
+/** Versions 2 and 3 carry record ids (the restore matches by id first and
+ *  needs no SKU-change warning); version 1 does not. */
+function snapshotHasIds(version: unknown): boolean {
+  const v = Number(version);
+  return v === 2 || v === 3;
+}
 
 export interface RestorePointRow {
   id: string;
@@ -141,6 +157,7 @@ export async function createSnapshot(
     item_type: string | null;
     warehouse_id: string | null;
     bin_location: string | null;
+    order_catalog_visible: boolean | null;
     category: unknown;
     supplier: unknown;
     location: unknown;
@@ -151,7 +168,7 @@ export async function createSnapshot(
       ctx.supabase
         .from('inventory_items')
         .select(
-          'id, sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
+          'id, sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, order_catalog_visible, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
         )
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -182,6 +199,8 @@ export async function createSnapshot(
       categoryName: embed(r.category),
       supplierName: embed(r.supplier),
       locationName: embed(r.location),
+      // The column is NOT NULL (0413); a missing value reads as shown.
+      orderCatalogVisible: r.order_catalog_visible !== false,
     }));
 
   const snapshot: RestoreSnapshot = {
@@ -292,7 +311,7 @@ export async function restoreSnapshot(
   // stage, data review DATA-1): read before anything is written, so a failed
   // read refuses the restore instead of re-creating a split record.
   const splits =
-    snapshot?.version !== SNAPSHOT_VERSION && typeof snapshot?.capturedAt === 'string'
+    !snapshotHasIds(snapshot?.version) && typeof snapshot?.capturedAt === 'string'
       ? await readSplitsSince(ctx.organizationId, snapshot.capturedAt)
       : [];
 
@@ -346,7 +365,7 @@ export async function restoreSnapshot(
   // after the snapshot keeps its stock once. Version 1 (no ids) matches by
   // (SKU, bin) as before, and a record Ungroup split after the point is found
   // through its split (planSplitMatches, PR stage DATA-1).
-  const byIdFirst = snapshot?.version === SNAPSHOT_VERSION;
+  const byIdFirst = snapshotHasIds(snapshot?.version);
   const reconciledById = new Set<string>(
     byIdFirst ? items.flatMap((it) => (it.id && byId.has(it.id) ? [it.id] : [])) : [],
   );
@@ -488,7 +507,12 @@ export async function restoreSnapshot(
             customFields: {},
             status: finalStatus,
           },
-          { allowUnconfirmedNewRack: true },
+          {
+            allowUnconfirmedNewRack: true,
+            // A record the point captured hidden from new ordering comes back
+            // hidden (version 3, 0413); otherwise the default, shown.
+            ...(it.orderCatalogVisible === false ? { orderCatalogVisible: false } : {}),
+          },
         );
         recreated++;
       }
@@ -518,7 +542,7 @@ export async function restoreSnapshot(
         failures,
         extras: extras.length,
         preRestoreId: pre.id,
-        snapshotVersion: byIdFirst ? SNAPSHOT_VERSION : 1,
+        snapshotVersion: byIdFirst ? Number(snapshot?.version) : 1,
         ...(splitMatch.size > 0 ? { matchedBySplit: splitMatch.size } : {}),
         ...(sharedFieldsKept > 0 ? { sharedFieldsKept } : {}),
       },
@@ -658,7 +682,7 @@ export interface RestorePointSkuChange {
 }
 
 export interface RestorePointSkuChanges {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   changes: RestorePointSkuChange[];
   /** Records that changed SKU beyond the ones named. */
   more: number;
@@ -701,8 +725,8 @@ export async function restorePointSkuChanges(
   if (pointErr) throw new ServiceError('internal_error', pointErr.message);
   if (!point) throw new ServiceError('not_found', 'Restore point not found.');
   const p = point as { version: unknown; captured_at: string | null; created_at: string };
-  if (Number(p.version) === SNAPSHOT_VERSION) {
-    return { version: SNAPSHOT_VERSION, changes: [], more: 0, truncated: false };
+  if (snapshotHasIds(p.version)) {
+    return { version: Number(p.version) as 2 | 3, changes: [], more: 0, truncated: false };
   }
   // PR stage, data review DATA-1 (2): audit_logs' read policy (0279) needs
   // activity_logs:read, which an override can take from an admin who can still

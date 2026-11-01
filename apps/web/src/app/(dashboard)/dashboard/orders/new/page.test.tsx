@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * L96: /dashboard/orders/new skipped the Orders module check that
@@ -38,12 +38,16 @@ vi.mock('@/components/orders/storefront/orders-storefront', () => ({
     return null;
   },
 }));
+const ctx = vi.hoisted(() => ({
+  role: 'staff',
+  permissions: new Set<string>(['orders:request']),
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({
     organizationId: 'org-1',
     userId: 'u-1',
-    role: 'staff',
-    permissions: new Set(['orders:request']),
+    role: ctx.role,
+    permissions: ctx.permissions,
     fullName: 'Pat',
     email: 'pat@example.com',
   })),
@@ -52,8 +56,12 @@ vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: vi.fn(async () => 'America/Los_Angeles'),
   getOrgEmailRouting: vi.fn(async () => ({ state: 'unset' })),
 }));
+const modules = vi.hoisted(() => ({ value: new Set<string>(['orders']) as Set<string> | null }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
-  getModulesForRequest: vi.fn(async () => new Set(['orders'])),
+  getModulesForRequest: vi.fn(async () => {
+    if (modules.value === null) throw new Error('modules unreadable');
+    return modules.value;
+  }),
   getWarehousesForRequest: m.getWarehousesForRequest,
 }));
 vi.mock('@/server/loaders/orders-frequently-ordered', () => ({
@@ -75,6 +83,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.getWarehousesForRequest.mockResolvedValue([{ id: 'wh-1', name: 'Main' }]);
   m.loadCatalogBundle.mockReturnValue(new Promise(() => {}));
+  ctx.role = 'staff';
+  ctx.permissions = new Set(['orders:request']);
+  modules.value = new Set(['orders']);
+  delete process.env.ORDER_ITEMS_MANAGE_ORGS;
+});
+afterEach(() => {
+  delete process.env.ORDER_ITEMS_MANAGE_ORGS;
 });
 
 describe('New order page: the Orders module gate (L96)', () => {
@@ -122,5 +137,55 @@ describe('New order page: no active warehouses (redesign P4.B2)', () => {
     );
     expect(m.storefrontProps).not.toHaveBeenCalled();
     expect(m.loadCatalogBundle).not.toHaveBeenCalled();
+  });
+});
+
+describe('New order page: Manage order items (ordering visibility, design 8.1)', () => {
+  const managing = () => m.storefrontProps.mock.calls.at(-1)?.[0]?.canManageOrderItems;
+
+  beforeEach(() => {
+    m.checkModuleAccess.mockResolvedValue({ enabled: true, canManage: false });
+  });
+
+  it('offers it to a manager in an organization the switch names', async () => {
+    process.env.ORDER_ITEMS_MANAGE_ORGS = 'org-1';
+    ctx.role = 'manager';
+    ctx.permissions = new Set(['orders:request', 'orders:manage_catalog_visibility']);
+    render(await callPage());
+    expect(managing()).toBe(true);
+  });
+
+  it('not without the effective permission (a denied manager, a staff member)', async () => {
+    process.env.ORDER_ITEMS_MANAGE_ORGS = '*';
+    ctx.role = 'manager';
+    ctx.permissions = new Set(['orders:request']);
+    render(await callPage());
+    expect(managing()).toBe(false);
+  });
+
+  it('a staff member StockPilot allowed gets it', async () => {
+    process.env.ORDER_ITEMS_MANAGE_ORGS = '*';
+    ctx.role = 'staff';
+    ctx.permissions = new Set(['orders:request', 'orders:manage_catalog_visibility']);
+    render(await callPage());
+    expect(managing()).toBe(true);
+  });
+
+  it('not while the switch is off for the organization', async () => {
+    process.env.ORDER_ITEMS_MANAGE_ORGS = 'org-2';
+    ctx.role = 'owner';
+    ctx.permissions = new Set(['orders:request', 'orders:manage_catalog_visibility']);
+    render(await callPage());
+    expect(managing()).toBe(false);
+  });
+
+  it('not when the module set could not be read (fail closed), and the kits row keeps no place', async () => {
+    process.env.ORDER_ITEMS_MANAGE_ORGS = '*';
+    ctx.role = 'manager';
+    ctx.permissions = new Set(['orders:request', 'orders:manage_catalog_visibility']);
+    modules.value = null;
+    render(await callPage());
+    expect(managing()).toBe(false);
+    expect(m.storefrontProps.mock.calls.at(-1)?.[0]?.kitsEnabled).toBe(false);
   });
 });

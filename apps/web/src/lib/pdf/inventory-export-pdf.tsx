@@ -6,7 +6,13 @@ import type { ExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
 import { BrandedHeader } from './branding';
-import { REPORT_CELL_PADDING_PT, REPORT_IMAGE_COL_GAP_PT } from './column-fit';
+import {
+  REPORT_BODY_FONT_SIZE_PT,
+  REPORT_CELL_PADDING_PT,
+  REPORT_IMAGE_COL_GAP_PT,
+  REPORT_PAGE_PADDING_PT,
+} from './column-fit';
+import { breakIdentifierLines } from './identifier-lines';
 import { pdfStyles, PDF_COLORS } from './styles';
 
 /**
@@ -22,6 +28,14 @@ import { pdfStyles, PDF_COLORS } from './styles';
  */
 
 export const EXPORT_PDF_EM_DASH = '—';
+
+/**
+ * Points kept free when an identifier is broken to its box. A catalog card's
+ * width is a rounded percentage (a third of the row is 33.3333%), so a line
+ * measured to the exact box could come out a hair too wide, and textkit would
+ * break it again, with the hyphen it inserts.
+ */
+const FIT_SLACK_PT = 0.5;
 
 /**
  * What react-pdf's `<Image>` receives: BYTES, never a URL. The route fetches
@@ -99,10 +113,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: REPORT_CELL_PADDING_PT,
   },
   /** Identifier cells: their width is value-derived (pdf-layout sizes the
-   *  column to the widest real value, capped), and this clip is the
-   *  last-resort net for values past the cap — @react-pdf never clips Text
-   *  overflow on its own, which is how a long SKU used to paint across the
-   *  neighbouring column's em dash. */
+   *  column to the widest real value, capped). A value past the cap is broken
+   *  onto lines that fit (breakIdentifierLines), and this clip is the
+   *  last-resort net behind that — @react-pdf never clips Text overflow on
+   *  its own, which is how a long SKU used to paint across the neighbouring
+   *  column's em dash. */
   cellClip: {
     overflow: 'hidden',
   },
@@ -275,7 +290,11 @@ function TableBody({ layout, rows }: { layout: ExportPdfLayout; rows: InventoryE
                 style={[styles.cellClip, { width: col.widthPt, flexGrow: 0, flexShrink: 0 }]}
               >
                 <Text style={[styles.cell, { width: col.widthPt }, alignStyle(col.align)]}>
-                  {row.cells[col.key] ?? EXPORT_PDF_EM_DASH}
+                  {breakIdentifierLines(
+                    row.cells[col.key] ?? EXPORT_PDF_EM_DASH,
+                    col.widthPt - REPORT_CELL_PADDING_PT * 2 - FIT_SLACK_PT,
+                    REPORT_BODY_FONT_SIZE_PT,
+                  )}
                 </Text>
               </View>
             ) : (
@@ -315,6 +334,50 @@ export const CATALOG_COVER_PT: Record<1 | 2 | 3, { widthPt: number; heightPt: nu
   3: { widthPt: 50, heightPt: 68 },
 };
 
+/**
+ * The card's horizontal geometry in points. catalogStyles and
+ * catalogValueWidthPt read the same numbers, so the width a SKU is broken to
+ * is the width react-pdf gives its value.
+ */
+const CATALOG_CARD_GAP_PT = 4;
+const CATALOG_CARD_BORDER_PT = 0.5;
+const CATALOG_CARD_PADDING_PT = 6;
+const CATALOG_COVER_GAP_PT = 6;
+const CATALOG_LABEL_WIDTH_PT = 54;
+const CATALOG_VALUE_FONT_SIZE_PT = 8.5;
+
+/**
+ * The width of a card's value column, for `columns` cards across a page
+ * `pageWidthPt` wide: the card's share of the row, less its gap, border and
+ * padding, the cover, the gap after it, and the label.
+ */
+export function catalogValueWidthPt(pageWidthPt: number, columns: 1 | 2 | 3): number {
+  const cardShare = (pageWidthPt - REPORT_PAGE_PADDING_PT * 2) / columns;
+  return (
+    cardShare -
+    2 * (CATALOG_CARD_GAP_PT + CATALOG_CARD_BORDER_PT + CATALOG_CARD_PADDING_PT) -
+    CATALOG_COVER_PT[columns].widthPt -
+    CATALOG_COVER_GAP_PT -
+    CATALOG_LABEL_WIDTH_PT
+  );
+}
+
+/*
+ * Every width in a card comes from the page, never from the text in it. Two
+ * @react-pdf/layout 5.2 behaviours make that necessary:
+ *
+ * - A Text keeps the lines from its first measure (`measureText`: `if
+ *   (!node.lines)`). A box sized from its content is first measured at the
+ *   full width on offer, before the row shrinks it, so a long title or value
+ *   kept lines that wide and ran past the card, into the next one. With
+ *   flexBasis 0 the body and the value take their width from the space left,
+ *   and their first measure is at the width they print at.
+ * - flexShrink: 0 is read as 1 (`setFlexShrink`: `value || 1`), so that
+ *   oversized body squeezed the cover's box by about 11pt and the text printed
+ *   over the cover, and the label column narrowed with it. Nothing pushes on
+ *   them now; minWidth, which react-pdf does honour, keeps them whole if
+ *   anything ever does.
+ */
 const catalogStyles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
@@ -322,20 +385,20 @@ const catalogStyles = StyleSheet.create({
     marginTop: 8,
   },
   cardOuter: {
-    padding: 4,
+    padding: CATALOG_CARD_GAP_PT,
   },
   card: {
     flexDirection: 'row',
-    borderWidth: 0.5,
+    borderWidth: CATALOG_CARD_BORDER_PT,
     borderColor: PDF_COLORS.line,
     borderStyle: 'solid',
     borderRadius: 3,
-    padding: 6,
+    padding: CATALOG_CARD_PADDING_PT,
   },
   cardBody: {
     flexGrow: 1,
-    flexShrink: 1,
-    paddingLeft: 6,
+    flexBasis: 0,
+    paddingLeft: CATALOG_COVER_GAP_PT,
   },
   cardTitle: {
     fontSize: 9.5,
@@ -353,13 +416,14 @@ const catalogStyles = StyleSheet.create({
     color: PDF_COLORS.ink4,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
-    width: 54,
+    width: CATALOG_LABEL_WIDTH_PT,
+    minWidth: CATALOG_LABEL_WIDTH_PT,
   },
   cardValue: {
-    fontSize: 8.5,
+    fontSize: CATALOG_VALUE_FONT_SIZE_PT,
     color: PDF_COLORS.ink2,
     flexGrow: 1,
-    flexShrink: 1,
+    flexBasis: 0,
   },
 });
 
@@ -372,6 +436,7 @@ const catalogStyles = StyleSheet.create({
  * drives the table AND the catalog with no second configuration.
  */
 function CatalogBody({
+  layout,
   rows,
   catalog,
 }: {
@@ -385,6 +450,7 @@ function CatalogBody({
   const cover = CATALOG_COVER_PT[catalog.columns];
   const cardWidth = `${(100 / catalog.columns).toFixed(4)}%`;
   const detailFields = catalog.fields.filter((f) => f.key !== 'image' && f.key !== 'name');
+  const identifierWidthPt = catalogValueWidthPt(layout.pageWidthPt, catalog.columns) - FIT_SLACK_PT;
 
   return (
     <View style={catalogStyles.grid}>
@@ -396,12 +462,9 @@ function CatalogBody({
           style={[catalogStyles.cardOuter, { width: cardWidth }]}
         >
           <View
-            style={[
-              catalogStyles.card,
-              { minHeight: CATALOG_CARD_MIN_HEIGHT_PT[catalog.columns] },
-            ]}
+            style={[catalogStyles.card, { minHeight: CATALOG_CARD_MIN_HEIGHT_PT[catalog.columns] }]}
           >
-            <View style={{ width: cover.widthPt, flexShrink: 0 }}>
+            <View style={{ width: cover.widthPt, minWidth: cover.widthPt }}>
               {row.imageSrc ? (
                 // eslint-disable-next-line jsx-a11y/alt-text
                 <Image
@@ -426,7 +489,13 @@ function CatalogBody({
                     {fieldHeading(field, { format: 'pdf', itemType: catalog.itemTypeKind })}
                   </Text>
                   <Text style={catalogStyles.cardValue}>
-                    {row.cells[field.key] ?? EXPORT_PDF_EM_DASH}
+                    {field.identifier
+                      ? breakIdentifierLines(
+                          row.cells[field.key] ?? EXPORT_PDF_EM_DASH,
+                          identifierWidthPt,
+                          CATALOG_VALUE_FONT_SIZE_PT,
+                        )
+                      : (row.cells[field.key] ?? EXPORT_PDF_EM_DASH)}
                   </Text>
                 </View>
               ))}

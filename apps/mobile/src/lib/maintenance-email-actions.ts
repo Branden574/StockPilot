@@ -85,11 +85,10 @@ export {
  * means the server predates the per-org routing feature entirely, the exact
  * code-before-migration window this feature must fail OPEN through. That —
  * and only that — maps to `{ state: 'fallback' }`, which
- * `maintenanceRecipientsForRouting` resolves to the compiled L4L constants,
- * byte-identical to what shipped before the feature. A PRESENT-but-malformed
- * field is the opposite case: something is actively wrong, and it fails
- * CLOSED as 'invalid' rather than silently mailing another tenant's
- * warehouse.
+ * `maintenanceRecipientsForRouting` resolves to the compiled sample
+ * constants. A PRESENT-but-malformed field is the opposite case: something is
+ * actively wrong, and it fails CLOSED as 'invalid' rather than composing with
+ * recipients nothing validated.
  */
 export function maintenanceRoutingFromResponse(raw: unknown): OrgEmailRoutingReadState {
   if (raw === undefined) return { state: 'fallback' };

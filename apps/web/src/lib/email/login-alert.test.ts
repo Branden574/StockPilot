@@ -20,7 +20,7 @@ describe('sendNewDeviceLoginEmail', () => {
 
   it('sends the es signin alert from the registry security sender', async () => {
     await sendNewDeviceLoginEmail({
-      to: 'branden574@gmail.com',
+      to: 'owner@example.com',
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       ip: '203.0.113.7',
@@ -35,7 +35,7 @@ describe('sendNewDeviceLoginEmail', () => {
       from?: string;
       replyTo?: string;
     };
-    expect(msg.to).toBe('branden574@gmail.com');
+    expect(msg.to).toBe('owner@example.com');
     expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
     expect(msg.replyTo).toBeUndefined();
     expect(msg.subject).toBe('New sign-in to your StockPilot account');
@@ -46,7 +46,7 @@ describe('sendNewDeviceLoginEmail', () => {
 
   it('never claims the alert is a manageable preference (registry flag)', async () => {
     await sendNewDeviceLoginEmail({
-      to: 'branden574@gmail.com',
+      to: 'owner@example.com',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/127.0',
       ip: null,
     });

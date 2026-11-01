@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
  * everywhere else, so a local `supabase db reset` always had it and no test
  * ever noticed. Both callers destructured only `{ data }`, so the 42883 was
  * discarded and the code fell through to `PO-${Date.now()}`. Result: 27
- * production purchase orders numbered like PO-1788277456195, on
+ * production purchase orders numbered like PO-1700000000505, on
  * supplier-facing documents, for three and a half months, with ZERO of the
  * intended PO-YYYY-NNNN shape and no error anywhere to explain it.
  *

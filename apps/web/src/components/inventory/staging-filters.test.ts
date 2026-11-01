@@ -50,7 +50,7 @@ function f(over: Partial<StagingFilters> = {}): StagingFilters {
 const A = row({
   itemId: 'A',
   name: 'Acer Chromebook',
-  sku: 'SP-9U4BK-0EK',
+  sku: 'SP-9DEM3-CB1',
   sourcePoNumber: 'PO-100',
   receiptNumber: 'RCV-000031',
   receivedAt: '2026-08-10T00:00:00Z',

@@ -158,7 +158,7 @@ export function VendorMappingsManager({
             </Label>
             <Input
               id="vm-description"
-              placeholder="Duracell Coppertop AA, 24/Pack"
+              placeholder="AA batteries, 24 pack"
               value={vendorDescription}
               onChange={(e) => setVendorDescription(e.target.value)}
             />

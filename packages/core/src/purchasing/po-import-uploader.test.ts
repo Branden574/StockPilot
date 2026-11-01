@@ -19,17 +19,17 @@ const profiles = (entries: Record<string, PoImportUploaderProfile>) =>
 
 describe('poImportUploaderLabel', () => {
   it('shows the full name', () => {
-    const m = profiles({ u1: { full_name: 'Marissa Lopez', email: 'marissa@cvwest.org' } });
-    expect(poImportUploaderLabel(m, 'u1')).toBe('Marissa Lopez');
+    const m = profiles({ u1: { full_name: 'Rebecca Lowry', email: 'rebecca@site1.test' } });
+    expect(poImportUploaderLabel(m, 'u1')).toBe('Rebecca Lowry');
   });
 
   it('falls back to the email when there is no name, and when the name is blank', () => {
     const m = profiles({
-      u1: { full_name: null, email: 'crystal@cvwest.org' },
-      u2: { full_name: '   ', email: ' doua@cvwest.org ' },
+      u1: { full_name: null, email: 'robin@site1.test' },
+      u2: { full_name: '   ', email: ' lena@site1.test ' },
     });
-    expect(poImportUploaderLabel(m, 'u1')).toBe('crystal@cvwest.org');
-    expect(poImportUploaderLabel(m, 'u2')).toBe('doua@cvwest.org');
+    expect(poImportUploaderLabel(m, 'u1')).toBe('robin@site1.test');
+    expect(poImportUploaderLabel(m, 'u2')).toBe('lena@site1.test');
   });
 
   it('says "Former member" when the lookup worked but no profile came back', () => {
@@ -58,10 +58,10 @@ describe('poImportUploaderLabel', () => {
   });
 
   it('ignores a stamp for another column, a malformed marker, and a marker on a row that still names someone', () => {
-    const m = profiles({ u1: { full_name: 'Doua Vang', email: null } });
+    const m = profiles({ u1: { full_name: 'Lena Hale', email: null } });
     expect(poImportUploaderLabel(m, null, { approved_by: '2026-11-04T18:22:05+00:00' })).toBe(PO_IMPORT_UPLOADER_UNKNOWN);
     expect(poImportUploaderLabel(m, null, ['uploaded_by'])).toBe(PO_IMPORT_UPLOADER_UNKNOWN);
-    expect(poImportUploaderLabel(m, 'u1', { uploaded_by: '2026-11-04T18:22:05+00:00' })).toBe('Doua Vang');
+    expect(poImportUploaderLabel(m, 'u1', { uploaded_by: '2026-11-04T18:22:05+00:00' })).toBe('Lena Hale');
   });
 
   it('never returns the raw id', () => {

@@ -5,6 +5,7 @@ import {
   ORPHANED_ADJUST_SELECT_SQL,
   PARK_ORPHANED_ADJUST_SQL,
 } from './adjust-outbox';
+import { CACHE_USER_META_KEY, PHOTOS_PENDING_META_KEY, UNCONFIRMED_ROW_STAMP } from './cache-owner';
 import { OWNED_BY_USER_SQL } from './outbox-scope';
 
 /**
@@ -471,8 +472,9 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * cycle counts + lines, bundles + components) and every org-scoped `meta`
  * key sync.ts persists on a pull: the sync cursor (`last_synced_at`), the
  * `enabled_modules` set, the `effective_permissions` set and the
- * `warehouse_scope`. Shared by `deleteOrgData` (org switch) and
- * `wipeForSignOut` (sign-out).
+ * `warehouse_scope`. Shared by `deleteOrgData` (a workspace switch, the
+ * workspace repair, Settings > Offline cache > Clear, a pull for another
+ * account), `wipeForSignOut` (sign-out) and `wipeForEviction`.
  *
  * WHY the last two are here: they were omitted, so an org switch left Org A's
  * permission set and warehouse scope persisted under Org B. The post-switch
@@ -488,8 +490,22 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * their first pull. Both readers treat "absent" as not-loaded-yet and fall
  * back to their documented defaults (static role permissions; no banner).
  *
- * `cache_user_id` (cache-owner.ts) goes with them: an emptied cache belongs to
- * nobody, and the next account's pull records itself.
+ * NOT the record of whose cache this is (`cache_user_id`, cache-owner.ts). It
+ * used to go with them ("an emptied cache belongs to nobody"), but these
+ * tables are not the only thing an account leaves: its photos stay in
+ * expo-image's caches and its photo links in memory, and only the account
+ * changes clear those (photo-cache-wipe.ts). And a pull that finds no record
+ * clears the photos but keeps the rows, that is whatever was cached after the
+ * wipe that forgot it (a count opened to work on offline). After a sign-out
+ * or an eviction that is normally the next account's own, since the account
+ * that left has no session any more. After a switch, the repair or Clear it
+ * would be the same account's, still signed in, and the next account would
+ * adopt it.
+ * So the record is forgotten only by the wipes of an account leaving the
+ * device, whose callers clear the photos first (forgetCacheOwner below).
+ * deleteOrgData keeps it, and the record of a photo clear still owed with it
+ * (`cache_photos_pending`, setCacheOwner below): the photos it is about stay
+ * too.
  *
  * The keys are pinned against sync.ts's writers by
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
@@ -511,8 +527,125 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
     delete from meta where key = 'enabled_modules';
     delete from meta where key = 'effective_permissions';
     delete from meta where key = 'warehouse_scope';
-    delete from meta where key = 'cache_user_id';
   `);
+}
+
+/**
+ * Forget whose cache this was (cache-owner.ts), and any photo clear still owed
+ * with it, inside the wipe of an account that is LEAVING the device:
+ * wipeForSignOut and wipeForEviction, and nowhere else. Their callers run them
+ * through wipeWithPhotoCaches, which clears the photos before this runs, so a
+ * record that is gone means the photos are gone too, or that their clear
+ * failed and the next account's pull clears them again (an adopt).
+ */
+async function forgetCacheOwner(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.runAsync('delete from meta where key = ?', [CACHE_USER_META_KEY]);
+  await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
+}
+
+/**
+ * Record `userId` as the account the cache belongs to, in sync.ts only: the
+ * cache-owner reset once the previous account's rows are gone, and the adopt,
+ * each once its photo clear has answered (see cache-owner.ts). Whatever the
+ * clear answered: a reset or an adopt that left NO record after a failed clear
+ * (as at 254fb9c72) let the next account adopt this account's rows instead of
+ * resetting them, and read them offline. So when the clear failed
+ * (`photosCleared` false) the record of a clear still owed is written beside
+ * it, in the same transaction, so neither can be left without the other; when
+ * it worked, any clear owed from before is settled with it. Queued like every
+ * lone write (queuedWrite): a plain statement issued while another flow's
+ * transaction is open would run inside it, and be undone with it on a
+ * rollback.
+ */
+export async function setCacheOwner(userId: string, photosCleared: boolean): Promise<void> {
+  await queuedWrite(async (db) => {
+    await db.runAsync('insert or replace into meta (key, value) values (?, ?)', [
+      CACHE_USER_META_KEY,
+      userId,
+    ]);
+    if (photosCleared) {
+      await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
+    } else {
+      await db.runAsync('insert or replace into meta (key, value) values (?, ?)', [
+        PHOTOS_PENDING_META_KEY,
+        userId,
+      ]);
+    }
+  });
+}
+
+/**
+ * Whose cache this is (cache-owner.ts), or null when none is recorded. Read by
+ * the count screen's write (cycle-count-cache.ts cacheCycleCount) inside its
+ * own transaction, so it reads the record that transaction sees: nothing is
+ * stored into a cache still recorded as another account's.
+ */
+export async function getCacheOwner(): Promise<string | null> {
+  return getMeta(CACHE_USER_META_KEY);
+}
+
+/**
+ * The photo clear that was owed has now worked (sync.ts, the recorded
+ * account's own pull, cache-owner.ts 'clear-photos'). Only the record of the
+ * clear owed goes; whose cache this is stays as it was. Queued, as above.
+ */
+export async function markPhotosCleared(): Promise<void> {
+  await queuedWrite(async (db) => {
+    await db.runAsync('delete from meta where key = ?', [PHOTOS_PENDING_META_KEY]);
+  });
+}
+
+/**
+ * A pull that finds NO OWNER RECORDED adopts the cache (cache-owner.ts), and
+ * the cache it adopts is not known to be this account's: an older release's
+ * switch, repair and Clear erased the record while rows cached after them
+ * stayed, and any later path that loses the record would leave rows, cursor
+ * and persisted values together. So, in one transaction, before the adopting
+ * pull is sent:
+ *   - the delta cursor goes, so that pull, and any after it until one lands,
+ *     is a FULL pull rather than a delta on someone else's timeline, which
+ *     sweeps nothing;
+ *   - the persisted org-scoped values go (modules, permissions, warehouse
+ *     scope), as clearOrgScopedTables clears them, so nothing of another
+ *     account's scope is shown before this account's pull lands, offline too.
+ *     The record of whose cache this is is not touched, nor any photo clear
+ *     owed: sync.ts sets both next, once the photo clear has answered;
+ *   - every cached row is stamped UNCONFIRMED_ROW_STAMP. The full pull keeps
+ *     a row it returns (it stamps it again) and, of the rest, only a count
+ *     this account still has an unsent entry for (sync.ts). Marked, not
+ *     deleted: offline nothing is pulled, and a delete here would also take
+ *     this account's own count, opened before its first pull, and any count
+ *     it opened to work on that the pull will return.
+ * The lines, PO lines, kit components and warehouses carry no stamp; they go
+ * with their count, PO or kit, and the warehouse list is replaced by the full
+ * pull (sync.ts).
+ *
+ * The cache generation is not bumped: no pull is in flight (syncNow runs one
+ * at a time, and this runs inside the adopting pull before its request), and
+ * a count the count screen fetched for another account, or before a wipe, is
+ * discarded by its own check (cycle-count-cache.ts cacheCycleCount). A count
+ * this account fetched and stores after this runs is stamped with its own
+ * time: it is this account's, and confirmed, once that write has released any
+ * edit on it that is not this account's (cycle-count-snapshot-sql.ts).
+ *
+ * The four meta keys are the ones clearOrgScopedTables clears, which keeps
+ * the record too: db-clear-keys.wiring.test.ts checks both lists against the
+ * keys sync.ts writes.
+ */
+export async function markCacheUnconfirmed(): Promise<void> {
+  const db = await getDb();
+  await withDbTransaction(db, () =>
+    db.execAsync(`
+      delete from meta where key = 'last_synced_at';
+      delete from meta where key = 'enabled_modules';
+      delete from meta where key = 'effective_permissions';
+      delete from meta where key = 'warehouse_scope';
+      update items set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
+      update purchase_orders set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
+      update cycle_counts set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
+      update bundles set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
+    `),
+  );
 }
 
 /**
@@ -544,6 +677,12 @@ export function currentCacheGeneration(): number {
  * Also clears the persisted `enabled_modules`, `effective_permissions` and
  * `warehouse_scope` so the drawer/tab gating and the Items scoped-view banner
  * re-derive from the new org's snapshot rather than the prior org's values.
+ *
+ * It KEEPS the record of whose cache this is (cache-owner.ts), as it keeps
+ * the photos: a switch, the workspace repair and Settings > Offline cache >
+ * Clear leave the account unchanged. Forgetting it here let the next account
+ * adopt the previous one's photos, and the counts it opened since, after a
+ * session that ended without a wipe.
  *
  * NOTE for callers: clearing the persisted values is only half of an
  * in-session switch. `useEffectivePermissions()` / `useWarehouseScope()` hold
@@ -578,11 +717,18 @@ export async function deleteOrgData(): Promise<void> {
  * as anyone else, and sent when it signs in here again. The one explicit way to
  * drop it is "Sign out and discard" (sign-out-flow.ts, queue.ts
  * discardUnsyncedFor), or Discard in Unsent work.
+ *
+ * The account is leaving, so the record of whose cache this was goes too
+ * (forgetCacheOwner): its caller clears the photos first (auth-context.tsx,
+ * wipeWithPhotoCaches).
  */
 export async function wipeForSignOut(): Promise<void> {
   cacheGeneration += 1;
   const db = await getDb();
-  await withDbTransaction(db, () => clearOrgScopedTables(db));
+  await withDbTransaction(db, async () => {
+    await clearOrgScopedTables(db);
+    await forgetCacheOwner(db);
+  });
 }
 
 /**
@@ -603,12 +749,16 @@ export async function wipeForSignOut(): Promise<void> {
  * Rows already 'rejected' are spared: terminal (no drain reads them) and the
  * only record that the queued work existed, so the operator shown the disabled
  * screen can still be told what was never sent (listRejected).
+ *
+ * The record of whose cache this was goes too, as at a sign-out: its caller
+ * clears the photos first (use-account-gate.ts, wipeWithPhotoCaches).
  */
 export async function wipeForEviction(evictedUserId: string | null): Promise<void> {
   cacheGeneration += 1;
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearOrgScopedTables(db);
+    await forgetCacheOwner(db);
     if (evictedUserId) {
       await db.runAsync(
         `delete from pending_actions where status <> 'rejected' and ${OWNED_BY_USER_SQL}`,

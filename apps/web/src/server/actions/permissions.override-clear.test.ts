@@ -28,7 +28,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
-import { effectivePermissions, type Permission } from '@stockpilot/core';
+import {
+  effectivePermissions,
+  PLATFORM_MANAGED_PERMISSION_COPY,
+  type Permission,
+} from '@stockpilot/core';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
@@ -195,5 +199,94 @@ describe('permission override CLEAR is anti-escalation gated (MED-14)', () => {
     });
     expect(result.ok).toBe(true);
     expect(chainCount('user_permission_overrides', 'insert')).toBe(1);
+  });
+});
+
+/**
+ * ORDERING VISIBILITY (migration 0413): orders:manage_catalog_visibility is
+ * PLATFORM-MANAGED. Owners and admins use their default but cannot grant,
+ * revoke or clear it for anyone, for a role or for a person, so neither org
+ * action writes it, for any value, before any read or write. The database
+ * refuses the same writes (tg_platform_managed_permission_guard); a refusal
+ * from there is reported with the same words, never as an internal error.
+ */
+describe('a platform-managed key cannot be changed from the org editors', () => {
+  const KEY = 'orders:manage_catalog_visibility' as Permission;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionState.role = 'owner';
+    sessionState.mfaRequired = false;
+    sessionState.mfaSatisfied = true;
+    sessionState.permissions = effectivePermissions('owner');
+    stubHolder.stub = freshStub();
+  });
+
+  it.each([true, false, null])('refuses a ROLE override (granted=%s) and touches nothing', async (granted) => {
+    for (const role of ['admin', 'manager', 'staff', 'viewer'] as const) {
+      const result = await setRolePermissionOverrideAction({ role, permission: KEY, granted });
+      expect(result.ok, role).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('forbidden');
+        expect(result.error.message).toBe(PLATFORM_MANAGED_PERMISSION_COPY);
+        expect(result.error.details).toEqual({ reason: 'permission_platform_managed' });
+      }
+    }
+    expect(stubHolder.stub!.fromCalls).toEqual([]);
+  });
+
+  it.each([true, false, null])('refuses a USER override (granted=%s) and touches nothing', async (granted) => {
+    const result = await setUserPermissionOverrideAction({
+      userId: '00000000-0000-0000-0000-0000000000a1',
+      permission: KEY,
+      granted,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.message).toBe(PLATFORM_MANAGED_PERMISSION_COPY);
+    }
+    // Refused before the member lookup: nothing was read or written.
+    expect(stubHolder.stub!.fromCalls).toEqual([]);
+  });
+
+  it('refuses an admin as well as the owner (their default does not let them delegate it)', async () => {
+    sessionState.role = 'admin';
+    sessionState.permissions = effectivePermissions('admin');
+    expect(sessionState.permissions.has(KEY)).toBe(true);
+    const result = await setUserPermissionOverrideAction({
+      userId: '00000000-0000-0000-0000-0000000000a1',
+      permission: KEY,
+      granted: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forbidden');
+    expect(stubHolder.stub!.fromCalls).toEqual([]);
+  });
+
+  it('a database refusal of a platform-managed write is said as such, not as an internal error', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'organization_members.select': { data: { role: 'staff' }, error: null },
+      'user_permission_overrides.insert': {
+        data: null,
+        error: {
+          message: 'This permission is managed by StockPilot support.',
+          code: '42501',
+          hint: 'permission_platform_managed',
+        },
+      },
+    });
+    // An ordinary key the database refuses as platform-managed (a key added
+    // to _platform_managed_permissions() before this build knows it).
+    const result = await setUserPermissionOverrideAction({
+      userId: '00000000-0000-0000-0000-0000000000a1',
+      permission: ADMIN_HELD,
+      granted: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.message).toBe(PLATFORM_MANAGED_PERMISSION_COPY);
+    }
   });
 });

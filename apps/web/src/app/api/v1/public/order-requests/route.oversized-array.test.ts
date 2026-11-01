@@ -80,11 +80,11 @@ function wireHappyAdmin() {
       ],
       error: null,
     },
-    'order_requests.insert.single': {
+    // The header, side row and lines: one transaction (0413 review fix round).
+    'rpc:insert_order_request_with_lines': {
       data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
       error: null,
     },
-    'order_request_lines.insert': { data: null, error: null },
     'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
   });
   adminHolder.client = stub.client;
@@ -159,7 +159,7 @@ describe('POST /api/v1/public/order-requests: a valid request still goes through
     expect(res.status).toBe(200);
     expect(((await res.json()) as { id: string }).id).toBe('req-1');
     expect(arrayParse).toHaveBeenCalled();
-    expect(stub.chainArgsAll.get('order_request_lines.insert')).toBeDefined();
+    expect(stub.rpcCalls.map((c) => c.name)).toContain('insert_order_request_with_lines');
   });
 
   it('exactly 100 lines pass the pre-check and reach validation', async () => {

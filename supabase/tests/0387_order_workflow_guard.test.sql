@@ -822,10 +822,16 @@ select is(
   -- warehouse, site, created_at or close-partial changes) sorts beside the
   -- gate, after the transition trigger and this guard; it never fires for
   -- an ordinary order either.
-  array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_validate_transition',
-        'trg_order_requests_workflow_guard', 'trg_order_requests_zz_replacement_header', 'trg_order_requests_zz_replacement_status',
-        'trg_zz_order_requests_replacement_link_upd'],
-  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0396 header guard, gate and link guard after both');
+  -- Re-pinned by 0414 (the signature image move): its capture trigger
+  -- (trg_order_requests_signature_image_capture, UPDATE OF
+  -- signature_data_url, signed_at) sorts third, after the 0388 marker and
+  -- before the transition trigger and this guard; it only moves a captured
+  -- image into order_request_secrets, which no later trigger reads, and an
+  -- API role can name neither column (the 0414 suite's C5).
+  array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_signature_image_capture',
+        'trg_order_requests_validate_transition', 'trg_order_requests_workflow_guard', 'trg_order_requests_zz_replacement_header',
+        'trg_order_requests_zz_replacement_status', 'trg_zz_order_requests_replacement_link_upd'],
+  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0396 header guard, gate and link guard after both, the 0414 image capture before all three');
 select is(
   (select md5(string_agg(t.tgname::text || '|' || t.tgfoid::regproc::text || '|' || t.tgenabled::text || '|' || t.tgtype::text, E'\n' order by t.tgname))
           || '|' || count(*)
@@ -846,8 +852,14 @@ select is(
   -- plus trg_order_requests_zz_replacement_header (BEFORE UPDATE, 19, WHEN a
   -- replacement's warehouse, site, created_at or close-partial changes;
   -- security review F-1). Computed on the local stack, 2026-10-06.
-  '5523a443798c313b845dede0ad83448f|12',
-  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0396''s five replacement triggers (census e6ea64a2...|5 plus seven rows)');
+  -- Re-pinned by 0414 (the signature image move; was
+  -- 5523a443798c313b845dede0ad83448f|12): plus
+  -- trg_order_requests_signature_image_capture (BEFORE UPDATE OF
+  -- signature_data_url, signed_at, FOR EACH ROW: tgtype 19). Computed on
+  -- the migration scratch stack, 2026-10-24, and reproduced offline from
+  -- main's twelve rows (which give 5523a443...|12) plus that one row.
+  'e2374793f33639637e2f893eb5383ead|13',
+  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger, 0396''s five replacement triggers and 0414''s image capture (census e6ea64a2...|5 plus eight rows)');
 select is(
   coalesce(obj_description('public.tg_order_requests_workflow_guard()'::regprocedure, 'pg_proc') ~ '0387', false)::text || ','
   || coalesce(col_description('public.order_requests'::regclass,

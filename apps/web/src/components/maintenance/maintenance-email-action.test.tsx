@@ -20,7 +20,7 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 // rejection tests below can assert the breadcrumb actually fires, not just
 // that the rejection was swallowed.
 const reportErrorMock = vi.fn(async (..._args: unknown[]) => undefined);
-vi.mock('@/lib/error-reporter', () => ({
+vi.mock('@/lib/error-reporter-core', () => ({
   reportError: (...args: unknown[]) => reportErrorMock(...args),
 }));
 
@@ -34,8 +34,8 @@ import {
 } from '@stockpilot/core';
 
 /** The routing DTO every render below hands the component — the compiled
- *  pair (what the server resolves for L4L, whose seed preserves today's
- *  values), so every existing pin stays on pre-feature behavior. */
+ *  sample pair, standing in for what the server resolves for a configured
+ *  org, so every existing pin stays on pre-feature behavior. */
 const TEST_ROUTING = {
   to: L4L_MAINTENANCE_RECIPIENTS.to,
   cc: L4L_MAINTENANCE_RECIPIENTS.cc,
@@ -83,7 +83,7 @@ const CONDENSED_BUT_FITS_INPUT: MaintenanceEmailContent = {
   priority: 'high',
   submittedAtDisplay: 'August 5, 2026 at 9:15 AM',
   requesterName: 'Jane Smith',
-  requesterEmail: 'jane.smith@learn4life.org',
+  requesterEmail: 'jane.smith@sampleorg.test',
   requesterPhone: '(555) 555-0199',
   siteName: 'Fresno Learning Center',
   department: 'Operations',
@@ -204,7 +204,7 @@ describe('Open in Outlook (component tests 7, 14)', () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
     const [url, target, features] = openSpy.mock.calls[0]!;
     expect(String(url)).toContain('outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=');
-    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@learn4life.org')));
+    expect(String(url)).toContain(encodeURIComponent(encodeURIComponent('dc4@sampleorg.test')));
     expect(target).toBe('_blank');
     expect(features).toBeUndefined(); // 'noopener' would return null even on success
     const handle = openSpy.mock.results[0]!.value as { opener: unknown };
@@ -347,7 +347,7 @@ describe('popup blocked (component test 8; brief section 19)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
     expect(await screen.findByText('Outlook could not be opened automatically.')).toBeInTheDocument();
     expect(assignSpy).toHaveBeenCalledTimes(1);
-    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@learn4life\.org\?cc=arosas%40cvwest\.org/);
+    expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:dc4@sampleorg\.test\?cc=jstone%40site1\.test/);
     for (const label of ['Try Outlook Again', 'Open in Default Email App', 'Copy Email Details']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -432,11 +432,11 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const written = vi.mocked(navigator.clipboard.writeText).mock.calls[0]![0] as string;
-    expect(written).toContain('TO: dc4@learn4life.org');
-    expect(written).toContain('CC: arosas@cvwest.org');
+    expect(written).toContain('TO: dc4@sampleorg.test');
+    expect(written).toContain('CC: jstone@site1.test');
     expect(
       await screen.findByText(
-        'Maintenance request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+        'Maintenance request copied. Create a new email to dc4@sampleorg.test, CC jstone@site1.test, and paste the copied details.',
       ),
     ).toBeInTheDocument();
   });
@@ -446,7 +446,7 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     const area = await screen.findByRole('textbox');
     expect(area).toHaveAttribute('readonly');
-    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
+    expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@sampleorg.test');
   });
   it('Minor 5: copies the FULL body even when the open-link draft is condensed (mutation self-check: rebuilding clipboard from prepared.draft.body must fail this)', async () => {
     // CONDENSED_BUT_FITS_INPUT drives prepared.draft.condensed === true, so
@@ -498,7 +498,6 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     'Ticket created',
     'Request submitted to Zendesk',
     'DC4 notified',
-    'Andrew notified',
     'Ticket assigned',
     'Email sent',
   ];
@@ -507,6 +506,8 @@ describe('honesty sweep (component test 14; brief section 20)', () => {
     for (const banned of BANNED_PHRASES) {
       expect(document.body.textContent).not.toContain(banned);
     }
+    // A named person notified, whatever the name.
+    expect(document.body.textContent).not.toMatch(/\b[A-Z][a-z]+ notified\b/);
   }
 
   it('success state: no forbidden phrase after a successful open', async () => {

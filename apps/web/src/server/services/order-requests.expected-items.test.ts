@@ -91,9 +91,9 @@ describe('expected-items guard (mig 0277)', () => {
       .catch((e: unknown) => e);
 
     expect(String((err as Error | undefined)?.message ?? '')).not.toContain("hasn't been received yet");
-    // The read of the order's existing lines comes after the item checks:
-    // reaching it proves the guard let the unflagged line through.
-    expect(stub.chainsAll.get('order_request_lines.select')).toBeDefined();
+    // The write (one add_order_request_lines call since 0413) comes after the
+    // item checks: reaching it proves the guard let the unflagged line through.
+    expect(stub.rpcCalls.map((c) => c.name)).toContain('add_order_request_lines');
   });
 
   it('create leaves it to the database and passes the recorded refusal on as final', async () => {

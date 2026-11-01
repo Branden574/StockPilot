@@ -50,6 +50,12 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // (the web's ?warehouse= or a prefill) is dropped. The cold-start shim is
   // app/dashboard/orders/new.tsx.
   { re: /\/dashboard\/orders\/new(\?.*)?$/, to: () => '/order/new' },
+  // Manage order items (ordering visibility, 0413; design 8.6): the web page
+  // opens the native management screen. Without this rule the path fell
+  // through to home (it is neither an order id nor the bare list). The query
+  // (the web page's filters and page) is dropped: the screen opens on its
+  // first page. The cold-start shim is app/dashboard/orders/manage-items.tsx.
+  { re: /\/dashboard\/orders\/manage-items(\?.*)?$/, to: () => '/order/manage-items' },
   // Returns (RX-1) have native twins: the RMA workbench (app/returns/[id].tsx)
   // and the list (the drawer's Returns). Staff pushes carry the DUAL link
   // /dashboard/returns/<rma>?order=/dashboard/orders/<original> (returns plan

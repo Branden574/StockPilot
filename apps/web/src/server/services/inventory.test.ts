@@ -1076,7 +1076,7 @@ describe('InventoryService.archive — stock guard', () => {
     status: 'active',
     quantity_on_hand: 181,
   };
-  // Two rack holdings mirroring Andrew's real Persepolis record.
+  // Two rack holdings mirroring a real Persepolis record.
   const HOLDINGS = [
     { location_id: 'loc-100a', quantity: 140, locations: { id: 'loc-100a', name: '100-A', kind: 'rack' } },
     { location_id: 'loc-38b', quantity: 41, locations: { id: 'loc-38b', name: '38-B', kind: 'rack' } },

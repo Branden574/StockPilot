@@ -33,6 +33,12 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { PURCHASE_ORDER_ITEM_TYPES } from '@/lib/purchase-orders/item-types';
+import {
+  unofferedDestinationNote,
+  unofferedSupplierNote,
+  type UnofferedDestination,
+  type UnofferedSupplier,
+} from '@/lib/purchase-orders/unoffered-choice';
 import { chunkInFilterValues, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { cn } from '@/lib/utils';
 import { useUnsavedWork } from '@/lib/unsaved-work';
@@ -189,6 +195,17 @@ interface PoFormProps {
   poId?: string;
   /** Pre-filled values for edit mode. */
   initial?: InitialPoValues;
+  /**
+   * Edit mode: what the draft's destination and supplier are when the selects
+   * do not offer them (a staging area, a deleted location, an archived
+   * supplier), as the page read them. The form never keeps such a value: it
+   * opens on None / No supplier with a note naming it (unoffered-choice.ts).
+   * Without this, the note says the same without a name.
+   */
+  unoffered?: {
+    destination?: UnofferedDestination | null;
+    supplier?: UnofferedSupplier | null;
+  };
   /**
    * Display metadata for the product groups the catalog items belong to,
    * keyed by group id. Empty (the default) for every non-sports org, which
@@ -711,12 +728,31 @@ export function PoForm({
   charters,
   poId,
   initial,
+  unoffered,
   productGroups = {},
   groupItems,
 }: PoFormProps) {
   const router = useRouter();
-  const [supplierId, setSupplierId] = React.useState<string>(initial?.supplierId ?? '');
-  const [locationId, setLocationId] = React.useState<string>(initial?.locationId ?? '');
+  // A draft's supplier or destination the selects do not offer is never kept
+  // (small fixes slice 8): Radix shows such a value as a blank box while the
+  // save would send it back unseen. The select opens on its empty choice, a
+  // note names what the draft holds, and choosing an option clears the note.
+  const initialSupplierOffered =
+    !initial?.supplierId || suppliers.some((s) => s.id === initial.supplierId);
+  const initialLocationOffered =
+    !initial?.locationId || locations.some((l) => l.id === initial.locationId);
+  const openingSupplierId = initialSupplierOffered ? (initial?.supplierId ?? '') : '';
+  const openingLocationId = initialLocationOffered ? (initial?.locationId ?? '') : '';
+  const [supplierId, setSupplierId] = React.useState<string>(openingSupplierId);
+  const [locationId, setLocationId] = React.useState<string>(openingLocationId);
+  const [supplierNote, setSupplierNote] = React.useState<string | null>(() =>
+    initialSupplierOffered ? null : unofferedSupplierNote('purchase_order', unoffered?.supplier),
+  );
+  const [destinationNote, setDestinationNote] = React.useState<string | null>(() =>
+    initialLocationOffered
+      ? null
+      : unofferedDestinationNote('purchase_order', unoffered?.destination),
+  );
   const [charterId, setCharterId] = React.useState<string>(initial?.charterId ?? '');
   const [poNumber, setPoNumber] = React.useState<string>(initial?.poNumber ?? '');
   const [expectedAt, setExpectedAt] = React.useState<string>(initial?.expectedAt ?? '');
@@ -731,8 +767,16 @@ export function PoForm({
   // that registered here (lib/unsaved-work.ts). Dirty = anything differs from
   // what the form opened with (blank for a new PO, the stored PO for an edit),
   // or a save is in flight. After a successful save the form is clean while
-  // the router moves on to the PO's page.
-  const [openedWith] = React.useState(() => poFormSnapshot(initialFormValues(initial)));
+  // the router moves on to the PO's page. "Opened with" is what the form
+  // shows: a supplier or destination it does not offer opens on its empty
+  // choice (above), and leaving then loses nothing, so that alone is clean.
+  const [openedWith] = React.useState(() =>
+    poFormSnapshot({
+      ...initialFormValues(initial),
+      supplierId: openingSupplierId,
+      locationId: openingLocationId,
+    }),
+  );
   const savedRef = React.useRef(false);
   // useUnsavedWork keeps the LATEST function, read at the moment of the
   // click, so this closure always sees the current fields.
@@ -1030,9 +1074,15 @@ export function PoForm({
             <Label htmlFor={fieldId('supplier')}>Supplier {optional}</Label>
             <Select
               value={supplierId || '__none'}
-              onValueChange={(v: string) => setSupplierId(v === '__none' ? '' : v)}
+              onValueChange={(v: string) => {
+                setSupplierId(v === '__none' ? '' : v);
+                setSupplierNote(null);
+              }}
             >
-              <SelectTrigger id={fieldId('supplier')}>
+              <SelectTrigger
+                id={fieldId('supplier')}
+                aria-describedby={supplierNote ? fieldId('supplier-note') : undefined}
+              >
                 <SelectValue placeholder="No supplier" />
               </SelectTrigger>
               <SelectContent>
@@ -1044,14 +1094,28 @@ export function PoForm({
                 ))}
               </SelectContent>
             </Select>
+            {supplierNote ? (
+              <p
+                id={fieldId('supplier-note')}
+                className="text-warning text-[12px] font-medium leading-[18px]"
+              >
+                {supplierNote}
+              </p>
+            ) : null}
           </div>
           <div className="min-w-0 space-y-1.5">
             <Label htmlFor={fieldId('location')}>Destination location {optional}</Label>
             <Select
               value={locationId || '__none'}
-              onValueChange={(v: string) => setLocationId(v === '__none' ? '' : v)}
+              onValueChange={(v: string) => {
+                setLocationId(v === '__none' ? '' : v);
+                setDestinationNote(null);
+              }}
             >
-              <SelectTrigger id={fieldId('location')}>
+              <SelectTrigger
+                id={fieldId('location')}
+                aria-describedby={destinationNote ? fieldId('location-note') : undefined}
+              >
                 <SelectValue placeholder="None" />
               </SelectTrigger>
               <SelectContent>
@@ -1063,6 +1127,14 @@ export function PoForm({
                 ))}
               </SelectContent>
             </Select>
+            {destinationNote ? (
+              <p
+                id={fieldId('location-note')}
+                className="text-warning text-[12px] font-medium leading-[18px]"
+              >
+                {destinationNote}
+              </p>
+            ) : null}
           </div>
           <div className="min-w-0 space-y-1.5">
             <Label htmlFor={fieldId('number')}>PO number {optional}</Label>

@@ -8,8 +8,8 @@ import type { RenderedEsEmail } from './security';
 
 // Registry sample world (ES.W) adapted to real merge params.
 const SEED = {
-  email: 'branden574@gmail.com',
-  firstName: 'Branden',
+  email: 'owner@example.com',
+  firstName: 'Carsten',
   resetUrl: 'https://stockpilotusa.com/auth/confirm?token_hash=pkce_4Kx&type=recovery&next=%2Freset%2Fcomplete',
   requestedAt: 'Jun 12, 2026, 2:41 PM PT',
   device: 'Chrome on macOS',
@@ -60,8 +60,8 @@ describe('pw-reset (renderPasswordResetEmail)', () => {
     assertWeight(res);
     expect(res.html).toContain('Reset your password.');
     expect(res.html).toContain('Takes about a minute.');
-    expect(res.html).toContain('Hi Branden —');
-    expect(res.html).toContain('branden574@gmail.com');
+    expect(res.html).toContain('Hi Carsten —');
+    expect(res.html).toContain('owner@example.com');
     expect(res.html).toContain('Didn&rsquo;t request this?');
     expect(res.html).toContain('Requested Jun 12, 2026, 2:41 PM PT, from Chrome on macOS.');
     // Bulletproof CTA with the registry label.
@@ -223,8 +223,8 @@ import {
 } from './security';
 
 const EC = {
-  currentEmail: 'branden574@gmail.com',
-  newEmail: 'branden@stockpilotusa.com',
+  currentEmail: 'owner@example.com',
+  newEmail: 'carsten@example.com',
   confirmUrl: 'https://stockpilotusa.com/auth/confirm?token_hash=NEWSIDE&type=email_change',
   approveUrl: 'https://stockpilotusa.com/auth/confirm?token_hash=CURSIDE&type=email_change',
   changedAt: 'Aug 25, 2026, 4:02 PM UTC',
@@ -238,7 +238,7 @@ describe('email-change-new (renderEmailChangeNewEmail)', () => {
       newEmail: EC.newEmail,
       currentEmail: EC.currentEmail,
       confirmUrl: EC.confirmUrl,
-      firstName: 'Branden',
+      firstName: 'Carsten',
       appUrl: EC.appUrl,
     });
 
@@ -273,7 +273,7 @@ describe('email-change-current (renderEmailChangeCurrentEmail)', () => {
       currentEmail: EC.currentEmail,
       newEmail: EC.newEmail,
       approveUrl: EC.approveUrl,
-      firstName: 'Branden',
+      firstName: 'Carsten',
       requestedAt: EC.requestedAt,
       appUrl: EC.appUrl,
     });
@@ -318,7 +318,7 @@ describe('email-changed (renderEmailChangedNoticeEmail)', () => {
       oldEmail: EC.currentEmail,
       newEmail: EC.newEmail,
       changedAt: EC.changedAt,
-      firstName: 'Branden',
+      firstName: 'Carsten',
       appUrl: EC.appUrl,
     });
 

@@ -144,6 +144,9 @@ describe('AddItemsDialog', () => {
     // Bundles are containers the order-creation catalog excludes; addLines has
     // no bundle check, so this dialog would otherwise be the one way in.
     expect(url.searchParams.get('bundles')).toBe('exclude');
+    // Ordering visibility (0413): only records shown in Orders. The server
+    // refuses a hidden item on Add items anyway; the picker never offers one.
+    expect(url.searchParams.get('orderable')).toBe('1');
     expect(url.searchParams.get('limit')).toBe('50');
     // An expected (awaiting-first-receipt) item is rejected by addLines, so the
     // picker must never opt into the expected view.

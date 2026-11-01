@@ -1,4 +1,5 @@
 import {
+  ORDER_ITEMS_MANAGE_BUTTON_COPY,
   ORDERS_LIST_OPEN_UNCONFIRMED_COPY,
   ORDERS_LIST_RETRY_COPY,
   ORDERS_LIST_UNCONFIRMED_COPY,
@@ -7,7 +8,7 @@ import {
   formatOrderNumber,
 } from '@stockpilot/core';
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
-import { Plus, ShoppingCart } from 'lucide-react-native';
+import { ListChecks, Plus, ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, useWindowDimensions, View } from 'react-native';
 
@@ -22,7 +23,13 @@ import { useAuth } from '@/lib/auth-context';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { unsettledSendsOnDevice } from '@/lib/order-storefront/services';
-import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder } from '@/lib/orders-list';
+import {
+  orderStatusPill,
+  ordersListEmpty,
+  ordersListReloadNote,
+  showManageOrderItems,
+  showPlaceOrder,
+} from '@/lib/orders-list';
 import { orderExchangeChip } from '@/lib/returns-view';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
@@ -80,6 +87,14 @@ export default function OrdersScreen() {
   // Orders module on and orders:request (lib/orders-list.ts).
   const canPlace = showPlaceOrder({
     role: role ?? null,
+    permissions,
+    ordersModuleEnabled: enabledModules.has('orders'),
+  });
+  // Manage order items (ordering visibility, 0413; design 8.1): the entry
+  // every member with the Orders module reaches, so a member StockPilot
+  // allowed who cannot place orders has a way in. Strict: only once the
+  // effective set holds the capability (lib/orders-list.ts).
+  const canManageItems = showManageOrderItems({
     permissions,
     ordersModuleEnabled: enabledModules.has('orders'),
   });
@@ -207,6 +222,7 @@ export default function OrdersScreen() {
   const failure = ordersListEmpty(true, canApprove);
   const reloadNote = ordersListReloadNote(failed, rows.length);
   const placeAnOrder = () => router.push('/order/new' as Href);
+  const manageOrderItems = () => router.push('/order/manage-items' as Href);
 
   return (
     <DataListScreen
@@ -274,8 +290,18 @@ export default function OrdersScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           <MobileTour tour={MOBILE_ORDERS_TOUR} />
           {canPlace ? (
-            <View ref={placeTargetRef} collapsable={false} style={{ marginRight: -3 }}>
+            <View ref={placeTargetRef} collapsable={false} style={{ marginRight: canManageItems ? 0 : -3 }}>
               <IconChip icon={Plus} onPress={placeAnOrder} accessibilityLabel={STOREFRONT_TITLE_COPY} minTap />
+            </View>
+          ) : null}
+          {canManageItems ? (
+            <View style={{ marginRight: -3 }}>
+              <IconChip
+                icon={ListChecks}
+                onPress={manageOrderItems}
+                accessibilityLabel={ORDER_ITEMS_MANAGE_BUTTON_COPY}
+                minTap
+              />
             </View>
           ) : null}
         </View>

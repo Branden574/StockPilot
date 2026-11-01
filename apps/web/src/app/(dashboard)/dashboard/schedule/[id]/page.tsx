@@ -10,14 +10,16 @@ import { Button } from '@/components/ui/button';
 import { formatOrderNumber } from '@stockpilot/core';
 import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
-import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
+import { formatEventRange } from '@/lib/schedule/event-range';
 import { formatNumber } from '@/lib/utils';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone } from '@stockpilot/core';
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: 'Scheduled',
@@ -34,36 +36,6 @@ const STATUS_TONE: Record<string, BadgeProps['variant']> = {
   cancelled: 'destructive',
 };
 
-function formatRange(startsAt: string, endsAt: string | null, allDay: boolean) {
-  const start = new Date(startsAt);
-  const dateOpts: Intl.DateTimeFormatOptions = {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  };
-  const timeOpts: Intl.DateTimeFormatOptions = {
-    hour: 'numeric',
-    minute: '2-digit',
-  };
-  if (allDay) {
-    return `${formatOrgDate(start, dateOpts)} · All day`;
-  }
-  if (!endsAt) {
-    return `${formatOrgDate(start, dateOpts)} · ${formatOrgTime(start, timeOpts)}`;
-  }
-  const end = new Date(endsAt);
-  // Compare PT calendar days (NOT the JS Date getters, which read the
-  // server's local tz) so "same-day" stays true when both timestamps
-  // fall on the same Pacific calendar day even if UTC midnight splits
-  // them.
-  const sameDay = formatOrgDate(start) === formatOrgDate(end);
-  if (sameDay) {
-    return `${formatOrgDate(start, dateOpts)} · ${formatOrgTime(start, timeOpts)} – ${formatOrgTime(end, timeOpts)}`;
-  }
-  return `${formatOrgDate(start, dateOpts)} ${formatOrgTime(start, timeOpts)} → ${formatOrgDate(end, dateOpts)} ${formatOrgTime(end, timeOpts)}`;
-}
-
 export default async function ScheduleEventDetailPage({
   params,
 }: {
@@ -77,6 +49,17 @@ export default async function ScheduleEventDetailPage({
   const ctx = await requireOrgContext();
   if (!can(ctx, 'schedule:read') && !can(ctx, 'schedule:manage')) notFound();
   const canManage = can(ctx, 'schedule:manage');
+  // The event's date and times in the organization's zone, as the calendar
+  // draws them (small fixes slice 8); they printed in Pacific whatever the
+  // organization's. An unreadable organization row is the documented default
+  // zone, reported, never an error page (getOrgRowForRequest throws on a
+  // read error).
+  const timeZoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'schedule.event.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   const svc = await ScheduleService.forCurrentUser();
   let event;
@@ -135,6 +118,8 @@ export default async function ScheduleEventDetailPage({
     }
   }
 
+  const timeZone = await timeZoneRead;
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
@@ -149,7 +134,7 @@ export default async function ScheduleEventDetailPage({
             {STATUS_LABEL[event.status] ?? event.status}
           </Badge>
         }
-        subline={formatRange(event.startsAt, event.endsAt, event.allDay)}
+        subline={formatEventRange(event.startsAt, event.endsAt, event.allDay, timeZone)}
         actions={
           canManage ? (
             // Secondary first, the ink commit button last (DESIGN-SPEC 6.1,

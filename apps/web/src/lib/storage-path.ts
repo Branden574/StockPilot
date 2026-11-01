@@ -64,6 +64,7 @@ export const UUID_SEGMENT = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  *   `{uuid}.webp`            web item-image / order-attachment / video mint
  *   `{uuid}-thumb.webp`      web item-image thumb + backfill-item-thumbs
  *   `{base36x12}.jpg`        mobile (`Math.random().toString(36).slice(2,14)`)
+ *   `{base36x12}-thumb.jpg`  mobile item-image thumb (`.png` for a PNG/WEBP photo)
  *   `cover.jpg`              books-import cover rehost
  *   `{uuid}.poster.jpg`      procedure-video poster frame
  *

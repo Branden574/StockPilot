@@ -9,6 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
 import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { drainIntegrationDeliveries } from '@/server/services/integration-events';
 import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
@@ -168,13 +169,6 @@ export async function GET(req: Request) {
     );
     return NextResponse.json({ ...result, webhooks });
   } catch (err) {
-    void reportError(err, { tag: 'cron.drain-outbox' });
-    return NextResponse.json(
-      {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Drain run failed',
-      },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.drain-outbox');
   }
 }

@@ -486,7 +486,7 @@ describe('InventoryTable instant mode', () => {
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [
-      item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 281 }),
+      item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-GDEM4-G01', quantity_on_hand: 281 }),
     ];
     render(
       <InventoryTable
@@ -514,7 +514,7 @@ describe('InventoryTable instant mode', () => {
     expect(screen.queryByText('CVW-Manchester · 1-A')).not.toBeInTheDocument();
 
     // Expand → placements visible.
-    await user.click(screen.getByRole('button', { name: /expand|show placements|SP-G69UU-05H/i }));
+    await user.click(screen.getByRole('button', { name: /expand|show placements|SP-GDEM4-G01/i }));
     expect(screen.getByText('CVW-Manchester · 1-A')).toBeInTheDocument();
     expect(screen.getByText('CVSII-Madera · 2-A')).toBeInTheDocument();
   });
@@ -678,12 +678,12 @@ describe('InventoryTable books SKU grouping', () => {
   }
 
   /** Two+ inventory_items rows of ONE title — the real L4L North Region
-   *  shape ("Into Algebra 1", sp-8n8lr-8nd, 3 rows). */
+   *  shape ("Into Algebra 1", sp-8dem6-ab1, 3 rows). */
   function algebraRows(): InstantDatasetItem[] {
     return [
-      item({ id: 'a1', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 4 }),
-      item({ id: 'a2', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 6 }),
-      item({ id: 'a3', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 2 }),
+      item({ id: 'a1', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 4 }),
+      item({ id: 'a2', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 6 }),
+      item({ id: 'a3', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 2 }),
     ];
   }
 
@@ -733,8 +733,8 @@ describe('InventoryTable books SKU grouping', () => {
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [
-      item({ id: 'i1', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 75 }),
-      item({ id: 'i2', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 100 }),
+      item({ id: 'i1', name: 'Acer Chromebook', sku: 'SP-GDEM4-G01', quantity_on_hand: 75 }),
+      item({ id: 'i2', name: 'Acer Chromebook', sku: 'SP-GDEM4-G01', quantity_on_hand: 100 }),
     ];
     const { container } = render(
       <InventoryTable
@@ -901,14 +901,14 @@ describe('InventoryTable books SKU grouping', () => {
         item({
           id: 's1',
           name: 'Into Algebra 1',
-          sku: 'sp-8n8lr-8nd',
+          sku: 'sp-8dem6-ab1',
           status: 'active',
           quantity_on_hand: 100,
         }),
         item({
           id: 's2',
           name: 'Into Algebra 1',
-          sku: 'sp-8n8lr-8nd',
+          sku: 'sp-8dem6-ab1',
           status: 'discontinued',
           quantity_on_hand: 50,
         }),
@@ -975,8 +975,8 @@ describe('InventoryTable books SKU grouping', () => {
   it('server mode marks a multi-row book group total as partial with the "*" disclosure', () => {
     const { container } = renderBooks({
       items: [
-        item({ id: 'p1', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 4 }),
-        item({ id: 'p2', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 6 }),
+        item({ id: 'p1', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 4 }),
+        item({ id: 'p2', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 6 }),
       ],
       total: 60,
       pageSize: 30,
@@ -1168,14 +1168,14 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
           item({
             id: 'e1',
             name: 'Into Algebra 1',
-            sku: 'sp-8n8lr-8nd',
+            sku: 'sp-8dem6-ab1',
             quantity_on_hand: 0,
             awaiting_first_receipt: true,
           }),
           item({
             id: 'e2',
             name: 'Into Algebra 1',
-            sku: 'sp-8n8lr-8nd',
+            sku: 'sp-8dem6-ab1',
             quantity_on_hand: 0,
             awaiting_first_receipt: true,
           }),
@@ -1485,7 +1485,7 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
     const LOCATION_CELL = 4;
 
     const pair = (over: Partial<InstantDatasetItem>[]) =>
-      over.map((o, i) => item({ id: `m${i}`, name: 'Acer Chromebook', sku: 'SP-G69UU-05H', ...o }));
+      over.map((o, i) => item({ id: `m${i}`, name: 'Acer Chromebook', sku: 'SP-GDEM4-G01', ...o }));
 
     it('shows "Multiple" when placements sit in different categories, the shared name when they agree', () => {
       const differing = renderSurface(SURFACES[0], {
@@ -1633,7 +1633,7 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       item({
         id,
         name: 'Acer Chromebook',
-        sku: 'SP-G69UU-05H',
+        sku: 'SP-GDEM4-G01',
         custom_fields:
           number == null ? {} : { rack_number: number, ...(row ? { rack_row: row } : {}) },
       });
@@ -2344,8 +2344,8 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
     render(
       <InventoryTable
         items={[
-          item({ id: 'sb1', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 4 }),
-          item({ id: 'sb2', name: 'Into Algebra 1', sku: 'sp-8n8lr-8nd', quantity_on_hand: 6 }),
+          item({ id: 'sb1', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 4 }),
+          item({ id: 'sb2', name: 'Into Algebra 1', sku: 'sp-8dem6-ab1', quantity_on_hand: 6 }),
         ]}
         lookups={EMPTY_LOOKUPS}
         total={60}

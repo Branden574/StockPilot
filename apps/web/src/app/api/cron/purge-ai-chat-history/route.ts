@@ -3,8 +3,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
-import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,10 +62,6 @@ export async function GET(req: Request) {
     const deleted = (data as number | null) ?? 0;
     return NextResponse.json({ ok: true, deleted });
   } catch (err) {
-    void reportError(err, { tag: 'cron.purge-ai-chat-history' });
-    return NextResponse.json(
-      { error: 'internal_error', message: err instanceof Error ? err.message : 'Purge failed' },
-      { status: 500 },
-    );
+    return internalErrorResponse(err, 'cron.purge-ai-chat-history');
   }
 }

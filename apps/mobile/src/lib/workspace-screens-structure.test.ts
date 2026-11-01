@@ -543,8 +543,8 @@ describe('AI launcher: the footer says what is true (D28)', () => {
       'assistant.',
       'BETA · NATIVE',
       'TRY ASKING',
-      "What's low at L4L North Region right now?",
-      'Draft a PO for the books category from Ingram.',
+      "What's low at our main warehouse right now?",
+      'Draft POs for items that are running low.',
       'How many Chromebooks did we receive this month?',
       'Which suppliers have the longest lead times?',
     ]) {
@@ -808,8 +808,8 @@ describe('New event (M-WS-05): the shared boxes, chips and checkbox', () => {
       'WHERE',
       'WAREHOUSE (OPTIONAL)',
       'REQUESTER (OPTIONAL)',
-      'Delivery to L4L Fresno',
-      'DC4 dock 2, customer HQ, etc.',
+      'Delivery to the main office',
+      'Dock 2, customer HQ, etc.',
       'Who asked for this?',
       'MVP · simple form',
       'Saving…',
@@ -890,7 +890,7 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     expect(els).toHaveLength(1);
     expect(attrText(els[0]!.el, 'accessibilityRole', sf)).toBe('link');
     expect(attrText(els[0]!.el, 'onPress', sf)).toBe(
-      '() => Linking.openURL(`mailto:${email}`).catch(() => undefined)',
+      '() => Linking.openURL(mailto).catch(() => undefined)',
     );
     // Padding, not a fixed box the email is centred in: a wrapped or larger
     // address grows the frame and stays 3pt under the name (-11.5 + 14.5)
@@ -898,6 +898,23 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     // climbed into the name and sank into the card's padding.
     expect(attrText(els[0]!.el, 'style', sf)).toMatch(
       /minHeight: 44,\s*paddingVertical: 14\.5,\s*marginTop: -11\.5,\s*marginBottom: -14\.5,/,
+    );
+  });
+
+  // SECURITY (B6): the card opened `mailto:${email}` from the stored text, so
+  // an address such as "a@b.com?bcc=x@y.z", or one with a zero-width joiner,
+  // a tag character or fullwidth letters, opened a message to someone the
+  // card does not show. The link is now made only by core's
+  // plainAddressMailtoUrl (one plain ASCII address; its cases are in
+  // packages/core), and any other text is the same words with no touchable.
+  it('Team: the email is a link only for one plain address, else the same words with no link', () => {
+    const code = codeOnly(sourceOf(TEAM)).replace(/\s+/g, ' ');
+    expect(code).toContain("import { plainAddressMailtoUrl } from '@stockpilot/core';");
+    expect(code).toContain('const mailto = plainAddressMailtoUrl(email);');
+    expect(code).not.toMatch(/`mailto:\$\{/);
+    expect(code).toMatch(/\{email && mailto \? \( <Pressable onPress=\{\(\) => Linking\.openURL\(mailto\)/);
+    expect(code).toContain(
+      ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
     );
   });
 

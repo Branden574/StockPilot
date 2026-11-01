@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parseCsvText } from './csv';
 
 const FIXTURE = readFileSync(
-  join(__dirname, 'fixtures/po-cvsii-001824.csv'),
+  join(__dirname, 'fixtures/po-demo-000101.csv'),
   'utf8',
 );
 
@@ -12,7 +12,7 @@ describe('parseCsvText', () => {
   const po = parseCsvText(FIXTURE);
 
   it('reads header from first 2 rows', () => {
-    expect(po.poNumber).toBe('PO-CVSII-001824');
+    expect(po.poNumber).toBe('PO-DEMO-000101');
     expect(po.vendorName).toMatch(/Staples Advantage/);
     expect(po.totalAmount).toBeCloseTo(299.53, 2);
   });

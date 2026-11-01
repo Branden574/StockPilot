@@ -1,29 +1,29 @@
 
 
 Purchase Order
-PO-CVSII-001824
-177 Holston Dr.
-Lancaster, CA 93535
-(661)272-1225
+PO-DEMO-000101
+100 Example Dr.
+Anytown, CA 90000
+(555)010-0100
 VENDOR INFORMATION
 Invoice Number:
 Staples Advantage
-P.O. Box 660409
-Dallas, TX     75266-0409
+P.O. Box 100000
+Dallas, TX     75200-0000
 DATE04/29/2026
-DESCRIPTIONSTAFF SUPPLIES ROC
+DESCRIPTIONSTAFF SUPPLIES DEMO
 PREPARED BY
-Lillian Partida
+Juniper Ashford
 STATUS
 Accounts Payable Documents
-WORKFLOWCVSII Multi Site PO
-ReasonStaff supplies. ROC
-CommentsPlease bill to West Shaw. ROC orders need AS
+WORKFLOWDEMO Multi Site PO
+ReasonStaff supplies. DEMO
+CommentsPlease bill to Main Campus. DEMO orders need AS
 approval.
 SHIPPING INFORMATION
-4065 W. Ashcroft Ave.
-Fresno, CA, 93722
-Phone: (559)267-3832 Contact: Andrew Rosas
+200 W. Sample Ave.
+Sampleton, CA, 90001
+Phone: (555)010-0142 Contact: Jordan Stone
 QTYUOMDATEDESCRIPTIONUNIT COSTTOTAL
 1EA4/29/2026TAX23.11$23.11
 Item Number N/A Vendor Product No N/A
@@ -62,15 +62,15 @@ COA # 62-00
 1PK4/29/2026Perk Polystyrene Fork, Medium-Weight, White, 300/Pack (PK56401)9.17$9.17
 Item Number 24390987 Vendor Product No 24390987 Auxilary No 24390987
 COA # 62-00
-8551
+1001
 Page 1 of 2Monday, May 4, 2026
 Approved
 
 Purchase Order
-PO-CVSII-001824
-177 Holston Dr.
-Lancaster, CA 93535
-(661)272-1225
+PO-DEMO-000101
+100 Example Dr.
+Anytown, CA 90000
+(555)010-0100
 1CT4/29/2026Perk Paper Hot Cup, 12 oz., White/Blue, 500/Carton (PK54367CT)53.32$53.32
 Item Number 24375255 Vendor Product No 24375255 Auxilary No 24375255
 COA # 62-00
@@ -80,16 +80,16 @@ COA # 62-00
 TOTAL
 $299.53
 Approval Information (Internal Use Only)
-Requester4/29/2026 5:17:19 PMLillian Partida Document Submitted for Approval - Total was 276.42
-Area Superintendent5/1/2026 6:36:11 PMGagendeep Gill General approved via Email - Total was 276.42
-Purchasing5/4/2026 10:35:57 AMCindy Parker General approved via Normal Method - Total was 299.53
+Requester4/29/2026 5:17:19 PMJuniper Ashford Document Submitted for Approval - Total was 276.42
+Area Superintendent5/1/2026 6:36:11 PMHarlan Teague General approved via Email - Total was 276.42
+Purchasing5/4/2026 10:35:57 AMCasey Lund General approved via Normal Method - Total was 299.53
 Terms and Conditions
 This Purchase Order Authorizes the purchase of the items or services in the quantities and the amounts specified above by the purchaser identified above on the presentation
 of proper identification at time of purchase.
 The Purchase Order # number must appear on billing invoices and packages and billing of the purchase must be submitted to the address shown above.
 Organization Name is exempt from payment of Sate sales tax under Exemption # xxxxxxxxxxxxx
-IMPORTANT: Please submit your invoice to microixattach@llac.org and include purchase order number PO-CVSII-001824. It will be processed by our Ai OCR system to
+IMPORTANT: Please submit your invoice to ap-invoices@example.org and include purchase order number PO-DEMO-000101. It will be processed by our Ai OCR system to
 expedite payment.
-8551
+1001
 Page 2 of 2Monday, May 4, 2026
 Approved

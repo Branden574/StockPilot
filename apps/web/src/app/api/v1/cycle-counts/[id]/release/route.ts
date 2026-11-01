@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -76,9 +77,10 @@ export async function POST(
                 : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    // Anything else is the fixed sentence, and reported (S16); a warehouse
+    // refusal is answered as the count routes answer it.
+    return forbiddenOrInternalResponse(e, 'api.v1.cycle_counts.release', {
+      organizationId: ctx.organizationId,
+    });
   }
 }

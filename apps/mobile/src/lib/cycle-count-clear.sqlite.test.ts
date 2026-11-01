@@ -25,9 +25,16 @@ vi.mock('./supabase', () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: null }, error: null }) } },
   readDeviceAuthSession: async () => ({ present: true, userId: 'u1' }),
 }));
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: { getItem: async (key: string) => (key === 'workspace.activeOrgId' ? 'org-a' : null) },
-}));
+// u1's own saved workspace, one value with its owner (workspace-keys.ts;
+// docket B10 re-pin, was the older single key, which no longer stamps a row).
+vi.mock('@react-native-async-storage/async-storage', async () => {
+  const { storedWorkspaceItem } = await import('./__fixtures__/saved-workspace');
+  return {
+    default: {
+      getItem: async (key: string) => storedWorkspaceItem(key, { orgId: 'org-a', ownerId: 'u1' }),
+    },
+  };
+});
 
 type Cache = typeof import('./cycle-count-cache');
 let raw: DatabaseSync;
@@ -108,7 +115,9 @@ describe('clearLocalLine: an emptied box over a saved count', () => {
     // Never a count: a build that does not know clears cannot send it as 0.
     expect('countedQuantity' in queued[0]!.payload).toBe(false);
     // The screen reads it back uncounted, and Post waits for it (Sync first).
-    await cache.cacheCycleCount(header, []); // the count's header, no lines
+    // The count's header, no lines, stored under the note the count screen
+    // takes before its fetch (cacheWriteScope).
+    expect(await cache.cacheCycleCount(header, [], await cache.cacheWriteScope())).toBe(true);
     const snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,
@@ -209,7 +218,13 @@ describe('a queued clear and the server read', () => {
   it('a fresh read of the count keeps the pending clear (the phone wins until it syncs), then shows the server once it has', async () => {
     const clear = await cache.clearLocalLine('l1');
     // Read again while the clear is queued: the server still has 5.
-    await cache.cacheCycleCount(header, [serverLine('l1', 5), serverLine('l2', null)]);
+    expect(
+      await cache.cacheCycleCount(
+        header,
+        [serverLine('l1', 5), serverLine('l2', null)],
+        await cache.cacheWriteScope(),
+      ),
+    ).toBe(true);
     let snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,
@@ -217,7 +232,13 @@ describe('a queued clear and the server read', () => {
     });
     // The clear is acknowledged; the next read shows the server's uncounted line.
     await cache.outboxAck(clear!.outboxId);
-    await cache.cacheCycleCount(header, [serverLine('l1', null), serverLine('l2', null)]);
+    expect(
+      await cache.cacheCycleCount(
+        header,
+        [serverLine('l1', null), serverLine('l2', null)],
+        await cache.cacheWriteScope(),
+      ),
+    ).toBe(true);
     snap = await cache.getCycleCount('cc1');
     expect(snap?.lines.find((l) => l.id === 'l1')).toMatchObject({
       counted: null,

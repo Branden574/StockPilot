@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { ItemImagesService } from '@/server/services/item-images';
 
 export const runtime = 'nodejs';
@@ -50,10 +51,12 @@ export async function GET(req: NextRequest) {
     { p_warehouse_id: warehouseId, p_days: days, p_limit: limit },
   );
   if (rpcErr) {
-    return NextResponse.json(
-      { error: 'internal_error', message: rpcErr.message },
-      { status: 500 },
-    );
+    // Postgres's text names the function and its tables: reported, never
+    // answered (S16).
+    return internalErrorResponse(new Error(rpcErr.message), 'orders.freq', {
+      organizationId: ctx.organizationId,
+      extra: { code: rpcErr.code ?? null },
+    });
   }
   const top = (topRows ?? []) as Array<{ item_id: string; request_count: number }>;
   if (top.length === 0) return NextResponse.json({ items: [] }, { status: 200 });
@@ -72,7 +75,10 @@ export async function GET(req: NextRequest) {
       .is('deleted_at', null)
       .eq('status', 'active')
       // Rentals are a separate inventory class and never orderable.
-      .eq('is_rental', false),
+      .eq('is_rental', false)
+      // Hidden from new ordering (0413): never offered, by any ordering
+      // endpoint.
+      .eq('order_catalog_visible', true),
     ctx.supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -127,8 +133,15 @@ export async function GET(req: NextRequest) {
   // need. Prefers stored thumb_path, falls back to transformed master,
   // falls back to bulk-import custom_fields.thumbnail_url. unstable_cache
   // layer means the second request is near-instant.
+  //
+  // Signed only for the items this answer returns: an item hidden from
+  // ordering (or archived since the RPC) gets no photo URL.
+  const returnedIds = itemIds.filter((id) => items.some((i) => i.id === id));
   const imagesSvc = new ItemImagesService(ctx);
-  const imageUrlByItem = await imagesSvc.primaryImagesForBrowserDisplay(itemIds, 200);
+  const imageUrlByItem =
+    returnedIds.length > 0
+      ? await imagesSvc.primaryImagesForBrowserDisplay(returnedIds, 200)
+      : new Map<string, string>();
 
   // Preserve the RPC's count-desc ordering by walking `top` (not items).
   // Items dropped along the way (archived between RPC + select) just

@@ -15,6 +15,7 @@ import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { SITE_URL, SUPPORT_EMAIL } from '@/lib/site';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { keepAlive } from '@/server/services/lib/defer';
 
 /**
  * Support tickets — public "report a problem" submissions + platform-admin
@@ -116,15 +117,23 @@ export async function createSupportTicket(input: CreateSupportTicketInput): Prom
   if (error) throw new Error(`support_tickets insert: ${error.message}`);
   const id = (data as { id: string }).id;
 
-  // Notify support — best-effort; the ticket row is already durable.
-  void notifySupport({ ...input, id }).catch((e) =>
-    reportError(e, { tag: 'support-tickets.notify', extra: { id } }),
+  // Notify support — best-effort; the ticket row is already durable. Both
+  // emails are kept alive past the response (lib/defer.ts keepAlive): a bare
+  // `void` held nothing once the route answered, so a suspended instance
+  // never sent them, and the submitter was told the ticket was received with
+  // no email to support and no acknowledgment.
+  keepAlive(
+    notifySupport({ ...input, id }).catch((e) =>
+      reportError(e, { tag: 'support-tickets.notify', extra: { id } }),
+    ),
   );
   // Owner decision 2026-07-20: the support-received concept is LIVE — a
   // one-time acknowledgment to the submitter. Best-effort like the triage
   // notification.
-  void sendSubmitterAck({ ...input, id }).catch((e) =>
-    reportError(e, { tag: 'support-tickets.ack', extra: { id } }),
+  keepAlive(
+    sendSubmitterAck({ ...input, id }).catch((e) =>
+      reportError(e, { tag: 'support-tickets.ack', extra: { id } }),
+    ),
   );
   return { id };
 }
@@ -325,8 +334,11 @@ export async function updateSupportTicket(
   // Fires only on the open/in_progress -> resolved crossing; best-effort.
   const b = before as { status: TicketStatus; email: string; name: string | null; subject: string };
   if (patch.status === 'resolved' && b.status !== 'resolved' && b.status !== 'closed') {
-    void sendResolvedNotice(id, b).catch((e) =>
-      reportError(e, { tag: 'support-tickets.resolved', extra: { id } }),
+    // Kept alive past the response, like the two emails above.
+    keepAlive(
+      sendResolvedNotice(id, b).catch((e) =>
+        reportError(e, { tag: 'support-tickets.resolved', extra: { id } }),
+      ),
     );
   }
 }
