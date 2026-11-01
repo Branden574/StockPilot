@@ -2,10 +2,13 @@
 -- pgTAP proof for migration 0416 (security slice E): the six order functions
 -- that asked orders:approve alone now ask write access to the order's
 -- warehouse too (cancel: on the approver's path only), and cancel no longer
--- lets anyone cancel a pending order that has no requester account. Written
--- to fail against the head before it (0401 when it was written, 0414 at the
--- renumber) in every section but P, G and the fixture checks; the M-section
--- shows it on the live bodies.
+-- lets anyone cancel a pending order that has no requester account, nor the
+-- person who placed one cancel it once they may no longer place orders in
+-- its organization. Written to fail against the head before it (0401 when it
+-- was written, 0414 at the renumber) in every section but P, G and the
+-- fixture checks; the M-section shows it on the live bodies. C5, C6, P3 and
+-- M9 came with the requester's permission term (review, 2026-11-01) and were
+-- seen failing on the body before it.
 --
 -- Written and reviewed as 0405, renumbered 0416 on 2026-10-31 (0413, 0414
 -- and 0415 ship first). The migration moved byte for byte, so its text still
@@ -28,13 +31,23 @@
 --   outZ   a manager of another organization
 --   nobody signed in, a member of no organization
 --   Warehouse B is the other warehouse of the same organization.
+-- C5 and C6's requesters (not in the persona table, so F1 and F2 read as
+-- before), each the requester of a pending order placed while they could:
+--   rmv    staff (A) removed from the organization; still staff of orgZ
+--   dis    staff (A) whose account was disabled
+--   noRq   staff (A), orders:request revoked
+--   apNoRq staff assigned to A, granted orders:approve, orders:request revoked
+--   ptl    a B2B portal customer of the organization (customer_users, never
+--          a member), the requester of a portal order
 --
 -- F.  The personas hold what the matrices assume: their permissions, and
---     write access as user_can_access_warehouse answers it.
+--     write access as user_can_access_warehouse answers it; C5 and C6's
+--     requesters' membership and permissions (F3).
 -- R.  One change per body: md5(prosrc) is slice E's and removing the added
 --     text gives production's body exactly (R1-R6).
 -- P.  The six keep their posture (arguments, result, volatility, SECURITY
---     DEFINER, SET clauses, owner, EXECUTE); each comment says the rule.
+--     DEFINER, SET clauses, owner, EXECUTE); each comment says the rule, and
+--     cancel's says the requester's (P3).
 -- W.  Per function, on an order of warehouse B and one of warehouse A: the
 --     scoped approver and the viewer approver are refused on B (42501, hint
 --     warehouse_write); the scoped approver passes on A; an approver assigned
@@ -45,7 +58,11 @@
 --     warehouse (an approver's own request included); the approver's own
 --     order once approved does (the race's end state: decided on the locked
 --     row); an order with no requester account (public link, deleted account)
---     is cancelled by no one but an approver, in their warehouses.
+--     is cancelled by no one but an approver, in their warehouses; the
+--     requester's cancel asks orders:request of the person who placed the
+--     order, which a removed member, a disabled account, a revoked member and
+--     a portal customer do not hold (C5), and an approver without it cancels
+--     only as an approver (C6).
 -- M.  Mutations: each added block taken out of the live body (inside an
 --     undone attempt) lets the refused call through, so the W and C lines
 --     are not tautological.
@@ -64,7 +81,7 @@
 
 begin;
 
-select plan(36);
+select plan(41);
 
 \set orgA    '\'04160000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'04160000-0000-0000-0000-00000000000b\''
@@ -100,6 +117,20 @@ select plan(36);
 \set oNulB   '\'04160000-0000-0000-0000-00000000010d\''
 \set oDelA   '\'04160000-0000-0000-0000-00000000010e\''
 \set oPc0B   '\'04160000-0000-0000-0000-00000000010f\''
+-- The requesters who may no longer place orders in orgA (C5, C6), kept out
+-- of the persona table so F1 and F2 read as before.
+\set rmv     '\'04160000-0000-0000-0000-0000000000aa\''
+\set dis     '\'04160000-0000-0000-0000-0000000000ab\''
+\set noRq    '\'04160000-0000-0000-0000-0000000000ac\''
+\set apNoRq  '\'04160000-0000-0000-0000-0000000000ad\''
+\set oRmvA   '\'04160000-0000-0000-0000-000000000110\''
+\set oDisA   '\'04160000-0000-0000-0000-000000000111\''
+\set oNoRqA  '\'04160000-0000-0000-0000-000000000112\''
+\set oApNqB  '\'04160000-0000-0000-0000-000000000113\''
+\set oApNqA  '\'04160000-0000-0000-0000-000000000114\''
+\set ptl     '\'04160000-0000-0000-0000-0000000000ae\''
+\set cusA    '\'04160000-0000-0000-0000-0000000000f1\''
+\set oPtlA   '\'04160000-0000-0000-0000-000000000115\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -200,6 +231,67 @@ insert into public.order_request_lines (order_request_id, item_id, quantity_requ
   (:oNulB,  :itB, 1, 0, null),
   (:oDelA,  :itA, 1, 0, null);
 
+-- C5 and C6: requesters who may no longer place orders in orgA. Each placed a
+-- pending order while they could. rmv also works in orgZ, so removing them
+-- from orgA leaves their session alive (TeamService.removeMember revokes
+-- sessions only when the last membership goes, and a removed member can sign
+-- in again); dis is disabled, whose access token stays valid until it
+-- expires; noRq has orders:request revoked; apNoRq approves orders in
+-- warehouse A and has orders:request revoked. ptl is a B2B portal customer's
+-- account: mapped to orgA's customer through customer_users, never a member
+-- (0250), and the requester of the portal order they placed (0251).
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:rmv,    '0416-rmv@0416.test',     '{}'::jsonb),
+  (:dis,    '0416-dis@0416.test',     '{}'::jsonb),
+  (:noRq,   '0416-norq@0416.test',    '{}'::jsonb),
+  (:apNoRq, '0416-apnorq@0416.test',  '{}'::jsonb),
+  (:ptl,    '0416-ptl@0416.test',     '{}'::jsonb)
+  on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orgA, :rmv,    'staff', now()),
+  (:orgA, :dis,    'staff', now()),
+  (:orgA, :noRq,   'staff', now()),
+  (:orgA, :apNoRq, 'staff', now()),
+  (:orgZ, :rmv,    'staff', now());
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
+  (:orgA, :rmv,    :whA, true),
+  (:orgA, :dis,    :whA, true),
+  (:orgA, :noRq,   :whA, true),
+  (:orgA, :apNoRq, :whA, true);
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  (:orgA, :noRq,   'orders:request', false),
+  (:orgA, :apNoRq, 'orders:request', false),
+  (:orgA, :apNoRq, 'orders:approve', true);
+insert into public.customers (id, organization_id, name) values
+  (:cusA, :orgA, '0416 Customer');
+insert into public.customer_users (customer_id, user_id, email, accepted_at) values
+  (:cusA, :ptl, '0416-ptl@0416.test', now());
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, customer_id, fulfillment_type) values
+  (:oRmvA,  :orgA, :whA, 'pending_approval', 'internal', :rmv,    null,  'pickup'),
+  (:oDisA,  :orgA, :whA, 'pending_approval', 'internal', :dis,    null,  'pickup'),
+  (:oNoRqA, :orgA, :whA, 'pending_approval', 'internal', :noRq,   null,  'pickup'),
+  (:oApNqB, :orgA, :whB, 'pending_approval', 'internal', :apNoRq, null,  'pickup'),
+  (:oApNqA, :orgA, :whA, 'pending_approval', 'internal', :apNoRq, null,  'pickup'),
+  (:oPtlA,  :orgA, :whA, 'pending_approval', 'portal',   :ptl,    :cusA, 'pickup');
+insert into public.order_request_lines (order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked) values
+  (:oRmvA,  :itA, 1, 0, null),
+  (:oDisA,  :itA, 1, 0, null),
+  (:oNoRqA, :itA, 1, 0, null),
+  (:oApNqB, :itB, 1, 0, null),
+  (:oApNqA, :itA, 1, 0, null),
+  (:oPtlA,  :itA, 1, 0, null);
+-- Then rmv leaves orgA as TeamService.removeMember removes a member (the
+-- membership row, then their assignments in the organization's warehouses),
+-- and dis is disabled as the account-disable service does it (user_profiles
+-- disabled_at, which only service_role writes: 0309's pin reverts anyone
+-- else's write).
+delete from public.organization_members where organization_id = :orgA and user_id = :rmv;
+delete from public.user_warehouse_assignments where organization_id = :orgA and user_id = :rmv;
+set local role to 'service_role';
+update public.user_profiles set disabled_at = now(), disabled_reason = 'policy_violation' where id = :dis;
+reset role;
+
 -- ══ Helpers (0387's, as 0395 uses them) ═══════════════════════════════════
 -- pg_temp.hint drops supautils' generic "Grant the required privileges ..."
 -- hint on privilege errors, which depends on the image.
@@ -299,6 +391,24 @@ select is(
   'adm=true/true mgr=true/true mgrNo=true/true nobody=false/false outZ=false/false own=true/true req=true/false '
   'stf=true/false stfAB=true/true stfAp=true/false vwr=false/false vwrAp=false/false',
   'F2: write access (warehouse A / warehouse B) as user_can_access_warehouse answers it: every warehouse for the owner, admin and managers by role; staff only where assigned; never a viewer, an outsider or a member of no organization');
+-- C5 and C6's requesters: is_org_member / orders:request / orders:approve.
+create function pg_temp.gates(p_sub uuid) returns text language plpgsql as $$
+declare v text;
+begin
+  perform set_config('request.jwt.claim.sub', p_sub::text, true);
+  v := public.is_org_member('04160000-0000-0000-0000-00000000000a')::text
+       || '/' || public.has_permission('04160000-0000-0000-0000-00000000000a', 'orders:request')::text
+       || '/' || public.has_permission('04160000-0000-0000-0000-00000000000a', 'orders:approve')::text;
+  perform set_config('request.jwt.claim.sub', '', true);
+  return v;
+end $$;
+select is(
+  'rmv=' || pg_temp.gates(:rmv) || ' dis=' || pg_temp.gates(:dis) || ' noRq=' || pg_temp.gates(:noRq)
+  || ' apNoRq=' || pg_temp.gates(:apNoRq) || ' ptl=' || pg_temp.gates(:ptl) || ' req=' || pg_temp.gates(:req)
+  || ' vwr=' || pg_temp.gates(:vwr) || ' stfAp=' || pg_temp.gates(:stfAp),
+  'rmv=false/false/false dis=false/false/false noRq=true/false/false apNoRq=true/false/true ptl=false/false/false '
+  'req=true/true/false vwr=true/true/false stfAp=true/true/true',
+  'F3: membership / orders:request / orders:approve in orgA: the removed member, the disabled account and the portal customer are no members and hold neither permission; the revoked member is a member without orders:request; the revoked approver keeps orders:approve only; the requester, the viewer and the scoped approver hold orders:request (the role default)');
 
 -- Everything below must leave this unchanged (Z1): every attempt is undone.
 create function pg_temp.state() returns text language sql stable as $$
@@ -419,13 +529,26 @@ $b0$, ''))
   'R5: reopen_picking has slice E''s body (md5 b62fbb68), and removing the added text gives production''s body exactly (14e49293): the warehouse term is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(replace(p.prosrc, $b0$  -- Slice E: an order with no requester account (placed through a public
+  (select md5(p.prosrc) || '|' || md5(replace(replace(replace(p.prosrc, $b0$  -- Slice E: an order with no requester account (placed through a public
   -- link, or its requester's account was deleted) is nobody's own order.
   -- The comparison above is NULL for it, and an IF treats NULL as false,
   -- so the rule below refused no one: any signed-in caller could cancel
   -- such an order while it waited for approval.
   v_is_owner := coalesce(v_is_owner, false);
-$b0$, ''), $b1$
+$b0$, ''), $b2$  -- Slice E: the requester's cancel is for someone who may still place
+  -- orders in the order's organization: has_permission 'orders:request',
+  -- which place_order_request asks to place one and the service asserts
+  -- before every cancel. It is false without an accepted membership of an
+  -- account that is not disabled, and when orders:request is revoked.
+  -- Without it, a member removed from the organization, a disabled account
+  -- (its access token outlives the disable) and a member whose
+  -- orders:request was revoked could each cancel their own pending order
+  -- by calling this function. An approver among them cancels only as an
+  -- approver, in their warehouses (below).
+  if v_is_owner then
+    v_is_owner := public.has_permission(v_req.organization_id, 'orders:request');
+  end if;
+$b2$, ''), $b1$
   -- Slice E: an approver's cancel asks write access to the order's
   -- warehouse, as every other approver action does (the order update
   -- policy, 0395; the app asks it first). Cancelling your own order while
@@ -442,8 +565,8 @@ $b0$, ''), $b1$
   end if;
 $b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
-  '2f230491b82b32b37f81c3ddbb8caf8e|535fc49935f15adc8d7dfa78836a06af',
-  'R6: cancel_order_request has slice E''s body (md5 2f230491), and removing the added text gives production''s body exactly (535fc499): the requester-account fix and the approver''s warehouse term are the only changes');
+  'dfbd31ed1083df82ae6de3cbb13b6c27|535fc49935f15adc8d7dfa78836a06af',
+  'R6: cancel_order_request has slice E''s body (md5 dfbd31ed), and removing the added text gives production''s body exactly (535fc499): the requester-account fix, the requester''s permission term and the approver''s warehouse term are the only changes');
 
 -- ══ P. The six keep their posture; the comments say the rule ══════════════
 select is(
@@ -484,6 +607,12 @@ select is(
   'approve_order_request=true, approve_partial=true, cancel_order_request=true, close_partial=true, '
   'reopen_picking=true, resume_fulfillment=true',
   'P2: each of the six says in its comment that it asks write access to the order''s warehouse, in the words of the rule (not the migration number)');
+select is(
+  (select position('the person who placed it cancels it as its requester only while they may place orders in its organization (has_permission orders:request'
+                   in coalesce(obj_description(p.oid, 'pg_proc'), '')) > 0
+     from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
+  true,
+  'P3: cancel_order_request''s comment says the requester''s rule: the person who placed the order cancels it only while they may place orders in its organization (orders:request)');
 
 -- ══ W. Each function asks write access to the order's warehouse ═══════════
 -- The order of warehouse B, then the scoped members on warehouse A's.
@@ -600,6 +729,24 @@ select is(
                   format('select status from public.order_requests where id = %L', :oDelA)),
   'mgr=ok:1:cancelled, stfAp=ok:1:cancelled / stfAp=42501:warehouse_write:forbidden, stfAB=ok:1:cancelled / mgr=ok:1:cancelled',
   'C4: such an order is cancelled by an approver, in their warehouses: the manager and the scoped approver in warehouse A, an approver assigned to B but not the scoped approver in warehouse B, the manager for the deleted requester''s order');
+select is(
+  pg_temp.attempt('authenticated', :rmv, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oRmvA), null,
+                  format('select status from public.order_requests where id = %L', :oRmvA)) || ' / '
+  || pg_temp.attempt('authenticated', :dis, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oDisA), null,
+                     format('select status from public.order_requests where id = %L', :oDisA)) || ' / '
+  || pg_temp.attempt('authenticated', :noRq, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oNoRqA), null,
+                     format('select status from public.order_requests where id = %L', :oNoRqA)) || ' / '
+  || pg_temp.attempt('authenticated', :ptl, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oPtlA), null,
+                     format('select status from public.order_requests where id = %L', :oPtlA)),
+  '42501:-:forbidden / 42501:-:forbidden / 42501:-:forbidden / 42501:-:forbidden',
+  'C5: the requester''s cancel asks that the person who placed the order may still place orders in its organization (orders:request, which the service asserts for every cancel): a member removed from the organization, a disabled account, a member whose orders:request was revoked and a portal customer (no member; the portal offers no cancel) are refused their own pending order (42501 forbidden). Before this each of them cancelled it, writing the order''s reason');
+select is(
+  pg_temp.attempt('authenticated', :apNoRq, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oApNqB), null,
+                  format('select status from public.order_requests where id = %L', :oApNqB)) || ' / '
+  || pg_temp.attempt('authenticated', :apNoRq, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, :oApNqA), null,
+                     format('select status from public.order_requests where id = %L', :oApNqA)),
+  '42501:warehouse_write:forbidden / ok:1:cancelled',
+  'C6: an approver who may no longer place orders cancels their own pending order only as an approver: refused in warehouse B, where they do not work (42501, hint warehouse_write), allowed in warehouse A. Before this the requester''s cancel let them cancel it in warehouse B too');
 
 -- ══ M. Mutations (generated by gen_0405.py): each takes the added text out of a live body, inside an undone attempt ══
 
@@ -732,6 +879,30 @@ select is(
 $c$)),
   '42501:warehouse_write:forbidden',
   'M8: cancel_order_request asking the warehouse of the requester''s own pending order too refuses the scoped approver''s own request in warehouse B: C1 fails on it');
+
+select is(
+  (select string_agg(pg_temp.attempt('authenticated', c.sub, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, c.ord),
+             format('select pg_temp.unpatch(%L, %L)', 'public.cancel_order_request(uuid, text)', $c$  -- Slice E: the requester's cancel is for someone who may still place
+  -- orders in the order's organization: has_permission 'orders:request',
+  -- which place_order_request asks to place one and the service asserts
+  -- before every cancel. It is false without an accepted membership of an
+  -- account that is not disabled, and when orders:request is revoked.
+  -- Without it, a member removed from the organization, a disabled account
+  -- (its access token outlives the disable) and a member whose
+  -- orders:request was revoked could each cancel their own pending order
+  -- by calling this function. An approver among them cancels only as an
+  -- approver, in their warehouses (below).
+  if v_is_owner then
+    v_is_owner := public.has_permission(v_req.organization_id, 'orders:request');
+  end if;
+$c$),
+             format($q$select status || '/' || coalesce(denied_reason, '-') from public.order_requests where id = %L$q$, c.ord)),
+             ' / ' order by c.n)
+     from (values (1, :rmv::uuid, :oRmvA::uuid), (2, :dis::uuid, :oDisA::uuid), (3, :noRq::uuid, :oNoRqA::uuid),
+                  (4, :ptl::uuid, :oPtlA::uuid), (5, :apNoRq::uuid, :oApNqB::uuid)) c(n, sub, ord)),
+  'ok:1:cancelled/Changed my mind / ok:1:cancelled/Changed my mind / ok:1:cancelled/Changed my mind / '
+  'ok:1:cancelled/Changed my mind / ok:1:cancelled/Changed my mind',
+  'M9: cancel_order_request without the requester''s permission term (the body before it) lets the removed member, the disabled account, the revoked member and the portal customer cancel their own pending order and write its reason, and the revoked approver cancel theirs in warehouse B: C5 and C6 fail on it');
 
 -- ══ G. Never a retryable error ════════════════════════════════════════════
 select is(

@@ -3067,11 +3067,15 @@ export class OrderRequestsService {
 
   async cancel(id: string, reason?: string | null): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // C2: gate on the same permission used to create a request. The
-    // underlying RPC (SECURITY DEFINER) still enforces its own
-    // membership + owner-or-manager checks; the TS gate closes the
-    // role-permissions-elision hole and surfaces a clean ServiceError
-    // for forbidden callers before any round trip.
+    // C2: gate on the same permission used to create a request, so a
+    // forbidden caller gets a clean ServiceError before any round trip.
+    // cancel_order_request (SECURITY DEFINER) decides on its own as well:
+    // someone with orders:approve cancels any open order in a warehouse they
+    // may write to, and the person who placed the order cancels it while it
+    // is pending approval only if they still hold orders:request there
+    // (has_permission: an accepted membership of an account that is not
+    // disabled; security slice E, 0416). Asking orders:request of an
+    // approver too is this service's rule alone.
     assertPermission(this.ctx, 'orders:request');
     // M7: requesters can only self-cancel a request that is still
     // pending approval. Once it has been approved (and stock has been

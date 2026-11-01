@@ -747,10 +747,11 @@ select is(
   -- pending approval, and the restock movements carry the order (0395 R1:
   -- removing both gives 0390's body exactly); nothing proven here reads either.
   -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an approver's
-  -- cancel outside the order's warehouses and counts an order with no requester account as
-  -- nobody's own (0416 R6: removing both gives this body exactly); the cancel and its
-  -- restocks are unchanged.
-  'cancel_order_request(uuid,text)|2f230491b82b32b37f81c3ddbb8caf8e|true|{"search_path=public, extensions"}|postgres\n'
+  -- cancel outside the order's warehouses, counts an order with no requester account as
+  -- nobody's own, and gives the requester's cancel only to someone who may still place
+  -- orders in the organization (0416 R6: removing the three gives this body exactly); the
+  -- cancel and its restocks are unchanged.
+  'cancel_order_request(uuid,text)|dfbd31ed1083df82ae6de3cbb13b6c27|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   -- Re-pinned by 0416 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an approver

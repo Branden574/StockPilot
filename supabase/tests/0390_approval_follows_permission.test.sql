@@ -350,9 +350,9 @@ select is(
   -- 0395 adds the requester's window and the restock link; 0395 R1 proves that
   -- removing them gives 0390's body (47cabcd1), whose role term this checks.
   -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af|2a2c6626a1e3b5db5884a793eb067576):
-  -- slice E adds its two blocks; 0416 R6 proves that removing them gives 0395's body
+  -- slice E adds its three blocks; 0416 R6 proves that removing them gives 0395's body
   -- (535fc499), whose role term this checks.
-  '2f230491b82b32b37f81c3ddbb8caf8e|51734794c00572e67c8f2a0c9961c175',
+  'dfbd31ed1083df82ae6de3cbb13b6c27|5985031add63e09a53b97e910d8a7781',
   'R4: cancel_order_request has 0390''s body (md5 47cabcd1), and putting the role term back gives production''s pre-0390 body exactly (7a2302de): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
@@ -457,7 +457,7 @@ select is(
   -- Re-pinned by 0395 (was 60198cff2d40c936d4d1cd11e050de14 and, for reopen_picking,
   -- 53b3b2e29c611896d4a99987c0983c18): the bodies carry 0395's blocks; 0395 R11
   -- proves the definitions are otherwise production's.
-  'cancel_order_request=5f03882c390a074236bb4a4a64b2e3b9\n'
+  'cancel_order_request=7212570a54b977b635d697fa60337cc0\n'
   'close_partial=404fa538dbeadbd6b005363979421d0a\n'
   'hold_order_stock=8f40b4baabd79973458d1759be5da4dd\n'
   'order_readiness_facts=faea50d0129c265a99b2660b42998abc\n'

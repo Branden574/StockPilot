@@ -423,9 +423,9 @@ $b0$, ''), $b1$
 $b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
   -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af|47cabcd1fe4f52fb7b2b6b6b64b68da1):
-  -- slice E adds two blocks; 0416 R6 proves that removing them gives 0395's body
+  -- slice E adds three blocks; 0416 R6 proves that removing them gives 0395's body
   -- (535fc499), from which removing 0395's text gives 0390's (47cabcd1).
-  '2f230491b82b32b37f81c3ddbb8caf8e|096e2410e6687bcd8cbaa65bee2bc285',
+  'dfbd31ed1083df82ae6de3cbb13b6c27|6b3de8813e7ca934bf25afbfa3481e5c',
   'R1: cancel_order_request has 0395''s body (md5 535fc499), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
 
 select is(
@@ -831,7 +831,7 @@ $b0$, '')) as m
   -- and reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2):
   -- the two bodies carry slice E's blocks; 0416 R5, R6 and P1 prove each definition is
   -- otherwise 0395's.
-  'cancel_order_request=16a547877a8a926f439e8c1af476ece1|4842e2494fa81ac6037296f1426b1989\n'
+  'cancel_order_request=2e0dc970ed9a59389a2828130584ca09|de3092c0a25a80469dbd399e6e05960b\n'
   'confirm_physical_signature=0ce2f35c507bef9e53f58ada6590993d|76899ffd767f579d61cfd2a6fccd1fb7\n'
   'post_cycle_count=40528d9207c8fe353b04d48bc0284acb|d2eee4d6216069731f965e9d2853c832\n'
   'post_receipt_v2=822851e86940eda3a9ad627cc53b3bcc|d40d3757f56f552c361acfbac0232c9b\n'

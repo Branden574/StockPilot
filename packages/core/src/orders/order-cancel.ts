@@ -3,7 +3,9 @@
  * screen (L85, L93). The rule is the service's (OrderRequestsService.cancel)
  * and, since security slice E (migration 0416), cancel_order_request's own:
  *   - nobody without orders:request: the service asserts it before any rule,
- *     for approvers too (desk check F3);
+ *     for approvers too (desk check F3); the function asks it of the person
+ *     who placed the order (has_permission, which also needs an accepted
+ *     membership of an account that is not disabled);
  *   - someone who approves orders (orders:approve) may cancel any open order
  *     in a warehouse they may write to (the service's requireWarehouseAccess
  *     'write', the function's user_can_access_warehouse 'write'): every

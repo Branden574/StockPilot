@@ -41,6 +41,22 @@
 --      pending approval (0395's requester window refused every other status).
 --      Found while restating the body; pgTAP C3 and M7 prove it on the
 --      unchanged body.
+--   4. cancel_order_request: the requester's cancel is for someone who may
+--      still place orders in the order's organization, has_permission(its
+--      organization, 'orders:request'): the permission place_order_request
+--      asks to place an order and the service asserts before every cancel.
+--      The gate compared requester_user_id with auth.uid() and nothing else,
+--      in a SECURITY DEFINER body, so callers the app refuses could cancel
+--      their own order while it was pending approval by calling the
+--      function directly: a member removed from the organization (removal
+--      keeps their account, and their sessions while they belong to another
+--      organization), a disabled account while its access token lasts, a
+--      member whose orders:request was revoked, and a B2B portal customer
+--      (never a member; the portal offers no cancel). has_permission is
+--      false for each: it asks an accepted membership of an account that is
+--      not disabled before the permission. An approver among them cancels
+--      only as an approver (item 2: in their warehouses). Found in review;
+--      pgTAP C5, C6 and M9 prove it on the unchanged body.
 --
 -- The term is user_can_access_warehouse(..., 'write') (0310's body), the
 -- policy's: true for an owner, admin or manager of the warehouse's
@@ -73,7 +89,9 @@
 -- refuses every one of these actions to them, so only a raw call changes.
 -- Item 3 changes nothing for anyone the app lets cancel: an approver of the
 -- organization still cancels such an order (within their warehouses), and
--- the app never offered its cancel to anyone else.
+-- the app never offered its cancel to anyone else. Nor does item 4: the app
+-- serves only an accepted, enabled member of the organization
+-- (requireOrgContext) and asserts orders:request before every cancel.
 --
 -- LOCKS. No table lock is held to commit, and a call already running
 -- finishes on the body it started with. One table lock is taken briefly:
@@ -635,7 +653,7 @@ begin
 end;
 $function$;
 
--- cancel_order_request: restated from 0395_order_stock_guards.sql; md5(prosrc) 535fc49935f15adc8d7dfa78836a06af -> 2f230491b82b32b37f81c3ddbb8caf8e.
+-- cancel_order_request: restated from 0395_order_stock_guards.sql; md5(prosrc) 535fc49935f15adc8d7dfa78836a06af -> dfbd31ed1083df82ae6de3cbb13b6c27.
 CREATE OR REPLACE FUNCTION public.cancel_order_request(p_id uuid, p_reason text DEFAULT NULL::text)
  RETURNS order_requests
  LANGUAGE plpgsql
@@ -674,6 +692,19 @@ begin
   -- so the rule below refused no one: any signed-in caller could cancel
   -- such an order while it waited for approval.
   v_is_owner := coalesce(v_is_owner, false);
+  -- Slice E: the requester's cancel is for someone who may still place
+  -- orders in the order's organization: has_permission 'orders:request',
+  -- which place_order_request asks to place one and the service asserts
+  -- before every cancel. It is false without an accepted membership of an
+  -- account that is not disabled, and when orders:request is revoked.
+  -- Without it, a member removed from the organization, a disabled account
+  -- (its access token outlives the disable) and a member whose
+  -- orders:request was revoked could each cancel their own pending order
+  -- by calling this function. An approver among them cancels only as an
+  -- approver, in their warehouses (below).
+  if v_is_owner then
+    v_is_owner := public.has_permission(v_req.organization_id, 'orders:request');
+  end if;
   if not v_is_manager and not v_is_owner then
     raise exception 'forbidden' using errcode = '42501';
   end if;
@@ -831,6 +862,6 @@ comment on function public.reopen_picking(uuid, text) is
   'Manager override: rewind a picked/packed (pre-signature) order to picking_in_progress to fix a miscount. Reverses complete_picking''s stock draw (adjust_stock +quantity_picked into the item''s Unplaced bucket, so the units stay drawable by the re-pick), restores the reservations released by this picking cycle, preserves quantity_picked + assigned_picker_id, clears packing-slip/token fields. Refuses when signed_at is set. Reason required. Since 0395 its movements carry reference_type order_request and the order id. Since slice E (0405): only with write access to the order''s warehouse (user_can_access_warehouse write), else 42501 forbidden, hint warehouse_write.';
 
 comment on function public.cancel_order_request(uuid, text) is
-  'Cancel an order request. Restocks the current staged batch (quantity_picked) ONLY when the order status says those units are actually out of quantity_on_hand: picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit. A mid-pick (picking_in_progress) order has not drawn yet, and a reopen_picking order has already had its draw returned — restocking either would invent stock. quantity_picked is cleared either way; quantity_fulfilled is never restocked. The status classification is exhaustive over order_requests_status_check: an unrecognised status raises unclassified_order_status_for_restock rather than defaulting to skip-the-restock, because a skipped restock destroys stock silently while a refused cancel is retryable. Since 0395: the person who placed the order may cancel it only while it is pending approval (42501 forbidden, hint requester_pending_only); someone with orders:approve cancels it at any open status; the restock movements carry reference_type order_request and the order id. Since slice E (0405): an approver''s cancel asks write access to the order''s warehouse (42501 forbidden, hint warehouse_write); cancelling your own order while it is pending approval asks none; an order with no requester account (public link, deleted account) is nobody''s own order, so only an approver cancels it.';
+  'Cancel an order request. Restocks the current staged batch (quantity_picked) ONLY when the order status says those units are actually out of quantity_on_hand: picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit. A mid-pick (picking_in_progress) order has not drawn yet, and a reopen_picking order has already had its draw returned — restocking either would invent stock. quantity_picked is cleared either way; quantity_fulfilled is never restocked. The status classification is exhaustive over order_requests_status_check: an unrecognised status raises unclassified_order_status_for_restock rather than defaulting to skip-the-restock, because a skipped restock destroys stock silently while a refused cancel is retryable. Since 0395: the person who placed the order may cancel it only while it is pending approval (42501 forbidden, hint requester_pending_only); someone with orders:approve cancels it at any open status; the restock movements carry reference_type order_request and the order id. Since slice E (0405): an approver''s cancel asks write access to the order''s warehouse (42501 forbidden, hint warehouse_write); cancelling your own order while it is pending approval asks none; an order with no requester account (public link, deleted account) is nobody''s own order, so only an approver cancels it; the person who placed it cancels it as its requester only while they may place orders in its organization (has_permission orders:request; a member removed from it, a disabled account, a member whose orders:request was revoked and a B2B portal customer get 42501 forbidden).';
 
 reset lock_timeout;

@@ -1747,13 +1747,14 @@ select is(
        -- window and the restock link (0395 R1); the linked restocks are 'return'
        -- movements, which the pick reads ('transfer', quantity < 0) never match.
        -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an
-       -- approver's cancel outside the order's warehouses and counts an order with no
-       -- requester account as nobody's own (0416 R6: removing both gives this body
-       -- exactly); the cancel and its restocks are unchanged. Every RMA cancel of a
-       -- replacement runs as an approver who passed the RMA's own write check on the
-       -- original order's warehouse, where the replacement is placed and the header guard
-       -- keeps it.
-       ('public.cancel_order_request(uuid,text)',                     '2f230491b82b32b37f81c3ddbb8caf8e'),
+       -- approver's cancel outside the order's warehouses, counts an order with no
+       -- requester account as nobody's own, and gives the requester's cancel only to
+       -- someone who may still place orders in the organization (0416 R6: removing the
+       -- three gives this body exactly); the cancel and its restocks are unchanged. Every
+       -- RMA cancel of a replacement runs as an approver who passed the RMA's own write
+       -- check on the original order's warehouse, where the replacement is placed and the
+       -- header guard keeps it.
+       ('public.cancel_order_request(uuid,text)',                     'dfbd31ed1083df82ae6de3cbb13b6c27'),
        ('public.hold_order_stock(uuid)',                              '3b0691d604823164daaa7f248616f00f'),
        ('public.order_readiness_facts(uuid)',                         '2f3fb057bacda8143377ecd9c2c5e6e2'),
        -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements
