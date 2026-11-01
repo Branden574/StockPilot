@@ -79,8 +79,7 @@
 --        revoked in 2 it could only mislead a reader.
 --    4.6 item_attachments: the table has no reader or writer anywhere in the
 --        apps and holds no row (preflight), so its two policies go and RLS
---        refuses every API role. The two item-attachments storage policies on
---        storage.objects go too.
+--        refuses every API role (its two storage policies go in 9).
 -- 7. The item-attachments bucket is deleted (4.6). It has never had an app
 --    writer (0325) and must be empty: the file counts its objects and
 --    multipart uploads again under the prelude's lock on storage.objects and
@@ -105,6 +104,10 @@
 --    push is right at today's size; the preflight refuses above 250,000
 --    rows, where the build belongs in an ops step with CREATE INDEX
 --    CONCURRENTLY instead.
+-- 9. The two item-attachments storage policies on storage.objects go (4.6),
+--    as the file's last statements: storage.objects policy statements come
+--    last in a migration (the storage policy order guard, since 0375). The
+--    prelude already holds every lock, so the order changes no lock.
 --
 -- ── WHO CHANGES AT PUSH ───────────────────────────────────────────────────
 -- Nobody, in anything the apps do. What a direct Data API call gets changes
@@ -876,15 +879,20 @@ create policy idempotency_keys_update on public.idempotency_keys
   for update to authenticated
   using ((select public.has_org_role(organization_id, 'manager')))
   with check ((select public.has_org_role(organization_id, 'manager')));
+comment on policy idempotency_keys_select on public.idempotency_keys is
+  'Managers of the organization read its keys: every API writer (post_receipt_v2, distribute_bundle, draft_order_shortfall_pos, start_targeted_recount) requires a manager (0420; was any member).';
+comment on policy idempotency_keys_insert on public.idempotency_keys is
+  'Managers of the organization record keys (0420; split from the FOR ALL idempotency_keys_write, same floor). No API role deletes a key.';
+comment on policy idempotency_keys_update on public.idempotency_keys is
+  'Managers of the organization update its keys (0420; split from idempotency_keys_write, same floor). Kept at that scope: post_receipt_v2 reads a committed key with SELECT ... FOR UPDATE, which this policy also filters.';
 
 -- 4.5 maintenance attachments: only the service role inserts (finalize).
 drop policy if exists maintenance_request_attachments_insert on public.maintenance_request_attachments;
 
--- 4.6 item attachments: no reader, no writer, no row.
+-- 4.6 item attachments: no reader, no writer, no row. (Its two storage
+-- policies go in 9, last.)
 drop policy if exists item_attachments_select on public.item_attachments;
 drop policy if exists item_attachments_write on public.item_attachments;
-drop policy if exists "item-attachments authenticated read" on storage.objects;
-drop policy if exists "item-attachments staff write" on storage.objects;
 
 -- ═══ 7. The empty item-attachments bucket (4.6) ═══════════════════════════
 -- Counted again under the prelude's ACCESS EXCLUSIVE on storage.objects, so
@@ -920,12 +928,15 @@ create index if not exists item_images_storage_path_idx on public.item_images (s
 create index if not exists item_images_thumb_path_idx on public.item_images (thumb_path);
 create index if not exists item_images_organization_id_idx on public.item_images (organization_id);
 
--- ═══ Comments ═══════════════════════════════════════════════════════════════
-comment on policy idempotency_keys_select on public.idempotency_keys is
-  'Managers of the organization read its keys: every API writer (post_receipt_v2, distribute_bundle, draft_order_shortfall_pos, start_targeted_recount) requires a manager (0420; was any member).';
-comment on policy idempotency_keys_insert on public.idempotency_keys is
-  'Managers of the organization record keys (0420; split from the FOR ALL idempotency_keys_write, same floor). No API role deletes a key.';
-comment on policy idempotency_keys_update on public.idempotency_keys is
-  'Managers of the organization update its keys (0420; split from idempotency_keys_write, same floor). Kept at that scope: post_receipt_v2 reads a committed key with SELECT ... FOR UPDATE, which this policy also filters.';
+-- ═══ 9. The item-attachments storage policies (4.6), last ═══════════════════
+-- storage.objects policy statements come last in a migration, followed only
+-- by more of them, bucket rows, their comments and the reset
+-- (apps/web/src/server/services/storage-policy-order.guard.test.ts, since
+-- 0375): a statement after them that waited for another lock would keep
+-- every storage read and write waiting with it. Here the prelude (5) already
+-- holds every lock the file takes, so the order changes no lock and no wait;
+-- it keeps the file inside the guard's rule.
+drop policy if exists "item-attachments authenticated read" on storage.objects;
+drop policy if exists "item-attachments staff write" on storage.objects;
 
 reset lock_timeout;
