@@ -3,7 +3,12 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the schedule. Saving an event, deleting one and changing its status
@@ -50,6 +55,9 @@ const SAVED = {
   warehouseId: 'wh-1',
   status: 'scheduled' as const,
 };
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -116,6 +124,7 @@ describe('the schedule event form when the save gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(updateScheduleEventAction).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });

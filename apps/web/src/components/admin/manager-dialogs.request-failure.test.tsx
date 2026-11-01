@@ -4,7 +4,7 @@ import type * as React from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the New / Edit dialogs of the charters, warehouses, categories,
@@ -101,6 +101,9 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.scrollIntoView ??= () => {};
 });
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -275,6 +278,7 @@ describe('New dialogs when the save gets no answer', () => {
       await user.click(within(dialog).getByRole('button', { name: c.submit }));
       await waitFor(() => expect(c.action).toHaveBeenCalled());
       await new Promise((r) => setTimeout(r, 20));
+      expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
       expect(toast.error).not.toHaveBeenCalled();
     });
   }

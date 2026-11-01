@@ -3,7 +3,7 @@ import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: Procedures. Archive and Restore closed their confirm in `finally`, so a
@@ -80,6 +80,9 @@ import { PROCEDURE_CREATED_VIDEOS_UNFINISHED, ProcedureForm } from './procedure-
 import { RestoreButton } from './restore-button';
 import { VideoUploader, type UploadedVideo } from './video-uploader';
 
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
+
 beforeEach(() => {
   vi.clearAllMocks();
   batchBreaks.on = false;
@@ -150,6 +153,7 @@ describe('Archive and Restore a procedure when the request gets no answer', () =
     render(<ArchiveButton procedureId="p1" />);
     const dialog = await confirmIn(user, /Archive/, 'Archive');
     await settle(() => expect(archiveProcedureAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(within(dialog).queryByRole('alert')).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -316,6 +320,7 @@ describe('the procedure form when the save gets no answer', () => {
     render(ui('edit'));
     await user.click(screen.getByRole('button', { name: /Save/i }));
     await settle(() => expect(updateProcedureAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });

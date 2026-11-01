@@ -4,7 +4,12 @@ import * as React from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: each of these settings saves set a busy flag, awaited its Server Action
@@ -118,6 +123,9 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.scrollIntoView ??= () => {};
 });
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -335,6 +343,7 @@ describe('settings saves when the request gets no answer', () => {
       render(c.ui());
       await c.press(user);
       await settle(c.action);
+      expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
       expect(toast.error).not.toHaveBeenCalled();
       expect(screen.queryByText(/couldn't/i)).toBeNull();
     });
@@ -364,6 +373,7 @@ describe('the embeddings backfill when a batch gets no answer', () => {
     render(<EmbeddingsBackfillPanel initialRemaining={120} initialTotal={120} />);
     await user.click(screen.getByRole('button', { name: /Start backfill/ }));
     await settle(vi.mocked(backfillItemEmbeddingsAction));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(backfillItemEmbeddingsAction).toHaveBeenCalledTimes(1);
   });
@@ -407,6 +417,7 @@ describe('Restore from a restore point when the restore gets no answer', () => {
     render(<RestoreSnapshotButton id="rp-1" when="10/10/2026, 1:00:00 AM" />);
     await confirmRestore(user);
     await settle(vi.mocked(restoreFromPointAction));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });

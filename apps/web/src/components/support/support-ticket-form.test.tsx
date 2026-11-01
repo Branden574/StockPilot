@@ -2,7 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 const refresh = vi.hoisted(() => vi.fn());
 // The real unstable_rethrow stays, so isControlFlow recognises a redirect.
@@ -25,6 +30,9 @@ import { SupportTicketForm } from './support-ticket-form';
 
 const originalCreate = URL.createObjectURL;
 const originalRevoke = URL.revokeObjectURL;
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   URL.createObjectURL = vi.fn(() => 'blob:support-preview');
@@ -119,6 +127,8 @@ describe('SupportTicketForm when the send gets no answer', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Send to StockPilot' })).toBeEnabled(),
     );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(submitDashboardTicketAction).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).toBeNull();
   });

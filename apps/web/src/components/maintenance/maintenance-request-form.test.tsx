@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { outOfDate, signInRedirect } from '@/test/rejected-request';
+import { outOfDate, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // Typed with an explicit rest-parameter signature (`..._args: unknown[]`)
 // rather than a zero-arg lambda: TS would otherwise infer a strict 0-arity
@@ -23,6 +23,9 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 import { MaintenanceRequestForm } from './maintenance-request-form';
 
 const SITES = [{ id: '44444444-4444-4444-4444-444444444444', name: 'Fresno Learning Center' }];
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -378,6 +381,7 @@ describe('MaintenanceRequestForm when the call redirects or the page is out of d
     await fillAndSave();
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(errorToast).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();

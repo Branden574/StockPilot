@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Role } from '@stockpilot/core';
 
 import { requestFailedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the Team page. Remove, Send password reset and Revoke invite set a
@@ -64,6 +64,9 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.scrollIntoView ??= () => {};
 });
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -298,6 +301,7 @@ describe('the Team page when a request gets no answer', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(removeMemberAction).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(within(dialog).queryByRole('alert')).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
   });

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import type { PublicLinkCandidateRow, PublicLinkRow } from '@/server/services/public-links';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the public request link pages. Every save, regenerate, delete, bulk
@@ -107,6 +107,9 @@ function renderEditor() {
     />,
   );
 }
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -240,6 +243,7 @@ describe('the public link editor when a request gets no answer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save settings/ }));
     await waitFor(() => expect(updatePublicLinkAction).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

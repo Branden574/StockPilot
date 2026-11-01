@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 import { ReplacementPicker } from './replacement-picker';
 
@@ -31,6 +31,9 @@ function load() {
     },
   }));
 }
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 describe('ReplacementPicker rows', () => {
   it('show the whole name (wrapped, never truncated) with the availability under it below sm', async () => {
@@ -98,6 +101,7 @@ describe('ReplacementPicker when the read gets no answer', () => {
     );
     await waitFor(() => expect(redirected).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

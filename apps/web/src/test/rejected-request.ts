@@ -14,6 +14,8 @@
  * server, and `signInRedirect()` for the last one.
  */
 
+import { afterEach, beforeEach } from 'vitest';
+
 /** What fetch (and so a Server Action call) rejects with when the browser is offline. */
 export function offline(): TypeError {
   return new TypeError('Failed to fetch');
@@ -45,4 +47,31 @@ export function signInRedirect(): Error {
   return Object.assign(new Error('NEXT_REDIRECT'), {
     digest: 'NEXT_REDIRECT;replace;/signin;307;',
   });
+}
+
+/**
+ * The rejections nothing handled during each test of the file that calls this
+ * (call it once, at the top level). Node reports a promise rejection nobody
+ * handled on `process` once the microtasks have run, so read the list after
+ * the test has waited a timer turn.
+ *
+ * A redirect to sign-in rejects the call too. A page that handles it
+ * (`if (isControlFlow(e)) return;`) says nothing and lets nothing escape. A
+ * handler with no catch also says nothing, but the redirect escapes it as an
+ * unhandled rejection, so a test of the redirect checks both: no message, and
+ * this list empty.
+ */
+export function recordEscapedRejections(): unknown[] {
+  const escaped: unknown[] = [];
+  const record = (reason: unknown) => {
+    escaped.push(reason);
+  };
+  beforeEach(() => {
+    escaped.length = 0;
+    process.on('unhandledRejection', record);
+  });
+  afterEach(() => {
+    process.off('unhandledRejection', record);
+  });
+  return escaped;
 }

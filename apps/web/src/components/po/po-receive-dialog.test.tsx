@@ -27,7 +27,12 @@ vi.mock('sonner', () => ({
 }));
 
 import { setDefaultLocale } from '@/test/hydration';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 import { PoReceiveDialog, RECEIPT_UNCONFIRMED_MESSAGE } from './po-receive-dialog';
 import type { SizeRunGroup } from './size-run-receive-grid';
@@ -80,6 +85,9 @@ async function openDialog(lines: DialogLine[], groups?: Record<string, SizeRunGr
   await user.click(screen.getByRole('button', { name: /receive items/i }));
   return user;
 }
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   postReceiptAction.mockReset();
@@ -433,6 +441,8 @@ describe('PoReceiveDialog when the post gets no answer', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /post receipt/i })).toBeEnabled(),
     );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

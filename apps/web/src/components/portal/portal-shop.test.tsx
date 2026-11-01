@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { hydrateAcrossClockShift } from '@/test/hydration';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 import { RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
 
@@ -40,6 +45,9 @@ function renderShop(over: Partial<React.ComponentProps<typeof PortalShop>>) {
     <PortalShop catalog={[]} orders={[]} returnsEnabled={false} pricingMode="no_charge" {...over} />,
   );
 }
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 describe('PortalShop — no_charge', () => {
   it('renders no price, and does not crash on a null unitPrice', () => {
@@ -354,6 +362,8 @@ describe('PortalShop when Place order gets no answer', () => {
     actions.submitPortalOrderAction.mockRejectedValueOnce(signInRedirect());
     await placeOrder();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).toBeNull();
   });

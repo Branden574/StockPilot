@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: the account and security settings (devices, API keys, webhooks, the
@@ -115,6 +115,9 @@ import { MfaRecoveryCodes } from './mfa-recovery-codes';
 import { OrgLogoUploader } from './org-logo-uploader';
 import { WebhooksPanel } from './webhooks-panel';
 
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -198,6 +201,7 @@ describe('signed-in devices when a request gets no answer', () => {
     render(<ActiveSessions sessions={SESSIONS} />);
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await settle(() => expect(revokeSessionAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
@@ -317,6 +321,7 @@ describe('webhooks when a request gets no answer', () => {
       screen.getByRole('button', { name: 'Send test to Slack endpoint Ops channel' }),
     );
     await settle(() => expect(testIntegrationEndpointAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
@@ -443,6 +448,7 @@ describe('Delete my account when the request gets no answer', () => {
     await user.type(within(dialog).getByRole('textbox'), 'DELETE');
     await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
     await settle(() => expect(deleteOwnAccountAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(within(dialog).queryByRole('alert')).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -508,6 +514,7 @@ describe('the email change when a request gets no answer', () => {
     render(<EmailSettingsCard {...PENDING} />);
     fireEvent.click(screen.getByRole('button', { name: 'Resend verification' }));
     await settle(() => expect(resendEmailChangeAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
@@ -592,6 +599,7 @@ describe('Cancel and sign out on the code page', () => {
     render(<MfaChallengeForm factors={[{ id: 'factor-1', friendlyName: 'Phone' }]} />);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel and sign out' }));
     await settle(() => expect(signOutAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
   });

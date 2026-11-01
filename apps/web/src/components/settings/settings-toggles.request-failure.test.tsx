@@ -11,7 +11,12 @@ import {
   requestFailedMessage,
   requestUnconfirmedMessage,
 } from '@/lib/request-failure';
-import { offline, outOfDate, signInRedirect } from '@/test/rejected-request';
+import {
+  offline,
+  outOfDate,
+  recordEscapedRejections,
+  signInRedirect,
+} from '@/test/rejected-request';
 
 // ---------------------------------------------------------------------------
 // B40: settings that flip at once (the digest, notification switches, module
@@ -104,6 +109,9 @@ import { OrderStatusesEditor } from './order-statuses-editor';
 import { PublicRequestsGlobalSettings } from './public-requests-global-settings';
 import { RolePermissionMatrix } from './role-permission-matrix';
 
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -185,6 +193,7 @@ describe('the weekly digest card when a save gets no answer', () => {
     render(ui(true));
     fireEvent.click(screen.getByRole('switch', { name: 'Toggle weekly digest' }));
     await settle(() => expect(setDigestPrefsAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
@@ -215,6 +224,7 @@ describe('notification switches when a save gets no answer', () => {
     render(<NotificationPreferencesForm initial={allOn()} />);
     fireEvent.click(screen.getByRole('switch', { name: 'Toggle Maintenance request resolved' }));
     await settle(() => expect(updateNotificationPreferencesAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
@@ -266,6 +276,7 @@ describe('email routing when a save gets no answer', () => {
     await user.click(screen.getByRole('button', { name: 'Clear routing' }));
     await user.click(screen.getByRole('button', { name: 'Confirm clear' }));
     await settle(() => expect(setOrgEmailRoutingAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -413,6 +424,7 @@ describe('public request settings when a save gets no answer', () => {
     render(<PublicRequestsGlobalSettings initialBlurb={null} warehouses={WAREHOUSES} />);
     fireEvent.click(screen.getByRole('button', { name: 'Closed' }));
     await settle(() => expect(setWarehousePublicOrderableAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -452,6 +464,7 @@ describe('module switches when the save gets no answer (inside a transition)', (
     );
     fireEvent.click(screen.getByRole('switch', { name: 'Toggle Rentals' }));
     await settle(() => expect(setModuleEnabledAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.queryByText('The settings page broke.')).toBeNull();
   });
@@ -542,6 +555,7 @@ describe('permission boxes when the save gets no answer (inside a transition)', 
     );
     fireEvent.click(screen.getByRole('checkbox', { name: label('Viewer') }));
     await settle(() => expect(setRolePermissionOverrideAction).toHaveBeenCalled());
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.dismiss).toHaveBeenCalledWith('perm-save');
     expect(screen.queryByText('The settings page broke.')).toBeNull();

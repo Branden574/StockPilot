@@ -11,7 +11,7 @@ import {
   visibleItemFacts,
 } from '@/test/order-readiness-facts';
 import { requestFailedMessage } from '@/lib/request-failure';
-import { offline, signInRedirect } from '@/test/rejected-request';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 import {
   putAwayTargets,
@@ -91,6 +91,9 @@ const facts = (status: string, items: Record<string, unknown>[], neededBy: strin
     items,
     { neededBy },
   );
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   routerRefresh.mockReset();
@@ -433,6 +436,8 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Hold available stock' })).toBeEnabled(),
     );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
     expect(holdOrderStock).toHaveBeenCalledTimes(1);
     expect(toastMock.error).not.toHaveBeenCalled();
     expect(routerRefresh).not.toHaveBeenCalled();
