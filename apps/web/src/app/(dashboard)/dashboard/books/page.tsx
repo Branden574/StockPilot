@@ -20,12 +20,14 @@ import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown'
 import { Button } from '@/components/ui/button';
 import { can, countStartAllowed, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
+import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import {
   deriveInstantView,
   instantStateFromPageParams,
   parseRevealGroupParam,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
+import { listFilterActive, otherWarehouseHintApplies } from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -48,6 +50,7 @@ import {
   displayGroupFields,
   readDisplayGroupsByItemIds,
 } from '@/server/services/lib/display-groups';
+import { countMatchesInOtherWarehouses } from '@/server/services/lib/other-warehouse-matches';
 import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
@@ -58,6 +61,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 
 // Lowered 50 → 30 in line with the inventory page. Book covers
 // average noticeably larger than item thumbnails (more variety of
@@ -371,6 +375,27 @@ async function booksTableSection({
     cycleCountsEnabled,
   });
 
+  // "NOTHING HERE IN <WAREHOUSE>", as on the Items page (review of batch D,
+  // 2026-10-20). The list and the instant dataset are narrowed to the
+  // warehouse filter (the switcher's cookie, or a saved view's warehouse), and
+  // when that alone left the view empty the page said "No books yet" and
+  // offered to add a first book, with no filter bar and nothing naming the
+  // warehouse. For an empty view the count elsewhere can answer (the search
+  // alone, Active or All: otherWarehouseHintApplies), it asks how many books
+  // match in the other warehouses and the warehouse's name, together and only
+  // then, so a view with rows or another narrowing pays no round trip.
+  const otherWarehouseHint = async (total: number): Promise<OtherWarehouseHint | null> => {
+    if (total !== 0 || !warehouseFilter || !otherWarehouseHintApplies(params, 'books')) {
+      return null;
+    }
+    const [warehouses, matches] = await Promise.all([
+      getWarehousesForRequest(sessionCtx.organizationId),
+      countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'books'),
+    ]);
+    const warehouseName = warehouses.find((w) => w.id === warehouseFilter)?.name ?? null;
+    return warehouseName && matches > 0 ? { warehouseName, matches } : null;
+  };
+
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
   // table derives search/filter/sort/status/stock/pagination locally
@@ -432,6 +457,7 @@ async function booksTableSection({
       params,
       lifecycleStatus,
       canCreate,
+      otherWarehouses: await otherWarehouseHint(derived.total),
     });
     // A zero-result view is a FINISHED page, so it carries the performance
     // marker itself. With rows, BooksInventoryTable -> InventoryTable carries it.
@@ -710,6 +736,7 @@ async function booksTableSection({
     params,
     lifecycleStatus,
     canCreate,
+    otherWarehouses: await otherWarehouseHint(data.total),
   });
   // Same as the instant branch: the zero-result view carries its own marker.
   if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
@@ -757,41 +784,55 @@ async function booksTableSection({
   );
 }
 
+/** The warehouse the view is filtered to, and how many books match in the others. */
+type OtherWarehouseHint = { warehouseName: string; matches: number };
+
 /**
- * The rich zero-result EmptyStates, shared VERBATIM by the instant and
- * server branches (extracted, not duplicated, so the two modes can't
- * drift). Returns null when the table should render.
+ * The zero-result EmptyStates, shared VERBATIM by the instant and server
+ * branches (extracted, not duplicated, so the two modes can't drift).
+ * Returns null when the table should render, which it does for every view a
+ * filter or a search narrows (listFilterActive), as on the Items page.
  */
 function booksEmptyState({
   total,
   params,
   lifecycleStatus,
   canCreate,
+  otherWarehouses,
 }: {
   total: number;
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   canCreate: boolean;
+  /** Set only when the warehouse filter alone emptied the view (see the page). */
+  otherWarehouses?: OtherWarehouseHint | null;
 }) {
   if (total !== 0) return null;
-  // Expected chip view (mig 0277) with zero rows — same dedicated branch
-  // as the Items page so the generic "No books yet" CTA never fires here.
-  if (params.expected === '1' && !params.q && !params.stock) {
+  // First, as on the Items page: the view is empty only because of the
+  // warehouse filter, so say so and offer the way out, in the Items page's
+  // words, instead of "No books yet".
+  if (otherWarehouses) {
+    const { warehouseName, matches: n } = otherWarehouses;
     return (
       <EmptyState
         icon={BookOpen}
-        title="No expected books"
-        description="Books created from purchase orders appear here until their first stock is received."
-        cta={{ label: 'Back to all books', href: '/dashboard/books' }}
+        title={`Nothing here in ${warehouseName}`}
+        description={`${n === 1 ? '1 item matches' : `${n} items match`} in your other warehouses. This view is filtered to ${warehouseName}.`}
+        action={<ClearWarehouseFilterButton label="Search all warehouses" />}
       />
     );
   }
-  // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
-  // the Items page: a zero result there just means none of the archived
-  // books were system-archived, not that nothing is archived at all. So
-  // does "No books yet" below, as on Items: the view falls through to the
-  // table's own "No items match your filters." row, chip and all.
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
+  // A filter or a search that leaves nothing is the table's own no-match
+  // state, with the filter bar, the active chips and "Clear all filters",
+  // in every mode (grouping walk 2026-10-20, W4 no-match; see the Items
+  // page). It used to be "No books yet" with an offer to add a first book
+  // whenever the view had no search, stock view or Auto-archived only chip,
+  // and a stock view or the Expected chip had a page-level state without
+  // the bar: their words ("No low-stock books", "No out-of-stock books", "No
+  // expected books") are the table's now, unchanged (listEmptyMessage).
+  if (listFilterActive(params)) return null;
+  // The Archived view with nothing archived (no filter on it: see above).
+  if (lifecycleStatus === 'archived') {
     return (
       <EmptyState
         icon={BookOpen}
@@ -801,39 +842,17 @@ function booksEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock && params.auto !== '1') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No books yet"
-        description={
-          canCreate
-            ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
-            : 'No books have been added to this workspace yet.'
-        }
-        cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
-      />
-    );
-  }
-  if (params.stock === 'low') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No low-stock books"
-        description="No books are at or below their reorder point right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  if (params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No out-of-stock books"
-        description="Nothing is at zero quantity right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  return null;
+  // The list itself is empty and nothing filters it.
+  return (
+    <EmptyState
+      icon={BookOpen}
+      title="No books yet"
+      description={
+        canCreate
+          ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
+          : 'No books have been added to this workspace yet.'
+      }
+      cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
+    />
+  );
 }
