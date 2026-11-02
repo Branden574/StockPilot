@@ -152,6 +152,16 @@ describe('readSessionMemberships: a membership list that cannot be read is not "
       for (const arg of args) expect(String(arg)).not.toContain(TIMEOUT_MESSAGE);
     }
   });
+
+  it("a read that fails with an empty code (a network failure) is unreadable and logs 'unknown'", async () => {
+    // postgrest-js answers a fetch that still fails after its retries with
+    // code '' (empty, not missing), so the log needs `||`, not `??`.
+    state.members = { data: null, error: { code: '', message: 'TypeError: fetch failed' } };
+    const { readSessionMemberships } = await import('./session');
+    expect(await readSessionMemberships()).toEqual({ ok: false });
+    const line = warn.mock.calls.find((args) => args[0] === '[session] membership read failed:');
+    expect(line).toEqual(['[session] membership read failed:', 'unknown']);
+  });
 });
 
 describe('a failed membership read: the other session helpers answer as before', () => {
