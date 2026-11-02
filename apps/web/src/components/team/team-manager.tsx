@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
 import { CategoryAccessCard } from '@/components/team/category-access-card';
-import { openWorkLines, REMOVE_MEMBER_COPY } from '@/components/team/remove-member-copy';
+import { removeDialogText } from '@/components/team/remove-member-copy';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -344,6 +344,7 @@ function MemberRow({
   const isWarehouseScopedRole = member.role === 'staff' || member.role === 'viewer';
   const canManageWarehouseAccess = canManage && isWarehouseScopedRole;
   const displayName = member.fullName ?? member.email;
+  const removeText = removeDialogText(openWork, displayName, warehouseSingular);
   // "Warehouse access" cell: All warehouses > assigned warehouse name > em
   // dash (no assignment — e.g. admins, who aren't scoped anyway).
   const assignedWarehouseName = member.warehouseId
@@ -572,15 +573,8 @@ function MemberRow({
           title="Remove member?"
           description={
             <div className="space-y-2">
-              <p>{REMOVE_MEMBER_COPY.description(displayName)}</p>
-              {(openWork.kind === 'loading'
-                ? [REMOVE_MEMBER_COPY.checking]
-                : openWork.kind === 'failed'
-                  ? [REMOVE_MEMBER_COPY.failed]
-                  : openWork.kind === 'forbidden'
-                    ? [REMOVE_MEMBER_COPY.forbidden]
-                    : openWorkLines(openWork.counts, warehouseSingular)
-              ).map((line) => (
+              <p>{removeText.description}</p>
+              {removeText.lines.map((line) => (
                 <p key={line}>{line}</p>
               ))}
             </div>

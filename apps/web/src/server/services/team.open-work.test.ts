@@ -4,10 +4,12 @@
 // person releases: public.member_open_work (migration 0429), which counts with
 // the same predicates the release itself uses and answers only an admin who
 // holds members:remove in that organization. The read fails CLOSED (recurring
-// pattern #1): a refusal is its own answer, and any other failure (the
-// function missing before the migration is pushed, a network error, an answer
-// of the wrong shape) is "failed", logged, never a throw that breaks the
-// dialog and never a count of zero.
+// pattern #1): a refusal is its own answer; the function missing (before the
+// migration is pushed, or after a rollback that drops it with the release
+// trigger) is "unavailable", so the dialog makes no claim that removing
+// releases anything; any other failure (a network error, an answer of the
+// wrong shape) is "failed", logged, never a throw that breaks the dialog and
+// never a count of zero.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -65,9 +67,33 @@ describe('TeamService.openWork', () => {
 
   it.each([
     [
-      'the function is missing (before the migration)',
-      { message: 'Could not find the function', code: 'PGRST202' },
+      "PostgREST's schema cache has no such function (PGRST202)",
+      {
+        message: 'Could not find the function public.member_open_work(p_member_id)',
+        code: 'PGRST202',
+      },
     ],
+    [
+      'Postgres has no such function (42883)',
+      { message: 'function public.member_open_work(uuid) does not exist', code: '42883' },
+    ],
+  ])(
+    'says unavailable, not failed, when the read function is missing: %s (the release went with it)',
+    async (_why, error) => {
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { svc } = service({ data: null, error });
+
+        await expect(svc.openWork(MEMBER_ROW_ID)).resolves.toEqual({ kind: 'unavailable' });
+        expect(warned).toHaveBeenCalledTimes(1);
+        expect(logged).not.toHaveBeenCalled();
+      } finally {
+        warned.mockRestore();
+      }
+    },
+  );
+
+  it.each([
     [
       'the row is not in an organization the caller belongs to',
       { message: 'member_not_found', code: 'P0002' },

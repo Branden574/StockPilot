@@ -8,7 +8,7 @@
 // follow the deliveries) are never named.
 import { describe, expect, it } from 'vitest';
 
-import { openWorkLines, REMOVE_MEMBER_COPY } from './remove-member-copy';
+import { openWorkLines, REMOVE_MEMBER_COPY, removeDialogText } from './remove-member-copy';
 
 const none = {
   cycleCounts: 0,
@@ -34,6 +34,12 @@ describe('openWorkLines (the Remove dialog)', () => {
       openWorkLines({ ...none, cycleCounts: 2, picks: 0, deliveries: 3 }, 'Warehouse'),
     ).toEqual([
       'Removing them releases 2 cycle counts in progress, 0 orders being picked and 3 open deliveries, so others can take them over.',
+    ]);
+  });
+
+  it('names a driver who holds only deliveries (never "nothing to release")', () => {
+    expect(openWorkLines({ ...none, deliveries: 1 }, 'Warehouse')).toEqual([
+      'Removing them releases 0 cycle counts in progress, 0 orders being picked and 1 open delivery, so others can take them over.',
     ]);
   });
 
@@ -79,5 +85,59 @@ describe('REMOVE_MEMBER_COPY', () => {
       'Could not check their open work. Removing them still releases it.',
     );
     expect(REMOVE_MEMBER_COPY.forbidden).toBe('Only an owner or admin can remove a member.');
+  });
+});
+
+// The dialog's whole text for each state of the read. "Work released now
+// stays released." and "Removing them still releases it." are said only once
+// the read shows the release exists: not while it is checking, and not when
+// the read function is missing (before migration 0429 is pushed, or after a
+// rollback that drops it together with the release trigger), when removing
+// releases nothing.
+describe('removeDialogText (the Remove dialog, per state of the read)', () => {
+  const WITHOUT_RELEASE =
+    'Sam Staff will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them later.';
+  const WITH_RELEASE = `${WITHOUT_RELEASE} Work released now stays released.`;
+
+  it('makes no claim about releasing while it checks', () => {
+    expect(removeDialogText({ kind: 'loading' }, 'Sam Staff', 'Warehouse')).toEqual({
+      description: WITHOUT_RELEASE,
+      lines: ['Checking their open work...'],
+    });
+  });
+
+  it('makes no claim about releasing when the read function is missing (nothing is released then)', () => {
+    const text = removeDialogText({ kind: 'unavailable' }, 'Sam Staff', 'Warehouse');
+    expect(text).toEqual({ description: WITHOUT_RELEASE, lines: [] });
+    expect([text.description, ...text.lines].join(' ')).not.toMatch(/releas/i);
+  });
+
+  it('says what it releases when the read answers', () => {
+    expect(
+      removeDialogText(
+        { kind: 'ok', counts: { ...none, cycleCounts: 1, picks: 2, deliveries: 1 } },
+        'Sam Staff',
+        'Warehouse',
+      ),
+    ).toEqual({
+      description: WITH_RELEASE,
+      lines: [
+        'Removing them releases 1 cycle count in progress, 2 orders being picked and 1 open delivery, so others can take them over.',
+      ],
+    });
+  });
+
+  it('says it could not check, and that removing still releases the work, when the read failed', () => {
+    expect(removeDialogText({ kind: 'failed' }, 'Sam Staff', 'Warehouse')).toEqual({
+      description: WITH_RELEASE,
+      lines: ['Could not check their open work. Removing them still releases it.'],
+    });
+  });
+
+  it('says who may remove when the read is refused', () => {
+    expect(removeDialogText({ kind: 'forbidden' }, 'Sam Staff', 'Warehouse')).toEqual({
+      description: WITH_RELEASE,
+      lines: ['Only an owner or admin can remove a member.'],
+    });
   });
 });

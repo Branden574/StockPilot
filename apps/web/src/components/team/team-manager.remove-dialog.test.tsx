@@ -9,7 +9,7 @@
 // refuses is said INSIDE the dialog (recurring pattern #20: a toast alone sits
 // behind it), and cleared when the dialog opens again and on each try. The
 // words no longer promise that a re-invite gives the work back.
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -219,11 +219,92 @@ describe('Team — Remove says what it releases', () => {
     renderTeam();
 
     const { dialog } = await openRemove();
+    await within(dialog).findByText(/Removing them releases/);
 
     expect(dialog).toHaveTextContent(
       'Sam Staff will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them later. Work released now stays released.',
     );
     expect(dialog.textContent).not.toMatch(/anytime/);
+  });
+});
+
+describe('Team — no claim about releasing until the read shows the release exists', () => {
+  it('does not say released work stays released while it checks', async () => {
+    h.openWork.mockReturnValue(new Promise(() => {}));
+    renderTeam();
+
+    const { dialog } = await openRemove();
+
+    expect(within(dialog).getByText('Checking their open work...')).toBeInTheDocument();
+    expect(dialog.textContent).not.toMatch(/stays released/);
+  });
+
+  it('says only that they lose access when the read function is missing (before the migration, or after a rollback)', async () => {
+    h.openWork.mockResolvedValue({ ok: true, data: { kind: 'unavailable' } });
+    renderTeam();
+
+    const { dialog } = await openRemove();
+
+    await waitFor(() =>
+      expect(within(dialog).queryByText('Checking their open work...')).toBeNull(),
+    );
+    expect(
+      within(dialog).getByText(
+        'Sam Staff will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them later.',
+      ),
+    ).toBeInTheDocument();
+    expect(dialog.textContent).not.toMatch(/releas/i);
+  });
+});
+
+describe('Team — each opening shows its own answer', () => {
+  const FIRST =
+    'Removing them releases 1 cycle count in progress, 2 orders being picked and 1 open delivery, so others can take them over.';
+  const SECOND =
+    'Removing them releases 0 cycle counts in progress, 0 orders being picked and 3 open deliveries, so others can take them over.';
+  const SECOND_COUNTS = { ...COUNTS, cycleCounts: 0, picks: 0, deliveries: 3 };
+
+  async function closeDialog(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement) {
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  }
+
+  it("says it is checking again when reopened, never the last opening's numbers while it waits", async () => {
+    renderTeam();
+    const first = await openRemove();
+    expect(await within(first.dialog).findByText(FIRST)).toBeInTheDocument();
+    await closeDialog(first.user, first.dialog);
+
+    let answer: (v: unknown) => void = () => {};
+    h.openWork.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const second = await openRemove();
+
+    expect(within(second.dialog).getByText('Checking their open work...')).toBeInTheDocument();
+    expect(within(second.dialog).queryByText(FIRST)).toBeNull();
+    answer({ ok: true, data: { kind: 'ok', counts: SECOND_COUNTS } });
+    expect(await within(second.dialog).findByText(SECOND)).toBeInTheDocument();
+  });
+
+  it('keeps the newer answer when an earlier opening answers last', async () => {
+    let answerFirst: (v: unknown) => void = () => {};
+    let answerSecond: (v: unknown) => void = () => {};
+    h.openWork
+      .mockReturnValueOnce(new Promise((resolve) => (answerFirst = resolve)))
+      .mockReturnValueOnce(new Promise((resolve) => (answerSecond = resolve)));
+    renderTeam();
+    const first = await openRemove();
+    await closeDialog(first.user, first.dialog);
+    const second = await openRemove();
+    expect(h.openWork).toHaveBeenCalledTimes(2);
+
+    answerSecond({ ok: true, data: { kind: 'ok', counts: SECOND_COUNTS } });
+    expect(await within(second.dialog).findByText(SECOND)).toBeInTheDocument();
+    await act(async () => {
+      answerFirst({ ok: true, data: { kind: 'ok', counts: COUNTS } });
+    });
+
+    expect(within(second.dialog).getByText(SECOND)).toBeInTheDocument();
+    expect(within(second.dialog).queryByText(FIRST)).toBeNull();
   });
 });
 

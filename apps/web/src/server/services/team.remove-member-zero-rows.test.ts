@@ -11,6 +11,10 @@
 // side effect:
 //   still there  forbidden "Only an owner or admin can remove a member."
 //   gone         not_found "This member was already removed."
+//   unreadable   busy, or internal_error (logged; the public words are the
+//                generic "An internal error occurred. Please try again."): a
+//                failed re-read is neither a refusal nor a removal that
+//                already happened.
 // And a removal that waited too long on a row the release (migration 0429)
 // changes, or was a deadlock victim, is "Busy. Try again.", not an internal
 // error: the delete and the release are one statement, so nothing was kept.
@@ -50,6 +54,8 @@ const MEMBER_ROW_ID = '44444444-4444-4444-4444-444444444444';
 function makeCtx(opts: {
   delete: { data: unknown; error: { message: string; code?: string } | null };
   stillThere?: boolean;
+  /** The re-read after a 0-row delete fails with this error. */
+  rereadError?: { message: string; code?: string };
 }) {
   return makeSupabaseStub({
     'organization_members.select': (call: MockCall) => {
@@ -57,6 +63,7 @@ function makeCtx(opts: {
       if (cols === 'role') return { data: { role: 'admin' }, error: null };
       if (cols === 'role, user_id')
         return { data: { role: 'staff', user_id: REMOVED_USER }, error: null };
+      if (cols === 'id' && opts.rereadError) return { data: null, error: opts.rereadError };
       if (cols === 'id')
         return { data: opts.stillThere ? { id: MEMBER_ROW_ID } : null, error: null };
       throw new Error(`unexpected organization_members select: ${String(cols)}`);
@@ -135,6 +142,46 @@ describe('TeamService.removeMember — a delete that removed no row', () => {
       code: 'not_found',
       message: 'This member was already removed.',
     });
+    expectNoSideEffect(admin);
+  });
+
+  // The re-read is the only way to tell a refusal from a removal that
+  // already happened. When it fails, the answer is neither: never "Only an
+  // owner or admin can remove a member." to an admin. Nothing was written (the
+  // delete removed no row), so the same press is safe to repeat.
+  it('says busy when the re-read waited too long, with no side effect', async () => {
+    const admin = armAdmin();
+    const ctx = makeCtx({
+      delete: { data: [], error: null },
+      rereadError: { message: 'canceling statement due to statement timeout', code: '57014' },
+    });
+
+    await expect(service(ctx).removeMember(MEMBER_ROW_ID)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Busy. Try again.',
+      details: { reason: 'busy', retryable: true },
+    });
+    expectNoSideEffect(admin);
+  });
+
+  it('is an internal error, not a refusal, when the re-read fails otherwise, with no side effect', async () => {
+    const admin = armAdmin();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const ctx = makeCtx({
+      delete: { data: [], error: null },
+      rereadError: { message: 'fetch failed' },
+    });
+
+    try {
+      await expect(service(ctx).removeMember(MEMBER_ROW_ID)).rejects.toMatchObject({
+        code: 'internal_error',
+        message: 'An internal error occurred. Please try again.',
+        internalDetail: expect.stringContaining('fetch failed'),
+      });
+      expect(logged).toHaveBeenCalledTimes(1);
+    } finally {
+      logged.mockRestore();
+    }
     expectNoSideEffect(admin);
   });
 

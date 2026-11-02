@@ -55,9 +55,17 @@ export interface MemberOpenWork {
   warehouses: number;
 }
 
-/** The dialog's read: the numbers, a refusal, or a read that failed. */
+/**
+ * The dialog's read: the numbers, a refusal, a read that failed, or no read
+ * function at all ("unavailable": migration 0429 not pushed yet, or rolled
+ * back; its trigger and its read are created and dropped together, so then
+ * removing releases nothing and the dialog must not say it does).
+ */
 export type MemberOpenWorkResult =
-  { kind: 'ok'; counts: MemberOpenWork } | { kind: 'forbidden' } | { kind: 'failed' };
+  | { kind: 'ok'; counts: MemberOpenWork }
+  | { kind: 'forbidden' }
+  | { kind: 'failed' }
+  | { kind: 'unavailable' };
 
 const openWorkCount = z.number().int().nonnegative();
 const memberOpenWorkSchema = z.object({
@@ -628,7 +636,15 @@ export class TeamService {
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', memberId)
         .maybeSingle();
-      if (!stillError && !still) {
+      // A re-read that failed answers neither question: never tell an admin
+      // only an owner or admin can remove a member because a read failed.
+      // Nothing was written, so busy is safe to repeat (orderBusyRefusal).
+      if (stillError) {
+        const detail = `[team.removeMember] the delete removed no row and the re-read failed for ${memberId}: ${postgrestErrorText(stillError)}`;
+        console.error(detail);
+        throw orderBusyRefusal(stillError) ?? new ServiceError('internal_error', detail);
+      }
+      if (!still) {
         throw new ServiceError('not_found', 'This member was already removed.');
       }
       // The Remove dialog says the same when its read is refused
@@ -789,9 +805,13 @@ export class TeamService {
    * B94: what Remove would release, read when the dialog opens. The database
    * decides who may ask (an admin holding members:remove in the row's
    * organization, as the removal itself needs), so a refusal is its own
-   * answer. Any other failure (the function missing before migration 0429 is
-   * pushed, a network error, an answer of the wrong shape) fails closed
-   * (pattern #1): logged, "failed", never a throw and never a zero.
+   * answer. A missing function (PGRST202 from PostgREST's schema cache, 42883
+   * from Postgres) is "unavailable": migration 0429 is not there (the web
+   * live before the push, or a rollback, which drops the read and the release
+   * trigger together), so removing releases nothing and the dialog says
+   * nothing about releasing. Any other failure (a network error, an answer of
+   * the wrong shape) fails closed (pattern #1): logged, "failed", never a
+   * throw and never a zero.
    */
   async openWork(memberId: string): Promise<MemberOpenWorkResult> {
     const { data, error } = await this.ctx.supabase.rpc('member_open_work', {
@@ -799,6 +819,10 @@ export class TeamService {
     });
     if (error) {
       if (error.code === '42501' && error.message === 'forbidden') return { kind: 'forbidden' };
+      if (error.code === 'PGRST202' || error.code === '42883') {
+        console.warn('[team.openWork] member_open_work is missing (migration 0429 not applied)');
+        return { kind: 'unavailable' };
+      }
       console.error(
         `[team.openWork] member_open_work failed for ${memberId}: ${postgrestErrorText(error)}`,
       );

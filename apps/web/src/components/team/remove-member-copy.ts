@@ -1,4 +1,4 @@
-import type { MemberOpenWork } from '@/server/services/team';
+import type { MemberOpenWork, MemberOpenWorkResult } from '@/server/services/team';
 
 /**
  * Words for Team's Remove dialog (B94). Removing a member releases their open
@@ -9,10 +9,24 @@ import type { MemberOpenWork } from '@/server/services/team';
  * request or the manager of a warehouse. Escalation claims (two-minute
  * leases) and schedule events (they follow the deliveries) are released too
  * and never named. Pure, so the words are tested here (pattern #8).
+ *
+ * The release is claimed only once the read shows the function is there: the
+ * read and the release trigger are created (and, in a rollback, dropped)
+ * together, so while it checks, and when the read function is missing, the
+ * dialog says only that they lose access.
  */
+function loseAccess(name: string): string {
+  return `${name} will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them later.`;
+}
+
 export const REMOVE_MEMBER_COPY = {
-  description: (name: string): string =>
-    `${name} will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them later. Work released now stays released.`,
+  description: (name: string): string => `${loseAccess(name)} Work released now stays released.`,
+  /**
+   * Before the read answers, and when the read function is missing (migration
+   * 0429 not there: removing releases nothing), the dialog makes no claim
+   * about releasing.
+   */
+  descriptionWithoutRelease: loseAccess,
   checking: 'Checking their open work...',
   failed: 'Could not check their open work. Removing them still releases it.',
   /** The read was refused; the removal answers the same (TeamService.removeMember). */
@@ -51,4 +65,40 @@ export function openWorkLines(counts: MemberOpenWork, warehouseSingular: string)
   }
   if (also.length > 0) lines.push(`It also clears them ${also.join(' and ')}.`);
   return lines;
+}
+
+/**
+ * The Remove dialog's text for each state of the read: the description, then
+ * the open-work lines. The release is named only once the read shows it
+ * exists (an answer, a refusal or a failed read of a function that is there).
+ */
+export function removeDialogText(
+  state: { kind: 'loading' } | MemberOpenWorkResult,
+  name: string,
+  warehouseSingular: string,
+): { description: string; lines: string[] } {
+  switch (state.kind) {
+    case 'loading':
+      return {
+        description: REMOVE_MEMBER_COPY.descriptionWithoutRelease(name),
+        lines: [REMOVE_MEMBER_COPY.checking],
+      };
+    case 'unavailable':
+      return { description: REMOVE_MEMBER_COPY.descriptionWithoutRelease(name), lines: [] };
+    case 'failed':
+      return {
+        description: REMOVE_MEMBER_COPY.description(name),
+        lines: [REMOVE_MEMBER_COPY.failed],
+      };
+    case 'forbidden':
+      return {
+        description: REMOVE_MEMBER_COPY.description(name),
+        lines: [REMOVE_MEMBER_COPY.forbidden],
+      };
+    case 'ok':
+      return {
+        description: REMOVE_MEMBER_COPY.description(name),
+        lines: openWorkLines(state.counts, warehouseSingular),
+      };
+  }
 }
