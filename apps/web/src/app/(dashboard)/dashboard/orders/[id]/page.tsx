@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import * as React from 'react';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
@@ -201,6 +202,14 @@ export default async function OrderDetailPage({
   // the error boundary. The service context above still starts first, so a
   // real order opens exactly as before.
   notFoundUnlessUuid(id);
+  // Orders off (a stale link) is the module-off panel, before the order is
+  // read: that read refuses with module_disabled, which was the error page
+  // (B66). The module set came with the request context above, so this
+  // waits on no read of its own.
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
+  }
   const canApprove = can(ctx, 'orders:approve');
 
   // ORDER READINESS (F2-1) starts HERE, beside the order read, not after it.

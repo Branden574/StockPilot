@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { effectivePermissions, type Role } from '@stockpilot/core';
 
+import { ServiceError } from '@/server/services/context';
+
 /**
  * The bundle page in the redesign (P4.D2, matrix W-CA-11): the record header
  * (back link, name, status and Pre-assembly labels, SKU, description, Edit /
@@ -22,12 +24,17 @@ type Detail = {
   phantom: { quantityOnHand: number; warehouseId: string | null } | null;
 };
 
-const data: { detail: Detail; recent: Array<Record<string, unknown>>; fail: boolean } = {
+/** `fail`: what the bundle read throws, or null when it answers. */
+const data: { detail: Detail; recent: Array<Record<string, unknown>>; fail: unknown } = {
   detail: { bundle: {}, components: [], phantom: null },
   recent: [],
-  fail: false,
+  fail: null,
 };
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
@@ -53,7 +60,7 @@ vi.mock('@/server/services/bundles', () => ({
   BundlesService: {
     forCurrentUser: vi.fn(async () => ({
       get: vi.fn(async () => {
-        if (data.fail) throw new Error('not found');
+        if (data.fail) throw data.fail;
         return data.detail;
       }),
       recentDistributions: vi.fn(async () => data.recent),
@@ -111,7 +118,7 @@ async function renderAs(role: Role = 'owner') {
 
 beforeEach(() => {
   cleanup();
-  data.fail = false;
+  data.fail = null;
   data.detail = {
     bundle: bundle(),
     components: [
@@ -201,9 +208,16 @@ describe('bundle page header', () => {
     expect(screen.queryByRole('button', { name: 'Distribute' })).toBeNull();
   });
 
-  it('any failure to load the bundle is a 404', async () => {
-    data.fail = true;
+  // B66: only a missing bundle is a 404. A failed read used to be one too,
+  // telling the person the bundle did not exist; it now reaches the error
+  // page, which says the page could not be loaded and offers Try again.
+  it('a missing bundle is a 404, and a failed read reaches the error page', async () => {
+    data.fail = new ServiceError('not_found', 'Bundle not found');
     await expect(renderAs('owner')).rejects.toThrow('notFound');
+
+    const failure = new ServiceError('internal_error', 'canceling statement due to timeout');
+    data.fail = failure;
+    await expect(renderAs('owner')).rejects.toBe(failure);
   });
 });
 
