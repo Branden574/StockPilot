@@ -1,4 +1,4 @@
--- 0427_recovery_codes_need_aal2.sql
+-- 0417_recovery_codes_need_aal2.sql
 --
 -- The database now asks for the same two-step sign-in level the app already
 -- asks for before it makes new recovery codes (docket S50b).
@@ -14,10 +14,10 @@
 -- aal2_required and the same sentence (the shape of 0413's level check). A
 -- token with no aal claim counts as aal1.
 --
--- PROVISIONAL NUMBER. 0427 holds this file's place. The integrator assigns
--- the final number when its kit starts (expected: the next number after 0416,
--- with branches whose kits have not started moving up by one), and the file
--- then moves byte for byte under that number. Nothing reads the number: the
+-- NUMBER. 0417 is this file's final number, assigned by the integrator: the
+-- next number after 0416. It moved here from its provisional number with
+-- only the header lines that name a number changed; everything else is as
+-- reviewed. Nothing reads the number: the
 -- added lines end in "-- S50b", the preflight is the block tagged
 -- $s50b_pre$, and the pgTAP file finds the statements the CLI recorded by
 -- the migration's name (recovery_codes_need_aal2).
@@ -61,7 +61,7 @@
 -- lock_timeout 900ms bounds anything unforeseen: another open transaction
 -- changing the function's catalog row makes the file wait, then end with
 -- 55P03 and nothing applied. scripts/db-concurrency/
--- 0427_migration_lock_footprint.sh checks each of these.
+-- 0417_migration_lock_footprint.sh checks each of these.
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- The function's new refusal is 42501 with hint aal2_required. The push

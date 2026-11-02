@@ -1,13 +1,13 @@
--- supabase/tests/0427_recovery_codes_need_aal2.test.sql
--- pgTAP proof for migration 0427 (docket S50b, provisional number): the
--- database now asks for the same two-step sign-in level the app already asks
--- for before it makes new recovery codes. generate_mfa_recovery_codes() makes
--- codes only for a token at aal2; consume_mfa_recovery_code() is not changed.
+-- supabase/tests/0417_recovery_codes_need_aal2.test.sql
+-- pgTAP proof for migration 0417 (docket S50b): the database now asks for
+-- the same two-step sign-in level the app already asks for before it makes
+-- new recovery codes. generate_mfa_recovery_codes() makes codes only for a
+-- token at aal2; consume_mfa_recovery_code() is not changed.
 --
--- PROVISIONAL NUMBER: no check reads 0427. R strips the lines tagged
--- "-- S50b", and A finds the statements the CLI recorded by the migration's
--- name (recovery_codes_need_aal2) and its preflight by the $s50b_pre$ tag, so
--- the file moves to its final number unchanged.
+-- NUMBER: no check reads 0417. R strips the lines tagged "-- S50b", and A
+-- finds the statements the CLI recorded by the migration's name
+-- (recovery_codes_need_aal2) and its preflight by the $s50b_pre$ tag, so the
+-- file moved from its provisional number to 0417 with no check changed.
 --
 -- Run against the schema without the migration (origin/main 6af839a8d, head
 -- 0415, scratch stack, 2026-11-02) it fails 10 of its 19: L3, L4 and L5 (each

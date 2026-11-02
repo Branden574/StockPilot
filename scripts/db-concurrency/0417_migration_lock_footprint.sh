@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0427 (docket S50b; the number is provisional,
-# and this script moves with the file when its kit assigns the final one).
+# Lock footprint of migration 0417 (docket S50b; this script finds the file
+# by its name, *_recovery_codes_need_aal2.sql, not by its number).
 # The file runs a catalog preflight, restates generate_mfa_recovery_codes()
 # with a level check, and restates the function's revoke and grant. What it
 # locks:
@@ -60,7 +60,7 @@
 # 5a50b0f0-... namespace and is removed at the start, at the end and by the
 # EXIT trap. Exit status 0 = every check passed.
 #
-# Usage: CONTAINER=supabase_db_spmig bash scripts/db-concurrency/0427_migration_lock_footprint.sh
+# Usage: CONTAINER=supabase_db_spmig bash scripts/db-concurrency/0417_migration_lock_footprint.sh
 
 set -uo pipefail
 
@@ -192,7 +192,7 @@ ACL0="$(acl)"
 echo "local head $(q "select max(version) from supabase_migrations.schema_migrations"); file $(basename "$MIG"); ACL $ACL0"
 
 if ! { echo "insert into auth.users (id, email, raw_user_meta_data) values ('$U', 's50b-footprint@example.test', '{}'::jsonb);"
-       call_sql 0427-fp-setup S | sed 's/^rollback;$/commit;/'; } | "${PSQL[@]}" > "$TMP/setup.log" 2>&1; then
+       call_sql 0417-fp-setup S | sed 's/^rollback;$/commit;/'; } | "${PSQL[@]}" > "$TMP/setup.log" 2>&1; then
   echo "fixture setup failed: $(cat "$TMP/setup.log")"; exit 1
 fi
 check "0: the fixture account holds ten unused codes" "$(q "select count(*) from public.mfa_recovery_codes where user_id = '$U' and used_at is null")" "10"
@@ -234,7 +234,7 @@ push_file() { # push_file <application_name> <out>
 
 # ═══ 1 and 2. The file alone ══════════════════════════════════════════════
 echo "== 1-2. the file in one transaction, rolled back"
-if run_file 0427-fp-alone "$TMP/alone.out"; then ok "1: the file ran"; else bad "1: the file failed: $(cat "$TMP/alone.out")"; fi
+if run_file 0417-fp-alone "$TMP/alone.out"; then ok "1: the file ran"; else bad "1: the file failed: $(cat "$TMP/alone.out")"; fi
 check "1: after the preflight, no table lock outside the catalogs" "$(grep '^pre_tables=' "$TMP/alone.out")" "pre_tables=none"
 check "1: at the end, no table lock outside the catalogs" "$(grep '^tables=' "$TMP/alone.out")" "tables=none"
 check "1: the one object lock at the end is GRANT's on the role authenticated" "$(grep '^objects=' "$TMP/alone.out")" "$EXPECTED_OBJECTS"
@@ -244,7 +244,7 @@ check "2: rolled back: the body is still 0103's" "$(body_md5)" "$OLD_MD5"
 # ═══ 3. A call in flight ══════════════════════════════════════════════════
 echo "== 3. the file while an aal2 call waits on the account's code rows"
 ( "${PSQL[@]}" > "$TMP/holder3.out" 2>&1 <<SQL
-set application_name to '0427-fp-holder';
+set application_name to '0417-fp-holder';
 begin;
 select 'H=' || count(*) from (select id from public.mfa_recovery_codes where user_id = '$U' for update) s;
 select pg_sleep(3);
@@ -252,12 +252,12 @@ rollback;
 SQL
 ) &
 PH=$!
-wait_event 0427-fp-holder PgSleep || bad "3: the holder never reached its pg_sleep"
-( call_sql 0427-fp-call A | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/call3.out" 2>&1 ) &
+wait_event 0417-fp-holder PgSleep || bad "3: the holder never reached its pg_sleep"
+( call_sql 0417-fp-call A | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/call3.out" 2>&1 ) &
 PA=$!
-if wait_locked 0427-fp-call; then ok "3: the call waits on the account's code rows"; else bad "3: the call never waited on the rows"; fi
-if run_file 0427-fp-file3 "$TMP/file3.out"; then ok "3: the file ran while the call was in flight"; else bad "3: the file failed: $(cat "$TMP/file3.out")"; fi
-check "3: the call was still waiting when the file finished" "$(waiting_on_lock 0427-fp-call)" "1"
+if wait_locked 0417-fp-call; then ok "3: the call waits on the account's code rows"; else bad "3: the call never waited on the rows"; fi
+if run_file 0417-fp-file3 "$TMP/file3.out"; then ok "3: the file ran while the call was in flight"; else bad "3: the file failed: $(cat "$TMP/file3.out")"; fi
+check "3: the call was still waiting when the file finished" "$(waiting_on_lock 0417-fp-call)" "1"
 below "3: the file finished under its lock_timeout" "$(grep '^ms=' "$TMP/file3.out" | cut -d= -f2)" 900
 check "3: no lock on a table outside the catalogs" "$(grep '^tables=' "$TMP/file3.out")" "tables=none"
 wait "$PH"; wait "$PA"
@@ -266,13 +266,13 @@ check "3: the account's codes are unchanged (every session rolled back)" "$(code
 
 # ═══ 4. A call while the file is open ═════════════════════════════════════
 echo "== 4. an aal2 call while the file's transaction is open (run to its end, paused before it ends)"
-( { echo "set application_name to '0427-fp-open';"; echo "begin;"; cat "$MIG"; echo "select 'F=done';"
+( { echo "set application_name to '0417-fp-open';"; echo "begin;"; cat "$MIG"; echo "select 'F=done';"
     echo "select pg_sleep(2);"; echo "$TABLES_SQL"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/open4.out" 2>&1 ) &
 PF=$!
-wait_event 0427-fp-open PgSleep || bad "4: the file never reached its pause"
-t0=$(now_ms); call_sql 0427-fp-call4 B | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/call4.out" 2>&1; t1=$(now_ms)
-check "4: the file was still open when the call finished" "$(q "select count(*) from pg_stat_activity where application_name = '0427-fp-open' and wait_event = 'PgSleep'")" "1"
+wait_event 0417-fp-open PgSleep || bad "4: the file never reached its pause"
+t0=$(now_ms); call_sql 0417-fp-call4 B | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/call4.out" 2>&1; t1=$(now_ms)
+check "4: the file was still open when the call finished" "$(q "select count(*) from pg_stat_activity where application_name = '0417-fp-open' and wait_event = 'PgSleep'")" "1"
 check "4: the call made ten codes" "$(grep -c '^B=10$' "$TMP/call4.out")" "1"
 below "4: the call took" "$((t1 - t0))" 1500
 wait "$PF"
@@ -292,16 +292,16 @@ NALL="$(q "select count(*) from pg_class c join pg_namespace n on n.oid = c.reln
 check "5: the only table there postgres may not lock is the auth server's own" \
   "$(q "select coalesce(string_agg(n.nspname || '.' || c.relname, ','), 'none')
           from pg_class c join pg_namespace n on n.oid = c.relnamespace where $IN_SCHEMAS and not $LOCKABLE")" "auth.schema_migrations"
-hold 0427-fp-all-holder "lock table $ALL in access exclusive mode;" 3 "$TMP/all-holder.out" &
+hold 0417-fp-all-holder "lock table $ALL in access exclusive mode;" 3 "$TMP/all-holder.out" &
 PH=$!
-if wait_event 0427-fp-all-holder PgSleep; then
+if wait_event 0417-fp-all-holder PgSleep; then
   ok "5: another session holds ACCESS EXCLUSIVE on $NALL tables"
 else
   bad "5: the holder never got its locks: $(cat "$TMP/all-holder.out")"
 fi
-if run_file 0427-fp-all "$TMP/all.out"; then ok "5: the file ran to its end"; else bad "5: the file failed: $(cat "$TMP/all.out")"; fi
+if run_file 0417-fp-all "$TMP/all.out"; then ok "5: the file ran to its end"; else bad "5: the file failed: $(cat "$TMP/all.out")"; fi
 below "5: under its lock_timeout" "$(grep '^ms=' "$TMP/all.out" | cut -d= -f2)" 900
-check "5: the holder still held them when the file finished" "$(q "select count(*) from pg_stat_activity where application_name = '0427-fp-all-holder' and wait_event = 'PgSleep'")" "1"
+check "5: the holder still held them when the file finished" "$(q "select count(*) from pg_stat_activity where application_name = '0417-fp-all-holder' and wait_event = 'PgSleep'")" "1"
 wait "$PH"
 
 # ═══ 6. The preflight refuses drift ═══════════════════════════════════════
@@ -332,12 +332,12 @@ check "6: nothing applied (the body is still 0103's, the ACL as it was)" "$(body
 # ═══ 7. A file that fails applies nothing ═════════════════════════════════
 echo "== 7. another open transaction changes the function's catalog row: the file, run as the push runs it"
 before="$(row_version)"
-hold 0427-fp-row-holder "alter function $FN cost 100;" 4 "$TMP/row-holder.log" &
+hold 0417-fp-row-holder "alter function $FN cost 100;" 4 "$TMP/row-holder.log" &
 PH=$!
-wait_event 0427-fp-row-holder PgSleep || bad "7: the holder never reached its pg_sleep: $(cat "$TMP/row-holder.log")"
-observe_wait 0427-fp-row-file 'create or replace function public\.generate_mfa_recovery_codes\(' "$TMP/row-observed.log" &
+wait_event 0417-fp-row-holder PgSleep || bad "7: the holder never reached its pg_sleep: $(cat "$TMP/row-holder.log")"
+observe_wait 0417-fp-row-file 'create or replace function public\.generate_mfa_recovery_codes\(' "$TMP/row-observed.log" &
 PO=$!
-t0=$(now_ms); push_file 0427-fp-row-file "$TMP/row-file.x55"; rc=$?; t1=$(now_ms)
+t0=$(now_ms); push_file 0417-fp-row-file "$TMP/row-file.x55"; rc=$?; t1=$(now_ms)
 wait "$PO"; wait "$PH"
 check "7: its preflight passed and it waited in its CREATE OR REPLACE" "$(grep '^statement=' "$TMP/row-observed.log")" "statement=1"
 check "7: on the other transaction" "$(grep '^waits=' "$TMP/row-observed.log")" "waits=transactionid:-:ShareLock"
