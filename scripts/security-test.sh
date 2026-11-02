@@ -1025,6 +1025,13 @@ WEB_TESTS=(
   # code page. The real server client, auth-js, requireOrgContext() and
   # get_request_context(), with the shared claims read in both orders.
   'src/app/(dashboard)/layout.refresh-swap.test.tsx'
+  # The ownership transfer decides its step-up from the owner's own factor
+  # list (S43a review round s43ar): a list that refreshed into an account with
+  # no authenticator read as "not enrolled", and the service role moved the
+  # organization without the code. The list now says whose it is
+  # (lib/auth/mfa-factors.ts), and only the owner's own counts.
+  src/lib/auth/mfa-factors.test.ts
+  src/server/actions/team.transfer-refresh-swap.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
