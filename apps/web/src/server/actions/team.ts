@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { INVITE_ACCOUNT_EXISTS_COPY } from '@/app/invite/[token]/invite-copy';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { assertCurrentAal2, assertPermission, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
@@ -508,10 +509,6 @@ const acceptInviteWithSignupSchema = z.object({
   fullName: z.string().min(1).max(120).optional(),
 });
 
-/** The one answer for an invite whose address cannot get a new account here. */
-const INVITE_ACCOUNT_EXISTS_COPY =
-  'An account already exists for this email. Use the "I already have an account" option instead.';
-
 /**
  * Combined sign-up + invite-acceptance flow.
  *
@@ -570,7 +567,7 @@ export async function acceptInviteWithSignupAction(input: {
 
   // 2. Check if an auth user already exists for this email. If so, this is
   //    actually the "I have an account, sign me in" path — return a clear
-  //    error directing them to the sign-in option.
+  //    error directing them to the invite page's Sign in link.
   //
   //    Implemented via the SECURITY DEFINER function
   //    `public.auth_user_exists_by_email` (migration 0097), which does a single

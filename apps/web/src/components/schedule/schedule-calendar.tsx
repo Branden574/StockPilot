@@ -133,8 +133,11 @@ function ChipWords({ ev, timeZone }: { ev: CalendarEvent; timeZone: string | und
   return (
     <>
       {/* The time at the chip's full tone: on a status wash a faded time fell
-          under 4.5:1. The title's weight sets it apart instead. */}
-      {time ? <span className="tabular-nums">{time} </span> : null}
+          under 4.5:1. The title's weight sets it apart instead. The time and
+          its space are one text node: as `{time} ` they were two, and Chrome
+          drops a space-only text node at the end of an inline element when it
+          names the link ("9:00 AMDelivery run", B100). */}
+      {time ? <span className="tabular-nums">{`${time} `}</span> : null}
       <span className="font-medium">{ev.title}</span>
       <span className="sr-only">, {STATUS_LABEL[ev.status]}</span>
     </>
@@ -375,9 +378,10 @@ export function ScheduleCalendar({
       {/* The month grid. Below about 640 px the seven columns scroll inside
           the card (the page itself never scrolls sideways), so every day keeps
           its chips, its "+ Add" link and its "+N more" button, which lists the
-          whole day, at phone width. It never scrolls up and down: on touch
-          screens the target of a "+N more" in the last row reaches 8 px past
-          the grid, and overflow-x-auto alone lets that scroll the card. */}
+          whole day, at phone width. It never scrolls up and down: the last
+          row's cells leave room for a "+N more" touch target (below), and
+          overflow-y-hidden keeps anything else that reaches past the grid
+          from scrolling the card. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
         <div className="overflow-x-auto overflow-y-hidden">
           <div className="min-w-[640px]">
@@ -405,6 +409,13 @@ export function ScheduleCalendar({
                       'border-border group relative min-h-[112px] min-w-0 border-b border-r p-1.5',
                       i % 7 === 6 && 'border-r-0',
                       i >= 35 && 'border-b-0',
+                      // Below sm and on coarse pointers a "+N more" target
+                      // reaches 14 px below its 16 px line (touchTargetClass,
+                      // 44 px). In the last row nothing is below it, so the
+                      // cell keeps those 14 px itself; with 6 px the target
+                      // hung 8 px past the grid and a script's scrollIntoView
+                      // could scroll the card (B100).
+                      i >= 35 && 'pointer-coarse:pb-3.5 max-sm:pb-3.5',
                       !inMonth && 'bg-sunk',
                     )}
                   >
@@ -444,8 +455,13 @@ export function ScheduleCalendar({
                           key={ev.id}
                           href={`/dashboard/schedule/${ev.id}`}
                           data-status={ev.status}
+                          // `relative`: the status word is sr-only, which is
+                          // absolutely positioned. Positioned by the chip, it
+                          // is cut by the chip's clip; positioned by the day
+                          // cell, it sat at the end of the uncut title and
+                          // widened the grid past Saturday (B100).
                           className={cn(
-                            'focus-visible:ring-ring block truncate rounded-[4px] border px-1.5 py-0.5 text-[11px] leading-4 focus-visible:outline-none focus-visible:ring-2',
+                            'focus-visible:ring-ring relative block truncate rounded-[4px] border px-1.5 py-0.5 text-[11px] leading-4 focus-visible:outline-none focus-visible:ring-2',
                             STATUS_TONE[ev.status],
                           )}
                           title={ev.title}
