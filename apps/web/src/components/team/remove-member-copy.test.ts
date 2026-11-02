@@ -5,7 +5,9 @@
 // releases (migration 0429 releases them in the same transaction as the
 // removal). Maintenance requests and warehouses are named only when there
 // are any; escalation claims (two-minute leases) and schedule events (they
-// follow the deliveries) are never named.
+// follow the deliveries) are never named. Invitations the person sent that
+// are not accepted yet are withdrawn in the same step and named only when
+// there are any.
 import { describe, expect, it } from 'vitest';
 
 import { openWorkLines, REMOVE_MEMBER_COPY, removeDialogText } from './remove-member-copy';
@@ -18,6 +20,7 @@ const none = {
   maintenanceRequests: 0,
   escalationClaims: 0,
   warehouses: 0,
+  pendingInvites: 0,
 };
 
 describe('openWorkLines (the Remove dialog)', () => {
@@ -68,6 +71,28 @@ describe('openWorkLines (the Remove dialog)', () => {
       'It also clears them as the local owner of 3 maintenance requests and as the manager of 1 warehouse.',
     );
     expect(openWorkLines({ ...none, cycleCounts: 1 }, 'Warehouse')).toHaveLength(1);
+  });
+
+  it('names the invitations they sent that are withdrawn, only when there are any', () => {
+    expect(openWorkLines({ ...none, cycleCounts: 1, pendingInvites: 1 }, 'Warehouse')).toEqual([
+      'Removing them releases 1 cycle count in progress, 0 orders being picked and 0 open deliveries, so others can take them over.',
+      'It also withdraws 1 invitation they sent that has not been accepted.',
+    ]);
+    expect(
+      openWorkLines({ ...none, maintenanceRequests: 1, pendingInvites: 3 }, 'Warehouse'),
+    ).toEqual([
+      'They have no cycle counts in progress, orders being picked or open deliveries to release.',
+      'It also clears them as the local owner of 1 maintenance request.',
+      'It also withdraws 3 invitations they sent that have not been accepted.',
+    ]);
+    expect(openWorkLines({ ...none, pendingInvites: 2 }, 'Warehouse')).toEqual([
+      'They have no cycle counts in progress, orders being picked or open deliveries to release.',
+      'It also withdraws 2 invitations they sent that have not been accepted.',
+    ]);
+    expect(openWorkLines({ ...none, cycleCounts: 1 }, 'Warehouse').join(' ')).not.toMatch(
+      /invitation/i,
+    );
+    expect(openWorkLines(none, 'Warehouse').join(' ')).not.toMatch(/invitation/i);
   });
 });
 
@@ -139,5 +164,28 @@ describe('removeDialogText (the Remove dialog, per state of the read)', () => {
       description: WITH_RELEASE,
       lines: ['Only an owner or admin can remove a member.'],
     });
+  });
+
+  it('names the invitations withdrawn when the read answers some, and never in any other state', () => {
+    expect(
+      removeDialogText(
+        { kind: 'ok', counts: { ...none, picks: 1, pendingInvites: 2 } },
+        'Sam Staff',
+        'Warehouse',
+      ).lines,
+    ).toEqual([
+      'Removing them releases 0 cycle counts in progress, 1 order being picked and 0 open deliveries, so others can take them over.',
+      'It also withdraws 2 invitations they sent that have not been accepted.',
+    ]);
+    for (const state of [
+      { kind: 'loading' as const },
+      { kind: 'unavailable' as const },
+      { kind: 'failed' as const },
+      { kind: 'forbidden' as const },
+      { kind: 'ok' as const, counts: { ...none, picks: 1 } },
+    ]) {
+      const text = removeDialogText(state, 'Sam Staff', 'Warehouse');
+      expect([text.description, ...text.lines].join(' ')).not.toMatch(/invitation/i);
+    }
   });
 });

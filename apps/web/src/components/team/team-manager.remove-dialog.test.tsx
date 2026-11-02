@@ -61,6 +61,7 @@ const COUNTS = {
   maintenanceRequests: 0,
   escalationClaims: 1,
   warehouses: 0,
+  pendingInvites: 0,
 };
 
 beforeEach(() => {
@@ -145,6 +146,31 @@ describe('Team — Remove says what it releases', () => {
         'It also clears them as the local owner of 1 maintenance request and as the manager of 2 sites.',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('names the invitations they sent that are withdrawn only when there are any', async () => {
+    h.openWork.mockResolvedValue({
+      ok: true,
+      data: { kind: 'ok', counts: { ...COUNTS, pendingInvites: 2 } },
+    });
+    const first = renderTeam();
+
+    const { dialog } = await openRemove();
+
+    expect(
+      await within(dialog).findByText(
+        'It also withdraws 2 invitations they sent that have not been accepted.',
+      ),
+    ).toBeInTheDocument();
+    first.unmount();
+
+    h.openWork.mockResolvedValue({ ok: true, data: { kind: 'ok', counts: COUNTS } });
+    renderTeam();
+    const { dialog: again } = await openRemove();
+    await within(again).findByText(
+      'Removing them releases 1 cycle count in progress, 2 orders being picked and 1 open delivery, so others can take them over.',
+    );
+    expect(within(again).queryByText(/invitation/i)).toBeNull();
   });
 
   it('says nothing is open when they hold no count, pick or delivery', async () => {

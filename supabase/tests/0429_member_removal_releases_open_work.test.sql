@@ -12,19 +12,27 @@
 --     a resolved, a cancelled and an archived maintenance request; a
 --     resolved escalation claim); a count, a pick and warehouse B in
 --     organization B. A platform admin's Act-as seat in A holds a claimed
---     pick.
+--     pick. Invitations: S sent, in A, a pending one, an expired one never
+--     revoked, an accepted one and one revoked earlier, and a pending one in
+--     B; two other admins of A and the Act-as seat each sent a pending one.
 -- R.  The release, for each path that deletes a membership row: an admin
 --     through the API (Team), the member leaving on their own (0140's delete
 --     policy), the admin client with no subject, and an Act-as seat ended
 --     (the stop and the sweep). Only organization A is touched; closed rows
 --     keep S; leaving B releases only B's.
+-- I.  Invitations the person sent that are not accepted and not revoked are
+--     withdrawn on every path but an ended Act-as seat, in THAT organization
+--     only, the way account deletion withdraws them (0393: revoked_at now,
+--     expires_at no later than a minute ago): another admin's, the same
+--     person's in another organization, an accepted one and one revoked
+--     earlier are untouched.
 -- A.  The audit rows: one per released count, pick, delivery and maintenance
 --     request and one summary, actor = the caller, cause member_removed,
 --     member_left or act_as_seat_ended, reason null (K1: the order page
 --     prints any string reason as "Reason: ..."), acting_as_platform; none
 --     when nothing was open.
 -- C.  member_open_work, the Remove dialog's read: what R1 releases, per kind
---     (the closed rows above not counted); refused for a manager, a manager
+--     (the closed rows above not counted), invitations included; refused for a manager, a manager
 --     granted members:remove (the admin floor), staff, an admin without
 --     members:remove, an outsider, anon and no subject.
 -- P.  Posture: the trigger (AFTER DELETE FOR EACH ROW, enabled), both
@@ -48,7 +56,7 @@
 -- always undoes what it did (sentinel XXB94), so every test starts from the
 -- fixture.
 begin;
-select plan(32);
+select plan(40);
 
 \set orgA    '\'94940000-0000-0000-0000-00000000000a\''
 \set orgB    '\'94940000-0000-0000-0000-00000000000b\''
@@ -95,6 +103,15 @@ select plan(32);
 \set mPaA    '\'94940000-0000-0000-0000-000000000603\''
 \set mIdleA  '\'94940000-0000-0000-0000-000000000604\''
 \set mOwnA   '\'94940000-0000-0000-0000-000000000605\''
+\set mAdmA   '\'94940000-0000-0000-0000-000000000606\''
+\set invSub    '\'94940000-0000-0000-0000-000000000701\''
+\set invSubOld '\'94940000-0000-0000-0000-000000000702\''
+\set invSubAcc '\'94940000-0000-0000-0000-000000000703\''
+\set invSubRev '\'94940000-0000-0000-0000-000000000704\''
+\set invSubB   '\'94940000-0000-0000-0000-000000000705\''
+\set invAdm    '\'94940000-0000-0000-0000-000000000706\''
+\set invAdm2   '\'94940000-0000-0000-0000-000000000707\''
+\set invPa     '\'94940000-0000-0000-0000-000000000708\''
 \set nobody  '\'94940000-0000-0000-0000-000000000699\''
 
 -- ══ Fixture ════════════════════════════════════════════════════════════════
@@ -115,13 +132,14 @@ insert into public.organizations (id, name, slug) values
   (:orgA, 'B94 A', 'b94-a'), (:orgB, 'B94 B', 'b94-b'), (:orgC, 'B94 C', 'b94-c');
 insert into public.organization_members (id, organization_id, user_id, role, accepted_at, impersonation_expires_at) values
   (:mOwnA,  :orgA, :own,  'owner',   now(), null),
+  (:mAdmA,  :orgA, :adm,  'admin',   now(), null),
   (:mSubA,  :orgA, :sub,  'staff',   now(), null),
   (:mIdleA, :orgA, :idle, 'staff',   now(), null),
   -- A platform admin's Act-as seat: a real, temporary owner row (0176).
   (:mPaA,   :orgA, :pa,   'owner',   now(), now() + interval '45 minutes'),
   (:mSubB,  :orgB, :sub,  'staff',   now(), null);
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
-  (:orgA, :adm, 'admin', now()), (:orgA, :adm2, 'admin', now()), (:orgA, :mgr, 'manager', now()),
+  (:orgA, :adm2, 'admin', now()), (:orgA, :mgr, 'manager', now()),
   (:orgA, :mgr2, 'manager', now()),
   (:orgB, :outB, 'owner', now()),
   (:orgC, :ownC, 'owner', now()), (:orgC, :cs, 'staff', now());
@@ -188,6 +206,18 @@ insert into public.exception_occurrences
    escalation_claimed_by, escalation_claimed_at) values
   (:exOpen, :orgA, 1, 'label_mismatch', :itA, :whA, now(), now(), null,  null,      :sub, now()),
   (:exDone, :orgA, 2, 'label_mismatch', :itA, :whA, now(), now(), now(), 'cleared', :sub, now());
+-- Invitations (0393's columns): S's pending, expired-but-never-revoked,
+-- accepted and earlier-revoked ones in A, S's pending one in B, and one
+-- pending each from the other two admins of A and the Act-as seat.
+insert into public.organization_invites (id, organization_id, email, role, token, expires_at, invited_by, accepted_at, revoked_at) values
+  (:invSub,    :orgA, 'b94-new1@b94.test', 'staff', 'b94-token-sub',     now() + interval '7 days', :sub,  null,  null),
+  (:invSubOld, :orgA, 'b94-new2@b94.test', 'staff', 'b94-token-sub-old', now() - interval '1 day',  :sub,  null,  null),
+  (:invSubAcc, :orgA, 'b94-new3@b94.test', 'staff', 'b94-token-sub-acc', now() + interval '7 days', :sub,  now(), null),
+  (:invSubRev, :orgA, 'b94-new4@b94.test', 'staff', 'b94-token-sub-rev', now() - interval '2 days', :sub,  null,  now() - interval '2 days'),
+  (:invSubB,   :orgB, 'b94-new5@b94.test', 'staff', 'b94-token-sub-b',   now() + interval '7 days', :sub,  null,  null),
+  (:invAdm,    :orgA, 'b94-new6@b94.test', 'staff', 'b94-token-adm',     now() + interval '7 days', :adm,  null,  null),
+  (:invAdm2,   :orgA, 'b94-new7@b94.test', 'staff', 'b94-token-adm2',    now() + interval '7 days', :adm2, null,  null),
+  (:invPa,     :orgA, 'b94-new8@b94.test', 'staff', 'b94-token-pa',      now() + interval '7 days', :pa,   null,  null);
 
 -- Short names for the fixture's ids, so the pinned values read as words.
 create temp table b94_names (id uuid primary key, n text not null unique);
@@ -201,7 +231,9 @@ insert into pg_temp.b94_names values
   (:oDrvDone, 'oDrvDone'), (:oDrvCanc, 'oDrvCanc'), (:oDrvDen, 'oDrvDen'),
   (:seOpen, 'seOpen'), (:seDone, 'seDone'), (:mrOpen, 'mrOpen'), (:mrDone, 'mrDone'), (:mrCanc, 'mrCanc'), (:mrArch, 'mrArch'),
   (:exOpen, 'exOpen'), (:exDone, 'exDone'),
-  (:mSubA, 'mSubA'), (:mSubB, 'mSubB'), (:mPaA, 'mPaA'), (:mIdleA, 'mIdleA'), (:mOwnA, 'mOwnA');
+  (:mSubA, 'mSubA'), (:mSubB, 'mSubB'), (:mPaA, 'mPaA'), (:mIdleA, 'mIdleA'), (:mOwnA, 'mOwnA'), (:mAdmA, 'mAdmA'),
+  (:invSub, 'invSub'), (:invSubOld, 'invSubOld'), (:invSubAcc, 'invSubAcc'), (:invSubRev, 'invSubRev'), (:invSubB, 'invSubB'),
+  (:invAdm, 'invAdm'), (:invAdm2, 'invAdm2'), (:invPa, 'invPa');
 
 -- ══ Helpers (the 0393 helpers, sentinel XXB94) ═════════════════════════════
 create function pg_temp.who(p uuid) returns text language sql stable as $$
@@ -320,6 +352,19 @@ create function pg_temp.audit(p_org uuid) returns text language sql stable as $$
     from public.audit_logs a
    where a.organization_id = p_org and a.metadata ? 'released_user_id'
 $$;
+-- The fixture's invitations (in one organization, or all): name=revoked
+-- state/expiry[/accepted]. withdrawn = revoked by this transaction (0393 sets
+-- revoked_at to now()); revoked = revoked before it; live = not revoked.
+create function pg_temp.invites(p_org uuid default null) returns text language sql stable as $$
+  select string_agg(pg_temp.who(i.id) || '='
+                    || case when i.revoked_at is null then 'live' when i.revoked_at = now() then 'withdrawn' else 'revoked' end
+                    || '/' || case when i.expires_at > now() then 'valid' else 'expired' end
+                    || case when i.accepted_at is not null then '/accepted' else '' end,
+                    ' ' order by pg_temp.who(i.id) collate "C")
+    from public.organization_invites i
+   where i.id in (select n.id from pg_temp.b94_names n where n.n like 'inv%')
+     and (p_org is null or i.organization_id = p_org)
+$$;
 -- The trigger's rows anywhere, for one released person.
 create function pg_temp.released_rows(p_user uuid) returns bigint language sql stable as $$
   select count(*) from public.audit_logs a where a.metadata ->> 'released_user_id' = p_user::text
@@ -332,6 +377,10 @@ select is(pg_temp.work(),
 select is(pg_temp.kept(),
   'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | sub/1 | sub | sub | cs',
   'F2: S''s closed work in A (a count, a pick, an event, three deliveries, three maintenance requests and a claim), all of S''s work in B and C''s count');
+select is(pg_temp.invites(),
+  'invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=live/valid invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=live/expired invSubRev=revoked/expired',
+  'F3: the invitations: S''s pending, accepted, expired and earlier-revoked ones in A and pending one in B; the other admins'' and the Act-as seat''s pending ones in A');
 
 -- ══ R. The release ═════════════════════════════════════════════════════════
 select is(
@@ -372,6 +421,38 @@ select is(
   || 'cycle_count.released/ccB@outB:member_removed,order.picking_released/oPickB@outB:member_removed,user.open_work_released/mSubB@outB:member_removed',
   'R5: removing S from B releases only B''s count, pick and warehouse, audited in B; nothing in A moves');
 
+-- ══ I. Invitations the person sent ═════════════════════════════════════════
+select is(
+  pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
+                  null, 'select pg_temp.invites()'),
+  'ok:1:invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=withdrawn/expired invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=withdrawn/expired invSubRev=revoked/expired',
+  'I1: an admin removes S from A: S''s pending and expired-but-never-revoked invitations in A are withdrawn (revoked now, expired); the accepted one, the one revoked earlier, S''s pending one in B and the other admins'' are untouched');
+select is(
+  pg_temp.attempt('authenticated', :sub, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
+                  null, 'select pg_temp.invites()'),
+  'ok:1:invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=withdrawn/expired invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=withdrawn/expired invSubRev=revoked/expired',
+  'I2: S leaving A on their own withdraws the same invitations');
+select is(
+  pg_temp.attempt('authenticated', :own, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :adm),
+                  null, 'select pg_temp.invites()'),
+  'ok:1:invAdm=withdrawn/expired invAdm2=live/valid invPa=live/valid invSub=live/valid invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=live/expired invSubRev=revoked/expired',
+  'I3: the owner removes an admin with a pending invitation: it is withdrawn; another admin''s pending invitation in A and S''s are untouched');
+select is(
+  pg_temp.attempt('authenticated', :outB, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgB, :sub),
+                  null, 'select pg_temp.invites()'),
+  'ok:1:invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=live/valid invSubAcc=live/valid/accepted invSubB=withdrawn/expired '
+  || 'invSubOld=live/expired invSubRev=revoked/expired',
+  'I4: removing S from B withdraws only S''s invitation in B; S''s invitations in A stay');
+select is(
+  pg_temp.attempt('service_role', null, format('delete from public.organization_members where id = %L and impersonation_expires_at is not null', :mPaA),
+                  null, 'select pg_temp.invites()'),
+  'ok:1:invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=live/valid invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=live/expired invSubRev=revoked/expired',
+  'I5: an ended Act-as seat withdraws nothing: a platform admin''s invitation sent while acting stays valid');
+
 -- ══ A. The audit rows ══════════════════════════════════════════════════════
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
@@ -388,11 +469,11 @@ select is(
                                      'released_user_id', %L::uuid, 'membership_id', %L::uuid,
                                      'cycle_counts', 1, 'picks', 1, 'deliveries', 2, 'schedule_events', 1,
                                      'maintenance_requests', 1, 'escalation_claims', 1, 'warehouses', 1,
-                                     'acting_as_platform', false))::text
+                                     'pending_invites', 2, 'acting_as_platform', false))::text
                                  from public.audit_logs a
                                 where a.organization_id = %L and a.event = 'user.open_work_released'$q$, :mSubA, :sub, :mSubA, :orgA)),
   'ok:1:true',
-  'A1b: the summary row holds all seven numbers (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse), the membership, the person released, reason null and cause member_removed');
+  'A1b: the summary row holds all eight numbers (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse, 2 invitations withdrawn), the membership, the person released, reason null and cause member_removed');
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format($q$select string_agg(a.event || '=' || (a.metadata = case a.event
@@ -448,6 +529,17 @@ select is(
   'ok:1:0/0',
   'A2: removing a member who holds no open work writes no audit row, not even the summary');
 select is(
+  pg_temp.attempt('authenticated', :own, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :adm),
+                  null, format($q$select string_agg(pg_temp.who(a.user_id) || ':' || (a.metadata ->> 'cause') || ':' || (a.metadata ->> 'pending_invites')
+                                                    || ':' || ((a.metadata ->> 'cycle_counts')::int + (a.metadata ->> 'picks')::int
+                                                               + (a.metadata ->> 'deliveries')::int + (a.metadata ->> 'schedule_events')::int
+                                                               + (a.metadata ->> 'maintenance_requests')::int + (a.metadata ->> 'escalation_claims')::int
+                                                               + (a.metadata ->> 'warehouses')::int), ',')
+                                 from public.audit_logs a
+                                where a.organization_id = %L and a.metadata ->> 'released_user_id' = %L$q$, :orgA, :adm)),
+  'ok:1:own:member_removed:1:0',
+  'A2b: removing an admin whose only open item is one pending invitation writes the summary alone, with 1 invitation withdrawn and 0 of everything else');
+select is(
   pg_temp.attempt('authenticated', :pa, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format($q$select pg_temp.audit(%L) || ' # ' || count(*) filter (where (a.metadata ->> 'acting_as_platform')::boolean)
                                  from public.audit_logs a where a.organization_id = %L and a.metadata ? 'released_user_id'$q$, :orgA, :orgA)),
@@ -459,14 +551,15 @@ select is(
 -- ══ C. member_open_work (the Remove dialog's read) ═════════════════════════
 select is(
   pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L)::text', :mSubA)),
-  '{"picks": 1, "deliveries": 2, "warehouses": 1, "cycleCounts": 1, "scheduleEvents": 1, "escalationClaims": 1, "maintenanceRequests": 1}',
-  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse); S''s closed deliveries, maintenance requests and claim are not counted');
+  '{"picks": 1, "deliveries": 2, "warehouses": 1, "cycleCounts": 1, "pendingInvites": 2, "scheduleEvents": 1, "escalationClaims": 1, "maintenanceRequests": 1}',
+  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse, 2 invitations not accepted or revoked); S''s closed deliveries, maintenance requests and claim, accepted and revoked invitations and B''s invitation are not counted');
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format($q$select jsonb_build_object(
                                    'cycleCounts', m -> 'cycle_counts', 'picks', m -> 'picks', 'deliveries', m -> 'deliveries',
                                    'scheduleEvents', m -> 'schedule_events', 'maintenanceRequests', m -> 'maintenance_requests',
-                                   'escalationClaims', m -> 'escalation_claims', 'warehouses', m -> 'warehouses')::text
+                                   'escalationClaims', m -> 'escalation_claims', 'warehouses', m -> 'warehouses',
+                                   'pendingInvites', m -> 'pending_invites')::text
                                  from (select a.metadata m from public.audit_logs a
                                         where a.organization_id = %L and a.event = 'user.open_work_released') s$q$, :orgA)),
   'ok:1:' || pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L)::text', :mSubA)),
@@ -490,6 +583,12 @@ select is(
   || pg_temp.call_as('authenticated', :adm, format('select (public.member_open_work(%L) ->> ''cycleCounts'')', :mIdleA)),
   '2 | 2 | 0',
   'C3: the owner and an Act-as seat (an owner row) read it too; a member with nothing open reads 0');
+select is(
+  pg_temp.call_as('authenticated', :own, format('select (public.member_open_work(%L) ->> ''pendingInvites'')', :mAdmA)) || ' | '
+  || pg_temp.call_as('authenticated', :adm, format('select (public.member_open_work(%L) ->> ''pendingInvites'')', :mIdleA)) || ' | '
+  || pg_temp.call_as('authenticated', :adm, format('select (public.member_open_work(%L) ->> ''pendingInvites'')', :mPaA)),
+  '1 | 0 | 0',
+  'C4: the read counts an admin''s one pending invitation, 0 for a member who sent none, and 0 for an Act-as seat (its invitations stay, I5)');
 
 -- ══ P. Posture ═════════════════════════════════════════════════════════════
 select is(
@@ -533,8 +632,8 @@ select is(
   (select count(*)::text
      from pg_proc p, regexp_matches(p.prosrc, '\m(delete\s+from|merge\s+into|truncate)\M', 'gi') m
     where p.oid = to_regprocedure('public.tg_organization_members_release_open_work()')),
-  'audit_logs,cycle_counts,exception_occurrences,maintenance_requests,order_requests,schedule_events,warehouses / 0',
-  'P3: the trigger writes only the seven released tables and audit_logs, and deletes nothing (no stock, no records)');
+  'audit_logs,cycle_counts,exception_occurrences,maintenance_requests,order_requests,organization_invites,schedule_events,warehouses / 0',
+  'P3: the trigger writes only the seven released tables, organization_invites and audit_logs, and deletes nothing (no stock, no records)');
 select is(
   (select (obj_description(to_regprocedure('public.tg_organization_members_release_open_work()'), 'pg_proc') ~ 'tg_auth_users_before_delete')::text
           || '/' || (obj_description(to_regprocedure('public.tg_organization_members_release_open_work()'), 'pg_proc') ~ 'member_open_work')::text
@@ -548,9 +647,10 @@ select is(
 -- ══ PAR. Removal and account deletion release the same set in A ════════════
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
-                  null, 'select pg_temp.work()'),
-  pg_temp.attempt('postgres', null, format('delete from auth.users where id = %L', :sub), null, 'select pg_temp.work()'),
-  'PAR: removing S from A and deleting S''s account leave A''s open work in the same state (rule #26: the two copies of the predicates agree)');
+                  null, format('select pg_temp.work() || '' # '' || pg_temp.invites(%L)', :orgA)),
+  pg_temp.attempt('postgres', null, format('delete from auth.users where id = %L', :sub), null,
+                  format('select pg_temp.work() || '' # '' || pg_temp.invites(%L)', :orgA)),
+  'PAR: removing S from A and deleting S''s account leave A''s open work and A''s invitations in the same state (rule #26: the copies of the predicates agree)');
 
 -- ══ Controls ═══════════════════════════════════════════════════════════════
 select is(

@@ -30,6 +30,7 @@ const COUNTS = {
   maintenanceRequests: 0,
   escalationClaims: 1,
   warehouses: 1,
+  pendingInvites: 2,
 };
 
 function service(rpc: { data: unknown; error: { message: string; code?: string } | null }) {
@@ -49,7 +50,7 @@ afterEach(() => {
 });
 
 describe('TeamService.openWork', () => {
-  it('returns the seven numbers for the membership row it was asked about', async () => {
+  it('returns the eight numbers, the invitations it withdraws included, for the membership row it was asked about', async () => {
     const { svc, stub } = service({ data: COUNTS, error: null });
 
     await expect(svc.openWork(MEMBER_ROW_ID)).resolves.toEqual({ kind: 'ok', counts: COUNTS });
@@ -108,10 +109,18 @@ describe('TeamService.openWork', () => {
   });
 
   it('fails closed on an answer of the wrong shape, never reading it as zero', async () => {
-    for (const data of [null, {}, { ...COUNTS, picks: 'two' }, { ...COUNTS, deliveries: -1 }]) {
+    const { pendingInvites: _dropped, ...withoutInvites } = COUNTS;
+    for (const data of [
+      null,
+      {},
+      { ...COUNTS, picks: 'two' },
+      { ...COUNTS, deliveries: -1 },
+      withoutInvites,
+      { ...COUNTS, pendingInvites: 1.5 },
+    ]) {
       const { svc } = service({ data, error: null });
       await expect(svc.openWork(MEMBER_ROW_ID)).resolves.toEqual({ kind: 'failed' });
     }
-    expect(logged).toHaveBeenCalledTimes(4);
+    expect(logged).toHaveBeenCalledTimes(6);
   });
 });
