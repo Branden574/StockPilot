@@ -3,11 +3,13 @@
 -- pgTAP proof for the S47 migration (docket item S47): an expired "act as"
 -- seat no longer passes user_can_access_warehouse, user_can_access_inventory,
 -- my_warehouse_ids or user_can_see_item_category, ledger._seal's warehouse
--- arm agrees with them, and the maintenance guard refuses a cancel by someone
+-- arm agrees with them, the maintenance guard refuses a cancel by someone
 -- without maintenance_requests:manage when the request's requester was
--- deleted. Written to fail against the head before it (0415 when it was
--- written) in E1-E15, D1, L1, M1, M2 and the structure lines R1-R3, P4, F1-F3
--- and X1-X4; every other line passes there too.
+-- deleted, and someone without it who is not the requester changes no
+-- request and adds or deletes no photo row (the update and photo policies
+-- admit a manager by role). Written to fail against the head before it (0415
+-- when it was written) in E1-E15, D1, L1, M1-M6 and the structure lines
+-- R1-R3, R5, P4, P5, F1-F3 and X1-X7; every other line passes there too.
 --
 -- An act-as seat is a platform admin's temporary owner membership: an
 -- organization_members row whose impersonation_expires_at is 45 minutes after
@@ -48,22 +50,31 @@
 -- L.  ledger._seal's warehouse arm: an expired seat in the warehouse's
 --     organization is out of scope, equal to the live predicate
 --     (caller_can_write_location); a live seat is in scope.
--- M.  The maintenance cancel arm: a manager without manage is refused a
---     request whose requester was deleted, as one whose requester exists;
---     the requester and a manage holder still cancel.
--- R.  One change per body: each restated body has exactly one line tagged
---     "-- S47", and taking it out (or, in the guard, putting the old
---     condition back) gives production's body exactly; the new md5 values;
---     the three new comments and the three kept ones; the guard's trigger.
+-- M.  The maintenance write rule: a manager without manage is refused a
+--     cancel of a request whose requester was deleted (it stays open), as of
+--     one whose requester exists; any other change to a request that is not
+--     theirs (one with no requester, another member's); deleting another
+--     member's photo row; and adding one (while members still hold INSERT on
+--     the table: docket S9's migration revokes it, and those lines then
+--     skip). The requester and a manage holder still cancel, change the
+--     request and delete its photos, and the requester still adds one.
+-- R.  One change per body: each restated body carries its lines tagged
+--     "-- S47" (one; the guard five), and taking them out (in the guard,
+--     putting the old cancel condition back) gives production's body
+--     exactly; the new md5 values; the comments, new and kept; the guard's
+--     trigger, and the photo guard's.
 -- P.  Posture: SECURITY mode, volatility, SET clause, owner, STRICT,
 --     LEAKPROOF, PARALLEL, result and EXECUTE are unchanged; the predicates
---     _seal mirrors are untouched; each body carries its term.
+--     _seal mirrors are untouched; each body carries its term; the photo
+--     guard's function is SECURITY INVOKER, pins its search_path and only
+--     service_role holds EXECUTE.
 -- F.  The migration's preflight, replayed from the statements the CLI
---     recorded: it refuses a second run (every body drifted), passes on the
---     pre-S47 bodies, and refuses a drifted header.
--- X.  Mutations: each S47 line taken out of the live body (inside an undone
---     attempt) lets the refused answer through again, so the E, D, L and M
---     lines are not tautological.
+--     recorded: it refuses a second run (every body drifted, the photo
+--     guard's names taken), passes on the pre-S47 bodies with the photo
+--     guard gone, and refuses a drifted header.
+-- X.  Mutations: each S47 line taken out of the live body, or the photo
+--     guard's trigger dropped (inside an undone attempt), lets the refused
+--     answer through again, so the E, D, L and M lines are not tautological.
 --
 -- Roles: fixtures as the test superuser. The E-C-D-M lines switch role and
 -- claims with SET LOCAL, as the existing access suites do; every L, F and X
@@ -73,7 +84,7 @@
 
 begin;
 
-select plan(54);
+select plan(68);
 
 \set org   '\'54700000-0000-0000-0000-00000000000a\''
 \set orgB  '\'54700000-0000-0000-0000-00000000000b\''
@@ -111,6 +122,8 @@ select plan(54);
 \set mrB   '\'54700000-0000-0000-0000-000000000402\''
 \set mrC   '\'54700000-0000-0000-0000-000000000403\''
 \set mrD   '\'54700000-0000-0000-0000-000000000404\''
+\set pD1   '\'54700000-0000-0000-0000-000000000501\''
+\set pD2   '\'54700000-0000-0000-0000-000000000502\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -200,6 +213,15 @@ values
   (:mrB, :org, :stf, 'Staff requester',   'Leaky tap here', 'Drips',         'normal', 'saved'),
   (:mrC, :org, null, 'Deleted requester', 'Door is stuck',  'Will not open', 'normal', 'saved'),
   (:mrD, :org, :stf, 'Staff requester',   'Light is out',   'Dark corner',   'normal', 'saved');
+-- Two of stf's photos on mrD, their own open request (recorded the way the
+-- finalize step records them, outside the API roles).
+insert into public.maintenance_request_attachments
+  (id, organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
+values
+  (:pD1, :org, :mrD, '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/p1.jpg',
+   'p1.jpg', 'p1.jpg', 'image/jpeg', 100, :stf),
+  (:pD2, :org, :mrD, '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/p2.jpg',
+   'p2.jpg', 'p2.jpg', 'image/jpeg', 100, :stf);
 
 -- ══ Helpers ═══════════════════════════════════════════════════════════════
 -- Every membership helper's answer about organization A, warehouse A, the
@@ -279,26 +301,57 @@ begin
   end if;
   return v_state || ':' || pg_temp.hint(v_hint) || ':' || v_msg;
 end $$;
--- The pre-S47 function: the live definition of p_sig with its one '-- S47'
--- line taken out, or, in the guard, the old cancel condition put back, then
--- re-created (only ever inside an undone subtransaction). Refuses when the
--- body has no single S47 line, so a mutation never passes by cutting nothing.
-create function pg_temp.unpatch(p_sig text) returns void language plpgsql as $$
-declare v_def text := pg_get_functiondef(to_regprocedure(p_sig));
+-- The guard's S47 text: its cancel line (k = 'cancel', and the line it
+-- replaced, 'cancel_old') and its four-line write rule ('block', with the
+-- newline before each line).
+create function pg_temp.s47_text(k text) returns text language sql immutable as $$
+  select case k
+    when 'cancel'     then '    if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47'
+    when 'cancel_old' then '    if not (v_manage or old.requester_user_id = v_uid) then'
+    when 'block'      then E'\n  if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47'
+                        || E'\n    raise exception ''Only the requester or a maintenance manager can change a request.''  -- S47'
+                        || E'\n      using errcode = ''42501'';  -- S47'
+                        || E'\n  end if;  -- S47'
+  end
+$$;
+-- p_src (a body or a whole definition) of p_sig with its S47 text taken
+-- out: every tagged line, or, in the guard, the old cancel condition put back
+-- ('all' or 'cancel') and the write rule cut ('all' or 'block').
+create function pg_temp.s47_strip(p_sig text, p_src text, p_part text default 'all') returns text
+language plpgsql immutable as $$
 begin
-  if (select count(*) from regexp_matches(v_def, '-- S47', 'g')) <> 1 then
-    raise exception 'unpatch: % has no single S47 line', p_sig;
+  if p_sig <> 'public.tg_maintenance_requests_guard()' then
+    return regexp_replace(p_src, E'\n[^\n]*-- S47[^\n]*', '', 'g');
   end if;
-  if p_sig = 'public.tg_maintenance_requests_guard()' then
-    if position('    if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47' in v_def) = 0 then
-      raise exception 'unpatch: the S47 cancel condition is not in %', p_sig;
-    end if;
-    execute replace(v_def,
-                    '    if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47',
-                    '    if not (v_manage or old.requester_user_id = v_uid) then');
-  else
-    execute regexp_replace(v_def, E'\n[^\n]*-- S47[^\n]*', '');
+  if p_part in ('all', 'cancel') then
+    p_src := replace(p_src, pg_temp.s47_text('cancel'), pg_temp.s47_text('cancel_old'));
   end if;
+  if p_part in ('all', 'block') then
+    p_src := replace(p_src, pg_temp.s47_text('block'), '');
+  end if;
+  return p_src;
+end $$;
+-- The pre-S47 function (or, in the guard, with only p_part of its S47 text
+-- taken out): the live definition of p_sig through s47_strip, then
+-- re-created (only ever inside an undone subtransaction). Refuses unless the
+-- body carries its S47 lines (one; the guard five) and the strip cut exactly
+-- what p_part names, so a mutation never passes by cutting nothing.
+create function pg_temp.unpatch(p_sig text, p_part text default 'all') returns void language plpgsql as $$
+declare
+  v_def  text := pg_get_functiondef(to_regprocedure(p_sig));
+  v_new  text;
+  v_left int;
+begin
+  if (select count(*) from regexp_matches(v_def, '-- S47', 'g'))
+     <> (case when p_sig = 'public.tg_maintenance_requests_guard()' then 5 else 1 end) then
+    raise exception 'unpatch: % does not carry its S47 lines', p_sig;
+  end if;
+  v_new := pg_temp.s47_strip(p_sig, v_def, p_part);
+  v_left := (select count(*) from regexp_matches(v_new, '-- S47', 'g'));
+  if v_left <> (case p_part when 'cancel' then 4 when 'block' then 1 else 0 end) then
+    raise exception 'unpatch: % kept % S47 lines after taking out %', p_sig, v_left, p_part;
+  end if;
+  execute v_new;
 end $$;
 -- The six functions S47 restates, by signature.
 create temp table s47_fn (k text primary key, sig text not null);
@@ -314,6 +367,11 @@ create function pg_temp.pre(p_keys text[]) returns text language sql stable as $
   select string_agg(format('select pg_temp.unpatch(%L)', f.sig), E';\n' order by k.o)
     from unnest(p_keys) with ordinality k(key, o)
     join s47_fn f on f.k = k.key
+$$;
+-- The photo guard taken away, as one statement list for p_prep.
+create function pg_temp.drop_photo_guard() returns text language sql immutable as $$
+  select 'drop trigger trg_maintenance_request_attachments_guard on public.maintenance_request_attachments;'
+         || E'\ndrop function public.tg_maintenance_request_attachments_guard()'
 $$;
 -- The migration's preflight as the CLI recorded it (found by its dollar tag,
 -- so the file's number is never read), run after p_prep inside a
@@ -342,7 +400,7 @@ begin
   end if;
   return v_state || ':' || pg_temp.hint(v_hint) || ':'
          || coalesce((select string_agg(m[1] || ' ' || m[2], ', ' order by m[1] collate "C")
-                        from regexp_matches(v_msg, '([^ ;]+) (drifted|missing)', 'g') m), v_msg);
+                        from regexp_matches(v_msg, '([^ ;]+) (drifted|missing|exists)', 'g') m), v_msg);
 end $$;
 
 -- ══ E. The expired seat ═══════════════════════════════════════════════════
@@ -449,7 +507,7 @@ select is(pg_temp.seal_scope(:sx), 'out_of_scope#live=out_of_scope',
 select is(pg_temp.seal_scope(:sl), 'in_scope#live=in_scope',
   'L2: control: _seal: the same through a live seat is in scope, equal to the live predicate');
 
--- ══ M. The maintenance cancel arm ═════════════════════════════════════════
+-- ══ M. The maintenance write rule ═════════════════════════════════════════
 set local "request.jwt.claim.sub" to :mno;
 set local role to 'authenticated';
 select is((select count(*)::int from public.maintenance_requests where id = :mrA), 1,
@@ -476,20 +534,67 @@ reset role;
 select is((select string_agg(status, ',' order by id) from public.maintenance_requests where id in (:mrB, :mrC)),
   'cancelled,cancelled', 'C16: control: both cancels landed');
 
+-- Every other change by the manager without manage, each tried inside an
+-- undone attempt (so the answer is what the caller gets, and nothing stays):
+-- the update policy's role arm lets each row through, the guard's write rule
+-- and the photo guard refuse it.
+select is(pg_temp.value('authenticated', :mno,
+            format($q$update public.maintenance_requests set subject = 'Rewritten by mno', description = 'Rewritten', priority = 'low'
+                       where id = %L returning subject$q$, :mrA)),
+  '42501:-:Only the requester or a maintenance manager can change a request.',
+  'M3: without manage, a request whose requester was deleted: any other change is refused too');
+select is(pg_temp.value('authenticated', :mno,
+            format($q$update public.maintenance_requests set subject = 'Rewritten by mno', description = 'Rewritten', priority = 'low'
+                       where id = %L returning subject$q$, :mrD)),
+  '42501:-:Only the requester or a maintenance manager can change a request.',
+  'M4: without manage, another member''s open request: any change is refused');
+select is(pg_temp.value('authenticated', :mno,
+            format('delete from public.maintenance_request_attachments where id = %L returning id::text', :pD1)),
+  '42501:-:Only the requester or a maintenance manager can add or remove a request''s photos.',
+  'M5: without manage, another member''s photo on their open request: the delete is refused');
+select case when has_table_privilege('authenticated', 'public.maintenance_request_attachments', 'INSERT')
+  then is(pg_temp.value('authenticated', :mno,
+            format($q$insert into public.maintenance_request_attachments
+                        (organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
+                      values (%L, %L, %L, 'm6.jpg', 'm6.jpg', 'image/jpeg', 100, %L) returning storage_path$q$,
+                   :org, :mrD, '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/m6.jpg', :mno)),
+          '42501:-:Only the requester or a maintenance manager can add or remove a request''s photos.',
+          'M6: without manage, a photo row added to another member''s open request is refused')
+  else skip('members hold no INSERT on maintenance_request_attachments (docket S9): the privilege refuses first', 1) end;
+-- Controls, also undone: the requester and a manage holder still change mrD
+-- and delete its photos, and the requester still adds one.
+select is(pg_temp.value('authenticated', :stf,
+            format($q$update public.maintenance_requests set subject = 'Edited by its requester' where id = %L returning subject$q$, :mrD)),
+  'Edited by its requester', 'C17: control: the requester still changes their own open request');
+select is(pg_temp.value('authenticated', :mgr,
+            format($q$update public.maintenance_requests set subject = 'Edited by a manage holder' where id = %L returning subject$q$, :mrD)),
+  'Edited by a manage holder', 'C18: control: a manage holder still changes another member''s request');
+select is(pg_temp.value('authenticated', :stf,
+            format('delete from public.maintenance_request_attachments where id = %L returning id::text', :pD2)),
+  '54700000-0000-0000-0000-000000000502', 'C19: control: the requester still deletes their own photo');
+select is(pg_temp.value('authenticated', :mgr,
+            format('delete from public.maintenance_request_attachments where id = %L returning id::text', :pD1)),
+  '54700000-0000-0000-0000-000000000501', 'C20: control: a manage holder still deletes another member''s photo');
+select case when has_table_privilege('authenticated', 'public.maintenance_request_attachments', 'INSERT')
+  then is(pg_temp.value('authenticated', :stf,
+            format($q$insert into public.maintenance_request_attachments
+                        (organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
+                      values (%L, %L, %L, 'c21.jpg', 'c21.jpg', 'image/jpeg', 100, %L) returning storage_path$q$,
+                   :org, :mrD, '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/c21.jpg', :stf)),
+          '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/c21.jpg',
+          'C21: control: the requester still adds a photo row to their own open request')
+  else skip('members hold no INSERT on maintenance_request_attachments (docket S9): the privilege refuses first', 1) end;
+
 -- ══ R. One change per body ════════════════════════════════════════════════
 select is(
   (select string_agg(f.k || ':tagged=' || (select count(*) from regexp_matches(p.prosrc, '-- S47', 'g'))::text || ':pre='
-                     || case when f.k = 'tg_maintenance_requests_guard'
-                             then md5(replace(p.prosrc,
-                                    '    if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47',
-                                    '    if not (v_manage or old.requester_user_id = v_uid) then'))
-                             else md5(regexp_replace(p.prosrc, E'\n[^\n]*-- S47[^\n]*', '', 'g')) end,
+                     || md5(pg_temp.s47_strip(f.sig, p.prosrc)),
                      ',' order by f.k)
      from s47_fn f join pg_proc p on p.oid = to_regprocedure(f.sig)),
   'ledger._seal:tagged=1:pre=1e6756966568825045ba05805e87d395,my_warehouse_ids:tagged=1:pre=7129bb768bce52a1ec1271be95afdffc,'
-  'tg_maintenance_requests_guard:tagged=1:pre=6605c3607f283e2c3ab025d044da04c0,user_can_access_inventory:tagged=1:pre=8a214b77e32a052ca3bf07a2be39a8ae,'
+  'tg_maintenance_requests_guard:tagged=5:pre=6605c3607f283e2c3ab025d044da04c0,user_can_access_inventory:tagged=1:pre=8a214b77e32a052ca3bf07a2be39a8ae,'
   'user_can_access_warehouse:tagged=1:pre=76b4170f3d393e8a1f293ca3d4895955,user_can_see_item_category:tagged=1:pre=e6d071a182bc309168347d7c7127379e',
-  'R1: one line tagged -- S47 per body, and taking it out (in the guard, putting the old condition back) gives production''s body exactly: 0373''s _seal, 0310''s four helpers, 0362''s guard');
+  'R1: one line tagged -- S47 per body (the guard five: its cancel line and its four-line write rule), and taking them out (in the guard, putting the old cancel condition back) gives production''s body exactly: 0373''s _seal, 0310''s four helpers, 0362''s guard');
 select is(
   (select string_agg(f.k || '=' || md5(p.prosrc), ',' order by f.k)
      from s47_fn f join pg_proc p on p.oid = to_regprocedure(f.sig)),
@@ -497,24 +602,30 @@ select is(
   -- the guard 6605c360, user_can_access_inventory 8a214b77,
   -- user_can_access_warehouse 76b4170f, user_can_see_item_category e6d071a1.
   'ledger._seal=fc7686f95039a82b840c43372f01f850,my_warehouse_ids=eacc28d3bd2d1ebd09242f61b8a094ad,'
-  'tg_maintenance_requests_guard=76ff61d4dea55842de8f2e9757dbd935,user_can_access_inventory=f80f6ad98ba24e160661117f2c146091,'
+  'tg_maintenance_requests_guard=276cf27bfc1f122b7604a17b4555b357,user_can_access_inventory=f80f6ad98ba24e160661117f2c146091,'
   'user_can_access_warehouse=c3e618bb3c05d227e1f61686e5a1848f,user_can_see_item_category=e7ba372ee91b3785afe872c685cc583e',
   'R2: the six restated bodies (md5 of prosrc)');
 select is(
   (select string_agg(f.k || '=' || coalesce(md5(obj_description(p.oid, 'pg_proc')), '-'), ',' order by f.k)
      from s47_fn f join pg_proc p on p.oid = to_regprocedure(f.sig)),
   -- Before S47: _seal 03866c5b (0373's), user_can_access_inventory d3b84a6a and
-  -- user_can_access_warehouse 93acba60 (0312's). The three new texts name the
-  -- migration's number, so they are re-pinned when the file is renamed.
+  -- user_can_access_warehouse 93acba60 (0312's), the guard 1784060d (0362's).
+  -- The four new texts name the migration's number, so they are re-pinned
+  -- when the file is renamed.
   'ledger._seal=daab54112ef298b061098348c5adf4c1,my_warehouse_ids=4272a860cd5b33d7ee020f2030b67228,'
-  'tg_maintenance_requests_guard=1784060d09dd848a867df3f79e122a14,user_can_access_inventory=a85d154a034d10e01e445e04f8d2e3ed,'
+  'tg_maintenance_requests_guard=f35eba29bbcd5210d30dd928a8a4884a,user_can_access_inventory=a85d154a034d10e01e445e04f8d2e3ed,'
   'user_can_access_warehouse=7d67606fe3f243ed45f1f0c8b921cf44,user_can_see_item_category=-',
-  'R3: comments: the reviewed text on the two helpers and _seal; my_warehouse_ids keeps 0322''s, the guard keeps 0362''s, user_can_see_item_category has none');
+  'R3: comments: the reviewed text on the two helpers, the guard and _seal; my_warehouse_ids keeps 0322''s, user_can_see_item_category has none');
 select is(
   (select pg_get_triggerdef(t.oid) from pg_trigger t
     where t.tgrelid = 'public.maintenance_requests'::regclass and t.tgname = 'trg_aa_maintenance_requests_guard'),
   'CREATE TRIGGER trg_aa_maintenance_requests_guard BEFORE INSERT OR UPDATE ON public.maintenance_requests FOR EACH ROW EXECUTE FUNCTION tg_maintenance_requests_guard()',
   'R4: the guard still fires BEFORE INSERT OR UPDATE FOR EACH ROW');
+select is(
+  (select string_agg(pg_get_triggerdef(t.oid), E'\n' order by t.tgname) from pg_trigger t
+    where t.tgrelid = 'public.maintenance_request_attachments'::regclass and not t.tgisinternal),
+  'CREATE TRIGGER trg_maintenance_request_attachments_guard BEFORE INSERT OR DELETE ON public.maintenance_request_attachments FOR EACH ROW EXECUTE FUNCTION tg_maintenance_request_attachments_guard()',
+  'R5: the photo guard fires BEFORE INSERT OR DELETE FOR EACH ROW, the only trigger on maintenance_request_attachments');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(
@@ -549,28 +660,37 @@ select ok(
   (select bool_and(p.prosrc ~ 'impersonation_expires_at > (pg_catalog\.)?now\(\)\)  -- S47')
      from s47_fn f join pg_proc p on p.oid = to_regprocedure(f.sig)
     where f.k <> 'tg_maintenance_requests_guard')
-  and (select p.prosrc ~ 'coalesce\(old\.requester_user_id = v_uid, false\)\) then  -- S47'
+  and (select position(pg_temp.s47_text('cancel') in p.prosrc) > 0 and position(pg_temp.s47_text('block') in p.prosrc) > 0
          from pg_proc p where p.oid = 'public.tg_maintenance_requests_guard()'::regprocedure),
-  'P4: each body carries its S47 term: the expiry test in five, the definite cancel answer in the guard');
+  'P4: each body carries its S47 term: the expiry test in five; in the guard, the definite cancel answer and the write rule');
+select is(
+  (select p.prosecdef::text || ':' || p.provolatile::text || ':' || coalesce(p.proconfig::text, '-') || ':' || pg_get_userbyid(p.proowner)
+          || ':' || p.proisstrict::text || ':' || p.proleakproof::text || ':' || p.proparallel::text || ':' || pg_get_function_result(p.oid)
+          || ':' || coalesce(p.proacl::text, '-') || ':' || md5(p.prosrc) || ':' || coalesce(md5(obj_description(p.oid, 'pg_proc')), '-')
+     from pg_proc p where p.oid = to_regprocedure('public.tg_maintenance_request_attachments_guard()')),
+  'false:v:{search_path=public}:postgres:false:false:u:trigger:{postgres=X/postgres,service_role=X/postgres}:d896b5511d7e7036c663f9309acfc91c:68328a75e9060258ad775ccd1fddd8cf',
+  'P5: the photo guard''s function: SECURITY INVOKER, volatile, search_path pinned, owned by postgres, EXECUTE for service_role only, its reviewed body and comment');
 
 -- ══ F. The migration's preflight, replayed ════════════════════════════════
 select is(pg_temp.try_pre(null),
   '55000:s47_preflight:ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[]) drifted, '
-  'public.my_warehouse_ids() drifted, public.tg_maintenance_requests_guard() drifted, '
+  'public.my_warehouse_ids() drifted, public.tg_maintenance_request_attachments_guard() exists, public.tg_maintenance_requests_guard() drifted, '
   'public.user_can_access_inventory(uuid,uuid,uuid,text) drifted, public.user_can_access_warehouse(uuid,uuid,text) drifted, '
-  'public.user_can_see_item_category(uuid,uuid,uuid) drifted',
-  'F1: a second run is refused before anything is applied (55000, hint s47_preflight): every body it restates has drifted from its pin');
-select is(pg_temp.try_pre(pg_temp.pre(array['ledger._seal', 'my_warehouse_ids', 'tg_maintenance_requests_guard',
-                                            'user_can_access_inventory', 'user_can_access_warehouse', 'user_can_see_item_category'])),
-  'ok',
-  'F2: on the six pre-S47 bodies (R1''s) the preflight passes: its pins are production''s bodies and headers');
+  'public.user_can_see_item_category(uuid,uuid,uuid) drifted, trg_maintenance_request_attachments_guard exists',
+  'F1: a second run is refused before anything is applied (55000, hint s47_preflight): every body it restates has drifted from its pin, and the photo guard''s two names are taken');
 select is(pg_temp.try_pre(pg_temp.pre(array['ledger._seal', 'my_warehouse_ids', 'tg_maintenance_requests_guard',
                                             'user_can_access_inventory', 'user_can_access_warehouse', 'user_can_see_item_category'])
+                          || E';\n' || pg_temp.drop_photo_guard()),
+  'ok',
+  'F2: on the six pre-S47 bodies (R1''s), with the photo guard gone, the preflight passes: its pins are production''s bodies and headers');
+select is(pg_temp.try_pre(pg_temp.pre(array['ledger._seal', 'my_warehouse_ids', 'tg_maintenance_requests_guard',
+                                            'user_can_access_inventory', 'user_can_access_warehouse', 'user_can_see_item_category'])
+                          || E';\n' || pg_temp.drop_photo_guard()
                           || E';\nalter function public.user_can_see_item_category(uuid, uuid, uuid) security invoker'),
   '55000:s47_preflight:public.user_can_see_item_category(uuid,uuid,uuid) drifted',
   'F3: a drifted header (SECURITY INVOKER) on a pre-S47 body is refused too, naming only that function');
 
--- ══ X. Mutations: each S47 line taken out ═════════════════════════════════
+-- ══ X. Mutations: each S47 line taken out, the photo guard dropped ═════════
 select is(pg_temp.value(null, null, format('select pg_temp.seal_scope(%L)', :sx), pg_temp.pre(array['ledger._seal'])),
   'in_scope#live=out_of_scope',
   'X1: _seal''s S47 line taken out (the helpers kept): L1''s drawer is in scope again and _seal disagrees with the live predicate');
@@ -591,7 +711,29 @@ select is(pg_temp.value('authenticated', :mno,
             format($q$update public.maintenance_requests set status = 'cancelled', cancelled_at = now() where id = %L returning status$q$, :mrA),
             pg_temp.pre(array['tg_maintenance_requests_guard'])),
   'cancelled',
-  'X4: the guard''s old cancel condition put back: M1''s cancel goes through again');
+  'X4: the guard''s pre-S47 body (the old cancel condition back, the write rule out): M1''s cancel goes through again');
+select is(pg_temp.value('authenticated', :mno,
+            format($q$with u as (update public.maintenance_requests set subject = 'Rewritten by mno', description = 'Rewritten', priority = 'low'
+                                  where id in (%L, %L) returning id)
+                      select count(*)::text from u$q$, :mrA, :mrD),
+            $p$select pg_temp.unpatch('public.tg_maintenance_requests_guard()', 'block')$p$),
+  '2',
+  'X5: the guard''s write rule alone taken out (the cancel line kept): M3''s and M4''s changes go through again');
+select is(pg_temp.value('authenticated', :mno,
+            format('delete from public.maintenance_request_attachments where id = %L returning id::text', :pD1),
+            'drop trigger trg_maintenance_request_attachments_guard on public.maintenance_request_attachments'),
+  '54700000-0000-0000-0000-000000000501',
+  'X6: the photo guard''s trigger dropped: M5''s delete goes through again');
+select case when has_table_privilege('authenticated', 'public.maintenance_request_attachments', 'INSERT')
+  then is(pg_temp.value('authenticated', :mno,
+            format($q$insert into public.maintenance_request_attachments
+                        (organization_id, maintenance_request_id, storage_path, original_filename, safe_filename, mime_type, byte_size, uploaded_by)
+                      values (%L, %L, %L, 'm6.jpg', 'm6.jpg', 'image/jpeg', 100, %L) returning storage_path$q$,
+                   :org, :mrD, '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/m6.jpg', :mno),
+            'drop trigger trg_maintenance_request_attachments_guard on public.maintenance_request_attachments'),
+          '54700000-0000-0000-0000-00000000000a/54700000-0000-0000-0000-000000000404/m6.jpg',
+          'X7: the photo guard''s trigger dropped: M6''s photo row goes in again')
+  else skip('members hold no INSERT on maintenance_request_attachments (docket S9): the privilege refuses first', 1) end;
 
 select * from finish();
 rollback;

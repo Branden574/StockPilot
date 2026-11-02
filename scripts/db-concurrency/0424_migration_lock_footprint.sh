@@ -2,8 +2,9 @@
 #
 # Lock footprint of the S47 migration
 # (supabase/migrations/*_act_as_expiry_in_access_gates.sql). The file
-# restates six functions and comments three of them, and nothing else.
-# What it locks:
+# restates six functions, creates the maintenance photo guard (a function and
+# its trigger on public.maintenance_request_attachments), and comments five
+# functions, and nothing else. What it locks:
 #
 #   - public.warehouses, organization_members, user_profiles and
 #     user_warehouse_assignments, AccessShareLock, held to commit. The three
@@ -16,20 +17,33 @@
 #     four that is held or queued (an ALTER TABLE, VACUUM FULL, another
 #     migration), where its 900 ms lock_timeout ends it with 55P03 and
 #     nothing applied.
+#   - public.maintenance_request_attachments, ShareRowExclusiveLock, held to
+#     commit (CREATE TRIGGER). Reads go on; a photo row insert or delete
+#     waits for the rest of the file, and the file waits behind one already
+#     running or any lock stronger than a read, where its lock_timeout ends
+#     it with 55P03 and nothing applied.
 #   - COMMENT ON FUNCTION's ShareUpdateExclusiveLock on
-#     user_can_access_warehouse, user_can_access_inventory and ledger._seal,
-#     held to commit (only other DDL on the same function waits).
-#   - Nothing else: the preflight reads catalogs only, and the three plpgsql
-#     bodies (user_can_see_item_category, ledger._seal, the maintenance guard)
-#     are checked for syntax only, so the tables they read are not opened.
+#     user_can_access_warehouse, user_can_access_inventory, the maintenance
+#     guard, the new photo guard function and ledger._seal, held to commit
+#     (only other DDL on the same function waits).
+#   - The photo guard's REVOKE and GRANT: AccessShareLock on the roles they
+#     name (anon, authenticated, service_role, and postgres as the grantor),
+#     held to commit; only DDL on those roles (DROP ROLE) waits.
+#   - Nothing else: the preflight reads catalogs only, and the four plpgsql
+#     bodies (user_can_see_item_category, ledger._seal, the maintenance guard,
+#     the photo guard) are checked for syntax only, so the tables they read
+#     are not opened.
 #
 # A call of a function takes no lock on it, so a call in flight never holds
 # the file up and the file never holds a call up. Checked:
 #
 #   1a. Run as one transaction, the file holds at its end AccessShareLock on
-#       the four tables, and no other lock on a table outside the catalogs.
-#   1b. Its only object locks are COMMENT's three ShareUpdateExclusiveLocks,
-#       on the three commented functions.
+#       the four tables and ShareRowExclusiveLock on
+#       maintenance_request_attachments, and no other lock on a table outside
+#       the catalogs.
+#   1b. Its only object locks are COMMENT's five ShareUpdateExclusiveLocks,
+#       on the five commented functions, and the AccessShareLocks REVOKE and
+#       GRANT take on the four roles.
 #   2.  The file runs in under 250 ms on the local stack.
 #   3.  A call in flight: a manager's claim_picking waits on its order row
 #       (held by a third session) while the file runs. The file finishes under
@@ -43,6 +57,12 @@
 #       table in user_can_access_warehouse's statement (the first body that
 #       reads it), and ends with 55P03 at its lock_timeout, in under 2 s,
 #       keeping nothing.
+#   5b. maintenance_request_attachments: with ACCESS EXCLUSIVE, and then ROW
+#       EXCLUSIVE (a photo row write in flight), held on it elsewhere, the
+#       file run as the push runs it waits on a ShareRowExclusiveLock on it in
+#       the CREATE TRIGGER statement and ends with 55P03 at its lock_timeout,
+#       in under 2 s, keeping nothing (no photo guard function or trigger
+#       either). With a read held there (ACCESS SHARE), it runs to its end.
 #   6.  No other table: with ACCESS EXCLUSIVE held on every other table in
 #       public and ledger (maintenance_requests, locations and
 #       user_category_assignments, which the plpgsql bodies read, included),
@@ -53,13 +73,14 @@
 #       pg_proc rows and comment rows are the row versions they were (xmin),
 #       so the push can simply be run again. Control: the same file with
 #       nothing held, read inside its own transaction before its rollback,
-#       rewrote the six pg_proc rows and the three comments (the witness sees
-#       a kept statement).
+#       rewrote the six pg_proc rows and four of their comments (the witness
+#       sees a kept statement). The photo guard is absent after both.
 #
 # Every migration session rolls back, so the script changes nothing but its
 # own fixture rows. The file's preflight refuses a second run, so this runs
 # against a LOCAL stack at the head before the S47 migration (the script
-# stops if any of the six bodies already carries an S47 line). CONTAINER as
+# stops if any of the six bodies already carries an S47 line, or the photo
+# guard exists). CONTAINER as
 # in the other scripts here (default the dev stack's supabase_db_stockpilot;
 # the migration scratch stack is supabase_db_spmig). Fixtures live under the
 # 54702222-... namespace and are removed at the start, at the end and by the
@@ -93,6 +114,9 @@ SIX="'public.user_can_access_warehouse(uuid,uuid,text)'::regprocedure,
      'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])'::regprocedure,
      'public.tg_maintenance_requests_guard()'::regprocedure"
 FOUR="public.organization_members public.user_profiles public.user_warehouse_assignments public.warehouses"
+PHOTO_GUARD="select (to_regprocedure('public.tg_maintenance_request_attachments_guard()') is not null)::int
+              + (select count(*) from pg_trigger where tgrelid = 'public.maintenance_request_attachments'::regclass
+                    and tgname = 'trg_maintenance_request_attachments_guard')"
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -210,7 +234,8 @@ trap 'exit 129' HUP
 if [ "$(q "select count(*) from pg_proc where oid in ($SIX)")" != "6" ]; then
   echo "one of the six functions the file restates is missing on this stack"; exit 1
 fi
-if [ "$(q "select count(*) from pg_proc where oid in ($SIX) and prosrc like '%-- S47%'")" != "0" ]; then
+if [ "$(q "select count(*) from pg_proc where oid in ($SIX) and prosrc like '%-- S47%'")" != "0" ] \
+   || [ "$(q "$PHOTO_GUARD")" != "0" ]; then
   echo "the S47 migration is already applied on this stack (its preflight refuses a second run): use the head before it"; exit 1
 fi
 if grep -qiE '^[[:space:]]*(begin|commit|rollback|start transaction)[[:space:]]*;' "$MIG"; then
@@ -235,11 +260,18 @@ LOCKS_SQL="select 'tables=' || coalesce(string_agg(distinct n.nspname || '.' || 
   from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
  where l.locktype = 'relation' and l.pid = pg_backend_pid() and l.granted
    and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema');
-select 'objects=' || count(*) || '/' || count(*) filter (where l.classid = 'pg_proc'::regclass and l.mode = 'ShareUpdateExclusiveLock'
-         and l.objid in ('public.user_can_access_warehouse(uuid,uuid,text)'::regprocedure,
-                         'public.user_can_access_inventory(uuid,uuid,uuid,text)'::regprocedure,
-                         'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])'::regprocedure))
-  from pg_locks l where l.locktype = 'object' and l.pid = pg_backend_pid() and l.granted;
+select 'objects=' || count(*) filter (where o.comment_lock) || '/5 comment locks; roles='
+       || coalesce(string_agg(o.rolname || ':' || o.mode, ',' order by o.rolname) filter (where o.rolname is not null), '-')
+       || '; other=' || count(*) filter (where not o.comment_lock and o.rolname is null)
+  from (select l.mode,
+               (l.classid = 'pg_proc'::regclass and l.mode = 'ShareUpdateExclusiveLock'
+                and l.objid in ('public.user_can_access_warehouse(uuid,uuid,text)'::regprocedure,
+                                'public.user_can_access_inventory(uuid,uuid,uuid,text)'::regprocedure,
+                                'public.tg_maintenance_requests_guard()'::regprocedure,
+                                'public.tg_maintenance_request_attachments_guard()'::regprocedure,
+                                'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])'::regprocedure)) as comment_lock,
+               case when l.classid = 'pg_authid'::regclass then (select r.rolname::text from pg_roles r where r.oid = l.objid) end as rolname
+          from pg_locks l where l.locktype = 'object' and l.pid = pg_backend_pid() and l.granted) o;
 select 'ms=' || round(extract(epoch from clock_timestamp() - now()) * 1000);"
 
 # The file in one transaction, its locks (and, with a third argument, the
@@ -263,10 +295,12 @@ push_file() { # push_file <application_name> <out>
 # ═══ 1 and 2. The file alone ══════════════════════════════════════════════
 echo "== 1-2. the file in one transaction, rolled back"
 if run_file s47-fp-alone "$TMP/alone.out"; then ok "1: the file ran"; else bad "1: the file failed: $(cat "$TMP/alone.out")"; fi
-check "1a: tables held at the end: AccessShareLock on the four tables the SQL bodies read, nothing else" \
+check "1a: tables held at the end: AccessShareLock on the four tables the SQL bodies read, ShareRowExclusiveLock on maintenance_request_attachments (CREATE TRIGGER), nothing else" \
   "$(grep '^tables=' "$TMP/alone.out")" \
-  "tables=public.organization_members:AccessShareLock,public.user_profiles:AccessShareLock,public.user_warehouse_assignments:AccessShareLock,public.warehouses:AccessShareLock"
-check "1b: object locks: COMMENT's ShareUpdateExclusiveLock on the three commented functions, nothing else" "$(grep '^objects=' "$TMP/alone.out")" "objects=3/3"
+  "tables=public.maintenance_request_attachments:ShareRowExclusiveLock,public.organization_members:AccessShareLock,public.user_profiles:AccessShareLock,public.user_warehouse_assignments:AccessShareLock,public.warehouses:AccessShareLock"
+check "1b: object locks: COMMENT's ShareUpdateExclusiveLock on the five commented functions, REVOKE and GRANT's AccessShareLock on the four roles they name, nothing else" \
+  "$(grep '^objects=' "$TMP/alone.out")" \
+  "objects=5/5 comment locks; roles=anon:AccessShareLock,authenticated:AccessShareLock,postgres:AccessShareLock,service_role:AccessShareLock; other=0"
 below "2: the file runs fast" "$(grep '^ms=' "$TMP/alone.out" | cut -d= -f2)" 250
 
 # ═══ 3. A call in flight ══════════════════════════════════════════════════
@@ -324,11 +358,41 @@ for t in $FOUR; do
   check "5 $tag: nothing kept (the six functions' pg_proc and comment row versions)" "$(changed_rows "$before" "$(row_versions)")" "0"
 done
 
+# ═══ 5b. maintenance_request_attachments ══════════════════════════════════
+for mode in 'access exclusive' 'row exclusive'; do
+  tag="${mode// /-}"
+  echo "== 5b. $mode held on maintenance_request_attachments: the file, run as the push runs it"
+  before="$(row_versions)"
+  hold "s47-fp-mra-$tag" "lock table public.maintenance_request_attachments in $mode mode;" 4 "$TMP/mra-holder-$tag.log" &
+  PH=$!
+  wait_event "s47-fp-mra-$tag" PgSleep || bad "5b $tag: the holder never got its lock: $(cat "$TMP/mra-holder-$tag.log")"
+  observe_wait "s47-fp-mra-file-$tag" 'create trigger trg_maintenance_request_attachments_guard' "$TMP/mra-observed-$tag.log" &
+  PO=$!
+  t0=$(now_ms); push_file "s47-fp-mra-file-$tag" "$TMP/mra-file-$tag.x55"; rc=$?; t1=$(now_ms)
+  wait "$PO"; wait "$PH"
+  check "5b $tag: it waits on a ShareRowExclusiveLock on maintenance_request_attachments, and nothing else" \
+    "$(grep '^waits=' "$TMP/mra-observed-$tag.log")" "waits=relation:maintenance_request_attachments:ShareRowExclusiveLock"
+  check "5b $tag: in the CREATE TRIGGER statement" "$(grep '^statement=' "$TMP/mra-observed-$tag.log")" "statement=1"
+  check "5b $tag: the file ends with 55P03 (psql exit 3)" "$rc:$(grep -c '55P03' "$TMP/mra-file-$tag.x55")" "3:1"
+  below "5b $tag: it gives up at its lock_timeout" "$((t1 - t0))" 2000
+  check "5b $tag: nothing kept (the six functions' row versions; no photo guard)" \
+    "$(changed_rows "$before" "$(row_versions)"):$(q "$PHOTO_GUARD")" "0:0"
+done
+echo "== 5b. a read held on maintenance_request_attachments: the file, rolled back"
+hold s47-fp-mra-read "lock table public.maintenance_request_attachments in access share mode;" 3 "$TMP/mra-read-holder.log" &
+PH=$!
+wait_event s47-fp-mra-read PgSleep || bad "5b read: the holder never got its lock: $(cat "$TMP/mra-read-holder.log")"
+if run_file s47-fp-mra-read-file "$TMP/mra-read.log"; then ok "5b read: the file ran"; else bad "5b read: the file failed: $(cat "$TMP/mra-read.log")"; fi
+below "5b read: under its lock_timeout" "$(grep '^ms=' "$TMP/mra-read.log" | cut -d= -f2)" 900
+check "5b read: the reader still held its lock when the file finished" "$(q "select count(*) from pg_stat_activity where application_name = 's47-fp-mra-read' and wait_event = 'PgSleep'")" "1"
+wait "$PH"
+
 # ═══ 6. No other table ════════════════════════════════════════════════════
 echo "== 6. ACCESS EXCLUSIVE held on every other table in public and ledger: the file, rolled back"
 OTHERS_WHERE="c.relkind in ('r', 'p') and n.nspname in ('public', 'ledger')
   and (n.nspname, c.relname) not in (('public', 'organization_members'), ('public', 'user_profiles'),
-                                     ('public', 'user_warehouse_assignments'), ('public', 'warehouses'))"
+                                     ('public', 'user_warehouse_assignments'), ('public', 'warehouses'),
+                                     ('public', 'maintenance_request_attachments'))"
 OTHERS="$(q "select string_agg(format('%I.%I', n.nspname, c.relname), ', ' order by n.nspname, c.relname)
                from pg_class c join pg_namespace n on n.oid = c.relnamespace where $OTHERS_WHERE")"
 NOTHERS="$(q "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where $OTHERS_WHERE")"
@@ -360,12 +424,13 @@ wait "$PO"; wait "$PH"
 check "7: it reached the last statement, ledger._seal's comment" "$(grep '^statement=' "$TMP/late-observed.log")" "statement=1"
 check "7: there it waits on that function's ShareUpdateExclusiveLock" "$(grep '^waits=' "$TMP/late-observed.log")" "waits=object:-:ShareUpdateExclusiveLock"
 check "7: the file ends with 55P03 (psql exit 3)" "$rc:$(grep -c '55P03' "$TMP/late-file.x55")" "3:1"
-check "7: nothing kept: the six bodies and two comments it wrote are rolled back" "$(changed_rows "$before" "$(row_versions)")" "0"
+check "7: nothing kept: the six bodies and the comments it wrote are rolled back, and no photo guard" \
+  "$(changed_rows "$before" "$(row_versions)"):$(q "$PHOTO_GUARD")" "0:0"
 echo "== 7. control: the same file with nothing held, its row versions read inside its own transaction"
 if run_file s47-fp-control "$TMP/control.log" rows; then ok "7: control: the file ran"; else bad "7: control: the file failed: $(cat "$TMP/control.log")"; fi
-check "7: control: inside it, the six pg_proc rows and the three comments are new row versions (the witness sees a kept statement)" \
-  "$(changed_rows "$before" "$(grep '^rows=' "$TMP/control.log" | cut -d= -f2-)")" "9"
-check "7: control: and after its rollback, none is" "$(changed_rows "$before" "$(row_versions)")" "0"
+check "7: control: inside it, the six pg_proc rows and four of their comments are new row versions (the witness sees a kept statement)" \
+  "$(changed_rows "$before" "$(grep '^rows=' "$TMP/control.log" | cut -d= -f2-)")" "10"
+check "7: control: and after its rollback, none is, and no photo guard" "$(changed_rows "$before" "$(row_versions)"):$(q "$PHOTO_GUARD")" "0:0"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL CHECKS PASSED"; else echo "$FAILS CHECK(S) FAILED"; fi

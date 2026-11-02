@@ -804,9 +804,13 @@ PGTAP_TESTS=(
   # live seat, the owner and assigned staff are unchanged. The maintenance
   # guard refuses a cancel by a manager without maintenance_requests:manage on
   # a request whose requester was deleted (the old check was NULL there and
-  # refused no one). Each restated body is production's with its one S47 line
-  # taken out, the migration's preflight is replayed from the recorded
-  # statements, and taking each S47 line out lets the refused answer through
+  # refused no one), and such a manager, whom the update and photo policies
+  # admit by role, changes no request that is not theirs and adds or deletes
+  # no photo row on one (the guard's write rule and the new photo guard
+  # trigger); the requester and a manage holder still do. Each restated body
+  # is production's with its S47 lines taken out, the migration's preflight is
+  # replayed from the recorded statements, and taking each S47 line out (or
+  # dropping the photo guard's trigger) lets the refused answer through
   # again. The lock footprint is
   # scripts/db-concurrency/0424_migration_lock_footprint.sh.
   supabase/tests/0424_act_as_expiry_in_access_gates.test.sql

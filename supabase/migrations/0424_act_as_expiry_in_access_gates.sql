@@ -1,12 +1,15 @@
--- Act-as seat expiry in the access gates, and a definite maintenance cancel
--- check (docket item S47).
+-- Act-as seat expiry in the access gates, and the maintenance write rule
+-- (docket item S47).
 --
 -- An expired "act as" seat no longer passes the two subject-scoped access
 -- gates or their two sibling helpers, ledger._seal's warehouse arm agrees
--- with them, and the maintenance guard's cancel check gives a definite
--- answer when the request's requester was deleted. DB-only: no row is
--- written, and no table, view, sequence, policy, trigger or grant is created
--- or changed.
+-- with them, the maintenance guard's cancel check gives a definite answer
+-- when the request's requester was deleted, and a maintenance request and
+-- its photo rows change, through the Data API, only for a holder of
+-- maintenance_requests:manage or the request's own requester. DB-only: no
+-- row is written, and no table, view, sequence or policy is created or
+-- changed. One function and its trigger are new (the photo guard, 5), with
+-- EXECUTE for service_role only.
 --
 -- ── WHAT WAS WRONG ─────────────────────────────────────────────────────────
 --   1. An act-as seat is a platform admin's temporary owner membership: an
@@ -56,14 +59,31 @@
 --      (read_all) and passes the update policy by role, could cancel such a
 --      request for good with a direct Data API call (the app refuses them
 --      before it writes).
+--   4. The same admin or manager could change every other part of any open
+--      request, and add or delete photo rows on it. maintenance_requests_update
+--      and maintenance_request_attachments_insert/_delete (0317) admit a
+--      manager by role, `or (select public.has_org_role(organization_id,
+--      'manager'))`, whatever the permission says, and the guard limited only
+--      resolving, cancelling, archiving and the local owner to the
+--      permission, so the subject, description, priority, category, place
+--      fields and links of another member's request, or of one whose
+--      requester was deleted, stayed open. The app's rule is manage or the
+--      request's own requester: MaintenanceRequestsService.update and
+--      recordDraftOpened refuse anyone else ("Not your request."), and so does
+--      the photo upload (MaintenanceAttachmentsService.assertParentOwnedAndOpen).
+--      Its photo remove() has no check of its own and relies on the delete
+--      policy, so such a manager's Remove went through in the app too. A
+--      role_permission_overrides row switching manage off for the whole
+--      manager role left every manager in that state.
 --
 -- ── WHAT THIS MIGRATION DOES ───────────────────────────────────────────────
 --   Six CREATE OR REPLACE FUNCTION statements, each copied byte for byte
 --   from the function's live definition with ONE line added or changed,
---   tagged '-- S47'. The tag names the docket item, never this file's
---   number, so a renumber at push time moves no body pin, and taking the
---   tagged line out (in the guard, putting the old condition back) gives
---   production's body exactly (pgTAP R1).
+--   tagged '-- S47' (the guard has one changed line and one added block of
+--   four, every line tagged). The tag names the docket item, never this
+--   file's number, so a renumber at push time moves no body pin, and taking
+--   the tagged lines out (in the guard, putting the old cancel condition
+--   back) gives production's body exactly (pgTAP R1).
 --   1. public.user_can_access_warehouse and public.user_can_access_inventory
 --      (0310): the member CTE also requires
 --        (m.impersonation_expires_at is null or m.impersonation_expires_at > now())
@@ -82,15 +102,42 @@
 --        if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then
 --      a definite answer whichever side is null. (The explicit
 --      "old.requester_user_id is not null and old.requester_user_id = v_uid"
---      is still NULL when v_uid is null.)
---   Three COMMENT ON FUNCTION statements: the two helpers say they are
+--      is still NULL when v_uid is null.) And the UPDATE path ends with the
+--      same condition for every change, refused with 42501 'Only the
+--      requester or a maintenance manager can change a request.': after the
+--      arms above, so the resolve, cancel, archive and local owner refusals
+--      keep their own words. Every API writer already meets it (the service
+--      checks manage or the requester before each write); the service role,
+--      SECURITY DEFINER callers and foreign key actions are not API roles
+--      and skip the guard as before.
+--   5. A new BEFORE INSERT OR DELETE trigger on
+--      public.maintenance_request_attachments,
+--      trg_maintenance_request_attachments_guard, and its SECURITY INVOKER
+--      function public.tg_maintenance_request_attachments_guard(): an API
+--      role adds or deletes a photo row only with maintenance_requests:manage
+--      or as the request's own requester, else 42501. The policies stay as
+--      they are: they hold every other condition (the request open, the
+--      uploader the caller, the module on, 'resolution' photos for manage),
+--      and a policy statement would take ACCESS EXCLUSIVE on the table and,
+--      through supautils' policy_grants, on every table that setting lists
+--      (on the local stack: auth.users, auth.sessions, storage.objects and
+--      20 more auth, storage and realtime tables, held to commit, so sign-ins
+--      and file reads would wait). EXECUTE is revoked from public, anon and
+--      authenticated and granted to service_role, as on the guard (a trigger
+--      function is never an RPC). Docket S9's migration (open when this was
+--      written) revokes INSERT on the table from anon and authenticated and
+--      drops the insert policy; once it is applied the privilege refuses a
+--      member's insert before this trigger runs, and the delete arm is what
+--      still answers maintenance_request_attachments_delete's role arm.
+--   Five COMMENT ON FUNCTION statements: the two helpers say they are
 --   expiry-aware since S47 (and user_can_access_inventory's no longer says
---   the picking functions are its only callers), and _seal's pin clause
---   names this file's preflight. my_warehouse_ids keeps 0322's comment, the
---   guard keeps 0362's, and user_can_see_item_category has none.
+--   the picking functions are its only callers), the guard's adds the new
+--   rule, the photo guard's is new, and _seal's pin clause names this file's
+--   preflight. my_warehouse_ids keeps 0322's comment and
+--   user_can_see_item_category has none.
 --   Signature, result, volatility, SECURITY mode, SET clause, owner and
---   EXECUTE are unchanged for all six (CREATE OR REPLACE keeps the owner and
---   the grants), and nothing else changes.
+--   EXECUTE are unchanged for the six restated functions (CREATE OR REPLACE
+--   keeps the owner and the grants), and nothing else changes.
 --
 -- Only an expired seat's answers change. A live seat keeps its owner access
 -- for its 45 minutes, by design, and every real membership has
@@ -111,12 +158,17 @@
 -- WHO CHANGES TODAY: platform admins only, through the Data API or a
 -- realtime subscription in the minutes between a seat's expiry and the
 -- sweep; and an admin or manager whose maintenance_requests:manage is
--- switched off, cancelling a request whose requester was deleted (the app
--- already refuses them). In the app, choosing an expired, unswept seat as a
--- picker now gets the app's existing "That user is not an active member of
--- this organization." The release steps count, read-only, before the push:
--- seats past expiry, orphaned seats, picks claimed or completed by a seat,
--- open requests with no requester, manage overrides switched off.
+-- switched off (a user or a role override), who can no longer cancel,
+-- change, or add or delete photos on a maintenance request that is not
+-- their own (the app already refuses all of it but the photo Remove). In
+-- the app, choosing an expired, unswept seat as a picker now gets the app's
+-- existing "That user is not an active member of this organization.", and
+-- such a manager's Remove on another member's photo now ends in the photo
+-- panel's existing "Could not remove the photo." (the route answers 500
+-- internal_error with its generic text). The release steps count,
+-- read-only, before the push: seats past expiry, orphaned seats, picks
+-- claimed or completed by a seat, open requests with no requester, manage
+-- overrides switched off (user and role).
 --
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- The preflight reads catalogs only. The three SQL-language bodies
@@ -124,41 +176,53 @@
 -- are parsed when created, which takes AccessShareLock on public.warehouses,
 -- organization_members, user_profiles and user_warehouse_assignments until
 -- commit. AccessShareLock conflicts only with ACCESS EXCLUSIVE: no read,
--- write, row lock or autovacuum waits for it. The three plpgsql bodies are
--- checked for syntax only and lock no table. Each COMMENT holds a
--- ShareUpdateExclusiveLock on its function to commit (only other DDL on the
--- same function waits). A call already running finishes on the body it
--- started with, and a call takes no lock on the function. Only an ACCESS
--- EXCLUSIVE on one of the four tables, held or queued, makes the file wait;
--- lock_timeout 900ms then ends it with 55P03 and nothing applied, and the
--- push can simply be run again. The lock footprint script that carries this
--- migration's number in scripts/db-concurrency/ checks each of these.
+-- write, row lock or autovacuum waits for it. The four plpgsql bodies are
+-- checked for syntax only and lock no table. CREATE TRIGGER holds SHARE ROW
+-- EXCLUSIVE on public.maintenance_request_attachments to commit: reads go
+-- on, a photo row insert or delete waits for the few milliseconds left of
+-- the file, and the file waits for one already running (a single-row
+-- statement). Each COMMENT holds a ShareUpdateExclusiveLock on its function
+-- to commit (only other DDL on the same function waits), and the photo
+-- guard's REVOKE and GRANT hold AccessShareLock on the roles they name
+-- (anon, authenticated, service_role, and postgres as the grantor), so only
+-- DDL on those roles would wait. A call already
+-- running finishes on the body it started with, and a call takes no lock on
+-- the function. Only an ACCESS EXCLUSIVE on one of the four tables, or a
+-- write lock on maintenance_request_attachments, held or queued, makes the
+-- file wait; lock_timeout 900ms then ends it with 55P03 and nothing
+-- applied, and the push can simply be run again. The lock footprint script
+-- that carries this migration's number in scripts/db-concurrency/ checks
+-- each of these.
 --
 -- DATA SAFETY: no row changes. The CLI applies the file as one transaction.
 --
 -- ERRORS: the push raises 55000 (hint s47_preflight: drift, nothing applied)
--- or 55P03 (busy: nothing applied). The functions raise nothing new: an
--- expired seat meets the refusals a non-member already meets (42501 from
--- the picking functions, P0001 invalid_picker from assign_picking), and the
--- guard's refusal is its 42501 'Only the requester or a maintenance manager
--- can cancel a request.' Never 40001 or 40P01 (PostgREST retries those
--- forever, 0367).
+-- or 55P03 (busy: nothing applied). An expired seat meets the refusals a
+-- non-member already meets (42501 from the picking functions, P0001
+-- invalid_picker from assign_picking). The guard's refusals are 42501: its
+-- 'Only the requester or a maintenance manager can cancel a request.' and
+-- the new 'Only the requester or a maintenance manager can change a
+-- request.'; the photo guard's is 42501 'Only the requester or a
+-- maintenance manager can add or remove a request's photos.' Never 40001
+-- or 40P01 (PostgREST retries those forever, 0367).
 --
 -- ROLLBACK (the owner's call only): a forward migration restoring the six
--- pre-S47 bodies (removing the S47 lines gives them exactly, pgTAP R1) and
--- the 0312 and 0373 comments.
+-- pre-S47 bodies (removing the S47 lines gives them exactly, pgTAP R1),
+-- the 0312, 0362 and 0373 comments, and dropping
+-- trg_maintenance_request_attachments_guard and its function.
 
 set lock_timeout = '900ms';
 
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 -- Each restated body must be the exact live text and header it was built
 -- from, the three predicates ledger._seal mirrors and this file leaves alone
--- must be the ones it was proven against, and organization_members must
--- still be unique on (organization_id, user_id) (the 0373 preflight's check:
--- has_org_role's `limit 1` row is the only row). Anything else is drift, or
--- a second run: stop before changing anything. The result type is compared
--- by type, not by its printed name, so the session's search_path cannot
--- change the answer.
+-- must be the ones it was proven against, organization_members must still be
+-- unique on (organization_id, user_id) (the 0373 preflight's check:
+-- has_org_role's `limit 1` row is the only row), and the photo guard's
+-- function and trigger names must be free. Anything else is drift, or a
+-- second run: stop before changing anything. The result type is compared by
+-- type, not by its printed name, so the session's search_path cannot change
+-- the answer.
 do $pre_s47$
 declare
   v_bad text := '';
@@ -201,6 +265,15 @@ begin
                            join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
                         = array['organization_id', 'user_id']) then
     v_bad := v_bad || ' organization_members is no longer unique on (organization_id, user_id);';
+  end if;
+  -- The two names section 5 creates must be free.
+  if to_regprocedure('public.tg_maintenance_request_attachments_guard()') is not null then
+    v_bad := v_bad || ' public.tg_maintenance_request_attachments_guard() exists;';
+  end if;
+  if exists (select 1 from pg_trigger t
+              where t.tgrelid = 'public.maintenance_request_attachments'::regclass
+                and t.tgname = 'trg_maintenance_request_attachments_guard') then
+    v_bad := v_bad || ' trg_maintenance_request_attachments_guard exists;';
   end if;
   if v_bad <> '' then
     raise exception 's47_preflight:%', v_bad
@@ -509,10 +582,13 @@ begin
 end;
 $function$;
 
--- ═══ 4. The maintenance guard's cancel arm ════════════════════════════════
+-- ═══ 4. The maintenance guard: the cancel arm and the write rule ══════════
 -- Restated from 0362_maintenance_request_guard.sql; md5(prosrc)
--- 6605c3607f283e2c3ab025d044da04c0 -> 76ff61d4dea55842de8f2e9757dbd935. Only the cancel arm's
--- condition changes; the trigger (trg_aa_maintenance_requests_guard, BEFORE
+-- 6605c3607f283e2c3ab025d044da04c0 -> 276cf27bfc1f122b7604a17b4555b357. The cancel arm's
+-- condition changes, and four tagged lines at the end of the UPDATE path
+-- refuse any other change by an API role that holds neither
+-- maintenance_requests:manage nor the request (the service's rule for update
+-- and draft-open). The trigger (trg_aa_maintenance_requests_guard, BEFORE
 -- INSERT OR UPDATE FOR EACH ROW) is untouched.
 create or replace function public.tg_maintenance_requests_guard()
 returns trigger
@@ -698,12 +774,66 @@ begin
     raise exception 'That status change is not allowed.'
       using errcode = '42501';
   end if;
+  if not (v_manage or coalesce(old.requester_user_id = v_uid, false)) then  -- S47
+    raise exception 'Only the requester or a maintenance manager can change a request.'  -- S47
+      using errcode = '42501';  -- S47
+  end if;  -- S47
 
   return new;
 end;
 $$;
 
--- ═══ 5. Comments ══════════════════════════════════════════════════════════
+-- ═══ 5. The maintenance photo guard ══════════════════════════════════════
+-- maintenance_request_attachments_insert and _delete (0317) admit a manager
+-- by role whatever maintenance_requests:manage says. This BEFORE INSERT OR
+-- DELETE trigger asks the app's rule of an API role: manage, or the
+-- request's own requester (false, never NULL, when the requester was
+-- deleted). The request is read as the caller, under its RLS, as the
+-- policies read it. The service role, SECURITY DEFINER callers and
+-- foreign key actions (a request or organization deleted) are not API roles
+-- and pass. The policies keep every other condition.
+create function public.tg_maintenance_request_attachments_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_org uuid;
+  v_request uuid;
+begin
+  if current_user not in ('authenticated', 'anon') then
+    return coalesce(new, old);
+  end if;
+  if tg_op = 'DELETE' then
+    v_org := old.organization_id;
+    v_request := old.maintenance_request_id;
+  else
+    v_org := new.organization_id;
+    v_request := new.maintenance_request_id;
+  end if;
+  if not (public.has_permission(v_org, 'maintenance_requests:manage')
+          or exists (select 1 from public.maintenance_requests r
+                      where r.id = v_request
+                        and r.organization_id = v_org
+                        and r.requester_user_id = auth.uid())) then
+    raise exception 'Only the requester or a maintenance manager can add or remove a request''s photos.'
+      using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+revoke all on function public.tg_maintenance_request_attachments_guard() from public, anon, authenticated;
+grant execute on function public.tg_maintenance_request_attachments_guard() to service_role;
+
+create trigger trg_maintenance_request_attachments_guard
+  before insert or delete on public.maintenance_request_attachments
+  for each row execute function public.tg_maintenance_request_attachments_guard();
+
+-- ═══ 6. Comments ══════════════════════════════════════════════════════════
+-- ledger._seal's stays the file's last statement (the footprint script's
+-- check 7 holds its lock elsewhere to stop the file there).
 comment on function public.user_can_access_warehouse(uuid, uuid, text) is
   'SUBJECT-scoped warehouse access gate (0007), disabled-subject-aware since '
   '0310 and expired-Act-as-seat-aware since S47 (0424). EXECUTE revoked from '
@@ -721,6 +851,22 @@ comment on function public.user_can_access_inventory(uuid, uuid, uuid, text) is
   'returns API guard triggers and the returns policies, which are scoped to `to '
   'authenticated`) reach it as their definer, as authenticated or as '
   'service_role, which all keep EXECUTE, so none of them is affected.';
+
+comment on function public.tg_maintenance_requests_guard() is
+  'BEFORE INSERT OR UPDATE guard (0362): API-role maintenance requests start '
+  'open and unnumbered with a profile-sourced requester snapshot; resolve, '
+  'cancel, archive and owner changes follow the service''s gates; closed-state '
+  'stamps are never cleared; references stay in the org. Since S47 (0424) any '
+  'other change also needs maintenance_requests:manage or the request''s own '
+  'requester, as in the service, whatever role the update policy admits.';
+
+comment on function public.tg_maintenance_request_attachments_guard() is
+  'BEFORE INSERT OR DELETE guard on maintenance_request_attachments (S47, '
+  '0424): an API role adds or deletes a photo row only with '
+  'maintenance_requests:manage or as the request''s own requester, the rule '
+  'the app''s photo upload follows. The insert and delete policies (0317) also '
+  'admit a manager by role whatever the permission says; this refuses that '
+  'arm, and the policies keep every other condition.';
 
 comment on function ledger._seal(uuid, uuid, uuid, text, public.stock_draw_holding[], uuid[]) is
   '0373: builds the draw a null-location stock change returns, with the '
