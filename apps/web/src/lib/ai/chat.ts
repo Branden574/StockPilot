@@ -6,6 +6,7 @@ import {
   type Part,
 } from '@google/generative-ai';
 
+import { ASSISTANT_ISBN_LIMIT } from '@/lib/books/import-limits';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { audit } from '@/server/services/audit';
@@ -274,7 +275,7 @@ Rules:
        dashboard: /dashboard/books/import has the same buttons for
        direct uploads outside of chat.)
     1. User pastes/lists ISBNs and asks to import them.
-    2. If 50+ ISBNs, recommend /dashboard/books/import (the dashboard
+    2. If more than ${ASSISTANT_ISBN_LIMIT} ISBNs, recommend /dashboard/books/import (the dashboard
        page handles up to 200 per batch). Stop there.
     3. Otherwise, call previewBulkBookImport with the ISBNs. The
        result tells you which are READY, which are DUPLICATE_IN_DB

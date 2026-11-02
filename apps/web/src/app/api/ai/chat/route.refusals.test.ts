@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
+import { CHAT_MESSAGE_MAX_CHARS, CHAT_MESSAGE_TOO_LONG } from '@/lib/ai/chat-limits';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -42,7 +43,9 @@ vi.mock('@/lib/ai/chat', () => ({ buildOrgSnapshot: vi.fn(), streamChat: vi.fn()
 vi.mock('@/lib/ai/chat-claude', () => ({ streamChatClaude: vi.fn() }));
 vi.mock('@/lib/ai/provider', () => ({ resolveAiProvider: () => 'claude' }));
 
-const MESSAGE_TOO_LONG = 'Your message is too long. Keep it under 2,000 characters.';
+// The route accepts exactly 2,000 characters, so "or fewer" (B76). The web
+// chat panel shows the same sentence before sending (lib/ai/chat-limits.ts).
+const MESSAGE_TOO_LONG = 'Your message is too long. Keep it to 2,000 characters or fewer.';
 const CONVERSATION_TOO_LONG = 'This conversation is too long. Start a new chat.';
 const UNREADABLE = 'The request could not be read.';
 
@@ -115,6 +118,14 @@ describe('POST /api/ai/chat refusals', () => {
       error: 'internal_error',
       message: 'Could not save your message.',
     });
+  });
+
+  it('a message of exactly 2,000 characters is accepted, and the sentence is the shared one (B76)', async () => {
+    // Accepted: the sessions stub refuses the save, as above.
+    const res = await POST(chat(JSON.stringify({ message: 'm'.repeat(CHAT_MESSAGE_MAX_CHARS) })));
+    expect(res.status).toBe(500);
+    expect(CHAT_MESSAGE_MAX_CHARS).toBe(2000);
+    expect(CHAT_MESSAGE_TOO_LONG).toBe(MESSAGE_TOO_LONG);
   });
 
   it('a body that is not JSON, or any other refusal, keeps the fixed sentence', async () => {
