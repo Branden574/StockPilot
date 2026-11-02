@@ -8,6 +8,7 @@ import { audit } from '@/server/services/audit';
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { ServiceError, withContext } from '@/server/services/context';
+import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 
 import {
   PERMISSIONS,
@@ -50,6 +51,47 @@ function overrideWriteError(error: { message: string; hint?: string | null }): S
     });
   }
   return new ServiceError('internal_error', error.message);
+}
+
+const RESTRICTION_CHANGE_REFUSAL =
+  'You can only change restrictions on permissions you have yourself.';
+
+/**
+ * Whether a refused write is the database asking for the permission before a
+ * restriction changes. The *_overrides_update policies ask of the row being
+ * changed what the *_overrides_delete policies ask (0322): a grant changes
+ * freely, a restriction only for a writer who holds its permission. The
+ * upsert's ON CONFLICT branch meets that rule even when the value does not
+ * change, so saving "restricted" over a row that already says restricted, on
+ * a permission the actor lacks, is refused (42501). After requireConfigurer
+ * and assertCanGrant that is the only 42501 a restriction write can meet; the
+ * platform-managed guard's 42501 carries its own hint and keeps its own words.
+ * A refused grant is never absorbed.
+ */
+function isRestrictionChangeRefusal(
+  error: { code?: string | null; hint?: string | null },
+  granted: boolean,
+): boolean {
+  return granted === false && error.code === '42501' && error.hint !== PLATFORM_MANAGED_HINT;
+}
+
+/**
+ * The re-read after such a refusal: only one row that already says restricted
+ * means nothing changed. A failed read, or an answer that is not a list
+ * (listRows, docket S27), is not that row: the plain sentence answers.
+ */
+function alreadyRestricted(
+  reread: { error: unknown },
+  rows: () => { granted: boolean }[],
+): boolean {
+  if (reread.error) return false;
+  try {
+    const found = rows();
+    return found.length === 1 && found[0]!.granted === false;
+  } catch (error) {
+    if (error instanceof ListReadError) return false;
+    throw error;
+  }
 }
 
 const permissionEnum = z.enum([...PERMISSIONS] as [Permission, ...Permission[]]);
@@ -112,7 +154,8 @@ async function requireConfigurer() {
  * The database enforces the same invariant independently — see the
  * *_overrides_delete policies in migration 0322, which allow deleting a
  * `granted=true` row freely but require has_permission() to delete a
- * `granted=false` one.
+ * `granted=false` one, and the *_overrides_update policies, which ask the
+ * same of the row an update starts from (isRestrictionChangeRefusal).
  */
 function assertCanGrant(
   ctx: Awaited<ReturnType<typeof requireConfigurer>>,
@@ -164,7 +207,25 @@ export async function setRolePermissionOverrideAction(input: {
         },
         { onConflict: 'organization_id,role,permission' },
       );
-      if (error) throw overrideWriteError(error);
+      if (error) {
+        if (!isRestrictionChangeRefusal(error, granted)) throw overrideWriteError(error);
+        // Re-read with the actor's own client. Already restricted: nothing
+        // changed, so no audit row and no broadcast.
+        const reread = await supabase
+          .from('role_permission_overrides')
+          .select('granted')
+          .eq('organization_id', ctx.organizationId)
+          .eq('role', role)
+          .eq('permission', permission);
+        if (
+          !alreadyRestricted(reread, () =>
+            listRows<{ granted: boolean }>('role_permission_overrides', reread),
+          )
+        ) {
+          throw new ServiceError('forbidden', RESTRICTION_CHANGE_REFUSAL);
+        }
+        return ok(null);
+      }
     }
 
     await audit(
@@ -293,7 +354,25 @@ export async function setUserPermissionOverrideAction(input: {
         },
         { onConflict: 'organization_id,user_id,permission' },
       );
-      if (error) throw overrideWriteError(error);
+      if (error) {
+        if (!isRestrictionChangeRefusal(error, granted)) throw overrideWriteError(error);
+        // Re-read with the actor's own client. Already restricted: nothing
+        // changed, so no audit row and no broadcast.
+        const reread = await supabase
+          .from('user_permission_overrides')
+          .select('granted')
+          .eq('organization_id', ctx.organizationId)
+          .eq('user_id', userId)
+          .eq('permission', permission);
+        if (
+          !alreadyRestricted(reread, () =>
+            listRows<{ granted: boolean }>('user_permission_overrides', reread),
+          )
+        ) {
+          throw new ServiceError('forbidden', RESTRICTION_CHANGE_REFUSAL);
+        }
+        return ok(null);
+      }
     }
 
     await audit(
