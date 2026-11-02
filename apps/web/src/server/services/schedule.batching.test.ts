@@ -290,6 +290,32 @@ describe('ScheduleService distributed flag', () => {
       expect(completedExtra()).toEqual({ autoDistributed: false });
     });
 
+    // S31: a failure distribute_bundle did not word (Postgres text naming a
+    // table or a constraint) went into the conflict, which the schedule
+    // action answers as it is. The manager reads the app's sentence, and the
+    // text is reported.
+    it("says the app's sentence for a failure it did not word, and reports the text", async () => {
+      const pgText = 'insert or update on table "stock_movements" violates foreign key constraint "stock_movements_item_id_fkey"';
+      const { run } = completeWith({ data: null, error: { message: pgText, code: '23503' } });
+      reportError.mockClear();
+      const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
+      expect(err).toMatchObject({
+        code: 'conflict',
+        message:
+          'Event marked complete, but the bundle could not be distributed. Retry from /dashboard/bundles/bundle-1.',
+      });
+      expect(err.message).not.toContain('stock_movements');
+      const distReport = reportError.mock.calls.find(
+        (c) => (c as unknown as [Error, { tag: string }])[1].tag === 'schedule.auto_distribute',
+      ) as unknown as [Error, Record<string, unknown>] | undefined;
+      expect(distReport?.[0].message).toBe(pgText);
+      expect(distReport?.[1]).toEqual({
+        tag: 'schedule.auto_distribute',
+        organizationId: 'org-test',
+        extra: { code: '23503', bundleId: 'bundle-1', scheduleEventId: eventId },
+      });
+    });
+
     // 0365: a required component outside the caller's inventory view is
     // refused with a code. The manager is told why, not 'component_not_visible'.
     it('names a component_not_visible refusal in words', async () => {
