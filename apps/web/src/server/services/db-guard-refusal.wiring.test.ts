@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Migration 0395 (L8) gates six stock ledger functions on the permission the
- * app checks first and refuses with 42501 'forbidden', hint permission. The
+ * app checks first (0415 adds distribute_bundle, on bundles:distribute; its
+ * Schedule completion call is pinned by schedule.batching.test.ts) and refuses
+ * with 42501 'forbidden', hint permission. The
  * message is the same word the functions' role floors raise, so each call
  * site must ask dbGuardRefusal BEFORE its own arms: an `includes('forbidden')`
  * arm reached first would put the wrong sentence on the refusal ("You cannot
@@ -45,6 +47,8 @@ describe('0395: each gated RPC asks dbGuardRefusal first in its error branch', (
     ['receiving.ts', 'post_receipt_v2', 'receipt_post', /^const guard = dbGuardRefusal\(error, 'receipt_post'\);$/],
     ['receiving.ts', 'reverse_receipt', 'receipt_reverse', /^const guard = dbGuardRefusal\(error, 'receipt_reverse'\);$/],
     ['bundles.ts', 'assemble_bundle', 'kit_assemble', /^const guard = dbGuardRefusal\(error, 'kit_assemble'\);$/],
+    // 0415 gates distribute_bundle the same way (bundles:distribute).
+    ['bundles.ts', 'distribute_bundle', 'kit_distribute', /^const guard = dbGuardRefusal\(error, 'kit_distribute'\);$/],
     ['inventory.ts', 'adjust_stock', 'adjust', /^const guard = dbGuardRefusal\(error, 'adjust'\);$/],
     ['inventory.ts', 'transfer_stock', 'transfer', /^const guard = dbGuardRefusal\(error, 'transfer'\);$/],
     ['order-requests.ts', 'cancel_order_request', 'none', /^const guard = dbGuardRefusal\(error\);$/],
