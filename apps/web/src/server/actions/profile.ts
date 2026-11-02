@@ -3,8 +3,10 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { getVerifiedEmail, isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
+import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
+import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -29,6 +31,7 @@ import {
   type CreatedStillActive,
   lastOwnerCopy,
   lateLastOwnerRefusal,
+  readAuthEmail,
   readDeletionReviewFacts,
   removeAvatarObjects,
   reportDeletionReviewFacts,
@@ -38,6 +41,7 @@ import {
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { assertStepUpHeld, sessionChangedError } from '@/server/services/step-up-held';
 
 import { err, ok, UNSAFE_DISPLAY_NAME_CHARS, type ActionResult } from '@stockpilot/core';
 
@@ -96,21 +100,23 @@ async function gateMfa(): Promise<void> {
  * escalates (HI-6) — losing your org must not lose the rule that a factor you
  * enrolled has to be satisfied. Shaped like `ServiceContext`'s MFA triple so
  * `mfaGateError` picks the same error shape in both paths.
+ *
+ * Both facts are those of `userId`, the account the action validated, and of
+ * no one else (docket S50a): the factor list says whose list it is
+ * (readMfaFactorList, factorsOf), and the level is that account's verified
+ * session claims (readVerifiedSessionClaimsOf; anything else is not aal2). A
+ * list of another account is no answer about this person: the action stops
+ * with SESSION_CHANGED (sign in again), never with the enrollment sentence.
+ * A verified factor of any type counts, the rule core's stepUpOwed and
+ * resolveMfaState apply (the app enrolls only TOTP).
  */
 async function resolveSessionMfaPosture(
   supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  let list: MfaFactorList;
   try {
-    const { data: factors, error } = await supabase.auth.mfa.listFactors();
-    if (error) throw new Error(error.message);
-    const enrolled = (factors?.totp ?? []).some((f) => f.status === 'verified');
-    if (!enrolled) return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    return {
-      mfaRequired: true,
-      mfaSatisfied: aal?.currentLevel === 'aal2',
-      mfaEnrolled: true,
-    };
+    list = await readMfaFactorList(supabase);
   } catch (e) {
     // Fail CLOSED, byte-for-byte the posture `resolveMfaState` takes in
     // services/context.ts: an unreadable factor list must never read as "no
@@ -121,6 +127,17 @@ async function resolveSessionMfaPosture(
     console.error('[profile] session MFA posture read failed:', e);
     return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
   }
+  const factors = factorsOf(list, userId);
+  if (!factors) throw sessionChangedError();
+  const enrolled = factors.some((f) => f.status === 'verified');
+  if (!enrolled) return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
+  // Never throws: null (no verified session of this account) is not aal2.
+  const claims = await readVerifiedSessionClaimsOf(supabase, userId);
+  return {
+    mfaRequired: true,
+    mfaSatisfied: claims?.aal === 'aal2',
+    mfaEnrolled: true,
+  };
 }
 
 /**
@@ -139,16 +156,19 @@ async function resolveSessionMfaPosture(
  * A member keeps the org gate EXACTLY as before: this is not a way around an
  * org's mfa_policy, only an answer for the case where there is no org to ask.
  */
-async function gateMfaForSelfService(): Promise<void> {
-  // Shares loadSessionAndContext's single membership query with requireSession
-  // (React.cache), so this costs no extra round trip.
+async function gateMfaForSelfService(userId: string): Promise<void> {
+  // A second read of the session and its memberships: React.cache() does not
+  // memoize inside a Server Action (lib/auth/session.ts), so this does not
+  // share requireSession()'s. A session that does not verify as `userId` here
+  // answers no memberships and takes the branch below, whose posture read is
+  // held to `userId` and refuses it.
   const memberships = await getSessionMemberships();
   if (memberships.length > 0) {
     await gateMfa();
     return;
   }
   const supabase = await createClient();
-  const posture = await resolveSessionMfaPosture(supabase);
+  const posture = await resolveSessionMfaPosture(supabase, userId);
   if (posture.mfaRequired && !posture.mfaSatisfied) throw mfaGateError(posture);
 }
 
@@ -524,17 +544,29 @@ export async function deleteOwnAccountAction(input: {
     const session = await requireSession();
     // SP-129 — NOT gateMfa(): a user with no membership must still be able to
     // delete their account. See gateMfaForSelfService.
-    await gateMfaForSelfService();
+    await gateMfaForSelfService(session.userId);
     const supabase = await createClient();
+    const admin = createAdminClient();
 
     // O-A3-7: a platform admin's account is not deleted while its email is on
     // the allowlist (a re-registration would inherit god-mode, and the
     // operator account would be lost by accident). The VERIFIED auth email,
-    // never the profile column the person can edit. An email that cannot be
-    // read fails closed: nothing changes, try again.
-    const verifiedEmail = await getVerifiedEmail();
-    if (!verifiedEmail) return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
-    if (isPlatformAdmin(verifiedEmail)) {
+    // never the profile column the person can edit: the email of the account
+    // requireSession() validated, read by its id with the service role, as the
+    // phone route reads it (docket S50a). An email that cannot be read fails
+    // closed: nothing changes, try again. No such user: the person's other
+    // request deleted the account a moment ago, the same answer as the
+    // check's "gone" below (review R7).
+    const authEmail = await readAuthEmail(admin, session.userId);
+    if (authEmail.kind === 'gone') return await endThisBrowserSession(supabase, session.userId);
+    if (authEmail.kind === 'failed') {
+      void reportError(new Error(authEmail.message), {
+        tag: 'account.delete.platform_admin_check',
+        extra: { source: 'web' },
+      });
+      return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
+    }
+    if (isPlatformAdmin(authEmail.email)) {
       return err('forbidden', ACCOUNT_DELETE_PLATFORM_ADMIN_COPY, { reason: 'platform_admin' });
     }
 
@@ -582,7 +614,6 @@ export async function deleteOwnAccountAction(input: {
     // no profile tombstone any more: nothing reads user_profiles.deleted_at
     // (see SP-008 below), so on a failure it only marked a live account as
     // deleted, and on success the profile cascades away with it.
-    const admin = createAdminClient();
     const check = await checkAccountDeletable(admin, session.userId, 'web');
     // Whether THIS request deleted the account (and so writes the audit row).
     let deletedHere = false;
@@ -599,17 +630,24 @@ export async function deleteOwnAccountAction(input: {
       // retry (a row lock or a deadlock) or check_failed: nothing was changed.
       if (check.kind !== 'gone') return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
       // gone: the account no longer exists. Reached only in a race: this
-      // request passed the MFA gate while GoTrue still had the user, and the
-      // person's other request (the phone, another tab) deleted the account
-      // before this check; once it is gone, the gate itself refuses first. Say
-      // so and end this browser's session below; the request that deleted it
-      // wrote the audit row (review R7).
+      // request passed the MFA gate and the platform-admin read while GoTrue
+      // still had the user, and the person's other request (the phone, another
+      // tab) deleted the account before this check; once it is gone, the gate
+      // itself refuses first. Say so and end this browser's session below; the
+      // request that deleted it wrote the audit row (review R7).
     } else {
       // What the deletion leaves for others to review, read now: the delete
       // nulls created_by and cascades the memberships (O-A3-5 counts for the
       // audit row, O-A3-2 subscriptions for the platform admin). Reads only;
       // a failure is reported and never holds the deletion up.
       const review = await readDeletionReviewFacts(admin, session.userId, auditOrganizationId, 'web');
+      // The last check before the delete (docket S50a): the verified session
+      // is still the account requireSession() validated, and that account owes
+      // no authenticator step-up, decided from its own factors read by its id.
+      // The gate at the top enforces the rule; this holds it for everything
+      // read since (the owner pre-check, the rate limit, the audit
+      // organization, the check). It throws, and nothing is deleted or written.
+      await assertStepUpHeld({ supabase, admin, userId: session.userId });
       // Now delete the auth user. Profile + membership rows cascade via the
       // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
       // orders are kept (0388).
@@ -699,26 +737,38 @@ export async function deleteOwnAccountAction(input: {
       });
     }
 
-    // End THIS browser's session too. deleteUser removes the refresh tokens,
-    // but the access token in the cookie stays valid until it expires and the
-    // proxy verifies it locally (getClaims), so the browser stayed "signed
-    // in" as a person with no membership: /signin bounced to /dashboard and
-    // then to Create your workspace (local walk, 0388). The phone already
-    // signs itself out after a 200. signOut removes the local session (the
-    // auth cookies) even though GoTrue no longer knows the user: auth-js
-    // ignores its 401/403/404 there. Best-effort: the account is already gone.
-    try {
-      await supabase.auth.signOut({ scope: 'local' });
-    } catch (signOutErr) {
-      void reportError(signOutErr, {
-        tag: 'account.delete.local_signout_failed',
-        extra: { userId: session.userId },
-      });
-    }
-
-    revalidatePath('/', 'layout');
-    return ok(undefined);
+    return await endThisBrowserSession(supabase, session.userId);
   } catch (e) {
     return actionErrorFrom(e);
   }
+}
+
+/**
+ * The account is gone (deleted by this request, or by the person's other
+ * request a moment ago): end THIS browser's session too, and answer ok.
+ *
+ * deleteUser removes the refresh tokens, but the access token in the cookie
+ * stays valid until it expires and the proxy verifies it locally (getClaims),
+ * so the browser stayed "signed in" as a person with no membership: /signin
+ * bounced to /dashboard and then to Create your workspace (local walk, 0388).
+ * The phone already signs itself out after a 200. signOut removes the local
+ * session (the auth cookies) even though GoTrue no longer knows the user:
+ * auth-js ignores its 401/403/404 there. Best-effort: the account is already
+ * gone.
+ */
+async function endThisBrowserSession(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<ActionResult<void>> {
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch (signOutErr) {
+    void reportError(signOutErr, {
+      tag: 'account.delete.local_signout_failed',
+      extra: { userId },
+    });
+  }
+
+  revalidatePath('/', 'layout');
+  return ok(undefined);
 }

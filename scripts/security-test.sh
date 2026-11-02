@@ -1035,6 +1035,19 @@ WEB_TESTS=(
   src/lib/auth/mfa-factors.test.ts
   src/server/services/context.factor-swap.test.ts
   src/server/actions/team.transfer-refresh-swap.test.ts
+  # Each security check in the recovery codes, account deletion and the email
+  # change reads the factors and sign-in level of the account the action
+  # already validated (docket S50a). A recovery code is spent, and codes are
+  # minted, with that account's verified access token on a client that acts as
+  # it alone (lib/supabase/access-token-client.ts); account deletion reads that
+  # account's factors, level and email, and checks once more right before the
+  # delete (server/services/step-up-held.ts); the email change takes the
+  # factors from the getUser() answer that names the user. The real server
+  # client, auth-js and requireSession() in the three action files.
+  src/server/services/step-up-held.test.ts
+  src/server/actions/mfa-recovery.held-reads.test.ts
+  src/server/actions/profile.held-reads.test.ts
+  src/server/actions/email-change.held-reads.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })

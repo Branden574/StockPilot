@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
+import { verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
@@ -23,8 +24,26 @@ const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
   stub: null,
 };
 
+/**
+ * The cookie session as the held read sees it (S50a): the verified token's
+ * subject and level. The code is spent with that token, on the access-token
+ * client, which this file hands the same stub so the RPC answers below apply.
+ */
+const cookie: { session: StubbedCookieSession } = { session: { sub: 'user-1', aal: 'aal1' } };
+
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => stubHolder.stub!.client),
+  createClient: vi.fn(async () =>
+    Object.assign(stubHolder.stub!.client, {
+      auth: Object.assign(
+        stubHolder.stub!.client.auth,
+        verifiedSessionAuth(() => cookie.session),
+      ),
+    }),
+  ),
+}));
+
+vi.mock('@/lib/supabase/access-token-client', () => ({
+  createAccessTokenClient: vi.fn((_token: string) => stubHolder.stub!.client),
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({
@@ -34,6 +53,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 import { revalidatePath } from 'next/cache';
 
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
 
@@ -77,6 +97,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stubHolder.stub = null;
+    cookie.session = { sub: 'user-1', aal: 'aal1' };
   });
 
   it('rejects when no password is provided (mandatory re-confirm)', async () => {
@@ -231,5 +252,71 @@ describe('consumeMfaRecoveryCodeAction', () => {
       name: 'increment_rate_limit',
       args: { p_key: 'mfa-recovery:user-1', p_limit: 5, p_window_ms: 15 * 60_000 },
     });
+  });
+
+  /**
+   * S50a: the code is checked as the account requireSession() validated, and
+   * only as that account. The RPC runs with that account's verified access
+   * token on a client that never loads or renews a session, after the password
+   * check; anything else is refused before a code is spent.
+   */
+  it('spends the code with the verified token of the validated account, after the password check', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    attachAdminMfa(stubHolder.stub, [{ id: 'f1', factor_type: 'totp' }]);
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+    expect(result.ok).toBe(true);
+    expect(createAccessTokenClient).toHaveBeenCalledTimes(1);
+    const [token] = vi.mocked(createAccessTokenClient).mock.calls[0]!;
+    const payload = JSON.parse(
+      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
+    );
+    expect(payload.sub).toBe('user-1');
+    expect(vi.mocked(createAccessTokenClient).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(verifyPasswordSideChannel).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('refuses before spending, and removes nothing, when the verified session is not the validated account', async () => {
+    cookie.session = { sub: 'user-2', aal: 'aal2' };
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    const { listFactors, deleteFactor } = attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+    ]);
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(createAccessTokenClient).not.toHaveBeenCalled();
+    expect(stubHolder.stub.rpcCalls.some((c) => c.name === 'consume_mfa_recovery_code')).toBe(
+      false,
+    );
+    expect(listFactors).not.toHaveBeenCalled();
+    expect(deleteFactor).not.toHaveBeenCalled();
+  });
+
+  it('refuses the same way when there is no verified session', async () => {
+    cookie.session = { sub: 'user-1', aal: 'aal1', read: 'error' };
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    const { deleteFactor } = attachAdminMfa(stubHolder.stub, [{ id: 'f1', factor_type: 'totp' }]);
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+    expect(result).toMatchObject({ ok: false, error: { code: 'unauthenticated' } });
+    expect(stubHolder.stub.rpcCalls.some((c) => c.name === 'consume_mfa_recovery_code')).toBe(
+      false,
+    );
+    expect(deleteFactor).not.toHaveBeenCalled();
   });
 });
