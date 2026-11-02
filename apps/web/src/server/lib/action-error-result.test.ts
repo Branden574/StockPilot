@@ -269,6 +269,58 @@ describe('RowFailures', () => {
     const r = thrownBy(() => redirect('/signin'));
     expect(() => rows.message(r)).toThrow();
   });
+  it("keeps a warehouse refusal's words per row, unreported, as actionErrorResult does", () => {
+    const rows = new RowFailures('actions.import.rows', { organizationId: 'org-1' });
+    expect(rows.message(new ForbiddenError('User has no warehouse assignment.'))).toBe(
+      'User has no warehouse assignment.',
+    );
+    expect(
+      rows.message(new ForbiddenError('Read-only auditor cannot perform write operations.')),
+    ).toBe('Read-only auditor cannot perform write operations.');
+    rows.report();
+    expect(reportMock).not.toHaveBeenCalled();
+  });
+
+  it("says the retryable access sentence when the caller's access could not be read, reported once as a warning", () => {
+    const rows = new RowFailures('po.drafts', {
+      organizationId: 'org-1',
+      message: 'Could not create the draft for this supplier.',
+    });
+    const first = new ForbiddenError('could not read access', { accessUnreadable: true });
+    expect(rows.message(first)).toBe(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
+    expect(
+      rows.message(new ForbiddenError('could not read access', { accessUnreadable: true })),
+    ).toBe(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
+    rows.report();
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(first, {
+      tag: 'po.drafts',
+      organizationId: 'org-1',
+      level: 'warning',
+      extra: { failed: 2 },
+    });
+  });
+
+  it('reports the unexpected failures and the unreadable access separately, each once', () => {
+    const rows = new RowFailures('actions.import.rows', { organizationId: 'org-1' });
+    const boom = new Error('boom');
+    const unreadable = new ForbiddenError('could not read access', { accessUnreadable: true });
+    rows.message(boom);
+    rows.message(unreadable);
+    rows.report();
+    expect(reportMock).toHaveBeenCalledTimes(2);
+    expect(reportMock).toHaveBeenCalledWith(boom, {
+      tag: 'actions.import.rows',
+      organizationId: 'org-1',
+      extra: { failed: 1 },
+    });
+    expect(reportMock).toHaveBeenCalledWith(unreadable, {
+      tag: 'actions.import.rows',
+      organizationId: 'org-1',
+      level: 'warning',
+      extra: { failed: 1 },
+    });
+  });
 });
 
 describe('the fixed sentences', () => {

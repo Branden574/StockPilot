@@ -16,7 +16,9 @@ const failures = vi.hoisted(() => new Map<string, unknown>());
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
-vi.mock('@/lib/auth/warehouse', () => ({
+// The real ForbiddenError: RowFailures tells a warehouse refusal by it.
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/warehouse')>()),
   getWarehouseAccess: vi.fn(async () => ({
     writableIds: ['wh-1'],
     readableIds: ['wh-1'],

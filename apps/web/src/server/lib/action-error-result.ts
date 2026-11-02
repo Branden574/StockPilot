@@ -114,14 +114,20 @@ export function actionErrorResult(
 /**
  * The failed rows of one run: an import's rows, a reorder's suppliers (S31).
  * A row's words are a refusal the app wrote (a ServiceError other than
- * internal_error: a duplicate SKU, a plan limit), else `opts.message`
- * (ROW_NOT_IMPORTED_MESSAGE by default), never the error's own text. The
- * unexpected ones are reported ONCE for the run (recurring pattern 30), with
- * their count and the first of them, by report().
+ * internal_error: a duplicate SKU, a plan limit; assertWarehouseAccess's or
+ * forcedWarehouseId's ForbiddenError: no warehouse assignment, a read-only
+ * auditor), else `opts.message` (ROW_NOT_IMPORTED_MESSAGE by default), never
+ * the error's own text. A ForbiddenError from a failed read of the caller's
+ * own access says the retryable access sentence, as actionErrorResult does.
+ * The unexpected ones are reported ONCE for the run (recurring pattern 30),
+ * with their count and the first of them, by report(); the unreadable-access
+ * ones once more, as a warning.
  */
 export class RowFailures {
   private first: unknown;
   private unexpected = 0;
+  private firstUnreadable: ForbiddenError | undefined;
+  private unreadable = 0;
 
   constructor(
     private readonly tag: string,
@@ -132,13 +138,32 @@ export class RowFailures {
   message(e: unknown): string {
     rethrowControlFlow(e);
     if (e instanceof ServiceError && e.code !== 'internal_error') return e.message;
+    if (e instanceof ForbiddenError) {
+      if (!e.accessUnreadable) return e.message;
+      this.unreadable += 1;
+      if (this.unreadable === 1) this.firstUnreadable = e;
+      return ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY;
+    }
     this.unexpected += 1;
     if (this.unexpected === 1) this.first = e;
     return this.opts.message ?? ROW_NOT_IMPORTED_MESSAGE;
   }
 
-  /** One report for the run, when any row failed for a reason the app did not write. */
+  /**
+   * One report for the run when any row failed for a reason the app did not
+   * write, and one warning when any row's warehouse access could not be read.
+   */
   report(): void {
+    if (this.unreadable > 0) {
+      void reportError(
+        this.firstUnreadable,
+        reportContext(this.tag, {
+          organizationId: this.opts.organizationId,
+          level: 'warning',
+          extra: { failed: this.unreadable },
+        }),
+      );
+    }
     if (this.unexpected === 0) return;
     const detail = this.first instanceof ServiceError ? this.first.internalDetail : undefined;
     void reportError(
