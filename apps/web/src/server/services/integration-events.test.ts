@@ -151,13 +151,13 @@ describe('buildRequest', () => {
 
 /**
  * docket S27: the webhook and alert endpoints report what the database did.
- * The service gates on the member's effective Manage integrations, but the
- * table's row rule (0169) still asks for the admin role, so a member given
- * the key passed the gate and the database changed nothing: turning an
- * endpoint off, removing it and rotating its secret all reported success on 0
- * rows, and rotating returned a secret that was never stored (the old one,
- * perhaps leaked, stayed live). Creating one read the refusal as an internal
- * error.
+ * The service gates on the member's effective Manage integrations, and the
+ * table's row rule asks for the same key since 0428 (the admin role before
+ * it), so a write the database refuses is one the request's view of the
+ * member's access missed. Before S27a such a write changed nothing and was
+ * reported as done: turning an endpoint off, removing it and rotating its
+ * secret all reported success on 0 rows, and rotating returned a secret that
+ * was never stored. Creating one read the refusal as an internal error.
  */
 describe('IntegrationEndpointsService: writes report what the database did', () => {
   const service = (results: Record<string, unknown>) => {

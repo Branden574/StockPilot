@@ -105,6 +105,74 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
   it('includes returns:manage (every RMA write gates on has_permission since 0394) so a grant is end-to-end', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('returns:manage')).toBe(true);
   });
+
+  it('includes integrations:manage and shipping:manage (the integration tables follow has_permission since 0428) so a grant is end-to-end', () => {
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('integrations:manage')).toBe(true);
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('shipping:manage')).toBe(true);
+  });
+});
+
+// The claim above holds only while the integration tables' row rules ask
+// has_permission (through rls_orgs_with_permission) and no role floor (docket
+// S27). Read the newest definition of each from the migrations, so the set and
+// the database cannot drift apart: a later migration that puts a role floor
+// back, or brings back one of the old write rules, fails here.
+describe('integrations:manage and shipping:manage: the row rules ask for the key', () => {
+  const MIGRATIONS = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../supabase/migrations',
+  );
+  const files = readdirSync(MIGRATIONS)
+    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+    .sort();
+  const sqlOf = (f: string) => readFileSync(join(MIGRATIONS, f), 'utf8').replace(/--[^\n]*/g, '');
+  /** The text of the newest `create policy <name> on public.<table>`, up to its `;`. */
+  const newestPolicy = (name: string, table: string): string | null => {
+    const head = new RegExp(`create policy ${name}\\s+on public\\.${table}\\b[^;]*;`, 'gi');
+    let found: string | null = null;
+    for (const f of files) {
+      for (const m of sqlOf(f).matchAll(head)) found = m[0];
+    }
+    return found;
+  };
+  /** Whether the newest statement about the policy drops it. */
+  const droppedLast = (name: string, table: string): boolean => {
+    const stmt = new RegExp(
+      `(create|drop) policy (?:if exists )?${name}\\s+on public\\.${table}\\b`,
+      'gi',
+    );
+    let last: string | null = null;
+    for (const f of files) {
+      for (const m of sqlOf(f).matchAll(stmt)) last = m[1]!.toLowerCase();
+    }
+    return last === 'drop';
+  };
+  const I = "rls_orgs_with_permission('integrations:manage')";
+  const S = "rls_orgs_with_permission('shipping:manage')";
+
+  it.each([
+    ['org_connections_insert', 'org_connections', [I, S]],
+    ['org_connections_update', 'org_connections', [I, S]],
+    ['connection_sync_log_replay', 'connection_sync_log', [I, S]],
+    ['integration_endpoints_manage', 'integration_endpoints', [I]],
+    ['integration_deliveries_select', 'integration_deliveries', [I]],
+  ] as const)('%s asks for the key and no role', (name, table, keys) => {
+    const policy = newestPolicy(name, table);
+    expect(policy, name).not.toBeNull();
+    for (const key of keys) expect(policy).toContain(key);
+    expect(policy).not.toMatch(/has_org_role|is_org_member/i);
+  });
+
+  it.each([
+    ['org_connections_write', 'org_connections'],
+    ['connection_sync_log_admin_replay', 'connection_sync_log'],
+    ['integration_endpoints_admin_all', 'integration_endpoints'],
+    ['integration_deliveries_admin_read', 'integration_deliveries'],
+    ['connection_mappings_write', 'connection_mappings'],
+    ['carrier_shipments_write', 'carrier_shipments'],
+  ] as const)('the role-floor rule %s is dropped and not created again', (name, table) => {
+    expect(droppedLast(name, table)).toBe(true);
+  });
 });
 
 describe('auditor read permissions (0279) defaults', () => {

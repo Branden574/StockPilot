@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ORDER_ITEMS_ROLES_LOCK_NOTE_COPY, PERMISSIONS, PERMISSION_META } from '@stockpilot/core';
+import {
+  FULLY_GRANTABLE_PERMISSIONS,
+  hasPermission,
+  isPlatformManagedPermission,
+  ORDER_ITEMS_ROLES_LOCK_NOTE_COPY,
+  PERMISSIONS,
+  PERMISSION_META,
+} from '@stockpilot/core';
 
 /**
  * The Roles & permissions matrix (W-ST-07a / 07b) on the shared Checkbox:
@@ -201,5 +208,65 @@ describe('RolePermissionMatrix: the platform-managed Manage order items row', ()
       name: `Sam — ${PERMISSION_META[FIRST].label}`,
     });
     expect(other).toBeEnabled();
+  });
+});
+
+/**
+ * Manage integrations and Manage shipping are fully grantable (docket S27):
+ * the integration tables' row rules ask has_permission (migration 0428), so a
+ * grant to a manager, or to one member, is no longer marked "Grant rolling
+ * out (app-level today)". A key still rolling out keeps the mark, so the
+ * check can see it.
+ */
+describe('RolePermissionMatrix: Manage integrations and Manage shipping are fully grantable', () => {
+  const ROLLING_OUT = 'Grant takes full effect after the row-level enforcement rollout';
+  const KEYS = ['integrations:manage', 'shipping:manage'] as const;
+  /** A key a manager lacks by default that is still rolling out. */
+  const STILL_ROLLING = PERMISSIONS.find(
+    (p) =>
+      !FULLY_GRANTABLE_PERMISSIONS.has(p) &&
+      !hasPermission('manager', p) &&
+      !isPlatformManagedPermission(p) &&
+      !(KEYS as readonly string[]).includes(p),
+  )!;
+  const badgeIn = (box: HTMLElement) => within(box.closest('td')!).queryByLabelText(ROLLING_OUT);
+
+  it.each(KEYS)('a manager role given %s shows no rolling-out mark', (key) => {
+    render(
+      <RolePermissionMatrix
+        roleOverrides={[
+          { role: 'manager', permission: key, granted: true },
+          { role: 'manager', permission: STILL_ROLLING, granted: true },
+        ]}
+        userOverrides={[]}
+        members={[]}
+      />,
+    );
+    const box = screen.getByRole('checkbox', { name: label('Manager', key) });
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    expect(badgeIn(box)).toBeNull();
+    // Control: the mark still shows where a grant is rolling out.
+    const control = screen.getByRole('checkbox', { name: label('Manager', STILL_ROLLING) });
+    expect(control).toHaveAttribute('aria-checked', 'true');
+    expect(badgeIn(control)).not.toBeNull();
+  });
+
+  it.each(KEYS)('a member given %s shows no rolling-out mark', (key) => {
+    render(
+      <RolePermissionMatrix
+        roleOverrides={[]}
+        userOverrides={[
+          { user_id: 'u-mgr', permission: key, granted: true },
+          { user_id: 'u-mgr', permission: STILL_ROLLING, granted: true },
+        ]}
+        members={[{ userId: 'u-mgr', name: 'Morgan', role: 'manager' }]}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Permissions for Morgan' });
+    const box = within(panel).getByRole('checkbox', { name: label('Morgan', key) });
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    expect(badgeIn(box)).toBeNull();
+    const control = within(panel).getByRole('checkbox', { name: label('Morgan', STILL_ROLLING) });
+    expect(badgeIn(control)).not.toBeNull();
   });
 });

@@ -401,11 +401,10 @@ describe('GET /api/integrations/quickbooks/callback', () => {
 
   // ── Effective permissions (docket S19) ─────────────────────────────────────
   // The gate is the member's EFFECTIVE set, the rule beginConnect applies, not
-  // the role's static defaults. org_connections' write rule asks only for the
-  // admin role (0146), so an admin whose integrations:manage was revoked can
-  // write a pending row with a state of their choosing through PostgREST; a
-  // static check here then let them finish the connect, storing the tokens of
-  // an account they control and activating the export.
+  // the role's static defaults. The activation is a service-role write that
+  // no row rule sees, so this check is the one that keeps a member whose
+  // integrations:manage was taken away from finishing a connect (org_connections'
+  // row rules ask the same key since 0428, docket S27).
   it.each([
     ['for them (a member override)', 'user_permission_overrides.select'],
     ['for every admin (a role override)', 'role_permission_overrides.select'],
