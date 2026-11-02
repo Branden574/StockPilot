@@ -332,16 +332,17 @@ describe('probeAndSettle', () => {
  *
  * `user:{id}:sessions` is a PUBLIC realtime channel (broadcast.ts posts with
  * `private: false`), so anyone holding the shipped anon key and a user's uuid
- * can forge a payload on it. Today the worst that buys them is a forced
- * sign-out. Letting a forged `reason` alone raise the disabled gate would also
- * hand them the ability to terminally reject a warehouse's queued offline work
- * — real data loss on an unauthenticated message.
+ * can forge a payload on it. Since S5 the listener asks the Auth server first
+ * and a message about a live session changes nothing at all
+ * (use-session-revocation.forged.test.ts). Letting a forged `reason` alone
+ * raise the disabled gate would hand them the ability to terminally reject a
+ * warehouse's queued offline work — real data loss on an unauthenticated
+ * message.
  *
  * So the two halves are split by what each can be trusted for: the BROADCAST
  * says what happened, and the PROBE corroborates that it happened. A forged
  * disable against a live session is refused because getUser() still resolves
- * the user, and the device falls through to the ordinary force-logout it would
- * have done anyway.
+ * the user.
  */
 describe('gateForRevocation', () => {
   it('accepts a disable that the probe corroborates', () => {

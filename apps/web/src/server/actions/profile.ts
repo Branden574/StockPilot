@@ -10,6 +10,7 @@ import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { DECODE_MAX_INPUT_PIXELS, readImageHeader } from '@/lib/image-decode';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
@@ -481,6 +482,29 @@ export async function setOrgLogoUrlAction(input: {
           'validation_error',
           'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
         );
+      }
+      // S45: the branded PDFs draw a logo through the capped image decoder
+      // (lib/image-decode.ts), which refuses a PNG, JPEG or WebP of more
+      // pixels than DECODE_MAX_INPUT_PIXELS (50 million), so such a logo
+      // would never print. Say so now, with its size, and keep the current
+      // logo. PNG and JPEG sizes come from the sniff, WebP's from its header.
+      // An AVIF states its size in a box tree that is not read here; the PDF
+      // side holds it to its own cap. This is advice to the uploader, not the
+      // defence: the PDF side refuses the same files whenever they are read.
+      if (sniffed.kind === 'png' || sniffed.kind === 'jpeg' || sniffed.kind === 'webp') {
+        const size = sniffed.kind === 'webp' ? readImageHeader(head.prefix) : sniffed;
+        if (
+          size &&
+          size.width !== null &&
+          size.height !== null &&
+          size.width * size.height > DECODE_MAX_INPUT_PIXELS[sniffed.kind]
+        ) {
+          await logos.remove([objectPath]);
+          return err(
+            'validation_error',
+            `That logo is too large to print (${size.width} by ${size.height} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.`,
+          );
+        }
       }
     }
     const supabase = await createClient();

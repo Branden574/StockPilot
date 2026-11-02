@@ -78,6 +78,7 @@ import {
   readVerifiedSessionClaims,
   readVerifiedSessionClaimsOf,
   readVerifiedSessionTokenOf,
+  readVerifiedTokenClaims,
 } from './verified-claims';
 
 let projectKey: SigningKey;
@@ -340,6 +341,92 @@ describe('readVerifiedSessionClaims', () => {
       },
     };
     await expect(readVerifiedSessionClaims(brokenChecks as never)).resolves.toBeNull();
+  });
+});
+
+/**
+ * The same verified read for a token the caller hands over (S5): the phone's
+ * bearer token on POST /api/v1/auth/signed-in and signed-out, which have no
+ * cookie session to load. One implementation: readVerifiedSessionClaims()
+ * loads the cookie session's token and calls this. The claims now carry the
+ * token's email too, for the routes' Audit log rows.
+ */
+describe('readVerifiedTokenClaims', () => {
+  /** A bare client: no cookie session at all, as on a bearer request. */
+  const bareClient = () => createClient();
+
+  it('a valid token: its claims, email included, verified locally with no request to the Auth server', async () => {
+    const token = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+    expect(await readVerifiedTokenClaims(await bareClient(), token)).toEqual({
+      userId: FIXTURE_USER_ID,
+      sessionId: FIXTURE_SESSION_ID,
+      aal: 'aal1',
+      amr: expect.any(Array),
+      email: 'member@example.com',
+    });
+    expect(server.calls['/user']).toBeUndefined();
+    expect(server.calls['/token']).toBeUndefined();
+  });
+
+  it('a payload edited under the original signature (another session id): null', async () => {
+    const real = await signAccessToken(projectKey, sessionClaims());
+    const forged = withEditedPayload(
+      real,
+      sessionClaims({ sessionId: '33333333-3333-4333-8333-333333333333' }),
+    );
+    expect(await readVerifiedTokenClaims(await bareClient(), forged)).toBeNull();
+    expect(server.calls['/user']).toBeUndefined();
+  });
+
+  it('an expired token: null, and nothing refreshes it (a handed-over token is never a session)', async () => {
+    const token = await signAccessToken(projectKey, sessionClaims({ expiresIn: -120 }));
+    expect(await readVerifiedTokenClaims(await bareClient(), token)).toBeNull();
+    expect(server.calls['/token']).toBeUndefined();
+  });
+
+  it('the key set cannot be fetched and GoTrue answers for ANOTHER subject: null', async () => {
+    // Warm nothing; the token is under a rotated key, so getClaims() must
+    // fetch the key set, which fails, and the Auth server is asked instead.
+    serve([projectKey, rotatedKey]);
+    server.failJwks = true;
+    const token = await signAccessToken(rotatedKey, sessionClaims({ sub: FIXTURE_USER_ID }));
+    const realFetch = server.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await realFetch(input, init);
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith('/auth/v1/user') || res.status !== 200) return res;
+      const user = (await res.json()) as Record<string, unknown>;
+      return new Response(JSON.stringify({ ...user, id: '99999999-9999-4999-8999-999999999999' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    expect(await readVerifiedTokenClaims(await bareClient(), token)).toBeNull();
+    expect(server.calls['/user']).toBe(1);
+  });
+
+  it('the key set cannot be fetched and GoTrue accepts the token for its own subject: the claims', async () => {
+    serve([projectKey, rotatedKey]);
+    server.failJwks = true;
+    const token = await signAccessToken(rotatedKey, sessionClaims({ aal: 'aal2' }));
+    expect(await readVerifiedTokenClaims(await bareClient(), token)).toMatchObject({
+      userId: FIXTURE_USER_ID,
+      sessionId: FIXTURE_SESSION_ID,
+      aal: 'aal2',
+    });
+    expect(server.calls['/user']).toBe(1);
+  });
+
+  it('an empty token: null, and no request', async () => {
+    expect(await readVerifiedTokenClaims(await bareClient(), '')).toBeNull();
+    expect(server.calls).toEqual({});
+  });
+
+  it('readVerifiedSessionClaims() is the cookie session’s token handed to it: the same email', async () => {
+    await signIn(sessionClaims({ aal: 'aal2' }));
+    expect((await readVerifiedSessionClaims(await createClient()))?.email).toBe(
+      'member@example.com',
+    );
   });
 });
 

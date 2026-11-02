@@ -20,8 +20,8 @@ import { checkRateLimit } from '@/lib/rate-limit';
  * from /signin/mfa, where an enrolled member's session is still aal1, and
  * withApiContext refuses that session everywhere else. This route reads
  * nothing of the organization (it forwards the report, keyed by the verified
- * user), so it is the one route on the AAL1 allowlist
- * (src/test/api-step-up.guard.test.ts).
+ * user), so it is on the AAL1 allowlist (src/test/api-step-up.guard.test.ts),
+ * beside the phone's sign-in and sign-out notes.
  */
 export async function POST(request: Request) {
   try {
