@@ -111,6 +111,21 @@ describe('Supabase clients use the URL-length guard', () => {
       Authorization: 'Bearer token-abc',
     });
   });
+
+  it('the access-token client, keeping its Authorization header and storing no session', async () => {
+    const { createAccessTokenClient } = await import('./access-token-client');
+    createAccessTokenClient('token-abc');
+    const options = seen.supabaseJs[0]?.options;
+    expect(globalFetch(options)).toBe(guardedServerSupabaseFetch);
+    expect((options?.global as { headers?: Record<string, string> }).headers).toEqual({
+      Authorization: 'Bearer token-abc',
+    });
+    expect(options?.auth).toEqual({
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    });
+  });
 });
 
 describe('which reporter each guard uses', () => {
