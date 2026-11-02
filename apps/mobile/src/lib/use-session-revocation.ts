@@ -6,6 +6,7 @@ import {
   deviceSignOutSteps,
   REVOKED_UNBIND_TIMEOUT_MS,
 } from './push-unbind';
+import { checkThisSession } from './session-check';
 import { supabase } from './supabase';
 
 /**
@@ -13,6 +14,18 @@ import { supabase } from './supabase';
  * was revoked from another device, sign out locally. Mirrors the web
  * SessionRevocationListener. Fail-silent (the refresh-token revocation still
  * logs the device out within the access-token TTL).
+ *
+ * A MESSAGE IS A CLAIM, NOT A FACT (S5, integrator decision 2026-11-02). The
+ * channel is public: anyone holding the app's public key and the person's user
+ * id can send `{ keepId: 'x' }` to it, and the phone used to sign out on that
+ * alone. Every real sender ends the session before it sends, so the phone now
+ * asks the Auth server about its own session first (session-check.ts), and
+ * only an answer that the session is gone lets anything below happen. A
+ * session the server still accepts means the message is forged or stale, and
+ * no answer proves nothing: in both cases nothing happens at all, as on the
+ * web. The question goes out on its own, never through auth-js's getUser(),
+ * which would remove the session from the device and leave the push token
+ * delete below with no token to send.
  *
  * Channel: `user:{userId}:sessions`  Event: `revoked`
  * Payload variants:
@@ -33,21 +46,22 @@ import { supabase } from './supabase';
  * another device." is simply not what happened.
  *
  * This listener stays deliberately dumb about that reason. It forwards it and
- * nothing more: the channel is public, so deciding whether to BELIEVE the claim
- * needs corroboration, and that judgement lives with the account gate.
+ * nothing more: whether the session ended is settled above, but whether it
+ * ended because the account was DISABLED is a further claim, and that
+ * judgement lives with the account gate.
  *
  * THIS PHONE'S PUSH TOKEN (S5, open question 5). A phone signed out from
  * another device kept its push_tokens row, so it kept showing the account's
- * notifications. Before anything else, while the access token the delete needs
- * is still on the device, push registration is held and this phone's row is
- * deleted (push-unbind.ts, at most 3 s). It runs BEFORE the account gate's
- * probe, never beside it: the probe's getUser() holds auth-js's lock and, for
- * a session the server has ended, removes the session from the device
- * (auth-js 2.105.1 GoTrueClient.js:2472, 2508-2511), and a delete queued
- * behind it reads its token through getSession() under that same lock
- * (supabase-js index.cjs:520-525) and goes out with no session, as the anon
- * key, which deletes nothing. Once signed out, Notification Center is cleared
- * of what the account still showed there.
+ * notifications. Once the Auth server has said the session is gone, while the
+ * access token the delete needs is still on the device, push registration is
+ * held and this phone's row is deleted (push-unbind.ts, at most 3 s). It runs
+ * BEFORE the account gate's probe, never beside it: the probe's getUser()
+ * holds auth-js's lock and, for a session the server has ended, removes the
+ * session from the device (auth-js 2.105.1 GoTrueClient.js:2472, 2508-2511),
+ * and a delete queued behind it reads its token through getSession() under
+ * that same lock (supabase-js index.cjs:520-525) and goes out with no session,
+ * as the anon key, which deletes nothing. Once signed out, Notification Center
+ * is cleared of what the account still showed there.
  */
 export function useSessionRevocation(
   userId: string | null,
@@ -97,6 +111,10 @@ export function useSessionRevocation(
           ('keepId' in p && !!mySessionId && p.keepId !== mySessionId);
         if (!targeted) return;
         void (async () => {
+          // The claim, checked before anything else: only an answer that this
+          // session is gone goes on. A live session or no answer: nothing
+          // happens, not even the hold (see above).
+          if ((await checkThisSession()) !== 'gone') return;
           const deviceSteps = deviceSignOutSteps({
             user: null,
             unbindTimeoutMs: REVOKED_UNBIND_TIMEOUT_MS,

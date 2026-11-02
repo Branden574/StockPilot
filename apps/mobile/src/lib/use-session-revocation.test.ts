@@ -20,6 +20,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * this phone's push token row (best effort, at most 3 s, while the access
  * token the delete needs is still here) and, once signed out, clears what
  * Notification Center still shows of the account.
+ *
+ * A MESSAGE IS A CLAIM (integrator decision 2026-11-02, from the security
+ * review of S5a). The channel is public, so the phone first asks the Auth
+ * server about its own session (session-check.ts), and acts only when the
+ * answer is that the session is gone. Here the Auth server's answer is faked
+ * (fetchAuthUser); by default it says the session is gone, as it does for
+ * every real message. use-session-revocation.forged.test.ts runs the same
+ * story through the real push modules.
  */
 
 const MINE = '5f0c9a1e-7b2d-4c3e-9f10-aa55bb66cc77';
@@ -37,6 +45,9 @@ const h = vi.hoisted(() => ({
   clear: vi.fn(),
   hold: vi.fn(),
   release: vi.fn(),
+  /** The Auth server's answer to GET /auth/v1/user (session-check.ts). */
+  authAnswer: vi.fn(),
+  asked: [] as string[],
 }));
 
 vi.mock('react', () => ({
@@ -61,6 +72,11 @@ vi.mock('./supabase', () => ({
       return ch;
     },
     removeChannel: vi.fn(),
+  },
+  fetchAuthUser: async (accessToken: string) => {
+    h.asked.push(accessToken);
+    h.log.push('check');
+    return h.authAnswer();
   },
 }));
 // The device steps (push-unbind.ts has its own tests): recorded in order.
@@ -96,6 +112,13 @@ const TOKEN = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url({ session_id: MI
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+function authAnswer(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 async function mount(onTargeted?: (payload: unknown) => Promise<boolean>) {
   const onSignedOut = vi.fn(() => {
     h.log.push('onSignedOut');
@@ -125,6 +148,9 @@ beforeEach(() => {
   h.clear.mockResolvedValue(undefined);
   h.hold.mockReset();
   h.release.mockReset();
+  h.asked.length = 0;
+  h.authAnswer.mockReset();
+  h.authAnswer.mockImplementation(async () => authAnswer(403, { code: 'session_not_found' }));
 });
 
 describe('which sessions a payload signs out (unchanged by S5: an old phone reads the new payload the same way)', () => {
@@ -161,12 +187,21 @@ describe('which sessions a payload signs out (unchanged by S5: an old phone read
 });
 
 describe('a message aimed at this phone also unbinds it and clears Notification Center (S5, open question 5)', () => {
-  it('in order: hold registration, delete this phone’s push token row (3 s), sign out locally, clear Notification Center, release', async () => {
+  it('in order: ask the Auth server, hold registration, delete this phone’s push token row (3 s), sign out locally, clear Notification Center, release', async () => {
     const { send } = await mount();
     send({ sessionIds: [MINE] });
     await tick();
     expect(h.unbind).toHaveBeenCalledWith(expect.objectContaining({ unbindTimeoutMs: 3_000 }));
-    expect(h.log).toEqual(['hold', 'unbind', 'signOut:local', 'clear', 'release', 'onSignedOut']);
+    expect(h.log).toEqual([
+      'check',
+      'hold',
+      'unbind',
+      'signOut:local',
+      'clear',
+      'release',
+      'onSignedOut',
+    ]);
+    expect(h.asked).toEqual([TOKEN]);
   });
 
   it('the unbind runs before the account gate’s probe, which can drop the session the delete needs', async () => {
@@ -178,6 +213,7 @@ describe('a message aimed at this phone also unbinds it and clears Notification 
     send({ keepId: null });
     await tick();
     expect(h.log).toEqual([
+      'check',
       'hold',
       'unbind',
       'gate',
@@ -218,9 +254,86 @@ describe('a message aimed at this phone also unbinds it and clears Notification 
     send({ keepId: MINE });
     send({});
     await tick();
+    expect(h.asked).toEqual([]);
     expect(h.hold).not.toHaveBeenCalled();
     expect(h.unbind).not.toHaveBeenCalled();
     expect(h.clear).not.toHaveBeenCalled();
     expect(h.signOut).not.toHaveBeenCalled();
+  });
+});
+
+describe('a message is a claim: nothing happens unless the Auth server says this session is gone (S5, 2026-11-02)', () => {
+  it.each([
+    ['{ keepId: <anything> }', { keepId: 'forged' }],
+    ['{ keepId: null }', { keepId: null }],
+    ['{ sessionIds: [this session] }', { sessionIds: [MINE] }],
+    ['{ keepId: null, reason: account_disabled }', { keepId: null, reason: 'account_disabled' }],
+  ])(
+    'the session is live (200): %s holds nothing, unbinds nothing, asks no gate, signs nothing out, clears nothing',
+    async (_n, payload) => {
+      h.authAnswer.mockImplementation(async () => authAnswer(200, { id: 'u1' }));
+      const onTargeted = vi.fn(async () => true);
+      const { send, onSignedOut } = await mount(onTargeted);
+      send(payload);
+      await tick();
+      expect(h.log).toEqual(['check']);
+      expect(h.hold).not.toHaveBeenCalled();
+      expect(h.unbind).not.toHaveBeenCalled();
+      expect(onTargeted).not.toHaveBeenCalled();
+      expect(h.signOut).not.toHaveBeenCalled();
+      expect(h.clear).not.toHaveBeenCalled();
+      expect(h.release).not.toHaveBeenCalled();
+      expect(h.alert).not.toHaveBeenCalled();
+      expect(onSignedOut).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['offline (the request fails)', () => Promise.reject(new TypeError('Network request failed'))],
+    ['a server failure (500)', async () => authAnswer(500, { code: 'unexpected_failure' })],
+    ['a gateway failure (503)', async () => authAnswer(503, { message: 'unavailable' })],
+    ['an expired token (401 bad_jwt)', async () => authAnswer(401, { code: 'bad_jwt' })],
+    [
+      'an answer with no code (401)',
+      async () => authAnswer(401, { message: 'Invalid credentials' }),
+    ],
+    ['an answer that is not JSON (403)', async () => new Response('<html>', { status: 403 })],
+  ])('no answer, %s: nothing happens', async (_n, reply) => {
+    h.authAnswer.mockImplementation(reply);
+    const { send, onSignedOut } = await mount();
+    send({ sessionIds: [MINE] });
+    await tick();
+    expect(h.log).toEqual(['check']);
+    expect(h.unbind).not.toHaveBeenCalled();
+    expect(h.signOut).not.toHaveBeenCalled();
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.alert).not.toHaveBeenCalled();
+    expect(onSignedOut).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['session_not_found (403)', 403, { code: 'session_not_found' }],
+    [
+      'session_not_found, an older server (403, error_code)',
+      403,
+      { code: 403, error_code: 'session_not_found' },
+    ],
+    ['session_expired', 401, { code: 'session_expired' }],
+    ['user_banned', 403, { code: 'user_banned' }],
+  ])('the session is gone, %s: the phone signs out', async (_n, status, body) => {
+    h.authAnswer.mockImplementation(async () => authAnswer(status, body));
+    const { send, onSignedOut } = await mount();
+    send({ keepId: null });
+    await tick();
+    expect(h.log).toEqual([
+      'check',
+      'hold',
+      'unbind',
+      'signOut:local',
+      'clear',
+      'release',
+      'onSignedOut',
+    ]);
+    expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 });

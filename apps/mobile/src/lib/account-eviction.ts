@@ -357,19 +357,21 @@ export async function probeAndSettle(
  *
  * `user:{id}:sessions` is a PUBLIC realtime channel — broadcast.ts posts with
  * `private: false` — so anyone holding the shipped anon key and a user's uuid
- * can forge a payload on it. Today the worst that buys them is a forced
- * sign-out, which is annoying and reversible. Letting a forged `reason` alone
- * raise the disabled gate would also hand them the eviction, and the eviction
- * TERMINALLY REJECTS the device's offline outbox: real, unsent warehouse work,
- * destroyed by an unauthenticated message.
+ * can forge a payload on it. Since S5 a forged message about a live session
+ * changes nothing at all: the listener asks the Auth server first and goes on
+ * only when the session is gone (use-session-revocation.ts, session-check.ts),
+ * so this gate is the second line. Letting a forged `reason` alone raise the
+ * disabled gate would hand them the eviction, and the eviction TERMINALLY
+ * REJECTS the device's offline outbox: real, unsent warehouse work, destroyed
+ * by an unauthenticated message.
  *
  * So the two halves are split by what each can be trusted for. The BROADCAST
  * says what happened; the PROBE corroborates that it happened. A forged disable
  * aimed at a live session is refused, because getUser() still resolves the
- * user, and the device falls through to the ordinary force-logout it would have
- * performed anyway. On a real disable the corroboration is free and already
- * paid for: the server revokes before it broadcasts, so the probe that follows
- * necessarily answers 'signed-out'.
+ * user (and the listener's own check has already found it live and stopped).
+ * On a real disable the corroboration is free and already paid for: the server
+ * revokes before it broadcasts, so the probe that follows necessarily answers
+ * 'signed-out'.
  *
  * `null` means "not a disable — handle it as an ordinary revocation".
  */

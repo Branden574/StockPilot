@@ -1625,11 +1625,17 @@ MOBILE_TESTS=(
   # session still owes its authenticator code. The registration goes through
   # register_push_token (SP-073). The phone's install id lives in the Keychain
   # only, outlives every sign-out, and is never made up when the Keychain
-  # refuses.
+  # refuses. A "signed out from another device" message on the public sessions
+  # channel is a claim: the phone asks the Auth server about its own session
+  # first, outside auth-js, and a message about a live session, or one it gets
+  # no answer for, deletes no push row, signs nothing out and clears nothing.
   src/lib/push-unbind.test.ts
   src/lib/use-push-notifications.test.ts
   src/lib/push-register-wiring.test.ts
   src/lib/use-session-revocation.test.ts
+  src/lib/use-session-revocation.forged.test.ts
+  src/lib/session-check.test.ts
+  src/lib/supabase.fetch-auth-user.test.ts
   src/lib/install-id.test.ts
 
   # The saved workspace records the account that saved it, and only that
