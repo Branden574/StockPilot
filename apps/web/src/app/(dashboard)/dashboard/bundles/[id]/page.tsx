@@ -73,7 +73,7 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
   const [whs, recent, upcomingEvents] = await Promise.all([
     (await WarehousesService.forCurrentUser()).listNames(),
     svc.recentDistributions({ bundleId: id, limit: 20 }),
-    fetchUpcomingEvents(),
+    fetchUpcomingEvents(ctx.organizationId),
   ]);
 
   const warehouseMap = new Map(whs.map((w) => [w.id, w.name]));
@@ -300,9 +300,15 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
   );
 }
 
-async function fetchUpcomingEvents(): Promise<
-  Array<{ id: string; title: string; startsAt: string }>
-> {
+/**
+ * The next month's open events of THIS organization, for Distribute's event
+ * picker. RLS (is_org_member) lets a member of two organizations read both,
+ * so the read names the page's organization: without it the other one's
+ * events were offered, and distribute_bundle refuses them (B92).
+ */
+async function fetchUpcomingEvents(
+  organizationId: string,
+): Promise<Array<{ id: string; title: string; startsAt: string }>> {
   try {
     const supabase = await createClient();
     const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -310,6 +316,7 @@ async function fetchUpcomingEvents(): Promise<
     const { data } = await supabase
       .from('schedule_events')
       .select('id, title, starts_at')
+      .eq('organization_id', organizationId)
       .gte('starts_at', sinceIso)
       .lte('starts_at', untilIso)
       .in('status', ['scheduled', 'in_progress'])
