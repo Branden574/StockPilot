@@ -882,6 +882,11 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # The webhook delivery's use of the same guard (docket B49), with the guard
+  # and safeFetch run for real: a refused URL (a private address, a scheme
+  # other than http or https, a Slack or Teams URL on another host) is final
+  # and never sent, while a failed lookup of the host is retried with backoff.
+  src/server/services/integration-events.delivery-lookup.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a
@@ -1035,6 +1040,19 @@ WEB_TESTS=(
   src/lib/auth/mfa-factors.test.ts
   src/server/services/context.factor-swap.test.ts
   src/server/actions/team.transfer-refresh-swap.test.ts
+  # Each security check in the recovery codes, account deletion and the email
+  # change reads the factors and sign-in level of the account the action
+  # already validated (docket S50a). A recovery code is spent, and codes are
+  # minted, with that account's verified access token on a client that acts as
+  # it alone (lib/supabase/access-token-client.ts); account deletion reads that
+  # account's factors, level and email, and checks once more right before the
+  # delete (server/services/step-up-held.ts); the email change takes the
+  # factors from the getUser() answer that names the user. The real server
+  # client, auth-js and requireSession() in the three action files.
+  src/server/services/step-up-held.test.ts
+  src/server/actions/mfa-recovery.held-reads.test.ts
+  src/server/actions/profile.held-reads.test.ts
+  src/server/actions/email-change.held-reads.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
