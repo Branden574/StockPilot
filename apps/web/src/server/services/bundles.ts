@@ -20,6 +20,7 @@ import {
 } from './context';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 export interface BundleRow {
@@ -709,17 +710,6 @@ export class BundlesService {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
 
-    // Block toggling preassembly off while phantom stock exists.
-    if (patch.preassemblyEnabled === false) {
-      const detail = await this.get(id);
-      if ((detail.phantom?.quantityOnHand ?? 0) > 0) {
-        throw new ServiceError(
-          'validation_error',
-          'Disassemble or distribute remaining pre-assembled kits before disabling pre-assembly.',
-        );
-      }
-    }
-
     // A refused component set (empty, an item twice, or no required
     // component) is refused before anything is written, the bundle row too.
     if (patch.components) {
@@ -727,6 +717,28 @@ export class BundlesService {
         throw new ServiceError('validation_error', 'A bundle needs at least one component');
       }
       assertComponentSet(patch.components);
+    }
+
+    // S39: the kit is read in THIS organization before anything is written,
+    // for every patch, and a miss refuses. The kit row's update below is
+    // filtered to this organization, but the component rows are written by
+    // bundle_id alone, which the component policy admits for a manager of the
+    // kit's own organization: from a page left open after a switch, the other
+    // organization's components were rewritten and this organization's audit
+    // log recorded it, and only then did the closing get() refuse. Turning
+    // pre-assembly off reads the whole kit through get() (scoped the same way)
+    // for the phantom check; every other patch reads the row alone.
+    if (patch.preassemblyEnabled === false) {
+      // Block toggling preassembly off while phantom stock exists.
+      const detail = await this.get(id);
+      if ((detail.phantom?.quantityOnHand ?? 0) > 0) {
+        throw new ServiceError(
+          'validation_error',
+          'Disassemble or distribute remaining pre-assembled kits before disabling pre-assembly.',
+        );
+      }
+    } else {
+      await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     }
 
     const updatePayload: Record<string, unknown> = { updated_by: this.ctx.userId };
@@ -869,6 +881,16 @@ export class BundlesService {
   ): Promise<{ phantomItemId: string; phantomQty: number }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
+    // S39: the kit is read in THIS organization first, and a miss refuses
+    // before the warehouse check and the function. assemble_bundle decides on
+    // the kit's own organization, and assertWarehouseAccess passes an owner,
+    // admin or manager (or an all-warehouses member) by role without asking
+    // whose warehouse it is, so a page left open after a switch assembled the
+    // other organization's kits while the audit row and the cache invalidation
+    // below went to this one. Read first, so the answer is not_found whoever
+    // asks; the function refuses a warehouse outside the kit's organization,
+    // so the kit is the one row to read.
+    await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
     // but must still be assigned to the target warehouse. Without this
     // gate, a manager restricted to warehouse A could pre-assemble kits
@@ -952,6 +974,10 @@ export class BundlesService {
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
+    // S39: read the kit in THIS organization first, as assemble() does:
+    // distribute_bundle decides on the kit's own organization, and the audit
+    // row and the cache invalidation below are this organization's.
+    await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scope gate. Same rationale as assemble(): a warehouse-
     // scoped staff member shouldn't be able to draw from a warehouse they
     // aren't assigned to even though they hold `bundles:distribute`.

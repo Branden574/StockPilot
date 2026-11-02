@@ -201,6 +201,8 @@ describe('paper hand-over notices: a deleted requester is never emailed (A3 desk
 
   function paperStub(row: Record<string, unknown>) {
     return makeSupabaseStub({
+      // The order, read in the organization before the function (S39).
+      'order_requests.select.maybeSingle': { data: { id: 'ord-1' }, error: null },
       'rpc:confirm_physical_signature': { data: row, error: null },
       // Read twice (prior shipped, then the totals): 2 of 5 already shipped.
       'order_request_lines.select': {
