@@ -15,10 +15,17 @@ import { checkRateLimit } from '@/lib/rate-limit';
  * funnel), 10 reports/user/hour fail-OPEN (losing a crash signal is worse
  * than an extra webhook post), 2KB body cap, fields truncated server-side.
  * Always returns 204 — the boundary never cares.
+ *
+ * Before the authenticator code too (docket S43a). The boundaries post here
+ * from /signin/mfa, where an enrolled member's session is still aal1, and
+ * withApiContext refuses that session everywhere else. This route reads
+ * nothing of the organization (it forwards the report, keyed by the verified
+ * user), so it is the one route on the AAL1 allowlist
+ * (src/test/api-step-up.guard.test.ts).
  */
 export async function POST(request: Request) {
   try {
-    const ctx = await withApiContext(request);
+    const ctx = await withApiContext(request, { allowStepUpPending: true });
     if (!ctx) return new NextResponse(null, { status: 204 });
 
     const rl = await checkRateLimit(`client-error:${ctx.userId}`, 10, 60 * 60 * 1000, 'open');

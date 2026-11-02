@@ -60,6 +60,7 @@ import {
   fakeAuthServer,
   makeLegacySecret,
   makeSigningKey,
+  refreshGrant,
   sessionClaims,
   sessionCookies,
   signAccessToken,
@@ -70,7 +71,11 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { getVerifiedSessionClaimsForRequest, readVerifiedSessionClaims } from './verified-claims';
+import {
+  getVerifiedSessionClaimsForRequest,
+  readVerifiedSessionClaims,
+  readVerifiedSessionClaimsOf,
+} from './verified-claims';
 
 let projectKey: SigningKey;
 /**
@@ -363,5 +368,76 @@ describe('getVerifiedSessionClaimsForRequest', () => {
   it('never rejects, even when no client can be made', async () => {
     cookiesUnavailable = true;
     await expect(getVerifiedSessionClaimsForRequest()).resolves.toBeNull();
+  });
+});
+
+/**
+ * readVerifiedSessionClaimsOf (docket S43a, review round 1): the claims count
+ * only for the account the request already validated. A cookie's refresh token
+ * and `expires_at` are the sender's to write, so the load behind this read can
+ * refresh into ANOTHER account's session; its verified aal2 must not answer
+ * for the first account.
+ */
+describe('readVerifiedSessionClaimsOf', () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+
+  /** A session whose cookie is due for a refresh now, with `refreshToken`. */
+  async function dueForRefresh(refreshToken: string) {
+    const claims = sessionClaims({ aal: 'aal1' });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims, {
+      refreshToken,
+      expiresAt: Math.floor(Date.now() / 1000) + 30,
+    });
+  }
+
+  it("the validated account's own session: its claims", async () => {
+    await signIn(sessionClaims({ aal: 'aal2' }));
+    expect(await readVerifiedSessionClaimsOf(await createClient(), FIXTURE_USER_ID)).toMatchObject({
+      userId: FIXTURE_USER_ID,
+      aal: 'aal2',
+    });
+  });
+
+  it("a session that refreshed into another account's aal2 session: null, with one line and no id", async () => {
+    await dueForRefresh('other-refresh');
+    const other = sessionClaims({ aal: 'aal2', sub: OTHER, email: 'other@example.test' });
+    server.refreshGrants.set(
+      'other-refresh',
+      refreshGrant(await signAccessToken(projectKey, other), other, 'other-refresh-2'),
+    );
+    const supabase = await createClient();
+    // The read itself is verified and real: it is the other account's.
+    expect(await readVerifiedSessionClaimsOf(supabase, FIXTURE_USER_ID)).toBeNull();
+    expect(server.calls['/token']).toBe(1);
+    const lines = warn.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).startsWith('[verified-claims]'),
+    );
+    expect(lines).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain(OTHER);
+    expect(JSON.stringify(lines)).not.toContain(FIXTURE_USER_ID);
+  });
+
+  it("a refresh of the same account's session keeps its subject, so it still answers", async () => {
+    await dueForRefresh('own-refresh');
+    const renewed = sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 });
+    server.refreshGrants.set(
+      'own-refresh',
+      refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'own-refresh-2'),
+    );
+    expect(await readVerifiedSessionClaimsOf(await createClient(), FIXTURE_USER_ID)).toMatchObject({
+      userId: FIXTURE_USER_ID,
+      aal: 'aal2',
+    });
+    expect(server.calls['/token']).toBe(1);
+  });
+
+  it('no verified claims at all: null, with no line', async () => {
+    const real = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+    const forged = sessionClaims({ aal: 'aal2' });
+    await signIn(forged, withEditedPayload(real, forged));
+    expect(await readVerifiedSessionClaimsOf(await createClient(), FIXTURE_USER_ID)).toBeNull();
+    expect(
+      warn.mock.calls.filter((c: unknown[]) => String(c[0]).startsWith('[verified-claims]')),
+    ).toHaveLength(0);
   });
 });
