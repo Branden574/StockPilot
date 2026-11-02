@@ -1049,6 +1049,21 @@ export default async function OrderDetailPage({
   // per-line Owed column.
   const totalFulfilled = lines.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
   const totalOwed = Math.max(0, totalQty - totalFulfilled);
+  // L85: the service lets the requester cancel only while the order waits for
+  // approval; an approver may cancel any open order; and every cancel needs
+  // orders:request (desk check F3). core's orderCancelOffer is that rule,
+  // shared with the phone. Returns RX-2: a replacement is cancelled only from
+  // its RMA. B51: the answer is handed to the button, which words the cancel
+  // by it (core orderCancelWords, the phone's words) and by whether anything
+  // was delivered, so an approver reads Cancel order and what happens.
+  const cancelOffer = isReplacement
+    ? null
+    : orderCancelOffer({
+        status: request.status,
+        canApprove,
+        isOwnRequest,
+        canRequest: can(ctx, 'orders:request'),
+      });
   // SO-000061: units that are neither handed over NOR staged — nobody has
   // pulled them. Derived (no column), and only meaningful once picking is
   // finished; the shared helper owns both the arithmetic and the status set so
@@ -1322,18 +1337,15 @@ export default async function OrderDetailPage({
                 lines={deliveryRequestLines}
               />
             )}
-            {/* L85: the service lets the requester cancel only while the
-                order waits for approval; an approver may cancel any open
-                order; and every cancel needs orders:request (desk check F3).
-                core's orderCancelOffer is that rule, shared with the phone.
-                Returns RX-2: a replacement is cancelled only from its RMA. */}
-            {!isReplacement &&
-              orderCancelOffer({
-                status: request.status,
-                canApprove,
-                isOwnRequest,
-                canRequest: can(ctx, 'orders:request'),
-              }) !== null && <CancelOrderButton orderId={id} status={request.status} />}
+            {/* L85, B51: who is offered Cancel, and which (cancelOffer). */}
+            {cancelOffer !== null && (
+              <CancelOrderButton
+                orderId={id}
+                status={request.status}
+                offer={cancelOffer}
+                anythingDelivered={totalFulfilled > 0}
+              />
+            )}
             <ReportProblemButton
               moduleEnabled={maintenanceModuleEnabled}
               canSubmit={maintenanceGate}

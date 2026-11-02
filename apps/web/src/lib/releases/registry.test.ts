@@ -48,6 +48,7 @@ import {
   ORDER_UNCONFIRMED_TITLE_COPY,
   ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderCancelOffer,
+  orderCancelWords,
   ORDER_RETURN_SUMMARY_NOTE,
   ORDER_SEE_MY_ORDERS_COPY,
   orderStatusLabelForFulfillment,
@@ -7216,9 +7217,17 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(orderCancelOffer({ status: 'pending_approval', canApprove: false, ...open })).toBe('requester');
     expect(orderCancelOffer({ status: 'approved', canApprove: false, ...open })).toBeNull();
     expect(orderCancelOffer({ status: 'pending_approval', canApprove: true, isOwnRequest: true, canRequest: false })).toBeNull();
+    // Re-pinned by B51 (was: the button's one label, confirmLabel="Cancel
+    // request", and no "Cancel order" in it). The web button now takes the
+    // kind of cancel and core orderCancelWords' words, the app's: an approver
+    // reads Cancel order there too, and someone who does not approve orders
+    // still reads Cancel request on their own pending order, as published.
     const web = readFileSync(resolve(__dirname, '../../components/orders/cancel-order-button.tsx'), 'utf8');
-    expect(web).toContain('confirmLabel="Cancel request"');
-    expect(web).not.toMatch(/Cancel order/);
+    expect(web).toContain('orderCancelWords(');
+    expect(orderCancelWords('approver', { status: 'approved', anythingDelivered: false }).label).toBe('Cancel order');
+    expect(orderCancelWords('requester', { status: 'pending_approval', anythingDelivered: false }).label).toBe(
+      'Cancel request',
+    );
   });
 
   // Publish re-read: a Physical signature that completed the order already

@@ -485,6 +485,37 @@ describe('orders/[id]: Cancel request (L85)', () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
   };
 
+  // B51: the button is told which kind of cancel it is (core orderCancelOffer's
+  // answer, worked out here and once thrown away) and whether anything was
+  // delivered, so it words the cancel the way the phone does.
+  const asApprover = () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
+    };
+  };
+  /** A line as OrderRequestsService.get returns it; `fulfilled` units were
+   *  handed over (a backorder's delivered part). */
+  const line = (fulfilled: number) => ({
+    id: 'L1',
+    order_request_id: ORDER_ID,
+    item_id: 'i1',
+    quantity_requested: 20,
+    quantity_fulfilled: fulfilled,
+    quantity_picked: null,
+    returned_quantity: 0,
+    unit_cost_at_request: 0,
+    notes: null,
+    item: {
+      id: 'i1',
+      name: 'Item i1',
+      sku: 'SKU-i1',
+      quantity_on_hand: 40,
+      charter_name: null,
+      charter_code: null,
+    },
+  });
+
   it('the requester (no approve) is offered it while the order waits for approval', async () => {
     asRequester();
     orderGet.mockResolvedValue(
@@ -494,7 +525,72 @@ describe('orders/[id]: Cancel request (L85)', () => {
     );
     await renderPage();
     expect(cancelButtonProps).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: ORDER_ID, status: 'pending_approval' }),
+      expect.objectContaining({
+        orderId: ORDER_ID,
+        status: 'pending_approval',
+        offer: 'requester',
+        anythingDelivered: false,
+      }),
+    );
+  });
+
+  it("an approver's cancel is the approver's kind, with nothing delivered on an approved order", async () => {
+    asApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'approved' }), lines: [line(0)] }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved', offer: 'approver', anythingDelivered: false }),
+    );
+  });
+
+  // Mutation caught: the delivered fact left off the button, or taken from
+  // the status instead of the lines.
+  it('a backordered order with a delivered line, and a resumed one, tell the button something was delivered', async () => {
+    asApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'backordered' }), lines: [line(5)] }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'backordered',
+        offer: 'approver',
+        anythingDelivered: true,
+      }),
+    );
+
+    vi.clearAllMocks();
+    asApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'pick_slip_generated' }),
+        lines: [line(5)],
+      }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pick_slip_generated',
+        offer: 'approver',
+        anythingDelivered: true,
+      }),
+    );
+  });
+
+  it('a backordered order with nothing delivered tells the button so', async () => {
+    asApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'backordered' }), lines: [line(0)] }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'backordered',
+        offer: 'approver',
+        anythingDelivered: false,
+      }),
     );
   });
 
