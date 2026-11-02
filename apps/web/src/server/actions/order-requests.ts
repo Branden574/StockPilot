@@ -3,9 +3,9 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -43,14 +43,19 @@ function toResult<T>(error: unknown): ActionResult<T> {
       ? err(error.code, error.message, error.details)
       : err(error.code, error.message);
   }
-  // The order service refuses a change outside the caller's warehouses with
-  // assertWarehouseAccess's ForbiddenError (every route answers it 403), not a
-  // ServiceError. It is a refusal with a sentence for people, never a fault:
-  // as 'internal_error' the Approve partial and Resume dialog said "Try again"
-  // (small fixes slice 2 review). The cycle-count and attachment actions
-  // already answer it this way.
-  if (error instanceof ForbiddenError) return err('forbidden', error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  // The rest is the shared answer (S31), which keeps every order action in
+  // step with the others:
+  //   - the order service refuses a change outside the caller's warehouses
+  //     with assertWarehouseAccess's ForbiddenError (every route answers it
+  //     403), not a ServiceError. It is a refusal with a sentence for people,
+  //     never a fault: as 'internal_error' the Approve partial and Resume
+  //     dialog said "Try again" (small fixes slice 2 review), so it is
+  //     'forbidden' with its words;
+  //   - a permission or account-status read that failed in withContext says
+  //     its own "could not be checked" sentence, reported as a warning, never
+  //     the generic sentence at error level (S31 review);
+  //   - anything else: the generic sentence, reported under this tag.
+  return actionErrorResult(error, 'actions.order_requests');
 }
 
 /**

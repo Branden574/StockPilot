@@ -3,15 +3,15 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { assertPermission, planLimitBudget, ServiceError, withContext } from '@/server/services/context';
+import { assertPermission, planLimitBudget, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import {
   ItemImportBatchesService,
   type ItemImportDuplicate,
 } from '@/server/services/item-imports';
 import { WarehousesService } from '@/server/services/warehouses';
+import { actionErrorResult, RowFailures } from '@/server/lib/action-error-result';
 
 import {
   AMBIGUOUS_COLUMN_MEANINGS,
@@ -220,9 +220,7 @@ export async function prepareItemImportAction(
       duplicate,
     });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.import.prepare_item_import');
   }
 }
 
@@ -356,6 +354,11 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     }
     const planned: PlannedRow[] = [];
     const rowErrors = new Map<number, string>();
+    // A write that fails says a refusal's words, else the fixed sentence;
+    // the unexpected ones are reported once for the file (S31).
+    const writeFailures = new RowFailures('actions.import.rows', {
+      organizationId: ctx.organizationId,
+    });
 
     for (let i = 0; i < parsed.data.rows.length; i++) {
       // The confirmed mapping is what lands: an aliased header ("Qty") fills
@@ -469,7 +472,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
         await svc.create(row.input, { planSlot: slot });
       } catch (e) {
         slot.release();
-        rowErrors.set(row.sourceRow, e instanceof Error ? e.message : 'Unknown error');
+        rowErrors.set(row.sourceRow, writeFailures.message(e));
       }
       return true;
     };
@@ -538,6 +541,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
       }
     }
 
+    writeFailures.report();
     // Folded in FILE order, never completion order: a user reads these against
     // their spreadsheet, so row 7 must come after row 3 however they finished.
     summary.failed = rowErrors.size;
@@ -561,8 +565,6 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.import.import_items');
   }
 }

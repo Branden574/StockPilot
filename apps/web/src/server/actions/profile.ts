@@ -43,6 +43,7 @@ import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { assertStepUpHeld, sessionChangedError } from '@/server/services/step-up-held';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, UNSAFE_DISPLAY_NAME_CHARS, type ActionResult } from '@stockpilot/core';
 
@@ -205,8 +206,7 @@ function membershipReadFailed(): ActionResult<never> {
  */
 function actionErrorFrom(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
-  if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-  return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  return actionErrorResult(e, 'actions.profile');
 }
 
 export async function updateProfileNameAction(input: {

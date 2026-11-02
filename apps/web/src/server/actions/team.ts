@@ -4,12 +4,7 @@ import { revalidatePath } from 'next/cache';
 
 import { INVITE_ACCOUNT_EXISTS_COPY } from '@/app/invite/[token]/invite-copy';
 import { rethrowControlFlow } from '@/lib/control-flow';
-import {
-  assertCurrentAal2,
-  assertPermission,
-  ServiceError,
-  withContext,
-} from '@/server/services/context';
+import { assertCurrentAal2, assertPermission, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
@@ -21,6 +16,11 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import {
+  actionErrorResult,
+  NOT_SET_UP_MESSAGE,
+  unexpectedActionError,
+} from '@/server/lib/action-error-result';
 
 import {
   acceptInviteSchema,
@@ -42,9 +42,7 @@ import { z } from 'zod';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.team');
 }
 
 export async function inviteMemberAction(
@@ -196,7 +194,9 @@ export async function sendMemberPasswordResetAction(
       .eq('organization_id', ctx.organizationId)
       .eq('user_id', parsed.data.targetUserId)
       .maybeSingle();
-    if (memberErr) return err('internal_error', memberErr.message);
+    if (memberErr) {
+      return unexpectedActionError(memberErr, 'actions.team.send_member_password_reset');
+    }
     if (!member) return err('not_found', 'Member not found in this organization.');
     if (!member.accepted_at) {
       return err(
@@ -210,7 +210,9 @@ export async function sendMemberPasswordResetAction(
       .select('email')
       .eq('id', parsed.data.targetUserId)
       .maybeSingle();
-    if (profileErr) return err('internal_error', profileErr.message);
+    if (profileErr) {
+      return unexpectedActionError(profileErr, 'actions.team.send_member_password_reset');
+    }
     const email = (profile?.email as string | null | undefined) ?? null;
     if (!email) return err('validation_error', 'That member has no email on file.');
 
@@ -305,6 +307,34 @@ const transferOwnershipSchema = z.object({
   password: z.string().min(1, 'Confirm your password').max(128),
 });
 
+const TRANSFER_NOT_OWNER = 'Only the current owner can transfer ownership.';
+const TRANSFER_TARGET_NOT_FOUND = 'Target member not found in this organization.';
+const TRANSFER_TO_SELF = 'You cannot transfer ownership to yourself.';
+const TRANSFER_ALREADY_OWNER = 'That member is already the owner.';
+
+/**
+ * transfer_org_ownership's own refusals (0393), matched on SQLSTATE and the
+ * exact text it raises, as the action's own sentences; null for anything
+ * else. Never the function's text itself (S31).
+ */
+function transferRefusal(error: { code?: string; message?: string }): ActionResult<never> | null {
+  const raised = error.message ?? '';
+  if (error.code === '42501' && raised === 'caller is not the current owner') {
+    return err('forbidden', TRANSFER_NOT_OWNER);
+  }
+  if (error.code !== '22023') return null;
+  switch (raised) {
+    case 'cannot transfer ownership to yourself':
+      return err('validation_error', TRANSFER_TO_SELF);
+    case 'target user is not an active member of this organization':
+      return err('not_found', TRANSFER_TARGET_NOT_FOUND);
+    case 'target is already the owner':
+      return err('validation_error', TRANSFER_ALREADY_OWNER);
+    default:
+      return null;
+  }
+}
+
 /**
  * Transfers organization ownership from the calling user to another
  * active member. This is the ONLY supported path to change the owner
@@ -338,7 +368,7 @@ export async function transferOwnershipAction(input: {
   try {
     const ctx = await withContext();
     if (ctx.role !== 'owner') {
-      return err('forbidden', 'Only the current owner can transfer ownership.');
+      return err('forbidden', TRANSFER_NOT_OWNER);
     }
 
     const session = await requireSession();
@@ -404,10 +434,14 @@ export async function transferOwnershipAction(input: {
       .eq('organization_id', ctx.organizationId)
       .eq('id', parsed.data.targetMemberId)
       .maybeSingle();
-    if (targetErr) return err('internal_error', targetErr.message);
-    if (!target) return err('not_found', 'Target member not found in this organization.');
+    if (targetErr) {
+      return unexpectedActionError(targetErr, 'actions.team.transfer_ownership', {
+        organizationId: ctx.organizationId,
+      });
+    }
+    if (!target) return err('not_found', TRANSFER_TARGET_NOT_FOUND);
     if ((target.user_id as string) === ctx.userId) {
-      return err('validation_error', 'You cannot transfer ownership to yourself.');
+      return err('validation_error', TRANSFER_TO_SELF);
     }
     if (!target.accepted_at) {
       return err(
@@ -416,7 +450,7 @@ export async function transferOwnershipAction(input: {
       );
     }
     if ((target.role as string) === 'owner') {
-      return err('validation_error', 'That member is already the owner.');
+      return err('validation_error', TRANSFER_ALREADY_OWNER);
     }
 
     const { error: rpcErr } = await admin.rpc('transfer_org_ownership', {
@@ -424,7 +458,17 @@ export async function transferOwnershipAction(input: {
       p_caller_user_id: ctx.userId,
       p_target_user_id: target.user_id as string,
     });
-    if (rpcErr) return err('internal_error', rpcErr.message);
+    if (rpcErr) {
+      // The function's own refusals (0393): the checks above, lost to a race
+      // (another tab transferred first, the member left). They say the
+      // action's sentences and are not reported; anything else is unexpected.
+      return (
+        transferRefusal(rpcErr) ??
+        unexpectedActionError(rpcErr, 'actions.team.transfer_ownership', {
+          organizationId: ctx.organizationId,
+        })
+      );
+    }
 
     await audit(
       {
@@ -496,11 +540,13 @@ export async function acceptInviteWithSignupAction(input: {
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
-    return err(
-      'internal_error',
-      'Server is missing SUPABASE_SERVICE_ROLE_KEY. Set it in Vercel env vars.',
-    );
+  } catch (e) {
+    // Only a server without the service-role key throws here: the invitee
+    // reads that the feature is not set up, never the setting (S31).
+    return unexpectedActionError(e, 'actions.team.invite_signup', {
+      message: NOT_SET_UP_MESSAGE,
+      level: 'warning',
+    });
   }
 
   // 1. Validate the invite first so we never create an auth user we'll have
@@ -510,7 +556,7 @@ export async function acceptInviteWithSignupAction(input: {
     .select('id, organization_id, email, accepted_at, expires_at')
     .eq('token', parsed.data.token)
     .maybeSingle();
-  if (inviteErr) return err('internal_error', inviteErr.message);
+  if (inviteErr) return unexpectedActionError(inviteErr, 'actions.team.invite_signup');
   if (!invite) return err('not_found', 'Invite not found');
   if (invite.accepted_at) return err('conflict', 'Invite already accepted');
   if (new Date(invite.expires_at as string).getTime() < Date.now()) {
@@ -531,7 +577,11 @@ export async function acceptInviteWithSignupAction(input: {
     'auth_user_exists_by_email',
     { p_email: email },
   );
-  if (existsErr) return err('internal_error', existsErr.message);
+  if (existsErr) {
+    return unexpectedActionError(existsErr, 'actions.team.invite_signup', {
+      organizationId: invite.organization_id as string,
+    });
+  }
   const alreadyExists = existsData === true;
   if (alreadyExists) {
     return err('conflict', INVITE_ACCOUNT_EXISTS_COPY);
@@ -587,7 +637,11 @@ export async function acceptInviteWithSignupAction(input: {
     email,
     password: parsed.data.password,
   });
-  if (signInErr) return err('internal_error', signInErr.message);
+  if (signInErr) {
+    return unexpectedActionError(signInErr, 'actions.team.invite_signup', {
+      organizationId: invite.organization_id as string,
+    });
+  }
 
   // 6. Accept the invite (creates membership + assignment + audits).
   try {

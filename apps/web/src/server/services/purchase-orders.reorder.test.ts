@@ -35,6 +35,7 @@ vi.mock('@/lib/auth/session', () => ({
 
 // Audit is fire-and-forget; stub it so it doesn't reach for a real client.
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 // ItemImagesService is imported by the module but unused on this path.
 vi.mock('./item-images', () => ({
@@ -44,6 +45,8 @@ vi.mock('./item-images', () => ({
     }
   },
 }));
+
+import { reportError } from '@/lib/error-reporter';
 
 import { ServiceError } from './context';
 import { PurchaseOrdersService } from './purchase-orders';
@@ -943,3 +946,86 @@ describe('createDraftsFromReorderForecast — the unassigned count is what is ON
   });
 });
 
+// S31: a supplier's failed draft carried any Error's own text (a TypeError, a
+// library's words) into supplierFailures, which the Server Actions return and
+// the reorder toast shows. A refusal the app wrote keeps its words; anything
+// else says the fixed sentence, and the run sends one report.
+describe("draft runs never show an error's own text for a supplier (S31)", () => {
+  const DRAFT_NOT_CREATED = 'Could not create the draft for this supplier.';
+
+  it('createDraftsFromItems: the fixed sentence for an unexpected failure, a refusal keeps its words, ONE report', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': servedLikePostgrest([
+        dbItem('a-1'),
+        dbItem('b-1', { supplier_id: 'sup-b' }),
+        dbItem('c-1', { supplier_id: 'sup-c' }),
+      ]),
+      'suppliers.select': {
+        data: [
+          { id: 'sup-a', name: 'Supplier A' },
+          { id: 'sup-b', name: 'Supplier B' },
+          { id: 'sup-c', name: 'Supplier C' },
+        ],
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+      'organization_modules.select': { data: { settings: {} }, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+    const first = new TypeError("Cannot read properties of undefined (reading 'id')");
+    vi.spyOn(svc, 'create').mockImplementation(async (input: { supplierId?: string | null }) => {
+      if (input.supplierId === 'sup-a') throw first;
+      if (input.supplierId === 'sup-b') throw new ServiceError('validation_error', 'Supplier is archived.');
+      throw new Error('relation "public.purchase_orders" does not exist');
+    });
+
+    const result = await svc.createDraftsFromItems(['a-1', 'b-1', 'c-1']);
+
+    const bySupplier = Object.fromEntries(
+      result.supplierFailures.map((f) => [f.supplierName, f.error]),
+    );
+    expect(bySupplier).toEqual({
+      'Supplier A': DRAFT_NOT_CREATED,
+      'Supplier B': 'Supplier is archived.',
+      'Supplier C': DRAFT_NOT_CREATED,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/undefined|relation/);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]).toEqual([
+      first,
+      { tag: 'po.drafts_from_items', organizationId: 'org-test', extra: { failed: 2 } },
+    ]);
+  });
+
+  it('createDraftsFromReorderForecast: the same for the suppliers and the unassigned draft, ONE report', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [belowPar('a-1', 'sup-a'), belowPar('x-1', null)],
+        error: null,
+      },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+    const first = new Error('socket hang up');
+    vi.spyOn(
+      svc as unknown as { createReorderDraft: (...a: unknown[]) => Promise<unknown> },
+      'createReorderDraft',
+    ).mockImplementation(async (supplierId: unknown) => {
+      throw supplierId === 'sup-a' ? first : new ServiceError('internal_error', 'deadlock detected');
+    });
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.supplierFailures).toEqual([
+      { supplierId: 'sup-a', supplierName: 'Supplier A', error: DRAFT_NOT_CREATED },
+      { supplierId: null, supplierName: 'Unassigned (no supplier)', error: DRAFT_NOT_CREATED },
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/socket|deadlock/);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]).toEqual([
+      first,
+      { tag: 'po.drafts_from_reorder', organizationId: 'org-test', extra: { failed: 2 } },
+    ]);
+  });
+});

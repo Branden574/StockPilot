@@ -1437,13 +1437,12 @@ export async function bulkPlaceStockAction(
             (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
           // A refusal (0365: a source in a warehouse the caller cannot write)
           // is an app-authored sentence; say it rather than "could not place".
-          const refused = e instanceof ServiceError && e.code === 'forbidden';
           failed.push({
             itemId: p.itemId,
             message: insufficient
               ? 'Not enough available to place.'
-              : refused
-                ? (e as ServiceError).message
+              : e instanceof ServiceError && e.code === 'forbidden'
+                ? e.message
                 : 'Could not place this item.',
           });
         }

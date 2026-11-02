@@ -1,9 +1,11 @@
 import 'server-only';
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getStripe } from '@/lib/stripe/server';
 import { getPriceId, type BillingInterval } from '@/lib/stripe/plans';
+import { NOT_SET_UP_MESSAGE } from '@/server/lib/action-error-result';
 
 import { type PlanId } from '@stockpilot/core';
 
@@ -43,13 +45,14 @@ export class BillingService {
 
     const priceId = getPriceId(plan, interval);
     if (!priceId) {
-      throw new ServiceError(
-        'validation_error',
-        `Stripe price ID not configured for ${plan}/${interval}. Set NEXT_PUBLIC_STRIPE_PRICE_${plan.toUpperCase()}_${interval.toUpperCase()} in .env.local.`,
+      void reportError(
+        new Error(`NEXT_PUBLIC_STRIPE_PRICE_${plan.toUpperCase()}_${interval.toUpperCase()} is not configured`),
+        this.notSetUpReport(),
       );
+      throw new ServiceError('validation_error', NOT_SET_UP_MESSAGE);
     }
 
-    const stripe = getStripe();
+    const stripe = this.stripe();
     const org = await this.getOrgBilling();
 
     let customerId = org.stripe_customer_id as string | null;
@@ -87,7 +90,7 @@ export class BillingService {
   async createPortalSession() {
     assertPermission(this.ctx, 'billing:manage');
     await assertRoleUnchanged(this.ctx);
-    const stripe = getStripe();
+    const stripe = this.stripe();
     const org = await this.getOrgBilling();
     if (!org.stripe_customer_id) {
       throw new ServiceError('not_found', 'No Stripe customer yet. Subscribe to a plan first.');
@@ -97,6 +100,29 @@ export class BillingService {
       return_url: `${env.NEXT_PUBLIC_APP_URL}/dashboard/settings/billing`,
     });
     return { url: portal.url };
+  }
+
+  /** The Stripe client, or "not set up" when this server has no secret key (S31). */
+  private stripe() {
+    if (!env.STRIPE_SECRET_KEY) {
+      void reportError(new Error('STRIPE_SECRET_KEY is not configured'), this.notSetUpReport());
+      throw new ServiceError('validation_error', NOT_SET_UP_MESSAGE);
+    }
+    return getStripe();
+  }
+
+  /**
+   * The report of a billing setting this server lacks (a local or preview
+   * server). The billing actions answer a validation ServiceError's words as
+   * they are, so the person reads NOT_SET_UP_MESSAGE and only the report
+   * names the setting.
+   */
+  private notSetUpReport() {
+    return {
+      tag: 'billing.not_set_up',
+      organizationId: this.ctx.organizationId,
+      level: 'warning' as const,
+    };
   }
 }
 

@@ -13,6 +13,11 @@ import { createClient } from '@/lib/supabase/server';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
+import {
+  actionErrorResult,
+  NOT_SET_UP_MESSAGE,
+  unexpectedActionError,
+} from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -71,9 +76,7 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     revalidatePath('/dashboard/settings/security');
     return ok({ codes });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.mfa_recovery.generate_mfa_recovery_codes');
   }
 }
 
@@ -194,11 +197,15 @@ export async function consumeMfaRecoveryCodeAction(input: {
     let admin;
     try {
       admin = createAdminClient();
-    } catch {
-      return err(
-        'internal_error',
-        'Server is missing SUPABASE_SERVICE_ROLE_KEY. Recovery cannot complete without it.',
-      );
+    } catch (e) {
+      // Only a server without the service-role key throws here. On such a
+      // server the closed limiter above (it needs the same client) refuses
+      // before any code is checked, so no code is spent. Never the setting's
+      // name to the person (S31).
+      return unexpectedActionError(e, 'actions.mfa_recovery.consume', {
+        message: NOT_SET_UP_MESSAGE,
+        level: 'warning',
+      });
     }
 
     const { data: factors } = await admin.auth.admin.mfa.listFactors({
@@ -228,8 +235,6 @@ export async function consumeMfaRecoveryCodeAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.mfa_recovery.consume_mfa_recovery_code');
   }
 }
