@@ -264,9 +264,10 @@ export async function signOutAction(): Promise<void> {
   // keepId:null targets ALL sessions (see use-session-revocation.ts).
   //
   // Sent also when neither revoke could be confirmed: the person asked to be
-  // signed out everywhere, so the phone signs out as asked, and a web tab
-  // asks GoTrue first and stays while its session is alive. Not sent twice
-  // when the database revoke already did.
+  // signed out everywhere, and each device's listener decides what the
+  // message means for its own session (a web tab asks GoTrue first and stays
+  // while its session is alive). Not sent twice when the database revoke
+  // already did.
   if (accountId && databaseRevoke !== 'ok') {
     await broadcastToChannel(`user:${accountId}:sessions`, 'revoked', { keepId: null });
   }
