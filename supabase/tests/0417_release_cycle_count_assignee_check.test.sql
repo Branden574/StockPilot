@@ -523,11 +523,11 @@ select is(
 select is(
   pg_temp.attempt('authenticated', :asg, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cUn)),
   '42501:-:forbidden',
-  'U3: the assignee of other counts, on a count no one is assigned to (a stale screen after a manager released it), is refused (42501 forbidden: the app says "Only the assigned employee or a manager can release this count."). Before S42 the call succeeded as a no-op');
+  'U3: the assignee of other counts, on a count no one is assigned to (a stale screen after a manager released it), is refused (42501 forbidden; through the app, S42b, this member of the count''s organization is told "This count was already released."). Before S42 the call succeeded as a no-op');
 select is(
   pg_temp.again('asg', :cAsg),
   'first=ok, again=42501:-:forbidden, after=-/-/-/2',
-  'U4: the assignee releases their own count, then sends the same release again (the phone''s retry when the first answer was lost): the first call releases it; the second finds no assignee and is refused (42501 forbidden: the app says "Only the assigned employee or a manager can release this count.", although the release went through). Before S42 the second call succeeded as a no-op and moved assignment_version again (after=-/-/-/3)');
+  'U4: the assignee releases their own count, then sends the same release again (the phone''s retry when the first answer was lost): the first call releases it; the second finds no assignee and is refused (42501 forbidden; through the app, S42b, they are told "This count was already released." and no second audit row is written). Before S42 the second call succeeded as a no-op and moved assignment_version again (after=-/-/-/3)');
 
 -- ══ S. The twin and the family ════════════════════════════════════════════
 select is(

@@ -1,6 +1,9 @@
 // release() + forceReassign() service wrappers over the 0282 RPCs.
 // Verifies reason enforcement, RPC errcode → ServiceError mapping, and audit.
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
 import {
@@ -279,6 +282,107 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
     });
     expect(stub.fromCalls).toEqual([]);
   });
+});
+
+// ── What the S42 migration and its pgTAP suite say the app answers ────────────
+// The S42 migration's header and its suite's U3 and U4 labels were written
+// before S42b. They said the app answers a refused release of a count with no
+// assignee (a stale screen after a manager released it, and the retry after a
+// lost answer) with the generic sentence, which S42b replaced in the same
+// change. Both files stay in the repository, so the sentences they quote are
+// taken here from release() itself: the two answers the cases above pin. The
+// header says what the app answers in one place, its ERRORS note, so no other
+// paragraph can drift from it. Each file is found by its suffix, so the number
+// the migration takes in ship order changes nothing here.
+describe('the S42 migration and its pgTAP suite quote what release() answers (S42b)', () => {
+  const REPO_ROOT = path.resolve(__dirname, '../../../../..');
+  const filesNamed = (dir: string, name: RegExp): string[] =>
+    readdirSync(path.join(REPO_ROOT, dir)).filter((f) => name.test(f));
+  const MIGRATION = filesNamed(
+    'supabase/migrations',
+    /^\d{4}_release_cycle_count_assignee_check\.sql$/,
+  );
+  const SUITE = filesNamed(
+    'supabase/tests',
+    /^\d{4}_release_cycle_count_assignee_check\.test\.sql$/,
+  );
+  const read = (dir: string, files: string[]): string =>
+    files.length === 1 ? readFileSync(path.join(REPO_ROOT, dir, files[0]!), 'utf8') : '';
+  const migration = read('supabase/migrations', MIGRATION);
+  const suite = read('supabase/tests', SUITE);
+  const flat = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+  /** The header's paragraphs: its `--` lines before the first statement, split at the empty ones. */
+  const paragraphs = (() => {
+    const lines = migration.split('\n');
+    const end = lines.findIndex((l) => l.trim() !== '' && !l.startsWith('--'));
+    return lines
+      .slice(0, end)
+      .map((l) => l.replace(/^--\s?/, ''))
+      .join('\n')
+      .split(/\n\s*\n/)
+      .map(flat)
+      .filter((p) => p !== '');
+  })();
+
+  /** A pgTAP description: the SQL string that opens with `<id>: `, its '' unescaped. */
+  const label = (id: string): string => {
+    const m = suite.match(new RegExp(`'(${id}: (?:[^']|'')*)'`));
+    return m ? flat(m[1]!.replace(/''/g, "'")) : '';
+  };
+
+  /** What release() answers when the database refused it and the caller's own read shows `row`. */
+  async function answer(row: { status: string; assigned_to: string | null }) {
+    const stub = makeSupabaseStub({
+      'rpc:release_cycle_count': { data: null, error: { message: 'forbidden', code: '42501' } },
+      'cycle_counts.select': servedLikePostgrest([
+        { id: 'cc-1', organization_id: 'org-test', ...row },
+      ]),
+    });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, { role: 'staff', userId: 'me' }),
+    );
+    return svc.release('cc-1', 'Shift ending').then(
+      () => ({ code: 'released', message: '' }),
+      (e: { code: string; message: string }) => ({ code: e.code, message: e.message }),
+    );
+  }
+  let alreadyReleased = '';
+  let generic = '';
+  beforeAll(async () => {
+    const released = await answer({ status: 'in_progress', assigned_to: null });
+    const other = await answer({ status: 'in_progress', assigned_to: 'someone-else' });
+    expect([released.code, other.code]).toEqual(['conflict', 'forbidden']);
+    alreadyReleased = released.message;
+    generic = other.message;
+  });
+
+  it('finds exactly one migration and one suite by their suffix', () => {
+    expect(MIGRATION).toHaveLength(1);
+    expect(SUITE).toHaveLength(1);
+  });
+
+  it("the header's ERRORS note names both answers, and no other paragraph quotes either", () => {
+    expect(alreadyReleased).not.toBe('');
+    expect(generic).not.toBe('');
+    const errors = paragraphs.filter((p) => p.startsWith('ERRORS:'));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(alreadyReleased);
+    expect(errors[0]).toContain(generic);
+    const others = paragraphs.filter((p) => !p.startsWith('ERRORS:')).join(' ');
+    expect(others).not.toContain(alreadyReleased);
+    expect(others).not.toContain(generic);
+  });
+
+  it.each(['U3', 'U4'])(
+    "the suite's %s label (a refusal on a count with no assignee) quotes the conflict answer, never the generic sentence",
+    (id) => {
+      const text = label(id);
+      expect(text.startsWith(`${id}: `)).toBe(true);
+      expect(text).toContain(alreadyReleased);
+      expect(text).not.toContain(generic);
+    },
+  );
 });
 
 describe('CycleCountsService.forceReassign', () => {

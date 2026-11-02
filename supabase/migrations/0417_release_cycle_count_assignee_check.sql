@@ -53,21 +53,23 @@
 -- asks an accepted, enabled membership of the caller's active organization
 -- with the cycle_counts module and stock:adjust, and the phone offers Release
 -- only on a count with an assignee, to that assignee or a manager. Three
--- edge cases now get the refusal the app already words as "Only the assigned
--- employee or a manager can release this count.":
---   - An assignee who taps Release after a manager already released the
---     count: a silent success before, with a "released" audit row for a
---     no-op; the same person already gets that sentence when the manager
---     reassigned it instead.
+-- edge cases are now refused, none of them a manager's (a manager's call
+-- goes through as before); the ERRORS note below says what the app answers:
+--   - An assignee who is not a manager and taps Release after a manager
+--     already released the count: a silent success before, with a
+--     "released" audit row for a no-op. Now the app says the count was
+--     already released (when the manager reassigned it to someone else
+--     instead, the app's answer is the generic refusal, as before).
 --   - An assignee who is not a manager and taps Release count again after
 --     their own release went through but its answer was lost (the phone
 --     stops waiting after 20 seconds, or the connection drops): before, the
 --     second call released the count again as a no-op, wrote a second
 --     "released" audit row and closed the sheet; now the sheet stays open
---     with that sentence, although the count is released. A manager's
---     second call goes through as before.
+--     and says the count was already released, and no second audit row is
+--     written.
 --   - A member removed from an organization who still belongs to another,
---     acting from a page left open.
+--     acting from a page left open: the generic refusal, which tells them
+--     nothing about the count.
 -- The release steps count, read-only, before the push: in-progress counts
 -- with no assignee, counts assigned to someone who is no longer an accepted
 -- member, and assignees without stock:adjust. No row changes whatever those
@@ -92,10 +94,15 @@
 -- comment; no table, view, sequence, policy or grant is created or changed.
 --
 -- ERRORS: the new refusals are 42501 'forbidden' with no hint and no detail,
--- the refusal the old check raises (the service turns it into "Only the
--- assigned employee or a manager can release this count."), so a refusal
--- says nothing about whether the count is assigned. Everything else is as
--- before. Never 40001 or 40P01 (PostgREST retries those forever).
+-- the refusal the old check raises, so a direct call's refusal says nothing
+-- about whether the count is assigned. Through the app, the same change's
+-- service code (S42b) reads the count after a 'forbidden', with the caller's
+-- own client in their active organization. If that read finds it in progress
+-- with no assignee (only a member of the count's organization can read it,
+-- and could see that anyway), the answer is a conflict, "This count was
+-- already released.", with no audit row; every other refusal stays "Only the
+-- assigned employee or a manager can release this count." Everything else
+-- is as before. Never 40001 or 40P01 (PostgREST retries those forever).
 
 set lock_timeout = '900ms';
 
