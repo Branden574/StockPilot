@@ -322,18 +322,21 @@ describe('one cell fewer in every row kind (owner decision 2026-10-19: SKU stack
     for (const tr of bodyRows(container)) expect(tr.children).toHaveLength(13);
   });
 
-  it('the no-match line spans the whole table: 11 cells on Items, 13 on Books', () => {
+  // The empty area sat in one row spanning the 11 / 13 cells until the review
+  // of 2026-10-20, which moved it under the table, outside the sideways
+  // scroller (at phone width the row's centred line was out of sight). The
+  // header keeps every cell.
+  it('a view with nothing in it keeps 11 header cells on Items and 13 on Books, and no body row', () => {
     const items = [dataset('a', { name: 'Alpha Widget' })];
     const first = renderInstant(items, 'q=zzz');
-    const line = first.container.querySelector('tbody td[colspan]') as HTMLTableCellElement;
-    expect(line.colSpan).toBe(11);
     expect(first.container.querySelectorAll('thead th')).toHaveLength(11);
+    expect(first.container.querySelectorAll('tbody tr')).toHaveLength(0);
+    expect(first.container.querySelector('tbody td[colspan]')).toBeNull();
     first.unmount();
 
     const books = renderInstant(items, 'q=zzz', BOOKS);
-    const bookLine = books.container.querySelector('tbody td[colspan]') as HTMLTableCellElement;
-    expect(bookLine.colSpan).toBe(13);
     expect(books.container.querySelectorAll('thead th')).toHaveLength(13);
+    expect(books.container.querySelectorAll('tbody tr')).toHaveLength(0);
   });
 });
 
