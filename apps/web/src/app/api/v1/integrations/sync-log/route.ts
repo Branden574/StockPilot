@@ -11,9 +11,9 @@ export const dynamic = 'force-dynamic';
 /**
  * Operator dead-letter view: list this org's FAILED connector sync-log rows
  * (status in 'error','dead'). Unlike the member-level connections health read,
- * this is gated on an ADMIN manage permission (integrations:manage OR
+ * this is gated on a manage permission (integrations:manage OR
  * shipping:manage) inside ConnectionsService.listFailedSyncs — the raw error
- * detail + the adjacent replay action are admin-only. A caller lacking the
+ * detail + the adjacent replay action are for those keys. A caller lacking the
  * manage permission gets a forbidden ServiceError → 403; a disabled module →
  * module_disabled → 403.
  */

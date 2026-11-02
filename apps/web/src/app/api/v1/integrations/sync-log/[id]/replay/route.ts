@@ -14,14 +14,16 @@ const idSchema = z.string().uuid();
 /**
  * Operator replay: re-queue a dead-lettered/errored connector export. Resets the
  * connection_sync_log row to status='pending' (attempts=0, next_attempt_at=null)
- * so the cron drainer re-picks it next tick. Same admin gating as the list view
+ * so the cron drainer re-picks it next tick. Same gating as the list view
  * (integrations:manage OR shipping:manage) + org-scoped — enforced inside
- * ConnectionsService.replaySync and by the 0152 admin-only RLS policy.
+ * ConnectionsService.replaySync and by the row rule connection_sync_log_replay
+ * (0428: the same keys, failed rows only; docket S27).
  *
  * A non-uuid `id` segment is a request-shape error (400). An id that doesn't
  * resolve to a replayable failed row for this org → not_found → 404 (never
  * leaks whether another org owns it). A failed row of this org that the row
- * rule refused to replay → forbidden → 403.
+ * rule refused to replay → forbidden → 403; one the drainer moved while an
+ * owner or an admin pressed Replay → conflict → 409.
  */
 export async function POST(
   req: NextRequest,

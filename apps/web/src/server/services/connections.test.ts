@@ -769,9 +769,10 @@ describe('ConnectionsService.saveAccountMapping', () => {
 
 /**
  * docket S27: every integration write reports what the database did. The
- * service gates on the member's EFFECTIVE key, but org_connections' row rule
- * (0146) still asks for the admin role, so a member given Manage integrations
- * or Manage shipping passes the gate and is refused by the database. Before:
+ * service gates on the member's EFFECTIVE key, and org_connections' row rules
+ * ask the same key since 0428 (the admin role before it), so a write the
+ * database refuses is one the request's view of the member's access missed,
+ * or the old rule after a rollback. These cases mock that refusal. Before:
  *   - an update the rule refused changes 0 rows with no error, and disconnect
  *     went on to delete the Vault secret and audit "disconnected" (the row kept
  *     a dangling secret_id), and the settings saves reported success;
@@ -791,7 +792,7 @@ describe('ConnectionsService: writes report what the database did (docket S27)',
   /** The Zendesk connect form, with placeholder values. */
   const FORM_VALUE = 'placeholder-1';
   const ZENDESK_FORM = { subdomain: 'example', email: 'agent@example.com', apiToken: FORM_VALUE };
-  /** A member given the key, whom the database's admin-only rule refuses. */
+  /** A member given the key, whose write the database refuses (mocked). */
   const keyHolder = (permissions: string[], modules: ModuleId[]) =>
     makeServiceContext(makeSupabaseStub().client, {
       role: 'manager',
@@ -1084,11 +1085,11 @@ describe('ConnectionsService: writes report what the database did (docket S27)',
 
   /**
    * docket S27 review: the dead-letter view lists a failed sync to every
-   * member given either key (its select rule is member-level), but the replay
-   * rule (0152) is admin-only, so a member's replay changed 0 rows and was
-   * told "No replayable failed sync was found for that id." about a row on
-   * their screen. A failed sync the member can still see is a refusal; any
-   * other 0-row replay stays not found.
+   * member given either key (its select rule is member-level). Under the
+   * role-floor replay rule (0152, before 0428) a manager's replay changed 0
+   * rows and was told "No replayable failed sync was found for that id."
+   * about a row on their screen. For a member below admin, a failed sync they
+   * can still see is a refusal; any other 0-row replay stays not found.
    */
   describe('a replay the database refused', () => {
     const BOTH = ['integrations', 'shipping'] as ModuleId[];
@@ -1131,6 +1132,57 @@ describe('ConnectionsService: writes report what the database did (docket S27)',
         message: 'No replayable failed sync was found for that id.',
       });
       expect(audit).not.toHaveBeenCalled();
+    });
+
+    /**
+     * docket S27 note L4. Neither row rule refuses an owner or an admin whom
+     * the gate let through: the role-floor rule before 0428 admits the role,
+     * and the rule since 0428 asks the same keys as the gate (an owner holds
+     * every key). So when their replay changes 0 rows and the second look
+     * finds the sync failed, the drainer moved it between the two requests
+     * (it was pending, then failed again): they are told it changed and to
+     * press Replay again, not that their access does not allow it. Nothing
+     * was written either way. A member below admin keeps the refusal (the
+     * cases above), which is what the role-floor rule, or its rollback, does
+     * to them.
+     */
+    it.each([
+      ['an owner', 'owner', ['integrations:manage', 'shipping:manage'], 'error'],
+      ['an admin', 'admin', ['integrations:manage', 'shipping:manage'], 'dead'],
+      ['an admin with only Manage shipping', 'admin', ['shipping:manage'], 'error'],
+    ] as const)(
+      'tells %s that the export changed while they pressed, not that they were refused',
+      async (_label, role, permissions, status) => {
+        const stub = makeSupabaseStub({
+          'connection_sync_log.update': { data: [], error: null },
+          'connection_sync_log.select': { data: [{ id: 'sync-1', status }], error: null },
+        });
+        const ctx = makeServiceContext(stub.client, {
+          role,
+          permissions: new Set(permissions),
+          enabledModules: new Set<ModuleId>(BOTH),
+        });
+        await expect(new ConnectionsService(ctx).replaySync('sync-1')).rejects.toMatchObject({
+          code: 'conflict',
+          message: 'This export changed while you pressed Replay. Try Replay again.',
+        });
+        expect(audit).not.toHaveBeenCalled();
+      },
+    );
+
+    it('an admin whose replay found nothing to replay still reads "not found"', async () => {
+      const stub = makeSupabaseStub({
+        'connection_sync_log.update': { data: [], error: null },
+        'connection_sync_log.select': { data: [{ id: 'sync-1', status: 'success' }], error: null },
+      });
+      const ctx = makeServiceContext(stub.client, {
+        role: 'admin',
+        permissions: new Set(['integrations:manage']),
+        enabledModules: new Set<ModuleId>(BOTH),
+      });
+      await expect(new ConnectionsService(ctx).replaySync('sync-1')).rejects.toMatchObject({
+        code: 'not_found',
+      });
     });
   });
 

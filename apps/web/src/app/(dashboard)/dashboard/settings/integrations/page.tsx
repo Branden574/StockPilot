@@ -54,10 +54,11 @@ export default async function IntegrationsSettingsPage() {
   // ApiKeysService gate + RLS floor).
   const showApiKeys = apiAccessAccess.enabled && isAdminRole(ctx.role);
 
-  // Permission gate FIRST — only owners/admins manage integrations. The tile
-  // on /dashboard/settings is gated the same way; this redirect is the
-  // server-side backstop for a direct URL hit. Reachable if the caller can
-  // manage ANY surface.
+  // Permission gate FIRST — Manage integrations or Manage shipping (any role
+  // given either; the database asks the same keys since 0428), or an admin
+  // for the API keys. The tile on /dashboard/settings is gated the same way;
+  // this redirect is the server-side backstop for a direct URL hit. Reachable
+  // if the caller can manage ANY surface.
   if (!can(ctx, 'integrations:manage') && !can(ctx, 'shipping:manage') && !showApiKeys) {
     redirect('/dashboard');
   }

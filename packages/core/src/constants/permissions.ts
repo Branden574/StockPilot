@@ -503,6 +503,19 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // has_permission plus the explicit deny, and the item scope is read access.
   // Platform-managed: only StockPilot support grants it, per member.
   'orders:manage_catalog_visibility',
+  // Integrations and shipping (mig 0428, docket S27): the integration tables'
+  // row rules ask has_permission (rls_orgs_with_permission) with no role
+  // floor. EasyPost connection rows follow shipping:manage and every other
+  // provider's follow integrations:manage, as the services gate them; webhook
+  // endpoints and deliveries follow integrations:manage; a failed export's
+  // replay takes either key. connection_mappings and carrier_shipments are
+  // written by the service role only, and a member's own write can never set
+  // a connection's Vault pointer or move the row (a guard trigger). The OAuth
+  // callbacks check the member's effective set before their service-role
+  // writes (S19). So a grant is fully effective end-to-end, and a revoke is
+  // effective in the database.
+  'integrations:manage',
+  'shipping:manage',
 ]);
 
 /**

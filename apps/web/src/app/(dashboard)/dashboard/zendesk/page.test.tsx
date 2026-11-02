@@ -83,6 +83,33 @@ describe('Zendesk page', () => {
     expect(await screen.findByText(`· since ${local}`)).toBeInTheDocument();
   });
 
+  // docket S27: "Connected to <subdomain>.zendesk.com" names the stored value
+  // only when it is one DNS label, the check the app's write path makes; the
+  // page and the connect card both say "Connected" without it otherwise, and
+  // the quick-access link is not built.
+  it('names the connected subdomain only when it is one DNS label', async () => {
+    h.conn = {
+      status: 'active',
+      subdomain: 'other.example/x?',
+      lastConnectedAt: null,
+      lastError: null,
+    };
+    const { unmount } = render(await ZendeskPage());
+    expect(document.body.textContent).not.toContain('other.example');
+    expect(document.body.textContent).not.toContain('.zendesk.com/');
+    expect(screen.getAllByText(/^Connected\.?$/)).toHaveLength(2);
+    expect(screen.queryByRole('link', { name: /Open my Zendesk/ })).not.toBeInTheDocument();
+    unmount();
+
+    h.conn = { status: 'active', subdomain: 'acme', lastConnectedAt: null, lastError: null };
+    render(await ZendeskPage());
+    expect(screen.getAllByText(/Connected to acme\.zendesk\.com/)).toHaveLength(2);
+    expect(screen.getByRole('link', { name: /Open my Zendesk/ })).toHaveAttribute(
+      'href',
+      'https://acme.zendesk.com/agent',
+    );
+  });
+
   it('keeps the connect form for integrations:manage and the ask-an-admin line for everyone else', async () => {
     const { unmount } = render(await ZendeskPage());
     expect(screen.getByLabelText('Zendesk subdomain')).toBeInTheDocument();

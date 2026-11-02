@@ -41,6 +41,52 @@ describe('ZendeskQuickAccess', () => {
     await waitFor(() => expect(h.save).toHaveBeenCalledWith({ subdomain: 'sampleorg' }));
   });
 
+  // docket S27: the stored subdomain is written by the app's checked path,
+  // which takes one DNS label only (connections.ts), but the link is built
+  // from whatever the row holds. A value that is not one label opens no link
+  // and reads as not set, for every member who sees this page.
+  it.each([
+    'other.example/x?',
+    'acme.zendesk.com@other.example',
+    'acme/agent#',
+    'acme.other',
+    '-acme',
+    ' acme',
+    'a'.repeat(64),
+  ])('builds no link from a stored subdomain that is not one DNS label (%s)', (stored) => {
+    render(<ZendeskQuickAccess subdomain={stored} canManage={false} />);
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain('zendesk.com/agent');
+    expect(
+      screen.getByText(/No Zendesk subdomain set yet\. Ask an admin to set it\./),
+    ).toBeInTheDocument();
+  });
+
+  it('a manager sees such a value as not set, with an empty field to set it', async () => {
+    render(<ZendeskQuickAccess subdomain="other.example/x?" canManage />);
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/No Zendesk subdomain set yet — add it below\./)).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: /Your Zendesk subdomain/ });
+    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: 'sampleorg' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(h.save).toHaveBeenCalledWith({ subdomain: 'sampleorg' }));
+  });
+
+  it('still links a 63-character label and a label with inner hyphens', () => {
+    const { unmount } = render(<ZendeskQuickAccess subdomain={'a'.repeat(63)} canManage={false} />);
+    expect(screen.getByRole('link', { name: /Open my Zendesk/ })).toHaveAttribute(
+      'href',
+      `https://${'a'.repeat(63)}.zendesk.com/agent`,
+    );
+    unmount();
+    render(<ZendeskQuickAccess subdomain="sample-org-2" canManage={false} />);
+    expect(screen.getByRole('link', { name: /Open my Zendesk/ })).toHaveAttribute(
+      'href',
+      'https://sample-org-2.zendesk.com/agent',
+    );
+  });
+
   // DESIGN-SPEC 2.4 item 3: a form control is never edged by the hairline
   // alone. The field drew --border (1.13:1 against the dark card), where the
   // shared Input draws the stronger --ed-line-strong (1.30:1).

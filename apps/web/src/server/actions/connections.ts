@@ -151,7 +151,7 @@ const replaySyncSchema = z.object({
 /**
  * Replays a dead-lettered/errored connector export: resets the
  * connection_sync_log row to 'pending' so the drainer re-picks it. Org-scoped +
- * admin-gated (integrations:manage OR shipping:manage) inside the service.
+ * gated on integrations:manage OR shipping:manage inside the service.
  */
 export async function replaySyncAction(
   input: { id: string },

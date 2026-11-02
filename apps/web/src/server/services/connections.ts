@@ -3,6 +3,7 @@ import 'server-only';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { env } from '@/lib/env';
+import { isZendeskSubdomain } from '@/lib/zendesk-subdomain';
 import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
 import { ZendeskClient } from '@/server/connectors/zendesk/client';
 import { deleteConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
@@ -18,7 +19,20 @@ import {
 } from './context';
 import { INTEGRATION_WRITE_REFUSED, integrationWriteError } from './integration-events';
 
-import { CONNECTOR_REGISTRY, type ConnectorProviderId, type Permission } from '@stockpilot/core';
+import {
+  CONNECTOR_REGISTRY,
+  isAtLeast,
+  type ConnectorProviderId,
+  type Permission,
+} from '@stockpilot/core';
+
+/**
+ * What an owner or an admin is told when their Replay changed nothing and the
+ * export is still failed on a second look: the drainer moved it between the
+ * two requests, and pressing Replay again re-queues it (docket S27; see
+ * replaySync). Names no table, rule or code.
+ */
+const REPLAY_RACED = 'This export changed while you pressed Replay. Try Replay again.';
 
 /**
  * Non-secret QBO chart-of-accounts ids stored under
@@ -209,7 +223,8 @@ export class ConnectionsService {
    * Lists this org's FAILED sync-log rows (status in 'error','dead') — the
    * operator dead-letter view. Unlike `list()` (member-level health), this is
    * gated on the manage permission (see assertSyncLogManage): the raw error
-   * detail + the replay capability are admin-only. Newest first.
+   * detail + the replay capability are for Manage integrations or Manage
+   * shipping. Newest first.
    */
   async listFailedSyncs(limit = 50): Promise<{ rows: FailedSyncRow[] }> {
     this.assertSyncLogManage();
@@ -244,23 +259,30 @@ export class ConnectionsService {
   /**
    * Replays a dead-lettered/errored sync-log row: resets it to status='pending',
    * attempts=0, next_attempt_at=null so the cron drainer re-picks it on the next
-   * tick. Org-scoped + admin-gated (assertSyncLogManage). Only 'dead'/'error'
-   * rows are eligible — a not-yet-terminal ('pending') or already-'success' row
-   * is left untouched and reported as not_found, so an operator can't replay a
-   * still-in-flight delivery or re-fire a completed export.
+   * tick. Org-scoped + gated on the manage key of each enabled module
+   * (assertSyncLogManage). Only 'dead'/'error' rows are eligible — a
+   * not-yet-terminal ('pending') or already-'success' row is left untouched and
+   * reported as not_found, so an operator can't replay a still-in-flight
+   * delivery or re-fire a completed export.
    *
    * Security: the UPDATE rides the user's (authenticated) request client, so the
-   * 0152 admin-only RLS policy (org-scoped, with-check status='pending') is the
-   * load-bearing boundary; the .eq(organization_id)/.in(status) filters here are
-   * defense in depth + give a clean not_found when the row isn't eligible.
+   * row rule connection_sync_log_replay (0428: a failed row, 'error' or 'dead',
+   * back to 'pending', for a member holding Manage integrations or Manage
+   * shipping; docket S27) is the load-bearing boundary; the
+   * .eq(organization_id)/.in(status) filters here are defense in depth + give a
+   * clean not_found when the row isn't eligible.
    *
-   * A replay the row rule refused changes 0 rows too, but the row is on the
-   * member's screen: the sync log's select rule is member-level, and this view
-   * opens to every member given either key (assertSyncLogManage). So a 0-row
-   * replay takes a second look with the same client: a failed sync the member
-   * can still see was refused, and says so (docket S27). Anything else, or a
-   * second look that fails or answers nothing, stays not_found; nothing
-   * changed either way.
+   * A 0-row replay of a row that is still on the member's screen as failed
+   * (the sync log's select rule is member-level) takes a second look with the
+   * same client to choose its message. The gate asks the same keys as the row
+   * rule, and an owner or an admin was never refused by the role-floor rule
+   * before 0428 either, so for them a failed row on the second look is one the
+   * drainer moved between the two requests (it was pending, then failed
+   * again): they are told it changed and to press Replay again. A member below
+   * admin is told the change was not saved (the role-floor rule, or its
+   * rollback, refuses them; since 0428, so does a key taken away after the
+   * page loaded). Anything else, or a second look that fails or answers
+   * nothing, stays not_found; nothing changed either way (docket S27).
    */
   async replaySync(id: string): Promise<void> {
     this.assertSyncLogManage();
@@ -291,6 +313,9 @@ export class ConnectionsService {
         .maybeSingle();
       const status = (seen as { status?: string } | null)?.status;
       if (status === 'error' || status === 'dead') {
+        if (isAtLeast(this.ctx.role, 'admin')) {
+          throw new ServiceError('conflict', REPLAY_RACED);
+        }
         throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
       }
       throw new ServiceError('not_found', 'No replayable failed sync was found for that id.');
@@ -531,7 +556,7 @@ export class ConnectionsService {
     // so reject anything that isn't a bare DNS label (no `.`, `/`, `:`, `@`,
     // `#`, `?`, whitespace) — otherwise `169.254.169.254#` etc. could retarget
     // the host to an internal/metadata address.
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(subdomain)) {
+    if (!isZendeskSubdomain(subdomain)) {
       throw new ServiceError('validation_error', 'Invalid Zendesk subdomain — use only letters, numbers, and hyphens.');
     }
     try {
@@ -653,7 +678,7 @@ export class ConnectionsService {
     }
     // Same SSRF-style guard as connectZendesk: the value is interpolated into a
     // zendesk.com host/URL, so allow only a bare DNS label.
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(subdomain)) {
+    if (!isZendeskSubdomain(subdomain)) {
       throw new ServiceError('validation_error', 'Invalid Zendesk subdomain — use only letters, numbers, and hyphens.');
     }
 

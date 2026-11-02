@@ -1,5 +1,6 @@
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { effectiveNavLabel } from '@/lib/nav-labels';
+import { isZendeskSubdomain } from '@/lib/zendesk-subdomain';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
@@ -48,7 +49,9 @@ export default async function ZendeskPage() {
       <DetailSection title="Connection">
         {conn?.status === 'active' ? (
           <p className="text-muted-foreground text-[13.5px]">
-            Connected{conn.subdomain ? ` to ${conn.subdomain}.zendesk.com` : ''}
+            {/* Named only when the stored subdomain is one DNS label, the
+                check the app's save makes (docket S27). */}
+            Connected{isZendeskSubdomain(conn.subdomain) ? ` to ${conn.subdomain}.zendesk.com` : ''}
             {/* The browser's own zone and clock: on the server this read
                 UTC (Vercel), a different wall-clock time for the viewer. */}
             {conn.lastConnectedAt ? (
