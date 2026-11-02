@@ -11,7 +11,11 @@ vi.mock('sharp', async (importOriginal) => {
   return { default: recordingSharp(real, sharpCalls) };
 });
 
-import { AVIF_8192_CROPPED_TO_64, IMAGE_LOOKALIKE_SVGS } from '@/test/image-decode-fixtures';
+import {
+  AVIF_8192_CROPPED_TO_64,
+  IMAGE_LOOKALIKE_SVGS,
+  OVERSIZED_DERIVED_AVIFS,
+} from '@/test/image-decode-fixtures';
 
 import { IMAGE_VARIANTS } from './image-variants.config';
 import { makeItemPhotoThumbnail } from './item-photo-thumbnail';
@@ -131,6 +135,15 @@ describe('makeItemPhotoThumbnail', () => {
     expect(await makeItemPhotoThumbnail(new Uint8Array(AVIF_8192_CROPPED_TO_64))).toBeNull();
     expect(sharpCalls).toEqual([]);
   });
+
+  it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
+    'answers null, without calling sharp, for an AVIF whose grid or overlay states more than its ispe: %s',
+    async (_label, bytes) => {
+      sharpCalls.length = 0;
+      expect(await makeItemPhotoThumbnail(new Uint8Array(bytes))).toBeNull();
+      expect(sharpCalls).toEqual([]);
+    },
+  );
 
   it('answers null for bytes that are not an image', async () => {
     expect(

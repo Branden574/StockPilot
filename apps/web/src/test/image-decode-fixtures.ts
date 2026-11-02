@@ -125,6 +125,66 @@ export const MALFORMED_PNGS: Readonly<Record<string, Buffer>> = {
   'palette rows with tRNS whose filter byte is not a PNG filter': pngWithRowFilter(3, 5),
 };
 
+/** The zlib data of eight rows of an 8 x 8 image of colour type 4 or 6
+ *  (8 bits), each row starting with `filterByte`. */
+function alphaRows(colourType: 4 | 6, filterByte: number): Buffer {
+  const row = Buffer.alloc(1 + 8 * (colourType === 4 ? 2 : 4));
+  row[0] = filterByte;
+  return deflateSync(Buffer.concat(Array<Buffer>(8).fill(row)));
+}
+
+/**
+ * An 8 x 8 PNG of colour type 4 (grey and alpha) or 6 (RGBA) with a tRNS
+ * chunk, which the PNG specification does not allow for a colour type that
+ * has an alpha channel: libpng (sharp) skips it by its length, while png-js
+ * (react-pdf and pdfkit) reads none of its data for these two colour types
+ * and goes on to read the chunks inside it. Inside it are four bytes, an
+ * IDAT whose rows start with `hiddenFilter` and IEND; after it come the
+ * file's own IDAT, with rows of filter 0, and IEND. sharp reads the file's
+ * own rows; png-js reads the hidden ones, and on a filter type over 4 throws
+ * inside zlib's callback. 125 bytes for colour type 6.
+ */
+export function pngWithIdatInsideTrns(colourType: 4 | 6, hiddenFilter: number): Buffer {
+  const hidden = Buffer.concat([
+    Buffer.alloc(4),
+    pngChunk('IDAT', alphaRows(colourType, hiddenFilter)),
+    PNG_IEND,
+  ]);
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngIhdr(8, 8, { colourType }),
+    pngChunk('tRNS', hidden),
+    pngChunk('IDAT', alphaRows(colourType, 0)),
+    PNG_IEND,
+  ]);
+}
+
+/** An 8 x 8 RGBA PNG with one tEXt chunk of `textBytes` bytes: a keyword, a
+ *  zero byte and the rest the letter A. png-js reads a tEXt chunk's text with
+ *  one function call per byte as its arguments, which past about 110,000
+ *  bytes throws a RangeError, and react-pdf then draws nothing. */
+export function pngWithText(textBytes: number): Buffer {
+  const keyword = Buffer.from('Comment\0', 'latin1');
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngIhdr(8, 8),
+    pngChunk('tEXt', Buffer.concat([keyword, Buffer.alloc(textBytes - keyword.length, 'A')])),
+    pngChunk('IDAT', rgbaRows(8, 8)),
+    PNG_IEND,
+  ]);
+}
+
+/**
+ * PNGs that sharp reads cleanly but react-pdf's PNG reader (png-js) reads
+ * differently, or cannot read, as stored. None may reach react-pdf unchanged;
+ * each is re-made by sharp, which drops the chunk png-js misreads.
+ */
+export const PNGS_PNG_JS_MISREADS: Readonly<Record<string, Buffer>> = {
+  'an IDAT and IEND inside the tRNS chunk of an RGBA PNG': pngWithIdatInsideTrns(6, 5),
+  'an IDAT and IEND inside the tRNS chunk of a grey and alpha PNG': pngWithIdatInsideTrns(4, 7),
+  'a tEXt chunk of 200,000 bytes': pngWithText(200_000),
+};
+
 /** A 64 x 64 RGBA PNG whose IDAT inflates to 16 MiB instead of its 16,448
  *  bytes of rows (about 16 KB). sharp reads only the rows the header states. */
 export function pngWithOversizedData(): Buffer {
@@ -309,6 +369,224 @@ export function avifBoxes(coded: [number, number], crop?: [number, number]): Buf
  *  file like it with real AV1 data took 1.1 GB of memory). */
 export const AVIF_8192_CROPPED_TO_64 = avifBoxes([8192, 8192], [64, 64]);
 
+export interface DerivedAvifOptions {
+  /** A grid of `rows` x `columns` tiles, or an overlay (iovl) of one tile at
+   *  the canvas's top left corner. */
+  type: 'grid' | 'iovl';
+  rows?: number;
+  columns?: number;
+  /** Every tile's coded size (its ispe). */
+  tile: [number, number];
+  /** The size the derived item's own data states: a grid's output size, an
+   *  overlay's canvas. libheif makes an image of this size. */
+  output: [number, number];
+  /** The derived item's own ispe, or null for none. */
+  ispe: [number, number] | null;
+  /** Where the derived item's data is: the idat box inside meta
+   *  (construction method 1, as libavif writes it) or mdat (method 0, a
+   *  file offset). Default idat. */
+  dataIn?: 'idat' | 'mdat';
+  /** The sizes in 32 bits (flags bit 0) rather than 16. Default false. */
+  wide?: boolean;
+  /** Item ids in 32 bits: pitm, iref and ipma version 1, iinf version 1,
+   *  infe version 3, iloc version 2. Default false (16 bits). */
+  ids32?: boolean;
+  /** ipma's property indexes in 15 bits (flags bit 0) rather than 7. */
+  ipmaWide?: boolean;
+  /** Each extent's offset in iloc's base offset, the extent's own 0. */
+  ilocBase?: boolean;
+  /** One tile's AV1 configuration (av1C contents) and coded data, each tile
+   *  pointing at the same data. Default a 16-byte stand-in that is not AV1,
+   *  so the file can never be decoded. */
+  tileData?: { av1C: Buffer; data: Buffer };
+}
+
+/** A u16 or u32 per `wide`. */
+function sized(n: number, wide: boolean): Buffer {
+  return wide ? u32(n) : u16(n);
+}
+
+/**
+ * An AVIF whose primary item is a derived image (ISO/IEC 23008-12): a grid
+ * of AV1 tiles, or an overlay of one, laid out as libavif writes one (ftyp,
+ * then meta with hdlr, pitm, iloc version 1, iinf, iref dimg, iprp and
+ * idat, then mdat). libheif makes the derived image at the size its data
+ * states, not at its ispe. With `tileData` from a real AV1 image the file
+ * decodes; with the default stand-in it never can.
+ */
+export function avifDerivedBoxes(opts: DerivedAvifOptions): Buffer {
+  const { type, tile, output, ispe, dataIn = 'idat', wide = false } = opts;
+  const { ids32 = false, ipmaWide = false, ilocBase = false } = opts;
+  const id = (n: number) => sized(n, ids32);
+  const version = (v: number) => Buffer.from([v, 0, 0, 0]);
+  const rows = type === 'grid' ? (opts.rows ?? 1) : 1;
+  const columns = type === 'grid' ? (opts.columns ?? 1) : 1;
+  const tiles = rows * columns;
+  const derivedId = tiles + 1;
+  const tileData = opts.tileData ?? {
+    av1C: Buffer.from([0x81, 0x3f, 0x02, 0x00]),
+    data: Buffer.alloc(16),
+  };
+  const flags = wide ? 1 : 0;
+  const payload =
+    type === 'grid'
+      ? Buffer.concat([
+          Buffer.from([0, flags, rows - 1, columns - 1]),
+          sized(output[0], wide),
+          sized(output[1], wide),
+        ])
+      : Buffer.concat([
+          Buffer.from([0, flags]),
+          Buffer.alloc(8, 0xff),
+          sized(output[0], wide),
+          sized(output[1], wide),
+          sized(0, wide),
+          sized(0, wide),
+        ]);
+  const tileIds = Array.from({ length: tiles }, (_, i) => i + 1);
+  // ipco: 1 av1C, 2 the tiles' ispe, 3 pixi, 4 the derived item's ispe.
+  const properties = [
+    box('av1C', tileData.av1C),
+    fullBox('ispe', u32(tile[0]), u32(tile[1])),
+    fullBox('pixi', Buffer.from([3, 8, 8, 8])),
+    ...(ispe ? [fullBox('ispe', u32(ispe[0]), u32(ispe[1]))] : []),
+  ];
+  /** An item's property associations: [essential, index] each. */
+  const associations = (list: Array<[boolean, number]>) =>
+    Buffer.concat([
+      Buffer.from([list.length]),
+      ...list.map(([essential, index]) =>
+        ipmaWide
+          ? u16((essential ? 0x8000 : 0) | index)
+          : Buffer.from([(essential ? 0x80 : 0) | index]),
+      ),
+    ]);
+  const ipmaEntries = [
+    ...tileIds.map((n) =>
+      Buffer.concat([
+        id(n),
+        associations([
+          [true, 1],
+          [false, 2],
+          [false, 3],
+        ]),
+      ]),
+    ),
+    Buffer.concat([
+      id(derivedId),
+      associations(
+        ispe
+          ? [
+              [false, 4],
+              [false, 3],
+            ]
+          : [[false, 3]],
+      ),
+    ]),
+  ];
+  const ilocEntry = (n: number, method: number, offset: number, length: number) =>
+    Buffer.concat([
+      id(n),
+      u16(method),
+      u16(0),
+      ...(ilocBase ? [u32(offset), u16(1), u32(0)] : [u16(1), u32(offset)]),
+      u32(length),
+    ]);
+  const meta = (mdatAt: number) => {
+    const payloadAt = dataIn === 'idat' ? 0 : mdatAt + 8 + tileData.data.length;
+    return fullBox(
+      'meta',
+      fullBox('hdlr', u32(0), Buffer.from('pict', 'latin1'), Buffer.alloc(13)),
+      box('pitm', version(ids32 ? 1 : 0), id(derivedId)),
+      box(
+        'iloc',
+        version(ids32 ? 2 : 1),
+        Buffer.from([0x44, ilocBase ? 0x40 : 0x00]),
+        id(tiles + 1),
+        ...tileIds.map((n) => ilocEntry(n, 0, mdatAt + 8, tileData.data.length)),
+        ilocEntry(derivedId, dataIn === 'idat' ? 1 : 0, payloadAt, payload.length),
+      ),
+      box(
+        'iinf',
+        version(ids32 ? 1 : 0),
+        id(tiles + 1),
+        ...[...tileIds, derivedId].map((n) =>
+          box(
+            'infe',
+            version(ids32 ? 3 : 2),
+            id(n),
+            u16(0),
+            Buffer.from(n === derivedId ? type : 'av01', 'latin1'),
+            Buffer.from([0]),
+          ),
+        ),
+      ),
+      box(
+        'iref',
+        version(ids32 ? 1 : 0),
+        box('dimg', id(derivedId), u16(tiles), ...tileIds.map((n) => id(n))),
+      ),
+      box(
+        'iprp',
+        box('ipco', ...properties),
+        box(
+          'ipma',
+          Buffer.from([ids32 ? 1 : 0, 0, 0, ipmaWide ? 1 : 0]),
+          u32(ipmaEntries.length),
+          ...ipmaEntries,
+        ),
+      ),
+      ...(dataIn === 'idat' ? [box('idat', payload)] : []),
+    );
+  };
+  const ftyp = box(
+    'ftyp',
+    Buffer.from('avif', 'latin1'),
+    u32(0),
+    Buffer.from('mif1avifmiaf', 'latin1'),
+  );
+  const mdatAt = ftyp.length + meta(0).length;
+  const mdat = box('mdat', tileData.data, ...(dataIn === 'mdat' ? [payload] : []));
+  return Buffer.concat([ftyp, meta(mdatAt), mdat]);
+}
+
+/**
+ * AVIFs whose primary item is a grid or an overlay whose own data states a
+ * far larger image than any ispe in the file. libheif 1.23 (sharp 0.35)
+ * makes the image at the size the data states before it reads a tile, so
+ * the file's largest ispe does not bound the decode: with real AV1 tiles the
+ * first took 1.06 GB of memory and the overlay 0.87 GB (the reviewer's
+ * measurement), with the decode failing only afterwards.
+ */
+export const OVERSIZED_DERIVED_AVIFS: Readonly<Record<string, Buffer>> = {
+  'a grid of 64 tiles of 2048 x 2048 making 16384 x 16384, its ispe 4096 x 4096': avifDerivedBoxes({
+    type: 'grid',
+    rows: 8,
+    columns: 8,
+    tile: [2048, 2048],
+    output: [16384, 16384],
+    ispe: [4096, 4096],
+  }),
+  'a grid of 64 tiles of 1024 x 1024 making 8192 x 8192, its ispe 64 x 64': avifDerivedBoxes({
+    type: 'grid',
+    rows: 8,
+    columns: 8,
+    tile: [1024, 1024],
+    output: [8192, 8192],
+    ispe: [64, 64],
+  }),
+  'an overlay of one 512 x 512 tile on a 16000 x 16000 canvas, its ispe 512 x 512':
+    avifDerivedBoxes({ type: 'iovl', tile: [512, 512], output: [16000, 16000], ispe: [512, 512] }),
+};
+
+/** The av1C contents and the coded data of a single-item AVIF made by
+ *  sharp, for avifDerivedBoxes' tiles. */
+export function av1TileOf(avif: Buffer): { av1C: Buffer; data: Buffer } {
+  const boxAt = (type: string) => avif.indexOf(Buffer.from(type, 'latin1')) - 4;
+  const contents = (at: number) => avif.subarray(at + 8, at + avif.readUInt32BE(at));
+  return { av1C: contents(boxAt('av1C')), data: contents(boxAt('mdat')) };
+}
+
 /** A 30-byte WebP header (RIFF, WEBP, VP8X) stating a `width` x `height`
  *  canvas, each up to 2^24. */
 export function webpVp8xHeader(width: number, height: number): Buffer {
@@ -395,6 +673,7 @@ holdBackFromSharp(
   WEBP_16383,
   WEBP_100_BY_1000000,
   AVIF_8192_CROPPED_TO_64,
+  ...Object.values(OVERSIZED_DERIVED_AVIFS),
   SVG_16000,
   MALFORMED_PNGS['an IHDR of 16000 x 16000 over 16 bytes of data']!,
   MALFORMED_PNGS['an IHDR of 100000 x 100000 over 16 bytes of data']!,

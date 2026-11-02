@@ -25,8 +25,11 @@ vi.mock('node:zlib', async (importOriginal) => {
 });
 
 import {
+  av1TileOf,
   AVIF_8192_CROPPED_TO_64,
   avifBoxes,
+  avifDerivedBoxes,
+  type DerivedAvifOptions,
   EXIF_JPEGS,
   gifHeader,
   IMAGE_LOOKALIKE_SVGS,
@@ -34,13 +37,17 @@ import {
   jpegFrameThen,
   jpegSegment,
   MALFORMED_PNGS,
+  OVERSIZED_DERIVED_AVIFS,
   PNG_8X8,
   PNG_IEND,
   PNG_SIGNATURE,
   pngChunk,
   pngIhdr,
+  pngWithIdatInsideTrns,
   pngWithOversizedData,
   pngWithRowFilter,
+  pngWithText,
+  PNGS_PNG_JS_MISREADS,
   repeated,
   SLOW_TO_PARSE_JPEGS,
   SVG_16000,
@@ -52,6 +59,9 @@ import {
 } from '@/test/image-decode-fixtures';
 
 import {
+  AVIF_MAX_BOXES_INSIDE,
+  AVIF_MAX_ITEMS,
+  AVIF_MAX_TOP_LEVEL_BOXES,
   DECODE_MAX_INPUT_PIXELS,
   DECODE_TIMEOUT_SECONDS,
   DecodeRefused,
@@ -265,6 +275,47 @@ describe('readImageHeader', () => {
     expect(readImageHeader(plain)).toEqual({ kind: 'avif', width: 64, height: 64, heavy: true });
   });
 
+  it(`AVIF: at most ${AVIF_MAX_TOP_LEVEL_BOXES} boxes at the top level, ftyp included`, () => {
+    // ftyp, meta and mdat, then empty free boxes.
+    const free = Buffer.concat([u32be(8), Buffer.from('free')]);
+    const withFree = (n: number) => Buffer.concat([avifBoxes([64, 64]), repeated(free, n)]);
+    expect(AVIF_MAX_TOP_LEVEL_BOXES).toBe(64);
+    expect(readImageHeader(withFree(61))).toMatchObject({ kind: 'avif', width: 64, height: 64 });
+    expect(readImageHeader(withFree(62))).toBeNull();
+    // 8 MiB of them: refused at the 65th box rather than walked to the end.
+    expect(readImageHeader(withFree(1024 * 1024 - 64))).toBeNull();
+  });
+
+  it(`AVIF: at most ${AVIF_MAX_BOXES_INSIDE} boxes inside meta, iprp and ipco`, () => {
+    const plain = avifBoxes([64, 64]);
+    const free = Buffer.concat([u32be(8), Buffer.from('free')]);
+    /** `n` free boxes at the end of `container`, its size and its parents' grown. */
+    const withFree = (container: 'meta' | 'iprp' | 'ipco', n: number) => {
+      const at = plain.indexOf(container) - 4;
+      const end = at + plain.readUInt32BE(at);
+      const bytes = Buffer.concat([plain.subarray(0, end), repeated(free, n), plain.subarray(end)]);
+      const chain = { meta: ['meta'], iprp: ['meta', 'iprp'], ipco: ['meta', 'iprp', 'ipco'] };
+      for (const box of chain[container]) {
+        const boxAt = bytes.indexOf(box) - 4;
+        bytes.writeUInt32BE(bytes.readUInt32BE(boxAt) + 8 * n, boxAt);
+      }
+      return bytes;
+    };
+    expect(AVIF_MAX_BOXES_INSIDE).toBe(256);
+    // avifBoxes' meta holds 5 boxes, its iprp 2 and its ipco 3.
+    for (const [container, own] of [
+      ['meta', 5],
+      ['iprp', 2],
+      ['ipco', 3],
+    ] as const) {
+      expect(readImageHeader(withFree(container, 256 - own)), container).toMatchObject({
+        width: 64,
+        height: 64,
+      });
+      expect(readImageHeader(withFree(container, 257 - own)), container).toBeNull();
+    }
+  });
+
   it('reads the size of the 38-byte WebP headers without sharp', () => {
     sharpCalls.length = 0;
     expect(readImageHeader(WEBP_7072)).toEqual({
@@ -361,6 +412,294 @@ describe('readImageHeader', () => {
   });
 });
 
+/**
+ * An AVIF whose primary item is derived from others: a grid of tiles, or an
+ * overlay (iovl). libheif makes the image at the size the item's own data
+ * states (a grid's output size, an overlay's canvas) before it reads a tile,
+ * so that size, and not only the file's ispe properties, must be within the
+ * cap.
+ */
+describe('readImageHeader: AVIF grids and overlays', () => {
+  const GRID: DerivedAvifOptions = {
+    type: 'grid',
+    rows: 2,
+    columns: 2,
+    tile: [64, 64],
+    output: [128, 128],
+    ispe: [128, 128],
+  };
+
+  /** A sharp-made 64 x 64 AV1 image's data, for tiles libheif can decode. */
+  async function realTile() {
+    return av1TileOf(await rgb(64, 64).avif({ effort: 0 }).toBuffer());
+  }
+
+  it('a grid of real AV1 tiles: the boxes built here read and decode as sharp reads them', async () => {
+    const tileData = await realTile();
+    for (const opts of [
+      { ...GRID, tileData },
+      { ...GRID, tileData, dataIn: 'mdat', wide: true },
+      { ...GRID, tileData, output: [120, 100], ispe: [120, 100] },
+      { ...GRID, tileData, ids32: true },
+      { ...GRID, tileData, ipmaWide: true },
+      { ...GRID, tileData, ilocBase: true, dataIn: 'mdat' },
+    ] as DerivedAvifOptions[]) {
+      const bytes = avifDerivedBoxes(opts);
+      const label = JSON.stringify({ ...opts, tileData: undefined });
+      const { header, meta } = await headerAndMetadata(bytes);
+      expect(meta, label).toEqual({
+        format: 'heif',
+        width: opts.output[0],
+        height: opts.output[1],
+      });
+      expect(header, label).toEqual({
+        kind: 'avif',
+        width: opts.output[0],
+        height: opts.output[1],
+        heavy: true,
+      });
+      const png = await withCappedImage(bytes, ['avif'], (img) => img.png().toBuffer());
+      const decoded = await sharp(png).metadata();
+      expect([decoded.width, decoded.height], label).toEqual(opts.output);
+    }
+  });
+
+  it('a grid within its ispe: the larger of its ispe and its tiles', () => {
+    expect(readImageHeader(avifDerivedBoxes(GRID))).toEqual({
+      kind: 'avif',
+      width: 128,
+      height: 128,
+      heavy: true,
+    });
+    // Data in mdat (construction method 0) and 32-bit sizes read the same.
+    expect(readImageHeader(avifDerivedBoxes({ ...GRID, dataIn: 'mdat', wide: true }))).toEqual({
+      kind: 'avif',
+      width: 128,
+      height: 128,
+      heavy: true,
+    });
+    // A grid of 64 tiles of 512 making 4096 x 4096: at the cap.
+    expect(
+      readImageHeader(
+        avifDerivedBoxes({
+          ...GRID,
+          rows: 8,
+          columns: 8,
+          tile: [512, 512],
+          output: [4096, 4096],
+          ispe: [4096, 4096],
+        }),
+      ),
+    ).toMatchObject({ width: 4096, height: 4096 });
+    // Its output under its ispe: the ispe still counts.
+    expect(
+      readImageHeader(avifDerivedBoxes({ ...GRID, output: [100, 100], ispe: [128, 128] })),
+    ).toMatchObject({ width: 128, height: 128 });
+  });
+
+  it(`null for more than ${AVIF_MAX_ITEMS} items: iinf entries, or an iloc or ipma count`, () => {
+    expect(AVIF_MAX_ITEMS).toBe(1024);
+    // 31 x 33 tiles and the grid: 1024 items. 32 x 32 and the grid: 1025.
+    const grid = (rows: number, columns: number) =>
+      avifDerivedBoxes({
+        ...GRID,
+        rows,
+        columns,
+        tile: [128, 128],
+        output: [columns * 128, rows * 128],
+        ispe: [columns * 128, rows * 128],
+      });
+    expect(readImageHeader(grid(31, 33))).toMatchObject({ width: 4224, height: 3968 });
+    expect(readImageHeader(grid(32, 32))).toBeNull();
+    // The 5-item grid with more infe entries (for items nothing else names)
+    // in its iinf: only iinf holds more than 1024.
+    const withEntries = (extra: number) => {
+      const plain = avifDerivedBoxes(GRID);
+      const iinf = plain.indexOf('iinf') - 4;
+      const end = iinf + plain.readUInt32BE(iinf);
+      const entries = Array.from({ length: extra }, (_, i) =>
+        Buffer.concat([
+          u32be(21),
+          Buffer.from('infe'),
+          Buffer.from([2, 0, 0, 0]),
+          Buffer.from([(100 + i) >> 8, (100 + i) & 0xff, 0, 0]),
+          Buffer.from('av01\0', 'latin1'),
+        ]),
+      );
+      const b = Buffer.concat([plain.subarray(0, end), ...entries, plain.subarray(end)]);
+      for (const box of ['meta', 'iinf']) {
+        const at = b.indexOf(box) - 4;
+        b.writeUInt32BE(b.readUInt32BE(at) + 21 * extra, at);
+      }
+      return b;
+    };
+    expect(readImageHeader(withEntries(AVIF_MAX_ITEMS - 5))).toMatchObject({ width: 128 });
+    expect(readImageHeader(withEntries(AVIF_MAX_ITEMS - 4))).toBeNull();
+    // The 5-item grid, its iloc or ipma stating 1025 entries: the grid's
+    // entry is read before the count runs past the entries there are, so
+    // only the count refuses it.
+    const counted = (box: 'iloc' | 'ipma') => {
+      const b = Buffer.from(avifDerivedBoxes(GRID));
+      const at = b.indexOf(box) + 4 + 4 + (box === 'iloc' ? 2 : 0);
+      if (box === 'iloc') b.writeUInt16BE(AVIF_MAX_ITEMS + 1, at);
+      else b.writeUInt32BE(AVIF_MAX_ITEMS + 1, at);
+      return b;
+    };
+    expect(readImageHeader(counted('iloc'))).toBeNull();
+    expect(readImageHeader(counted('ipma'))).toBeNull();
+  });
+
+  it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
+    'null, and refused before sharp: %s',
+    async (_label, bytes) => {
+      expect(readImageHeader(bytes)).toBeNull();
+      sharpCalls.length = 0;
+      await expect(withCappedImage(bytes, ALL_KINDS, async () => 'decoded')).rejects.toBeInstanceOf(
+        DecodeRefused,
+      );
+      expect(sharpCalls).toEqual([]);
+    },
+  );
+
+  it('null for a grid whose data states a larger width or height than its ispe', () => {
+    for (const [output, ispe] of [
+      [
+        [129, 128],
+        [128, 128],
+      ],
+      [
+        [128, 129],
+        [128, 128],
+      ],
+      [
+        [60_000, 64],
+        [128, 128],
+      ],
+    ] as Array<[[number, number], [number, number]]>) {
+      expect(readImageHeader(avifDerivedBoxes({ ...GRID, output, ispe })), `${output}`).toBeNull();
+      expect(
+        readImageHeader(avifDerivedBoxes({ ...GRID, output, ispe, dataIn: 'mdat', wide: true })),
+        `${output} in mdat, 32-bit`,
+      ).toBeNull();
+      expect(
+        readImageHeader(avifDerivedBoxes({ ...GRID, output, ispe, ids32: true, ipmaWide: true })),
+        `${output} with 32-bit item ids`,
+      ).toBeNull();
+    }
+  });
+
+  it('a grid’s 32-bit sizes are read as 32 bits', () => {
+    // 65536 + 128: its 16-bit halves read 1 and 128, under the ispe.
+    expect(
+      readImageHeader(
+        avifDerivedBoxes({ ...GRID, wide: true, output: [65_664, 128], ispe: [128, 128] }),
+      ),
+    ).toBeNull();
+  });
+
+  it('null for any overlay (iovl), whatever its sizes', async () => {
+    const tileData = await realTile();
+    const overlay = avifDerivedBoxes({
+      type: 'iovl',
+      tile: [64, 64],
+      output: [64, 64],
+      ispe: [64, 64],
+      tileData,
+    });
+    // sharp reads it: the refusal is the decoder's.
+    expect((await sharp(overlay).metadata()).width).toBe(64);
+    expect(readImageHeader(overlay)).toBeNull();
+    expect(
+      readImageHeader(
+        avifDerivedBoxes({ type: 'iovl', tile: [64, 64], output: [32, 32], ispe: [64, 64] }),
+      ),
+    ).toBeNull();
+  });
+
+  it('null when a grid’s data cannot be read', () => {
+    const plain = avifDerivedBoxes(GRID);
+    const inMdat = avifDerivedBoxes({ ...GRID, dataIn: 'mdat' });
+    /** The grid's iloc entry: item 5, after iloc's 4 + 2 + 2 bytes and four
+     *  tile entries of 16 bytes. Its fields: id, method, data reference,
+     *  extent count, offset, length. */
+    const gridEntry = (bytes: Buffer) => bytes.indexOf('iloc') + 4 + 8 + 4 * 16;
+    const edited = (bytes: Buffer, edit: (b: Buffer, entry: number) => void) => {
+      const b = Buffer.from(bytes);
+      edit(b, gridEntry(b));
+      return b;
+    };
+    const idat = plain.indexOf('idat') + 4;
+    expect(plain.readUInt16BE(gridEntry(plain))).toBe(5);
+    expect(readImageHeader(plain)).toMatchObject({ width: 128 });
+    for (const [label, bytes] of Object.entries({
+      'no iloc entry for the grid': edited(plain, (b, e) => b.writeUInt16BE(9, e)),
+      'construction method 2 (another item)': edited(plain, (b, e) => b.writeUInt16BE(2, e + 2)),
+      'reserved bits before the construction method': edited(plain, (b, e) =>
+        b.writeUInt16BE(0x10 | 1, e + 2),
+      ),
+      // Laid out as version 2 (32-bit ids), stating version 3.
+      'iloc version 3': (() => {
+        const b = avifDerivedBoxes({ ...GRID, ids32: true });
+        b[b.indexOf('iloc') + 4] = 3;
+        return b;
+      })(),
+      // Every offset and length in 2 bytes, read that way they find the grid.
+      'iloc offsets and lengths of 2 bytes': (() => {
+        const entry = (id: number, method: number, length: number) =>
+          [id, method, 0, 1, 0, length].map((n) => Buffer.from([n >> 8, n & 0xff]));
+        const body = Buffer.concat([
+          Buffer.from([1, 0, 0, 0, 0x22, 0x00, 0, 5]),
+          ...[1, 2, 3, 4].flatMap((id) => entry(id, 0, 16)),
+          ...entry(5, 1, 8),
+        ]);
+        const iloc = plain.indexOf('iloc') - 4;
+        const old = plain.readUInt32BE(iloc);
+        const b = Buffer.concat([
+          plain.subarray(0, iloc),
+          u32be(8 + body.length),
+          Buffer.from('iloc'),
+          body,
+          plain.subarray(iloc + old),
+        ]);
+        const meta = b.indexOf('meta') - 4;
+        b.writeUInt32BE(b.readUInt32BE(meta) + 8 + body.length - old, meta);
+        return b;
+      })(),
+      'a data reference to another file': edited(plain, (b, e) => b.writeUInt16BE(1, e + 4)),
+      'two extents': edited(plain, (b, e) => b.writeUInt16BE(2, e + 6)),
+      'an extent past the end of idat': edited(plain, (b, e) => b.writeUInt32BE(4, e + 8)),
+      'an extent longer than idat': edited(plain, (b, e) => b.writeUInt32BE(12, e + 12)),
+      'an extent shorter than the sizes': edited(plain, (b, e) => b.writeUInt32BE(7, e + 12)),
+      'an extent past the end of the file': edited(inMdat, (b, e) =>
+        b.writeUInt32BE(inMdat.length - 4, e + 8),
+      ),
+      'grid version 1': (() => {
+        const b = Buffer.from(plain);
+        b[idat] = 1;
+        return b;
+      })(),
+      'a 32-bit grid in 8 bytes': (() => {
+        const b = Buffer.from(plain);
+        b[idat + 1] = 1;
+        return b;
+      })(),
+      'an output width of 0': (() => {
+        const b = Buffer.from(plain);
+        b.writeUInt16BE(0, idat + 4);
+        return b;
+      })(),
+      'no ispe for the grid': avifDerivedBoxes({ ...GRID, ispe: null }),
+      'no idat box': (() => {
+        const b = Buffer.from(plain);
+        b.write('idax', plain.indexOf('idat'), 'latin1');
+        return b;
+      })(),
+    })) {
+      expect(readImageHeader(bytes), label).toBeNull();
+    }
+  });
+});
+
 describe('DECODE_MAX_INPUT_PIXELS', () => {
   it('50 million for PNG, JPEG and WebP; 4096 x 4096 for GIF and AVIF', () => {
     expect(DECODE_MAX_INPUT_PIXELS).toEqual({
@@ -451,6 +790,21 @@ describe('withCappedImage', () => {
       ]);
       expect(timeoutSeconds, kind).toBe(20);
     }
+  });
+
+  it('turns sharp’s operation cache off, so no decoded image is kept after its request', async () => {
+    // sharp's default: up to 50 MB, 20 files and 100 operations. libjpeg's
+    // whole-image buffers of a progressive JPEG are not counted against the
+    // 50 MB, so 24 at the cap held 2.6 GB (S45 Linux measurement).
+    sharp.cache(true);
+    expect(sharp.cache()).toMatchObject({ memory: { max: 50 }, items: { max: 100 } });
+    const jpeg = await rgb(8, 8).jpeg({ progressive: true }).toBuffer();
+    await withCappedImage(jpeg, ['jpeg'], (img) => img.png().toBuffer());
+    expect(sharp.cache()).toMatchObject({
+      memory: { current: 0, max: 0 },
+      files: { max: 0 },
+      items: { current: 0, max: 0 },
+    });
   });
 
   it('AVIF: refuses 4096 x 4097 before sharp and converts 4096 x 4096', async () => {
@@ -588,6 +942,56 @@ describe('pngPassesUnchanged', () => {
 
   it.each(Object.entries(MALFORMED_PNGS))('refused: %s', async (_label, bytes) => {
     expect(await pngPassesUnchanged(bytes, LIMITS)).toBe(false);
+  });
+
+  it.each(Object.entries(PNGS_PNG_JS_MISREADS))(
+    'refused: %s (sharp reads it; png-js reads it otherwise)',
+    async (_label, bytes) => {
+      expect((await sharp(bytes).metadata()).format).toBe('png');
+      expect(await pngPassesUnchanged(bytes, LIMITS)).toBe(false);
+    },
+  );
+
+  it('refused: a tRNS chunk on a colour type with alpha (4 or 6), even empty; allowed on 0, 2 and 3', async () => {
+    const rows = (channels: number) => deflateSync(Buffer.alloc(8 * (1 + 8 * channels)));
+    const withTrns = (colourType: number, trns: Buffer) =>
+      Buffer.concat([
+        PNG_SIGNATURE,
+        pngIhdr(8, 8, { colourType }),
+        ...(colourType === 3 ? [pngChunk('PLTE', Buffer.alloc(6, 0x80))] : []),
+        pngChunk('tRNS', trns),
+        pngChunk('IDAT', rows({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colourType]!)),
+        PNG_IEND,
+      ]);
+    expect(await pngPassesUnchanged(withTrns(0, Buffer.from([0, 7])), LIMITS)).toBe(true);
+    expect(await pngPassesUnchanged(withTrns(2, Buffer.from([0, 1, 0, 2, 0, 3])), LIMITS)).toBe(
+      true,
+    );
+    expect(await pngPassesUnchanged(withTrns(3, Buffer.from([0, 0x80])), LIMITS)).toBe(true);
+    for (const colourType of [4, 6]) {
+      expect(await pngPassesUnchanged(withTrns(colourType, Buffer.alloc(0)), LIMITS)).toBe(false);
+      expect(await pngPassesUnchanged(withTrns(colourType, Buffer.alloc(2)), LIMITS)).toBe(false);
+      // The fixture's hidden rows are valid here: refused for the chunk alone.
+      expect(await pngPassesUnchanged(pngWithIdatInsideTrns(colourType as 4 | 6, 0), LIMITS)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('a tEXt chunk of up to 64 KiB passes; a longer one is refused', async () => {
+    expect(await pngPassesUnchanged(pngWithText(64 * 1024), LIMITS)).toBe(true);
+    expect(await pngPassesUnchanged(pngWithText(64 * 1024 + 1), LIMITS)).toBe(false);
+    // Other chunks are not held to it: a 200,000-byte zTXt or private chunk passes.
+    const withChunk = (type: string) =>
+      Buffer.concat([
+        PNG_SIGNATURE,
+        pngIhdr(8, 8),
+        pngChunk(type, Buffer.alloc(200_000, 0x41)),
+        pngChunk('IDAT', deflateSync(Buffer.alloc(8 * 33))),
+        PNG_IEND,
+      ]);
+    expect(await pngPassesUnchanged(withChunk('zTXt'), LIMITS)).toBe(true);
+    expect(await pngPassesUnchanged(withChunk('prVt'), LIMITS)).toBe(true);
   });
 
   it('refused: data that inflates past the rows the header states, inflating no more than the rows', async () => {

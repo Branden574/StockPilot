@@ -16,7 +16,9 @@ import {
   gifHeader,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
+  OVERSIZED_DERIVED_AVIFS,
   pngWithOversizedData,
+  PNGS_PNG_JS_MISREADS,
   SLOW_TO_PARSE_JPEGS,
   SVG_16000,
   SVG_UNDER_A_WEBP_HEADER,
@@ -34,14 +36,27 @@ import {
   type SeeThroughImage,
 } from '@/test/see-through-images';
 
-const { cacheKeys, cachedFns, safeFetch, sharpCalls } = vi.hoisted(() => ({
+const { cacheKeys, cachedFns, safeFetch, sharpCalls, sniffs } = vi.hoisted(() => ({
   cacheKeys: [] as string[][],
   // The function each cache key wraps, so a test can see what it would store.
   cachedFns: new Map<string, (...args: unknown[]) => unknown>(),
   safeFetch: vi.fn(),
   /** Every sharp(...) call's arguments, the real sharp doing the work. */
   sharpCalls: [] as unknown[][],
+  /** The bytes of every call to the upload sniffer, which the decoder's
+   *  header read calls for JPEG and AVIF. */
+  sniffs: [] as Uint8Array[],
 }));
+vi.mock('@/lib/image-signature', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/image-signature')>();
+  return {
+    ...real,
+    sniffImage: (bytes: Uint8Array) => {
+      sniffs.push(bytes);
+      return real.sniffImage(bytes);
+    },
+  };
+});
 vi.mock('sharp', async (importOriginal) => {
   const { recordingSharp } = await import('@/test/image-decode-fixtures');
   const real = (await importOriginal<{ default: (...a: never[]) => unknown }>()).default;
@@ -378,10 +393,43 @@ describe('photos through the capped decoder (S45)', () => {
       WEBP_100_BY_1000000,
       gifHeader(4097, 4096),
       AVIF_8192_CROPPED_TO_64,
+      ...Object.values(OVERSIZED_DERIVED_AVIFS),
     ]) {
       sharpCalls.length = 0;
       expect(await prefetchOne(bytes, 'image/webp')).toBeNull();
       expect(callsWith(bytes)).toEqual([]);
+    }
+  });
+
+  it.each(Object.entries(PNGS_PNG_JS_MISREADS))(
+    'a PNG that react-pdf would read otherwise is re-made as a PNG, never as stored: %s',
+    async (_label, bytes) => {
+      const printed = bytesOf(await prefetchOne(bytes));
+      expect(printed.equals(bytes)).toBe(false);
+      expect(await described(printed)).toMatchObject({ format: 'png', width: 8, height: 8 });
+      expect(printed.includes(Buffer.from('tRNS'))).toBe(false);
+      expect(printed.includes(Buffer.from('tEXt'))).toBe(false);
+    },
+  );
+
+  it('reads a photo’s header once: an AVIF or a JPEG that does not pass is sniffed once', async () => {
+    const avif = await sharp({
+      create: { width: 64, height: 48, channels: 3, background: '#123456' },
+    })
+      .avif({ effort: 0 })
+      .toBuffer();
+    const jpeg = await sharp({
+      create: { width: 900, height: 600, channels: 3, background: '#123456' },
+    })
+      .jpeg()
+      .toBuffer();
+    for (const [bytes, type] of [
+      [avif, 'image/avif'],
+      [jpeg, 'image/jpeg'],
+    ] as const) {
+      sniffs.length = 0;
+      expect(await prefetchOne(bytes, type), type).toMatch(/^data:image\/jpeg;base64,/);
+      expect(sniffs.filter((s) => Buffer.from(s).equals(bytes)).length, type).toBe(1);
     }
   });
 
@@ -507,11 +555,14 @@ describe('photos through the capped decoder (S45)', () => {
     const out = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
     expect(out.get('cover')).toBeNull();
     expect(callsWith(avif)).toEqual([]);
-    // Nor one coded over the cap and cropped under it.
-    fetchSpy.mockResolvedValue(response(AVIF_8192_CROPPED_TO_64, { 'content-type': 'image/avif' }));
-    const cropped = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
-    expect(cropped.get('cover')).toBeNull();
-    expect(callsWith(AVIF_8192_CROPPED_TO_64)).toEqual([]);
+    // Nor one coded over the cap and cropped under it, nor a grid or overlay
+    // whose data states more than its ispe.
+    for (const bytes of [AVIF_8192_CROPPED_TO_64, ...Object.values(OVERSIZED_DERIVED_AVIFS)]) {
+      fetchSpy.mockResolvedValue(response(bytes, { 'content-type': 'image/avif' }));
+      const out = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
+      expect(out.get('cover')).toBeNull();
+      expect(callsWith(bytes)).toEqual([]);
+    }
   }, 30_000);
 });
 
@@ -719,6 +770,29 @@ describe('prefetchPdfLogo', () => {
       serveLogo(bytes);
       expect(await prefetchPdfLogo(LOGO)).toBeNull();
       await expect(cachedFns.get('pdf-logo-data-uri-v2')!(LOGO)).rejects.toThrow();
+    },
+  );
+
+  it.each(Object.entries(PNGS_PNG_JS_MISREADS))(
+    'a PNG logo react-pdf would read otherwise prints from a re-made PNG, never as stored: %s',
+    async (_label, bytes) => {
+      serveLogo(bytes);
+      const printed = bytesOf(await prefetchPdfLogo(LOGO));
+      expect(printed.equals(bytes)).toBe(false);
+      expect(await described(printed)).toMatchObject({ format: 'png', width: 8, height: 8 });
+    },
+  );
+
+  it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
+    'an AVIF logo whose grid or overlay states more than its ispe: no logo, nothing stored, sharp not called: %s',
+    async (_label, bytes) => {
+      sharpCalls.length = 0;
+      serveLogo(bytes, 'image/avif');
+      expect(await prefetchPdfLogo(LOGO)).toBeNull();
+      await expect(cachedFns.get('pdf-logo-data-uri-v2')!(LOGO)).rejects.toThrow(
+        /not a PNG, JPEG, WebP, GIF or AVIF image/,
+      );
+      expect(callsWith(bytes)).toEqual([]);
     },
   );
 

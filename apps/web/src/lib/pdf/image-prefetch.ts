@@ -3,10 +3,10 @@ import 'server-only';
 import { unstable_cache } from 'next/cache';
 
 import {
+  hasPngSignature,
   jpegPassesUnchanged,
   pngFitInside,
   pngPassesUnchanged,
-  readImageHeader,
   withCappedImage,
   type ImageKind,
 } from '@/lib/image-decode';
@@ -90,7 +90,9 @@ async function ensurePdfCompatibleBytes(
     if (await pngPassesUnchanged(rawBytes, unchanged)) {
       return { bytes: rawBytes, contentType: 'image/png' };
     }
-    if (readImageHeader(rawBytes)?.kind === 'png') {
+    // The decoder reads the header (for an AVIF, a walk of its boxes) once,
+    // in withCappedImage; here the signature is enough to choose the chain.
+    if (hasPngSignature(rawBytes)) {
       const png = await pngFitInside(rawBytes, ['png'], PDF_PHOTO_MAX_EDGE_PX);
       return { bytes: png, contentType: 'image/png' };
     }

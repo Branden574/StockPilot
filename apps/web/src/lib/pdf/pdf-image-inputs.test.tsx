@@ -4,7 +4,12 @@ import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fetchExportImageBytes } from '@/lib/exports/export-images';
-import { EXIF_JPEGS, MALFORMED_PNGS, SLOW_TO_PARSE_JPEGS } from '@/test/image-decode-fixtures';
+import {
+  EXIF_JPEGS,
+  MALFORMED_PNGS,
+  PNGS_PNG_JS_MISREADS,
+  SLOW_TO_PARSE_JPEGS,
+} from '@/test/image-decode-fixtures';
 import { countInPdf, STORAGE_PHOTO_URL, withStoragePhoto } from '@/test/see-through-images';
 
 import { BrandedHeader } from './branding';
@@ -23,8 +28,12 @@ import { toPdfImageSrc } from './inventory-export-pdf';
  * on out of reach of any catch or take far longer over than a photo, each
  * path first gives no image (that is asserted before any
  * render, so a run against code that passes such bytes on stops there); the
- * document then renders with the placeholder or no logo. Ordinary PNG and
- * JPEG files still render one image.
+ * document then renders with the placeholder or no logo. A PNG that sharp
+ * reads cleanly but png-js would read otherwise (chunks inside a tRNS chunk
+ * of a colour type with alpha; a tEXt chunk too long for png-js) is re-made
+ * first: each path gives an image that is not the stored file (asserted
+ * before any render), and the document renders it. Ordinary PNG and JPEG
+ * files still render one image.
  */
 
 // The prefetch's data-URI cache needs a Next request scope; here it calls
@@ -105,6 +114,29 @@ describe('images in PDFs (S45)', () => {
         const pdf = await render(path, src);
         expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
         expect(countInPdf(pdf, '/Subtype /Image')).toBe(0);
+      },
+      10_000,
+    );
+  }
+
+  /** Whether `src` hands react-pdf `bytes` exactly as stored. */
+  function isStored(src: Awaited<ReturnType<typeof boundary>>, bytes: Buffer): boolean {
+    if (typeof src === 'string')
+      return Buffer.from(src.split(',')[1] ?? '', 'base64').equals(bytes);
+    return src !== null && Buffer.from(src.data).equals(bytes);
+  }
+
+  for (const path of PATHS) {
+    it.each(Object.entries(PNGS_PNG_JS_MISREADS))(
+      `${path}: %s is re-made, and the document renders it`,
+      async (_label, bytes) => {
+        const src = await boundary(path, bytes, 'image/png');
+        expect(src).not.toBeNull();
+        expect(isStored(src, bytes)).toBe(false);
+        const pdf = await render(path, src);
+        expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+        // The image, and its soft mask: these files are see-through.
+        expect(countInPdf(pdf, '/Subtype /Image')).toBeGreaterThan(0);
       },
       10_000,
     );

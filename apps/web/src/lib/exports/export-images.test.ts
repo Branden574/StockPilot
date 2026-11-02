@@ -78,6 +78,8 @@ import {
   EXIF_JPEGS,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
+  OVERSIZED_DERIVED_AVIFS,
+  PNGS_PNG_JS_MISREADS,
   PNG_8X8,
   pngWithOversizedData,
   SLOW_TO_PARSE_JPEGS,
@@ -1533,6 +1535,17 @@ describe('fetchExportImageBytes — the capped decoder (S45)', () => {
     expect(readImageDimensions(image.data)).toEqual({ width: 64, height: 64 });
   });
 
+  it.each(Object.entries(PNGS_PNG_JS_MISREADS))(
+    'a PNG that react-pdf would read otherwise is embedded as a fresh PNG, never as given: %s',
+    async (_label, bytes) => {
+      const { images } = await fetchAs(bytes, 'image/png');
+      const image = images.get('a')!;
+      expect(image.extension).toBe('png');
+      expect(Buffer.from(image.data).equals(bytes)).toBe(false);
+      expect(readImageDimensions(image.data)).toEqual({ width: 8, height: 8 });
+    },
+  );
+
   it('SVG text served as image/png is unsupported (it used to be embedded by its type)', async () => {
     const { images, skippedReasons } = await fetchAs(SVG_16000, 'image/png');
     expect(images.has('a')).toBe(false);
@@ -1544,6 +1557,7 @@ describe('fetchExportImageBytes — the capped decoder (S45)', () => {
       WEBP_7072,
       WEBP_100_BY_1000000,
       AVIF_8192_CROPPED_TO_64,
+      ...Object.values(OVERSIZED_DERIVED_AVIFS),
       SVG_16000,
       IMAGE_LOOKALIKE_SVGS['SVG after a comment holding ftypavif']!,
     ]) {
