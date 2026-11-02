@@ -12,11 +12,37 @@ const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
  *  the length cannot make a function buffer an unbounded body. */
 export const PDF_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+/** Every JPEG this file makes: an optional fit-inside resize, then any
+ *  transparency flattened onto white, then JPEG. libvips paints a transparent
+ *  pixel black on a JPEG save (B62), so no JPEG may skip the flatten. */
+const PDF_JPEG_BACKGROUND = '#ffffff';
+async function jpegOnWhite(
+  rawBytes: Buffer,
+  opts: { quality: number; maxEdgePx?: number },
+): Promise<Buffer> {
+  const { default: sharp } = await import('sharp');
+  let img = sharp(rawBytes);
+  if (opts.maxEdgePx !== undefined) {
+    img = img.resize({
+      width: opts.maxEdgePx,
+      height: opts.maxEdgePx,
+      fit: 'inside',
+      withoutEnlargement: true,
+    });
+  }
+  return img
+    .flatten({ background: PDF_JPEG_BACKGROUND })
+    .jpeg({ quality: opts.quality, mozjpeg: true })
+    .toBuffer();
+}
+
 /**
  * @react-pdf/image@3.x supports JPEG, PNG, and SVG ONLY — no WebP, no
  * AVIF, no GIF. The codebase stores item thumbnails as WebP (see
  * migration 0122), so for the PDF path we transcode unsupported
- * formats to JPEG using `sharp` (already in the dep graph via Next).
+ * formats to JPEG on white using `sharp` (already in the dep graph via
+ * Next): a see-through background prints white, never black. PNG and
+ * JPEG pass through unchanged; react-pdf keeps a PNG's transparency.
  *
  * Bytes-in/bytes-out, no IO. Failure returns null so the consumer
  * falls back to a placeholder instead of crashing the document.
@@ -38,10 +64,9 @@ async function ensurePdfCompatibleBytes(
   if (isPng) return { bytes: rawBytes, contentType: 'image/png' };
   if (isJpeg) return { bytes: rawBytes, contentType: 'image/jpeg' };
 
-  // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG.
+  // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG on white.
   try {
-    const { default: sharp } = await import('sharp');
-    const jpegBytes = await sharp(rawBytes).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    const jpegBytes = await jpegOnWhite(rawBytes, { quality: 80 });
     return { bytes: jpegBytes, contentType: 'image/jpeg' };
   } catch (err) {
     // sharp failed — log which format tripped it so a blank image in a PDF
@@ -57,16 +82,13 @@ async function ensurePdfCompatibleBytes(
  * Downscale for a small PDF cell (the Book Order Totals covers): the longest
  * edge at most `maxEdgePx`, never enlarged, aspect kept (fit inside, so a
  * portrait cover is never cropped), transparency flattened to white, JPEG
- * q75. A 2048px master becomes a few KB instead of ~40-70 KB per row.
+ * q75 (jpegOnWhite, the same operations in the same order as before B62, so
+ * the bytes and the v6 cache entries are unchanged). A 2048px master becomes
+ * a few KB instead of ~40-70 KB per row.
  */
 async function downscaleForPdf(rawBytes: Buffer, maxEdgePx: number): Promise<Buffer | null> {
   try {
-    const { default: sharp } = await import('sharp');
-    return await sharp(rawBytes)
-      .resize({ width: maxEdgePx, height: maxEdgePx, fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: '#ffffff' })
-      .jpeg({ quality: 75, mozjpeg: true })
-      .toBuffer();
+    return await jpegOnWhite(rawBytes, { quality: 75, maxEdgePx });
   } catch (err) {
     console.warn(
       `[pdf-image] downscale failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -212,8 +234,9 @@ const getCachedImageDataUri = unstable_cache(
   // v5 (2026-06-02): bumped to evict 25-day-poisoned null entries from earlier
   // transient failures (the cause of "a lot of item images missing in PDFs"),
   // AND the fn now throws-instead-of-caching-null so this stops recurring.
-  // Kept at v5 for the unsized path so existing PDFs keep their warm cache.
-  ['pdf-image-data-uri-v5'],
+  // v7 (B62): data URIs stored before the flatten printed a see-through photo
+  // on a black square; v6 is the sized key.
+  ['pdf-image-data-uri-v7'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
@@ -243,8 +266,8 @@ const getCachedSizedImageDataUri = unstable_cache(
  *
  * Caller passes `[key, signedUrl]` pairs; the key round-trips so the
  * consumer can map the result back to its row / item / whatever.
- * `opts.maxEdgePx` downscales every image (see downscaleForPdf); existing
- * callers pass nothing and get the bytes as before.
+ * `opts.maxEdgePx` downscales every image (see downscaleForPdf); callers
+ * that pass nothing get each image at its own size (ensurePdfCompatibleBytes).
  */
 // Bound concurrent image fetches. A long report (now up to 1000 photos) must
 // not fire 1000 simultaneous storage requests on a cold render — that floods

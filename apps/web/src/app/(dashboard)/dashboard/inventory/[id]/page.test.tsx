@@ -8,6 +8,13 @@ import { describe, expect, it, vi } from 'vitest';
 const itemDetail = vi.hoisted(() => vi.fn((_props: Record<string, unknown>) => null));
 vi.mock('@/components/inventory/item-detail', () => ({ ItemDetail: itemDetail }));
 
+class NotFound extends Error {}
+vi.mock('next/navigation', () => ({
+  notFound: () => {
+    throw new NotFound('notFound');
+  },
+}));
+
 import ItemDetailPage, { metadata } from './page';
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -51,6 +58,20 @@ describe('/dashboard/inventory/[id]', () => {
       const props = await render({ return: bad });
       expect(props.backHref).toBe('/dashboard/inventory');
       expect(props.returnParam).toBeUndefined();
+    }
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before ItemDetail starts
+// its reads (the item's read answered an invalid-uuid error, which reached
+// the error boundary as "Something broke loading this page").
+describe('/dashboard/inventory/[id]: an id that is not a uuid', () => {
+  it('is the not-found page: no ItemDetail is handed the id', async () => {
+    for (const id of ['not-a-uuid', ID.slice(0, -1)]) {
+      await expect(
+        ItemDetailPage({ params: Promise.resolve({ id }), searchParams: Promise.resolve({}) }),
+        id,
+      ).rejects.toBeInstanceOf(NotFound);
     }
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   callArgs,
+  countedLikePostgrest,
   inFilters,
   makeSupabaseStub,
   servedLikePostgrest,
@@ -102,5 +103,72 @@ describe('servedLikePostgrest', () => {
     await expect(
       Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
     ).rejects.toThrow(/cannot evaluate \.or\(\)/);
+  });
+
+  it('evaluates .not(col, "is", null): keeps only the rows whose col is set (an archived-only list)', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const { data } = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .not('gone', 'is', null)
+      .order('id')
+      .range(0, 999);
+    expect((data as Array<{ id: string }>).map((r) => r.id)).toEqual(['d']);
+  });
+
+  it('still refuses any other .not() rather than ignoring it', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').not('n', 'eq', 1)),
+    ).rejects.toThrow(/cannot evaluate \.not\(n, eq, 1\)/);
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').not('gone', 'is', true)),
+    ).rejects.toThrow(/cannot evaluate \.not\(gone, is, true\)/);
+  });
+});
+
+describe('countedLikePostgrest', () => {
+  // 1500 rows: past the 1000 rows one response may carry.
+  const rows = Array.from({ length: 1500 }, (_, i) => ({
+    id: `r${String(i).padStart(4, '0')}`,
+    org: i % 3 === 0 ? 'o2' : 'o1',
+    gone: i % 5 === 0 ? '2026-01-01' : null,
+  }));
+
+  it("answers a head count with the number of rows the query's filters keep, past 1000", async () => {
+    const stub = makeSupabaseStub({ 'items.select': countedLikePostgrest(rows) });
+    const all = await stub.client.from('items').select('id', { count: 'exact', head: true });
+    expect(all).toEqual({ data: null, error: null, count: 1500 });
+    const o1 = await stub.client
+      .from('items')
+      .select('id', { count: 'exact', head: true })
+      .eq('org', 'o1');
+    expect(o1.count).toBe(rows.filter((r) => r.org === 'o1').length);
+    const live = await stub.client
+      .from('items')
+      .select('id', { count: 'exact', head: true })
+      .eq('org', 'o1')
+      .is('gone', null)
+      .in('id', ['r0001', 'r0002', 'r0005', 'r0010']);
+    // r0001 and r0002 are o1 and live; r0005 and r0010 are gone.
+    expect(live.count).toBe(2);
+  });
+
+  it('serves a select without a head count like servedLikePostgrest', async () => {
+    const stub = makeSupabaseStub({ 'items.select': countedLikePostgrest(rows) });
+    const { data } = await stub.client.from('items').select('id').order('id').range(0, 999);
+    expect(data).toHaveLength(1000);
+  });
+
+  it('throws on a method it cannot count', () => {
+    const stub = makeSupabaseStub({ 'items.select': countedLikePostgrest(rows) });
+    expect(() =>
+      stub.client
+        .from('items')
+        .select('id', { count: 'exact', head: true })
+        .gt('id', 'r1')
+        .then(() => {}),
+    ).toThrow(/cannot evaluate \.gt\(\)/);
   });
 });

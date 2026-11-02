@@ -37,7 +37,7 @@ vi.mock('@/server/services/schedule', () => ({
     forCurrentUser: vi.fn(async () => ({
       listInRange: vi.fn(async () => []),
       get: vi.fn(async () => ({
-        id: 'ev-1',
+        id: '5eed0000-0000-4000-8000-0000000000b1',
         title: 'Evening delivery',
         startsAt: '2026-11-08T04:00:00.000Z',
         endsAt: null,
@@ -74,6 +74,8 @@ import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 import EditScheduleEventPage from './[id]/edit/page';
 import NewScheduleEventPage from './new/page';
 
+const EVENT_ID = '5eed0000-0000-4000-8000-0000000000b1';
+
 function findProps(node: unknown, type: unknown): Record<string, unknown> | null {
   if (Array.isArray(node)) {
     for (const child of node) {
@@ -89,7 +91,7 @@ function findProps(node: unknown, type: unknown): Record<string, unknown> | null
 
 const pages = {
   new: () => NewScheduleEventPage({ searchParams: Promise.resolve({ date: '2026-11-07' }) }),
-  edit: () => EditScheduleEventPage({ params: Promise.resolve({ id: 'ev-1' }) }),
+  edit: () => EditScheduleEventPage({ params: Promise.resolve({ id: EVENT_ID }) }),
 } as const;
 
 beforeEach(() => {
@@ -120,3 +122,20 @@ describe.each(['new', 'edit'] as const)(
     });
   },
 );
+
+// B63: a mistyped or cut-off link to Edit event is Page not found before the
+// event is read, and ahead of the schedule:manage gate.
+describe('the edit event page: an event id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    const { ScheduleService } = await import('@/server/services/schedule');
+    for (const id of ['not-a-uuid', EVENT_ID.slice(0, -1)]) {
+      await expect(EditScheduleEventPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(ScheduleService.forCurrentUser).not.toHaveBeenCalled();
+    expect(getOrgRowForRequest).not.toHaveBeenCalled();
+  });
+});

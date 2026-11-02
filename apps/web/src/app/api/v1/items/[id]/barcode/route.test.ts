@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -16,6 +17,8 @@ vi.mock('@/lib/auth/api-context', () => ({
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: vi.fn(),
 }));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 // Inject tiny Buffer fakes for the dynamic imports the route does — we
 // don't want to depend on the real bwip-js / qrcode binary output.
@@ -42,11 +45,15 @@ function buildCtx() {
   };
 }
 
-function buildRequest(url = 'https://test.local/api/v1/items/i-1/barcode') {
+const ITEM_ID = '5eed0000-0000-4000-8000-0000000000aa';
+/** A well-formed id the service does not find. */
+const MISSING_ID = '5eed0000-0000-4000-8000-0000000000ab';
+
+function buildRequest(url = `https://test.local/api/v1/items/${ITEM_ID}/barcode`) {
   return new Request(url) as unknown as Parameters<typeof GET>[0];
 }
 
-function buildParams(id = 'i-1') {
+function buildParams(id = ITEM_ID) {
   return { params: Promise.resolve({ id }) };
 }
 
@@ -68,7 +75,7 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(function () {
       return {
-        get: vi.fn(async () => ({ id: 'i-1', barcode: '012345', sku: 'SKU-1' })),
+        get: vi.fn(async () => ({ id: ITEM_ID, barcode: '012345', sku: 'SKU-1' })),
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
@@ -83,11 +90,14 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(function () {
       return {
-        get: vi.fn(async () => ({ id: 'i-1', barcode: '012345', sku: 'SKU-1' })),
+        get: vi.fn(async () => ({ id: ITEM_ID, barcode: '012345', sku: 'SKU-1' })),
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
-    const res = await GET(buildRequest('https://test.local/api/v1/items/i-1/barcode?type=qr'), buildParams());
+    const res = await GET(
+      buildRequest(`https://test.local/api/v1/items/${ITEM_ID}/barcode?type=qr`),
+      buildParams(),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
     const buf = Buffer.from(await res.arrayBuffer());
@@ -104,7 +114,7 @@ describe('GET /api/v1/items/[id]/barcode', () => {
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
-    const res = await GET(buildRequest(), buildParams('missing'));
+    const res = await GET(buildRequest(), buildParams(MISSING_ID));
     expect(res.status).toBe(404);
     expect(await res.text()).toBe('Item not found');
   });
@@ -134,7 +144,7 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(function () {
       return {
-        get: vi.fn(async () => ({ id: 'i-1', barcode: null, sku: null })),
+        get: vi.fn(async () => ({ id: ITEM_ID, barcode: null, sku: null })),
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
@@ -147,7 +157,7 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(function () {
       return {
-        get: vi.fn(async () => ({ id: 'i-1', barcode: null, sku: '   ' })),
+        get: vi.fn(async () => ({ id: ITEM_ID, barcode: null, sku: '   ' })),
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
@@ -159,15 +169,57 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(function () {
       return {
-        get: vi.fn(async () => ({ id: 'i-1', barcode: '012345', sku: 'SKU-1' })),
+        get: vi.fn(async () => ({ id: ITEM_ID, barcode: '012345', sku: 'SKU-1' })),
       } as unknown as InstanceType<typeof InventoryService>;
     });
 
     const res = await GET(
-      buildRequest('https://test.local/api/v1/items/i-1/barcode?value=OVERRIDE'),
+      buildRequest(`https://test.local/api/v1/items/${ITEM_ID}/barcode?value=OVERRIDE`),
       buildParams(),
     );
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
+  // B63: an id that is not a uuid went to the item read, whose invalid-uuid
+  // error answered 403 (every ServiceError but not_found did). It is refused
+  // first now, in the route's own plain-text style.
+  it('a malformed id is a plain-text 400, and the item is never read', async () => {
+    for (const id of ['not-a-uuid', ITEM_ID.slice(0, -1), '-'.repeat(36)]) {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      const res = await GET(buildRequest(), buildParams(id));
+      expect([id, res.status]).toEqual([id, 400]);
+      expect(await res.text()).toBe('That item id is not valid.');
+    }
+    expect(InventoryService).not.toHaveBeenCalled();
+  });
+
+  // B63, in passing: an outage (internal_error) answered 403 Forbidden, with
+  // no report. Each ServiceError now keeps its real status, and an
+  // internal_error is reported, as the PO PDF route does.
+  it('an internal_error is a 500, reported; a permanent refusal keeps its status', async () => {
+    const cases = [
+      ['internal_error', 500],
+      ['validation_error', 400],
+      ['conflict', 409],
+      ['module_disabled', 403],
+    ] as const;
+    for (const [code, status] of cases) {
+      vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+      vi.mocked(InventoryService).mockImplementationOnce(function () {
+        return {
+          get: vi.fn(async () => {
+            throw new ServiceError(code, `refused: ${code}`);
+          }),
+        } as unknown as InstanceType<typeof InventoryService>;
+      });
+      const res = await GET(buildRequest(), buildParams());
+      expect([code, res.status]).toEqual([code, status]);
+    }
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'internal_error' }),
+      expect.objectContaining({ tag: 'items.barcode' }),
+    );
   });
 });

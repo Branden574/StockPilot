@@ -15,7 +15,22 @@
 // vi.restoreAllMocks() after each test, so mocks are re-armed per test.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+const { ceiling, reportError } = vi.hoisted(() => ({
+  // The shared LOOKUP_ROW_CEILING, lowered by the ceiling tests.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the service reads the binding on
+// every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
+}));
+
+import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import { sendEmail } from '@/lib/email/resend';
 
@@ -156,7 +171,18 @@ describe('TeamService.invite — multi-charter', () => {
 });
 
 describe('TeamService.setMemberCharterAssignments — reconcile', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ceiling.value = 10_000;
+  });
+
+  // A save that removes a member's charter first counts the organization's
+  // active charters and warehouse charter links (B47 decisions round): both
+  // lists the dialog is built from. Under the ceiling here.
+  const UNDER_THE_CEILING = {
+    'charters.select': { data: null, error: null, count: 3 },
+    'warehouse_charters.select': { data: null, error: null, count: 4 },
+  };
 
   const userId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   const warehouseId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -178,6 +204,7 @@ describe('TeamService.setMemberCharterAssignments — reconcile', () => {
       },
       'warehouses.select': { data: [{ id: warehouseId }], error: null },
       'user_warehouse_assignments.select': { data: existing, error: null },
+      ...UNDER_THE_CEILING,
     });
     const svc = new TeamService(makeServiceContext(stub.client, { role: 'admin' }));
 
@@ -218,6 +245,7 @@ describe('TeamService.setMemberCharterAssignments — reconcile', () => {
       'organization_members.select': { data: [{ user_id: userId }], error: null },
       'warehouses.select': { data: [{ id: warehouseId }], error: null },
       'user_warehouse_assignments.select': { data: existing, error: null },
+      ...UNDER_THE_CEILING,
     });
     const svc = new TeamService(makeServiceContext(stub.client, { role: 'admin' }));
 
@@ -270,5 +298,166 @@ describe('TeamService.setMemberCharterAssignments — reconcile', () => {
     await expect(
       svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [] }),
     ).rejects.toThrow(/permission/i);
+  });
+});
+
+/**
+ * Team's member Charters dialog is built from ChartersService.list (active
+ * charters) and WarehouseChartersService.listPairs (every link), and both stop
+ * at LOOKUP_ROW_CEILING (B47 decisions round, 2026-11-01). With either cut, a
+ * member's charter the dialog cannot show drops out of its selection, so a
+ * save that changed nothing would remove it, or turn a member whose only
+ * charters it cannot show into "all charters". So at the ceiling a save that
+ * removes a member's charter refuses, before any write.
+ */
+describe('TeamService.setMemberCharterAssignments at LOOKUP_ROW_CEILING', () => {
+  const userId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const warehouseId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const shown = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const notShown = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+  const added = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ceiling.value = 5;
+  });
+
+  function stubWith(
+    existing: Array<{ id: string; charter_id: string | null; is_primary: boolean }>,
+    counts: { charters: number | Error; links: number | Error },
+  ) {
+    const writes: MockCall[] = [];
+    const counted = (n: number | Error) =>
+      n instanceof Error
+        ? { data: null, error: { message: n.message } }
+        : { data: null, error: null, count: n };
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: [{ user_id: userId }], error: null },
+      'warehouses.select': { data: [{ id: warehouseId }], error: null },
+      'user_warehouse_assignments.select': { data: existing, error: null },
+      'user_warehouse_assignments.delete': (call) => {
+        writes.push(call);
+        return { data: null, error: null };
+      },
+      'user_warehouse_assignments.insert': (call) => {
+        writes.push(call);
+        return { data: null, error: null };
+      },
+      'charters.select': counted(counts.charters),
+      'warehouse_charters.select': counted(counts.links),
+    });
+    return {
+      stub,
+      writes,
+      svc: new TeamService(makeServiceContext(stub.client, { role: 'admin' })),
+    };
+  }
+
+  const AT_CEILING =
+    "This organization has 5 or more charters or warehouse charter links, more than this page can list, so a member's charters cannot be removed here. Nothing was changed.";
+
+  it.each([
+    ['the active charters', { charters: 5, links: 2 }],
+    ['the warehouse charter links', { charters: 2, links: 5 }],
+  ])(
+    'a save that drops a charter refuses while %s reach the ceiling, and writes nothing',
+    async (_label, counts) => {
+      const { svc, writes, stub } = stubWith(
+        [
+          { id: 'row-shown', charter_id: shown, is_primary: true },
+          { id: 'row-not-shown', charter_id: notShown, is_primary: false },
+        ],
+        counts,
+      );
+
+      // What the dialog sends when it could not show notShown.
+      await expect(
+        svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [shown] }),
+      ).rejects.toMatchObject({ code: 'conflict', message: AT_CEILING });
+      expect(writes).toEqual([]);
+      // The counts are the dialog's two lists: the organization's active
+      // charters, and every link of the organization.
+      expect(stub.chainArgs.get('charters.select')).toEqual([
+        ['id', { count: 'exact', head: true }],
+        ['organization_id', 'org-test'],
+        ['status', 'active'],
+      ]);
+      expect(stub.chainArgs.get('warehouse_charters.select')).toEqual([
+        ['charter_id', { count: 'exact', head: true }],
+        ['organization_id', 'org-test'],
+      ]);
+    },
+  );
+
+  it('a member whose only charter the dialog could not show is not turned into "all charters"', async () => {
+    const { svc, writes } = stubWith(
+      [{ id: 'row-not-shown', charter_id: notShown, is_primary: true }],
+      { charters: 5, links: 5 },
+    );
+
+    await expect(
+      svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [] }),
+    ).rejects.toMatchObject({ code: 'conflict', message: AT_CEILING });
+    expect(writes).toEqual([]);
+  });
+
+  it('a count that fails refuses in plain words and reports the cause', async () => {
+    const { svc, writes } = stubWith(
+      [
+        { id: 'row-shown', charter_id: shown, is_primary: true },
+        { id: 'row-not-shown', charter_id: notShown, is_primary: false },
+      ],
+      { charters: 2, links: new Error('statement timeout') },
+    );
+
+    await expect(
+      svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [shown] }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      message: "Could not check this organization's charters, so nothing was changed. Try again.",
+    });
+    expect(writes).toEqual([]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+      tag: 'team.member_charters.save_check',
+      extra: { warehouseId, check: 'links' },
+    });
+  });
+
+  it('adding a charter goes ahead at the ceiling, with no count', async () => {
+    const { svc, writes, stub } = stubWith(
+      [{ id: 'row-shown', charter_id: shown, is_primary: true }],
+      { charters: 5, links: 5 },
+    );
+
+    await svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [shown, added] });
+
+    expect(writes.map((w) => w.op)).toEqual(['insert']);
+    expect(stub.chainsAll.get('charters.select')).toBeUndefined();
+  });
+
+  it('narrowing "all charters" to one goes ahead at the ceiling: the dialog hid nothing it had', async () => {
+    const { svc, writes } = stubWith([{ id: 'row-all', charter_id: null, is_primary: true }], {
+      charters: 5,
+      links: 5,
+    });
+
+    await svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [added] });
+
+    expect(writes.map((w) => w.op)).toEqual(['delete', 'insert']);
+  });
+
+  it('under the ceiling a save that drops a charter goes ahead', async () => {
+    const { svc, writes } = stubWith(
+      [
+        { id: 'row-shown', charter_id: shown, is_primary: true },
+        { id: 'row-not-shown', charter_id: notShown, is_primary: false },
+      ],
+      { charters: 4, links: 4 },
+    );
+
+    await svc.setMemberCharterAssignments({ userId, warehouseId, charterIds: [shown] });
+
+    expect(writes.map((w) => w.op)).toEqual(['delete']);
   });
 });

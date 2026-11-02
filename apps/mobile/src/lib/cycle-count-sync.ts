@@ -85,6 +85,8 @@ class CycleCountSyncEngine {
   /** The drain running now, so forceSync can wait for it instead of skipping. */
   private drainRun: Promise<void> | null = null;
   private mounted = false;
+  /** Restart now is waiting (pauseForRestart): no drain starts, no row is sent. */
+  private restartPaused = false;
 
   private appStateSub: { remove(): void } | null = null;
   private networkSub: { remove(): void } | null = null;
@@ -181,6 +183,24 @@ class CycleCountSyncEngine {
   }
 
   /**
+   * Restart now (the phone update pop-up, B44) is about to restart the app: a
+   * restart cancels a send in flight, so no drain starts and a running one
+   * stops before its next row. Returns the resume, for a restart that did not
+   * happen.
+   */
+  pauseForRestart(): () => void {
+    this.restartPaused = true;
+    return () => {
+      this.restartPaused = false;
+    };
+  }
+
+  /** Resolves once no drain is running. */
+  async whenIdle(): Promise<void> {
+    while (this.drainRun) await this.drainRun.catch(() => undefined);
+  }
+
+  /**
    * Force a drain attempt now (badge tap, pull-to-refresh, sign-out). A drain
    * already running is waited for first, then another pass runs: a caller that
    * recounts afterwards (the sign-out prompt) must see what that drain did,
@@ -208,7 +228,7 @@ class CycleCountSyncEngine {
   };
 
   private async refreshNetworkAndDrain(): Promise<void> {
-    if (this.inFlight) return;
+    if (this.inFlight || this.restartPaused) return;
     const online = await this.isOnline();
     this.pendingCount = await totalPendingCount();
     this.rejectedCount = await this.safeRejectedCount();
@@ -297,6 +317,9 @@ class CycleCountSyncEngine {
         // nor rejected.
         const decision = outboxSendDecision(row, await liveOutboxScope());
         if (!decision.send) continue;
+        // A restart into an update is waiting (pauseForRestart): this row and
+        // the rest stay queued, untouched, for the next drain.
+        if (this.restartPaused) break;
         try {
           // Stamps a legacy row with this account, so it is never sent as another.
           await outboxMarkSending(row.id, { orgId: decision.orgId, userId: decision.userId });

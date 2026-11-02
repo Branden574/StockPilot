@@ -53,6 +53,9 @@ import { GET } from './route';
  * PDF byte stream is never built; the element's `.props` are inspected
  * directly instead.
  */
+/** The count's id: the route answers 400 for an id that is not a uuid (B63). */
+const CC_ID = 'cc000001-0000-4000-8000-000000000001';
+
 function groupedLine(): {
   id: string;
   cycle_count_id: string;
@@ -77,7 +80,7 @@ function groupedLine(): {
 } {
   return {
     id: 'line-1',
-    cycle_count_id: 'cc-1',
+    cycle_count_id: CC_ID,
     item_id: 'item-1',
     warehouse_id: 'wh-a',
     expected_quantity: 6,
@@ -101,7 +104,7 @@ function groupedLine(): {
 
 function header() {
   return {
-    id: 'cc-1',
+    id: CC_ID,
     organization_id: 'org-1',
     warehouse_id: null,
     status: 'in_progress' as const,
@@ -130,7 +133,7 @@ function ctxWith(enabledModules: Set<ModuleId>) {
 }
 
 function req() {
-  return new NextRequest('https://test.local/api/cycle-counts/cc-1/pdf');
+  return new NextRequest(`https://test.local/api/cycle-counts/${CC_ID}/pdf`);
 }
 
 async function paramsFor(id: string) {
@@ -160,7 +163,7 @@ describe('GET /api/cycle-counts/[id]/pdf — group fields gated on the sports mo
       ctxWith(new Set<ModuleId>([...DEFAULT_MODULE_IDS])) as never,
     );
 
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
 
     expect(res.status).toBe(200);
     expect(ProductGroupsService).not.toHaveBeenCalled();
@@ -179,7 +182,7 @@ describe('GET /api/cycle-counts/[id]/pdf — group fields gated on the sports mo
       } as never;
     });
 
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
 
     expect(res.status).toBe(200);
     const [line] = capturedLines();
@@ -250,7 +253,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () =>
     }));
     vi.mocked(withApiContext).mockResolvedValue(ctx as never);
 
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
 
     expect(res.status).toBe(200);
     const sent = (stub.chainArgsAll.get('inventory_items.select') ?? []).map(
@@ -296,7 +299,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () =>
     });
     vi.mocked(withApiContext).mockResolvedValue(ctx as never);
 
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
 
     expect(res.status).toBe(200);
     expect(maxInFlight).toBeGreaterThan(1);
@@ -314,7 +317,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () =>
     vi.mocked(withApiContext).mockResolvedValue(ctx as never);
     const { reportError } = await import('@/lib/error-reporter');
 
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
 
     expect(res.status).toBe(500);
     expect(renderToStream).not.toHaveBeenCalled();
@@ -361,7 +364,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the reference and scope label', () 
         }),
       } as never;
     });
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-disposition')).toBe('inline; filename="cycle-count-CC-000042.pdf"');
     expect(capturedCycle()).toMatchObject({ countNumber: 42, scope: 'selection', warehouseId: null });
@@ -372,8 +375,10 @@ describe('GET /api/cycle-counts/[id]/pdf — the reference and scope label', () 
     vi.mocked(CycleCountsService).mockImplementation(function () {
       return { get: async () => ({ header: { ...header(), count_number: null }, lines: [groupedLine()] }) } as never;
     });
-    const res = await GET(req(), await paramsFor('cc-1'));
-    expect(res.headers.get('content-disposition')).toBe('inline; filename="cycle-count-cc-1.pdf"');
+    const res = await GET(req(), await paramsFor(CC_ID));
+    expect(res.headers.get('content-disposition')).toBe(
+      'inline; filename="cycle-count-cc000001.pdf"',
+    );
     expect(capturedCycle().countNumber).toBeNull();
   });
 });
@@ -418,7 +423,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the header logo', () => {
   it('prints the stored logo from the bytes prefetchPdfLogo answers', async () => {
     vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED) as never);
     vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(LOGO_BYTES);
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
     expect(res.status).toBe(200);
     expect(prefetchPdfLogo).toHaveBeenCalledTimes(1);
     expect(prefetchPdfLogo).toHaveBeenCalledWith(STORED);
@@ -428,7 +433,7 @@ describe('GET /api/cycle-counts/[id]/pdf — the header logo', () => {
   it('prints no logo when prefetchPdfLogo answers none, whatever is stored', async () => {
     vi.mocked(withApiContext).mockResolvedValue(ctxWithLogo(STORED) as never);
     vi.mocked(prefetchPdfLogo).mockResolvedValueOnce(null);
-    const res = await GET(req(), await paramsFor('cc-1'));
+    const res = await GET(req(), await paramsFor(CC_ID));
     expect(res.status).toBe(200);
     expect(capturedOrg()).toEqual({ name: 'Acme', logoUrl: null });
   });

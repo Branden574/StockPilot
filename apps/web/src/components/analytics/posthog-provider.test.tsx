@@ -95,6 +95,60 @@ describe('PostHogProvider', () => {
     );
   });
 
+  // Docket S22 (owner decision d.4). Whether a visit is recorded is decided by
+  // the replay switch in the PostHog project, unless the code says no: the SDK
+  // records only when the project says yes AND this option is false, its
+  // default. A recording is the page itself, which before_send leaves alone.
+  // posthog-provider.sdk.test.tsx proves the project's yes is overruled.
+  it('MUTATION GUARD — never records a session, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ disable_session_recording: true }),
+    );
+  });
+
+  // Docket S28. Two more things the PostHog project can switch on by itself
+  // send the page address without passing before_send: console log capture
+  // (its Logs product) stamps every record with it after the logs hook has
+  // run, and Conversations (its chat) posts it with a new ticket. So the chat
+  // is switched off, and the logs hook drops every record before it is built.
+  it('MUTATION GUARD — never loads PostHog Conversations, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ disable_conversations: true }),
+    );
+  });
+
+  // Docket S22 review, a path of S28's kind. The SDK keeps the first page a
+  // device visited, query and all, and sends it with every feature-flags
+  // request, past before_send: at load when the PostHog project has any flag,
+  // and after every identify(). The app reads no flag, so it asks for none.
+  // posthog-provider.sdk.test.tsx proves it through the real SDK.
+  it('MUTATION GUARD — never asks for feature flags, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    expect(posthogMock.init).toHaveBeenCalledWith(
+      'phc_test_key',
+      expect.objectContaining({ advanced_disable_feature_flags: true }),
+    );
+  });
+
+  it('MUTATION GUARD — drops every log record, whatever the PostHog project says', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    const options = posthogMock.init.mock.calls[0]?.[1] as {
+      logs?: { beforeSend?: (record: { body: string; level?: string }) => unknown };
+    };
+    expect(typeof options.logs?.beforeSend).toBe('function');
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+      expect(options.logs?.beforeSend?.({ body: '"placeholder console line"', level })).toBeNull();
+    }
+  });
+
   // The path guard below keeps PostHog off a share page, but a credential can
   // sit in another page's URL: the invite page's Sign in link is
   // /signin?redirect=/invite/<token>, and the SDK puts that URL on every event

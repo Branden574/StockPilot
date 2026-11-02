@@ -18,7 +18,7 @@ import { PageHeader } from '@/components/patterns/page-header';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { can, countStartAllowed, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import {
@@ -152,14 +152,21 @@ export default async function BooksPage({
   const contextStarted = withContext();
   contextStarted.catch(() => {});
   // Ungroup anything (owner 2026-10-12): the sports gate joins them, for
-  // Ungroup on a size family (request-cached, no round trip of its own).
-  const [moduleAccess, { enabled: priceTrackingEnabled }, { enabled: sportsEnabled }, params] =
-    await Promise.all([
-      checkModuleAccess('books'),
-      checkModuleAccess('price_tracking'),
-      checkModuleAccess('sports'),
-      searchParams,
-    ]);
+  // Ungroup on a size family (request-cached, no round trip of its own). So
+  // does Cycle Counts, for the bulk bar's Cycle count (B42).
+  const [
+    moduleAccess,
+    { enabled: priceTrackingEnabled },
+    { enabled: sportsEnabled },
+    { enabled: cycleCountsEnabled },
+    params,
+  ] = await Promise.all([
+    checkModuleAccess('books'),
+    checkModuleAccess('price_tracking'),
+    checkModuleAccess('sports'),
+    checkModuleAccess('cycle_counts'),
+    searchParams,
+  ]);
   if (!moduleAccess.enabled) {
     return <ModuleUnavailable moduleId="books" access={moduleAccess} />;
   }
@@ -191,7 +198,7 @@ export default async function BooksPage({
     requireOrgContext(),
     effectiveNavLabel('/dashboard/books', 'Books'),
     InventoryService.forCurrentUser().then((svc) => svc.listDistinctRacks({ scope: 'books' })),
-    booksTableSection({ params, lifecycleStatus, sportsEnabled }),
+    booksTableSection({ params, lifecycleStatus, sportsEnabled, cycleCountsEnabled }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -307,11 +314,14 @@ async function booksTableSection({
   params,
   lifecycleStatus,
   sportsEnabled,
+  cycleCountsEnabled,
 }: {
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   /** The sports module is on (Ungroup on a size family). */
   sportsEnabled: boolean;
+  /** The Cycle Counts module is on (the bulk bar's Cycle count, B42). */
+  cycleCountsEnabled: boolean;
 }): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
   // Saved views are strictly per-user — they never enter the shared
@@ -355,6 +365,15 @@ async function booksTableSection({
   // sports:manage with the sports module on; the page asked the module gate
   // with the others).
   const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
+  // The bulk "Cycle count" shortcut (B42): only for someone who can start a
+  // count, by the server's floors (core countStartAllowed: a manager with
+  // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
+  // staff were sent to Start a count and refused.
+  const canStartCount = countStartAllowed({
+    role: sessionCtx.role as Role,
+    permissions: sessionCtx.permissions,
+    cycleCountsEnabled,
+  });
 
   // "NOTHING HERE IN <WAREHOUSE>", as on the Items page (review of batch D,
   // 2026-10-20). The list and the instant dataset are narrowed to the
@@ -460,6 +479,7 @@ async function booksTableSection({
         canUngroup={canUngroup}
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
+        canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -732,6 +752,7 @@ async function booksTableSection({
       canUngroup={canUngroup}
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
+      canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

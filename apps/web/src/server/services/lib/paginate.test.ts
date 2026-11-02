@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
+
 import { ServiceError } from '../context';
 import { fetchAllRows, PAGE_SIZE } from './paginate';
 
@@ -102,5 +104,45 @@ describe('fetchAllRows error detail', () => {
     expect((err as ServiceError).code).toBe('internal_error');
     expect((err as ServiceError).internalDetail).toBe('HTTP 502 Bad Gateway (empty error message)');
     expect((err as ServiceError).message).not.toContain('502');
+  });
+});
+
+/**
+ * `requireList` (docket S27): a read whose answer decides who is told or what
+ * a digest shows names its table, and a page that is not a list (postgrest-js
+ * resolves an empty body with data null) is a failed read. Without the option
+ * every other caller keeps today's reading (open question 13).
+ */
+describe('fetchAllRows with requireList', () => {
+  it.each(NOT_A_LIST)(
+    '%s throws a ServiceError naming the table and the status, never "no rows"',
+    async (_shape, answer) => {
+      const err = await fetchAllRows(async () => answer as never, {
+        requireList: 'user_category_assignments',
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('internal_error');
+      expect((err as ServiceError).internalDetail).toBe(
+        `user_category_assignments answered no list (status ${answer.status})`,
+      );
+      // The public message stays generic (S13).
+      expect((err as ServiceError).message).not.toContain('user_category_assignments');
+    },
+  );
+
+  it('refuses a later page too, and without the option an empty body still ends the read', async () => {
+    const pages = [
+      { data: Array.from({ length: PAGE_SIZE }, (_, id) => ({ id })), error: null, status: 200 },
+      { data: null, error: null, status: 204 },
+    ];
+    const build = (from: number) => Promise.resolve(pages[from / PAGE_SIZE]!);
+    await expect(
+      fetchAllRows(build, { requireList: 'user_warehouse_assignments' }),
+    ).rejects.toMatchObject({
+      code: 'internal_error',
+      internalDetail: 'user_warehouse_assignments answered no list (status 204)',
+    });
+    // Every caller that does not opt in reads it as before (open question 13).
+    expect(await fetchAllRows(build)).toHaveLength(PAGE_SIZE);
   });
 });

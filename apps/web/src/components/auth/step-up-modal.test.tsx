@@ -80,6 +80,27 @@ describe('StepUpModal', () => {
     expect(verify).toBeEnabled();
   });
 
+  // Docket B50: authenticator apps show the code as "123 456". A maxLength of
+  // 6 cut a pasted copy at six characters, "123 45", before the digits were
+  // kept: five digits, and Verify stayed off.
+  it('a code pasted with a space is sent as six digits', async () => {
+    const user = userEvent.setup();
+    await openStepUp();
+    await waitFor(() => expect(listFactors).toHaveBeenCalled());
+    const code = screen.getByLabelText('Authentication code');
+
+    await user.click(code);
+    await user.paste('123 456');
+    expect(code).toHaveValue('123456');
+    // Without a maxLength, the box itself keeps six digits and no more.
+    await user.paste('7');
+    expect(code).toHaveValue('123456');
+    await user.click(screen.getByRole('button', { name: 'Verify' }));
+
+    expect(challengeFactorAction).toHaveBeenCalledWith({ factorId: 'factor-1', code: '123456' });
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('true'));
+  });
+
   it('a good code steps up, closes and resolves true', async () => {
     const user = userEvent.setup();
     await openStepUp();

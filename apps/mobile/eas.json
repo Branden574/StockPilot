@@ -28,6 +28,10 @@
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
+    "simulator-ota-test": {
+      "extends": "simulator",
+      "channel": "ota-test"
+    },
     "preview": {
       "distribution": "internal",
       "node": "22.19.0",

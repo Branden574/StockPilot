@@ -6,6 +6,7 @@ import { cycleCountScopeLabel, pastExpectedDayTest } from '@stockpilot/core';
 
 import { ServiceError } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { listRows } from './lib/list-rows';
 import { fetchAllRows } from './lib/paginate';
 
 export interface DigestLowStockGroup {
@@ -279,7 +280,10 @@ export interface DigestReaderData {
 /**
  * Read, with the service role, everything that decides what the given
  * recipients may read in `orgId`. Any failed read throws: the digest must not
- * fall back to a wider view.
+ * fall back to a wider view. So does an answer that is not a list (an empty
+ * body, docket S27): read as "no rows", no category rows gave a viewer every
+ * category, and no override rows gave back a purchase-order read the
+ * organization took away.
  */
 export async function loadDigestReaderData(
   admin: SupabaseClient,
@@ -298,6 +302,7 @@ export async function loadDigestReaderData(
             .in('user_id', batch)
             .order('id', { ascending: true })
             .range(from, to),
+        { requireList: 'user_warehouse_assignments' },
       ),
       fetchAllRowsByIds<{ user_id: string; category_id: string }>(
         userIds,
@@ -309,6 +314,7 @@ export async function loadDigestReaderData(
             .in('user_id', batch)
             .order('id', { ascending: true })
             .range(from, to),
+        { requireList: 'user_category_assignments' },
       ),
       // One row per (org, user, permission), so user_id is a stable order.
       fetchAllRowsByIds<{ user_id: string; granted: boolean }>(
@@ -322,6 +328,7 @@ export async function loadDigestReaderData(
             .in('user_id', batch)
             .order('user_id', { ascending: true })
             .range(from, to),
+        { requireList: 'user_permission_overrides' },
       ),
       admin
         .from('role_permission_overrides')
@@ -332,6 +339,11 @@ export async function loadDigestReaderData(
     ]);
   if (roleOverrides.error) throw new ServiceError('internal_error', roleOverrides.error.message);
   if (roleDefaults.error) throw new ServiceError('internal_error', roleDefaults.error.message);
+  const roleOverrideRows = listRows<{ role: string; granted: boolean }>(
+    'role_permission_overrides',
+    roleOverrides,
+  );
+  const roleDefaultRows = listRows<{ role: string }>('role_default_permissions', roleDefaults);
 
   const assignments = new Map<string, DigestReaderAssignment[]>();
   for (const r of assignmentRows) {
@@ -349,15 +361,8 @@ export async function loadDigestReaderData(
     assignments,
     categories,
     userPoRead: new Map(userOverrideRows.map((r) => [r.user_id, r.granted === true])),
-    rolePoRead: new Map(
-      ((roleOverrides.data ?? []) as Array<{ role: string; granted: boolean }>).map((r) => [
-        r.role,
-        r.granted === true,
-      ]),
-    ),
-    defaultPoReadRoles: new Set(
-      ((roleDefaults.data ?? []) as Array<{ role: string }>).map((r) => r.role),
-    ),
+    rolePoRead: new Map(roleOverrideRows.map((r) => [r.role, r.granted === true])),
+    defaultPoReadRoles: new Set(roleDefaultRows.map((r) => r.role)),
   };
 }
 

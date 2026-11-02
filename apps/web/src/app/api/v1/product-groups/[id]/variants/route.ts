@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { variantLabel } from '@stockpilot/core';
+import { isUuid, variantLabel } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -48,7 +48,7 @@ export async function GET(
   }
 
   const { id } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+  if (!isUuid(id)) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
 

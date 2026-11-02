@@ -111,9 +111,21 @@ const nextConfig: NextConfig = {
   //      don't have to loosen the security headers to ship analytics.
   //   2. Ad blockers / Brave Shields drop requests to known tracker hosts;
   //      first-party /ingest requests sail through, so we don't under-count.
+  // The proxy is the route handler app/ingest/[...path]/route.ts, NOT a
+  // rewrite (docket S34). Being same-origin, every /ingest request carries
+  // this host's cookies, the Supabase session among them, and an external
+  // rewrite forwards the request's headers as they came. The route builds a
+  // new request from a list of headers instead: never a cookie, never a
+  // member's Authorization. It passes on only the requests posthog-js makes
+  // with the provider's init options, each by the method the SDK uses (any
+  // other path answers 404, another method 405), so turning an SDK feature
+  // on, or a posthog-js update, means checking the route's list
+  // (route.census.test.ts fails on a path or bundle it has not seen).
+  // src/test/ingest-proxy.guard.test.ts fails if a /ingest rewrite comes back.
   // skipTrailingSlashRedirect stops Next from 308-redirecting PostHog's
-  // /flags|/decide style paths. Hosts are US Cloud (the project's region) and
-  // MUST match api_host:'/ingest' in the PostHog provider.
+  // /e/ and /flags/ style paths, so they reach the route as the SDK spelled
+  // them. Hosts are US Cloud (the project's region, set in the route) and the
+  // path MUST match api_host:'/ingest' in the PostHog provider.
   skipTrailingSlashRedirect: true,
   // Belt-and-suspenders: Next.js defaults this to false, but a future
   // dependency (e.g. a Sentry plugin) can flip the underlying webpack
@@ -208,18 +220,9 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // First-party proxy for PostHog (see skipTrailingSlashRedirect note above).
-  // The browser only ever talks to /ingest on our own domain; Next rewrites
-  // it server-side to PostHog US Cloud, invisible to CSP + ad blockers.
-  async rewrites() {
-    return [
-      {
-        source: '/ingest/static/:path*',
-        destination: 'https://us-assets.i.posthog.com/static/:path*',
-      },
-      { source: '/ingest/:path*', destination: 'https://us.i.posthog.com/:path*' },
-    ];
-  },
+  // No rewrites. /ingest (PostHog) is proxied by a route handler that copies
+  // no cookie, never by a rewrite: see the skipTrailingSlashRedirect note
+  // above.
 
   async headers() {
     // CSP — see SECURITY.md for the full rationale. Notable choices:

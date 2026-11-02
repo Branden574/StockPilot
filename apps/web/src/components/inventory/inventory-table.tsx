@@ -64,6 +64,7 @@ import {
   groupCoverRow,
   shownUnderByRecord,
   ungroupableItemIds,
+  DELETED_USER_LABEL,
   DISPLAY_GROUP_FALLBACK_NAME,
   GROUP_COPY,
   groupingSelectionFacts,
@@ -411,6 +412,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Viewer can start a cycle count (core countStartAllowed: a manager with
+   *  cycle_counts:assign and stock:adjust, the module on). Enables the bulk
+   *  'Cycle count' shortcut (B42). Default false → hidden. */
+  canStartCount?: boolean;
   /** Ungroup (0399): the viewer holds items:update, so the bulk bar may offer
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
@@ -557,9 +562,14 @@ interface SavedViewSummary {
   /** True when shared with the whole org. Non-owner viewers see a
       read-only chip with a small Users icon. */
   isShared?: boolean;
-  /** Owner's user id. Only the owner sees the delete + share-toggle
-      controls on the chip; everyone else gets a click-to-apply chip. */
-  ownerId?: string;
+  /** Owner's user id. Only the owner sees the share toggle on the chip;
+      everyone else gets a click-to-apply chip. Null for a shared view whose
+      owner deleted their account (B23). */
+  ownerId?: string | null;
+  /** Whether this viewer may delete the view (the server's rule: the owner,
+      or an admin or owner for a shared view whose owner deleted their
+      account). Omitted: the owner only, as before. */
+  canRemove?: boolean;
 }
 
 type SparkMode = 'qty' | 'moves';
@@ -773,6 +783,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canStartCount = false,
   canUngroup = false,
   canUnlinkFamilies = false,
   canRenameGroups = false,
@@ -2942,6 +2953,7 @@ export function InventoryTable({
               scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
               basePath={basePath}
               isOwner={!!currentUserId && sv.ownerId === currentUserId}
+              canRemove={sv.canRemove ?? (!!currentUserId && sv.ownerId === currentUserId)}
               onApply={(state) => setViewSearch(state.q ?? '')}
             />
           ))}
@@ -3193,6 +3205,7 @@ export function InventoryTable({
             hasElsewhereSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && (i.elsewhere_quantity ?? 0) > 0,
             )}
+            canStartCount={canStartCount}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick
               // type from the base path so the confirm screen can group
@@ -5810,12 +5823,20 @@ function describeState(state: SavedViewSummary['state']): string {
   return parts.length === 0 ? 'No filters set' : parts.join(' · ');
 }
 
+/** Who shared a view, for its chip's title. B23: a shared view whose owner
+ *  deleted their account has no owner, so it never reads "a teammate". */
+function savedViewSharer(view: SavedViewSummary, isOwner: boolean): string {
+  if (isOwner) return 'you';
+  return view.ownerId === null ? `a ${DELETED_USER_LABEL.toLowerCase()}` : 'a teammate';
+}
+
 function SavedViewChip({
   view,
   isActive,
   scope,
   basePath,
   isOwner,
+  canRemove,
   onApply,
 }: {
   view: SavedViewSummary;
@@ -5823,6 +5844,7 @@ function SavedViewChip({
   scope: 'inventory' | 'books';
   basePath: string;
   isOwner: boolean;
+  canRemove: boolean;
   /** Told the view's state as the chip navigates to it: the table hands the
    *  view's search to its box (or empties it) once the address lands. */
   onApply?: (state: SavedViewSummary['state']) => void;
@@ -5903,7 +5925,7 @@ function SavedViewChip({
           ? 'border-foreground bg-foreground text-background'
           : 'hover:bg-muted border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]',
       )}
-      title={view.isShared ? `Shared by ${isOwner ? 'you' : 'a teammate'}` : undefined}
+      title={view.isShared ? `Shared by ${savedViewSharer(view, isOwner)}` : undefined}
     >
       <button
         type="button"
@@ -5937,7 +5959,7 @@ function SavedViewChip({
           )}
         </button>
       )}
-      {isOwner && (
+      {canRemove && (
         <button
           type="button"
           onClick={remove}

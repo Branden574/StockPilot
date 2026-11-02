@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reportError } from '@/lib/error-reporter';
+import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
@@ -75,6 +77,110 @@ describe('the staff audience (effective returns:manage, warehouse read, actor ex
   it('never throws: a failed read is reported and nobody is notified', async () => {
     admin({ 'organization_members.select': { data: null, error: { message: 'boom' } } });
     await expect(resolveReturnStaffAudience({ organizationId: ORG, warehouseId: WH, actorUserId: null })).resolves.toEqual([]);
+  });
+
+  /**
+   * docket S27: an answer with no error that is not a list (postgrest-js
+   * resolves an empty body with data null) was read as "no rows". The role
+   * override read so answered dropped the organization's revoke, and a manager
+   * whose returns:manage it took away was told; the member read so answered
+   * told nobody, silently; the assignments read so answered dropped every
+   * assigned staff member, silently, while the managers were still told. Each
+   * is a failed read: nobody is told and it is reported, naming the table.
+   */
+  describe('an answer that is not a list is a failed read', () => {
+    const MANAGERS = [
+      { user_id: 'mgr', role: 'manager' },
+      { user_id: 'staff-granted', role: 'staff' },
+    ];
+    const listed = (data: unknown) => ({ data, error: null, status: 200 });
+    function reads(odd: string, answer: unknown) {
+      admin({
+        'organization_members.select': listed(MANAGERS),
+        'role_permission_overrides.select': listed([]),
+        'user_permission_overrides.select': listed([
+          { user_id: 'staff-granted', permission: 'returns:manage', granted: true },
+        ]),
+        'user_warehouse_assignments.select': listed([
+          { user_id: 'staff-granted', warehouse_id: WH },
+        ]),
+        'notification_preferences.select': listed([]),
+        [odd]: answer,
+      });
+    }
+    async function expectNobodyAndOneReport(table: string, status: number) {
+      const ids = await resolveReturnStaffAudience({
+        organizationId: ORG,
+        warehouseId: WH,
+        actorUserId: null,
+      });
+      expect(ids).toEqual([]);
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((err as Error).message).toBe(`${table} answered no list (status ${status})`);
+      expect(context).toEqual({
+        tag: 'returns_notify.resolve_audience',
+        extra: { organizationId: ORG },
+      });
+    }
+
+    it('with every read a list, the manager and the granted staff member are told (unchanged)', async () => {
+      reads('role_permission_overrides.select', listed([]));
+      const ids = await resolveReturnStaffAudience({
+        organizationId: ORG,
+        warehouseId: WH,
+        actorUserId: null,
+      });
+      expect(ids.sort()).toEqual(['mgr', 'staff-granted']);
+      // A role override that takes returns:manage from managers stops the manager.
+      reads(
+        'role_permission_overrides.select',
+        listed([{ role: 'manager', permission: 'returns:manage', granted: false }]),
+      );
+      expect(
+        await resolveReturnStaffAudience({
+          organizationId: ORG,
+          warehouseId: WH,
+          actorUserId: null,
+        }),
+      ).toEqual(['staff-granted']);
+      expect(reportError).not.toHaveBeenCalled();
+      // Read the same way, an empty body hid that override and told the manager.
+      reads('role_permission_overrides.select', NOT_A_LIST[0][1]);
+      await expectNobodyAndOneReport('role_permission_overrides', 200);
+    });
+
+    it.each(NOT_A_LIST)(
+      '%s from the role override read tells nobody and is reported',
+      async (_shape, answer) => {
+        reads('role_permission_overrides.select', answer);
+        await expectNobodyAndOneReport('role_permission_overrides', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the member override read tells nobody and is reported',
+      async (_shape, answer) => {
+        reads('user_permission_overrides.select', answer);
+        await expectNobodyAndOneReport('user_permission_overrides', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the member read tells nobody and is reported, never silently',
+      async (_shape, answer) => {
+        reads('organization_members.select', answer);
+        await expectNobodyAndOneReport('organization_members', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the assignments read is a refusal, not a quiet drop of the assigned staff',
+      async (_shape, answer) => {
+        reads('user_warehouse_assignments.select', answer);
+        await expectNobodyAndOneReport('user_warehouse_assignments', answer.status);
+      },
+    );
   });
 });
 

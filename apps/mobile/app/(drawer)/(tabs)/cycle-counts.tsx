@@ -27,6 +27,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
 import {
+  countStartAllowed,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
   CYCLE_COUNT_SEARCH_MAX_LENGTH,
   CYCLE_COUNT_STATUS_LABELS,
@@ -60,7 +61,6 @@ import {
   type CycleCountListView,
 } from '@/lib/cycle-count-history';
 import { listCycleCounts } from '@/lib/cycle-counts-api';
-import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
@@ -69,6 +69,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useRole } from '@/lib/use-role';
 
 /** Typing settles for this long before the list is asked for again. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -176,17 +177,27 @@ export default function CycleCounts() {
   const stackedSummary = shouldStackRow(useWindowDimensions().fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const { orgId } = useOrg();
-  // Write-CTA gate: starting a count posts stock adjustments, so the "+"
-  // follows stock:adjust. Cosmetic (the API enforces server-side); while the
-  // effective set is loading (undefined) the CTA shows — today's behavior.
+  // Who is offered ＋ and the start hint (B42): someone who can start a count,
+  // by the server's floors (core countStartAllowed: a manager with
+  // cycle_counts:assign and stock:adjust, the module on). It followed
+  // stock:adjust alone, which staff hold, so staff were offered a start the
+  // server always refused. Cosmetic (the API enforces it); while the role is
+  // unknown (a cold start offline, before it is read) the start is not
+  // offered, as for Distribute.
+  const { role } = useRole();
   const perms = useEffectivePermissions();
-  const canStartCount = showWriteCta(perms, 'stock:adjust');
+  const enabledModules = useEnabledModules();
+  const canStartCount = countStartAllowed({
+    role,
+    permissions: perms,
+    cycleCountsEnabled: enabledModules.has('cycle_counts'),
+  });
   // Whether the start may offer Books (startCountChoices). Permissive until
   // the first snapshot lands, as the tab bar is: the default module set
   // includes Books. The hint is worked out here, not inside the empty-list
   // element: with the call in that element the React Compiler could no
   // longer keep load's memoization (react-hooks/preserve-manual-memoization).
-  const booksOn = useEnabledModules().has('books');
+  const booksOn = enabledModules.has('books');
   const startHint = startCountHint(booksOn);
 
   // What the list shows (search, status, page), restored per workspace when
@@ -554,7 +565,7 @@ export default function CycleCounts() {
           ? 'Open counts download when you are online. Connect to see your full history.'
           : canStartCount
             ? startHint
-            : 'Counts started from the web appear here for review.'}
+            : 'Counts a manager starts appear here.'}
       </Body>
     </View>
   );
