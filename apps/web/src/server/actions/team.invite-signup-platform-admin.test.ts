@@ -200,6 +200,26 @@ describe('acceptInviteWithSignupAction never creates the account of a platform a
     },
   );
 
+  it("tells an address that already has an account to use the page's own Sign in link (B77)", async () => {
+    h.accounts.add('existing.person@example.com');
+    invite(TOKEN_EXISTING, 'existing.person@example.com');
+
+    const res = await acceptInviteWithSignupAction({ token: TOKEN_EXISTING, password: PASSWORD });
+
+    // The invite page has no "I already have an account" option; its footer
+    // reads "Already have an account? Sign in" (app/invite/[token]/page.test.tsx
+    // pins the footer to this sentence).
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'An account already exists for this email. Use "Already have an account? Sign in" on this page, then accept the invite.',
+      },
+    });
+    expectNoAccount();
+  });
+
   it('reports the refusal for the operator, naming the workspace and never the address', async () => {
     invite(TOKEN_ADMIN, ADMIN_EMAIL);
 

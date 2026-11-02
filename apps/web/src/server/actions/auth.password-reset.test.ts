@@ -35,7 +35,12 @@ vi.mock('next/headers', () => ({
     delete: () => {},
   })),
 }));
-vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+// Next's own control-flow rule stays real: the fallthrough's helper rethrows
+// it first (lib/control-flow.ts).
+vi.mock('next/navigation', async (importOriginal) => ({
+  unstable_rethrow: (await importOriginal<typeof import('next/navigation')>()).unstable_rethrow,
+  redirect: vi.fn(),
+}));
 vi.mock('next/server', () => ({ after: vi.fn() }));
 vi.mock('@/lib/auth/login-device', () => ({ noteLoginDevice: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
@@ -278,6 +283,32 @@ describe('completePasswordResetAction', () => {
     if (!res.ok) expect(res.error.code).toBe('internal_error');
     expect(signOut).not.toHaveBeenCalled();
     expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  // S31: a refusal B50 does not name answered GoTrue's own text, which the
+  // reset page showed as it is, and was not reported.
+  it("answers a refusal it does not know with the fixed sentence, never GoTrue's text, and reports it", async () => {
+    const refusal = {
+      name: 'AuthApiError',
+      status: 500,
+      code: 'unexpected_failure',
+      message: 'Database error updating user: relation "auth.mfa_factors" is locked',
+    };
+    updateUser.mockResolvedValue({ error: refusal });
+
+    const res = await completePasswordResetAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Something went wrong. Please try again.' },
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    // The report carries GoTrue's text and code (lib/error-text.ts, C21).
+    expect((reported as Error).message).toContain(refusal.message);
+    expect((reported as Error).message).toContain(refusal.code);
+    expect(context).toEqual({ tag: 'actions.auth.password_reset' });
+    expect(signOut).not.toHaveBeenCalled();
   });
 
   // ── SP-014: TOTP-enrolled users could never finish a reset ──────────────

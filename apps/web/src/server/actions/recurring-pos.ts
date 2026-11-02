@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
@@ -10,6 +9,7 @@ import {
   recurringTemplateSchema,
   type RecurringTemplateInput,
 } from '@/server/services/recurring-pos';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { can, err, ok, planAllowsRecurringPos, type ActionResult, type OrgBillingState } from '@stockpilot/core';
 
@@ -102,10 +102,7 @@ export async function createRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.recurring_pos.create_recurring_template');
   }
 }
 
@@ -137,10 +134,7 @@ export async function updateRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.recurring_pos.update_recurring_template');
   }
 }
 
@@ -169,10 +163,7 @@ export async function setRecurringTemplateEnabledAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(result);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.recurring_pos.set_recurring_template_enabled');
   }
 }
 
@@ -200,10 +191,7 @@ export async function deleteRecurringTemplateAction(
     revalidatePath(REVALIDATE_PATH);
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.recurring_pos.delete_recurring_template');
   }
 }
 
@@ -229,9 +217,6 @@ export async function seedRecurringTemplateFromPoAction(poId: string): Promise<
     // No audit (read-only), no revalidate.
     return ok(seed);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.recurring_pos.seed_recurring_template_from_po');
   }
 }

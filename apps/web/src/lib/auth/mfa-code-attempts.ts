@@ -13,7 +13,9 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
 /**
  * The web's authenticator code checks: the sign-in code at /signin/mfa and the
  * step-up modal (server/actions/mfa.ts challengeFactorAction), and the reset's
- * code step (server/actions/auth.ts completePasswordResetAction).
+ * code step (server/actions/auth.ts completePasswordResetAction). The
+ * set-up's code (server/actions/mfa.ts verifyEnrollmentAction) answers with
+ * the same words, chosen by how GoTrue answered (S31).
  *
  * ONE BUDGET, TWO BUCKETS. Every well-formed code press, before GoTrue is
  * asked, on all three paths together, is checked in two buckets, in this

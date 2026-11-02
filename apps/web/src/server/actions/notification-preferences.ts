@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   NOTIFICATION_PREF_KEYS,
   type NotificationPrefKey,
@@ -14,6 +13,7 @@ import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { writeNotificationPrefs } from '@/server/services/notification-preferences';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -109,8 +109,6 @@ export async function updateNotificationPreferencesAction(
     revalidatePath('/dashboard/settings/notifications');
     return ok({ changed: changedKeys.length });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.notification_preferences.update_notification_preferences');
   }
 }

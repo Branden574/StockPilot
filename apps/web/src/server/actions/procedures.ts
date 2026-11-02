@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { ServiceError } from '@/server/services/context';
 import { ProceduresService } from '@/server/services/procedures';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import {
@@ -12,6 +11,7 @@ import {
   type ProcedureVideoRow,
 } from '@/server/services/procedure-videos';
 import { ProcedureCommentsService } from '@/server/services/procedure-comments';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   createProcedureSchema,
@@ -44,10 +44,7 @@ import {
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-   
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.procedures');
 }
 
 // ---------------------------------------------------------------------------

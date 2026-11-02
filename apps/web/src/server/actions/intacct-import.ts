@@ -3,13 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError, withContext } from '@/server/services/context';
+import { withContext } from '@/server/services/context';
 import {
   importItemsFromIntacct,
   type IntacctImportSummary,
 } from '@/server/services/intacct-import';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -39,8 +39,6 @@ export async function importFromIntacctAction(
     revalidatePath('/dashboard/settings/integrations');
     return ok(summary);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.intacct_import.import_from_intacct');
   }
 }

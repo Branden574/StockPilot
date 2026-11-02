@@ -11,6 +11,7 @@ import {
   ServiceError,
   type ServiceContext,
 } from '@/server/services/context';
+import { RowFailures } from '@/server/lib/action-error-result';
 import { InventoryService } from '@/server/services/inventory';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 
@@ -142,6 +143,11 @@ export async function importItemsFromIntacct(
     notes: [],
     errors: [],
   };
+  // A failed item says a refusal's words, else the fixed sentence (the card
+  // shows them); the unexpected ones are reported once for the run (S31).
+  const rowFailures = new RowFailures('intacct_import.rows', {
+    organizationId: ctx.organizationId,
+  });
 
   // Best-effort on-hand map (Σ across warehouses). Tolerated failure: some
   // tenants gate or rename the object — degrade to qty 0 with a note rather
@@ -263,12 +269,8 @@ export async function importItemsFromIntacct(
         summary.created++;
       } catch (e) {
         summary.failed++;
-        if (summary.errors.length < 50) {
-          summary.errors.push({
-            sku,
-            message: e instanceof Error ? e.message : 'create failed',
-          });
-        }
+        const message = rowFailures.message(e);
+        if (summary.errors.length < 50) summary.errors.push({ sku, message });
       }
     }
 
@@ -291,5 +293,6 @@ export async function importItemsFromIntacct(
     );
   }
 
+  rowFailures.report();
   return summary;
 }

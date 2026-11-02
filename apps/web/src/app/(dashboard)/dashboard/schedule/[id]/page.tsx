@@ -2,6 +2,7 @@ import { ChevronLeft, MapPin, Package, ShoppingCart, User2 } from 'lucide-react'
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleStatusActions } from '@/components/schedule/schedule-status-actions';
@@ -11,6 +12,7 @@ import { formatOrderNumber } from '@stockpilot/core';
 import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { reportError } from '@/lib/error-reporter';
 import { formatEventRange } from '@/lib/schedule/event-range';
 import { formatNumber } from '@/lib/utils';
@@ -65,6 +67,12 @@ export default async function ScheduleEventDetailPage({
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
   notFoundUnlessUuid(id);
+  // Schedule off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('schedule');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="schedule" access={moduleAccess} />;
+  }
   // Mirrors /dashboard/schedule: schedule:read (or manage) can VIEW — the
   // calendar's event chips link here, so a read-only grantee must not dead-end
   // on a 404. Status changes + editing stay schedule:manage (the write UI

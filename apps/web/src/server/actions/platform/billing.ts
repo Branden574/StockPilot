@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { setBilling, startTrial } from '@/server/services/platform/billing';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, PLAN_IDS, type ActionResult } from '@stockpilot/core';
 
@@ -65,7 +66,7 @@ export async function setOrgBillingAction(
       billingNotes: parsed.data.billingNotes,
     });
   } catch (e) {
-    return err('internal_error', e instanceof Error ? e.message : 'Failed to save billing');
+    return actionErrorResult(e, 'actions.platform.billing.set_org_billing');
   }
 
   revalidatePath(`/platform/orgs/${parsed.data.organizationId}`);
@@ -96,7 +97,7 @@ export async function startOrgTrialAction(
       now: Date.now(),
     });
   } catch (e) {
-    return err('internal_error', e instanceof Error ? e.message : 'Failed to start trial');
+    return actionErrorResult(e, 'actions.platform.billing.start_org_trial');
   }
 
   revalidatePath(`/platform/orgs/${parsed.data.organizationId}`);
