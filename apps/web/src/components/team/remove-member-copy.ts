@@ -6,7 +6,9 @@ import type { MemberOpenWork, MemberOpenWorkResult } from '@/server/services/tea
  * how much before the press, from TeamService.openWork: the cycle counts in
  * progress, orders being picked and open deliveries always (a 0 included),
  * and one more line only when they are the local owner of a maintenance
- * request or the manager of a warehouse. Escalation claims (two-minute
+ * request or the manager of a warehouse, and one more only when they sent
+ * invitations here that are not accepted yet (the removal withdraws them, as
+ * account deletion does). Escalation claims (two-minute
  * leases) and schedule events (they follow the deliveries) are released too
  * and never named. Pure, so the words are tested here (pattern #8).
  *
@@ -64,6 +66,13 @@ export function openWorkLines(counts: MemberOpenWork, warehouseSingular: string)
     also.push(`as the manager of ${plural(counts.warehouses, warehouse, `${warehouse}s`)}`);
   }
   if (also.length > 0) lines.push(`It also clears them ${also.join(' and ')}.`);
+  if (counts.pendingInvites > 0) {
+    lines.push(
+      counts.pendingInvites === 1
+        ? 'It also withdraws 1 invitation they sent that has not been accepted.'
+        : `It also withdraws ${counts.pendingInvites} invitations they sent that have not been accepted.`,
+    );
+  }
   return lines;
 }
 

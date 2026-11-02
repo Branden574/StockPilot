@@ -38,10 +38,18 @@
 --          archived;
 --        an unresolved exception's escalation claim;
 --        the manager of a warehouse.
+--      Then it withdraws the invitations the person sent in THAT organization
+--      that are not accepted and not revoked, with 0393's own predicate and
+--      columns (revoked_at now, expires_at no later than a minute ago), so
+--      an invitation a removed member sent cannot be accepted later; the
+--      expired ones too, because a resend renews expires_at. Not for an
+--      ended Act-as seat: a platform admin's invitation sent while acting is
+--      support work for the organization and stays valid.
 --      It never touches stock, a movement, a record's quantities or any other
 --      organization. It writes one audit row per released count, pick,
 --      delivery and maintenance request, then one user.open_work_released
---      summary with all seven numbers, only when something was released.
+--      summary with all seven numbers and pending_invites (the invitations
+--      withdrawn), only when something was released or withdrawn.
 --      Every row carries reason null (the order page prints a string reason
 --      as "Reason: ...", and the app keeps reason for words a person typed)
 --      and cause:
@@ -71,25 +79,26 @@
 --      draw-scope trigger there (UPDATE OF id, organization_id) does not
 --      fire.
 --   3. public.member_open_work(p_member_id) returns jsonb: the same seven
---      numbers for one membership row, read before Remove is pressed (the
---      Remove dialog names the counts, picks and deliveries, and maintenance
---      requests and warehouses when there are any). STABLE, SECURITY DEFINER,
+--      numbers and pendingInvites (0 for an Act-as seat) for one membership
+--      row, read before Remove is pressed (the Remove dialog names the
+--      counts, picks and deliveries, and maintenance requests, warehouses
+--      and invitations when there are any). STABLE, SECURITY DEFINER,
 --      EXECUTE for authenticated only. Refusals: 42501 unauthenticated (no
 --      subject); P0002 member_not_found (no such row in an organization the
 --      caller belongs to); 42501 forbidden unless the caller is an admin
 --      (0140's delete policy floor) AND holds members:remove (the app's
 --      gate) there.
 --
--- PARITY (rule #26). The same seven predicates now live in three places:
--- 0393's tg_auth_users_before_delete, this trigger and member_open_work. A
--- change to one (a new order status, a new kind of open work) changes all
--- three; pgTAP C1b (the read equals the release) and PAR (the release equals
--- account deletion's) fail otherwise.
+-- PARITY (rule #26). The same seven predicates, and the invitation
+-- predicate, now live in three places: 0393's tg_auth_users_before_delete,
+-- this trigger and member_open_work. A change to one (a new order status, a
+-- new kind of open work) changes all three; pgTAP C1b (the read equals the
+-- release) and PAR (the release equals account deletion's) fail otherwise.
 --
 -- NOT RELEASED: work already stranded on people removed before this file
 -- (no bulk change; the read-only counts run before the push decide whether a
--- separate tier B item is needed). Not changed: pending invites the person
--- sent, the maintenance notify audience, delivery GPS rows, and the warehouse
+-- separate tier B item is needed). Not changed: the maintenance notify
+-- audience, delivery GPS rows, and the warehouse
 -- assignments and default organization that only Team's removeMember clears
 -- (follow-ups for the self-leave and Act-as paths).
 --
@@ -164,6 +173,7 @@ declare
   v_mrs    integer := 0;
   v_claims integer := 0;
   v_whs    integer := 0;
+  v_invs   integer := 0;
 begin
   -- FIRST, and keep it first: the organization being deleted (its audit rows
   -- would fail audit_logs' key and stop the deletion) or the account being
@@ -298,7 +308,20 @@ begin
      and w.manager_user_id = v_user;
   get diagnostics v_whs = row_count;
 
-  if v_counts + v_picks + v_drops + v_events + v_mrs + v_claims + v_whs > 0 then
+  -- 0393's invitation predicate and columns, in this organization only; an
+  -- ended Act-as seat's invitations stay (support work for the organization).
+  if old.impersonation_expires_at is null then
+    update public.organization_invites i
+       set revoked_at = now(),
+           expires_at = least(i.expires_at, now() - interval '1 minute')
+     where i.organization_id = v_org
+       and i.invited_by = v_user
+       and i.accepted_at is null
+       and i.revoked_at is null;
+    get diagnostics v_invs = row_count;
+  end if;
+
+  if v_counts + v_picks + v_drops + v_events + v_mrs + v_claims + v_whs + v_invs > 0 then
     insert into public.audit_logs (organization_id, user_id, event, metadata)
     values (v_org, v_actor, 'user.open_work_released',
             jsonb_build_object('entity_type', 'organization_member', 'entity_id', old.id,
@@ -308,6 +331,7 @@ begin
                                'cycle_counts', v_counts, 'picks', v_picks, 'deliveries', v_drops,
                                'schedule_events', v_events, 'maintenance_requests', v_mrs,
                                'escalation_claims', v_claims, 'warehouses', v_whs,
+                               'pending_invites', v_invs,
                                'acting_as_platform', v_acting));
   end if;
 
@@ -321,12 +345,13 @@ comment on function public.tg_organization_members_release_open_work() is
   '0429 (B94): after a membership row is deleted (Team''s Remove, a member leaving, an Act-as seat ended), releases '
   'that person''s open work in THAT organization only, in the same transaction: counts in progress (version + 1), '
   'picks, deliveries not completed, cancelled or denied, scheduled events, open maintenance local owner, unresolved '
-  'escalation claims and warehouse manager. Never stock, never another organization. Returns at once when the '
+  'escalation claims and warehouse manager, and withdraws the invitations the person sent there that are not accepted '
+  'or revoked (not for an Act-as seat). Never stock, never another organization. Returns at once when the '
   'organization or the account is already gone (organization deletion; account deletion, which '
   'tg_auth_users_before_delete released). Audits each count, pick, delivery and maintenance request and one '
-  'user.open_work_released summary; reason null, cause member_removed, member_left or act_as_seat_ended; the actor '
-  'is auth.uid(). PARITY: the same seven predicates live in tg_auth_users_before_delete (0393) and '
-  'member_open_work; change all three together.';
+  'user.open_work_released summary (pending_invites: invitations withdrawn); reason null, cause member_removed, member_left or act_as_seat_ended; the actor '
+  'is auth.uid(). PARITY: the same seven predicates and the invitation predicate live in tg_auth_users_before_delete '
+  '(0393) and member_open_work; change all three together.';
 
 -- ── 2. The trigger ──────────────────────────────────────────────────────────
 create trigger trg_organization_members_release_open_work
@@ -349,11 +374,12 @@ declare
   v_uid  uuid := auth.uid();
   v_org  uuid;
   v_user uuid;
+  v_seat boolean;
 begin
   if v_uid is null then
     raise exception 'unauthenticated' using errcode = '42501';
   end if;
-  select m.organization_id, m.user_id into v_org, v_user
+  select m.organization_id, m.user_id, m.impersonation_expires_at is not null into v_org, v_user, v_seat
     from public.organization_members m
    where m.id = p_member_id;
   if v_org is null or not public.is_org_member(v_org) then
@@ -381,7 +407,11 @@ begin
                           where x.organization_id = v_org and x.escalation_claimed_by = v_user
                             and x.resolved_at is null),
     'warehouses', (select count(*) from public.warehouses w
-                    where w.organization_id = v_org and w.manager_user_id = v_user));
+                    where w.organization_id = v_org and w.manager_user_id = v_user),
+    'pendingInvites', case when v_seat then 0 else
+                        (select count(*) from public.organization_invites i
+                          where i.organization_id = v_org and i.invited_by = v_user
+                            and i.accepted_at is null and i.revoked_at is null) end);
 end;
 $$;
 
@@ -390,9 +420,10 @@ grant execute on function public.member_open_work(uuid) to authenticated;
 
 comment on function public.member_open_work(uuid) is
   '0429 (B94): what removing this membership would release, per kind (cycleCounts, picks, deliveries, '
-  'scheduleEvents, maintenanceRequests, escalationClaims, warehouses), for the Remove dialog. Signed in; the row '
+  'scheduleEvents, maintenanceRequests, escalationClaims, warehouses), and the invitations it would withdraw '
+  '(pendingInvites; 0 for an Act-as seat), for the Remove dialog. Signed in; the row '
   'in an organization the caller belongs to (else P0002 member_not_found); admin there AND members:remove (else '
-  '42501 forbidden). PARITY: the same seven predicates live in tg_organization_members_release_open_work and '
-  'tg_auth_users_before_delete (0393); change all three together.';
+  '42501 forbidden). PARITY: the same seven predicates and the invitation predicate live in '
+  'tg_organization_members_release_open_work and tg_auth_users_before_delete (0393); change all three together.';
 
 reset lock_timeout;

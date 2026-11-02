@@ -346,13 +346,15 @@ export type AuditEvent =
   | 'user.profile.updated'
   | 'user.session.invalidated'
   /**
-   * B94 (0429): one summary per membership delete that released open work,
-   * written by tg_organization_members_release_open_work after its per-object
-   * rows (none when nothing was open): entity organization_member (the
-   * deleted row), reason null, cause, released_user_id, membership_id, the
-   * seven numbers (cycle_counts, picks, deliveries, schedule_events,
-   * maintenance_requests, escalation_claims, warehouses) and
-   * acting_as_platform. user_id is the caller, null for the admin client.
+   * B94 (0429): one summary per membership delete that released open work
+   * or withdrew invitations, written by
+   * tg_organization_members_release_open_work after its per-object rows (none
+   * when nothing was open): entity organization_member (the deleted row),
+   * reason null, cause, released_user_id, membership_id, the seven numbers
+   * (cycle_counts, picks, deliveries, schedule_events, maintenance_requests,
+   * escalation_claims, warehouses), pending_invites (invitations the person
+   * sent there that were withdrawn) and acting_as_platform. user_id is the
+   * caller, null for the admin client.
    */
   | 'user.open_work_released'
   // Verified self-service email change (mig 0345). 'changed' is written by

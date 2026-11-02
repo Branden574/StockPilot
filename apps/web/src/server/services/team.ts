@@ -42,8 +42,10 @@ function formatInviteExpiry(iso: string): string {
 /**
  * B94: what removing one member releases in this organization, per kind, as
  * public.member_open_work (migration 0429) counts it with the release's own
- * predicates. The Remove dialog names the first three, and the maintenance
- * requests and warehouses when there are any.
+ * predicates, and how many invitations they sent there that are not accepted
+ * or revoked (the removal withdraws them, as account deletion does). The
+ * Remove dialog names the first three, and the maintenance requests,
+ * warehouses and invitations when there are any.
  */
 export interface MemberOpenWork {
   cycleCounts: number;
@@ -53,6 +55,7 @@ export interface MemberOpenWork {
   maintenanceRequests: number;
   escalationClaims: number;
   warehouses: number;
+  pendingInvites: number;
 }
 
 /**
@@ -76,6 +79,7 @@ const memberOpenWorkSchema = z.object({
   maintenanceRequests: openWorkCount,
   escalationClaims: openWorkCount,
   warehouses: openWorkCount,
+  pendingInvites: openWorkCount,
 });
 
 export class TeamService {
