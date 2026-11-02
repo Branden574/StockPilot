@@ -142,6 +142,40 @@ export async function readVerifiedSessionClaims(
 }
 
 /**
+ * readVerifiedSessionClaims held to ONE account: the claims only when the
+ * verified token's subject is `userId`, the user this request already
+ * validated (getUser(), the context, the verified email). Anything else is
+ * null, which every caller treats as "not verified": not AAL2, no step-up.
+ *
+ * WHY THE SUBJECT MUST BE CHECKED. Each read of the cookie session LOADS it
+ * again, and a load refreshes the session, with the cookie's own refresh
+ * token, whenever the cookie's own `expires_at` says it is within 90 s of
+ * expiry (auth-js __loadSession); @supabase/ssr then hands the refreshed
+ * session to every later read on that client, and the cookie store to every
+ * later client. Nothing signs either field, so whoever sends the cookie
+ * chooses both: one account's access token, which the identity read
+ * validates, and the refresh token of ANOTHER account's session, with
+ * `expires_at` set to pass the margin after the identity read. The claims read
+ * that follows then verifies the other account's token, and its `aal2` would
+ * count for the first account. A refresh of the same account's session keeps
+ * its subject, so it still answers.
+ */
+export async function readVerifiedSessionClaimsOf(
+  supabase: AuthReader,
+  userId: string,
+): Promise<VerifiedSessionClaims | null> {
+  const claims = await readVerifiedSessionClaims(supabase);
+  if (!claims) return null;
+  if (claims.userId === userId) return claims;
+  // Never the ids: a fixed line, so a cookie built to swap accounts shows in
+  // the runtime logs.
+  console.warn(
+    '[verified-claims] the session now holds another account than the one this request validated',
+  );
+  return null;
+}
+
+/**
  * This request's verified session claims (readVerifiedSessionClaims on the
  * cookie session), read ONCE per page render and shared through React
  * cache().
@@ -158,6 +192,12 @@ export async function readVerifiedSessionClaims(
  *
  * Inside a Server Action or a Route Handler cache() does not memoize, so each
  * call reads again (a local check once the key set is cached).
+ *
+ * The claims are those of whatever account the cookie session holds when this
+ * read loads it, which is not always the account the request validated (see
+ * readVerifiedSessionClaimsOf). A caller that decides anything on them first
+ * compares `userId` with that user: the dashboard layout's gate and
+ * resolveMfaState in withContext() do.
  *
  * Never rejects: the layout awaits it only at its enrolled-member gate, and a
  * client that cannot be made is as unverified as a forged token (null).

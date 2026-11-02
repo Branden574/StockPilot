@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   releaseContext: null as null | (() => void),
   failContext: null as null | ((e: Error) => void),
-  factors: null as null | (() => Promise<Array<{ status: string }>>),
+  factors: null as null | (() => Promise<{ userId: string; factors: Array<{ status: string }> }>),
   factorReads: 0,
   aal: 'aal1' as 'aal1' | 'aal2',
 }));
@@ -134,7 +134,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.releaseContext = null;
   state.failContext = null;
-  state.factors = async () => [];
+  state.factors = async () => ({ userId: 'u-1', factors: [] });
   state.factorReads = 0;
   state.aal = 'aal1';
 });
@@ -151,7 +151,7 @@ describe('DashboardLayout — the factor read overlaps the context read', () => 
   });
 
   it('an enrolled user at AAL1 is still sent to the MFA challenge', async () => {
-    state.factors = async () => [{ status: 'verified' }];
+    state.factors = async () => ({ userId: 'u-1', factors: [{ status: 'verified' }] });
     const render = DashboardLayout({ children: null });
     state.releaseContext!();
     await expect(render).rejects.toThrow(
