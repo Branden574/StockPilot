@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 //   - viewer WITH the read grant (effective-permission set) → the page
 //     renders READ-ONLY (no write CTAs);
 //   - staff/manager (static role defaults, mirrored in Unit 1) → unchanged,
-//     write CTAs included.
+//     write CTAs included. Except the start of a cycle count (B42): only a
+//     manager with cycle_counts:assign and stock:adjust can start one, so
+//     staff keep the list without it.
 
 const ctxHolder = vi.hoisted(() => ({
   current: {
@@ -232,8 +234,17 @@ describe('cycle counts list (/dashboard/cycle-counts)', () => {
     // Empty-state CTA is a write affordance too.
     expect(screen.queryByText('Start your first count')).not.toBeInTheDocument();
   });
-  it('staff (static defaults) is unchanged: page renders WITH the CTA', async () => {
+  // B42: staff hold stock:adjust, the old gate, but not cycle_counts:assign,
+  // so the start they were offered was always refused.
+  it('staff (static defaults) still read the page, without the Start-a-count CTA', async () => {
     setCtx('staff');
+    render(await CycleCountsPage({ searchParams: emptySearchParams }));
+    expect(screen.getByRole('heading', { name: 'Cycle counts' })).toBeInTheDocument();
+    expect(screen.queryByText('+ Start a count')).not.toBeInTheDocument();
+    expect(screen.queryByText('Start your first count')).not.toBeInTheDocument();
+  });
+  it('a manager (static defaults) renders WITH the CTA', async () => {
+    setCtx('manager');
     render(await CycleCountsPage({ searchParams: emptySearchParams }));
     expect(screen.getByText('+ Start a count')).toBeInTheDocument();
   });

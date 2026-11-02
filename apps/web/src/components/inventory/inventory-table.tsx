@@ -407,6 +407,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Viewer can start a cycle count (core countStartAllowed: a manager with
+   *  cycle_counts:assign and stock:adjust, the module on). Enables the bulk
+   *  'Cycle count' shortcut (B42). Default false → hidden. */
+  canStartCount?: boolean;
   /** Ungroup (0399): the viewer holds items:update, so the bulk bar may offer
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
@@ -756,6 +760,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canStartCount = false,
   canUngroup = false,
   canUnlinkFamilies = false,
   canRenameGroups = false,
@@ -2962,6 +2967,7 @@ export function InventoryTable({
             hasElsewhereSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && (i.elsewhere_quantity ?? 0) > 0,
             )}
+            canStartCount={canStartCount}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick
               // type from the base path so the confirm screen can group
