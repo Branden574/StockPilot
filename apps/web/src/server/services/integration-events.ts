@@ -3,7 +3,7 @@ import 'server-only';
 import { createHmac, randomBytes } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
-import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
+import { isSsrfRefusal, safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
@@ -375,9 +375,13 @@ async function attemptDelivery(
     ok = res.status >= 200 && res.status < 300;
     if (!ok) errorMsg = `HTTP ${res.status}`;
   } catch (e) {
-    // SSRF block is terminal (don't retry a poisoned URL); network errors retry.
+    // A refusal of the URL is final (a bad scheme, a private address, a host
+    // off an allowlist, too many redirects, a Slack or Teams URL on another
+    // host): don't retry a poisoned URL. A failed lookup of the host is a
+    // network failure like any other and retries with backoff, up to
+    // MAX_ATTEMPTS (docket B49).
     errorMsg = e instanceof Error ? e.message : 'delivery failed';
-    if (e instanceof SsrfBlockedError) {
+    if (isSsrfRefusal(e)) {
       await finalize(admin, endpoint, delivery, { ok: false, code: null, error: errorMsg, dead: true }, attempts);
       return { claimed: true, ok: false };
     }
