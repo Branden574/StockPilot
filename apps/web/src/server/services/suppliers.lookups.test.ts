@@ -44,6 +44,19 @@ describe('SuppliersService.listForLookups', () => {
     const { service } = svc(false);
     await expect(service.list()).rejects.toMatchObject({ code: 'module_disabled' });
   });
+
+  it('module ON and the read fails: it throws, never an empty picker for a list that could not be read', async () => {
+    // Only a module that is OFF answers []. A failed read is not "no
+    // suppliers": the page fails and the error is reported.
+    const enabledModules = new Set<ModuleId>(DEFAULT_MODULE_IDS);
+    enabledModules.add('suppliers');
+    const stub = makeSupabaseStub({
+      'suppliers.select': { data: null, error: { message: 'canceling statement due to statement timeout' } },
+    });
+    const service = new SuppliersService(makeServiceContext(stub.client, { enabledModules }));
+    await expect(service.listForLookups()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(stub.fromCalls).toContain('suppliers');
+  });
 });
 
 describe('no page or route asks for suppliers in a way that crashes when the module is off', () => {

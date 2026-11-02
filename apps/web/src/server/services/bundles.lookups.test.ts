@@ -66,6 +66,21 @@ describe('BundlesService.listForLookups', () => {
     const { service } = svc(false);
     await expect(service.list()).rejects.toMatchObject({ code: 'module_disabled' });
   });
+
+  it('module ON and the read fails: it throws, never an empty Bundle box for a list that could not be read', async () => {
+    // A deliberate decision (B67): turning a failed read into [] would show
+    // an empty Bundle box, as if the organization had no bundles, for a list
+    // that could not be read. The page fails and the error is reported.
+    const enabledModules = new Set<ModuleId>(DEFAULT_MODULE_IDS);
+    enabledModules.add('bundles');
+    const stub = makeSupabaseStub({
+      'bundles.select': { data: null, error: { message: 'canceling statement due to statement timeout' } },
+      'bundle_distributions.select': { data: [], error: null },
+    });
+    const service = new BundlesService(makeServiceContext(stub.client, { enabledModules }));
+    await expect(service.listForLookups()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(stub.fromCalls).toContain('bundles');
+  });
 });
 
 describe('no page outside Bundles asks for bundles in a way that crashes when the module is off', () => {
