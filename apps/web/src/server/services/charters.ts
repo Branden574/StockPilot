@@ -3,8 +3,15 @@ import 'server-only';
 import { z } from 'zod';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { ServiceError, withContext, type ServiceContext } from './context';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import {
+  assertCanEditOrganizationSetup,
+  assertSetupRowInOrganization,
+  isPolicyRefusal,
+  setupNothingSaved,
+  WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY,
+} from './lib/organization-setup-gate';
 import { fetchAllRows } from './lib/paginate';
 
 /**
@@ -141,8 +148,12 @@ export class ChartersService {
     });
   }
 
+  /**
+   * Owner or admin only, checked before any write: charters_admin_write asks
+   * the admin role (B99). An INSERT the policy refuses says nothing was saved.
+   */
   async create(input: CreateCharterInput) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data, error } = await this.ctx.supabase
       .from('charters')
       .insert({
@@ -160,13 +171,24 @@ export class ChartersService {
       })
       .select('id')
       .single();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      if (isPolicyRefusal(error)) throw setupNothingSaved();
+      throw new ServiceError('internal_error', error.message);
+    }
     await audit({ event: 'charter.created', entityType: 'charter', entityId: data.id as string, after: input }, this.ctx);
     return { id: data.id as string };
   }
 
+  /**
+   * Owner or admin only, checked before any write (B99). The UPDATE asks for
+   * its row back: one that changed no row (the id is not this organization's,
+   * or the policy hid it) says nothing was saved and writes no audit row. A
+   * save with no field sends no UPDATE, as WarehousesService.update, and reads
+   * the row instead, so its audit row never names an id that is not this
+   * organization's charter.
+   */
   async update(id: string, patch: UpdateCharterInput) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.code !== undefined) updates.code = patch.code ?? null;
@@ -178,17 +200,24 @@ export class ChartersService {
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
     if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone ?? null;
-    const { error } = await this.ctx.supabase
-      .from('charters')
-      .update(updates)
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (Object.keys(updates).length > 0) {
+      const { data: row, error } = await this.ctx.supabase
+        .from('charters')
+        .update(updates)
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (!row) throw setupNothingSaved();
+    } else {
+      await assertSetupRowInOrganization(this.ctx, 'charters', id);
+    }
     await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch }, this.ctx);
   }
 
   async archive(id: string) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data: row, error } = await this.ctx.supabase
       .from('charters')
       .update({ status: 'archived' })
@@ -203,11 +232,11 @@ export class ChartersService {
 
   /**
    * Restore an archived charter — sets status back to 'active'. Same
-   * permission gate as archive(). Restoring goes to 'active' (not
+   * owner-or-admin gate as archive(). Restoring goes to 'active' (not
    * 'inactive') because that's the inverse of archive.
    */
   async restore(id: string) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data: row, error } = await this.ctx.supabase
       .from('charters')
       .update({ status: 'active' })

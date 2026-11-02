@@ -325,6 +325,11 @@ const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: stri
     why: "Its table is typed 'charters' | 'warehouses', and it selects id and name: no kept address.",
   },
   {
+    file: 'apps/web/src/server/services/lib/organization-setup-gate.ts',
+    enclosing: 'assertSetupRowInOrganization',
+    why: "Its table is typed 'warehouses' | 'charters', and it selects only id: no kept address.",
+  },
+  {
     file: 'apps/web/src/server/services/recovery.ts',
     enclosing: 'RecoveryService.listDeleted',
     why:

@@ -13,13 +13,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * verify sweep).
  */
 
-const { get, chartersList, listPairs, counts } = vi.hoisted(() => ({
+const { get, chartersList, listPairs, counts, session } = vi.hoisted(() => ({
   get: vi.fn(),
   chartersList: vi.fn(),
   listPairs: vi.fn(),
   counts: { items: 12, pending: 3, completed: 7 },
+  // The request's context: an admin unless a test says otherwise.
+  session: { ctx: null as unknown },
 }));
 
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContext: vi.fn(async () => session.ctx),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
@@ -69,9 +74,24 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+import { effectivePermissions, type Role } from '@stockpilot/core';
+
 import WarehouseDetailPage from './page';
 
 const WH = '5eed0000-0003-4000-8000-000000000001';
+
+/** A member's request context, with the effective set the page reads. */
+function contextOf(role: Role, grant?: boolean) {
+  return {
+    organizationId: 'org-1',
+    userId: 'u-viewer',
+    role,
+    permissions: effectivePermissions(
+      role,
+      grant === undefined ? [] : [{ permission: 'organization:update', granted: grant }],
+    ),
+  };
+}
 
 function warehouse(over: Record<string, unknown> = {}) {
   return {
@@ -99,6 +119,7 @@ async function renderPage() {
 
 beforeEach(() => {
   get.mockReset();
+  session.ctx = contextOf('admin');
   chartersList.mockResolvedValue([
     { id: 'c-1', name: 'Harbor', code: 'HAR' },
     { id: 'c-2', name: 'Ridge', code: 'RDG' },
@@ -224,6 +245,46 @@ describe('Warehouse page', () => {
       '/dashboard/admin/warehouses',
     );
   });
+});
+
+/**
+ * B99: Edit, and Manage warehouses when no charter is linked, lead to the
+ * Admin > Warehouses editor, where only an owner's or an admin's change is
+ * saved. Everyone else was sent back to the Overview (no organization:update)
+ * or shown an editor whose saves never landed (granted it), so the page offers
+ * them only to an owner or admin who holds organization:update.
+ */
+describe('Warehouse page: Edit and Manage warehouses', () => {
+  it('an admin who holds organization:update sees both', async () => {
+    listPairs.mockResolvedValue([]);
+    get.mockResolvedValue(warehouse());
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage warehouses' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Link charters to this warehouse so the team knows who it serves.'),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['a manager', contextOf('manager')],
+    ['a manager granted organization:update', contextOf('manager', true)],
+    ['an admin whose organization:update was revoked', contextOf('admin', false)],
+  ])(
+    '%s sees neither, and the empty state does not ask them to link charters',
+    async (_who, ctx) => {
+      session.ctx = ctx;
+      listPairs.mockResolvedValue([]);
+      get.mockResolvedValue(warehouse());
+      await renderPage();
+      expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Manage warehouses' })).toBeNull();
+      expect(screen.getByText('No charters assigned')).toBeInTheDocument();
+      expect(screen.queryByText(/Link charters to this warehouse/)).toBeNull();
+      // What everyone can use stays.
+      expect(screen.getByRole('link', { name: /New order from here/ })).toBeInTheDocument();
+    },
+  );
 });
 
 // B63: a mistyped or cut-off link is Page not found before the warehouse is

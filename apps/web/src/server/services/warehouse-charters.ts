@@ -3,8 +3,15 @@ import 'server-only';
 import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { ServiceError, withContext, type ServiceContext } from './context';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import {
+  assertCanEditOrganizationSetup,
+  isPolicyRefusal,
+  setupNothingSaved,
+  setupPartlySaved,
+  WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY,
+} from './lib/organization-setup-gate';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
 
@@ -93,12 +100,17 @@ export class WarehouseChartersService {
    *   charter here (inventory_items_warehouse_charter_fk is ON DELETE
    *   RESTRICT and sees deleted rows too);
    * - when either count cannot be read.
+   *
+   * Owner or admin only, checked before the first read: wc_admin_write (0321)
+   * asks the admin role, so a member below admin given organization:update
+   * had every INSERT refused and every DELETE remove nothing, and the save
+   * said it was done (B99). The writes say what landed (see the closure).
    */
   async prepareSetForWarehouse(
     warehouseId: string,
     charterIds: string[],
   ): Promise<() => Promise<void>> {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
 
     // Every current link, page by page, ordered by charter (B47 part C). One
     // read with no range stopped at 1000 links on the warehouse, so a save
@@ -137,7 +149,24 @@ export class WarehouseChartersService {
       await this.assertNoItemsOnRemovedCharters(warehouseId, toRemove);
     }
 
+    // The writes, in order: the INSERT, then the DELETE, then one audit row
+    // naming the links in place. A refusal says whether part of the list
+    // landed (W4, with the audit row for it) or none of it (W3, no audit row);
+    // WarehousesService.update turns either into W4 when the row change
+    // before it landed.
     return async () => {
+      const auditLinks = (after: string[]) =>
+        audit(
+          {
+            event: 'warehouse_charters.updated',
+            entityType: 'warehouse',
+            entityId: warehouseId,
+            before: { charterIds: [...existing] },
+            after: { charterIds: after },
+          },
+          this.ctx,
+        );
+
       if (toAdd.length > 0) {
         const { error: insErr } = await this.ctx.supabase.from('warehouse_charters').insert(
           toAdd.map((charter_id) => ({
@@ -146,31 +175,89 @@ export class WarehouseChartersService {
             charter_id,
           })),
         );
-        if (insErr) throw new ServiceError('internal_error', insErr.message);
+        if (insErr) {
+          if (isPolicyRefusal(insErr)) throw setupNothingSaved();
+          throw new ServiceError('internal_error', insErr.message);
+        }
       }
+      const added = toAdd.length > 0;
 
       if (toRemove.length > 0) {
-        const { error: delErr } = await this.ctx.supabase
+        // The rows it removed come back: a DELETE the policy refuses removes
+        // nothing and answers no error.
+        const {
+          data: gone,
+          error: delErr,
+          status,
+          statusText,
+        } = await this.ctx.supabase
           .from('warehouse_charters')
           .delete()
           .eq('organization_id', this.ctx.organizationId)
           .eq('warehouse_id', warehouseId)
           // in-list-bound: charters removed from one warehouse (the org's charters, a few dozen at most)
-          .in('charter_id', toRemove);
-        if (delErr) throw new ServiceError('internal_error', delErr.message);
+          .in('charter_id', toRemove)
+          .select('charter_id');
+        if (delErr) {
+          // The database's own words go to the server report only; the
+          // person reads what was saved.
+          void reportError(
+            new Error(
+              `warehouse charter links delete failed: ${postgrestErrorText(delErr, { status, statusText })}`,
+            ),
+            { tag: 'warehouse_charters.save', extra: { warehouseId, write: 'delete' } },
+          );
+          if (!added) throw setupNothingSaved();
+          await auditLinks([...desired, ...toRemove]);
+          throw setupPartlySaved();
+        }
+        const removed = new Set(
+          (Array.isArray(gone) ? (gone as Array<{ charter_id: string }>) : []).map(
+            (r) => r.charter_id,
+          ),
+        );
+        if (removed.size < toRemove.length) {
+          const stillLinked = await this.linksStillThere(warehouseId, toRemove, removed);
+          if (stillLinked.length > 0) {
+            if (!added && removed.size === 0) throw setupNothingSaved();
+            await auditLinks([...desired, ...stillLinked]);
+            throw setupPartlySaved();
+          }
+        }
       }
 
-      await audit(
-        {
-          event: 'warehouse_charters.updated',
-          entityType: 'warehouse',
-          entityId: warehouseId,
-          before: { charterIds: [...existing] },
-          after: { charterIds: [...desired] },
-        },
-        this.ctx,
-      );
+      await auditLinks([...desired]);
     };
+  }
+
+  /**
+   * After a link DELETE that answered fewer rows than it was asked to remove:
+   * which of them are still there. Another admin may have removed the others
+   * first, and that save is not refused (B99). A read that fails cannot tell,
+   * so every link the DELETE did not answer for counts as still there.
+   */
+  private async linksStillThere(
+    warehouseId: string,
+    toRemove: string[],
+    removed: ReadonlySet<string>,
+  ): Promise<string[]> {
+    const res = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      // in-list-bound: charters removed from one warehouse (the org's charters, a few dozen at most)
+      .in('charter_id', toRemove);
+    if (res.error || !Array.isArray(res.data)) {
+      void reportError(
+        new Error(
+          `warehouse charter links re-read failed: ${res.error ? postgrestErrorText(res.error, res) : 'no list in the answer'}`,
+        ),
+        { tag: 'warehouse_charters.save_check', extra: { warehouseId, check: 'removed' } },
+      );
+      return toRemove.filter((id) => !removed.has(id));
+    }
+    return (res.data as Array<{ charter_id: string }>).map((r) => r.charter_id);
   }
 
   /**

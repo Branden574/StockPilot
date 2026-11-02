@@ -6,7 +6,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinksManager } from '@/components/settings/public-links-manager';
 import { PublicRequestsGlobalSettings } from '@/components/settings/public-requests-global-settings';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
-import { can } from '@stockpilot/core';
+import { can, canEditOrganizationSetup } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -28,10 +28,13 @@ export default async function PublicRequestsSettingsPage() {
   // 2026-07-12: the links gate must not lock organization:update holders out
   // of the org-wide blurb/warehouse controls they had before 0261):
   // - links/catalog management → public_links:manage (service gate + RLS)
-  // - blurb + warehouse toggles → organization:update (their services/RLS)
+  // - blurb + warehouse toggles → owner or admin with organization:update.
+  //   Their table policies (organizations_update, warehouses_admin_write) ask
+  //   the admin role, so a member below admin given organization:update saw
+  //   their changes look saved while none landed (B99).
   // Full-page 403 only when the caller holds NEITHER.
   const canManageLinks = can(ctx, 'public_links:manage');
-  const canManageOrg = can(ctx, 'organization:update');
+  const canManageOrg = canEditOrganizationSetup(ctx);
   if (!canManageLinks && !canManageOrg) {
     return (
       <SettingsPage>

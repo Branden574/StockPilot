@@ -59,6 +59,13 @@ function links(warehouseId: string, from: number, n: number, organizationId = OR
   }));
 }
 
+/** An admin's link DELETE as PostgREST answers it when the save asks its rows
+ *  back: every link it was asked to remove (B99). */
+function removedLikePostgrest(call: MockCall): QueryResult {
+  const asked = (inFilters(call)[0]?.[1] ?? []) as string[];
+  return { data: asked.map((charter_id) => ({ charter_id })), error: null };
+}
+
 function pageArgs(stub: SupabaseStub, key: string, page: number, method: string): unknown[][] {
   const methods = stub.chainsAll.get(key)?.[page] ?? [];
   const args = stub.chainArgsAll.get(key)?.[page] ?? [];
@@ -137,7 +144,7 @@ describe('WarehouseChartersService.setForWarehouse compares against every link',
       },
       'warehouse_charters.delete': (call) => {
         writes.deletes.push(call);
-        return { data: null, error: null };
+        return removedLikePostgrest(call);
       },
       'inventory_items.select': (call) => {
         writes.counts.push(call);
@@ -280,7 +287,7 @@ describe('at LOOKUP_ROW_CEILING', () => {
         },
         'warehouse_charters.delete': (call) => {
           writes.deletes.push(call);
-          return { data: null, error: null };
+          return removedLikePostgrest(call);
         },
         'inventory_items.select': (call) => {
           writes.counts.push(call);

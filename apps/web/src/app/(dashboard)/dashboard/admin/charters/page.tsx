@@ -3,7 +3,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { ChartersService } from '@/server/services/charters';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { canEditOrganizationSetup, resolveTerminology } from '@stockpilot/core';
 
 export default async function ChartersAdminPage({
   searchParams,
@@ -14,6 +14,10 @@ export default async function ChartersAdminPage({
   const supabase = await createClient();
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
+  // The Admin layout lets in anyone holding organization:update, but only an
+  // owner's or an admin's change to a charter is saved (B99). Everyone else
+  // gets the list without New, Edit, Archive or Restore.
+  const canManage = canEditOrganizationSetup(ctx);
 
   const [orgRow, charters] = await Promise.all([
     supabase.from('organizations').select('terminology').eq('id', ctx.organizationId).maybeSingle(),
@@ -30,15 +34,25 @@ export default async function ChartersAdminPage({
         view={isArchivedView ? 'archived' : 'active'}
         initial={charters}
         termSingular={term.charter_singular}
+        canManage={canManage}
         eyebrow="Admin"
         title={term.charter_plural}
         // Bounded, so the view toggle and New sit beside the title block.
         subline={
-          <p className="max-w-[72ch]">
-            {isArchivedView
-              ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
-              : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
-          </p>
+          <>
+            <p className="max-w-[72ch]">
+              {isArchivedView
+                ? canManage
+                  ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
+                  : `${term.charter_plural} that were archived.`
+                : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
+            </p>
+            {canManage ? null : (
+              <p className="max-w-[72ch]">
+                {`Only owners and admins can add or change ${term.charter_plural.toLowerCase()}.`}
+              </p>
+            )}
+          </>
         }
       />
     </div>

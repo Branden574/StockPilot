@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { plainAddressMailtoUrl } from '@stockpilot/core';
+import { canEditOrganizationSetup, plainAddressMailtoUrl } from '@stockpilot/core';
 
 import { newOrderFromWarehouseHref, warehouseTelUrl } from '@/components/locations/warehouse-links';
 import {
@@ -16,6 +16,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
@@ -89,12 +90,19 @@ export default async function WarehouseDetailPage({
   }
 
   // Everything else loads in parallel — Supabase client is request-scoped
-  // (cached via React.cache in withContext), so each service shares it.
-  const [chartersSvc, whChartersSvc, supabase] = await Promise.all([
+  // (cached via React.cache in withContext), so each service shares it. The
+  // request's context is cached the same way: asking it here adds no round
+  // trip.
+  const [chartersSvc, whChartersSvc, supabase, ctx] = await Promise.all([
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
     createClient(),
+    requireOrgContext(),
   ]);
+  // Edit and Manage warehouses open the Admin > Warehouses editor, where only
+  // an owner's or an admin's change is saved (B99). Anyone else was sent back
+  // to the Overview, or shown an editor whose saves never landed.
+  const canEditWarehouse = canEditOrganizationSetup(ctx);
 
   const [allCharters, pairs, itemCountResult, pendingOrdersResult, completedOrders30dResult] =
     await Promise.all([
@@ -166,9 +174,11 @@ export default async function WarehouseDetailPage({
         }
         subline={<>Updated {formatRelative(warehouse.updated_at)}</>}
         actions={
-          <Button asChild variant="outline">
-            <Link href="/dashboard/admin/warehouses">Edit</Link>
-          </Button>
+          canEditWarehouse ? (
+            <Button asChild variant="outline">
+              <Link href="/dashboard/admin/warehouses">Edit</Link>
+            </Button>
+          ) : null
         }
         primaryAction={
           // The storefront reads ?warehouseId= (orders/new/page.tsx); the
@@ -338,11 +348,19 @@ export default async function WarehouseDetailPage({
             headingLevel={3}
             icon={WarehouseIcon}
             title="No charters assigned"
-            description={<p>Link charters to this warehouse so the team knows who it serves.</p>}
+            description={
+              canEditWarehouse ? (
+                <p>Link charters to this warehouse so the team knows who it serves.</p>
+              ) : (
+                <p>An owner or admin can link charters to this warehouse.</p>
+              )
+            }
             action={
-              <Button asChild variant="gradient" size="sm">
-                <Link href="/dashboard/admin/warehouses">Manage warehouses</Link>
-              </Button>
+              canEditWarehouse ? (
+                <Button asChild variant="gradient" size="sm">
+                  <Link href="/dashboard/admin/warehouses">Manage warehouses</Link>
+                </Button>
+              ) : null
             }
           />
         ) : (

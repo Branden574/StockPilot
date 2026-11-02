@@ -51,15 +51,19 @@ const CHARTERS = [
   { id: 'c2', name: 'Ridge' },
 ];
 
-function renderManager(view: 'active' | 'archived' = 'active') {
+function renderManager(
+  view: 'active' | 'archived' = 'active',
+  { canManage = true, rows = [ROW] }: { canManage?: boolean; rows?: Array<typeof ROW> } = {},
+) {
   return render(
     <WarehousesManager
       view={view}
-      initial={[ROW]}
+      initial={rows}
       charters={CHARTERS}
       managers={[{ id: 'm1', name: 'Morgan Manager' }]}
       termSingular="Depot"
       charterSingular="Region"
+      canManage={canManage}
       eyebrow="Admin"
       title="Depots"
       subline="Physical locations stock lives in."
@@ -181,5 +185,55 @@ describe('WarehousesManager', () => {
     );
     finish({ ok: true });
     await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+});
+
+/**
+ * B99: only an owner's or an admin's change to a warehouse is saved (every
+ * write policy asks the admin role), so for anyone else the list is read-only:
+ * no New, no Edit, Archive or Restore, no Actions column and no dialog.
+ */
+describe('WarehousesManager for someone who cannot change warehouses', () => {
+  it('shows the list with no New, no Actions column and no row actions', () => {
+    renderManager('active', { canManage: false });
+    expect(screen.getByRole('heading', { level: 1, name: 'Depots' })).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'View filter' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New depot' })).toBeNull();
+    expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
+      'Name',
+      'Code',
+      'Region',
+      'Manager',
+      'Users',
+      'Items',
+    ]);
+    expect(screen.getByRole('link', { name: 'North DC' })).toHaveAttribute(
+      'href',
+      '/dashboard/warehouses/w1',
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers no Restore in the archived view', () => {
+    renderManager('archived', { canManage: false });
+    expect(screen.getByRole('link', { name: 'North DC' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull();
+    expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).not.toContain(
+      'Actions',
+    );
+  });
+
+  it('an empty list does not point at New, or at archiving and restoring', () => {
+    const { unmount } = renderManager('active', { canManage: false, rows: [] });
+    expect(screen.getByText('No depots yet')).toBeInTheDocument();
+    expect(screen.queryByText(/New depot/)).toBeNull();
+    expect(screen.queryByText(/Create your first/)).toBeNull();
+    unmount();
+
+    renderManager('archived', { canManage: false, rows: [] });
+    expect(screen.getByText('No archived depots')).toBeInTheDocument();
+    expect(screen.queryByText(/you archive|restore them/i)).toBeNull();
   });
 });

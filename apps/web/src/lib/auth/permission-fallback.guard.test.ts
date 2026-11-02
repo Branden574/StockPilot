@@ -256,11 +256,17 @@ function overrideTableCensus() {
 }
 
 /**
- * A context written in place for can() or canDistributeBundles() with no
- * `permissions` key: core can() answers it from the role's static defaults.
- * None today; a context a request built carries its effective set.
+ * A context written in place for can(), canDistributeBundles() or
+ * canEditOrganizationSetup() with no `permissions` key: core can() answers it
+ * from the role's static defaults. None today; a context a request built
+ * carries its effective set.
  */
 const IN_PLACE_CONTEXTS: Record<string, Allowed> = {};
+
+/** A call of can() or a core predicate built on it, given an object literal
+ *  with no `permissions` key. */
+const IN_PLACE_CONTEXT =
+  /\b(?:can|canDistributeBundles|canEditOrganizationSetup)\s*\(\s*\{(?![^{}]*\bpermissions\b)[^{}]*\}/g;
 
 describe("no request falls back to a role's static permissions (docket S19)", () => {
   it('resolves src/ (the scans below would pass vacuously on a wrong path)', () => {
@@ -281,9 +287,15 @@ describe("no request falls back to a role's static permissions (docket S19)", ()
   });
 
   it('never writes a context in place for can() without its permission set', () => {
-    expect(
-      sitesOf(/\b(?:can|canDistributeBundles)\s*\(\s*\{(?![^{}]*\bpermissions\b)[^{}]*\}/g),
-    ).toEqual(counts(IN_PLACE_CONTEXTS));
+    expect(sitesOf(IN_PLACE_CONTEXT)).toEqual(counts(IN_PLACE_CONTEXTS));
+  });
+
+  it('reads a context written in place for every core predicate built on can()', () => {
+    const found = (code: string) => [...code.matchAll(IN_PLACE_CONTEXT)].length;
+    for (const fn of ['can', 'canDistributeBundles', 'canEditOrganizationSetup']) {
+      expect(found(`${fn}({ role: 'admin' }, 'items:read')`), fn).toBe(1);
+      expect(found(`${fn}({ role, permissions })`), fn).toBe(0);
+    }
   });
 });
 
