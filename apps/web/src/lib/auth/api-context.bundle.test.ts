@@ -32,6 +32,7 @@ import {
 
 import { reportError } from '@/lib/error-reporter';
 import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 import { withApiContext } from './api-context';
 import { heldMembership, orderCatalogLastHideAtOf } from './request-context-bundle';
@@ -206,12 +207,14 @@ function makeClient() {
         },
         error: null,
       }),
-      mfa: {
-        getAuthenticatorAssuranceLevel: async () => {
-          world.calls.push('auth:aal');
-          return { data: { currentLevel: world.aal } };
+      // The cookie path's level: the verified token of this user's own session,
+      // recorded as one 'auth:aal' per read.
+      ...verifiedSessionAuth(
+        () => ({ sub: USER, aal: world.aal }),
+        (call) => {
+          if (call === 'getSession') world.calls.push('auth:aal');
         },
-      },
+      ),
     },
   };
 }

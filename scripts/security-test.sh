@@ -921,6 +921,11 @@ WEB_TESTS=(
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
   src/lib/auth/api-context.step-up.test.ts
+  # The level those refusals and the MFA label read is the validated user's
+  # own (S43a review round 1): a cookie carrying another account's refresh
+  # token, timed to refresh after getUser(), reads as not aal2. The real server
+  # client and auth-js against the fixture's Auth server.
+  src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   src/app/api/integrations/quickbooks/callback/route.test.ts

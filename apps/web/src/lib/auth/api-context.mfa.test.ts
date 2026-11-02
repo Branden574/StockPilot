@@ -41,6 +41,8 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
+
 import { withApiContext } from './api-context';
 
 const USER_ID = '99999999-9999-9999-9999-999999999999';
@@ -52,7 +54,7 @@ const state: {
   policy: Policy;
   /** GoTrue factors on the validated user object (bearer + cookie). */
   factors: Array<{ status: string }>;
-  /** currentLevel reported to the COOKIE path. */
+  /** The COOKIE path's level: the `aal` of the session's verified token. */
   cookieAal: 'aal1' | 'aal2';
   role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 } = {
@@ -101,12 +103,8 @@ function makeClient() {
     },
     auth: {
       getUser: async () => ({ data: { user: fakeUser() }, error: null }),
-      mfa: {
-        getAuthenticatorAssuranceLevel: async () => ({
-          data: { currentLevel: state.cookieAal, nextLevel: 'aal2' },
-          error: null,
-        }),
-      },
+      // The COOKIE path's level: the verified token of this user's own session.
+      ...verifiedSessionAuth(() => ({ sub: USER_ID, aal: state.cookieAal })),
     },
   };
 }

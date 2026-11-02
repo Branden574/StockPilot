@@ -38,6 +38,8 @@ vi.mock('@/lib/env', () => ({
 vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
+
 import { cookieSessionOwesStepUp, withApiContext } from './api-context';
 
 const USER = '99999999-9999-4999-8999-999999999999';
@@ -47,11 +49,16 @@ const COOKIE_VALUE = 'cookie-value-not-for-logs';
 
 type Policy = 'optional' | 'admins_required' | 'all_required';
 
+/** Another account, whose session a cookie can refresh into mid-request. */
+const OTHER = '33333333-3333-4333-8333-333333333333';
+
 const world = {
   /** GoTrue's factors on the validated user (both paths read them off getUser). */
   factors: [] as Array<{ status: string }>,
-  /** The cookie session's own level, as getAuthenticatorAssuranceLevel answers it. */
+  /** The cookie session's own level: the `aal` of its verified token. */
   cookieAal: 'aal1' as 'aal1' | 'aal2' | null,
+  /** Whose session the cookie holds when its level is read (another account after a swap). */
+  cookieSub: USER,
   /** How that level read goes. */
   aalRead: 'answer' as 'answer' | 'error' | 'throw',
   policy: 'optional' as Policy,
@@ -137,21 +144,14 @@ function makeClient() {
         world.calls.push('auth:getUser');
         return { data: { user: { id: USER, email: EMAIL, factors: world.factors } }, error: null };
       },
-      mfa: {
-        getAuthenticatorAssuranceLevel: async () => {
-          world.calls.push('auth:aal');
-          if (world.aalRead === 'throw') throw new Error('storage unreadable');
-          if (world.aalRead === 'error') return { data: null, error: { message: 'no session' } };
-          return {
-            data: {
-              currentLevel: world.cookieAal,
-              nextLevel: 'aal2',
-              currentAuthenticationMethods: [],
-            },
-            error: null,
-          };
+      // The level read: the session's access token, then its verified claims
+      // (lib/auth/verified-claims). Recorded as one 'auth:aal' per read.
+      ...verifiedSessionAuth(
+        () => ({ sub: world.cookieSub, aal: world.cookieAal, read: world.aalRead }),
+        (call) => {
+          if (call === 'getSession') world.calls.push('auth:aal');
         },
-      },
+      ),
     },
   };
 }
@@ -187,6 +187,7 @@ beforeEach(() => {
   delete process.env.REQUEST_CONTEXT_RPC;
   world.factors = [];
   world.cookieAal = 'aal1';
+  world.cookieSub = USER;
   world.aalRead = 'answer';
   world.policy = 'optional';
   world.role = 'staff';
@@ -287,6 +288,55 @@ describe('the cookie path (the web) refuses a session that owes its code', () =>
     world.factors = VERIFIED;
     expect(await withApiContext(cookie())).toBeNull();
     expect(world.calls).toEqual(['auth:getUser', 'auth:aal']);
+  });
+});
+
+describe("the cookie level is the validated user's own (review round 1)", () => {
+  // A cookie's refresh token and expires_at are the sender's to write, so the
+  // load behind the level read can refresh into ANOTHER account's session after
+  // getUser() validated this one. Its aal2 must count for nothing here.
+  it("a session that now holds another account's aal2: refused, one info line, no read", async () => {
+    world.factors = VERIFIED;
+    world.cookieSub = OTHER;
+    world.cookieAal = 'aal2';
+    expect(await withApiContext(cookie())).toBeNull();
+    expect(world.calls).toEqual(['auth:getUser', 'auth:aal']);
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it('on the AAL1 allowlist that context is labelled unsatisfied', async () => {
+    world.factors = VERIFIED;
+    world.cookieSub = OTHER;
+    world.cookieAal = 'aal2';
+    const ctx = await withApiContext(cookie(), { allowStepUpPending: true });
+    expect(ctx?.mfaRequired).toBe(true);
+    expect(ctx?.mfaSatisfied).toBe(false);
+  });
+
+  it.each([['fast'], ['legacy']] as const)(
+    "an admin with no factor under admins_required: another account's aal2 cannot satisfy the policy (%s)",
+    async (path) => {
+      if (path === 'legacy') process.env.REQUEST_CONTEXT_RPC = 'off';
+      world.policy = 'admins_required';
+      world.role = 'admin';
+      world.factors = [];
+      world.cookieSub = OTHER;
+      world.cookieAal = 'aal2';
+      const ctx = await withApiContext(cookie());
+      expect(ctx?.mfaRequired).toBe(true);
+      expect(ctx?.mfaSatisfied).toBe(false);
+      // The same admin's own aal2 session does satisfy it.
+      world.cookieSub = USER;
+      expect((await withApiContext(cookie()))?.mfaSatisfied).toBe(true);
+    },
+  );
+
+  it('the refusal and the label share one level read', async () => {
+    world.factors = VERIFIED;
+    world.cookieAal = 'aal2';
+    const ctx = await withApiContext(cookie());
+    expect(ctx?.mfaSatisfied).toBe(true);
+    expect(world.calls.filter((c) => c === 'auth:aal')).toHaveLength(1);
   });
 });
 
@@ -437,5 +487,14 @@ describe('cookieSessionOwesStepUp: the check the OAuth callbacks share', () => {
     world.aalRead = 'answer';
     world.cookieAal = null;
     expect(await owes()).toBe(true);
+  });
+
+  it("another account's aal2 session is owed: the level must be the given user's", async () => {
+    world.factors = VERIFIED;
+    world.cookieAal = 'aal2';
+    world.cookieSub = OTHER;
+    expect(await owes()).toBe(true);
+    world.cookieSub = USER;
+    expect(await owes()).toBe(false);
   });
 });
