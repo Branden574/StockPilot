@@ -796,16 +796,19 @@ PGTAP_TESTS=(
   supabase/tests/0415_bundle_component_checks.test.sql
   # Purchase order write scope (0423, docket S46): purchase_orders_write (FOR
   # ALL) is split into INSERT and UPDATE policies that need the writer floor,
-  # purchase_orders:read and purchase_orders_select's warehouse rule (plus the
-  # organization checks), so no policy widens the read; the line write policy
-  # is split into INSERT, UPDATE and DELETE policies that need the parent
-  # purchase order readable; next_po_number is SECURITY DEFINER with a manager
-  # or purchase_orders:manage gate, so numbers still count every purchase
-  # order. Personas: staff and viewers holding manage in one warehouse, in
-  # none, managers and admins without read; reads, updates, redirects,
-  # cancel and place, inserts, lines, numbering, the draft save, receiving.
-  # The PO-import approval path that stays open is pinned (IMP1). The lock
-  # footprint is scripts/db-concurrency/0423_migration_lock_footprint.sh.
+  # purchase_orders:read and purchase_orders_select's warehouse rule at write
+  # level (plus the organization checks), so no policy widens the read and a
+  # viewer changes nothing in a warehouse they only view; the line write
+  # policy is split into INSERT, UPDATE and DELETE policies that need the
+  # parent purchase order readable and, below manager, writable;
+  # next_po_number is SECURITY DEFINER with a manager or
+  # purchase_orders:manage gate (with no user: the service role or no claims),
+  # so numbers still count every purchase order. Personas: staff and viewers
+  # holding manage in one warehouse, in none, managers and admins without
+  # read; reads, updates, redirects, cancel and place, inserts, lines,
+  # numbering, the draft save, receiving. The PO-import approval path that
+  # stays open is pinned (IMP1). The lock footprint is
+  # scripts/db-concurrency/0423_migration_lock_footprint.sh.
   supabase/tests/0423_po_write_scope.test.sql
 
   # AI read scoping.

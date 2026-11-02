@@ -1015,7 +1015,11 @@ select is(
   -- whom the gate admits and who drew the same count before (0423 N1), so
   -- the numbers it steps past are unchanged. Computed on the local stack
   -- after 0423.
-  'next_po_number(uuid)|104bd06a21cd31164ab4aa1dbc64433c|true|{search_path=public}|postgres\n'
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
@@ -1193,8 +1197,13 @@ select is(
   -- purchase_orders:manage, whom the new policies admit wherever they may
   -- read purchase orders (the manager arm of the warehouse rule); the
   -- service refuses a manager without purchase_orders:read before calling.
-  -- Computed on the local stack after 0423.
-  'purchase_orders + purchase_order_items + idempotency_keys policies|29bb36e438c19f9cc077731a67629fc8|9',
+  -- Computed on the local stack after 0423. 0423's decisions round
+  -- (2026-11-02; was 29bb36e438c19f9cc077731a67629fc8|9): the write policies
+  -- ask write access to the destination's warehouse
+  -- (user_can_access_warehouse 'write') instead of the read set, and the line
+  -- policies ask it of the parent; a manager passes both by role, so F2-5's
+  -- drafts are unchanged. Recomputed on the local stack.
+  'purchase_orders + purchase_order_items + idempotency_keys policies|a209a489a4b1af2db8b4485320609620|9',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');
 
 select * from finish();

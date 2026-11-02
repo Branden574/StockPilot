@@ -61,7 +61,14 @@
 --   7. my_warehouse_ids lists a viewer's warehouses (a viewer reads there), so
 --      a viewer holding manage created a purchase order or template for, or
 --      redirected one into, a warehouse they only view; the web refuses a
---      viewer every warehouse write.
+--      viewer such a destination (resolveDestinationWarehouseId asks write
+--      access). The decisions round (2026-11-02, from a push security review)
+--      found the rest of it: through the same warehouse set the write
+--      policies let that viewer change what was already there (place,
+--      cancel, send back to draft, rename or re-note a purchase order; edit a
+--      draft's supplier, amounts or lines; arm, re-line, pause or delete a
+--      template), and so did the web's status, notes and rename paths, which
+--      read the purchase order at view level.
 --   8. _notify_po_status (0092) and _notify_receipt_posted (0157) told the
 --      creator and every owner, admin and manager (0313) whatever they may
 --      read: a member without read, or staff outside the warehouse, got the
@@ -77,12 +84,18 @@
 --      'PO-' || year || '-' || (count + 1) padded to four digits. Its own
 --      gate: a signed-in caller must be a manager or hold
 --      purchase_orders:manage, else 42501, so the count tells an outsider
---      nothing; the service role (no auth.uid(): the crons) passes. The gate
---      is manager OR manage, not read, so an approver of a PO import (still
---      manage-gated, see below) draws a real number. EXECUTE stays with
---      authenticated and service_role only. It comes first and takes no table
---      lock, so numbering never sees narrowed reads without the definer
---      count.
+--      nothing. With no auth.uid(), the service role (the crons) and a call
+--      with no request claims (the database's own) pass, and any other API
+--      identity (anon, a token with no subject) gets 42501, decided by the
+--      JWT claims and never by current_user, which inside SECURITY DEFINER is
+--      always the owner (decisions round, 2026-11-02: no API identity reaches
+--      that branch today, since EXECUTE is authenticated's and the service
+--      role's and every user token carries a subject; it fails closed if one
+--      ever does). The gate is manager OR manage, not read, so an approver of
+--      a PO import (still manage-gated, see below) draws a real number.
+--      EXECUTE stays with authenticated and service_role only. It comes first
+--      and takes no table lock, so numbering never sees narrowed reads
+--      without the definer count.
 --   2. purchase_orders_write is replaced by purchase_orders_insert (WITH
 --      CHECK) and purchase_orders_update (USING and WITH CHECK). Each needs:
 --        * a manager or purchase_orders:manage (0208's floor);
@@ -90,13 +103,18 @@
 --          rls_orgs_with_permission term purchase_orders_select uses), so a
 --          writer who may not read is refused instead of writing blind, and a
 --          revoke of it binds managers and admins (owners always hold it);
---        * 0322's warehouse rule, copied from purchase_orders_select: a
---          manager, or no destination, or a destination in no warehouse or in
---          one of the caller's (my_warehouse_ids), so a writer changes exactly
---          the purchase orders they can read. On UPDATE the WITH CHECK applies
---          it to the new row too, so a purchase order cannot be redirected out
---          of the writer's warehouses. A purchase order with no warehouse
---          stays readable and writable below manager, as 0322 reads it;
+--        * 0322's warehouse rule from purchase_orders_select, at write level:
+--          a manager, or no destination, or a destination in no warehouse or
+--          in one the caller may change (user_can_access_warehouse 'write':
+--          managers and above, and staff assigned to it; never a viewer).
+--          The read policy asks my_warehouse_ids(), which lists a viewer's
+--          warehouses too, so a viewer reads their warehouses' purchase orders
+--          and changes none of them, while staff change exactly the purchase
+--          orders they can read (decisions round; the first draft copied the
+--          read set). On UPDATE the WITH CHECK applies it to the new row too,
+--          so a purchase order cannot be redirected out of the writer's
+--          warehouses. A purchase order with no warehouse stays readable and
+--          writable below manager, as 0322 reads it;
 --        * in each WITH CHECK, 0208's organization checks (location_in_org,
 --          charter_in_org, supplier_in_org), unchanged.
 --      No FOR ALL and no DELETE policy: DELETE is revoked from authenticated
@@ -105,10 +123,13 @@
 --   3. purchase_order_items_write is replaced by purchase_order_items_insert,
 --      _update and _delete: the same floor, and the parent purchase order
 --      readable by the caller (an EXISTS that reads purchase_orders under the
---      caller's row security, so exactly purchase_orders_select; no
---      warehouse logic is repeated). The line guard keeps the draft, item and
---      amount rules; the UPDATE policy matters only to the receipt functions,
---      which update lines as the caller under the ledger flag.
+--      caller's row security, so purchase_orders_select) and, below manager,
+--      its destination in no warehouse or in one the caller may change
+--      (purchase_orders_update's write-level rule, decisions round), so a
+--      line is written exactly when its purchase order may be. The line
+--      guard keeps the draft, item and amount rules; the UPDATE policy
+--      matters only to the receipt functions, which update lines as the
+--      caller (a manager) under the ledger flag.
 --      purchase_order_items_select is untouched (docket S10 5.1).
 --   4. A comment on each of the five policies and on the function. When the
 --      receiving checklist (0419) is in, checklist_runs_select's comment is
@@ -123,8 +144,9 @@
 --      stay.
 --   6. recurring_po_templates_insert, _update and _delete get
 --      purchase_orders_insert's rule: the floor, purchase_orders:read, 0273's
---      organization checks and 0322's warehouse rule (USING and WITH CHECK).
---      recurring_po_templates_select stays member-wide (docket S10 5.1).
+--      organization checks and the write-level warehouse rule (USING and WITH
+--      CHECK). recurring_po_templates_select stays member-wide (docket S10
+--      5.1).
 --   7. po_attachments' three policies follow the purchase order (an EXISTS
 --      under the caller's row security; the writes keep the floor), and the
 --      bucket's four policies ask po_attachment_object_visible(name) (new,
@@ -134,31 +156,43 @@
 --      or an update of destination_location_id, on purchase_orders and
 --      recurring_po_templates: for a Data API caller, a new or changed
 --      destination in a warehouse must be one they may change
---      (user_can_access_warehouse 'write'), else 42501. A WITH CHECK could
---      not do it: it cannot tell a status change from a redirect, and a
---      viewer may still place or pause what they read. No destination, a
---      place with no warehouse, an unchanged destination, SECURITY DEFINER
---      functions and the service role are not asked.
+--      (user_can_access_warehouse 'write'), else 42501 with a sentence. Since
+--      the decisions round the write policies (2, 6) ask the same of every
+--      row they let a caller write, before and after; the trigger runs before
+--      their WITH CHECK, so a refused new destination is said in words, not
+--      as a row-level security refusal. No destination, a place with no
+--      warehouse, an unchanged destination, SECURITY DEFINER functions and
+--      the service role are not asked.
 --   9. _notify_po_status and _notify_receipt_posted are restated with one
 --      more condition on who is told: _po_readable_by(purchase order, member)
 --      (new, DEFINER, no API EXECUTE), purchase_orders_select's three rules
 --      resolved for that member. EXECUTE on po_status_in_org is revoked from
 --      authenticated (the service role keeps it).
+--   The decisions round (2026-11-02, two automated push security reviews):
+--  10. The purchase order, line and template write policies (2, 3, 6) ask
+--      write access to the destination's warehouse, not the read set (WHAT
+--      WAS WRONG, 7). Reads are unchanged.
+--  11. next_po_number's gate fails closed for an API identity that is
+--      neither a user nor the service role (1).
 --
--- WHO CHANGES: staff and viewers holding purchase_orders:manage read and
--- write only their own warehouses' purchase orders and those with no
--- warehouse; members whose purchase_orders:read is revoked (managers and
--- admins included) read, change, receive and draft none. The web already
--- refused them every one of these; the phone's lists change at the push, with
--- no app update. Owners, managers and admins holding read, and the crons, are
+-- WHO CHANGES: staff and viewers holding purchase_orders:manage read only
+-- their own warehouses' purchase orders and those with no warehouse; staff
+-- write the same ones, and a viewer writes only those with no warehouse (a
+-- viewer's access to a warehouse is view only). Members whose
+-- purchase_orders:read is revoked (managers and admins included) read,
+-- change, receive and draft none. The web already refused them all of these
+-- but a viewer's status, notes and rename changes, which the same PR now
+-- refuses first, in words; the phone's lists change at the push, with no app
+-- update. Owners, managers and admins holding read, and the crons, are
 -- unchanged. The PR's kit notes carry the read-only counts that size it.
 -- The review round: a manager or admin without read cannot reverse a
 -- receipt (not found; the web already hid the purchase order from them);
 -- recurring templates, attachment rows and stored files are written, and the
 -- rows and files read, only by someone who may read the purchase order; a
 -- viewer holding manage cannot send a purchase order or template to a
--- warehouse they only view; PO status and receipt notifications reach only
--- people who may read the purchase order (the creator included).
+-- warehouse they only view, nor (decisions round) change one there, its
+-- lines included; PO status and receipt notifications reach only people who
+-- may read the purchase order (the creator included).
 --
 -- WHAT THIS DOES NOT CLOSE:
 --   * approve_po_import_commit (0360, SECURITY DEFINER; gate: member, the
@@ -180,6 +214,11 @@
 --     staff or a viewer, for the owner to review.
 --   * Template rows, purchase order lines and receipts stay readable by any
 --     member (docket S10 5.1).
+--   * Purchase order files follow the read rule (7): a viewer holding
+--     purchase_orders:manage still adds and removes the files of a purchase
+--     order in a warehouse they only view. The decisions round asked about
+--     the purchase order, line and template writes (10); the files are
+--     handed back to the docket.
 --
 -- STALE TEXT IN APPLIED FILES (an applied file is never edited): the 0366
 -- header (save_purchase_order_draft is SECURITY INVOKER "on purpose:
@@ -344,9 +383,20 @@ security definer
 set search_path = public
 as $$
 begin
-  if auth.uid() is not null
-     and not (public.has_org_role(p_org_id, 'manager')
-              or public.has_permission(p_org_id, 'purchase_orders:manage')) then
+  if auth.uid() is null then
+    -- No user. The service role (the crons) passes, and so does a call that
+    -- carries no request claims (the database's own jobs and functions). Any
+    -- other API identity is refused: anon, or a token with no subject. Keyed
+    -- on the request's claims (auth.role(), request.jwt.claims), never on
+    -- current_user, which inside SECURITY DEFINER is always the owner.
+    if coalesce(auth.role(), '') <> 'service_role'
+       and (coalesce(auth.role(), '') <> ''
+            or coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb <> '{}'::jsonb) then
+      raise exception 'You cannot manage purchase orders in this organization.'
+        using errcode = '42501';
+    end if;
+  elsif not (public.has_org_role(p_org_id, 'manager')
+             or public.has_permission(p_org_id, 'purchase_orders:manage')) then
     raise exception 'You cannot manage purchase orders in this organization.'
       using errcode = '42501';
   end if;
@@ -360,7 +410,7 @@ revoke all on function public.next_po_number(uuid) from public, anon;
 grant execute on function public.next_po_number(uuid) to authenticated, service_role;
 
 comment on function public.next_po_number(uuid) is
-  'Per-org sequential PO number (PO-YYYY-NNNN), count of the organization''s purchase orders + 1 (0005). SECURITY DEFINER since S46: the count no longer depends on which purchase orders the caller may read, so a PO writer limited to some warehouses draws the same next number as a manager. Gate: signed-in callers must be a manager (has_org_role) or hold purchase_orders:manage (42501 otherwise); the service role (no auth.uid()) passes. EXECUTE to authenticated and service_role only.';
+  'Per-org sequential PO number (PO-YYYY-NNNN), count of the organization''s purchase orders + 1 (0005). SECURITY DEFINER since S46: the count no longer depends on which purchase orders the caller may read, so a PO writer limited to some warehouses draws the same next number as a manager. Gate: signed-in callers must be a manager (has_org_role) or hold purchase_orders:manage (42501 otherwise). With no user, the service role passes, and so does a call with no request claims (the database''s own); any other API identity (anon, a token with no subject) gets 42501, decided by the JWT claims, never by current_user. EXECUTE to authenticated and service_role only.';
 
 -- ═══ 1b. The review round's functions (no table lock) ════════════════════════
 -- All plpgsql (names resolve when they run), so, like next_po_number, they
@@ -740,10 +790,10 @@ comment on function public.po_attachment_object_visible(text) is
   'S46 (0423): true when a po-attachments object name is {organization}/{purchase order}/{file} and the caller may read that purchase order (purchase_orders read under the caller''s row security, so purchase_orders_select decides). Any other name is false, never a cast error. SECURITY INVOKER; the bucket''s four policies ask it.';
 
 -- A Data API write may send a purchase order, or a recurring template, only
--- to a warehouse the writer may change. The write policies let a viewer write
--- where they read (my_warehouse_ids lists a viewer's warehouses); a WITH CHECK
--- cannot tell a status change from a redirect, so the destination is checked
--- here, when it is set or changed.
+-- to a warehouse the writer may change. The write policies ask the same of
+-- every row they let a caller write (decisions round); this trigger runs
+-- before their WITH CHECK, so a refused new destination is refused in words
+-- rather than as a row-level security error.
 create or replace function public.tg_po_destination_write_guard()
 returns trigger
 language plpgsql
@@ -784,7 +834,7 @@ $$;
 revoke all on function public.tg_po_destination_write_guard() from public, anon, authenticated;
 
 comment on function public.tg_po_destination_write_guard() is
-  'S46 (0423): BEFORE INSERT OR UPDATE OF destination_location_id on purchase_orders and recurring_po_templates. For a Data API caller, a new or changed destination in a warehouse must be one the caller may change (user_can_access_warehouse write: managers and above, or staff assigned to it), so a viewer holding purchase_orders:manage cannot create a purchase order or template for, or redirect one into, a warehouse they only view (42501). No destination, a place with no warehouse, an unchanged destination, SECURITY DEFINER functions and the service role pass.';
+  'S46 (0423): BEFORE INSERT OR UPDATE OF destination_location_id on purchase_orders and recurring_po_templates. For a Data API caller, a new or changed destination in a warehouse must be one the caller may change (user_can_access_warehouse write: managers and above, or staff assigned to it), so a viewer holding purchase_orders:manage cannot create a purchase order or template for, or redirect one into, a warehouse they only view (42501, with a sentence). The write policies ask the same of every row they let a caller write; this runs before their WITH CHECK, so the refusal is said in words. No destination, a place with no warehouse, an unchanged destination, SECURITY DEFINER functions and the service role pass.';
 
 -- ═══ 2. The lock prelude ═════════════════════════════════════════════════════
 -- Every table lock the statements below take, at once and without waiting.
@@ -847,8 +897,10 @@ end
 $lock46$;
 
 -- ═══ 3. purchase_orders: INSERT and UPDATE, no FOR ALL ══════════════════════
--- The last conjunct is purchase_orders_select's third (0322), copied as it is:
--- both sides of the EXISTS comparison are qualified (pattern #25).
+-- The last conjunct is purchase_orders_select's third (0322) at write level:
+-- user_can_access_warehouse(..., 'write') where the read policy asks
+-- my_warehouse_ids(), which lists a viewer's warehouses too (decisions round).
+-- Both sides of the EXISTS comparison are qualified (pattern #25).
 drop policy purchase_orders_write on public.purchase_orders;
 
 create policy purchase_orders_insert on public.purchase_orders
@@ -870,7 +922,7 @@ create policy purchase_orders_insert on public.purchase_orders
          where l.id = purchase_orders.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -892,7 +944,7 @@ create policy purchase_orders_update on public.purchase_orders
          where l.id = purchase_orders.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -914,15 +966,17 @@ create policy purchase_orders_update on public.purchase_orders
          where l.id = purchase_orders.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
   );
 
 -- ═══ 4. purchase_order_items: INSERT, UPDATE, DELETE ════════════════════════
--- The EXISTS reads purchase_orders under the caller's row security, so a line
--- may be written exactly when its purchase order may be read.
+-- The EXISTS reads purchase_orders under the caller's row security, and below
+-- manager asks write access to its destination's warehouse as
+-- purchase_orders_update does, so a line may be written exactly when its
+-- purchase order may be.
 drop policy purchase_order_items_write on public.purchase_order_items;
 
 create policy purchase_order_items_insert on public.purchase_order_items
@@ -934,6 +988,19 @@ create policy purchase_order_items_insert on public.purchase_order_items
       select 1 from public.purchase_orders p
        where p.id = purchase_order_items.purchase_order_id
          and p.organization_id = purchase_order_items.organization_id
+         and (
+           ( select public.has_org_role(purchase_order_items.organization_id, 'manager') )
+           or p.destination_location_id is null
+           or exists (
+             select 1
+               from public.locations l
+              where l.id = p.destination_location_id
+                and (
+                  l.warehouse_id is null
+                  or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
+                )
+           )
+         )
     )
   );
 
@@ -946,6 +1013,19 @@ create policy purchase_order_items_update on public.purchase_order_items
       select 1 from public.purchase_orders p
        where p.id = purchase_order_items.purchase_order_id
          and p.organization_id = purchase_order_items.organization_id
+         and (
+           ( select public.has_org_role(purchase_order_items.organization_id, 'manager') )
+           or p.destination_location_id is null
+           or exists (
+             select 1
+               from public.locations l
+              where l.id = p.destination_location_id
+                and (
+                  l.warehouse_id is null
+                  or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
+                )
+           )
+         )
     )
   )
   with check (
@@ -955,6 +1035,19 @@ create policy purchase_order_items_update on public.purchase_order_items
       select 1 from public.purchase_orders p
        where p.id = purchase_order_items.purchase_order_id
          and p.organization_id = purchase_order_items.organization_id
+         and (
+           ( select public.has_org_role(purchase_order_items.organization_id, 'manager') )
+           or p.destination_location_id is null
+           or exists (
+             select 1
+               from public.locations l
+              where l.id = p.destination_location_id
+                and (
+                  l.warehouse_id is null
+                  or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
+                )
+           )
+         )
     )
   );
 
@@ -967,16 +1060,29 @@ create policy purchase_order_items_delete on public.purchase_order_items
       select 1 from public.purchase_orders p
        where p.id = purchase_order_items.purchase_order_id
          and p.organization_id = purchase_order_items.organization_id
+         and (
+           ( select public.has_org_role(purchase_order_items.organization_id, 'manager') )
+           or p.destination_location_id is null
+           or exists (
+             select 1
+               from public.locations l
+              where l.id = p.destination_location_id
+                and (
+                  l.warehouse_id is null
+                  or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
+                )
+           )
+         )
     )
   );
 
 -- ═══ 5. Comments ════════════════════════════════════════════════════════════
 comment on policy purchase_orders_insert on public.purchase_orders is
-  'S46: a new purchase order needs a manager or purchase_orders:manage, purchase_orders:read in the organization, the destination inside the caller''s warehouses below manager (none, or a place with no warehouse, also passes, as in purchase_orders_select), and the 0203-0205 organization checks. Reads go by purchase_orders_select alone.';
+  'S46: a new purchase order needs a manager or purchase_orders:manage, purchase_orders:read in the organization, below manager a destination in a warehouse the caller may change (user_can_access_warehouse write: staff assigned to it, never a viewer; none, or a place with no warehouse, also passes, as in purchase_orders_select), and the 0203-0205 organization checks. Reads go by purchase_orders_select alone.';
 comment on policy purchase_orders_update on public.purchase_orders is
   'S46: the same rule as purchase_orders_insert on the row before (USING) and after (WITH CHECK) the change. No FOR ALL policy: none widens purchase_orders_select. DELETE is revoked (0360).';
 comment on policy purchase_order_items_insert on public.purchase_order_items is
-  'S46: a manager or purchase_orders:manage, and the parent purchase order readable by the caller (the EXISTS reads purchase_orders under the caller''s RLS). tg_purchase_order_items_guard adds the draft, item and amount rules.';
+  'S46: a manager or purchase_orders:manage, and the parent purchase order readable by the caller (the EXISTS reads purchase_orders under the caller''s RLS) with, below manager, its destination in no warehouse or in one the caller may change (purchase_orders_update''s rule). tg_purchase_order_items_guard adds the draft, item and amount rules.';
 comment on policy purchase_order_items_update on public.purchase_order_items is
   'S46: as purchase_order_items_insert. The guard refuses every API-role line update outside the receipt functions'' ledger flag.';
 comment on policy purchase_order_items_delete on public.purchase_order_items is
@@ -1001,8 +1107,9 @@ $c46$;
 -- in send mode under its cap, places it, so a template is written under
 -- purchase_orders_insert's rule: the floor, purchase_orders:read, the
 -- organization checks (0273, all restated: ALTER POLICY replaces the whole
--- expression) and 0322's warehouse rule, on the row before and after. Reads
--- stay member-wide (recurring_po_templates_select; docket S10 5.1).
+-- expression) and the write-level warehouse rule of purchase_orders_update,
+-- on the row before and after. Reads stay member-wide
+-- (recurring_po_templates_select; docket S10 5.1).
 alter policy recurring_po_templates_insert on public.recurring_po_templates
   with check (
     ( ( select public.has_org_role(recurring_po_templates.organization_id, 'manager') )
@@ -1020,7 +1127,7 @@ alter policy recurring_po_templates_insert on public.recurring_po_templates
          where l.id = recurring_po_templates.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -1041,7 +1148,7 @@ alter policy recurring_po_templates_update on public.recurring_po_templates
          where l.id = recurring_po_templates.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -1062,7 +1169,7 @@ alter policy recurring_po_templates_update on public.recurring_po_templates
          where l.id = recurring_po_templates.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -1083,7 +1190,7 @@ alter policy recurring_po_templates_delete on public.recurring_po_templates
          where l.id = recurring_po_templates.destination_location_id
            and (
              l.warehouse_id is null
-             or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or public.user_can_access_warehouse(auth.uid(), l.warehouse_id, 'write')
            )
       )
     )
@@ -1135,7 +1242,7 @@ create trigger trg_po_destination_write_guard
 
 -- ═══ 9. Comments of the review round ═════════════════════════════════════════
 comment on policy recurring_po_templates_insert on public.recurring_po_templates is
-  'S46 (0423): a template is a standing purchase order (the daily run creates and may place it as the owner), so it is written under purchase_orders_insert''s rule: a manager or purchase_orders:manage, purchase_orders:read, the destination inside the caller''s warehouses below manager (none, or a place with no warehouse, also passes), and the 0206/0273 organization checks. tg_po_destination_write_guard keeps a viewer out of warehouses they only view.';
+  'S46 (0423): a template is a standing purchase order (the daily run creates and may place it as the owner), so it is written under purchase_orders_insert''s rule: a manager or purchase_orders:manage, purchase_orders:read, below manager a destination in a warehouse the caller may change (never a viewer''s; none, or a place with no warehouse, also passes), and the 0206/0273 organization checks. tg_po_destination_write_guard refuses a new destination outside them first, in words.';
 comment on policy recurring_po_templates_update on public.recurring_po_templates is
   'S46 (0423): as recurring_po_templates_insert, on the row before (USING: the floor, read and the warehouse rule) and after (WITH CHECK) the change.';
 comment on policy recurring_po_templates_delete on public.recurring_po_templates is

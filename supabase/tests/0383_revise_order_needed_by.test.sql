@@ -815,7 +815,11 @@ select is(
   -- organization, not only the ones the caller may read; the number it gives
   -- a manager is unchanged (0423 N1). The needed-by revision reads no PO
   -- number. Computed on the local stack after 0423.
-  'next_po_number(uuid)|104bd06a21cd31164ab4aa1dbc64433c|true|{search_path=public}|postgres\n'
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'

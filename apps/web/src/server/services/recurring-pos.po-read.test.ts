@@ -126,6 +126,32 @@ describe('RecurringPoTemplatesService: a template write the database refuses say
     },
   );
 
+  // 0423's decisions round: the template writes ask write access to the
+  // destination's warehouse (user_can_access_warehouse 'write'), which a
+  // viewer has nowhere, also in the warehouses they are assigned to and read.
+  // "go to your warehouses" would be false for those, so a viewer is told
+  // that their access is view only.
+  it.each(writes)(
+    '%s: a viewer holding manage is told that their warehouse access is view only',
+    async (_name, op, call) => {
+      const stub = makeSupabaseStub({
+        [`recurring_po_templates.${op}`]: { data: null, error: null },
+        'recurring_po_templates.select': { data: { id: 'tpl-1' }, error: null },
+      });
+      const viewer = new RecurringPoTemplatesService(
+        makeServiceContext(stub.client, { role: 'viewer', permissions: BOTH }) as never,
+      );
+
+      const err = await call(viewer).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('forbidden');
+      expect((err as ServiceError).message).toBe(
+        "Your warehouse access is view only, so you can't change this recurring purchase order.",
+      );
+    },
+  );
+
   it.each(writes)('%s: a template that is gone is still not found', async (_name, op, call) => {
     const stub = makeSupabaseStub({
       [`recurring_po_templates.${op}`]: { data: null, error: null },

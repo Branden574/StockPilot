@@ -272,9 +272,13 @@ export class RecurringPoTemplatesService {
    * A template write matched no row. Since 0423 the database writes a
    * template only for someone who may write a purchase order to its
    * destination (below manager: no destination, a place with no warehouse,
-   * or one of their warehouses), while every member still reads every
+   * or a warehouse they may change), while every member still reads every
    * template, so the list can show one this member may not change. Says
    * which it is instead of calling a template on the screen "not found".
+   * A viewer may change no warehouse's (0423's decisions round: write access,
+   * user_can_access_warehouse 'write'), also the ones they are assigned to and
+   * read, where "go to your warehouses" would be false, so a viewer is told
+   * that their access is view only.
    */
   private async writeRefusedOrMissing(id: string): Promise<ServiceError> {
     const { data, error } = await this.ctx.supabase
@@ -285,6 +289,12 @@ export class RecurringPoTemplatesService {
       .maybeSingle();
     if (error) return new ServiceError('internal_error', error.message);
     if (!data) return new ServiceError('not_found', 'Recurring PO template not found');
+    if (this.ctx.role === 'viewer') {
+      return new ServiceError(
+        'forbidden',
+        "Your warehouse access is view only, so you can't change this recurring purchase order.",
+      );
+    }
     return new ServiceError(
       'forbidden',
       'You can change only the recurring purchase orders that go to your warehouses.',

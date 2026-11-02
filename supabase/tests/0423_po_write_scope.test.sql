@@ -48,6 +48,27 @@
 --        their old text plus the marked additions and nothing else; C10: the
 --        re-pins elsewhere move by this file's changes alone.
 --
+-- The decisions round (2026-11-02) answered two automated push security
+-- reviews of the review-round file. On that file (head 2937b2c71; scratch
+-- stack, 401 migrations) 11 of the now 61 fail, exactly W2, W9, T5, V1-V4,
+-- N3, N4, C7 and C11; V5 and N5 hold on both by design:
+--   V1-V4, W2, W9, T5  a viewer holding manage, assigned to A1 as a viewer,
+--        changed what was already in A1: placed, cancelled, sent back to
+--        draft, renamed and re-dated purchase orders, edited a draft's
+--        amounts, supplier and lines (directly and through
+--        save_purchase_order_draft), and armed, re-supplied, paused,
+--        redirected and deleted A1's template. The write policies asked
+--        my_warehouse_ids(), which lists a viewer's warehouses (the read
+--        set); they now ask user_can_access_warehouse(..., 'write'). V5: the
+--        viewer still reads A1, still writes what has no warehouse, and
+--        staff in A1 still write A1's.
+--   N3, N4  next_po_number passed every caller with no auth.uid(); now anon
+--        (granted EXECUTE inside the test only) and a token with no subject
+--        get 42501, whichever way the claims arrive. N5: the service role and
+--        a call with no claims still get a number.
+--   C7, C11 the catalog: the write policies ask write access, never the read
+--        set, and the read policy is unchanged.
+--
 -- Personas (organization A with warehouses A1 and A2; organization B):
 --   own        owner                       mgr       manager
 --   mgrNoMan   manager, purchase_orders:manage revoked
@@ -55,7 +76,8 @@
 --   admNoRd    admin, purchase_orders:read revoked
 --   stf        staff in A1 (default set: read, no manage)
 --   stfMan     staff in A1 with a purchase_orders:manage override
---   vwrMan     viewer in A1 with a purchase_orders:manage override
+--   vwrMan     viewer in A1 with a purchase_orders:manage override (reads A1,
+--              writes nowhere: user_can_access_warehouse 'write' is false)
 --   stfManNoRd staff in A1 with manage granted and read revoked
 --   loneMan    staff in no warehouse with a purchase_orders:manage override
 --   bAdm       admin of organization B only
@@ -68,9 +90,11 @@
 --      when 0419 is in.
 -- R.   Reads: purchase_orders_select alone decides.
 -- W.   Purchase order writes: update, redirect, cancel and place, insert.
+-- V.   A viewer holding manage changes nothing in a warehouse they only view.
 -- L.   Line writes follow the parent purchase order.
 -- N.   next_po_number counts every purchase order for a writer; a non-writer
---      gets 42501.
+--      gets 42501, and so does an API identity that is neither a user nor the
+--      service role.
 -- S.   save_purchase_order_draft end to end (it is SECURITY INVOKER).
 -- RC.  Receiving: managers still post and reverse; a manager or admin without
 --      read gets po_not_found for both, and nothing is written.
@@ -90,7 +114,7 @@
 
 begin;
 
-select plan(52);
+select plan(61);
 
 \set orgA       '\'04230000-0000-0000-0000-0000000000a0\''
 \set orgB       '\'04230000-0000-0000-0000-0000000000b0\''
@@ -145,6 +169,32 @@ begin
   begin
     perform set_config('request.jwt.claim.sub', coalesce(p_sub::text, ''), true);
     perform set_config('request.jwt.claim.role', p_role, true);
+    perform set_config('role', p_role, true);
+    if p_sql ~* '^\s*(select|with)\M' then
+      execute p_sql into v;
+    else
+      execute p_sql;
+      get diagnostics n = row_count;
+      v := n::text;
+    end if;
+    raise exception using errcode = 'XX499', message = coalesce(v, 'null');
+  exception when others then
+    get stacked diagnostics st = returned_sqlstate, msg = message_text;
+    if st = 'XX499' then return 'ok:' || msg; end if;
+    return 'err:' || st;
+  end;
+end $$;
+
+-- As pg_temp.u, with the claims as PostgREST sends them today: one JSON object
+-- in request.jwt.claims, the per-claim settings cleared. ALWAYS undone.
+create function pg_temp.uc(p_claims text, p_sql text, p_role text)
+returns text language plpgsql as $$
+declare v text; n bigint; st text; msg text;
+begin
+  begin
+    perform set_config('request.jwt.claim.sub', '', true);
+    perform set_config('request.jwt.claim.role', '', true);
+    perform set_config('request.jwt.claims', p_claims, true);
     perform set_config('role', p_role, true);
     if p_sql ~* '^\s*(select|with)\M' then
       execute p_sql into v;
@@ -507,8 +557,8 @@ select is(pg_temp.u(:stfMan, pg_temp.notes_q(:poA1)) || ' ' || pg_temp.u(:stfMan
   'W1: staff holding manage update A1''s purchase order and the two with no warehouse, and match 0 rows on A2''s');
 select is(pg_temp.u(:vwrMan, pg_temp.notes_q(:poA1)) || ' ' || pg_temp.u(:vwrMan, pg_temp.notes_q(:poA2)) || ' '
           || pg_temp.u(:loneMan, pg_temp.notes_q(:poA1)) || ' ' || pg_temp.u(:loneMan, pg_temp.notes_q(:poND)),
-  'ok:1 ok:0 ok:0 ok:1',
-  'W2: the viewer holding manage as the staff member; the manage holder in no warehouse only the purchase order with no destination');
+  'ok:0 ok:0 ok:0 ok:1',
+  'W2: the viewer holding manage changes no purchase order of A1, where they only view (decisions round: write access, not the read set), nor of A2; the manage holder in no warehouse only the purchase order with no destination');
 select is(pg_temp.u(:mgrNoRd, pg_temp.notes_q(:poA1)) || ' ' || pg_temp.u(:admNoRd, pg_temp.notes_q(:poA1)) || ' '
           || pg_temp.u(:stfManNoRd, pg_temp.notes_q(:poA1)) || ' ' || pg_temp.u(:stf, pg_temp.notes_q(:poA1)),
   'ok:0 ok:0 ok:0 ok:0',
@@ -537,8 +587,8 @@ select is(pg_temp.u(:vwrMan, pg_temp.ins_q(:locA2)) || ' ' || pg_temp.u(:vwrMan,
   'W8: the viewer holding manage creates none for a warehouse, not even their own (read-only there, as the web refuses), and may with no destination or a place in no warehouse; without read, or without manage below manager, refused; a manager anywhere');
 select is(pg_temp.u(:vwrMan, pg_temp.dest_q(:poND, :locA1)) || ' ' || pg_temp.u(:vwrMan, pg_temp.dest_q(:drA1, :locOrg)) || ' '
           || pg_temp.u(:vwrMan, pg_temp.dest_q(:drA1, null)) || ' ' || pg_temp.u(:vwrMan, pg_temp.status_q(:drA1, 'ordered')),
-  'err:42501 ok:1 ok:1 ok:1',
-  'W9: the viewer holding manage cannot point a purchase order at their own warehouse (42501), and may point one away to no warehouse, and still place A1''s draft (the web''s status change)');
+  'err:42501 ok:0 ok:0 ok:0',
+  'W9: the viewer holding manage cannot point a purchase order at their own warehouse (42501), nor point A1''s draft away or place it (0 rows: they only view A1; decisions round)');
 
 -- ═══ L. Line writes ═════════════════════════════════════════════════════════
 select is(pg_temp.u(:stfMan, pg_temp.line_ins_q(:drA2)) || ' ' || pg_temp.u(:stfMan, pg_temp.line_ins_q(:drA1)) || ' '
@@ -558,6 +608,21 @@ select is(pg_temp.u(:stfMan, pg_temp.num_q()) || ' ' || pg_temp.u(:mgr, pg_temp.
 select is(pg_temp.u(:stf, pg_temp.num_q()) || ' ' || pg_temp.u(:bAdm, pg_temp.num_q()),
   'err:42501 err:42501',
   'N2: someone who may not write purchase orders in the organization gets 42501, so the definer count tells an outsider nothing');
+-- Decisions round: with no auth.uid(), only the service role and a call with
+-- no request claims get a number. anon has no EXECUTE (C3); it is granted
+-- here, inside this test's transaction only, to reach the branch.
+grant execute on function public.next_po_number(uuid) to anon;
+select is(pg_temp.u(null, pg_temp.num_q(), 'anon') || ' ' || pg_temp.uc('{"role": "anon"}', pg_temp.num_q(), 'anon'),
+  'err:42501 err:42501',
+  'N3: anon gets 42501 whichever way the claims arrive (per-claim settings, or one request.jwt.claims object), even with EXECUTE');
+select is(pg_temp.uc('{"role": "authenticated"}', pg_temp.num_q(), 'authenticated') || ' ' || pg_temp.u(null, pg_temp.num_q(), 'authenticated') || ' '
+          || pg_temp.uc('{"iss": "po-scope-probe"}', pg_temp.num_q(), 'authenticated'),
+  'err:42501 err:42501 err:42501',
+  'N4: a token with no subject gets 42501: authenticated with no sub, either way the claims arrive, and claims with no role at all');
+revoke execute on function public.next_po_number(uuid) from anon;
+select is(pg_temp.uc('{"role": "service_role"}', pg_temp.num_q(), 'service_role') || ' ' || public.next_po_number(:orgA),
+  'ok:PO-' || to_char(now(), 'YYYY') || '-0007 PO-' || to_char(now(), 'YYYY') || '-0007',
+  'N5: the service role with its claims in request.jwt.claims (N1 has the per-claim settings), and a call with no claims (this test''s own session, as the database''s jobs), still get the next number');
 
 -- ═══ S. save_purchase_order_draft ═══════════════════════════════════════════
 select is(pg_temp.u(:stfMan, pg_temp.save_drawn_q(:locA1)) || ' ' || pg_temp.u(:stfMan, pg_temp.save_drawn_q(null)) || ' '
@@ -633,8 +698,39 @@ select is(pg_temp.u(:stfMan, pg_temp.tpl_del_q(:tplA2)) || ' ' || pg_temp.u(:mgr
 select is(pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplND, 'destination_location_id = ' || quote_literal(:locA1))) || ' '
           || pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplA1, 'enabled = false')) || ' '
           || pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplA1, 'destination_location_id = ' || quote_literal(:locOrg))),
-  'err:42501 ok:1 ok:1',
-  'T5: the viewer holding manage cannot point a template at their own warehouse, and may still pause A1''s or point it away to no warehouse (as the web''s pause and resume)');
+  'err:42501 ok:0 ok:0',
+  'T5: the viewer holding manage cannot point a template at their own warehouse, nor pause A1''s or point it away (0 rows: they only view A1; decisions round)');
+
+-- ═══ V. A viewer holding manage changes nothing in a warehouse they only view
+-- Decisions round: vwrMan is assigned to A1 as a viewer, so reads A1
+-- (my_warehouse_ids, the read set) and may write nowhere
+-- (user_can_access_warehouse 'write'). The write policies ask write access.
+select is(pg_temp.u(:vwrMan, pg_temp.status_q(:poA1, 'cancelled')) || ' ' || pg_temp.u(:vwrMan, pg_temp.status_q(:poA1, 'draft')) || ' '
+          || pg_temp.u(:vwrMan, format('update public.purchase_orders set subtotal = 12345, total = 12345 where id = %L', :drA1)) || ' '
+          || pg_temp.u(:vwrMan, format('update public.purchase_orders set supplier_id = %L where id = %L', :supA, :drA1)) || ' '
+          || pg_temp.u(:vwrMan, format('update public.purchase_orders set po_number = %L where id = %L', 'PO-SCOPE-RENAMED', :poA1)) || ' '
+          || pg_temp.u(:vwrMan, format('update public.purchase_orders set expected_at = now() + interval %L where id = %L', '9 days', :poA1)),
+  'ok:0 ok:0 ok:0 ok:0 ok:0 ok:0',
+  'V1: the viewer holding manage cannot cancel A1''s purchase order or send it back to draft, change a draft''s amounts or supplier, or rename or re-date one (0 rows)');
+select is(pg_temp.u(:vwrMan, pg_temp.save_q(:drA1, :locA1, 'PO-SCOPE-EDIT')) || ' ' || pg_temp.u(:vwrMan, pg_temp.save_q(:drA1, null, 'PO-SCOPE-EDIT')),
+  'err:P0002 err:P0002',
+  'V2: nor edit A1''s draft through save_purchase_order_draft, keeping its destination or moving it to none (its row lock reads under the update policy: po_not_found)');
+select is(pg_temp.u(:vwrMan, pg_temp.line_ins_q(:drA1)) || ' ' || pg_temp.u(:vwrMan, pg_temp.line_del_q(:drA1)) || ' '
+          || pg_temp.u(:vwrMan, format('update public.purchase_order_items set quantity_ordered = 5 where id = %L', :lnD1)),
+  'err:42501 ok:0 ok:0',
+  'V3: nor add a line to A1''s draft (42501), remove its lines or change one (0 rows): the line policies ask write access to the parent''s warehouse');
+select is(pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplA1, 'send_mode = ''send'', max_auto_send_cents = 100000, next_run_at = now()')) || ' '
+          || pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplA1, format('supplier_id = %L', :supA))) || ' '
+          || pg_temp.u(:vwrMan, pg_temp.tpl_del_q(:tplA1)),
+  'ok:0 ok:0 ok:0',
+  'V4: nor arm A1''s recurring template, change its supplier or delete it (0 rows)');
+select is(pg_temp.u(:vwrMan, pg_temp.seen_q()) || ' ' || pg_temp.u(:vwrMan, format('select count(*)::text from public.recurring_po_templates where id = %L', :tplA1)) || ' '
+          || pg_temp.u(:vwrMan, pg_temp.status_q(:poND, 'cancelled')) || ' ' || pg_temp.u(:vwrMan, pg_temp.notes_q(:poOL)) || ' '
+          || pg_temp.u(:vwrMan, pg_temp.tpl_upd_q(:tplND, 'enabled = false')) || ' '
+          || pg_temp.u(:stfMan, pg_temp.status_q(:poA1, 'cancelled')) || ' ' || pg_temp.u(:stfMan, pg_temp.save_q(:drA1, :locA1, 'PO-SCOPE-EDIT')) || ' '
+          || pg_temp.u(:stfMan, pg_temp.tpl_upd_q(:tplA1, 'send_mode = ''send'', max_auto_send_cents = 100000, next_run_at = now()')),
+  'ok:A1,D1,ND,OL ok:1 ok:1 ok:1 ok:1 ok:1 ok:saved ok:1',
+  'V5 (control): the viewer still reads A1''s purchase orders and templates and still changes those with no destination or a place in no warehouse; staff holding manage in A1 still cancel, edit and arm A1''s');
 
 -- ═══ AT. PO attachments: the row and the stored file follow the purchase order
 select is(pg_temp.u(:stfMan, pg_temp.att_sel_q(:attA2)) || ' ' || pg_temp.u(:mgrNoRd, pg_temp.att_sel_q(:attA2)) || ' '
@@ -708,10 +804,10 @@ select is(
   (select string_agg(x, E'\n' order by x collate "C") from (
      select c.relname || '.' || pol.polname || ':' || pol.polcmd::text || ':'
             || (case when c.relname = 'recurring_po_templates' and pol.polcmd <> 'r'
-                       then coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'purchase_orders:read my_warehouse_ids') ~ 'purchase_orders:read'
-                            and coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'purchase_orders:read my_warehouse_ids') ~ 'my_warehouse_ids'
-                            and coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), 'purchase_orders:read my_warehouse_ids') ~ 'purchase_orders:read'
-                            and coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), 'purchase_orders:read my_warehouse_ids') ~ 'my_warehouse_ids'
+                       then coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'purchase_orders:read user_can_access_warehouse') ~ 'purchase_orders:read'
+                            and coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'purchase_orders:read user_can_access_warehouse') ~ 'user_can_access_warehouse'
+                            and coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), 'purchase_orders:read user_can_access_warehouse') ~ 'purchase_orders:read'
+                            and coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), 'purchase_orders:read user_can_access_warehouse') ~ 'user_can_access_warehouse'
                      when c.relname = 'recurring_po_templates'
                        then pg_get_expr(pol.polqual, pol.polrelid) ~ 'is_org_member'
                      when c.relname = 'po_attachments'
@@ -742,7 +838,7 @@ select is(
   'recurring_po_templates.recurring_po_templates_select:r:true\n'
   'recurring_po_templates.recurring_po_templates_update:w:true\n'
   'recurring_po_templates.trg_po_destination_write_guard:true',
-  'C7: the template writes carry purchase_orders:read and the warehouse rule (reads stay member-wide); the attachment rows follow their purchase order (no purchase_order_in_org); the four bucket policies ask po_attachment_object_visible; the destination guard fires before an insert, or an update of destination_location_id, on both tables');
+  'C7: the template writes carry purchase_orders:read and the warehouse rule at write level (user_can_access_warehouse; reads stay member-wide); the attachment rows follow their purchase order (no purchase_order_in_org); the four bucket policies ask po_attachment_object_visible; the destination guard fires before an insert, or an update of destination_location_id, on both tables');
 select is(
   (select string_agg(x, ',' order by x collate "C") from (
      select c.relname || '.' || pol.polname || ':' || (d.description is not null)::text as x
@@ -821,6 +917,28 @@ select is(
       and t.tgname <> 'trg_po_destination_write_guard'),
   'cfc031524c8052a69fceab91be550768|18 b8cf49572ed3d9556416e8d4b89a7094|4',
   'C10: ledger.* with ledger.reverse_receipt at its 0195 text is the post-0415 pin, and the PO triggers without trg_po_destination_write_guard are the pre-0423 pin, so the 0383 Z2, 0385 Z2 and 0415 R3 re-pins move by this file''s changes alone');
+
+-- Decisions round: every write policy of the three tables asks write access
+-- to the destination's warehouse (user_can_access_warehouse, 'write') and
+-- never the read set (my_warehouse_ids, which lists a viewer's warehouses);
+-- purchase_orders_select still asks the read set, and the two member-wide
+-- reads ask neither.
+select is(
+  (select string_agg(c.relname || '.' || pol.polname || ':'
+            || ((coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || ' ' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), ''))
+                ~ 'user_can_access_warehouse\(auth\.uid\(\), l\.warehouse_id, ''write''')::text || '|'
+            || ((coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || ' ' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), ''))
+                ~ 'my_warehouse_ids')::text,
+          ',' order by c.relname collate "C", pol.polname collate "C")
+     from pg_policy pol join pg_class c on c.oid = pol.polrelid
+    where c.oid in ('public.purchase_orders'::regclass, 'public.purchase_order_items'::regclass, 'public.recurring_po_templates'::regclass)),
+  'purchase_order_items.purchase_order_items_delete:true|false,purchase_order_items.purchase_order_items_insert:true|false,'
+  || 'purchase_order_items.purchase_order_items_select:false|false,purchase_order_items.purchase_order_items_update:true|false,'
+  || 'purchase_orders.purchase_orders_insert:true|false,purchase_orders.purchase_orders_select:false|true,'
+  || 'purchase_orders.purchase_orders_update:true|false,recurring_po_templates.recurring_po_templates_delete:true|false,'
+  || 'recurring_po_templates.recurring_po_templates_insert:true|false,recurring_po_templates.recurring_po_templates_select:false|false,'
+  || 'recurring_po_templates.recurring_po_templates_update:true|false',
+  'C11: the purchase order, line and template write policies ask write access to the warehouse and never the read set; purchase_orders_select still reads by my_warehouse_ids');
 
 -- ═══ IMP. PO-import approval (not closed by 0423) ═══════════════════════════
 select is(pg_temp.imp(:stfMan) || ' ' || pg_temp.imp(:vwrMan) || ' ' || pg_temp.imp(:mgrNoRd) || ' ' || pg_temp.imp(:stfManNoRd),

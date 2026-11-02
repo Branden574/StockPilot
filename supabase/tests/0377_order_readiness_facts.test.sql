@@ -1206,7 +1206,11 @@ select is(
   -- organization, not only the ones the caller may read; the number it gives
   -- a manager is unchanged (0423 N1). F2 reads no PO number. Computed on the
   -- local stack after 0423.
-  'next_po_number(uuid)|104bd06a21cd31164ab4aa1dbc64433c|true|{search_path=public}|postgres\n'
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0395 (was efc01e2e0ea98531c92c7db27f17695c): the wrapper refuses a direct
   -- call without stock:adjust before raising the flag (0395 R9); its body and

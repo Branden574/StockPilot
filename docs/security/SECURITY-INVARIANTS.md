@@ -545,21 +545,28 @@ actually fire.
   reads past `purchase_orders:read` and the warehouse scope) until 0423
   (docket S46) replaced it with `purchase_orders_insert` and
   `purchase_orders_update`, each needing the writer floor,
-  `purchase_orders:read` and `purchase_orders_select`'s warehouse rule, with
-  no `DELETE` policy (`DELETE` is revoked, 0360). `purchase_order_items_write`
-  became `purchase_order_items_insert`, `_update` and `_delete`, which need
-  the parent purchase order readable by the caller. A plain split would have
-  broken PO numbering, because `next_po_number` was invoker and counted only
-  visible POs, so 0423 first made it `SECURITY DEFINER` with its own gate
-  (a manager or `purchase_orders:manage`). Purchase orders are read through
+  `purchase_orders:read` and `purchase_orders_select`'s warehouse rule at
+  write level (`user_can_access_warehouse(..., 'write')`, where the read
+  policy asks `my_warehouse_ids()`: a viewer reads their warehouses' purchase
+  orders and changes none of them), with no `DELETE` policy (`DELETE` is
+  revoked, 0360). `purchase_order_items_write` became
+  `purchase_order_items_insert`, `_update` and `_delete`, which need the
+  parent purchase order readable by the caller and, below manager, its
+  destination's warehouse writable; the recurring template write policies
+  take the same rule. A plain split would have broken PO numbering, because
+  `next_po_number` was invoker and counted only visible POs, so 0423 first
+  made it `SECURITY DEFINER` with its own gate (a manager or
+  `purchase_orders:manage`; with no user, only the service role and a call
+  with no request claims). Purchase orders are read through
   `purchase_orders_select` alone.
 - **Tested at**: INV-35 (the sweep, plus a stale-entry audit of allowlist G)
   and INV-36 (plants a scoped table with a `FOR ALL` policy and a stale
   allowlist row; both must be caught). 0371's own test pins the exact policy
   set on `item_stock_levels` (A1-A4), and 0423's
   ([`0423_po_write_scope.test.sql`](../../supabase/tests/0423_po_write_scope.test.sql))
-  the set on `purchase_orders` and `purchase_order_items` (C1, C2), with the
-  reads and writes of each persona (R, W, L) and the numbering (N).
+  the set on `purchase_orders` and `purchase_order_items` (C1, C2) and the
+  write-level warehouse rule of every write policy (C11), with the reads and
+  writes of each persona (R, W, L, V) and the numbering (N).
 
 ### INV-C5 — `order_submissions` is owner-only, and only the two writers insert into it
 

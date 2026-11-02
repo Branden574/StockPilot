@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { OVERDUE_PO_STATUSES } from '@/lib/purchase-orders/tabs';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -32,7 +32,12 @@ import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
-import { createItemSchema, pastExpectedDayCutoff } from '@stockpilot/core';
+import {
+  createItemSchema,
+  isManagerOrAbove,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+  pastExpectedDayCutoff,
+} from '@stockpilot/core';
 
 /** Notifications created at once by one fan-out (maintenance-notify.ts uses
  *  the same number for the same reason). */
@@ -61,6 +66,22 @@ type SavedDraft = {
   /** Items left off because they are already on an open PO (reorder only). */
   skippedItemIds: string[];
 };
+
+/**
+ * A change to a purchase order the caller may read but not write (S46,
+ * migration 0423's decisions round): its destination is in a warehouse where
+ * their access is view only. Below manager only a viewer reaches it (staff
+ * read and write the same warehouses), so it says so.
+ */
+const PO_VIEW_ONLY_COPY =
+  "Your warehouse access is view only, so you can't change this purchase order.";
+
+/** The warehouse of a purchase order's destination, as get() embeds it. */
+function destinationWarehouseOf(po: unknown): string | null {
+  const dest = (po as { destination?: unknown }).destination;
+  const destRow = Array.isArray(dest) ? dest[0] : dest;
+  return (destRow as { warehouse_id?: string | null } | null | undefined)?.warehouse_id ?? null;
+}
 
 /** The unique index on a live PO's number (cancelled POs excepted). */
 const PO_NUMBER_INDEX = 'purchase_orders_org_ponumber_active_key';
@@ -696,9 +717,7 @@ export class PurchaseOrdersService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!po) throw new ServiceError('not_found', 'Purchase order not found');
 
-    const dest = (po as { destination?: unknown }).destination;
-    const destRow = Array.isArray(dest) ? dest[0] : dest;
-    const wh = (destRow as { warehouse_id?: string | null } | null | undefined)?.warehouse_id ?? null;
+    const wh = destinationWarehouseOf(po);
     if (wh) {
       const access = await getWarehouseAccess(this.ctx);
       if (!access.hasAllAccess && !access.readableIds.includes(wh)) {
@@ -751,6 +770,37 @@ export class PurchaseOrdersService {
     });
 
     return { po, lines: linesWithImages };
+  }
+
+  /**
+   * A change to an existing purchase order needs write access to the warehouse
+   * of its destination, as purchase_orders_update asks in the database (S46,
+   * migration 0423's decisions round: user_can_access_warehouse 'write'). get()
+   * asks read access only, which a viewer has in the warehouses they are
+   * assigned to, so a viewer holding purchase_orders:manage got past it and
+   * placed, cancelled, renamed or re-noted that warehouse's purchase orders;
+   * the database now matches no row for them. Refused here first, in words.
+   * No destination, or a place in no warehouse, stays open, as there. Called
+   * with get()'s row by updateStatus, updateNotes, renamePoNumber and update.
+   */
+  private async assertPoWritable(po: unknown): Promise<void> {
+    const wh = destinationWarehouseOf(po);
+    // Managers and above write in every warehouse: the role is the whole rule
+    // (getWarehouseAccess), so they skip the access read.
+    if (!wh || isManagerOrAbove(this.ctx.role)) return;
+    try {
+      await assertWarehouseAccess(wh, 'write', this.ctx);
+    } catch (e) {
+      if (!(e instanceof ForbiddenError)) throw e;
+      // A failed read of the caller's own access is not a scope: it claims none.
+      if (e.accessUnreadable) {
+        throw new ServiceError('conflict', ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, {
+          reason: 'failed',
+          retryable: true,
+        });
+      }
+      throw new ServiceError('forbidden', PO_VIEW_ONLY_COPY);
+    }
   }
 
   /**
@@ -1232,6 +1282,7 @@ export class PurchaseOrdersService {
 
     // Fetch the current PO (org-scoped, permission-gated).
     const { po } = await this.get(id);
+    await this.assertPoWritable(po); // the destination it has now (the new one: below)
     const currentStatus = (po as { status?: string }).status ?? '';
     if (currentStatus !== 'draft') {
       throw new ServiceError('forbidden', 'Only draft purchase orders can be edited.');
@@ -1411,6 +1462,7 @@ export class PurchaseOrdersService {
     if (trimmed.length > 100) throw new ServiceError('validation_error', 'PO number is too long.');
 
     const { po } = await this.get(id);
+    await this.assertPoWritable(po);
     const currentStatus = (po as { status?: string }).status ?? '';
     const currentNumber = (po as { po_number?: string }).po_number ?? '';
     if (currentStatus === 'cancelled') {
@@ -1478,6 +1530,7 @@ export class PurchaseOrdersService {
     // caller can't see this PO. Reused so notes editing can't reach another
     // org's (or an inaccessible warehouse's) PO.
     const { po } = await this.get(id);
+    await this.assertPoWritable(po);
     const before = (po as { notes?: string | null }).notes ?? null;
     const nextNotes = trimmed.length > 0 ? trimmed : null;
 
@@ -1509,6 +1562,7 @@ export class PurchaseOrdersService {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
     const { po } = await this.get(id); // throws not_found if user can't see this PO's warehouse
+    await this.assertPoWritable(po); // forbidden if they may only view it
     // Cancelled is terminal. A cancelled PO releases its po_number (the partial
     // unique index only covers non-cancelled rows), so its number may already
     // have been reissued to a new active PO — reopening it would collide. Block
