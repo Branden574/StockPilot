@@ -181,7 +181,8 @@ describe('CancelOrderButton words (B51)', () => {
   });
 
   // Mutation caught: a word copied into the component again (the drift that
-  // let the web and the phone disagree, pattern 26).
+  // let the web and the phone disagree, pattern 26). The failure phrase too:
+  // a request that gets no answer says "We couldn't <failedWhat>", by kind.
   it('holds no words of its own: every word is orderCancelWords', () => {
     const source = readFileSync(path.resolve(__dirname, 'cancel-order-button.tsx'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -198,6 +199,8 @@ describe('CancelOrderButton words (B51)', () => {
       'Order request cancelled.',
       'Order cancelled.',
       'stock reservations',
+      'cancel the request',
+      'cancel the order',
     ]) {
       expect(source, literal).not.toContain(literal);
     }
