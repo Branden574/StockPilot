@@ -115,7 +115,10 @@ describe('a restriction re-written over an existing restriction on a permission 
   });
 
   it('person: already restricted -> success with no audit row and no broadcast', async () => {
-    stubHolder.stub = stub('user_permission_overrides', { data: { granted: false }, error: null });
+    stubHolder.stub = stub('user_permission_overrides', {
+      data: [{ granted: false }],
+      error: null,
+    });
     const result = await setUserPermissionOverrideAction({
       userId: MEMBER,
       permission: LACKED,
@@ -133,7 +136,10 @@ describe('a restriction re-written over an existing restriction on a permission 
   });
 
   it('role: already restricted -> success with no audit row and no broadcast', async () => {
-    stubHolder.stub = stub('role_permission_overrides', { data: { granted: false }, error: null });
+    stubHolder.stub = stub('role_permission_overrides', {
+      data: [{ granted: false }],
+      error: null,
+    });
     const result = await setRolePermissionOverrideAction({
       role: 'admin',
       permission: LACKED,
@@ -150,8 +156,9 @@ describe('a restriction re-written over an existing restriction on a permission 
   });
 
   it.each([
-    ['the row is a grant', { data: { granted: true }, error: null }],
-    ['there is no row', { data: null, error: null }],
+    ['the row is a grant', { data: [{ granted: true }], error: null }],
+    ['there is no row', { data: [], error: null }],
+    ['the answer is not a list', { data: null, error: null }],
     ['the re-read fails', { data: null, error: { message: 'boom', code: 'XX000' } }],
   ] as const)('person: %s -> the plain sentence, nothing announced', async (_label, reread) => {
     stubHolder.stub = stub('user_permission_overrides', reread);
@@ -169,8 +176,9 @@ describe('a restriction re-written over an existing restriction on a permission 
   });
 
   it.each([
-    ['the row is a grant', { data: { granted: true }, error: null }],
-    ['there is no row', { data: null, error: null }],
+    ['the row is a grant', { data: [{ granted: true }], error: null }],
+    ['there is no row', { data: [], error: null }],
+    ['the answer is not a list', { data: null, error: null }],
   ] as const)('role: %s -> the plain sentence, nothing announced', async (_label, reread) => {
     stubHolder.stub = stub('role_permission_overrides', reread);
     const result = await setRolePermissionOverrideAction({
@@ -197,7 +205,7 @@ describe('a restriction re-written over an existing restriction on a permission 
           hint: 'permission_platform_managed',
         },
       },
-      'user_permission_overrides.select': { data: { granted: false }, error: null },
+      'user_permission_overrides.select': { data: [{ granted: false }], error: null },
     });
     const result = await setUserPermissionOverrideAction({
       userId: MEMBER,
@@ -215,7 +223,7 @@ describe('a restriction re-written over an existing restriction on a permission 
 
   it('a refused grant is not absorbed and is not re-read', async () => {
     // assertCanGrant passed (the actor holds HELD); the database refused anyway.
-    stubHolder.stub = stub('user_permission_overrides', { data: { granted: true }, error: null });
+    stubHolder.stub = stub('user_permission_overrides', { data: [{ granted: true }], error: null });
     const result = await setUserPermissionOverrideAction({
       userId: MEMBER,
       permission: HELD,
@@ -234,7 +242,7 @@ describe('a restriction re-written over an existing restriction on a permission 
         data: null,
         error: { message: 'insert or update violates foreign key constraint', code: '23503' },
       },
-      'user_permission_overrides.select': { data: { granted: false }, error: null },
+      'user_permission_overrides.select': { data: [{ granted: false }], error: null },
     });
     const result = await setUserPermissionOverrideAction({
       userId: MEMBER,

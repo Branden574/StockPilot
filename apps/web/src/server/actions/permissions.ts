@@ -8,6 +8,7 @@ import { audit } from '@/server/services/audit';
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { ServiceError, withContext } from '@/server/services/context';
+import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 
 import {
   PERMISSIONS,
@@ -74,10 +75,23 @@ function isRestrictionChangeRefusal(
   return granted === false && error.code === '42501' && error.hint !== PLATFORM_MANAGED_HINT;
 }
 
-/** The re-read after such a refusal: only a row that already says restricted
- *  means nothing changed. */
-function alreadyRestricted(row: { granted: boolean } | null): boolean {
-  return row?.granted === false;
+/**
+ * The re-read after such a refusal: only one row that already says restricted
+ * means nothing changed. A failed read, or an answer that is not a list
+ * (listRows, docket S27), is not that row: the plain sentence answers.
+ */
+function alreadyRestricted(
+  reread: { error: unknown },
+  rows: () => { granted: boolean }[],
+): boolean {
+  if (reread.error) return false;
+  try {
+    const found = rows();
+    return found.length === 1 && found[0]!.granted === false;
+  } catch (error) {
+    if (error instanceof ListReadError) return false;
+    throw error;
+  }
 }
 
 const permissionEnum = z.enum([...PERMISSIONS] as [Permission, ...Permission[]]);
@@ -197,14 +211,17 @@ export async function setRolePermissionOverrideAction(input: {
         if (!isRestrictionChangeRefusal(error, granted)) throw overrideWriteError(error);
         // Re-read with the actor's own client. Already restricted: nothing
         // changed, so no audit row and no broadcast.
-        const { data: existing } = await supabase
+        const reread = await supabase
           .from('role_permission_overrides')
           .select('granted')
           .eq('organization_id', ctx.organizationId)
           .eq('role', role)
-          .eq('permission', permission)
-          .maybeSingle();
-        if (!alreadyRestricted(existing)) {
+          .eq('permission', permission);
+        if (
+          !alreadyRestricted(reread, () =>
+            listRows<{ granted: boolean }>('role_permission_overrides', reread),
+          )
+        ) {
           throw new ServiceError('forbidden', RESTRICTION_CHANGE_REFUSAL);
         }
         return ok(null);
@@ -341,14 +358,17 @@ export async function setUserPermissionOverrideAction(input: {
         if (!isRestrictionChangeRefusal(error, granted)) throw overrideWriteError(error);
         // Re-read with the actor's own client. Already restricted: nothing
         // changed, so no audit row and no broadcast.
-        const { data: existing } = await supabase
+        const reread = await supabase
           .from('user_permission_overrides')
           .select('granted')
           .eq('organization_id', ctx.organizationId)
           .eq('user_id', userId)
-          .eq('permission', permission)
-          .maybeSingle();
-        if (!alreadyRestricted(existing)) {
+          .eq('permission', permission);
+        if (
+          !alreadyRestricted(reread, () =>
+            listRows<{ granted: boolean }>('user_permission_overrides', reread),
+          )
+        ) {
           throw new ServiceError('forbidden', RESTRICTION_CHANGE_REFUSAL);
         }
         return ok(null);
