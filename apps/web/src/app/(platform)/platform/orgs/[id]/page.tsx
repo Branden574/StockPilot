@@ -27,6 +27,7 @@ import {
   formatLastActive,
   resolveLastActive,
 } from '@/lib/platform/last-active';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   DETAIL_PREVIEW_LIMIT,
@@ -91,6 +92,10 @@ export default async function PlatformOrgDetailPage({
   await requirePlatformAdmin();
 
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before any
+  // read or audit row (B63): the overview read threw on it, which the root
+  // error page showed as "Something went wrong".
+  notFoundUnlessUuid(id);
   const { tab: tabParam, q, page: pageParam } = await searchParams;
   const tab: Tab = (TABS.find((t) => t.key === firstParam(tabParam))?.key ?? 'overview') as Tab;
   // A repeated `?q=` (a stray double-submit, a hand-edited URL) gives

@@ -78,34 +78,53 @@ import { TOOL_CATALOG } from './tools';
 // hands back the FIRST 1000-row window — which is precisely what the real API
 // does, silently.
 type Rows = Array<Record<string, unknown>>;
-type TableSource = Rows | ((from: number, to: number) => Rows);
+/** A window function may answer a failed read instead of rows. */
+type TableSource = Rows | ((from: number, to: number) => Rows | { error: { message: string } });
 
 function makeSupabase(sources: Record<string, TableSource>) {
   const rangeCalls: Array<{ table: string; from: number; to: number }> = [];
+  const orderCalls: Array<{ table: string; column: string }> = [];
+  /** One entry per request: the `.in()` filters it carried (none: []). */
+  const requests: Array<{ table: string; inFilters: Array<[string, unknown[]]> }> = [];
   const from = (table: string) => {
     let range: { from: number; to: number } | null = null;
+    const inFilters: Array<[string, unknown[]]> = [];
     const chain: Record<string | symbol, unknown> = {};
     const proxy: unknown = new Proxy(chain, {
       get(_t, prop) {
         if (prop === 'then') {
+          requests.push({ table, inFilters: [...inFilters] });
           const src = sources[table] ?? [];
           const win = range ?? { from: 0, to: 999 };
-          const data = typeof src === 'function' ? src(win.from, win.to) : src;
-          return (onFulfilled: (v: unknown) => unknown) =>
-            Promise.resolve({ data, error: null }).then(onFulfilled);
+          const out = typeof src === 'function' ? src(win.from, win.to) : src;
+          // An `.in()` keeps only its values, as PostgREST does.
+          const kept = Array.isArray(out)
+            ? out.filter((row) => inFilters.every(([col, values]) => values.includes(row[col])))
+            : out;
+          const res = Array.isArray(kept)
+            ? { data: kept, error: null }
+            : { data: null, error: kept.error };
+          return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(res).then(onFulfilled);
         }
         return (...args: unknown[]) => {
           if (prop === 'range') {
             range = { from: args[0] as number, to: args[1] as number };
             rangeCalls.push({ table, from: range.from, to: range.to });
           }
+          if (prop === 'order') orderCalls.push({ table, column: args[0] as string });
+          if (prop === 'in') inFilters.push([args[0] as string, args[1] as unknown[]]);
           return proxy;
         };
       },
     });
     return proxy;
   };
-  return { client: { from } as unknown as ServiceContext['supabase'], rangeCalls };
+  return {
+    client: { from } as unknown as ServiceContext['supabase'],
+    rangeCalls,
+    orderCalls,
+    requests,
+  };
 }
 
 function ctxWith(supabase: ServiceContext['supabase']): ServiceContext {
@@ -181,6 +200,105 @@ describe('SP-040: inventory aggregation tools page past the 1000-row clamp', () 
     expect(res.totals.itemCount).toBe(1500);
     expect(res.rows.map((r) => r.categoryId).sort()).toEqual(['c1', 'c2']);
     expect(res.truncated).toBe(false);
+  });
+
+  /**
+   * B47: inventoryByCategory named its categories from ONE read with no order
+   * and no range, so past 1000 categories PostgREST answered an arbitrary
+   * 1000 and the rest were called "(deleted)". B47's decisions round
+   * (2026-11-01) reads only the names of the categories the items use, by id,
+   * in batches of 100 (fetchAllRowsByIds), each batch page by page: the item
+   * set is already capped at AI_AGGREGATION_ROW_CAP, so the names read is
+   * bounded by it, not by how many categories the organization has. A failed
+   * batch fails the tool call instead.
+   */
+  describe('inventoryByCategory names the categories its items use, by id', () => {
+    const catId = (i: number) => `cat-${String(i).padStart(5, '0')}`;
+    /** 1,200 categories: the organization's whole list. */
+    const ALL_CATEGORIES: Rows = Array.from({ length: 1200 }, (_, i) => ({
+      id: catId(i),
+      name: `Category ${i}`,
+    }));
+    /** Items in the given categories, two units at $5 each; null = none. */
+    const itemsIn =
+      (categoryIds: Array<string | null>) =>
+      (from: number): Rows =>
+        from > 0
+          ? []
+          : categoryIds.map((categoryId, i) => ({
+              id: `item-${String(i).padStart(5, '0')}`,
+              category_id: categoryId,
+              quantity_on_hand: 2,
+              unit_cost: 5,
+            }));
+    const categoryReads = (
+      requests: Array<{ table: string; inFilters: Array<[string, unknown[]]> }>,
+    ) => requests.filter((r) => r.table === 'categories');
+
+    it('names the 1,200th category, reading only the ids its items use, never the whole list', async () => {
+      const { client, orderCalls, requests } = makeSupabase({
+        inventory_items: itemsIn([catId(1199), catId(1199), catId(3), null]),
+        categories: ALL_CATEGORIES,
+      });
+
+      const res = (await TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client))) as {
+        rows: Array<{ categoryId: string | null; categoryName: string; itemCount: number }>;
+      };
+
+      const byId = new Map(res.rows.map((r) => [r.categoryId, r]));
+      expect(byId.get(catId(1199))!.categoryName).toContain('Category 1199');
+      expect(byId.get(catId(1199))!.itemCount).toBe(2);
+      expect(byId.get(catId(3))!.categoryName).toContain('Category 3');
+      expect(byId.get(null)!.categoryName).toContain('(uncategorized)');
+      // One request, for exactly the two ids the items use.
+      const reads = categoryReads(requests);
+      expect(reads).toHaveLength(1);
+      expect(reads[0]!.inFilters).toEqual([['id', [catId(1199), catId(3)]]]);
+      // Ordered by id, so a page boundary never repeats or skips a category.
+      expect(
+        new Set(orderCalls.filter((o) => o.table === 'categories').map((o) => o.column)),
+      ).toEqual(new Set(['id']));
+    });
+
+    it('more than 100 categories in use: batches of 100 ids, every one named', async () => {
+      const used = Array.from({ length: 250 }, (_, i) => catId(i * 4));
+      const { client, requests } = makeSupabase({
+        inventory_items: itemsIn(used),
+        categories: ALL_CATEGORIES,
+      });
+
+      const res = (await TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client))) as {
+        rows: Array<{ categoryId: string | null; categoryName: string }>;
+      };
+
+      expect(res.rows).toHaveLength(250);
+      expect(res.rows.some((r) => r.categoryName.includes('(deleted)'))).toBe(false);
+      const reads = categoryReads(requests);
+      expect(reads.map((r) => (r.inFilters[0]?.[1] ?? []).length)).toEqual([100, 100, 50]);
+      expect(new Set(reads.flatMap((r) => r.inFilters[0]?.[1] ?? []))).toEqual(new Set(used));
+    });
+
+    it('no categorized item: no categories read at all', async () => {
+      const { client, requests } = makeSupabase({
+        inventory_items: itemsIn([null, null]),
+        categories: ALL_CATEGORIES,
+      });
+
+      await TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client));
+
+      expect(categoryReads(requests)).toEqual([]);
+    });
+
+    it('a failed batch fails the tool call, never "(deleted)" for every category', async () => {
+      const { client } = makeSupabase({
+        inventory_items: itemsIn([catId(1199), catId(3)]),
+        categories: () => ({ error: { message: 'statement timeout' } }),
+      });
+
+      await expect(
+        TOOL_CATALOG.inventoryByCategory!.execute({}, ctxWith(client)),
+      ).rejects.toThrow();
+    });
   });
 
   it('listCategories counts items past the clamp (its comment claimed "≤500 rows max")', async () => {

@@ -4,6 +4,8 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import { fetchAllRows } from './lib/paginate';
 
 export const createWarehouseSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -99,48 +101,79 @@ export class WarehousesService {
    * ONLY rows with `status = 'archived'`. Rows with `status = 'inactive'`
    * intentionally show up in neither view — inactive is a separate
    * concept (warehouses that exist but aren't operating right now).
+   *
+   * Each warehouse's `charters` come from their own read of the links, every
+   * page, ordered by warehouse and then charter (B47 part C), not from a
+   * to-many embed. The Admin > Warehouses editor starts from this list and
+   * every save sends it back to WarehouseChartersService.prepareSetForWarehouse,
+   * which reads every link the same way. With the editor's list cut at 1000
+   * (PostgREST may cut an embed like any response), a save that changed
+   * nothing would DELETE the links nobody unticked, and the cascade would
+   * remove the staff charter assignments on them. Archived charters keep
+   * their links and stay named here, as the embed named them.
+   *
+   * The links read stops at LOOKUP_ROW_CEILING for the whole organization
+   * (the first by warehouse, then charter), reported once. A warehouse past
+   * that point gets a cut list, so the save refuses to remove a link while
+   * the organization is at the ceiling (prepareSetForWarehouse).
    */
   async list(opts: { includeArchived?: boolean } = {}): Promise<WarehouseRow[]> {
     const targetStatus = opts.includeArchived ? 'archived' : 'active';
-    const { data, error } = await this.ctx.supabase
-      .from('warehouses')
-      .select(
-        `id, name, code, contact_name, contact_email, contact_phone,
-         manager_user_id, status, notes, created_at, updated_at,
-         manager:user_profiles!manager_user_id (full_name, email),
-         assignments:user_warehouse_assignments!warehouse_id (user_id),
-         items:inventory_items!warehouse_id (id),
-         wh_charters:warehouse_charters!warehouse_id (charter:charters!charter_id (id, name))`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', targetStatus)
-      .order('name', { ascending: true });
+    type LinkRow = { warehouse_id: string; charter: unknown };
+    const [{ data, error }, links] = await Promise.all([
+      this.ctx.supabase
+        .from('warehouses')
+        .select(
+          `id, name, code, contact_name, contact_email, contact_phone,
+           manager_user_id, status, notes, created_at, updated_at,
+           manager:user_profiles!manager_user_id (full_name, email),
+           assignments:user_warehouse_assignments!warehouse_id (user_id),
+           items:inventory_items!warehouse_id (id)`,
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('status', targetStatus)
+        .order('name', { ascending: true }),
+      fetchAllRows<LinkRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('warehouse_charters')
+            .select('warehouse_id, charter:charters!charter_id (id, name)')
+            .eq('organization_id', this.ctx.organizationId)
+            .order('warehouse_id', { ascending: true })
+            .order('charter_id', { ascending: true })
+            .range(from, to),
+        { cap: LOOKUP_ROW_CEILING },
+      ),
+    ]);
     if (error) throw new ServiceError('internal_error', error.message);
+    if (links.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('warehouses.list.charter_links', {
+        organizationId: this.ctx.organizationId,
+      });
+    }
+
+    const chartersByWarehouse = new Map<string, Array<{ id: string; name: string }>>();
+    for (const link of links) {
+      const c = (Array.isArray(link.charter) ? link.charter[0] : link.charter) as
+        { id: string; name: string } | null | undefined;
+      if (!c) continue;
+      const list = chartersByWarehouse.get(link.warehouse_id) ?? [];
+      list.push({ id: c.id, name: c.name });
+      chartersByWarehouse.set(link.warehouse_id, list);
+    }
 
     return (data ?? []).map((r) => {
       const mg = (r as { manager?: unknown }).manager;
       const manager = Array.isArray(mg) ? mg[0] : mg;
       const assignments = (r as { assignments?: unknown }).assignments;
       const items = (r as { items?: unknown }).items;
-      const whCharters = (r as { wh_charters?: unknown }).wh_charters;
       const userIds = Array.isArray(assignments)
         ? new Set(assignments.map((a) => (a as { user_id: string }).user_id)).size
         : 0;
 
-      const charters: Array<{ id: string; name: string }> = Array.isArray(whCharters)
-        ? whCharters
-            .map((wc) => {
-              const ch = (wc as { charter?: unknown }).charter;
-              const c = Array.isArray(ch) ? ch[0] : ch;
-              if (!c) return null;
-              return {
-                id: (c as { id: string }).id,
-                name: (c as { name: string }).name,
-              };
-            })
-            .filter((x): x is { id: string; name: string } => x !== null)
-            .sort((a, b) => a.name.localeCompare(b.name))
-        : [];
+      const charters = (chartersByWarehouse.get(r.id as string) ?? []).sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
 
       return {
         id: r.id as string,
@@ -308,6 +341,21 @@ export class WarehousesService {
     if (patch.address !== undefined) updates.address = patch.address ?? null;
     if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
     if (patch.status !== undefined) updates.status = patch.status;
+
+    // Charter list reconciliation lives in WarehouseChartersService — calling
+    // it from here keeps the audit log + item-conflict checks in one place.
+    // Its checks run BEFORE the warehouse row is written, and its writes
+    // after (B47 decisions round): every refusal of the charter list (items
+    // still tagged to a removed charter, a count that cannot be read, a list
+    // at the lookup ceiling) used to come after the row change was saved, so
+    // a refused save still renamed the warehouse.
+    let applyCharters: (() => Promise<void>) | null = null;
+    if (patch.charterIds !== undefined) {
+      const { WarehouseChartersService } = await import('./warehouse-charters');
+      const svc = new WarehouseChartersService(this.ctx);
+      applyCharters = await svc.prepareSetForWarehouse(id, patch.charterIds);
+    }
+
     if (Object.keys(updates).length > 0) {
       const { error } = await this.ctx.supabase
         .from('warehouses')
@@ -317,13 +365,7 @@ export class WarehousesService {
       if (error) throw new ServiceError('internal_error', error.message);
     }
 
-    // Charter list reconciliation lives in WarehouseChartersService — calling
-    // it from here keeps the audit log + item-conflict checks in one place.
-    if (patch.charterIds !== undefined) {
-      const { WarehouseChartersService } = await import('./warehouse-charters');
-      const svc = new WarehouseChartersService(this.ctx);
-      await svc.setForWarehouse(id, patch.charterIds);
-    }
+    if (applyCharters) await applyCharters();
 
     await audit(
       {

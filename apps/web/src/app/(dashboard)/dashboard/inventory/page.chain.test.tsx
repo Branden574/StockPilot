@@ -215,6 +215,8 @@ vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list'
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
+import { getModulesForRequest } from '@/lib/dashboard/request-cache';
+
 import InventoryPage from './page';
 
 const ROW = {
@@ -886,5 +888,47 @@ describe('Items page: the Archived view says how to restore', () => {
       'Items you archived. Select one and choose Restore to make it active again.',
     );
     expect(container.textContent).not.toContain('setting status to Active');
+  });
+});
+
+/**
+ * B42: the bulk bar's Cycle count had no gate, so staff (and anyone else who
+ * could select rows) were sent to Start a count, which the server refuses
+ * below a manager with cycle_counts:assign and stock:adjust. The page decides
+ * with core countStartAllowed and the request-cached module set (no
+ * withContext on the Items page's first paint), at both of its table calls.
+ */
+describe('Items page: Cycle count in the bulk bar only for someone who can start a count', () => {
+  beforeEach(() => {
+    vi.mocked(getModulesForRequest).mockImplementation(
+      async () => new Set(['orders', 'cycle_counts']) as never,
+    );
+  });
+  afterEach(() => {
+    vi.mocked(getModulesForRequest).mockImplementation(async () => new Set(['orders']) as never);
+  });
+
+  it('a manager with Cycle Counts on is offered it (the default view)', async () => {
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('a manager with Cycle Counts on is offered it (a deep link, the instant table)', async () => {
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('staff (stock:adjust, no cycle_counts:assign) are not', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+
+  it('nor a manager whose organization turned Cycle Counts off', async () => {
+    vi.mocked(getModulesForRequest).mockImplementation(async () => new Set(['orders']) as never);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
   });
 });

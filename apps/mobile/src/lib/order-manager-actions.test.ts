@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { deletedDriverHandOverLine } from '@stockpilot/core';
+
 import { orderManagerActions, type OrderManagerActionsInput } from './order-manager-actions';
 
 /**
@@ -143,6 +145,42 @@ describe('orderManagerActions: Physical signature is a manager by role or the dr
   });
 });
 
+// B23: 0393 clears the driver of an open order when the driver deletes their
+// account. The order stays in transit and an approver hands it over as
+// before; the section says who is left to do it, with the web panel's words.
+describe('orderManagerActions: an in-transit delivery whose driver deleted their account (B23)', () => {
+  const gone: Partial<OrderManagerActionsInput> = {
+    hasAssignedDriver: false,
+    isAssignedDriver: false,
+    driverDeleted: true,
+  };
+
+  it('a manager reads the line naming both hand-over buttons, and keeps both buttons', () => {
+    const a = at(manager, 'in_transit', gone);
+    expect(a.deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: true }));
+    expect(a).toMatchObject({ showSection: true, digitalSignature: true, physicalSignature: true });
+  });
+
+  it('a granted staff approver reads the line naming only Collect signature (mutation: name the paper signature to everyone)', () => {
+    const a = at(grantedStaff, 'in_transit', gone);
+    expect(a.deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: false }));
+    expect(a).toMatchObject({ digitalSignature: true, physicalSignature: false });
+  });
+
+  it('no line while the driver is named, at another status, for a viewer, or without orders:approve (mutation: drop a condition)', () => {
+    expect(at(manager, 'in_transit', { hasAssignedDriver: true }).deletedDriverLine).toBeNull();
+    expect(at(manager, 'in_transit').deletedDriverLine).toBeNull();
+    expect(at(manager, 'staged_for_delivery', gone).deletedDriverLine).toBeNull();
+    expect(at(manager, 'completed', gone).deletedDriverLine).toBeNull();
+    expect(at({ ...manager, isViewerRole: true }, 'in_transit', gone).deletedDriverLine).toBeNull();
+    expect(at(base, 'in_transit', gone).deletedDriverLine).toBeNull();
+    expect(at(revokedManager, 'in_transit', gone)).toMatchObject({
+      showSection: false,
+      deletedDriverLine: null,
+    });
+  });
+});
+
 describe('orderManagerActions: never an empty or a wrong-status section', () => {
   it('terminal and picking statuses render nothing here', () => {
     for (const status of ['completed', 'cancelled', 'denied', 'pending_confirmation', 'pick_slip_generated', 'picking_in_progress', null, undefined]) {
@@ -185,6 +223,15 @@ describe('the order screen reads these gates (wiring pins)', () => {
     const calls = SCREEN.split('availableOrderActions({').slice(1).map((c) => c.slice(0, c.indexOf('})')));
     expect(calls).toHaveLength(2);
     for (const call of calls) expect(call).toContain('canApproveOrders: rpApprove,');
+  });
+
+  it('B23: reads when the order went out and tells the helper when its driver deleted their account (mutation: drop the column or the fact)', () => {
+    expect(SCREEN).toMatch(/fulfillment_type, signature_token,\s*in_transit_at,/);
+    expect(SCREEN).toContain('inTransitAt: (r.in_transit_at as string | null) ?? null,');
+    expect(SCREEN).toMatch(
+      /hasAssignedDriver: !!order\?\.assignedDeliveryUserId,\s*driverDeleted: isDeliveryDriverDeleted\(\{\s*fulfillmentType: ft,\s*inTransitAt: order\?\.inTransitAt,\s*assignedDeliveryUserId: order\?\.assignedDeliveryUserId,\s*\}\),/,
+    );
+    expect(SCREEN).toMatch(/\{managerActions\.deletedDriverLine \?/);
   });
 
   it('each button reads its own gate', () => {

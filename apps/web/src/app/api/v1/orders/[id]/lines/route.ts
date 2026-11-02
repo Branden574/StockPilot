@@ -6,6 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -74,6 +75,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -143,6 +147,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const { id } = await params;
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -202,6 +209,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   }
 
   const { id } = await params;
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
   const lineId = z.string().uuid().safeParse(req.nextUrl.searchParams.get('lineId'));
   if (!lineId.success) {
     return NextResponse.json(
