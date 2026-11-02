@@ -68,7 +68,13 @@ const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules:
  * three, or as a notice, sees or reads them first (a read of a release a
  * reader is not told changes nothing).
  */
-const NEWER_IDS = ['authenticator-code-requests-2026-11', 'integration-retries-2026-11'];
+// Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: the authenticator code and integration retries releases only): the web fixes and archived charters releases are published later, at the top, and reach an owner, so they are read or seen with the others.
+const NEWER_IDS = [
+  'web-fixes-2026-11-02',
+  'archived-charters-2026-11',
+  'authenticator-code-requests-2026-11',
+  'integration-retries-2026-11',
+];
 const newerReads = NEWER_IDS.map((id) => ({
   release_id: id,
   revision: 1,
@@ -138,10 +144,11 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: every pinned position two places higher): the authenticator code and integration retries releases are published directly below the B44 phone update draft, above the lists-delivery-sites-and-fixes release, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02b (2026-11-02; was: every pinned position one place higher): the lists-delivery-sites-and-fixes release is published directly below the B44 phone update draft, above the export fixes release, so every position below it moves down by one.
     // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: every pinned position one place higher): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one.
-    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
-    expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[5]?.id).toBe(ID);
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the export fixes release at 4, ID at 5 and slice(6)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
+    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[6]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[7]?.id).toBe(ID);
+    for (const r of RELEASES.slice(8)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
