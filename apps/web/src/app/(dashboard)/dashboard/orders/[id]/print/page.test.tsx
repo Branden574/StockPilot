@@ -34,6 +34,7 @@ import { inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock
 
 import OrderPrintPage from './page';
 
+const ORDER_ID = '11111111-1111-1111-1111-111111111111';
 const itemId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const lines = Array.from({ length: 250 }, (_, i) => ({
   id: `line-${i}`,
@@ -81,7 +82,7 @@ describe('order print page with 250 lines', () => {
       };
     });
 
-    render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    render(await OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }));
 
     expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
     const firstRow = screen.getAllByRole('row')[1]!;
@@ -94,7 +95,9 @@ describe('order print page with 250 lines', () => {
     stubWith(() =>
       ++n === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
     );
-    await expect(OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) })).rejects.toMatchObject({
+    await expect(
+      OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }),
+    ).rejects.toMatchObject({
       code: 'internal_error',
     });
   });
@@ -127,7 +130,7 @@ describe('order print page: a line whose item the reader cannot read', () => {
     });
     stubWith(() => ({ data: [{ id: itemId(1), bin_location: null }], error: null }));
 
-    render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    render(await OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }));
 
     const rows = screen.getAllByRole('row').map((r) => r.textContent ?? '');
     expect(rows.some((t) => t.includes("An item you can't see"))).toBe(true);
@@ -156,7 +159,9 @@ describe('order print page: the order is named by its number (L91)', () => {
     });
     stubWith(() => ({ data: [], error: null }));
 
-    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    const { container } = render(
+      await OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }),
+    );
 
     const text = container.textContent ?? '';
     expect(text.match(/Order SO-000049/g)).toHaveLength(2);
@@ -172,7 +177,9 @@ describe('order print page: the order is named by its number (L91)', () => {
     });
     stubWith(() => ({ data: [], error: null }));
 
-    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    const { container } = render(
+      await OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }),
+    );
 
     expect((container.textContent ?? '').match(/Order #11111111/g)).toHaveLength(2);
   });
@@ -218,7 +225,9 @@ describe('order print page: the slip keeps its own header on paper (D6)', () => 
     });
     stubWith(() => ({ data: [], error: null }));
 
-    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    const { container } = render(
+      await OrderPrintPage({ params: Promise.resolve({ id: ORDER_ID }) }),
+    );
     const css = container.querySelector('style')?.textContent ?? '';
     const selectors = hiddenSelectors(css);
     expect(selectors.length).toBeGreaterThan(0);
@@ -238,5 +247,20 @@ describe('order print page: the slip keeps its own header on paper (D6)', () => 
     expect(hides(shell.querySelector('header')!)).toBe(true);
     expect(hides(shell.querySelector('a')!)).toBe(true);
     shell.remove();
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before the order is read.
+describe('order print page: an order id that is not a uuid', () => {
+  it('is the not-found page, with no order read and no request context asked for', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', ORDER_ID.slice(0, -1)]) {
+      vi.clearAllMocks();
+      await expect(OrderPrintPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+      expect(orderGet).not.toHaveBeenCalled();
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
   });
 });

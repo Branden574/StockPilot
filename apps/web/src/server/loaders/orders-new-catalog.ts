@@ -27,6 +27,7 @@ import {
   settleAsDataError,
 } from '@/server/services/lib/fetch-by-ids';
 import { ServiceError } from '@/server/services/context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import {
   ordersCatalogTag,
   ordersCatalogWarehouseTag,
@@ -382,17 +383,49 @@ export const loadCatalogThumbMapCached = unstable_cache(
 const loadChartersForWarehouseCached = unstable_cache(
   async (warehouseId: string): Promise<StorefrontCharter[]> => {
     const supabase = createAdminClient();
-    const { data: pairs, error } = await supabase
-      .from('warehouse_charters')
-      .select('charter:charters!inner (id, name, code, status, address)')
-      .eq('warehouse_id', warehouseId);
-    // THROW, never []: a failed read cached as "this warehouse services no
-    // sites" would hide every delivery site for 5 minutes. The page shows its
-    // error state instead, and the next request retries.
-    if (error) {
-      throw new Error(`[orders-new] warehouse charters read failed: ${error.message}`);
+    // Every link, page by page, ordered by charter (the table has no id
+    // column; its key is warehouse + charter). One read with no order and no
+    // range answered an arbitrary 1000 past 1000 links on this warehouse, and
+    // archived charters' links count too (the status filter runs below), so
+    // the rest of the sites were missing here and in the phone's order sites,
+    // which this loader also serves (B47). The charter order only keeps the
+    // pages stable; the sites are returned by name (below). The read stops at
+    // LOOKUP_ROW_CEILING links (the first by charter), reported once per fill:
+    // the cached value is then those links' active sites, by name.
+    type LinkRow = { charter: unknown };
+    let pairs: LinkRow[];
+    try {
+      pairs = await fetchAllRows<LinkRow>(
+        (from, to) =>
+          supabase
+            .from('warehouse_charters')
+            .select('charter:charters!inner (id, name, code, status, address)')
+            .eq('warehouse_id', warehouseId)
+            .order('charter_id', { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: LinkRow[] | null;
+            error: { message: string } | null;
+          }>,
+        { cap: LOOKUP_ROW_CEILING },
+      );
+    } catch (err) {
+      // THROW, never []: a failed read cached as "this warehouse services no
+      // sites" would hide every delivery site for 5 minutes. The page shows its
+      // error state instead, and the next request retries. Any failed page
+      // fails the read. fetchAllRows throws a ServiceError whose public message
+      // is generic; the PostgREST cause is internalDetail.
+      const cause =
+        err instanceof ServiceError
+          ? (err.internalDetail ?? err.message)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new Error(`[orders-new] warehouse charters read failed: ${cause}`);
     }
-    return (pairs ?? []).flatMap((p) => {
+    if (pairs.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('orders_new.delivery_sites', { warehouseId });
+    }
+    const sites = pairs.flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)
         ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
         : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
@@ -413,6 +446,10 @@ const loadChartersForWarehouseCached = unstable_cache(
         },
       ];
     });
+    // By name, then id: the returns chooser's rule (readDeliverySites). Nothing
+    // after this sorts: the site picker on Orders > New and the phone's site
+    // sheet list the sites as given, and a charter id is a random uuid.
+    return sites.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   },
   ['orders-new-v2-charters-v2'],
   { revalidate: 300, tags: ['orders-new-v2-charters'] },

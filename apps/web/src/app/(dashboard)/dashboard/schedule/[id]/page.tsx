@@ -14,6 +14,7 @@ import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { formatEventRange } from '@/lib/schedule/event-range';
 import { formatNumber } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
@@ -36,12 +37,34 @@ const STATUS_TONE: Record<string, BadgeProps['variant']> = {
   cancelled: 'destructive',
 };
 
+/**
+ * What an event's distribution handed out, from its bundle_distributions row
+ * (B103): "1 kit (Starter kit) was distributed from East Warehouse." A kit
+ * name that could not be read is left out; a warehouse is "a warehouse", as
+ * in the sentence before completion. Plural on the absolute count, as there.
+ */
+function handedOutLine(
+  quantity: number,
+  kitName: string | null,
+  warehouseName: string | null,
+): string {
+  const one = Math.abs(quantity) === 1;
+  return (
+    `${formatNumber(quantity)} ${one ? 'kit' : 'kits'}` +
+    (kitName ? ` (${kitName})` : '') +
+    ` ${one ? 'was' : 'were'} distributed from ${warehouseName ?? 'a warehouse'}.`
+  );
+}
+
 export default async function ScheduleEventDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   // Mirrors /dashboard/schedule: schedule:read (or manage) can VIEW — the
   // calendar's event chips link here, so a read-only grantee must not dead-end
   // on a 404. Status changes + editing stay schedule:manage (the write UI
@@ -93,8 +116,16 @@ export default async function ScheduleEventDetailPage({
   // If a bundle is linked, surface its name + the destination warehouse
   // name in a side card. Two extra cheap reads; bail silently on either
   // if RLS or a stale id slips through.
+  //
+  // Once the event has a distribution, the card says what it handed out
+  // (B103), from its bundle_distributions row: a hand-out from a bundle page
+  // that named this event may be of another kit, quantity or warehouse than
+  // the event's own bundle fields.
+  const distribution = event.bundleId ? event.bundleDistribution : null;
   let linkedBundle: { id: string; name: string; sku: string | null } | null = null;
+  let distributedBundleName: string | null = null;
   let bundleWarehouseName: string | null = null;
+  let distributedWarehouseName: string | null = null;
   if (event.bundleId) {
     try {
       const bundlesSvc = await BundlesService.forCurrentUser();
@@ -108,11 +139,26 @@ export default async function ScheduleEventDetailPage({
       /* ignore */
     }
   }
-  if (event.bundleWarehouseId) {
+  if (distribution) {
+    if (distribution.bundleId === event.bundleId) {
+      distributedBundleName = linkedBundle?.name ?? null;
+    } else {
+      try {
+        const bundlesSvc = await BundlesService.forCurrentUser();
+        distributedBundleName = (await bundlesSvc.get(distribution.bundleId)).bundle.name;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  if (event.bundleWarehouseId || distribution) {
     try {
       const whSvc = await WarehousesService.forCurrentUser();
       const all = await whSvc.listNames();
-      bundleWarehouseName = all.find((w) => w.id === event.bundleWarehouseId)?.name ?? null;
+      const nameOf = (warehouseId: string | null | undefined) =>
+        warehouseId ? (all.find((w) => w.id === warehouseId)?.name ?? null) : null;
+      bundleWarehouseName = nameOf(event.bundleWarehouseId);
+      distributedWarehouseName = nameOf(distribution?.warehouseId);
     } catch {
       /* ignore */
     }
@@ -239,21 +285,33 @@ export default async function ScheduleEventDetailPage({
               </span>
             ) : null}
           </div>
-          <p className="text-muted-foreground text-[12px]">
-            {event.bundleQuantity != null ? formatNumber(event.bundleQuantity) : '—'}{' '}
-            {/* Pluralize on the absolute count — fractional kits read
-                as plural to match how every other quantity copy in
-                the app behaves (e.g. "0.5 kits", "2.5 kits"). */}
-            kit
-            {event.bundleQuantity != null && Math.abs(event.bundleQuantity) === 1
-              ? ''
-              : 's'}{' '}
-            will be distributed from {bundleWarehouseName ?? 'a warehouse'}{' '}
-            when this event is marked complete.
-            {event.bundleDistributed
-              ? ' This event already triggered a distribution — re-completing won\'t re-fire.'
-              : ''}
-          </p>
+          {distribution ? (
+            // What the event handed out, and nothing about the future (B103):
+            // it kept saying the kit "will be distributed ... when this event
+            // is marked complete" after it had been.
+            <p className="text-muted-foreground text-[12px]">
+              {handedOutLine(
+                distribution.quantity,
+                distributedBundleName,
+                distributedWarehouseName,
+              )}
+            </p>
+          ) : event.status === 'completed' ? null : (
+            // Before completion: what completing the event will hand out. A
+            // completed event with no distribution (its hand-out was refused,
+            // its kit was added after it was completed, or its order closed
+            // it) hands nothing out by itself, so it says neither.
+            <p className="text-muted-foreground text-[12px]">
+              {event.bundleQuantity != null ? formatNumber(event.bundleQuantity) : '—'}{' '}
+              {/* Pluralize on the absolute count — fractional kits read
+                  as plural to match how every other quantity copy in
+                  the app behaves (e.g. "0.5 kits", "2.5 kits"). */}
+              kit
+              {event.bundleQuantity != null && Math.abs(event.bundleQuantity) === 1 ? '' : 's'} will
+              be distributed from {bundleWarehouseName ?? 'a warehouse'} when this event is marked
+              complete.
+            </p>
+          )}
         </DetailSection>
       )}
 

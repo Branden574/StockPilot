@@ -41,7 +41,7 @@
       "body": {
         "fulfillmentType": "delivery",
         "deliveryCharterId": "$site",
-        "onBehalfOf": { "name": "Maria Lopez", "email": "maria@example.org" },
+        "onBehalfOf": { "name": "Pixie Quill", "email": "pixie@example.org" },
         "notes": "Room 12, by Friday",
         "neededByLocal": "2026-10-05T10:00",
         "lines": [
@@ -122,7 +122,7 @@
     {
       "id": "A11",
       "title": "a name and an email between spaces (trimmed first)",
-      "body": { "onBehalfOf": { "name": "  Maria Lopez ", "email": " maria@example.org\t" } },
+      "body": { "onBehalfOf": { "name": "  Pixie Quill ", "email": " pixie@example.org\t" } },
       "core": "accept",
       "sql": "accept"
     },
@@ -143,8 +143,8 @@
       "title": "a name, an email and notes padded with every character JavaScript's trim removes (trimmed first, on both engines)",
       "body": {
         "onBehalfOf": {
-          "name": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffMaria Lopez\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff",
-          "email": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffmaria@example.org\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+          "name": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffPixie Quill\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff",
+          "email": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffpixie@example.org\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
         },
         "notes": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffRoom 12\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
       },
@@ -154,7 +154,7 @@
     {
       "id": "A14",
       "title": "an email with an apostrophe, a plus, a hyphen and subdomains (the web accepts it today)",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "o'neil+orders@sub.ex-ample.co.uk" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "o'neil+orders@sub.ex-ample.co.uk" } },
       "core": "accept",
       "sql": "accept"
     },
@@ -254,7 +254,7 @@
       "id": "R12",
       "title": "a 121-character name",
       "body": {
-        "onBehalfOf": { "name": { "$repeat": "n", "times": 121 }, "email": "maria@example.org" }
+        "onBehalfOf": { "name": { "$repeat": "n", "times": 121 }, "email": "pixie@example.org" }
       },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
@@ -262,42 +262,42 @@
     {
       "id": "R13",
       "title": "a blank name with an email (both or neither)",
-      "body": { "onBehalfOf": { "name": "   ", "email": "maria@example.org" } },
+      "body": { "onBehalfOf": { "name": "   ", "email": "pixie@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R14",
       "title": "a name with an empty email (both or neither)",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R15",
       "title": "an email with no @",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria.example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie.example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R16",
       "title": "an email with two @",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@x@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@x@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R17",
       "title": "an email with a space in it",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria lopez@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie quill@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R18",
       "title": "an email with no dot in the domain",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@localhost" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@localhost" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
@@ -306,7 +306,7 @@
       "title": "a 255-character email",
       "body": {
         "onBehalfOf": {
-          "name": "Maria",
+          "name": "Pixie",
           "email": { "$repeat": "e", "times": 243, "suffix": "@example.org" }
         }
       },
@@ -423,42 +423,42 @@
     {
       "id": "R35",
       "title": "an email with a no-break space inside it",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria\u00a0lopez@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie\u00a0quill@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R36",
       "title": "an email with a one-letter top-level domain (the web refuses it today)",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@gmail.c" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@gmail.c" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R37",
       "title": "an email with two dots in a row",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria..lopez@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie..quill@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R38",
       "title": "an email with a quoted local part",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "\"maria\"@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "\"pixie\"@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R39",
       "title": "an email whose domain starts with a hyphen",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@-example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@-example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R40",
       "title": "an email with a letter outside ASCII",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "mar\u00eda@example.org" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pix\u00ede@example.org" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
@@ -486,14 +486,14 @@
     {
       "id": "R44",
       "title": "an email ending in U+0085, which JavaScript's trim keeps",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@example.org\u0085" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@example.org\u0085" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
     {
       "id": "R45",
       "title": "an email ending in a zero-width space (U+200B), which JavaScript's trim keeps",
-      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@example.org\u200b" } },
+      "body": { "onBehalfOf": { "name": "Pixie", "email": "pixie@example.org\u200b" } },
       "core": { "reason": "on_behalf_invalid" },
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },
@@ -525,7 +525,7 @@
       "id": "D04",
       "title": "an on-behalf email with no name",
       "body": {},
-      "sqlPatch": { "on_behalf_email": "maria@example.org" },
+      "sqlPatch": { "on_behalf_email": "pixie@example.org" },
       "core": "accept",
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
     },

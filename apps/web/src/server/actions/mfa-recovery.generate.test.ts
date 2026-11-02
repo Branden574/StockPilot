@@ -12,6 +12,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * REAL server client and auth-js against the fixture's ES256 keys and Auth
  * server (src/test/auth-session-fixture.ts); the database calls are recorded
  * instead of sent.
+ *
+ * And the codes are minted with that same verified token (S50a): on a client
+ * built for that token alone (lib/supabase/access-token-client), never on the
+ * cookie client, whose own calls load the session again.
  */
 
 let jar = new Map<string, string>();
@@ -43,13 +47,19 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: (...args: unknown[]) => checkRateLimit(...(args as [])),
 }));
 const rpc = vi.fn(async () => ({ data: [{ code: 'aaaa-bbbb' }], error: null }));
+const cookieRpc = vi.fn(async () => ({ data: null, error: { message: 'not this client' } }));
 vi.mock('@/lib/supabase/server', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/supabase/server')>();
   return {
     // The request's cookie client, with its database calls recorded.
-    createClient: async () => Object.assign(await real.createClient(), { rpc }),
+    createClient: async () => Object.assign(await real.createClient(), { rpc: cookieRpc }),
   };
 });
+// The client the codes are minted on, built for one access token.
+const createAccessTokenClient = vi.fn((_token: string) => ({ rpc }));
+vi.mock('@/lib/supabase/access-token-client', () => ({
+  createAccessTokenClient: (token: string) => createAccessTokenClient(token),
+}));
 
 import {
   INSECURE_USER_WARNING,
@@ -102,14 +112,21 @@ async function expectRefused() {
   // Refused before the rate limit is spent and before any code is minted.
   expect(checkRateLimit).not.toHaveBeenCalled();
   expect(rpc).not.toHaveBeenCalled();
+  expect(createAccessTokenClient).not.toHaveBeenCalled();
+  expect(cookieRpc).not.toHaveBeenCalled();
 }
 
 describe('generateMfaRecoveryCodesAction — the AAL2 gate', () => {
   it('a verified AAL2 session mints the codes, with no warning', async () => {
-    await signIn(sessionClaims({ aal: 'aal2' }));
+    const claims = sessionClaims({ aal: 'aal2' });
+    const token = await signAccessToken(projectKey, claims);
+    await signIn(claims, token);
     const res = await generateMfaRecoveryCodesAction();
     expect(res).toEqual({ ok: true, data: { codes: ['aaaa-bbbb'] } });
+    // With the very token whose claims passed the gate, never on the cookie client.
+    expect(createAccessTokenClient).toHaveBeenCalledWith(token);
     expect(rpc).toHaveBeenCalledWith('generate_mfa_recovery_codes');
+    expect(cookieRpc).not.toHaveBeenCalled();
     expect(warn.mock.calls.some((c: unknown[]) => INSECURE_USER_WARNING.test(String(c[0])))).toBe(
       false,
     );
@@ -136,6 +153,17 @@ describe('generateMfaRecoveryCodesAction — the AAL2 gate', () => {
 
   it('an expired AAL2 token that cannot be refreshed is refused', async () => {
     await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
+    await expectRefused();
+  });
+
+  it('a verified AAL2 session of another account than the validated one is refused', async () => {
+    await signIn(
+      sessionClaims({
+        aal: 'aal2',
+        sub: '33333333-3333-4333-8333-333333333333',
+        email: 'other@example.test',
+      }),
+    );
     await expectRefused();
   });
 });

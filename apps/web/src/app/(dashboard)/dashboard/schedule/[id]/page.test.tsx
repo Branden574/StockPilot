@@ -61,9 +61,11 @@ vi.mock('@/server/services/warehouses', () => ({
 
 import ScheduleEventDetailPage from './page';
 
+const EVENT_ID = '5eed0000-0000-4000-8000-0000000000b1';
+
 function event(status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled') {
   return {
-    id: 'ev-1',
+    id: EVENT_ID,
     title: 'Dock pickup',
     status,
     startsAt: '2026-10-20T16:00:00.000Z',
@@ -83,7 +85,7 @@ function event(status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled') 
 }
 
 async function renderPage() {
-  const ui = await ScheduleEventDetailPage({ params: Promise.resolve({ id: 'ev-1' }) });
+  const ui = await ScheduleEventDetailPage({ params: Promise.resolve({ id: EVENT_ID }) });
   return render(ui);
 }
 
@@ -106,7 +108,7 @@ describe('the event page header', () => {
     expect(headerActions(container)).toEqual(['Edit', 'Cancel', 'Start']);
     expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute(
       'href',
-      '/dashboard/schedule/ev-1/edit',
+      `/dashboard/schedule/${EVENT_ID}/edit`,
     );
     expect(screen.getByRole('button', { name: 'Start' })).toHaveClass('bg-primary');
   });
@@ -143,5 +145,23 @@ describe('the event page header', () => {
     h.ctx = { role: 'viewer', permissions: new Set() };
     h.event = event('scheduled');
     await expect(renderPage()).rejects.toThrow('notFound');
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before the event is read
+// (its invalid-uuid error reached the error boundary), and ahead of the
+// schedule:read gate.
+describe('schedule/[id]: an event id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    const { ScheduleService } = await import('@/server/services/schedule');
+    for (const id of ['not-a-uuid', EVENT_ID.slice(0, -1)]) {
+      await expect(
+        ScheduleEventDetailPage({ params: Promise.resolve({ id }) }),
+        id,
+      ).rejects.toThrow('notFound');
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(ScheduleService.forCurrentUser).not.toHaveBeenCalled();
   });
 });

@@ -30,7 +30,10 @@ function buildCtx() {
   };
 }
 
-function buildRequest(id = 'order-1') {
+/** The order's id: the route answers 400 for an id that is not a uuid (B63). */
+const ORDER_ID = '0a000000-0000-4000-8000-000000000201';
+
+function buildRequest(id = ORDER_ID) {
   return {
     req: new Request(`https://test.local/api/v1/orders/${id}/shipping/reconcile`, {
       method: 'POST',
@@ -67,7 +70,7 @@ describe('POST /api/v1/orders/[id]/shipping/reconcile', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ shipment });
-    expect(reconcilePurchasing).toHaveBeenCalledWith('order-1');
+    expect(reconcilePurchasing).toHaveBeenCalledWith(ORDER_ID);
   });
 
   it('returns 200 with { shipment: null } when the stranded row was reset to draft', async () => {

@@ -28,6 +28,8 @@ const KIT_MESSAGE =
 
 function serviceWithRpcError(error: { message: string; code?: string; hint?: string }) {
   const stub = makeSupabaseStub({
+    // The PO, read in the organization before the function (S39).
+    'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
     'rpc:post_receipt_v2': { data: null, error },
     'purchase_order_items.select': { data: [], error: null },
     'inventory_items.select': { data: [], error: null },

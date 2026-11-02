@@ -49,6 +49,31 @@ const everyone: ReleaseViewer = {
 };
 /** A member who holds no permission and no module. */
 const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+/**
+ * Added when main was merged in after #461 and #471 (2026-11-02): three
+ * releases published that day are dated later than this one (04:21Z) and sit
+ * above it: authenticator-code-requests-2026-11 (15:43Z, every member),
+ * integration-retries-2026-11 (15:42Z, whoever manages integrations with the
+ * Integrations module on) and lists-delivery-sites-and-fixes-2026-11 (05:53Z,
+ * every member). releaseRegistrySchema keeps dates from increasing down the
+ * list, so this release is fourth, directly above the export fixes release. A
+ * test that expects it to be a reader's notice, or first in an old phone
+ * build's list, reads or sees those three first (a read of a release a reader
+ * is not told changes nothing).
+ */
+const NEWER_IDS = [
+  'authenticator-code-requests-2026-11',
+  'integration-retries-2026-11',
+  'lists-delivery-sites-and-fixes-2026-11',
+];
+const newerReads = NEWER_IDS.map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-02T17:40:00Z',
+  read_at: '2026-11-02T17:40:00Z',
+}));
+const newerSeen: Record<string, boolean> = Object.fromEntries(NEWER_IDS.map((id) => [id, true]));
 
 /** A file in the repository, as written. */
 const REPO = resolve(__dirname, '../../../../..');
@@ -110,8 +135,12 @@ const WEB_ENTRIES = [
 const INTEGRATIONS_LINK = { href: '/dashboard/settings/integrations', label: 'Open Integrations' };
 
 describe('the update-ready-and-fixes release', () => {
-  it('is published once, at the top, at revision 1, with the B44 draft folded in and no draft left', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
+  // Renamed when main was merged in after #461 and #471 (2026-11-02; was: "is published once, at the top, ...", with ID at RELEASES[0]): the three releases in NEWER_IDS are dated later and sit above it. Claim kept: published once, at revision 1, with the B44 draft folded in and no draft left.
+  it('is published once, directly below the lists-delivery-sites-and-fixes release and above the export fixes release, at revision 1, with the B44 draft folded in and no draft left', () => {
+    // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES[0]): the three newer releases take 0 to 2, so this one is at 3.
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES.slice(0, 3).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -130,8 +159,12 @@ describe('the update-ready-and-fixes release', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T02:52:02Z'));
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T04:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    for (const r of RELEASES.slice(1)) {
+    // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES.slice(1)): this release is at 3, so the releases below it start at 4; the three above it are dated later.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    for (const r of RELEASES.slice(0, 3)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
 
@@ -170,7 +203,8 @@ describe('the update-ready-and-fixes release', () => {
     expect(ids).not.toContain('bundle-required-component');
   });
 
-  it('reaches every member and is the first notice for each with nothing read; an old phone build shows its title and summary, with the Integrations button only for a reader that line reaches', () => {
+  // Renamed when main was merged in after #461 and #471 (2026-11-02; was: "reaches every member and is the first notice for each with nothing read; an old phone build shows ...", with nothing read or seen): the authenticator code and lists-delivery-sites-and-fixes releases, dated later, reach every member and come first. Claim kept: every member is told it, and an old phone build shows its title and summary, with the Integrations button only for a reader that line reaches.
+  it('reaches every member and is the notice for each once the newer releases are read; an old phone build shows its title and summary once they are seen, with the Integrations button only for a reader that line reaches', () => {
     const told = (v: ReleaseViewer) =>
       visibleReleases(RELEASES, v)
         .find((r) => r.id === ID)
@@ -178,19 +212,20 @@ describe('the update-ready-and-fixes release', () => {
     expect(told(everyone)).toEqual(release().entries.map((e) => e.id));
     // The two lines with no audience reach a member with no permission.
     expect(told(member)).toEqual(['update-ready-message', 'app-text-size-tabs-lists-buttons']);
+    // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: ID with nothing read, and ID first on an old phone build with nothing seen): the three newer releases come first; once they are read or seen, this one is the notice and first in the list.
     for (const v of [everyone, member]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, newerReads, null).latestUnread?.id, v.role).toBe(ID);
     }
     // The old phone builds' list takes its button from the first line with a
     // link that the reader is told.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen)[0]).toEqual({
       id: ID,
       date: '2026-11-02',
       title: release().title,
       body: release().summary,
       cta: INTEGRATIONS_LINK,
     });
-    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, member, newerSeen)[0]).toEqual({
       id: ID,
       date: '2026-11-02',
       title: release().title,

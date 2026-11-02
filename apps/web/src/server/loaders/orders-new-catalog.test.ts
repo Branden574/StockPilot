@@ -3,9 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { holdMembership, type BundleMembership } from '@/lib/auth/request-context-bundle';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
-const { createAdminClientMock, createClientMock } = vi.hoisted(() => ({
+const { createAdminClientMock, createClientMock, ceiling, reportError } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   createClientMock: vi.fn(),
+  // The shared LOOKUP_ROW_CEILING, lowered by the delivery sites ceiling test.
+  ceiling: { value: 10_000 },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// A getter, so a test can lower the ceiling: the loader reads the binding on
+// every call.
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 
 vi.mock('next/cache', () => ({
@@ -1159,6 +1172,176 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
     await expect(loadChartersForWarehouse(WH)).resolves.toEqual([
       { id: CHARTER_A, name: 'Alpha', code: 'A', address: null },
     ]);
+  });
+
+  it('charters: the failed read keeps the PostgREST text in its message, for the log', async () => {
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': FAILED });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadChartersForWarehouse(WH)).rejects.toThrow(
+      /\[orders-new\] warehouse charters read failed: fetch failed/,
+    );
+  });
+});
+
+/* ---- delivery sites past 1000 links on one warehouse (B47 part B) ---- */
+
+// Orders > New lists a warehouse's delivery sites from its warehouse_charters
+// links (and serves the phone's order sites through /api/v1/orders/catalog).
+// That read had no order and no range, and archived charters' links count
+// too (the active filter runs after the read), so past 1000 links on one
+// warehouse PostgREST answered an arbitrary 1000 and the rest were missing.
+// It is now read page by page, ordered by charter.
+describe('loadChartersForWarehouse: every delivery site, past 1000 links', () => {
+  const charterId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const link = (i: number, status: string, warehouseId = WH) => ({
+    warehouse_id: warehouseId,
+    charter_id: charterId(i),
+    charter: {
+      id: charterId(i),
+      name: `Site ${String(i).padStart(4, '0')}`,
+      code: null,
+      status,
+      address: null,
+    },
+  });
+  // 1,200 active and 30 archived links on WH, stored with the archived ones
+  // first, and another warehouse's links that must never be listed.
+  const LINKS = [
+    ...Array.from({ length: 30 }, (_, i) => link(5000 + i, 'archived')),
+    ...Array.from({ length: 1200 }, (_, i) => link(i, 'active')),
+    ...Array.from({ length: 5 }, (_, i) => link(8000 + i, 'active', WH2)),
+  ];
+
+  function argsOf(stub: ReturnType<typeof makeSupabaseStub>, page: number, method: string) {
+    const methods = stub.chainsAll.get('warehouse_charters.select')?.[page] ?? [];
+    const args = stub.chainArgsAll.get('warehouse_charters.select')?.[page] ?? [];
+    return methods.flatMap((m, i) => (m === method ? [args[i]] : []));
+  }
+
+  beforeEach(() => {
+    ceiling.value = 10_000;
+    reportError.mockClear();
+  });
+
+  it('lists the 1,200 active sites, in two pages ordered by charter, keeping the warehouse on every page', async () => {
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(LINKS) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+    expect(reportError).not.toHaveBeenCalled();
+
+    expect(sites).toHaveLength(1200);
+    expect(new Set(sites.map((s) => s.id))).toEqual(
+      new Set(Array.from({ length: 1200 }, (_, i) => charterId(i))),
+    );
+    expect(stub.chainsAll.get('warehouse_charters.select')).toHaveLength(2);
+    expect(argsOf(stub, 0, 'order').map((a) => a![0])).toEqual(['charter_id']);
+    expect(argsOf(stub, 0, 'range')).toEqual([[0, 999]]);
+    expect(argsOf(stub, 1, 'range')).toEqual([[1000, 1999]]);
+    for (const page of [0, 1]) {
+      expect(argsOf(stub, page, 'eq')).toContainEqual(['warehouse_id', WH]);
+    }
+  });
+
+  it('a failed second page rejects with the PostgREST text, never a partial list cached for 5 minutes', async () => {
+    const served = servedLikePostgrest(LINKS);
+    let calls = 0;
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select': (call) => {
+        calls += 1;
+        return calls === 1 ? served(call) : { data: null, error: { message: 'statement timeout' } };
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    await expect(loadChartersForWarehouse(WH)).rejects.toThrow(
+      /\[orders-new\] warehouse charters read failed: .*statement timeout/,
+    );
+    expect(calls).toBe(2);
+  });
+
+  // The pages are read in charter order only so that they are stable. A
+  // charter id is a random uuid, and nothing after this loader sorts: the web
+  // site picker (orders-storefront.tsx) and the phone's site sheet (through
+  // /api/v1/orders/catalog) list the sites as given. So the loader lists them
+  // by name, then id: the returns chooser's rule (readDeliverySites). The
+  // tests above check which sites are listed; these check their order.
+  const named = (i: number, name: string, status = 'active') => ({
+    warehouse_id: WH,
+    charter_id: charterId(i),
+    charter: { id: charterId(i), name, code: null, status, address: null },
+  });
+
+  it('lists a handful of sites by name, then id, whatever order the rows arrive in', async () => {
+    // Arrival order is neither charter order nor name order. Two sites share
+    // a name and arrive larger id first; one name starts in lower case (name
+    // order, not character-code order); the archived charter stays out.
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select': {
+        data: [
+          named(9, 'Delta Site'),
+          named(3, 'Bravo Site'),
+          named(1, 'charlie Site'),
+          named(8, 'Archived Site', 'archived'),
+          named(7, 'Alpha Site'),
+          named(5, 'Delta Site'),
+        ],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    expect(sites.map((s) => [s.name, s.id])).toEqual([
+      ['Alpha Site', charterId(7)],
+      ['Bravo Site', charterId(3)],
+      ['charlie Site', charterId(1)],
+      ['Delta Site', charterId(5)],
+      ['Delta Site', charterId(9)],
+    ]);
+  });
+
+  it('past 1000 links, lists every site by name across both pages, not in the charter order they are read in', async () => {
+    // Charter i is named Site <1199 - i>, so the first site by name has the
+    // largest charter id and is read on the second page.
+    const pad = (n: number) => String(n).padStart(4, '0');
+    const REVERSED = Array.from({ length: 1200 }, (_, i) => named(i, `Site ${pad(1199 - i)}`));
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(REVERSED) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    expect(stub.chainsAll.get('warehouse_charters.select')).toHaveLength(2);
+    expect(argsOf(stub, 0, 'order').map((a) => a![0])).toEqual(['charter_id']);
+    expect(sites.map((s) => s.id)).toEqual(
+      Array.from({ length: 1200 }, (_, k) => charterId(1199 - k)),
+    );
+    expect(sites[0]!.name).toBe('Site 0000');
+    expect(sites[1199]!.name).toBe('Site 1199');
+  });
+
+  /**
+   * B47 decisions round (2026-11-01): the read stops at LOOKUP_ROW_CEILING
+   * links, the first by charter, and reports it once with the warehouse only.
+   * The cached value is then the active sites among those links, by name.
+   */
+  it('stops at the ceiling: the active sites of the first links by charter, by name, reported once', async () => {
+    ceiling.value = 1100;
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': servedLikePostgrest(LINKS) });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const sites = await loadChartersForWarehouse(WH);
+
+    // Charters 0-1199 are active and sort before the archived 5000-5029.
+    expect(sites.map((s) => s.id)).toEqual(Array.from({ length: 1100 }, (_, i) => charterId(i)));
+    expect(argsOf(stub, 1, 'range')).toEqual([[1000, 1099]]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+      tag: 'lookup_ceiling.orders_new.delivery_sites',
+      organizationId: null,
+      extra: { lookup: 'orders_new.delivery_sites', warehouseId: WH },
+    });
   });
 });
 

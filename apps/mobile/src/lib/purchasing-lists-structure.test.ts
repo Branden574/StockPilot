@@ -559,7 +559,10 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
       "'Could not update'",
       "'Could not delete'",
       "'You need manager access to change recurring POs.'",
-      "row.send_mode === 'send' ? 'Auto-send' : 'Draft'",
+      // Re-pinned by fix/recurring-po-auto-order-words-b64-b105 (B105,
+      // 2026-11-02; was: 'Auto-send'): the mode marks the purchase order as
+      // ordered and sends nothing to the supplier.
+      "row.send_mode === 'send' ? 'Auto-order' : 'Draft'",
       "row.enabled ? `next ${nextRun}` : 'paused'",
       "supplierObj?.name ?? 'No supplier'",
       'title="Recurring POs"',
