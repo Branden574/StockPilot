@@ -63,6 +63,9 @@ vi.mock('@/server/services/context', () => ({
 import NewPoPage from './new/page';
 import EditPoPage from './[id]/edit/page';
 
+// A well-formed id: the page refuses any other before reading (B63).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 beforeEach(() => {
   vi.clearAllMocks();
   inventoryList.mockResolvedValue({ items: [], total: 0, valueOnHand: 0 });
@@ -81,7 +84,7 @@ describe('PO item pickers request expected:\'any\' (mig 0277)', () => {
   });
 
   it('edit-PO page: list() is called with expected:\'any\' so existing draft lines keep resolving', async () => {
-    await EditPoPage({ params: Promise.resolve({ id: 'po-1' }) });
+    await EditPoPage({ params: Promise.resolve({ id: PO_ID }) });
     expect(inventoryList).toHaveBeenCalledWith(
       expect.objectContaining({ expected: 'any' }),
     );

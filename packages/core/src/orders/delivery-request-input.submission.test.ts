@@ -102,12 +102,12 @@ describe('deliveryRequestInputFromSubmission', () => {
 
   it('an order on behalf of someone names them and their email, from the placed order', () => {
     const input = deliveryRequestInputFromSubmission(
-      summary({ requestedFor: { self: false, name: 'Maria Lopez', email: 'maria@example.org' } }),
+      summary({ requestedFor: { self: false, name: 'Pixie Quill', email: 'pixie@example.org' } }),
       setup(),
       RECIPIENTS,
     );
-    expect(input.requestedFor).toBe('Maria Lopez');
-    expect(input.requesterEmail).toBe('maria@example.org');
+    expect(input.requestedFor).toBe('Pixie Quill');
+    expect(input.requesterEmail).toBe('pixie@example.org');
   });
 
   it('pickup: the real method, no destination, and the pickup words', () => {

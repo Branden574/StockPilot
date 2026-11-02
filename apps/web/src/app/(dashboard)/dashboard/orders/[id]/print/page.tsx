@@ -6,6 +6,7 @@ import { AutoPrint } from '@/components/orders/auto-print';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { formatNumber } from '@/lib/utils';
@@ -57,6 +58,9 @@ export default async function OrderPrintPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
 
   const svc = await OrderRequestsService.forCurrentUser();
