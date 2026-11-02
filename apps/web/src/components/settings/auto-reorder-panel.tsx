@@ -76,7 +76,7 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
           : null,
     };
     if (payload.maxAutoSendCents != null && !Number.isFinite(payload.maxAutoSendCents)) {
-      toast.error('Enter a valid auto-send cap, or leave it blank.');
+      toast.error('Enter a valid auto-order cap, or leave it blank.');
       return;
     }
     setBusy(true);
@@ -128,17 +128,22 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
               className={SELECT}
             >
               <option value="draft">Create a draft PO for review</option>
-              <option value="send">Auto-send the PO to the supplier</option>
+              <option value="send">Mark as ordered automatically</option>
             </select>
+            {/* B105: the mode marks the PO as ordered (runAutoReorder's
+                updateStatus 'ordered') and sends nothing to the supplier. The
+                rule is the run's (shouldAutoSend), as it was. */}
             <p className="text-muted-foreground text-[12px] leading-[18px]">
-              Draft = someone reviews + sends. Auto-send still respects PO approval thresholds — and
-              a PO is only auto-sent when it&apos;s under a cap or your approval threshold; without
-              either ceiling it&apos;s drafted for review instead.
+              Draft = someone reviews the PO and marks it as ordered. Mark as ordered automatically
+              still respects PO approval thresholds — and a PO is only marked as ordered when
+              it&apos;s under a cap or your approval threshold; without either ceiling it&apos;s
+              drafted for review instead. Nothing is sent to the supplier. Send them the purchase
+              order yourself.
             </p>
           </div>
           {mode === 'send' && (
             <div className="space-y-1.5">
-              <Label htmlFor="ar-cap">Auto-send cap ($, optional)</Label>
+              <Label htmlFor="ar-cap">Auto-order cap ($, optional)</Label>
               <Input
                 id="ar-cap"
                 type="number"
@@ -150,7 +155,7 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
                 disabled={busy}
               />
               <p className="text-muted-foreground text-[12px] leading-[18px]">
-                A supplier PO above this is left as a draft instead of auto-sent.
+                A PO above this is left as a draft instead of being marked as ordered.
               </p>
             </div>
           )}

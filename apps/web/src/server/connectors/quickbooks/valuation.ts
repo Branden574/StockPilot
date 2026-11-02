@@ -89,6 +89,34 @@ function monthKey(now: Date): string {
   return now.toISOString().slice(0, 7);
 }
 
+/** The connection settings the monthly valuation reads and writes. */
+export interface ValuationSettings {
+  accountIds?: { inventoryAsset?: string; valuationOffset?: string };
+  lastValuationSnapshotValue?: number;
+  lastValuationMonth?: string;
+  lastValuationSkipReason?: string | null;
+}
+
+/** Recorded in settings.lastValuationSkipReason while the accounts are not set. */
+const ACCOUNTS_NOT_SET_REASON =
+  'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured';
+
+/**
+ * Whether maybePostMonthlyValuation has anything to do for a connection with
+ * these settings at `now`: this month is not posted yet, and either both
+ * accounts are set (it posts and stamps the month) or the skip reason is not
+ * recorded yet (it records it). Its own gates ask this, and the drain-outbox
+ * cron asks it too: a connection the run's deadline left behind counts as
+ * work left for the next tick only when this is true (docket B81 review).
+ */
+export function valuationDue(settings: ValuationSettings, now: Date): boolean {
+  if (settings.lastValuationMonth === monthKey(now)) return false;
+  if (!settings.accountIds?.inventoryAsset || !settings.accountIds?.valuationOffset) {
+    return settings.lastValuationSkipReason !== ACCOUNTS_NOT_SET_REASON;
+  }
+  return true;
+}
+
 /** YYYY-MM-DD of a Date in UTC. */
 function dateKey(now: Date): string {
   return now.toISOString().slice(0, 10);
@@ -147,7 +175,8 @@ async function currentInventoryValue(admin: AdminClient, organizationId: string)
  *
  * Flow:
  *  1. Skip if this connection already posted for the current calendar month
- *     (`settings.lastValuationMonth === YYYY-MM`).
+ *     (`settings.lastValuationMonth === YYYY-MM`), or if its accounts are not
+ *     set and that skip reason is already recorded (valuationDue).
  *  2. Compute the org's current total inventory value; delta = round2(current −
  *     lastSnapshot). Snapshot defaults to 0 on first run.
  *  3. GRACEFUL CONFIG GAP: if the inventoryAsset / valuationOffset accounts
@@ -174,15 +203,12 @@ export async function maybePostMonthlyValuation(
   now: Date,
 ): Promise<void> {
   const month = monthKey(now);
-  const settings = (conn.settings ?? {}) as {
-    accountIds?: { inventoryAsset?: string; valuationOffset?: string };
-    lastValuationSnapshotValue?: number;
-    lastValuationMonth?: string;
-    lastValuationSkipReason?: string | null;
-  };
+  const settings = (conn.settings ?? {}) as ValuationSettings;
 
-  // 1. Once per calendar month per connection.
-  if (settings.lastValuationMonth === month) return;
+  // 1. Once per calendar month per connection, and an unconfigured connection
+  //    whose skip reason is already recorded has nothing to write either
+  //    (valuationDue, which the cron also asks).
+  if (!valuationDue(settings, now)) return;
 
   const inventoryAssetId = settings.accountIds?.inventoryAsset;
   const valuationOffsetId = settings.accountIds?.valuationOffset;
@@ -190,20 +216,17 @@ export async function maybePostMonthlyValuation(
   // 3. GRACEFUL CONFIG GAP — record the skip in a DEDICATED settings field
   //    (never the shared last_error column, which the drainer uses for real
   //    Bill-export failures) and skip without blocking the drain. Merge so we
-  //    don't clobber accountIds. Only write when the reason actually changes,
-  //    so an unconfigured connection isn't re-stamped on every 5-min tick.
+  //    don't clobber accountIds. Reached only when the recorded reason differs
+  //    (valuationDue above), so an unconfigured connection isn't re-stamped on
+  //    every tick.
   if (!inventoryAssetId || !valuationOffsetId) {
-    const skipReason =
-      'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured';
-    if (settings.lastValuationSkipReason !== skipReason) {
-      await admin
-        .from('org_connections')
-        .update({
-          settings: { ...settings, lastValuationSkipReason: skipReason },
-          updated_at: now.toISOString(),
-        })
-        .eq('id', conn.id);
-    }
+    await admin
+      .from('org_connections')
+      .update({
+        settings: { ...settings, lastValuationSkipReason: ACCOUNTS_NOT_SET_REASON },
+        updated_at: now.toISOString(),
+      })
+      .eq('id', conn.id);
     return;
   }
 

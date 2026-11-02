@@ -151,6 +151,27 @@ describe('reencodeWithoutMetadata', () => {
     expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 20_000_000 });
   });
 
+  // S45: the thumbnail's decode of the cleaned master carries the same limit
+  // (every sharp call in the web app passes one: sharp-input-limits.guard).
+  // The master is this function's own output, so the thumbnail is unchanged.
+  it('the thumbnail decode passes the same limit, and the thumbnail is the same file', async () => {
+    const input = new Uint8Array(await fixture('jpeg', { orientation: 6 }));
+    sharpCalls.length = 0;
+    const out = await reencodeWithoutMetadata(input, 'jpeg', { maxInputPixels: 20_000_000 });
+    expect(sharpCalls.map((args) => args[1])).toEqual([
+      { limitInputPixels: 20_000_000 },
+      { limitInputPixels: 20_000_000 },
+    ]);
+    sharpCalls.length = 0;
+    await reencodeWithoutMetadata(input, 'jpeg');
+    expect(sharpCalls[1]![1]).toEqual({ limitInputPixels: 50_000_000 });
+    const before = await sharp(Buffer.from(out!.master))
+      .resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+    expect(Buffer.from(out!.thumb).equals(before)).toBe(true);
+  });
+
   it.each(['jpeg', 'webp'] as const)(
     '%s: `quality` sets the master quality; the default is 90, byte for byte',
     async (f) => {
@@ -171,6 +192,22 @@ describe('reencodeWithoutMetadata', () => {
       expect(meta.exif).toBeUndefined();
     },
   );
+
+  it('turns sharp’s operation cache off, so no decoded photo is kept after its request (S45)', async () => {
+    // sharp's default keeps the last 100 operations and buffers it does not
+    // count against its 50 MB: on Linux, ten re-encodes of a progressive
+    // 7071 x 7071 JPEG passed 3 GB with it, and stayed near 470 MB without.
+    sharp.cache(true);
+    expect(sharp.cache()).toMatchObject({ memory: { max: 50 }, items: { max: 100 } });
+    expect(
+      await reencodeWithoutMetadata(new Uint8Array(await fixture('jpeg')), 'jpeg'),
+    ).not.toBeNull();
+    expect(sharp.cache()).toMatchObject({
+      memory: { current: 0, max: 0 },
+      files: { max: 0 },
+      items: { current: 0, max: 0 },
+    });
+  });
 
   it('png ignores `quality` (lossless)', async () => {
     const input = new Uint8Array(await fixture('png'));

@@ -223,7 +223,7 @@ describe('the success email: core deliveryRequestInputFromSubmission matches the
   it('a pickup on behalf of someone, with no needed-by', () => {
     const { web, phone } = renderBoth({
       method: 'pickup',
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       neededBy: '',
       notes: '',
       lines: [{ itemId: POLO.id, quantity: 1 }],
@@ -231,13 +231,13 @@ describe('the success email: core deliveryRequestInputFromSubmission matches the
     expectSameMessage(web, phone);
     expect(phone.fulfillmentType).toBe('pickup');
     expect(phone.destination).toBeNull();
-    expect(phone.requestedFor).toBe('Maria Lopez');
+    expect(phone.requestedFor).toBe('Pixie Quill');
   });
 
   it('a late-evening needed-by keeps its day', () => {
     const { web, phone } = renderBoth({
       method: 'delivery',
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       neededBy: '2026-12-31T23:30',
       notes: 'Last day of the year.',
       lines: [{ itemId: PLANNER.id, quantity: 12 }],
@@ -349,7 +349,7 @@ describe('the success email is the message the page sent before PO-2', () => {
       'a pickup on behalf of someone, with no needed-by',
       {
         method: 'pickup',
-        onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+        onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
         neededBy: '',
         notes: '',
         lines: [{ itemId: POLO.id, quantity: 1 }],
@@ -359,7 +359,7 @@ describe('the success email is the message the page sent before PO-2', () => {
       'a delivery on behalf of someone, late on the last day of the year',
       {
         method: 'delivery',
-        onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+        onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
         neededBy: '2026-12-31T23:30',
         notes: 'Last day of the year.',
         lines: [{ itemId: PLANNER.id, quantity: 12 }],

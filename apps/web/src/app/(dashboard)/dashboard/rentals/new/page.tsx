@@ -360,6 +360,7 @@ export default async function NewRentalPage({
         aisles={aisles}
         members={members}
         viewerRole={ctx.role}
+        viewerUserId={ctx.userId}
       />
     </div>
   );

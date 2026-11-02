@@ -22,7 +22,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -43,6 +42,7 @@ import {
   DISPLAY_GROUP_FALLBACK_NAME,
   formatCycleCountNumber,
   isCountableItem,
+  isUuid,
   formatOrderNumber,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
@@ -72,6 +72,7 @@ import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card, Hair } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -162,6 +163,7 @@ import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 
 interface Item {
   id: string;
@@ -496,6 +498,27 @@ async function resolveReceiptPoNumbers(
   return map;
 }
 
+/**
+ * Why there is no item to show (core verificationRefusalCopy('not_found',
+ * 'item')). True for an item this member's warehouse, charter or category
+ * access hides, one that is gone, and a link whose id is not a uuid; "This
+ * item no longer exists." was not.
+ */
+const ITEM_NOT_FOUND_COPY = 'This item is not available to you, or it no longer exists.';
+
+type Router = ReturnType<typeof useRouter>;
+
+/**
+ * Leave the item screen: back when there is a screen behind it, else Home.
+ * Opened from a link on a cold start there is nothing behind it, and a bare
+ * router.back() left the person on the spinner with no way out (B65). Not a
+ * hook, so `load` keeps its dependency list.
+ */
+function leaveItemScreen(router: Router): void {
+  if (router.canGoBack()) router.back();
+  else router.replace('/');
+}
+
 export default function ItemDetail() {
   const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
@@ -567,6 +590,9 @@ export default function ItemDetail() {
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  // A photo going up holds the phone update pop-up until it is saved
+  // (update-prompt-holds.ts): a restart would cut the upload.
+  useHoldUpdatePrompt(photoBusy, 'photo');
   const [photoViewerOpen, setPhotoViewerOpen] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
@@ -668,9 +694,24 @@ export default function ItemDetail() {
   // The item id this screen has already painted. A failed REFRESH keeps what
   // is on screen; only a failed FIRST read has nothing to keep.
   const paintedItemId = React.useRef<string | null>(null);
+  // The malformed link id whose "Not found" alert is up: `load` runs again
+  // whenever `role` changes, and nothing awaits before the alert, so without
+  // this a second alert would stack on the first.
+  const notFoundAlertedFor = React.useRef<string | null>(null);
 
   const load = React.useCallback(async () => {
     if (!id) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no item,
+    // so nothing is read: Postgres refuses it, and the failed read said
+    // "Check your connection and try again." Sets no state.
+    if (!isUuid(id)) {
+      if (notFoundAlertedFor.current === id) return;
+      notFoundAlertedFor.current = id;
+      Alert.alert('Not found', ITEM_NOT_FOUND_COPY, [
+        { text: 'OK', onPress: () => leaveItemScreen(router) },
+      ]);
+      return;
+    }
     const seq = ++loadSeq.current;
     // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
     // so it starts NOW, alongside the item read and well before the holdings
@@ -709,13 +750,13 @@ export default function ItemDetail() {
       // told the operator the item no longer existed and navigated away.
       if (paintedItemId.current === id) return;
       Alert.alert('Could not load this item', 'Check your connection and try again.', [
-        { text: 'OK', onPress: () => router.back() },
+        { text: 'OK', onPress: () => leaveItemScreen(router) },
       ]);
       return;
     }
     if (!data) {
-      Alert.alert('Not found', 'This item no longer exists.', [
-        { text: 'OK', onPress: () => router.back() },
+      Alert.alert('Not found', ITEM_NOT_FOUND_COPY, [
+        { text: 'OK', onPress: () => leaveItemScreen(router) },
       ]);
       return;
     }
@@ -1042,7 +1083,9 @@ export default function ItemDetail() {
     ): Promise<
       { ok: true; rows: MovementRow[]; count: number } | { ok: false; error: string }
     > => {
-      if (!id || !orgId) return { ok: true, rows: [], count: 0 };
+      // A link id that is not a uuid reads nothing (B65): a ?tab=movements
+      // link runs this beside the load that says "Not found".
+      if (!id || !orgId || !isUuid(id)) return { ok: true, rows: [], count: 0 };
       const {
         data,
         count,
@@ -1269,7 +1312,8 @@ export default function ItemDetail() {
       offset: number,
       pageSize: number,
     ): Promise<{ ok: true; rows: AuditRow[]; count: number } | { ok: false; error: string }> => {
-      if (!id || !orgId) return { ok: true, rows: [], count: 0 };
+      // A link id that is not a uuid reads nothing (B65), as above.
+      if (!id || !orgId || !isUuid(id)) return { ok: true, rows: [], count: 0 };
       const {
         data,
         count,
@@ -1625,8 +1669,9 @@ export default function ItemDetail() {
     if (!item || photoBusy) return;
     const hasPhoto = !!item.imageUrl;
     Alert.alert(hasPhoto ? 'Replace photo' : 'Add photo', undefined, [
-      { text: 'Take photo', onPress: () => void pickFromCamera() },
-      { text: 'Choose from library', onPress: () => void pickFromLibrary() },
+      // Held from the tap through the picker, the upload and the save.
+      { text: 'Take photo', onPress: () => void whileUpdatePromptHeld(pickFromCamera) },
+      { text: 'Choose from library', onPress: () => void whileUpdatePromptHeld(pickFromLibrary) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -1714,7 +1759,12 @@ export default function ItemDetail() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
+          <IconChip
+            icon={ChevronLeft}
+            onPress={() => leaveItemScreen(router)}
+            accessibilityLabel="Back"
+            minTap
+          />
           <IconChip icon={Edit3} onPress={openEdit} accessibilityLabel="Edit item" minTap />
         </View>
       </SafeAreaView>
@@ -2895,6 +2945,8 @@ function MovementNoteModalContent({
   // both being empty) — mirrors "no-op edit" so we never round-trip needlessly.
   const nextNote = normalizeMovementNote(text);
   const isDirty = nextNote !== normalizeMovementNote(initialNote);
+  // An unsaved note holds the phone update pop-up (update-prompt-holds.ts).
+  useHoldUpdatePrompt(isDirty, 'item-note');
 
   async function submit() {
     if (busy || !isDirty) return;

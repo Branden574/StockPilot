@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -8,6 +8,7 @@ import {
   ORDER_DRAFT_PREFIX,
   orderDraftPrefixFor,
   RENTAL_DRAFT_PREFIX,
+  rentalDraftPrefixFor,
   useCart,
 } from './cart-context';
 
@@ -214,7 +215,7 @@ describe('CartProvider — the New order draft is per account', () => {
   const legacy = () =>
     JSON.stringify({
       ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }),
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       lines: [{ itemId: 'stapler', quantity: 3 }],
     });
 
@@ -252,6 +253,97 @@ describe('CartProvider — the New order draft is per account', () => {
     localStorage.setItem(`${ORDER_DRAFT_PREFIX}${WH}`, legacy());
     renderOrders(A);
     expect(screen.getByTestId('lines').textContent).toBe('tentx1');
+  });
+});
+
+// ═══ THE NEW RENTAL DRAFT BELONGS TO ONE ACCOUNT (B20a) ═══
+//
+// New rental saved its cart under rental-draft:<warehouse>, which belonged to
+// no account: on a shared computer the next person to open New rental for that
+// warehouse found the last person's items and quantities. It now saves under
+// rental-draft:v2:<userId>:<warehouse> (rentalDraftPrefixFor). A draft left
+// under the old key is NOT adopted (review of B20a): it carries no owner, and
+// adopting it once handed it to whoever opened New rental first. New rental
+// mounts the cart with no legacyDraftPrefix, as renderRental does, and removes
+// the old key unread itself (rental-create-form.test.tsx pins that part).
+describe('CartProvider — the New rental draft is per account', () => {
+  function renderRental(prefix: string) {
+    return render(
+      <CartProvider
+        initial={initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' })}
+        draftPrefix={prefix}
+      >
+        <Lines />
+      </CartProvider>,
+    );
+  }
+
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.useRealTimers();
+    // A storage spy left by a test that failed before restoring its own.
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it('the prefix names the account', () => {
+    expect(rentalDraftPrefixFor('u1')).toBe('rental-draft:v2:u1:');
+  });
+
+  // Mutation caught: a prefix that does not carry the account.
+  it("one account's rental draft is not restored for another account on the same warehouse", () => {
+    const u1Key = `${rentalDraftPrefixFor('u1')}${WH}`;
+    localStorage.setItem(u1Key, draft([{ itemId: 'tent', quantity: 2 }]));
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+    // Still there for its own account.
+    expect(localStorage.getItem(u1Key)).not.toBeNull();
+  });
+
+  // Mounted as New rental mounts it, the cart neither reads nor opens a draft
+  // under the old shared key, for the first account or the next.
+  it('a draft under the old shared key is never read or opened, by any account', () => {
+    const legacyKey = `${RENTAL_DRAFT_PREFIX}${WH}`;
+    localStorage.setItem(legacyKey, draft([{ itemId: 'tent', quantity: 2 }]));
+    // On localStorage itself: happy-dom binds a copy of each Storage method
+    // onto the instance at first use, so a spy on Storage.prototype misses it.
+    const reads = vi.spyOn(localStorage, 'getItem');
+    const first = renderRental(rentalDraftPrefixFor('u1'));
+    const legacyReads = reads.mock.calls.filter(([key]) => key === legacyKey);
+    reads.mockRestore();
+    expect(legacyReads).toEqual([]);
+    expect(screen.getByTestId('lines').textContent).toBe('');
+    first.unmount();
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+  });
+
+  // A tab still on the previous build reads the old key, so this build must
+  // never write it. Real timers: the save is waited for, not stepped.
+  it('a rental cart saves under the account key only, never under the old shared key', async () => {
+    renderRental(rentalDraftPrefixFor('u1'));
+    act(() => {
+      screen.getByRole('button', { name: 'add tent' }).click();
+    });
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(`${rentalDraftPrefixFor('u1')}${WH}`) ?? '{}');
+      expect(saved.lines).toEqual([{ itemId: 'tent', quantity: 1 }]);
+    });
+    expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+  });
+
+  it('an account with its own rental draft keeps it, and the Orders draft is never adopted', () => {
+    localStorage.setItem(
+      `${rentalDraftPrefixFor('u1')}${WH}`,
+      draft([{ itemId: 'tent', quantity: 1 }]),
+    );
+    localStorage.setItem(`${ORDER_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'stapler', quantity: 1 }]));
+    const own = renderRental(rentalDraftPrefixFor('u1'));
+    expect(screen.getByTestId('lines').textContent).toBe('tentx1');
+    own.unmount();
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+    expect(localStorage.getItem(`${ORDER_DRAFT_PREFIX}${WH}`)).not.toBeNull();
   });
 });
 

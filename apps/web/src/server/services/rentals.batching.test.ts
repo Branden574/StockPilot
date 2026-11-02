@@ -31,6 +31,7 @@ import {
   inFilters,
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
 } from '@/test/supabase-mock';
 
@@ -62,6 +63,11 @@ describe('RentalsService.create with 150 lines', () => {
         enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'rentals' as ModuleId]),
       }) as never,
     );
+  // The warehouse, read in this context's organization ('org-test') before
+  // create_rental (S39).
+  const warehouseInOrg = {
+    'warehouses.select': servedLikePostgrest([{ id: 'wh-1', organization_id: 'org-test' }]),
+  };
 
   // The item and availability checks moved into create_rental (migration
   // 0361), which reads them inside the database: there is no id list in a
@@ -69,6 +75,7 @@ describe('RentalsService.create with 150 lines', () => {
   // call, so the check and the writes cover the whole checkout atomically.
   it('sends every line to create_rental in one call, with no id-list reads of its own', async () => {
     const stub = makeSupabaseStub({
+      ...warehouseInOrg,
       'rpc:create_rental': { data: 'rental-150', error: null },
     });
     await expect(svcFor(stub.client).create(input as never)).resolves.toEqual({ id: 'rental-150' });
@@ -81,6 +88,7 @@ describe('RentalsService.create with 150 lines', () => {
 
   it("maps the function's availability refusal to validation_error with its wording", async () => {
     const stub = makeSupabaseStub({
+      ...warehouseInOrg,
       'rpc:create_rental': {
         data: null,
         error: {
@@ -158,12 +166,15 @@ describe('resolveMaintenanceAudience preference read', () => {
       'organization_members.select': { data: members, error: null },
       'role_permission_overrides.select': { data: [], error: null },
       'user_permission_overrides.select': { data: [], error: null },
+      // A list read (docket S27): the module's one settings row.
       'organization_modules.select': {
-        data: {
-          settings: {
-            notifyAudience: Object.fromEntries(members.map((m) => [m.user_id, 'all'])),
+        data: [
+          {
+            settings: {
+              notifyAudience: Object.fromEntries(members.map((m) => [m.user_id, 'all'])),
+            },
           },
-        },
+        ],
         error: null,
       },
       'notification_preferences.select': (call) => {

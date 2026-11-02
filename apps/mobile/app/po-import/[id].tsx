@@ -1,5 +1,6 @@
 import {
   can,
+  isUuid,
   lineNeedsMappingConfirmation,
   poImportUploaderLabel,
   type Role,
@@ -11,7 +12,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -24,6 +24,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -294,6 +295,18 @@ export default function PoImportDetailScreen() {
   // reset on mount; refresh() clears it itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no
+    // import: the not-found sentence at once, with nothing read and no Try
+    // again (Postgres refuses it, so a read could only fail).
+    if (!isUuid(id)) {
+      setHeader(null);
+      setLines([]);
+      setPredecessor(null);
+      setReplacement(null);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     const [{ data: head, error: hErr }, { data: lineRows, error: lErr }] = await Promise.all([
       supabase
         .from('po_imports')
@@ -427,7 +440,7 @@ export default function PoImportDetailScreen() {
   }, [id, orgId, loadLineage]);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: a link id that is not a uuid sets the not-found state at once (no read); every other set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 

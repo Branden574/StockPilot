@@ -27,6 +27,9 @@
  */
 
 import { isValidIsbn, isbnSearchKeys } from '../books/isbn';
+// isUuid is exported from ../ids/uuid (through the package index), never
+// again from here: two `export *` modules exporting one name is an error.
+import { isUuid } from '../ids/uuid';
 import {
   ORDER_STATUS_KEYS,
   resolveOrderStatusConfig,
@@ -203,12 +206,6 @@ export const DEFAULT_BOOK_REPORT_QUERY: Readonly<BookReportQuery> = Object.freez
   sort: 'copies',
   page: 1,
 });
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: unknown): value is string {
-  return typeof value === 'string' && UUID_RE.test(value);
-}
 
 /** A real calendar date written YYYY-MM-DD, from 2000-01-01 to 2100-12-31
  *  (the SQL bounds). Pure string arithmetic: no Date, no zone. */

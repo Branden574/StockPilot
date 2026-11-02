@@ -91,17 +91,17 @@ describe('sites and requesters', () => {
 
   it('recent requesters: every word in the name or email', () => {
     const people = [
-      { name: 'Maria Lopez', email: 'maria@example.org', lastOrderedAt: '', orders: 1, lastFulfillment: null, lastSiteId: null },
+      { name: 'Pixie Quill', email: 'pixie@example.org', lastOrderedAt: '', orders: 1, lastFulfillment: null, lastSiteId: null },
       { name: null, email: 'sam@school.org', lastOrderedAt: '', orders: 2, lastFulfillment: null, lastSiteId: null },
     ];
-    expect(matchRequesters(people, 'maria').map((p) => p.email)).toEqual(['maria@example.org']);
+    expect(matchRequesters(people, 'pixie').map((p) => p.email)).toEqual(['pixie@example.org']);
     expect(matchRequesters(people, 'school sam').map((p) => p.email)).toEqual(['sam@school.org']);
     expect(matchRequesters(people, '  ')).toHaveLength(2);
   });
 
   it('the For row', () => {
     expect(requesterRowValue(null)).toBe('Myself');
-    expect(requesterRowValue({ name: 'Maria', email: 'm@x.org' })).toBe('Maria · m@x.org');
+    expect(requesterRowValue({ name: 'Pixie', email: 'p@x.org' })).toBe('Pixie · p@x.org');
     expect(requesterRowValue({ name: '', email: '' })).toBe('Myself');
   });
 });

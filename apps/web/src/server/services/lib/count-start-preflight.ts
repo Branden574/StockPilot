@@ -1,10 +1,15 @@
 import 'server-only';
 
-import { isManagerOrAbove, type RecountUnavailableReason } from '@stockpilot/core';
+import {
+  can,
+  COUNT_START_MANAGER_ONLY_COPY,
+  isManagerOrAbove,
+  type RecountUnavailableReason,
+} from '@stockpilot/core';
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 
-import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from '../context';
+import { assertModuleEnabled, mfaGateError, ServiceError, type ServiceContext } from '../context';
 import { fetchAllRowsByIds } from './fetch-by-ids';
 
 /**
@@ -17,8 +22,9 @@ import { fetchAllRowsByIds } from './fetch-by-ids';
  * checks live here and both call them, in this order (pattern #26: two copies
  * of an authorization rule drift):
  *
- *   1. assertCountStartFloors  the cycle_counts module; cycle_counts:assign and
- *                              stock:adjust; the manager role.
+ *   1. assertCountStartFloors  the cycle_counts module; the MFA step-up when
+ *                              one is owed; cycle_counts:assign, stock:adjust
+ *                              and the manager role.
  *   2. assertAcceptedMember    the assignee, when one is asked for, BEFORE
  *                              anything is created (SP-123).
  *   3. gateCountItems          write access to every warehouse the countable
@@ -31,13 +37,27 @@ import { fetchAllRowsByIds } from './fetch-by-ids';
  * reported as an internal error (pattern #4).
  */
 
-/** Step 1. Throws before any database round trip. */
+/**
+ * Step 1. Throws before any database round trip.
+ *
+ * A refusal of the role or a permission says COUNT_START_MANAGER_ONLY_COPY
+ * (B42): it used to be assertPermission's "Missing permission:
+ * cycle_counts:assign", which the web toasted and the phone put in its alert,
+ * and staff (stock:adjust, no cycle_counts:assign) were the ones who met it.
+ * The module keeps its own error, and the MFA step-up is checked first, as
+ * assertPermission did, with the error the step-up modal reads.
+ */
 export function assertCountStartFloors(ctx: ServiceContext): void {
   assertModuleEnabled(ctx, 'cycle_counts');
-  assertPermission(ctx, 'cycle_counts:assign');
-  assertPermission(ctx, 'stock:adjust');
-  if (!isManagerOrAbove(ctx.role)) {
-    throw new ServiceError('forbidden', 'Only a manager can start a count.');
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    throw mfaGateError(ctx);
+  }
+  if (
+    !isManagerOrAbove(ctx.role) ||
+    !can(ctx, 'cycle_counts:assign') ||
+    !can(ctx, 'stock:adjust')
+  ) {
+    throw new ServiceError('forbidden', COUNT_START_MANAGER_ONLY_COPY);
   }
 }
 

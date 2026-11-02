@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
@@ -47,12 +47,17 @@ import { editMovementNoteAction } from './movements';
 const MOVEMENT_ID = '11111111-1111-1111-1111-111111111111';
 const ITEM_ID = '22222222-2222-2222-2222-222222222222';
 
-/** Stub the table-returning RPC's one-row result (item_id + pre-update note). */
+/**
+ * Stub the table-returning RPC's one-row result (item_id + pre-update note).
+ * The movement is in this organization ('org-1'): the action reads it there
+ * before the RPC (S39).
+ */
 function stubWith(rpcResult: {
   data?: unknown;
   error?: { message: string; code?: string } | null;
 }) {
   stubHolder.stub = makeSupabaseStub({
+    'stock_movements.select': servedLikePostgrest([{ id: MOVEMENT_ID, organization_id: 'org-1' }]),
     'rpc:edit_movement_note': { data: rpcResult.data ?? null, error: rpcResult.error ?? null },
   });
 }

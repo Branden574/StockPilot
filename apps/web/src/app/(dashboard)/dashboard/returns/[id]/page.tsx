@@ -4,6 +4,7 @@ import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ReturnWorkbench, type WorkbenchReturnLabel } from '@/components/returns/return-workbench';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ServiceError } from '@/server/services/context';
 import { RMAService } from '@/server/services/returns';
 import { ShippingService } from '@/server/services/shipping';
@@ -22,6 +23,9 @@ import { can } from '@stockpilot/core';
  */
 export default async function ReturnDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it, ahead of the gates below (B63).
+  notFoundUnlessUuid(id);
 
   const moduleAccess = await checkModuleAccess('returns');
   if (!moduleAccess.enabled) {

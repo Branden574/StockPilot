@@ -25,6 +25,7 @@ import {
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
 } from '@/server/lib/api-error-response';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -62,6 +63,9 @@ export async function POST(
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(cycleCountId, 'That cycle count id is not valid.');
+  if (invalidId) return invalidId;
 
   if (!env.GEMINI_API_KEY) {
     return NextResponse.json({ error: 'feature_unavailable' }, { status: 503 });
