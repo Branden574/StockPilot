@@ -69,17 +69,17 @@
 -- through supautils 3.4.0 (image 17.6.1.166), on every existing table
 -- supautils.policy_grants lists for this role (auth, storage and realtime:
 -- auth.users and auth.sessions among them; 0390, 0395). CREATE TRIGGER
--- takes SHARE ROW EXCLUSIVE on org_connections. The preflight reads catalogs
--- and deparses the policies in a block that is always undone, so it ends
--- holding no table lock; CREATE FUNCTION, REVOKE and COMMENT take none. So
--- the prelude takes the six tables and those tables at once, NOWAIT,
--- retrying up to 40 times with a 50 to 150 ms pause that holds nothing (the
--- 0390 and 0395 pattern), and no later statement takes a new table
--- lock: the file never waits while holding one, so it cannot deadlock. From
--- the prelude to the commit (milliseconds), integration reads and writes,
--- webhook dispatch (an integration_deliveries insert per event), sign-ins,
--- token refreshes, and storage and realtime requests wait for the hold.
--- lock_timeout 900ms bounds anything unforeseen.
+-- takes SHARE ROW EXCLUSIVE on org_connections. The preflight reads catalogs,
+-- and reads role_default_permissions and deparses the policies in a block
+-- that is always undone, so it ends holding no table lock; CREATE FUNCTION,
+-- REVOKE and COMMENT take none. So the prelude takes the six tables and those
+-- tables at once, NOWAIT, retrying up to 40 times with a 50 to 150 ms pause
+-- that holds nothing (the 0390 and 0395 pattern), and no later statement
+-- takes a new table lock: the file never waits while holding one, so it
+-- cannot deadlock. From the prelude to the commit (milliseconds), integration
+-- reads and writes, webhook dispatch (an integration_deliveries insert per
+-- event), sign-ins, token refreshes, and storage and realtime requests wait
+-- for the hold. lock_timeout 900ms bounds anything unforeseen.
 -- scripts/db-concurrency/0428_migration_lock_footprint.sh measures it.
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
@@ -135,16 +135,6 @@ begin
     end if;
   end loop;
 
-  -- Admins hold both keys by default (0207), so the new rules keep every
-  -- admin's access unless an override takes it away.
-  select string_agg(rdp.permission, ',' order by rdp.permission)
-    into v_got
-    from public.role_default_permissions rdp
-   where rdp.role = 'admin' and rdp.permission in ('integrations:manage', 'shipping:manage');
-  if v_got is distinct from 'integrations:manage,shipping:manage' then
-    v_bad := v_bad || format(' admin defaults are not both keys (%s);', coalesce(v_got, 'none'));
-  end if;
-
   -- The columns the new rules compare are NOT NULL (pattern 23b).
   select string_agg(c.relname || '.' || a.attname || '=' || a.attnotnull::text, ',' order by c.relname)
     into v_got
@@ -183,13 +173,20 @@ begin
     v_bad := v_bad || ' public._guard_org_connections_client_writes() already exists;';
   end if;
 
-  -- Every policy on the six tables is the one 0146, 0149, 0152 or 0169
-  -- created: name, command, permissive, roles, and the md5 of each
-  -- expression. Deparsed in a block that is always undone, with search_path
-  -- pinned inside it (docket S9's method), so the text does not depend on the
-  -- session's search_path and nothing the deparse locks outlives the block.
-  -- Variables keep their values when the block is undone.
+  -- Two checks run in a block that is always undone, so nothing they lock
+  -- outlives it (variables keep their values when the block is undone):
+  --  * admins hold both keys by default (0207), so the new rules keep every
+  --    admin's access unless an override takes it away (a table read: its
+  --    lock would otherwise last until the commit);
+  --  * every policy on the six tables is the one 0146, 0149, 0152 or 0169
+  --    created: name, command, permissive, roles, and the md5 of each
+  --    expression, deparsed with search_path pinned inside the block (docket
+  --    S9's method) so the text does not depend on the session's search_path.
   begin
+    select string_agg(rdp.permission, ',' order by rdp.permission)
+      into v_got
+      from public.role_default_permissions rdp
+     where rdp.role = 'admin' and rdp.permission in ('integrations:manage', 'shipping:manage');
     perform set_config('search_path', 'public, extensions', true);
     select string_agg(c.relname || '.' || pol.polname || '|' || pol.polcmd::text || '|' || pol.polpermissive::text || '|'
                       || (select string_agg(case x when 0 then 'public' else x::regrole::text end, ',' order by 1)
@@ -207,6 +204,9 @@ begin
   exception when sqlstate 'XX527' then
     null;
   end;
+  if v_got is distinct from 'integrations:manage,shipping:manage' then
+    v_bad := v_bad || format(' admin defaults are not both keys (%s);', coalesce(v_got, 'none'));
+  end if;
   if v_pol is distinct from
      'carrier_shipments.carrier_shipments_select|r|true|authenticated|18c56f48bbf23a4726bac4b92133f24b|336d5ebc5436534e61d16e63ddfca327' || E'\n' ||
      'carrier_shipments.carrier_shipments_write|*|true|authenticated|5edfa0447ba758bd93b0b8a1baa3a7ea|5edfa0447ba758bd93b0b8a1baa3a7ea' || E'\n' ||

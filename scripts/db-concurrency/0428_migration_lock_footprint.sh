@@ -23,7 +23,8 @@
 # This proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
-#       catalogs (the preflight's deparse ran in its undone block).
+#       catalogs (the preflight's role_default_permissions read and its deparse
+#       ran in its undone block).
 #   1b. The prelude takes ACCESS EXCLUSIVE on the six integration tables and
 #       on every existing table in supautils.policy_grants for the role, and
 #       nothing else. Control: that list holds at least 20 tables here, so
@@ -156,7 +157,7 @@ else
   END="$(sed -n 's/^END|//p' "$TMP/1.out")"
   NGRANTS="$(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vcE '^public\.(org_connections|connection_sync_log|integration_endpoints|integration_deliveries|connection_mappings|carrier_shipments):')"
   if [ "$BEFORE" = "none" ]; then
-    ok "1a: the preflight locks no table (its deparse ran in the undone block)"
+    ok "1a: the preflight locks no table (its table read and its deparse ran in the undone block)"
   else
     bad "1a: before the prelude the file already holds: $BEFORE"
   fi
