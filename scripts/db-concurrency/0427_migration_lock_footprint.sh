@@ -36,7 +36,11 @@
 #   5.  No table at any point: with ACCESS EXCLUSIVE held by another session
 #       on every table in public, ledger, auth and extensions that postgres
 #       may lock (all but auth.schema_migrations, which belongs to the auth
-#       server), the file runs to its end under its lock_timeout.
+#       server), the file runs to its end under its lock_timeout. Check 1
+#       reads only the locks still held at the end; this is the check that
+#       sees a lock the file takes and releases (a scratch copy whose body
+#       declares a %ROWTYPE waits here, in the body's compilation, and ends
+#       with 55P03).
 #   6.  The preflight refuses drift: with the body, the ACL or the
 #       search_path changed earlier in the same transaction, or the file run
 #       a second time, it stops with 55000 (hint
