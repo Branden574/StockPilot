@@ -495,15 +495,22 @@ export async function completePasswordResetAction(
         code,
         path: 'password_reset',
       });
+      // The two pauses (this account's code budget spent, GoTrue's own limit
+      // on code checks) carry `reason` too: an authenticator code changes
+      // every 30 seconds, so the one in the box is stale once the wait is
+      // over. With the reason the form empties the box and shows the words
+      // under it, as for a refused code; without it the form kept the code,
+      // and the next press was certain to be refused.
       if (check.kind === 'budget_spent') {
-        // No `reason`: the form keeps the box and the code and shows this.
-        return err('rate_limited', MFA_CODE_BUDGET_SPENT);
+        return err('rate_limited', MFA_CODE_BUDGET_SPENT, { reason: 'aal2_required' });
       }
       if (check.kind !== 'verified') {
         // Never echo GoTrue's message, which can carry factor/challenge
         // identifiers.
         if (check.outcome === 'session_gone') return err('unauthenticated', RESET_LINK_GONE);
-        if (check.outcome === 'limited') return err('rate_limited', MFA_CODE_GOTRUE_LIMITED);
+        if (check.outcome === 'limited') {
+          return err('rate_limited', MFA_CODE_GOTRUE_LIMITED, { reason: 'aal2_required' });
+        }
         if (check.kind === 'challenge_failed') {
           return err('internal_error', MFA_CHALLENGE_NOT_STARTED);
         }

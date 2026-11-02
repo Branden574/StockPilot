@@ -643,6 +643,9 @@ describe('completePasswordResetAction', () => {
         error: {
           code: 'rate_limited',
           message: 'Too many code attempts. Wait a few minutes and try again.',
+          // The code in the box is stale after the wait, so the form empties
+          // the box (reset-complete-form reads this reason).
+          details: { reason: 'aal2_required' },
         },
       });
       expect(challenge).not.toHaveBeenCalled();
@@ -731,6 +734,7 @@ describe('completePasswordResetAction', () => {
         error: {
           code: 'rate_limited',
           message: 'Too many code checks right now. Wait a minute and try again.',
+          details: { reason: 'aal2_required' },
         },
       });
       expect(refusedRows()).toEqual([]);
