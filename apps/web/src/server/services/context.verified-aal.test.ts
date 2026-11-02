@@ -66,9 +66,13 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 // An enrolled member under the 'optional' policy: enrollment alone requires
-// AAL2 (HI-6), so the level is read.
+// AAL2 (HI-6), so the level is read. The list is the member's own (the
+// context's user); context.factor-swap.test.ts runs the real list.
 vi.mock('@/lib/dashboard/request-cache', () => ({
-  getMfaFactorsForRequest: vi.fn(async () => [{ status: 'verified' }]),
+  getMfaFactorsForRequest: vi.fn(async () => ({
+    userId: '11111111-1111-4111-8111-111111111111',
+    factors: [{ status: 'verified' }],
+  })),
   getModulesForRequest: vi.fn(async () => new Set(['orders'])),
   getOrgRowForRequest: vi.fn(async () => ({
     terminology: null,
@@ -85,6 +89,7 @@ import {
   INSECURE_USER_WARNING,
   fakeAuthServer,
   makeSigningKey,
+  refreshGrant,
   sessionClaims,
   sessionCookies,
   signAccessToken,
@@ -208,6 +213,75 @@ describe('assertCurrentAal2 — the step-up before security changes', () => {
     const refusal = await stepUpRefusal();
     expect(refusal?.code).toBe('forbidden');
     expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+  });
+});
+
+/**
+ * S43a review round 1: the claims count only for the member the context
+ * resolved. In a Server Action the context (requireOrgContext, stubbed here as
+ * resolved for the member) is settled before the claims are read, and that
+ * read LOADS the cookie session again. A load refreshes the session with the
+ * cookie's own refresh token when the cookie's own `expires_at` says it is
+ * within 90 s of expiry; nothing signs either field. So the member's password
+ * alone (an aal1 token), beside the refresh token of another account's aal2
+ * session, made the read verify the OTHER account's aal2: the gate counted it
+ * for the member.
+ */
+describe("a claims read that refreshes into another account's session", () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+
+  async function memberCookieDueForRefresh() {
+    const claims = sessionClaims({ aal: 'aal1' });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims, {
+      refreshToken: 'other-account-refresh',
+      expiresAt: Math.floor(Date.now() / 1000) + 30,
+    });
+    const other = sessionClaims({
+      aal: 'aal2',
+      sub: OTHER,
+      sessionId: '44444444-4444-4444-8444-444444444444',
+      email: 'other@example.test',
+      totpAgeSeconds: 30,
+    });
+    server.refreshGrants.set(
+      'other-account-refresh',
+      refreshGrant(await signAccessToken(projectKey, other), other, 'other-account-refresh-2'),
+    );
+  }
+
+  it("withContext: the member is not satisfied by the other account's aal2", async () => {
+    await memberCookieDueForRefresh();
+    const ctx = await withContext();
+    expect(server.calls['/token']).toBeGreaterThanOrEqual(1);
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  it('assertCurrentAal2: refused, as unverifiable for this member', async () => {
+    await memberCookieDueForRefresh();
+    const refusal = await stepUpRefusal();
+    expect(server.calls['/token']).toBeGreaterThanOrEqual(1);
+    expect(refusal?.code).toBe('forbidden');
+    expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+    expect(refusal?.message).toBe(
+      'Could not verify your two-factor authentication state. Sign in again and try once more.',
+    );
+  });
+
+  it("control: the member's own aal2 session refreshing still satisfies both", async () => {
+    const claims = sessionClaims({ aal: 'aal2' });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims, {
+      refreshToken: 'member-own-refresh',
+      expiresAt: Math.floor(Date.now() / 1000) + 30,
+    });
+    const renewed = sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 });
+    server.refreshGrants.set(
+      'member-own-refresh',
+      refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'member-own-refresh-2'),
+    );
+    expect((await withContext()).mfaSatisfied).toBe(true);
+    expect(await stepUpRefusal()).toBeNull();
+    expect(server.calls['/token']).toBeGreaterThanOrEqual(1);
   });
 });
 

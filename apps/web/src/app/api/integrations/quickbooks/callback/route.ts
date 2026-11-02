@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { cookieSessionOwesStepUp } from '@/lib/auth/api-context';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -63,6 +64,14 @@ export async function GET(req: Request) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.redirect(new URL('/signin', appUrl), { status: 302 });
+  }
+
+  // THE AUTHENTICATOR CODE (docket S43a). withApiContext refuses a session that
+  // still owes its code, and this route does not use it, so it asks the same
+  // question here: an enrolled member signed in with the password alone gets
+  // this route's existing `forbidden`, before anything is read or exchanged.
+  if (await cookieSessionOwesStepUp(supabase, user)) {
+    return redirectWithError('forbidden');
   }
 
   // ACCOUNT STATUS (0308). This route builds its own principal above, so it is
