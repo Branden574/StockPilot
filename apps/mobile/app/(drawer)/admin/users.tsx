@@ -5,7 +5,6 @@ import {
   Alert,
   Image,
   Linking,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,7 @@ import { plainAddressMailtoUrl } from '@stockpilot/core';
 import { Card } from '@/components/ui/card';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { DataListScreen } from '@/components/data-list-screen';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';

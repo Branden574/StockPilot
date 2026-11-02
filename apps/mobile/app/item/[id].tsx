@@ -22,7 +22,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -72,6 +71,7 @@ import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card, Hair } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -162,6 +162,7 @@ import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 
 interface Item {
   id: string;
@@ -567,6 +568,9 @@ export default function ItemDetail() {
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  // A photo going up holds the phone update pop-up until it is saved
+  // (update-prompt-holds.ts): a restart would cut the upload.
+  useHoldUpdatePrompt(photoBusy, 'photo');
   const [photoViewerOpen, setPhotoViewerOpen] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
@@ -1625,8 +1629,9 @@ export default function ItemDetail() {
     if (!item || photoBusy) return;
     const hasPhoto = !!item.imageUrl;
     Alert.alert(hasPhoto ? 'Replace photo' : 'Add photo', undefined, [
-      { text: 'Take photo', onPress: () => void pickFromCamera() },
-      { text: 'Choose from library', onPress: () => void pickFromLibrary() },
+      // Held from the tap through the picker, the upload and the save.
+      { text: 'Take photo', onPress: () => void whileUpdatePromptHeld(pickFromCamera) },
+      { text: 'Choose from library', onPress: () => void whileUpdatePromptHeld(pickFromLibrary) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -2895,6 +2900,8 @@ function MovementNoteModalContent({
   // both being empty) — mirrors "no-op edit" so we never round-trip needlessly.
   const nextNote = normalizeMovementNote(text);
   const isDirty = nextNote !== normalizeMovementNote(initialNote);
+  // An unsaved note holds the phone update pop-up (update-prompt-holds.ts).
+  useHoldUpdatePrompt(isDirty, 'item-note');
 
   async function submit() {
     if (busy || !isDirty) return;

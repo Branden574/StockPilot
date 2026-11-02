@@ -5,7 +5,6 @@ import {
   AccessibilityInfo,
   Animated,
   Keyboard,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Modal } from '@/components/ui/modal';
 import { Body } from '@/components/ui/text';
 import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import {
@@ -26,6 +26,8 @@ import {
   measureTarget,
   setActiveTour,
   setTourVisible,
+  UPDATE_PROMPT_LOCK_ID,
+  useTourVisible,
   useWhatsNewOpen,
   type TargetRect,
 } from '@/lib/tour-targets';
@@ -63,6 +65,10 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   // Mutual lock: if What's New grabbed the interruption slot first, keep this
   // tour's Modal hidden until it closes (we keep our phase, so we re-present).
   const whatsNewOpen = useWhatsNewOpen();
+  // The same for the phone update pop-up (B44) while it is open or the app is
+  // restarting: a native alert sits above any sheet, and the tour keeps its
+  // phase, so it presents again once the pop-up is answered.
+  const updatePromptOpen = useTourVisible(UPDATE_PROMPT_LOCK_ID);
   // Tab navigators keep every screen MOUNTED — without this gate all
   // screens' offers open their Modals at once and the topmost (wrong)
   // one wins. Only the focused screen may present.
@@ -234,7 +240,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       </Pressable>
 
       <Modal
-        visible={isFocused && phase !== 'idle' && !whatsNewOpen}
+        visible={isFocused && phase !== 'idle' && !whatsNewOpen && !updatePromptOpen}
         transparent
         statusBarTranslucent
         animationType="none"
