@@ -446,7 +446,7 @@ export default function PoReceiveScreen() {
   }, [id, orgId, loadRunGroups, loadReceiptHistory]);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); a link id that is not a uuid sets the not-found state at once (no read); everything else is post-await
     setLoading(true);
     setLoadError(null);
     void load();

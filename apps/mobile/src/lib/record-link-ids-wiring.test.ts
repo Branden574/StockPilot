@@ -247,6 +247,22 @@ describe('purchase order screen: a malformed link id is "This PO was not found"'
       'if (!isUuid(id)) { setHeader(null); setLines([]); setGroups({}); setReceipts([]); setLoadError(null); setLoading(false); return; }',
     );
   });
+
+  // The not-uuid branch sets six pieces of state before any await, so a
+  // note ending "everything else is post-await" with no word of it is false,
+  // and a reader trusting it could move or drop the suppression.
+  it("the effect's lint note names the not-uuid sets ahead of its post-await claim", () => {
+    const note = between(
+      sourceOf(PO),
+      '// eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount',
+      '\n',
+    );
+    const notUuid = at(
+      note,
+      'a link id that is not a uuid sets the not-found state at once (no read)',
+    );
+    expect(notUuid).toBeLessThan(at(note, 'everything else is post-await'));
+  });
 });
 
 // ── PO import ────────────────────────────────────────────────────────────
@@ -275,6 +291,9 @@ describe('PO import screen: a malformed link id is "This import was not found"',
       'void load();',
     );
     expect(effect).not.toContain('every set is post-await');
+    expect(effect).toContain(
+      'a link id that is not a uuid sets the not-found state at once (no read)',
+    );
   });
 });
 
