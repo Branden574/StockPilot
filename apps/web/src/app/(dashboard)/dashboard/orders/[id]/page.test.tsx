@@ -613,6 +613,22 @@ describe('orders/[id]: Cancel request (L85)', () => {
     expect(cancelButtonProps).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
   });
 
+  // Returns RX-2: an exchange replacement is cancelled only from its RMA, so
+  // the approver who is offered Cancel on the approved order above is not
+  // offered it here; the only difference is replacement_for_return_id.
+  // Mutation caught: the isReplacement guard on cancelOffer dropped.
+  it('an approver is not offered it on an approved exchange replacement', async () => {
+    asApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'approved', replacement_for_return_id: 'rma-1' }),
+        lines: [line(0)],
+      }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+  });
+
   // Desk check F3: svc.cancel asserts orders:request for every cancel,
   // approvers included, so without it the button only led to a refusal.
   it('is not offered without orders:request, to an approver or to the requester', async () => {
