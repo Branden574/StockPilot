@@ -42,6 +42,13 @@ const PAST_MESSAGES = [
   { role: 'user', content: 'Which shelf is low?', toolCalls: null },
   { role: 'assistant', content: 'Two shelves are low.', toolCalls: null },
 ];
+/** Listed in the rail, but deleted elsewhere: its read answers 404. */
+const REMOVED_CHAT = {
+  id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  title: 'Removed chat',
+  createdAt: '2026-10-19T10:00:00Z',
+  updatedAt: '2026-10-19T10:00:00Z',
+};
 const NEW_CHAT = '11111111-1111-4111-8111-111111111111';
 const REPLY = 'Here is the preview.';
 
@@ -52,7 +59,7 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function fakeServer() {
+function fakeServer({ removedChat = false }: { removedChat?: boolean } = {}) {
   const requests: string[] = [];
   const extractForms: FormData[] = [];
   const chatMessages: string[] = [];
@@ -60,10 +67,13 @@ function fakeServer() {
     const method = init?.method ?? 'GET';
     requests.push(`${method} ${url}`);
     if (url === '/api/ai/sessions' && method === 'GET') {
-      return json({ ok: true, sessions: [PAST_CHAT] });
+      return json({ ok: true, sessions: removedChat ? [PAST_CHAT, REMOVED_CHAT] : [PAST_CHAT] });
     }
     if (url === `/api/ai/sessions/${PAST_CHAT.id}` && method === 'GET') {
       return json({ ok: true, messages: PAST_MESSAGES });
+    }
+    if (url === `/api/ai/sessions/${REMOVED_CHAT.id}` && method === 'GET') {
+      return json({ error: 'not_found' }, 404);
     }
     if (url === '/api/books/extract-isbns-ai') {
       const form = init!.body as FormData;
@@ -230,6 +240,22 @@ describe('ChatPanel limits (B76)', () => {
       await withNote();
       fireEvent.click(within(rail()).getByRole('button', { name: /Earlier chat/ }));
       await screen.findByText('Two shelves are low.');
+      expect(note()).toBeNull();
+    });
+
+    it('on picking a chat in the rail that was deleted elsewhere', async () => {
+      // Its read answers 404, so the panel empties the screen for a new chat;
+      // the note goes with the chat it was shown in.
+      const server = fakeServer({ removedChat: true });
+      render(<ChatPanel canOpenBulkIsbnImport />);
+      await opened();
+      fireEvent.click(within(rail()).getByRole('button', { name: /Earlier chat/ }));
+      await screen.findByText('Two shelves are low.');
+      typeAndPressEnter('x'.repeat(2001));
+      expect(await screen.findByRole('alert')).toHaveTextContent(CHAT_MESSAGE_TOO_LONG);
+      fireEvent.click(within(rail()).getByRole('button', { name: /Removed chat/ }));
+      await waitFor(() => expect(screen.queryByText('Two shelves are low.')).toBeNull());
+      expect(server.count(`GET /api/ai/sessions/${REMOVED_CHAT.id}`)).toBe(1);
       expect(note()).toBeNull();
     });
   });

@@ -57,4 +57,13 @@ describe('extractIsbnsFromText', () => {
     expect(isValidIsbn13('9780306406152')).toBe(false);
     expect(extractIsbnsFromText('978 0306406152')).toContain('0306406152');
   });
+
+  it('hides the ISBN-13 itself, not the character before it', () => {
+    // The match can start with the character before the ISBN. A hidden span
+    // one place off would leave the ISBN's last or first digit visible, and
+    // with a 9-digit number one space away it would read as a made-up ISBN-10
+    // ("7 123456789" -> 7123456789, "123456789 9" -> 1234567899).
+    expect(extractIsbnsFromText('ISBN 978-0-306-40615-7 123456789')).toEqual(['9780306406157']);
+    expect(extractIsbnsFromText('123456789 978-0-306-40615-7')).toEqual(['9780306406157']);
+  });
 });

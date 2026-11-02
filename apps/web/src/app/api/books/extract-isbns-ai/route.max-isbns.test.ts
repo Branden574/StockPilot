@@ -155,14 +155,16 @@ describe('POST /api/books/extract-isbns-ai with maxIsbns (B76)', () => {
   });
 
   it('ignores a maxIsbns that is not a whole number from 1 to 999, and the model runs (13)', async () => {
-    const isbns = syntheticIsbn13s(51);
+    // More ISBNs than any of these values could cap, 1000 included: a value
+    // taken as a cap would skip the model call.
+    const isbns = syntheticIsbn13s(1001);
     for (const value of ['0', '-1', 'abc', '1000', '5.5', '', '050', ' 50', new Blob(['50'])]) {
       vi.mocked(claudeGenerateJsonString).mockClear();
       const body = await extract(upload('order-sheet.csv', 'text/csv', csv(isbns), value));
       const label = typeof value === 'string' ? JSON.stringify(value) : 'a file';
       expect(claudeGenerateJsonString, label).toHaveBeenCalledTimes(1);
       expect(body.isbns, label).toEqual(isbns);
-      expect(body.notes, label).toBe('51 regex hits');
+      expect(body.notes, label).toBe('1001 regex hits');
     }
   });
 
