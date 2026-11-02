@@ -24,7 +24,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { DELETE } from './route';
 
@@ -44,15 +44,18 @@ function arrange(opts: {
     // The delete answers as the policy does today: its role arm lets a
     // manager through.
     'maintenance_request_attachments.delete': { data: { id: PHOTO_ID }, error: null },
-    'maintenance_requests.select': {
-      data: {
+    // The request answers only a read whose filters match it (a read keyed
+    // by the photo's id finds no requester, as in the database).
+    'maintenance_requests.select': servedLikePostgrest([
+      {
+        id: REQUEST_ID,
+        organization_id: 'org-test',
         requester_user_id: opts.requesterUserId,
         archived_at: null,
         cancelled_at: null,
         resolved_at: null,
       },
-      error: null,
-    },
+    ]),
   });
   const ctx = makeServiceContext(stub.client, {
     userId: 'u-1',
@@ -95,20 +98,30 @@ describe('DELETE /api/v1/maintenance-requests/[id]/attachments/[attachmentId]', 
     expect(storageRemove).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['the requester (staff: submit only)', { role: 'staff' as const, requesterUserId: 'u-1' }],
-    [
-      'a manage holder who did not file the request',
-      { role: 'manager' as const, requesterUserId: 'someone-else' },
-    ],
-  ])('%s gets 200 and the photo is removed', async (_who, persona) => {
-    const stub = arrange(persona);
-
-    const res = await DELETE(removeRequest(), params());
-
+  async function expectRemoved(res: Response, stub: ReturnType<typeof arrange>) {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toHaveLength(1);
     expect(storageRemove).toHaveBeenCalledWith([`org-test/${REQUEST_ID}/a.jpg`]);
+  }
+
+  it('the requester (staff: submit only) gets 200 and the photo is removed, after one read of the requester of this request in this organization', async () => {
+    const stub = arrange({ role: 'staff', requesterUserId: 'u-1' });
+
+    const res = await DELETE(removeRequest(), params());
+
+    await expectRemoved(res, stub);
+    expect(stub.chainArgsAll.get('maintenance_requests.select')).toEqual([
+      [['requester_user_id'], ['organization_id', 'org-test'], ['id', REQUEST_ID]],
+    ]);
+  });
+
+  it('a manage holder who did not file the request gets 200 and the photo is removed, with no read of the requester', async () => {
+    const stub = arrange({ role: 'manager', requesterUserId: 'someone-else' });
+
+    const res = await DELETE(removeRequest(), params());
+
+    await expectRemoved(res, stub);
+    expect(stub.chainsAll.get('maintenance_requests.select')).toBeUndefined();
   });
 });
