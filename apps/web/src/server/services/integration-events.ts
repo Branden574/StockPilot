@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
 import { isSsrfRefusal, safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
@@ -109,6 +109,15 @@ export const DRAIN_DELIVERY_CONCURRENCY = 10;
  * that is not started is not claimed, so it stays pending for the next tick.
  */
 export const DRAIN_TIME_BUDGET_MS = 30_000;
+
+/**
+ * How long dispatch waits before it tries the endpoint read, or the delivery
+ * insert, again after a failure: three tries in all (docket B82). A brief
+ * failure lost the event, because the cron retries only deliveries that
+ * exist. A read changes nothing, and the delivery ids are chosen before the
+ * first try, so either step is safe to repeat on any failure.
+ */
+export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];
 /** Backoff: ~1m, 2m, 4m, 8m, 16m, capped at 30m. */
 function backoffMs(attempt: number): number {
   return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempt - 1));
@@ -465,6 +474,22 @@ export function dispatchEvent(
   return work;
 }
 
+/**
+ * Runs `step` until it resolves, waiting DISPATCH_RETRY_DELAYS_MS between
+ * tries; the last try's failure is thrown.
+ */
+async function withDispatchRetries<T>(step: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await step();
+    } catch (e) {
+      const delay = DISPATCH_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) throw e;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 /** The body of `dispatchEvent()`. Never rejects. */
 async function dispatchEventNow(
   organizationId: string,
@@ -473,57 +498,72 @@ async function dispatchEventNow(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    const endpointsRes = await admin
-      .from('integration_endpoints')
-      .select('id, organization_id, type, url, secret')
-      .eq('organization_id', organizationId)
-      .eq('enabled', true)
-      .contains('event_types', [eventType]);
     // A failed read, or an answer that is not a list (an empty body), is not
     // "no endpoints": the event's deliveries are never inserted, and the cron
-    // retries only rows that exist. The catch below reports it (docket S27).
-    if (endpointsRes.error) {
-      throw new Error(
-        `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
-      );
-    }
-    const eps = listRows<EndpointRow>('integration_endpoints', endpointsRes);
+    // retries only rows that exist. It is tried again (docket B82); the catch
+    // below reports the last failure (docket S27).
+    const eps = await withDispatchRetries(async () => {
+      const endpointsRes = await admin
+        .from('integration_endpoints')
+        .select('id, organization_id, type, url, secret')
+        .eq('organization_id', organizationId)
+        .eq('enabled', true)
+        .contains('event_types', [eventType]);
+      if (endpointsRes.error) {
+        throw new Error(
+          `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
+        );
+      }
+      return listRows<EndpointRow>('integration_endpoints', endpointsRes);
+    });
     if (eps.length === 0) return;
 
     // Batch-insert one pending delivery per endpoint (single round trip), then
     // fire the immediate attempts in PARALLEL. Previously this was a per-endpoint
     // insert + sequential await — O(N) round trips that blocked each other on the
     // 8s delivery timeout (audit 2026-06-09). Failures stay 'pending' for the cron.
-    const insertRes = await admin
-      .from('integration_deliveries')
-      .insert(
-        eps.map((ep) => ({
-          organization_id: organizationId,
-          endpoint_id: ep.id,
-          event_type: eventType,
-          payload: data,
-          status: 'pending',
-          max_attempts: MAX_ATTEMPTS,
-        })),
-      )
-      .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
-    // A failed insert lost the event's deliveries just the same: reported below.
-    if (insertRes.error) {
-      throw new Error(
-        `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
-      );
-    }
-    const rows = insertRes.data;
-    if (!rows || rows.length === 0) return;
+    //
+    // The ids are chosen here, before the first try, and a row whose id is
+    // already there is skipped (ON CONFLICT (id) DO NOTHING), so a failed insert
+    // is tried again without queuing a delivery twice (docket B82): a try that
+    // committed but whose answer was lost leaves its rows to the cron, because
+    // the insert answers only the rows it inserted.
+    const deliveries = eps.map((ep) => ({
+      id: randomUUID(),
+      organization_id: organizationId,
+      endpoint_id: ep.id,
+      event_type: eventType,
+      payload: data,
+      status: 'pending',
+      max_attempts: MAX_ATTEMPTS,
+    }));
+    const rows = await withDispatchRetries(async () => {
+      const insertRes = await admin
+        .from('integration_deliveries')
+        .upsert(deliveries, { onConflict: 'id', ignoreDuplicates: true })
+        .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
+      // A failed insert lost the event's deliveries just the same: reported below.
+      if (insertRes.error) {
+        throw new Error(
+          `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
+        );
+      }
+      return listRows<DeliveryRow>('integration_deliveries', insertRes);
+    });
+    if (rows.length === 0) return;
     const epById = new Map(eps.map((e) => [e.id, e]));
     await Promise.allSettled(
-      (rows as DeliveryRow[]).map((row) => {
+      rows.map((row) => {
         const ep = epById.get(row.endpoint_id);
         return ep ? attemptDelivery(admin, ep, row) : Promise.resolve({ claimed: false, ok: false });
       }),
     );
   } catch (e) {
-    void reportError(e, { tag: 'integration-events.dispatch', extra: { eventType } });
+    void reportError(e, {
+      tag: 'integration-events.dispatch',
+      organizationId,
+      extra: { eventType },
+    });
   }
 }
 
@@ -555,17 +595,24 @@ export async function drainIntegrationDeliveries(
   let delivered = 0;
   if (pastDeadline()) return { attempted, delivered };
   try {
-    const { data: due } = await admin
+    const dueRes = await admin
       .from('integration_deliveries')
       .select('id, endpoint_id, event_type, payload, attempts, max_attempts')
       .eq('status', 'pending')
       .lte('next_attempt_at', now.toISOString())
       .order('next_attempt_at', { ascending: true })
       .limit(limit);
-    if (!due || due.length === 0) return { attempted, delivered };
+    // A failed read, or an answer that is not a list (an empty body), is not
+    // "nothing due": the catch below reports it, and the rows stay pending for
+    // the next tick (docket B82).
+    if (dueRes.error) {
+      throw new Error(`integration_deliveries select: ${postgrestErrorText(dueRes.error, dueRes)}`);
+    }
+    const due = listRows<DeliveryRow>('integration_deliveries', dueRes);
+    if (due.length === 0) return { attempted, delivered };
 
     // Batch-load the endpoints for the due rows.
-    const endpointIds = Array.from(new Set(due.map((d) => (d as DeliveryRow).endpoint_id)));
+    const endpointIds = Array.from(new Set(due.map((d) => d.endpoint_id)));
     const epsRes = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
@@ -576,14 +623,16 @@ export async function drainIntegrationDeliveries(
     // permanently dropped every due webhook. Stop here; the rows stay pending
     // and the next tick retries them. The catch below reports it. An answer
     // that is not a list (an empty body) is a failed read too (docket S27).
-    if (epsRes.error) throw new Error(`integration_endpoints select: ${epsRes.error.message}`);
+    if (epsRes.error) {
+      throw new Error(`integration_endpoints select: ${postgrestErrorText(epsRes.error, epsRes)}`);
+    }
     const eps = listRows<EndpointRow>('integration_endpoints', epsRes);
     const epById = new Map(eps.map((e) => [e.id, e]));
 
     // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
     const live: DeliveryRow[] = [];
     const deadIds: string[] = [];
-    for (const d of due as DeliveryRow[]) {
+    for (const d of due) {
       if (epById.has(d.endpoint_id)) live.push(d);
       else deadIds.push(d.id);
     }
