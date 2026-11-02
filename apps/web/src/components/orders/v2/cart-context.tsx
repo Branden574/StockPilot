@@ -33,10 +33,12 @@ import type { CartAction, CartState } from './types';
 // `rental-draft:<warehouse>` belonged to no account either: the next person to
 // open New rental for that warehouse on a shared browser found the last
 // person's items and quantities. New rental now saves under
-// `rental-draft:v2:<userId>:<warehouse>` (rentalDraftPrefixFor) and adopts a
-// draft under the old key once, the same way. Only the items and quantities
-// were ever saved there; the borrower, return date and notes are the form's
-// own state, never stored.
+// `rental-draft:v2:<userId>:<warehouse>` (rentalDraftPrefixFor). It does NOT
+// adopt a draft under the old key: that draft carries no owner, and adopting
+// it once handed it to whoever opened New rental first (review of B20a). New
+// rental passes no legacyDraftPrefix and removes the old key unread itself
+// (rental-create-form.tsx). Only the items and quantities were ever saved
+// there; the borrower, return date and notes are the form's own state.
 export const ORDER_DRAFT_PREFIX = 'order-draft:';
 export const RENTAL_DRAFT_PREFIX = 'rental-draft:';
 /** The New order page's draft prefix for one account. */
@@ -117,9 +119,10 @@ export function CartProvider({
   draftPrefix?: string;
   /**
    * A prefix this page used to save under (the New order page's account-less
-   * `order-draft:`, New rental's `rental-draft:`). When no draft exists under
-   * `draftPrefix`, a draft under this one is adopted once, with its on-behalf
-   * name and email removed, and the old key is deleted.
+   * `order-draft:`). When no draft exists under `draftPrefix`, a draft under
+   * this one is adopted once, with its on-behalf name and email removed, and
+   * the old key is deleted. New rental passes none: its old drafts are
+   * removed unread instead (see SO DOES THE NEW RENTAL DRAFT above).
    */
   legacyDraftPrefix?: string;
   children: React.ReactNode;
