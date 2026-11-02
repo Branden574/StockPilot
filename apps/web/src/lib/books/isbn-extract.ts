@@ -1,8 +1,14 @@
 import 'server-only';
 
+import { isValidIsbn13 } from '@stockpilot/core';
+
 import { ServiceError } from '@/server/services/context';
 
 import { normalizeIsbn } from './lookup';
+
+/** Written over an ISBN-13 match before the ISBN-10 pass: not a digit, X,
+ *  space or dash, so no ISBN-10 can match on or across it. */
+const HIDDEN = '#';
 
 /**
  * Extract ISBN candidates from arbitrary text by scanning for any
@@ -16,26 +22,42 @@ import { normalizeIsbn } from './lookup';
  */
 export function extractIsbnsFromText(text: string): string[] {
   if (!text) return [];
-  // Two regexes: ISBN-13 first (so we don't capture the "978..." prefix
-  // as a 10-digit by mistake), then ISBN-10. Both allow optional
+  // Two regexes: ISBN-13 first, then ISBN-10. Both allow optional
   // dashes/spaces between digit groups.
-  const patterns: RegExp[] = [
-    /(?:^|[^0-9])((?:97[89])(?:[\s-]?\d){10})(?=[^0-9]|$)/g,
-    /(?:^|[^0-9Xx])(\d(?:[\s-]?\d){8}[\s-]?[0-9Xx])(?=[^0-9Xx]|$)/g,
-  ];
+  const isbn13 = /(?:^|[^0-9])((?:97[89])(?:[\s-]?\d){10})(?=[^0-9]|$)/g;
+  const isbn10 = /(?:^|[^0-9Xx])(\d(?:[\s-]?\d){8}[\s-]?[0-9Xx])(?=[^0-9Xx]|$)/g;
 
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const re of patterns) {
-    for (const m of text.matchAll(re)) {
-      const candidate = m[1] ?? '';
-      const normalized = normalizeIsbn(candidate);
-      if (!normalized) continue;
-      if (seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push(normalized);
-    }
+  const add = (candidate: string) => {
+    const normalized = normalizeIsbn(candidate);
+    if (!normalized) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  };
+
+  // The ISBN-10 pass reads the text with each checksum-valid ISBN-13 match
+  // hidden (docket B76). Written with a dash or a space after its prefix
+  // ("978-0-306-40615-7"), an ISBN-13 holds ten digits the ISBN-10 pattern
+  // also matches ("0-306-40615-7"), and each was added as a made-up ISBN-10
+  // that is looked up and fails (a 979 one as its first ten digits). A
+  // 13-digit reading that fails its checksum stays visible, so a real ISBN-10
+  // after a stray "978" is still found.
+  const parts: string[] = [];
+  let shown = 0;
+  for (const m of text.matchAll(isbn13)) {
+    const candidate = m[1] ?? '';
+    add(candidate);
+    if (!isValidIsbn13(candidate)) continue;
+    // The match may start with the one character before the ISBN; the
+    // ISBN itself ends the match.
+    const start = m.index + m[0].length - candidate.length;
+    parts.push(text.slice(shown, start), HIDDEN.repeat(candidate.length));
+    shown = start + candidate.length;
   }
+  parts.push(text.slice(shown));
+  for (const m of parts.join('').matchAll(isbn10)) add(m[1] ?? '');
   return out;
 }
 

@@ -116,6 +116,18 @@ export async function POST(req: Request) {
     );
   }
 
+  // The most ISBNs the caller can use (docket B76): the web AI Assistant
+  // sends the number it adds at a time. Past it the AI work that could only
+  // lengthen the list is skipped. It can only make the caller's own
+  // extraction cheaper, so anything but a whole number from 1 to 999 is
+  // ignored, and a caller that sends none (Bulk ISBN import, the phone) is
+  // unchanged.
+  const maxIsbnsField = form.get('maxIsbns');
+  const maxIsbns =
+    typeof maxIsbnsField === 'string' && /^[1-9][0-9]{0,2}$/.test(maxIsbnsField)
+      ? Number(maxIsbnsField)
+      : undefined;
+
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
 
@@ -128,9 +140,12 @@ export async function POST(req: Request) {
         kind === 'pdf' ? 'application/pdf' : (file.type || 'image/png');
       // A failed model call is reported by the helper and answered as a
       // fixed note, never the vendor's text (S16 review).
-      const result = await aiExtractIsbnsFromBuffer(buffer, mime, {
-        organizationId: ctx.organizationId,
-      });
+      const result = await aiExtractIsbnsFromBuffer(
+        buffer,
+        mime,
+        { organizationId: ctx.organizationId },
+        { maxIsbns },
+      );
       return NextResponse.json({
         ok: true,
         kind,
@@ -144,7 +159,7 @@ export async function POST(req: Request) {
     }
 
     const text = await fileToText(buffer, kind);
-    const result = await aiExtractIsbns(text, { organizationId: ctx.organizationId });
+    const result = await aiExtractIsbns(text, { organizationId: ctx.organizationId }, { maxIsbns });
     return NextResponse.json({
       ok: true,
       kind,

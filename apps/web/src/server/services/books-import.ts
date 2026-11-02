@@ -6,6 +6,7 @@ import {
   ForbiddenError,
 } from '@/lib/auth/warehouse';
 import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
+import { ASSISTANT_ISBN_LIMIT } from '@/lib/books/import-limits';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
@@ -203,7 +204,9 @@ async function rehostCover(
  * `barcode = <isbn>`. (Bulk imports use the ISBN as the barcode.)
  */
 
-const MAX_PER_BATCH = 50;
+// The assistant's per-call cap, shared with its tool description, its system
+// prompt and the web chat panel's upload check (B76).
+const MAX_PER_BATCH = ASSISTANT_ISBN_LIMIT;
 
 export type PreviewStatus =
   | 'ready'

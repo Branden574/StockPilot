@@ -52,7 +52,9 @@ vi.mock('@/lib/books/lookup', async () => {
   };
 });
 
+import { ASSISTANT_ISBN_LIMIT } from '@/lib/books/import-limits';
 import { lookupIsbn } from '@/lib/books/lookup';
+import { syntheticIsbn13s } from '@/test/synthetic-isbns';
 
 import { BooksImportService } from './books-import';
 import { ServiceError } from './context';
@@ -383,5 +385,34 @@ describe('BooksImportService.execute', () => {
     const payload = itemInsertArgs[0]![0] as Array<Record<string, unknown>>;
     expect(payload).toHaveLength(1);
     expect(payload[0]!.barcode).toBe(ISBN_B);
+  });
+});
+
+/**
+ * B76: the assistant's cap is ASSISTANT_ISBN_LIMIT, the number the tool
+ * description, the system prompt and the web chat panel's upload check read.
+ * At the cap the preview runs; one more is refused before any lookup.
+ */
+describe('BooksImportService.preview cap (B76)', () => {
+  it('refuses ASSISTANT_ISBN_LIMIT + 1 ISBNs before any lookup, and previews ASSISTANT_ISBN_LIMIT', async () => {
+    const svc = new BooksImportService(makeServiceContext(execStub().client));
+
+    let caught: unknown = null;
+    try {
+      await svc.preview(syntheticIsbn13s(ASSISTANT_ISBN_LIMIT + 1));
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).code).toBe('validation_error');
+    expect((caught as ServiceError).message).toBe(
+      `Bulk import is capped at ${ASSISTANT_ISBN_LIMIT} ISBNs per batch via the assistant. Use /dashboard/books/import for larger batches (up to 200).`,
+    );
+    expect(lookupIsbn).not.toHaveBeenCalled();
+
+    const preview = await svc.preview(syntheticIsbn13s(ASSISTANT_ISBN_LIMIT));
+    expect(preview.totals.submitted).toBe(ASSISTANT_ISBN_LIMIT);
+    expect(preview.totals.ready).toBe(ASSISTANT_ISBN_LIMIT);
+    expect(lookupIsbn).toHaveBeenCalledTimes(ASSISTANT_ISBN_LIMIT);
   });
 });

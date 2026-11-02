@@ -73,6 +73,19 @@ export interface AiExtractReportContext {
   organizationId: string;
 }
 
+/** What the caller can use (docket B76). */
+export interface AiExtractOptions {
+  /**
+   * The most ISBNs the caller can use: the web AI Assistant sends the number
+   * it adds at a time, and refuses a longer list whatever the AI adds. Past
+   * it the AI work that could only make the list longer is skipped: the model
+   * call on text whose regex hits already pass it, and the lookups that check
+   * title-only guesses once the ISBNs kept without a lookup pass it. Unset
+   * (Bulk ISBN import, the phone): everything runs, as before.
+   */
+  maxIsbns?: number;
+}
+
 /**
  * The notes when the model call fails, whatever the vendor said (S16
  * review). The route answers `notes` with a 200, and the web chat panel puts
@@ -85,6 +98,14 @@ export interface AiExtractReportContext {
 export const AI_UNAVAILABLE_NOTE = 'AI extraction unavailable.';
 export const AI_UNAVAILABLE_REGEX_ONLY_NOTE =
   'AI extraction unavailable. Returning regex hits only.';
+
+/** The notes when the caller's cap skipped AI work (B76): fixed sentences
+ *  too. The web panel does not send a list past its cap, so it never quotes
+ *  them. */
+export const OVER_LIMIT_AI_SKIPPED_NOTE =
+  'More ISBNs than the limit asked for: the AI pass was skipped.';
+export const OVER_LIMIT_GUESSES_UNCHECKED_NOTE =
+  'More ISBNs than the limit asked for: guesses from titles were not checked.';
 
 /**
  * A failed model call, reported with the organization. A warning: the
@@ -260,6 +281,18 @@ async function verifyLowConfidence(
   return verified;
 }
 
+/** Regex hits as candidates: read from the text itself, so kept as sure. */
+function regexCandidates(regexHits: string[]): AiExtractResult['candidates'] {
+  return regexHits.map((isbn) => ({
+    isbn,
+    title: null,
+    author: null,
+    confidence: 'high' as const,
+    verified: true,
+    source: 'regex' as const,
+  }));
+}
+
 /**
  * Internal: do the merge + verification dance given a regex
  * baseline and a set of AI candidates. Used by both the text-based
@@ -268,20 +301,20 @@ async function verifyLowConfidence(
 async function mergeRegexAndAi(
   regexHits: string[],
   aiCandidates: AiExtractCandidate[],
+  opts: AiExtractOptions,
 ): Promise<AiExtractResult> {
   const regexSet = new Set(regexHits);
-  const verifiedLowConf = await verifyLowConfidence(aiCandidates);
+  // The ISBNs kept whatever the lookups say: the regex hits, then the high
+  // and medium candidates. The list returned is never shorter, so when these
+  // alone pass the caller's cap the guesses are not looked up (B76).
+  const kept = new Set(regexHits);
+  for (const c of aiCandidates) if (c.confidence !== 'low') kept.add(c.isbn);
+  const overLimit = opts.maxIsbns !== undefined && kept.size > opts.maxIsbns;
+  const verifiedLowConf = overLimit ? new Set<string>() : await verifyLowConfidence(aiCandidates);
 
   const seen = new Set<string>(regexHits);
   const finalIsbns: string[] = [...regexHits];
-  const provenance: AiExtractResult['candidates'] = regexHits.map((isbn) => ({
-    isbn,
-    title: null,
-    author: null,
-    confidence: 'high' as const,
-    verified: true,
-    source: 'regex' as const,
-  }));
+  const provenance = regexCandidates(regexHits);
 
   for (const c of aiCandidates) {
     if (seen.has(c.isbn)) continue;
@@ -290,6 +323,10 @@ async function mergeRegexAndAi(
     seen.add(c.isbn);
     finalIsbns.push(c.isbn);
     provenance.push({ ...c, source: 'ai', verified: c.confidence === 'low' });
+  }
+
+  if (overLimit) {
+    return { isbns: finalIsbns, candidates: provenance, notes: OVER_LIMIT_GUESSES_UNCHECKED_NOTE };
   }
 
   const aiAdded = finalIsbns.length - regexHits.length;
@@ -321,6 +358,7 @@ export async function aiExtractIsbnsFromBuffer(
   buffer: Buffer,
   mimeType: string,
   report: AiExtractReportContext,
+  opts: AiExtractOptions = {},
 ): Promise<AiExtractResult> {
   let aiCandidates: AiExtractCandidate[] = [];
   try {
@@ -329,14 +367,24 @@ export async function aiExtractIsbnsFromBuffer(
     reportModelFailure(err, report, 'multimodal');
     return { isbns: [], candidates: [], notes: AI_UNAVAILABLE_NOTE };
   }
-  return mergeRegexAndAi([], aiCandidates);
+  return mergeRegexAndAi([], aiCandidates, opts);
 }
 
 export async function aiExtractIsbns(
   text: string,
   report: AiExtractReportContext,
+  opts: AiExtractOptions = {},
 ): Promise<AiExtractResult> {
   const regexHits = extractIsbnsFromText(text);
+  // Past the caller's cap already: the model could only add to the list
+  // (B76).
+  if (opts.maxIsbns !== undefined && regexHits.length > opts.maxIsbns) {
+    return {
+      isbns: regexHits,
+      candidates: regexCandidates(regexHits),
+      notes: OVER_LIMIT_AI_SKIPPED_NOTE,
+    };
+  }
   let aiCandidates: AiExtractCandidate[] = [];
   try {
     aiCandidates = await callModelOnText(text);
@@ -344,16 +392,9 @@ export async function aiExtractIsbns(
     reportModelFailure(err, report, 'text');
     return {
       isbns: regexHits,
-      candidates: regexHits.map((isbn) => ({
-        isbn,
-        title: null,
-        author: null,
-        confidence: 'high' as const,
-        verified: true,
-        source: 'regex' as const,
-      })),
+      candidates: regexCandidates(regexHits),
       notes: AI_UNAVAILABLE_REGEX_ONLY_NOTE,
     };
   }
-  return mergeRegexAndAi(regexHits, aiCandidates);
+  return mergeRegexAndAi(regexHits, aiCandidates, opts);
 }

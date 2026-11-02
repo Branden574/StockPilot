@@ -12,6 +12,7 @@ import { runStreamedStockWrites } from '@/server/services/lib/inventory-list-cac
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
+import { CHAT_MESSAGE_MAX_CHARS, CHAT_MESSAGE_TOO_LONG } from '@/lib/ai/chat-limits';
 import { streamChatClaude } from '@/lib/ai/chat-claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
 import { classifyAiError } from '@/lib/ai/errors';
@@ -52,7 +53,7 @@ const pageContextSchema = z.object({
   referrerPath: z.string().max(200).optional(),
 });
 const bodySchema = z.object({
-  message: z.string().min(1).max(2000),
+  message: z.string().min(1).max(CHAT_MESSAGE_MAX_CHARS),
   sessionId: z.string().uuid().optional(),
   history: z.array(turnSchema).max(40).optional(),
   pageContext: pageContextSchema.optional(),
@@ -76,7 +77,8 @@ function bodyRefusalMessage(issues: z.ZodIssue[]): string {
   const first = issues[0];
   if (first?.code === 'too_big') {
     if (first.path[0] === 'message') {
-      return 'Your message is too long. Keep it under 2,000 characters.';
+      // The web chat panel says the same before it sends (B76).
+      return CHAT_MESSAGE_TOO_LONG;
     }
     if (first.path[0] === 'history') return 'This conversation is too long. Start a new chat.';
   }

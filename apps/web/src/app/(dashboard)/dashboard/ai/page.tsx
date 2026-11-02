@@ -27,6 +27,12 @@ export default async function AiPage() {
   if (!can(ctx, 'items:update')) {
     redirect('/dashboard');
   }
+  // Bulk ISBN import needs items:import, and its way back is the Books page,
+  // which needs the Books module. Only then does the note for a file with
+  // more ISBNs than the assistant adds at a time link to it (B76). The module
+  // set is read once per request.
+  const booksAccess = await checkModuleAccess('books');
+  const canOpenBulkIsbnImport = booksAccess.enabled && can(ctx, 'items:import');
   return (
     // The two-pane tool page: the page box with the redesign's gutters
     // (16 px on a phone), the shared header, then the sessions rail beside the
@@ -52,7 +58,7 @@ export default async function AiPage() {
         }
         tour={<PageTour tour={AI_TOUR} />}
       />
-      <ChatPanel />
+      <ChatPanel canOpenBulkIsbnImport={canOpenBulkIsbnImport} />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration, type ResponseSchema } from '@google/generative-ai';
 
+import { ASSISTANT_ISBN_LIMIT } from '@/lib/books/import-limits';
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { claudeGenerateJsonString } from './claude';
 import { resolveAiProvider } from './provider';
@@ -1129,8 +1130,7 @@ const lookupIsbnTool: ToolExecutor = {
 const previewBulkBookImportTool: ToolExecutor = {
   declaration: {
     name: 'previewBulkBookImport',
-    description:
-      "READ-ONLY preview of a bulk ISBN import. Resolves every ISBN, flags duplicates already in inventory (same barcode), flags ISBNs that appear twice in the input list, and reports lookup failures. ALWAYS call this first when a user wants to bulk-import books — show them the breakdown and the duplicate flags, then wait for explicit confirmation before calling executeBulkBookImport. Capped at 50 ISBNs per call; route larger batches to /dashboard/books/import.",
+    description: `READ-ONLY preview of a bulk ISBN import. Resolves every ISBN, flags duplicates already in inventory (same barcode), flags ISBNs that appear twice in the input list, and reports lookup failures. ALWAYS call this first when a user wants to bulk-import books — show them the breakdown and the duplicate flags, then wait for explicit confirmation before calling executeBulkBookImport. Capped at ${ASSISTANT_ISBN_LIMIT} ISBNs per call; route larger batches to /dashboard/books/import.`,
     parameters: {
       type: SchemaType.OBJECT,
       properties: {

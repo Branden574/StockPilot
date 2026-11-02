@@ -1,6 +1,16 @@
 'use client';
 
-import { Loader2, Paperclip, Plus, Send, Sparkles, Trash2, Wrench } from 'lucide-react';
+import {
+  Loader2,
+  Paperclip,
+  Plus,
+  Send,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  Wrench,
+} from 'lucide-react';
+import Link from 'next/link';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -8,7 +18,11 @@ import { filterChipClass } from '@/components/patterns/chip';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
+import { CHAT_MESSAGE_MAX_CHARS, CHAT_MESSAGE_TOO_LONG } from '@/lib/ai/chat-limits';
+import { ASSISTANT_ISBN_LIMIT } from '@/lib/books/import-limits';
 import { cn } from '@/lib/utils';
+
+import { buildUploadMessage, tooManyIsbnsNote } from './upload-message';
 
 interface ChatTurn {
   role: 'user' | 'assistant';
@@ -190,7 +204,23 @@ function formatRelative(iso: string): string {
   return `${d}d ago`;
 }
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  /**
+   * Whether this person can open Bulk ISBN import (the Books module and
+   * items:import; the AI page decides). Only then does the note for a file
+   * with more ISBNs than the assistant adds at a time link to it (B76).
+   */
+  canOpenBulkIsbnImport?: boolean;
+}
+
+/** The note above the message box (B76): what was not sent, and why. */
+interface ComposerNote {
+  text: string;
+  /** Ends with the Open Bulk ISBN import link. */
+  bulkImportLink: boolean;
+}
+
+export function ChatPanel({ canOpenBulkIsbnImport = false }: ChatPanelProps) {
   const [turns, setTurns] = React.useState<ChatTurn[]>([]);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -198,6 +228,10 @@ export function ChatPanel() {
   const [dragOver, setDragOver] = React.useState(false);
   const [sessionId, setSessionId] = React.useState<string | null>(null);
   const [sessions, setSessions] = React.useState<SessionRow[]>([]);
+  // A file with more ISBNs than the assistant adds at a time, or a message
+  // longer than the chat accepts, is not sent, so no turn shows it and no
+  // reply can say why: this note does, above the message box (B76).
+  const [note, setNote] = React.useState<ComposerNote | null>(null);
   // Capture the dashboard page the user came from once on mount, then
   // ship it as `pageContext.referrerPath` on every chat turn. The
   // server extracts an entity ID from a strict route allowlist
@@ -293,6 +327,7 @@ export function ChatPanel() {
         }
         setSessionId(null);
         setTurns([]);
+        setNote(null);
         return;
       }
       const messages =
@@ -309,6 +344,8 @@ export function ChatPanel() {
           toolCalls: m.toolCalls ?? undefined,
         })),
       );
+      // A note belongs to the chat it was shown in (B76).
+      setNote(null);
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
       }
@@ -325,6 +362,7 @@ export function ChatPanel() {
     setSessionId(null);
     setTurns([]);
     setInput('');
+    setNote(null);
     // A fresh chat is a fresh intent — the page they originally came
     // from is no longer necessarily what they want to talk about. Drop
     // the referrer hint so the AI doesn't keep biasing its answers
@@ -360,9 +398,13 @@ export function ChatPanel() {
   async function uploadFile(file: File) {
     if (uploading || busy) return;
     setUploading(true);
+    setNote(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
+      // The most the assistant adds at a time: past it the route skips AI
+      // work whose result could not be sent anyway (B76).
+      fd.append('maxIsbns', String(ASSISTANT_ISBN_LIMIT));
       const res = await fetch('/api/books/extract-isbns-ai', {
         method: 'POST',
         body: fd,
@@ -384,19 +426,23 @@ export function ChatPanel() {
         toast.warning(`No ISBNs found in "${file.name}".`);
         return;
       }
-      const synthetic = [
-        `[Uploaded ${file.name} — extracted ${isbns.length} ISBN${isbns.length === 1 ? '' : 's'}${
-          json.notes ? ` (${json.notes})` : ''
-        }]`,
-        '',
-        ...isbns,
-        '',
-        'Please preview the bulk import for these ISBNs and tell me which warehouse + charter you need.',
-      ].join('\n');
+      // More than the assistant previews or imports at a time: sending the
+      // list would spend a chat turn for nothing (and from about 130 ISBNs
+      // the chat refuses the message after showing it), so nothing is sent
+      // and the note says where the list goes instead (B76).
+      if (isbns.length > ASSISTANT_ISBN_LIMIT) {
+        setNote({
+          text: tooManyIsbnsNote(isbns.length, canOpenBulkIsbnImport),
+          bulkImportLink: canOpenBulkIsbnImport,
+        });
+        return;
+      }
+      const synthetic = buildUploadMessage(file.name, isbns, json.notes);
       // setUploading off before send() to avoid the disabled-textarea
       // race; send() flips its own busy flag.
       setUploading(false);
-      await send(synthetic);
+      // What the person had typed stays in the box: it was not sent (B76).
+      await send(synthetic, { keepInput: true });
     } catch (err) {
       toast.error(
         err instanceof Error
@@ -409,9 +455,17 @@ export function ChatPanel() {
     }
   }
 
-  async function send(message: string) {
+  async function send(message: string, opts: { keepInput?: boolean } = {}) {
     const trimmed = message.trim();
     if (!trimmed) return;
+    // Longer than the chat accepts: the route would refuse it after it was
+    // shown as a turn and the box cleared. It stays in the box, and the note
+    // says why (B76).
+    if (trimmed.length > CHAT_MESSAGE_MAX_CHARS) {
+      setNote({ text: CHAT_MESSAGE_TOO_LONG, bulkImportLink: false });
+      return;
+    }
+    setNote(null);
     if (busy) return;
     // Push the user turn AND a placeholder assistant turn — the
     // placeholder is what we mutate as text deltas stream in. The
@@ -422,7 +476,7 @@ export function ChatPanel() {
       { role: 'user', content: trimmed },
       { role: 'assistant', content: '', toolCalls: [] },
     ]);
-    setInput('');
+    if (!opts.keepInput) setInput('');
     setBusy(true);
 
     const appendAssistantDelta = (delta: string) => {
@@ -813,6 +867,36 @@ export function ChatPanel() {
             )}
           </div>
 
+          {/* What was not sent, and why (B76): a file over the assistant's
+              ISBN limit, or a message over the chat's length. On the page,
+              not a toast that times out, and it wraps; the conversation
+              above shrinks, so the composer stays on screen. */}
+          {note ? (
+            <div
+              role="alert"
+              className="border-warning/40 bg-warning-wash text-foreground mx-2.5 mb-2.5 flex items-start gap-2 rounded-md border px-3 py-2 text-[12.5px] leading-[18px]"
+            >
+              <TriangleAlert aria-hidden className="text-warning mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p className="min-w-0 [overflow-wrap:anywhere]">
+                <span>{note.text}</span>
+                {note.bulkImportLink ? (
+                  <>
+                    {' '}
+                    <Link
+                      href="/dashboard/books/import"
+                      className={cn(
+                        'text-accent hover:text-foreground inline-flex items-center font-medium underline underline-offset-2 transition-colors',
+                        touchTargetClass,
+                      )}
+                    >
+                      Open Bulk ISBN import
+                    </Link>
+                  </>
+                ) : null}
+              </p>
+            </div>
+          ) : null}
+
           {/* Composer */}
           <form
             onSubmit={(e) => {
@@ -909,7 +993,8 @@ export function ChatPanel() {
         </div>
         <p className="text-muted-foreground mt-1.5 px-1 text-[11.5px] leading-[17px]">
           ⌘ Enter or Enter to send · Shift+Enter for newline · Drop or attach a PDF / Word / Excel /
-          image to bulk-import books · Chats auto-save 30 days.
+          image with up to {ASSISTANT_ISBN_LIMIT} ISBNs to bulk-import books · Chats auto-save 30
+          days.
         </p>
       </div>
     </div>
