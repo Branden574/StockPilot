@@ -54,25 +54,27 @@ describe('isDefiniteRefusal (F1-5: did the call surely not commit?)', () => {
   });
 });
 
-describe('isPermanentRefusal (B82, integrator R4: will the same request be refused again?)', () => {
-  it('bad data, a constraint, a missing table, column or right, or PostgREST refusing the request', () => {
+describe('isPermanentRefusal (B82, integrator R4b: will the same request be refused again?)', () => {
+  it('bad data, a constraint, or PostgREST refusing the request itself', () => {
+    for (const code of ['22P02', '22001', '23502', '23503', '23505', 'PGRST100', 'PGRST116']) {
+      expect(isPermanentRefusal({ message: 'x', code })).toBe(true);
+    }
+  });
+
+  it('class 42 and PGRST2xx/3xx are not: they can be brief here (a migration push, a schema cache miss, pooling, a credential change)', () => {
     for (const code of [
-      '22P02',
-      '22001',
-      '23502',
-      '23503',
-      '23505',
       '42501',
       '42P01',
+      '42P05',
       '42703',
-      'PGRST100',
-      'PGRST116',
+      'PGRST202',
       'PGRST204',
       'PGRST205',
       'PGRST300',
       'PGRST301',
     ]) {
-      expect(isPermanentRefusal({ message: 'x', code })).toBe(true);
+      expect(isDefiniteRefusal({ message: 'x', code })).toBe(true);
+      expect(isPermanentRefusal({ message: 'x', code })).toBe(false);
     }
   });
 

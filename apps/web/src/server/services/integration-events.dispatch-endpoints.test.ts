@@ -14,11 +14,11 @@
  * inserted with ON CONFLICT (id) DO NOTHING, so a repeated insert cannot queue
  * a delivery twice. Only the third failure is reported, with the organization.
  *
- * Integrator R4 (2026-11-02): a refusal that the same request meets again
- * (bad data, a constraint, a missing table, column or right, PostgREST
- * refusing the request) is reported after one try, and each wait is its delay
- * times 0.5 to 1.5, so dispatches that one brief failure stopped together do
- * not all try again in the same moment.
+ * Integrator R4 and R4b (2026-11-02): a refusal that the same request meets
+ * again (bad data, a constraint, PostgREST refusing the request itself) is
+ * reported after one try, except for a security.* event, which is always tried
+ * three times; and each wait is its delay times 0.5 to 1.5, so dispatches that
+ * one brief failure stopped together do not all try again in the same moment.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,7 +38,11 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.cl
 import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
 
-import { DISPATCH_RETRY_DELAYS_MS, dispatchEvent } from './integration-events';
+import {
+  DISPATCH_RETRY_DELAYS_MS,
+  dispatchEvent,
+  type IntegrationEventType,
+} from './integration-events';
 
 const ENDPOINT = {
   id: 'ep-1',
@@ -68,18 +72,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** One dispatch of order.approved whose endpoint read answers `endpoints`.
- *  The delivery insert answers no rows by default, so no attempt is made. */
+/** One dispatch of `eventType` (order.approved) whose endpoint read answers
+ *  `endpoints`. The delivery insert answers no rows by default, so no attempt
+ *  is made. */
 async function dispatchWith(
   endpoints: QueryResult | (() => QueryResult),
   insert: QueryResult | ((call: MockCall) => QueryResult) = { data: [], error: null },
+  eventType: IntegrationEventType = 'order.approved',
 ) {
   const stub = makeSupabaseStub({
     'integration_endpoints.select': endpoints,
     'integration_deliveries.insert': insert,
   });
   adminHolder.client = stub.client;
-  const done = dispatchEvent('org-1', 'order.approved', { orderId: 'order-1' });
+  const done = dispatchEvent('org-1', eventType, { orderId: 'order-1' });
   // Run the waits between tries.
   await vi.runAllTimersAsync();
   await done;
@@ -277,16 +283,22 @@ describe('dispatchEvent: the delivery insert', () => {
   });
 });
 
-describe('dispatchEvent: which failures are tried again (integrator R4)', () => {
-  /** Refusals the same request meets again: SQLSTATE classes 22, 23 and 42,
-   *  and PostgREST's PGRST1xx, PGRST2xx and PGRST3xx. */
+describe('dispatchEvent: which failures are tried again (integrator R4, R4b)', () => {
+  /** Refusals the same request meets again: SQLSTATE classes 22 and 23, and
+   *  PostgREST's PGRST1xx (R4b). */
   const REFUSALS: Array<[string, string]> = [
     ['22P02', 'invalid input syntax for type uuid: "x"'],
     ['23502', 'null value in column "organization_id" violates not-null constraint'],
+    ['23503', 'insert or update on table "integration_deliveries" violates foreign key constraint'],
     ['23505', 'duplicate key value violates unique constraint'],
-    ['42501', 'permission denied for table integration_endpoints'],
-    ['42P01', 'relation "public.integration_endpoints" does not exist'],
     ['PGRST100', 'failed to parse filter'],
+  ];
+  /** Definite answers that can still be brief on this stack (R4b): a table or
+   *  column missing while a migration is pushed, a schema cache miss, a right
+   *  or a credential refused while a change settles. */
+  const BRIEF_HERE: Array<[string, string]> = [
+    ['42P01', 'relation "public.integration_endpoints" does not exist'],
+    ['42501', 'permission denied for table integration_endpoints'],
     ['PGRST204', "Could not find the 'event_types' column in the schema cache"],
     ['PGRST301', 'JWSError JWSInvalidSignature'],
   ];
@@ -354,6 +366,42 @@ describe('dispatchEvent: which failures are tried again (integrator R4)', () => 
       );
     },
   );
+
+  it.each(BRIEF_HERE)('a read refused with %s is tried three times', async (code, message) => {
+    const { stub, dispatchReports } = await dispatchWith({ data: null, error: { message, code } });
+    expect(stub.chainsAll.get('integration_endpoints.select')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+  });
+
+  it.each(BRIEF_HERE)('an insert refused with %s is tried three times', async (code, message) => {
+    const { stub, dispatchReports } = await dispatchWith(
+      { data: [ENDPOINT], error: null },
+      { data: null, error: { message, code } },
+    );
+    expect(stub.chainsAll.get('integration_deliveries.insert')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+  });
+
+  it('a security event is always tried three times, even after a refusal', async () => {
+    const { stub, dispatchReports } = await dispatchWith(
+      { data: [ENDPOINT], error: null },
+      {
+        data: null,
+        error: {
+          message:
+            'insert or update on table "integration_deliveries" violates foreign key constraint',
+          code: '23503',
+        },
+      },
+      'security.member_role_changed',
+    );
+    expect(stub.chainsAll.get('integration_deliveries.insert')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+    expect(dispatchReports[0]?.[1]).toEqual({
+      ...EXPECTED_REPORT_CONTEXT,
+      extra: { eventType: 'security.member_role_changed' },
+    });
+  });
 
   it.each(BRIEF)('a read that met %s is tried three times', async (_failure, answer) => {
     const { stub, dispatchReports } = await dispatchWith(answer);

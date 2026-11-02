@@ -505,9 +505,10 @@ class DispatchStepError extends Error {
  * is thrown. Between tries it waits each DISPATCH_RETRY_DELAYS_MS delay times
  * 0.5 to 1.5, so the dispatches one brief failure stopped together do not all
  * try again in the same moment. A refusal the same request meets again
- * (isPermanentRefusal: bad data, a constraint, a missing table, column or
- * right, PostgREST refusing the request) is thrown at once: a retry cannot
- * change it (integrator R4).
+ * (isPermanentRefusal: bad data, a constraint, PostgREST refusing the request
+ * itself) is thrown at once, as a retry cannot change it, unless
+ * `retryRefusals`: a security.* event is always tried three times
+ * (integrator R4, R4b).
  *
  * No deadline: every caller fires dispatchEvent around its response, kept
  * alive past it (keepAlive; order-requests through defer), and none has a
@@ -515,14 +516,19 @@ class DispatchStepError extends Error {
  * waiting. A caller that has a deadline must pass it in, and this must then
  * stop at it.
  */
-async function withDispatchRetries<T>(step: () => Promise<T>): Promise<T> {
+async function withDispatchRetries<T>(
+  step: () => Promise<T>,
+  opts: { retryRefusals: boolean },
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await step();
     } catch (e) {
       const delay = DISPATCH_RETRY_DELAYS_MS[attempt];
       if (delay === undefined) throw e;
-      if (e instanceof DispatchStepError && isPermanentRefusal(e)) throw e;
+      if (!opts.retryRefusals && e instanceof DispatchStepError && isPermanentRefusal(e)) {
+        throw e;
+      }
       await new Promise((resolve) => setTimeout(resolve, delay * (0.5 + Math.random())));
     }
   }
@@ -536,6 +542,9 @@ async function dispatchEventNow(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
+    // A security.* event (a role change, an MFA or API key change) is never
+    // given up after one try (integrator R4b).
+    const retry = { retryRefusals: eventType.startsWith('security.') };
     // A failed read, or an answer that is not a list (an empty body), is not
     // "no endpoints": the event's deliveries are never inserted, and the cron
     // retries only rows that exist. It is tried again (docket B82); the catch
@@ -554,7 +563,7 @@ async function dispatchEventNow(
         );
       }
       return listRows<EndpointRow>('integration_endpoints', endpointsRes);
-    });
+    }, retry);
     if (eps.length === 0) return;
 
     // Batch-insert one pending delivery per endpoint (single round trip), then
@@ -589,7 +598,7 @@ async function dispatchEventNow(
         );
       }
       return listRows<DeliveryRow>('integration_deliveries', insertRes);
-    });
+    }, retry);
     if (rows.length === 0) return;
     const epById = new Map(eps.map((e) => [e.id, e]));
     await Promise.allSettled(
