@@ -4,7 +4,14 @@ import { createHash } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
 import { audit, auditMany } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  isModuleEnabled,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { dispatchEvent } from './integration-events';
 import {
@@ -62,6 +69,17 @@ export interface ReceiptLineRow {
   notes: string | null;
   created_at: string;
 }
+
+/**
+ * A purchase order's receipts for its page and its PDF
+ * (`historyForPurchaseOrder`): `off` when the Receiving module is off (nothing
+ * was read), `failed` when the read failed (reported; no message travels), or
+ * the receipts and their lines.
+ */
+export type PoReceiptHistory =
+  | { state: 'off' }
+  | { state: 'ok'; receipts: ReceiptRow[]; lines: ReceiptLineRow[] }
+  | { state: 'failed' };
 
 /**
  * Computes a deterministic SHA-256 of the normalized receipt request, used
@@ -183,6 +201,41 @@ export class ReceivingService {
       receipts: receiptsWithNames,
       lines: lines as unknown as ReceiptLineRow[],
     };
+  }
+
+  /**
+   * A purchase order's receipts for a page or document that is about the
+   * PURCHASE ORDER (its page and its PDF), where receipts are one section.
+   * Never throws.
+   *
+   * WHY (B67). Receiving is an optional module that depends on Purchase
+   * orders, and an owner or admin can switch it off alone. The PO page read
+   * `listForPurchaseOrder()`, which refuses with `module_disabled` when it is
+   * off, beside the PO itself, so every purchase order's page was "Something
+   * broke loading this page"; a failed receipts read with Receiving on did
+   * the same. The PDF caught every error and printed no receipts, reporting
+   * none of them.
+   *
+   * Off answers `off` with nothing read: off still means no receipt rows, and
+   * the caller leaves the section out (the PDF did already). A failed read is
+   * `failed`, reported once here with a fixed message (the raw text in
+   * `extra.detail`, as reportDegradedRead does), so the caller can say the
+   * receipts could not be loaded instead of showing none. The strict
+   * `listForPurchaseOrder()` keeps its refusal for every other caller.
+   */
+  async historyForPurchaseOrder(poId: string): Promise<PoReceiptHistory> {
+    if (!isModuleEnabled(this.ctx, 'receiving')) return { state: 'off' };
+    try {
+      return { state: 'ok', ...(await this.listForPurchaseOrder(poId)) };
+    } catch (err) {
+      void reportError(new Error('Receipts read failed; showing the purchase order without them'), {
+        tag: 'receiving.po_history',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+        extra: { detail: rawErrorText(err) },
+      });
+      return { state: 'failed' };
+    }
   }
 
   /**

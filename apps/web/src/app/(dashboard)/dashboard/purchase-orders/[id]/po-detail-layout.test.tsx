@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const poGet = vi.fn();
 const inventoryByIds = vi.fn();
 const locationsList = vi.fn();
-const listForPurchaseOrder = vi.fn(async () => ({ receipts: [], lines: [] }));
+const historyForPurchaseOrder = vi.fn(async () => ({ state: 'ok', receipts: [], lines: [] }));
 const attachmentsList = vi.fn(async () => []);
 let role = 'owner';
 
@@ -96,7 +96,7 @@ vi.mock('@/server/services/locations', () => ({
   LocationsService: { forCurrentUser: vi.fn(async () => ({ list: locationsList })) },
 }));
 vi.mock('@/server/services/receiving', () => ({
-  ReceivingService: { forCurrentUser: vi.fn(async () => ({ listForPurchaseOrder })) },
+  ReceivingService: { forCurrentUser: vi.fn(async () => ({ historyForPurchaseOrder })) },
 }));
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: {
@@ -367,7 +367,7 @@ describe('PO page: an id that is not a uuid', () => {
       );
     }
     expect(poGet).not.toHaveBeenCalled();
-    expect(listForPurchaseOrder).not.toHaveBeenCalled();
+    expect(historyForPurchaseOrder).not.toHaveBeenCalled();
     expect(attachmentsList).not.toHaveBeenCalled();
     expect(requireOrgContext).not.toHaveBeenCalled();
   });
