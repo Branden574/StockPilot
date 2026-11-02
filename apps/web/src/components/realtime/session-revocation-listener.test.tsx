@@ -209,6 +209,42 @@ describe('SessionRevocationListener (browser Buffer polyfill installed)', () => 
     expect(h.signOut).not.toHaveBeenCalled();
   });
 
+  // S5 (integrator decision 2026-11-01): "Sign out all other devices", Change
+  // password and the phone's sign-out (POST /api/v1/auth/signed-out) now name
+  // the sessions they ended instead of the one they kept (`keepId` put a live
+  // session id on this public channel). The listener needed no change: these
+  // pass against it as it was before S5.
+  describe('the payload the session-ending paths now send: { sessionIds: the ended sessions }', () => {
+    const KEPT = '0a0b0c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+    const ENDED = 'f0e0d0c0-b0a0-4090-8080-706050403020';
+    // Encoded while the describe is collected, before beforeAll swaps in the
+    // browser polyfill (which has no 'base64url').
+    const KEPT_JWT = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url({ session_id: KEPT })}.signature`;
+
+    it('a tab whose session was ended (named) signs out', async () => {
+      const onRevoked = await mount();
+      onRevoked({ payload: { sessionIds: [ENDED, MY_SESSION] } });
+      await waitFor(() => expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+      await waitFor(() => expect(h.replace).toHaveBeenCalledWith('/signin'));
+    });
+
+    it('the tab that made the change (its session is the kept one, never named) stays signed in, and GoTrue is not even asked', async () => {
+      h.getSession.mockResolvedValue({ data: { session: { access_token: KEPT_JWT } } });
+      const onRevoked = await mount();
+      onRevoked({ payload: { sessionIds: [ENDED, MY_SESSION] } });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.getUser).not.toHaveBeenCalled();
+      expect(h.signOut).not.toHaveBeenCalled();
+      expect(h.replace).not.toHaveBeenCalled();
+
+      // Control: this tab did read KEPT as its own session (the pass above is
+      // not a tab that knows no session): named, it signs out.
+      onRevoked({ payload: { sessionIds: [KEPT] } });
+      await waitFor(() => expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+    });
+  });
+
   it('a broadcast about other sessions leaves this tab signed in', async () => {
     const onRevoked = await mount();
 

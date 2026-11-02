@@ -23,6 +23,8 @@ const getSession = vi.fn();
 const getClaims = vi.fn();
 const maybeSingle = vi.fn();
 const broadcastToChannel = vi.fn();
+/** list_my_sessions on the cookie client: the caller's sessions, the kept one included. */
+const rpc = vi.fn();
 // vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
 // above the module body), so a plain `const` would still be in its temporal
 // dead zone when the factory runs.
@@ -92,6 +94,7 @@ vi.mock('@/lib/supabase/server', () => ({
       mfa: { listFactors, getAuthenticatorAssuranceLevel },
     },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
+    rpc,
   }),
 }));
 
@@ -199,9 +202,16 @@ describe('changePasswordAction — account status', () => {
  * its first intended caller. An inlined copy silently misses every future
  * hardening applied to the helper.
  */
+const OTHER_A = '55555555-5555-4555-8555-555555555555';
+const OTHER_B = '66666666-6666-4666-8666-666666666666';
+
 describe('changePasswordAction — session revocation + shared password check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    rpc.mockResolvedValue({
+      data: [{ id: OTHER_A }, { id: 'sess-1' }, { id: OTHER_B }],
+      error: null,
+    });
     getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
     checkRateLimit.mockResolvedValue({ allowed: true });
     signInWithPassword.mockResolvedValue({ error: null });
@@ -214,14 +224,48 @@ describe('changePasswordAction — session revocation + shared password check', 
     maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
   });
 
-  it('broadcasts the revoke to other devices, keeping the current session alive', async () => {
+  it('broadcasts the revoke to other devices, naming the sessions it ended and never the one it kept', async () => {
     const res = await changePasswordAction(INPUT);
 
     expect(res.ok).toBe(true);
     expect(signOut).toHaveBeenCalledWith({ scope: 'others' });
+    // S5 (integrator decision 2026-11-01): `{ keepId: 'sess-1' }` put the LIVE
+    // session id on the public channel. The ended ones are named instead.
+    expect(broadcastToChannel).toHaveBeenCalledTimes(1);
     expect(broadcastToChannel).toHaveBeenCalledWith('user:u-1:sessions', 'revoked', {
-      keepId: 'sess-1',
+      sessionIds: [OTHER_A, OTHER_B],
     });
+    expect(JSON.stringify(broadcastToChannel.mock.calls)).not.toContain('sess-1');
+  });
+
+  it('lists the sessions BEFORE the password changes: once the others are ended they cannot be named', async () => {
+    await changePasswordAction(INPUT);
+    expect(rpc).toHaveBeenCalledWith('list_my_sessions');
+    expect(rpc.mock.invocationCallOrder[0]!).toBeLessThan(updateUser.mock.invocationCallOrder[0]!);
+    expect(updateUser.mock.invocationCallOrder[0]!).toBeLessThan(
+      broadcastToChannel.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('no other session, or a list that cannot be read: the password still changes, and nothing is broadcast', async () => {
+    rpc.mockResolvedValueOnce({ data: [{ id: 'sess-1' }], error: null });
+    expect((await changePasswordAction(INPUT)).ok).toBe(true);
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: 'PGRST000', message: 'connection refused' },
+    });
+    expect((await changePasswordAction(INPUT)).ok).toBe(true);
+    expect(updateUser).toHaveBeenCalledTimes(2);
+    expect(signOut).toHaveBeenCalledTimes(2);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('a refused password change broadcasts nothing (the list before it was only a read)', async () => {
+    updateUser.mockResolvedValueOnce({
+      error: { message: 'Password should be at least 8 characters' },
+    });
+    expect((await changePasswordAction(INPUT)).ok).toBe(false);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 
   it('skips the broadcast when the current session id cannot be derived', async () => {
@@ -283,5 +327,6 @@ describe('changePasswordAction — session revocation + shared password check', 
     expect(updateUser).not.toHaveBeenCalled();
     expect(signOut).not.toHaveBeenCalled();
     expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

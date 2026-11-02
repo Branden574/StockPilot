@@ -137,6 +137,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
   ],
+  'app/api/v1/auth/signed-out/route.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions: the phone's sign-out ends the account's other sessions (0213: auth.uid()'s rows only).",
+  ],
   'app/api/v1/me/seen/route.ts::touch_member_last_seen': [
     'takes_org',
     "The caller's own last-seen stamp in the organization it names.",

@@ -3,12 +3,26 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 /**
  * Security invariant: "Sign out other devices" keeps exactly the caller's own
  * session, named by the `session_id` claim of an access token whose signature
- * has been checked.
+ * has been checked, and puts only the sessions it ended on the public
+ * channel, never the one it kept.
  *
  * It decoded the id from getSession()'s token unchecked. Here the session is
  * read by the REAL server client and auth-js against the fixture's ES256 keys
  * and Auth server (src/test/auth-session-fixture.ts); the database calls are
  * recorded instead of sent.
+ *
+ * S5 (integrator decision 2026-11-01): the broadcast was `{ keepId: <the kept
+ * session> }`, a LIVE session id on a channel anyone with the anon key and the
+ * user's id can read. It is now `{ sessionIds: <the sessions it ended> }`,
+ * listed before the revoke. Both listeners already sign a device out when its
+ * own session is named and leave the kept one alone
+ * (session-revocation-listener.test.tsx, use-session-revocation.test.ts).
+ *
+ * And only after a revoke that answered (security review of S5a): the ids
+ * named are the sessions the revoke ENDS, so a broadcast ahead of the revoke,
+ * or after a revoke that failed, would put live session ids on the public
+ * channel. One call log records the database calls and the broadcast in the
+ * order they happen.
  */
 
 let jar = new Map<string, string>();
@@ -26,11 +40,27 @@ vi.mock('@/lib/env', async () => {
   };
 });
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-const broadcastToChannel = vi.fn(async () => undefined);
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+/** The database calls and the broadcast, in the order they happen. */
+const calls: string[] = [];
+const broadcastToChannel = vi.fn(async () => {
+  calls.push('broadcast');
+});
 vi.mock('@/lib/realtime/broadcast', () => ({
   broadcastToChannel: (...args: unknown[]) => broadcastToChannel(...(args as [])),
 }));
-const rpc = vi.fn(async () => ({ data: 1, error: null }));
+const OTHER_A = '55555555-5555-4555-8555-555555555555';
+const OTHER_B = '66666666-6666-4666-8666-666666666666';
+/** The caller's sessions as list_my_sessions answers (the kept one included). */
+let listed: Array<{ id: string }> = [];
+let listError: { code: string; message: string } | null = null;
+let revokeError: { code: string; message: string } | null = null;
+const rpc = vi.fn(async (name: string, _args?: unknown) => {
+  calls.push(name);
+  if (name === 'list_my_sessions') return { data: listError ? null : listed, error: listError };
+  if (name === 'revoke_my_other_sessions' && revokeError) return { data: null, error: revokeError };
+  return { data: 1, error: null };
+});
 vi.mock('@/server/services/context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/context')>();
   const { createClient } = await import('@/lib/supabase/server');
@@ -76,6 +106,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  rpc.mockClear();
+  broadcastToChannel.mockClear();
+  calls.length = 0;
+  listed = [];
+  listError = null;
+  revokeError = null;
   server = fakeAuthServer(projectKey);
   vi.stubGlobal('fetch', server.fetch);
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -93,21 +129,67 @@ async function signIn(claims: Record<string, unknown>, token?: string) {
 const REFUSAL = 'Could not identify your current session — please reload and try again.';
 
 describe('revokeOtherSessionsAction — which session it keeps', () => {
-  it('keeps the verified session and signs out the rest', async () => {
+  it('keeps the verified session and signs out the rest, naming only the sessions it ended', async () => {
     await signIn(sessionClaims());
+    listed = [{ id: OTHER_A }, { id: FIXTURE_SESSION_ID }, { id: OTHER_B }];
     const res = await revokeOtherSessionsAction();
     expect(res).toEqual({ ok: true, data: { revoked: 'others' } });
+    // Listed BEFORE the revoke: afterwards they are gone and cannot be named.
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual([
+      'list_my_sessions',
+      'revoke_my_other_sessions',
+    ]);
     expect(rpc).toHaveBeenCalledWith('revoke_my_other_sessions', {
       p_keep_session_id: FIXTURE_SESSION_ID,
     });
+    expect(broadcastToChannel).toHaveBeenCalledTimes(1);
     expect(broadcastToChannel).toHaveBeenCalledWith(
       'user:11111111-1111-4111-8111-111111111111:sessions',
       'revoked',
-      { keepId: FIXTURE_SESSION_ID },
+      { sessionIds: [OTHER_A, OTHER_B] },
     );
+    // The kept session is live: it never goes out on the public channel.
+    expect(JSON.stringify(broadcastToChannel.mock.calls)).not.toContain(FIXTURE_SESSION_ID);
     expect(warn.mock.calls.some((c: unknown[]) => INSECURE_USER_WARNING.test(String(c[0])))).toBe(
       false,
     );
+  });
+
+  it('in order: list the sessions, revoke the others, and only then name them on the channel', async () => {
+    await signIn(sessionClaims());
+    listed = [{ id: OTHER_A }, { id: FIXTURE_SESSION_ID }, { id: OTHER_B }];
+    expect((await revokeOtherSessionsAction()).ok).toBe(true);
+    expect(calls).toEqual(['list_my_sessions', 'revoke_my_other_sessions', 'broadcast']);
+  });
+
+  it('a revoke that answers an error: the action fails and nothing is broadcast, so no live session is named', async () => {
+    await signIn(sessionClaims());
+    listed = [{ id: OTHER_A }, { id: FIXTURE_SESSION_ID }, { id: OTHER_B }];
+    revokeError = { code: '57014', message: 'canceling statement due to statement timeout' };
+    const res = await revokeOtherSessionsAction();
+    expect(res.ok).toBe(false);
+    expect(calls).toEqual(['list_my_sessions', 'revoke_my_other_sessions']);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('no other device: nothing to name, nothing broadcast', async () => {
+    await signIn(sessionClaims());
+    listed = [{ id: FIXTURE_SESSION_ID }];
+    expect((await revokeOtherSessionsAction()).ok).toBe(true);
+    expect(rpc).toHaveBeenCalledWith('revoke_my_other_sessions', {
+      p_keep_session_id: FIXTURE_SESSION_ID,
+    });
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('a list that cannot be read still signs the other devices out; they are just not told at once', async () => {
+    await signIn(sessionClaims());
+    listError = { code: 'PGRST000', message: 'connection refused' };
+    expect((await revokeOtherSessionsAction()).ok).toBe(true);
+    expect(rpc).toHaveBeenCalledWith('revoke_my_other_sessions', {
+      p_keep_session_id: FIXTURE_SESSION_ID,
+    });
+    expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 
   it('a token edited to name another session is refused: nothing is revoked or broadcast', async () => {
