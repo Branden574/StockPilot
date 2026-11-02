@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isUserNotFound } from '@/lib/auth/gotrue-user-not-found';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError, mfaGateError } from '@/server/services/context';
@@ -21,6 +22,18 @@ export function sessionChangedError(): ServiceError {
 }
 
 /**
+ * The account the action validated no longer exists: GoTrue answered its
+ * factor list with 404 user_not_found (lib/auth/gotrue-user-not-found), most
+ * often because the person's other request (the phone, another tab) deleted
+ * it a moment ago. The session ended during the action, so the same sentence
+ * as SESSION_CHANGED, with reason `account_gone` so a caller can tell it
+ * apart: account deletion answers it as already deleted (review R7).
+ */
+export function accountGoneError(): ServiceError {
+  return new ServiceError('unauthenticated', SESSION_CHANGED, { reason: 'account_gone' });
+}
+
+/**
  * The authenticator step-up of ONE account, the account the action validated
  * (docket S50a), decided from that account's own facts only:
  *  - the level: the cookie session's verified claims, only when their subject
@@ -32,6 +45,9 @@ export function sessionChangedError(): ServiceError {
  * Throws, in order:
  *  - `unauthenticated` (SESSION_CHANGED, reason `session_changed`) when there
  *    is no verified session of `userId`;
+ *  - `unauthenticated` (SESSION_CHANGED, reason `account_gone`) when GoTrue
+ *    has no such user (404 user_not_found to the factor list), not reported:
+ *    it is no outage (accountGoneError);
  *  - `internal_error` when the factors cannot be read: it fails closed, and
  *    the failure is reported;
  *  - `forbidden` with reason `aal2_required` (mfaGateError's enrolled shape)
@@ -54,6 +70,7 @@ export async function assertStepUpHeld({
   const claims = await readVerifiedSessionClaimsOf(supabase, userId);
   if (!claims) throw sessionChangedError();
   const { data, error } = await admin.auth.admin.mfa.listFactors({ userId });
+  if (isUserNotFound(error)) throw accountGoneError();
   if (error || !data) {
     // Never the id: a fixed tag, so an outage that refuses here shows.
     void reportError(new Error(error?.message || 'listFactors returned no data'), {

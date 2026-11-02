@@ -24,7 +24,7 @@ const OTHER = '33333333-3333-4333-8333-333333333333';
 let session: StubbedCookieSession;
 let factorsRead: {
   data: { factors: Array<{ id: string; factor_type: string; status: string }> } | null;
-  error: { message: string } | null;
+  error: { message: string; name?: string; status?: number; code?: string } | null;
 };
 const listFactors = vi.fn(async (_args: { userId: string }) => factorsRead);
 
@@ -77,6 +77,37 @@ describe('assertStepUpHeld', () => {
 
   it('the factor read fails: refused as an internal error, and reported', async () => {
     factorsRead = { data: null, error: { message: 'service unavailable' } };
+    expect(await outcome()).toMatchObject({ code: 'internal_error' });
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  // GoTrue answers every /admin/users/<id> route, the factor list included,
+  // with 404 user_not_found once the account is gone (the person's other
+  // request deleted it): not an outage, and not a reason to keep this browser
+  // signed in. The caller hears account_gone.
+  it('no such account (404 user_not_found): account_gone, not reported as unreadable', async () => {
+    factorsRead = {
+      data: null,
+      error: {
+        name: 'AuthApiError',
+        status: 404,
+        code: 'user_not_found',
+        message: 'User not found',
+      },
+    };
+    expect(await outcome()).toEqual({
+      code: 'unauthenticated',
+      message: SESSION_CHANGED,
+      details: { reason: 'account_gone' },
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a 404 without the user_not_found code (a proxy, not GoTrue) is not proof: unreadable, reported', async () => {
+    factorsRead = {
+      data: null,
+      error: { name: 'AuthApiError', status: 404, code: 'not_found', message: 'Not found' },
+    };
     expect(await outcome()).toMatchObject({ code: 'internal_error' });
     expect(reportError).toHaveBeenCalledTimes(1);
   });

@@ -634,7 +634,8 @@ export async function deleteOwnAccountAction(input: {
       // still had the user, and the person's other request (the phone, another
       // tab) deleted the account before this check; once it is gone, the gate
       // itself refuses first. Say so and end this browser's session below; the
-      // request that deleted it wrote the audit row (review R7).
+      // request that deleted it wrote the audit row (review R7). Deleted after
+      // this check, the last check below or the delete itself answers the same.
     } else {
       // What the deletion leaves for others to review, read now: the delete
       // nulls created_by and cascades the memberships (O-A3-5 counts for the
@@ -646,8 +647,17 @@ export async function deleteOwnAccountAction(input: {
       // no authenticator step-up, decided from its own factors read by its id.
       // The gate at the top enforces the rule; this holds it for everything
       // read since (the owner pre-check, the rate limit, the audit
-      // organization, the check). It throws, and nothing is deleted or written.
-      await assertStepUpHeld({ supabase, admin, userId: session.userId });
+      // organization, the check). It throws, and nothing is deleted or written,
+      // unless the account is already gone (lastCheckMetGoneAccount): then
+      // this browser is signed out as for the check's "gone" above.
+      try {
+        await assertStepUpHeld({ supabase, admin, userId: session.userId });
+      } catch (refusal) {
+        if (await lastCheckMetGoneAccount(refusal, admin, session.userId)) {
+          return await endThisBrowserSession(supabase, session.userId);
+        }
+        throw refusal;
+      }
       // Now delete the auth user. Profile + membership rows cascade via the
       // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
       // orders are kept (0388).
@@ -741,6 +751,36 @@ export async function deleteOwnAccountAction(input: {
   } catch (e) {
     return actionErrorFrom(e);
   }
+}
+
+/**
+ * Whether the last check before the delete refused only because the account
+ * is already gone: the person's other request (the phone, another tab) passed
+ * its own check and deleted the account while this one ran its check, so
+ * this request meets the deletion at the last check, not at the delete (each
+ * check is rolled back before its own delete, so both pass). The caller then
+ * answers as for the check's "gone" (review R7): nothing deleted or written
+ * here, this browser signed out, ok.
+ *
+ *  - account_gone: GoTrue answered the factor list with 404 user_not_found.
+ *  - session_changed: no verified session of the account. When getClaims()
+ *    cannot check the token locally, GoTrue checks it, and it refuses the
+ *    token of a deleted account (403 user_not_found). So GoTrue is asked
+ *    whether the account still exists (readAuthEmail, by its id): only its
+ *    "gone" answer counts. A session that holds another account, or an
+ *    answer that is not "gone", keeps the refusal.
+ * Every other refusal (a step-up owed, factors that cannot be read) stands.
+ */
+async function lastCheckMetGoneAccount(
+  refusal: unknown,
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<boolean> {
+  if (!(refusal instanceof ServiceError)) return false;
+  const reason = refusal.details?.reason;
+  if (reason === 'account_gone') return true;
+  if (reason !== 'session_changed') return false;
+  return (await readAuthEmail(admin, userId)).kind === 'gone';
 }
 
 /**

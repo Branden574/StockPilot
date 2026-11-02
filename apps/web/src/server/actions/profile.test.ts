@@ -1268,10 +1268,14 @@ describe('deleteOwnAccountAction', () => {
       );
     });
 
-    it('404 user_not_found to the delete (deleted by another request): success, no second audit row', async () => {
+    // Only the gap between the last check's factor read (S50a) and the delete:
+    // the other request deleted the account after GoTrue listed its factors.
+    // Deleted any earlier, the factor read itself answers 404 (the next case).
+    it('deleted by another request after the last check read its factors (404 user_not_found to the delete): success, no second audit row', async () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: NOT_FOUND }));
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(true);
+      expect(adminAuth.listFactors).toHaveBeenCalledTimes(1);
       // The platform-admin check's read only (S50a): the delete's own answer
       // settles it, so GoTrue is not asked again.
       expect(adminAuth.getUserById).toHaveBeenCalledTimes(1);
@@ -1280,6 +1284,98 @@ describe('deleteOwnAccountAction', () => {
       expect(avatarStorage.list).not.toHaveBeenCalled();
       expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
       expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+    });
+
+    // The likeliest way to meet the deletion: both requests pass their checks
+    // (each check is rolled back before its delete), the other one deletes,
+    // and this one's next GoTrue call is the last check's factor read. GoTrue
+    // answers every /admin/users/<id> route, the factor list included, with
+    // 404 user_not_found once the user is gone.
+    it('deleted by another request before the last check read its factors (404 user_not_found there): success, this browser signed out, nothing deleted or written here', async () => {
+      adminAuth.listFactors.mockImplementationOnce(async () => ({ data: null, error: NOT_FOUND }));
+      // Not Once: a queued answer the action never asks for would carry over
+      // to the next test (clearAllMocks keeps it); the top-level beforeEach
+      // resets this one.
+      adminAuth.deleteUser.mockImplementation(async () => ({ error: NOT_FOUND }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(adminAuth.listFactors).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(avatarStorage.list).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledTimes(1);
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      // Not an outage: the factors were not "unreadable".
+      expect(reportErrorMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'auth.step_up_held.factors_unreadable' }),
+      );
+    });
+
+    // The same race when getClaims() cannot check the token locally (the key
+    // set could not be fetched): the session's token is then checked by GoTrue,
+    // which answers 403 user_not_found for a deleted account, so the last check
+    // finds no session of the account. GoTrue is asked whether the account
+    // still exists before "sign in again" is said.
+    it('deleted by another request during the check, while GoTrue checks the token: success, this browser signed out, nothing deleted or written here', async () => {
+      adminRpc.mockImplementationOnce(async () => {
+        const auth = stubHolder.stub!.client.auth as unknown as Record<string, unknown>;
+        auth.getClaims = async () => ({
+          data: null,
+          error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+        });
+        auth.getUser = async () => ({
+          data: { user: null },
+          error: {
+            name: 'AuthApiError',
+            status: 403,
+            code: 'user_not_found',
+            message: 'User from sub claim in JWT does not exist',
+          },
+        });
+        return { data: { deletable: true }, error: null };
+      });
+      // The platform-admin check finds the account; it is gone after that.
+      // (Not Once: see above.)
+      let reads = 0;
+      adminAuth.getUserById.mockImplementation(async () =>
+        ++reads === 1
+          ? { data: { user: { id: 'user-1' } }, error: null }
+          : { data: { user: null }, error: NOT_FOUND },
+      );
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(adminAuth.getUserById).toHaveBeenCalledTimes(2);
+      expect(adminAuth.getUserById).toHaveBeenNthCalledWith(2, 'user-1');
+      expect(adminAuth.listFactors).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    });
+
+    it('no session of the account at the last check, and GoTrue cannot say whether it exists: sign in again, nothing deleted or signed out', async () => {
+      adminRpc.mockImplementationOnce(async () => {
+        mfaState.sessionUserId = 'user-2';
+        return { data: { deletable: true }, error: null };
+      });
+      let reads = 0;
+      adminAuth.getUserById.mockImplementation(async () =>
+        ++reads === 1
+          ? { data: { user: { id: 'user-1' } }, error: null }
+          : { data: { user: null }, error: { message: 'upstream unavailable', status: 503 } },
+      );
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message: 'Sign in again, then try again.',
+          details: { reason: 'session_changed' },
+        },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(cookieSignOut).not.toHaveBeenCalled();
     });
 
     it('the check finds no such account (deleted from another device): success, nothing deleted or written here', async () => {
