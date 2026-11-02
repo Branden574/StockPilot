@@ -983,7 +983,10 @@ actually fire.
     pinned, the RMA's own scope (receive, close, a new replacement) follows
     it, and stock moves at close stay gated on each item's own warehouse.
     The helper's first read takes no lock; the second, under the lock, keeps
-    it fail closed. Proofs: the 0425 suite's V section and
+    it fail closed. It reads only the live replacement (not cancelled or
+    denied), so a cancelled one left in the old warehouse neither refuses
+    staff of the new one nor lets staff of the old one act on the live one
+    (0425 V-1-8, V-1-9 and M7). Proofs: the 0425 suite's V section and
     `scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh`.
   - **Close the rest** (0397, returns RX-4; RX-2 verification V3).
     `close_return_replacement_rest` (SECURITY DEFINER, EXECUTE for
@@ -1061,7 +1064,10 @@ actually fire.
     for a data fix); a line of an ordinary order passes as before; a non-API
     insert while the replacement is still `pending_approval` passes (only
     `_return_replacement_issue`, in the transaction that creates and
-    approves it). Anything else on a replacement's line, or moving a line
+    approves it). An API role's insert there is refused: the service role
+    may insert a replacement order at any status, and the insert policy
+    then lets its requester add a line (0425 FR5 and M6). Anything else on
+    a replacement's line, or moving a line
     into or out of one, is `replacement_lines_fixed`. The comparison is the
     whole row minus the workflow columns, so a column added later is
     guarded. Every function that writes `order_request_lines` is pinned by

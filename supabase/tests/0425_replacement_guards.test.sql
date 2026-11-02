@@ -36,7 +36,10 @@
 --      Red: the forged flag let the service role and a manager through.
 --      Controls: every SECURITY DEFINER path that raises the flag still
 --      passes (Cancel replacement, the RMA cancel's close of a backorder, a
---      change, Close the rest above) and so does a postgres data fix.
+--      change, Close the rest above) and so does a postgres data fix. The
+--      lines guard's pending-approval exemption asks the role too (FR5): the
+--      requester, a manager and the service role may not add a line to a
+--      replacement still pending approval; the issue (postgres) still may.
 -- V.   V-1 and S4 / 13.18: after the original moves to warehouse B (by the
 --      superuser, inside the undone attempt, as 0397 B7), staff of B alone
 --      are refused 42501 warehouse_write by the replacement's own warehouse,
@@ -47,12 +50,17 @@
 --      replacement and the RMA cancel were refused only inside
 --      cancel_order_request (0416), after both row locks. Controls: someone
 --      who writes both warehouses passes all five; an RMA with no exchange
---      cancels as before; nothing changes without a move. The two-session
+--      cancels as before; nothing changes without a move. The gate asks the
+--      live replacement only (V-1-8, V-1-9): a cancelled one left in A
+--      neither refuses staff of B a new replacement or the RMA cancel, nor
+--      lets staff of A act on the live one re-issued in B. The two-session
 --      proof that a refused caller never waits on the RMA or the replacement
 --      row is scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh.
 -- M.   Mutations, each inside an undone attempt: the role term out of the
---      lines guard or the header guard, the header trigger without its new
---      edge, and each function's first gate out (the second still refuses).
+--      lines guard's flag exemption, the header guard or the lines guard's
+--      pending-approval exemption (M6), the header trigger without its new
+--      edge, each function's first gate out (the second still refuses), and
+--      the gate helper without its live filter (M7).
 -- R.   The six restated bodies minus their "-- S7" lines, and the header
 --      guard minus its two S7 blocks, are the bodies before (md5); the new
 --      bodies are pinned.
@@ -69,7 +77,7 @@
 
 begin;
 
-select plan(38);
+select plan(43);
 
 \set orgA    '\'04250000-0000-0000-0000-00000000000a\''
 \set own     '\'04250000-0000-0000-0000-0000000000a0\''
@@ -102,6 +110,8 @@ select plan(38);
 \set oK8     '\'04250000-0000-0000-0000-000000000108\''
 \set oK9     '\'04250000-0000-0000-0000-000000000109\''
 \set oK10    '\'04250000-0000-0000-0000-00000000010a\''
+\set oK11    '\'04250000-0000-0000-0000-00000000010b\''
+\set oK12    '\'04250000-0000-0000-0000-00000000010c\''
 \set oOrd    '\'04250000-0000-0000-0000-000000000120\''
 \set oPend   '\'04250000-0000-0000-0000-000000000901\''
 \set lK1     '\'04250000-0000-0000-0000-000000000201\''
@@ -114,6 +124,8 @@ select plan(38);
 \set lK8     '\'04250000-0000-0000-0000-000000000208\''
 \set lK9     '\'04250000-0000-0000-0000-000000000209\''
 \set lK10    '\'04250000-0000-0000-0000-00000000020a\''
+\set lK11    '\'04250000-0000-0000-0000-00000000020b\''
+\set lK12    '\'04250000-0000-0000-0000-00000000020c\''
 \set lOrd    '\'04250000-0000-0000-0000-000000000220\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -190,6 +202,8 @@ insert into public.order_requests
   (:oK8,  :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oK9,  :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oK10, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
+  (:oK11, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
+  (:oK12, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oOrd, :orgA, :whA, 'approved',  'internal', :req, 'Req Person', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
   (:lK1,  :oK1,  :gM, 4, 4),
@@ -202,6 +216,8 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   (:lK8,  :oK8,  :gM, 4, 4),
   (:lK9,  :oK9,  :gM, 4, 4),
   (:lK10, :oK10, :gM, 4, 4),
+  (:lK11, :oK11, :gM, 4, 4),
+  (:lK12, :oK12, :gM, 4, 4),
   (:lOrd, :oOrd, :gS, 2, 0);
 
 -- ══ Helpers (the 0397 file's, unchanged in shape) ═════════════════════════
@@ -682,6 +698,24 @@ select is(
   || ':' || pg_temp.holds(:'oKr')::text,
   'ok:1 | changed=true:cancelled:0 | changed=true:cancelled:approved/true | cancelled:completed:0',
   'FR4 controls: a postgres data fix under the flag still moves a replacement; every SECURITY DEFINER path that raises the flag still passes the role-asking guards: Cancel replacement (cancelled, holds released), a change (the old one cancelled, the new one approved), and the RMA cancel closing a part-handed-over backorder (close_partial: completed, holds released)');
+-- FR5. The lines guard's other way through, the issue's own insert while the
+-- replacement is pending approval, asks the role as well. Reachable without
+-- the issue: the service role may insert a replacement order at any status
+-- (0392 refuses it only a token, 0396's link trigger only anon and
+-- authenticated), and the insert policy then lets its requester add a line
+-- before it ships (0395). The pending replacement for rX is FR3's prep.
+select format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type,
+                                                    replacement_for_return_id)
+                 values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup', %L)$q$, :oPend, :orgA, :whA, :req, :'rX') as "pendPrep" \gset
+select format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oPend, :gL) as "pendLine" \gset
+select is(
+  pg_temp.attempt('authenticated', :req, :'pendLine', :'pendPrep')
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, :'pendLine', :'pendPrep')
+  || ' | ' || pg_temp.attempt('service_role', null, :'pendLine', :'pendPrep')
+  || ' | ' || pg_temp.attempt('postgres', null, :'pendLine', :'pendPrep'),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed'
+  || ' | 42501:replacement_lines_fixed:replacement_lines_fixed | ok:1',
+  'FR5: the requester, a manager and the service role may not add a line to a replacement still pending approval; a writer that is not an API role (the issue, as postgres) still may');
 
 -- ══ V. V-1 and S4 / 13.18: the replacement's own warehouse ═════════════════
 -- rV: an exchange approved (oV, approved in A). rV2: a replacement handed
@@ -761,6 +795,42 @@ select is(
                         'release_return_replacement_early')),
   'cancel_return=true,cancel_return_replacement=true,change_return_replacement=true,close_return_replacement_rest=true,release_return_replacement_early=true',
   'V-1-7 (red: false each): in each of the five, the replacement-warehouse gate comes before the first FOR UPDATE (S4 / 13.18 for Close the rest)');
+-- The gate reads only the LIVE replacement. rQ: an exchange approved in A,
+-- its replacement cancelled (Cancel replacement keeps the RMA approved), so
+-- a cancelled replacement in A and none live; its original moves to B inside
+-- each undone attempt. rR: the same cancel and then, with its original moved
+-- to B (kept, by the superuser), a new replacement issued there by Change (an
+-- item of B): a cancelled replacement in A and the live one in B. A gate that
+-- read any replacement would take whichever row came first (a non-STRICT
+-- SELECT INTO); with no live replacement rQ leaves it only the cancelled one.
+select pg_temp.exchange(:oK11, :lK11, :gL) as "rQ" \gset
+select coalesce(pg_temp.live(:'rQ'), '00000000-0000-0000-0000-000000000000'::uuid) as "oQ" \gset
+select pg_temp.e3(pg_temp.rpc('authenticated', :mgr, pg_temp.v_sql('cancel_repl', :'rQ'))) as "jQ" \gset
+select pg_temp.exchange(:oK12, :lK12, :gL) as "rR" \gset
+select coalesce(pg_temp.live(:'rR'), '00000000-0000-0000-0000-000000000000'::uuid) as "oR1" \gset
+select pg_temp.write_as('postgres', null, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :oK12)) as "rRmove" \gset
+select pg_temp.e3(pg_temp.rpc('authenticated', :stfAB, pg_temp.v_sql('cancel_repl', :'rR'))) as "jR1" \gset
+select pg_temp.e3(pg_temp.rpc('authenticated', :stfAB, pg_temp.v_sql('change_b', :'rR'))) as "jR2" \gset
+select coalesce(pg_temp.live(:'rR'), '00000000-0000-0000-0000-000000000000'::uuid) as "oR2" \gset
+\set moveQ  '\'update public.order_requests set warehouse_id = \'\'04250000-0000-0000-0000-0000000000d2\'\' where id = \'\'04250000-0000-0000-0000-00000000010b\'\'\''
+\set backR  '\'update public.order_requests set warehouse_id = \'\'04250000-0000-0000-0000-0000000000d1\'\' where id = \'\'04250000-0000-0000-0000-00000000010c\'\'\''
+select is(
+  :'jQ' || ':' || (select status from public.order_requests where id = :'oQ') || ':' || coalesce(pg_temp.live(:'rQ')::text, 'none')
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('change_b', :'rQ'), :moveQ))
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('cancel_rma', :'rQ'), :moveQ)),
+  'changed=true:cancelled:none | changed=true | changed=true',
+  'V-1-8: with its replacement cancelled in A and none live, after the original moves to B staff of B alone still issue a new one (Change, an item of B) and cancel the RMA: a cancelled replacement refuses nobody');
+select is(
+  :'rRmove' || ' | ' || :'jR1' || ' | ' || :'jR2'
+  || ' | ' || (select o.status || '/' || (o.warehouse_id = :whA)::text from public.order_requests o where o.id = :'oR1')
+  || ' | ' || coalesce((select o.status || '/' || (o.warehouse_id = :whB)::text from public.order_requests o where o.id = :'oR2'), 'none')
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('release', :'rR')))
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('cancel_repl', :'rR')))
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfA, pg_temp.v_sql('release', :'rR'), :backR))
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfA, pg_temp.v_sql('cancel_repl', :'rR'), :backR)),
+  'ok:1 | changed=true | changed=true | cancelled/true | approved/true | changed=true | changed=true'
+  || ' | 42501:warehouse_write:warehouse_write | 42501:warehouse_write:warehouse_write',
+  'V-1-9: with a cancelled replacement in A and the live one re-issued in B, staff of B alone release and cancel the live one; with the original moved back to A, staff of A alone are refused it by its own warehouse, not let through by the cancelled one in A');
 
 -- ══ M. Mutations (each inside an undone attempt) ══════════════════════════
 select is(
@@ -822,6 +892,23 @@ select is(
          E'\n      perform public._return_replacement_warehouse_gate(p_return_id, p_user);  -- S7: under the replacement''s lock', '')$p$)),
   'changed=true,42501:warehouse_write:forbidden',
   'M5: with both gates out, release early goes through again and the RMA cancel is refused only inside cancel_order_request (0416), after the locks: V-1-1 and V-1-4 rest on the gates');
+-- The pending-approval role term is matched from the text before it: the flag
+-- exemption above it ends with the same role term (M1).
+select :'pendPrep' || '; ' || $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         E'v_status = ''pending_approval''\n     and current_user not in (''authenticated'', ''anon'', ''service_role'') then',
+         E'v_status = ''pending_approval'' then')$p$ as "m6Prep" \gset
+select is(
+  pg_temp.attempt('authenticated', :req, :'pendLine', :'m6Prep')
+  || ' | ' || pg_temp.attempt('service_role', null, :'pendLine', :'m6Prep'),
+  'ok:1 | ok:1',
+  'M6: the lines guard without the role term on its pending-approval exemption lets the requester and the service role add a line to a replacement still pending approval: FR5 rests on that term');
+select :moveQ || '; ' || $p$select pg_temp.repatch('public._return_replacement_warehouse_gate(uuid,uuid)',
+         ' and o.status not in (''cancelled'', ''denied'');', ';')$p$ as "m7Prep" \gset
+select is(
+  pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('change_b', :'rQ'), :'m7Prep'))
+  || ',' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('cancel_rma', :'rQ'), :'m7Prep')),
+  '42501:warehouse_write:warehouse_write,42501:warehouse_write:warehouse_write',
+  'M7: the gate helper without its live filter reads the cancelled replacement in A and refuses staff of B the new replacement and the RMA cancel: V-1-8 rests on the filter');
 
 -- ══ R. The restated bodies ═════════════════════════════════════════════════
 select is(
