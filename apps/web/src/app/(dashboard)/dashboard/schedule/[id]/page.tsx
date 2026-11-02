@@ -14,6 +14,7 @@ import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { formatEventRange } from '@/lib/schedule/event-range';
 import { formatNumber } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
@@ -42,6 +43,9 @@ export default async function ScheduleEventDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   // Mirrors /dashboard/schedule: schedule:read (or manage) can VIEW — the
   // calendar's event chips link here, so a read-only grantee must not dead-end
   // on a 404. Status changes + editing stay schedule:manage (the write UI

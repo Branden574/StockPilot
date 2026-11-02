@@ -252,7 +252,7 @@ describe('isPristineCart (exported by core for PO-1)', () => {
   it('a line, a requester, a site, notes or a needed-by is worth restoring', () => {
     expect(isPristineCart(cartReducer(seed, { type: 'add', itemId: 'i-1' }))).toBe(false);
     expect(
-      isPristineCart({ ...seed, onBehalfOf: { name: 'Maria', email: 'maria@example.org' } }),
+      isPristineCart({ ...seed, onBehalfOf: { name: 'Pixie', email: 'pixie@example.org' } }),
     ).toBe(false);
     expect(isPristineCart({ ...seed, charterId: 'ch-1' })).toBe(false);
     expect(isPristineCart({ ...seed, notes: 'rush' })).toBe(false);

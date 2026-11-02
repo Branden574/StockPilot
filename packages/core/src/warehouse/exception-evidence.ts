@@ -144,7 +144,7 @@ export function exceptionEvidenceCountLabel(liveCount: number): string {
   return `Photos (${n} of ${EXCEPTION_EVIDENCE_MAX_PHOTOS})`;
 }
 
-/** Who added a photo, under the photo: "Added by Maria Lopez". The label is
+/** Who added a photo, under the photo: "Added by Pixie Quill". The label is
  *  the one the service gives (a name, else an email, else "Former member"). */
 export function exceptionEvidenceAddedByCopy(uploaderLabel: string | null | undefined): string {
   const who = uploaderLabel?.trim();
@@ -233,8 +233,8 @@ export function exceptionEvidenceTimesCopy(
 }
 
 /**
- * One evidence event in the timeline: the headline ("Photo added by Maria",
- * "Photo removed by Maria", from describeOccurrenceEvent), the detail line
+ * One evidence event in the timeline: the headline ("Photo added by Pixie",
+ * "Photo removed by Pixie", from describeOccurrenceEvent), the detail line
  * (the photo's two times, for an added photo), and the note (the photo's
  * note, or the reason it was removed), each rendered by the screen as it
  * renders other events.

@@ -17,6 +17,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 
 import { poImportUploaderLabel, resolveOrgTimezone } from '@stockpilot/core';
 
@@ -37,6 +38,9 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   }
 
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63). The module gate above stays first.
+  notFoundUnlessUuid(id);
   // The lineage notice dates a later import of this file as a calendar day,
   // and whose day it is matters: in the server's zone (UTC on Vercel) an
   // evening import in California lands on the next date. So the org's zone,

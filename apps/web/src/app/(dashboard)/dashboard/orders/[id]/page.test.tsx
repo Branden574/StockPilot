@@ -849,6 +849,21 @@ describe('orders/[id]: the order read', () => {
     orderGet.mockRejectedValue(failure);
     await expect(renderPage()).rejects.toBe(failure);
   });
+
+  // B63: a link whose id was mistyped or cut short named no order, but the
+  // order read's invalid-uuid error reached the error boundary ("Something
+  // broke loading this page") and filed a report. It is checked first now.
+  it('an order id that is not a uuid is the not-found page, with no order, attachments or readiness read', async () => {
+    for (const id of ['not-a-uuid', ORDER_ID.slice(0, -1)]) {
+      vi.clearAllMocks();
+      await expect(OrderDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+      expect(orderGet).not.toHaveBeenCalled();
+      expect(attachmentsList).not.toHaveBeenCalled();
+      expect(readinessForCurrentUser).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe('orders/[id]: the Collect signature link (migration 0389)', () => {
@@ -961,6 +976,115 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     await renderPage();
     expect(panelProps()).toBeUndefined();
     expect(sideReads()).toBe(0);
+  });
+
+  // B23: 0393 clears the driver of an open order when the driver deletes
+  // their account. The order stays in transit: an approver keeps the raw
+  // hand-over link, and the panel is told the driver is gone so it can say
+  // who is left to hand it over.
+  it('B23: an in-transit delivery whose driver deleted their account keeps the link, and the panel hears the driver is gone', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'in_transit',
+          fulfillment_type: 'delivery',
+          in_transit_at: '2026-10-20T15:04:05.000Z',
+          assigned_delivery_user_id: null,
+          signature_token: DIGEST,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(true);
+    expect(panelProps()?.signatureToken).toBe(RAW);
+  });
+
+  it('B23: a delivery that still names its driver, or never went out, is not reported as a deleted driver', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'in_transit',
+          fulfillment_type: 'delivery',
+          in_transit_at: '2026-10-20T15:04:05.000Z',
+          assigned_delivery_user_id: 'driver-2',
+          signature_token: DIGEST,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(false);
+
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'staged_for_delivery',
+          fulfillment_type: 'delivery',
+          in_transit_at: null,
+          assigned_delivery_user_id: null,
+        }),
+      }),
+    );
+    await renderPage();
+    expect(panelProps()?.driverDeleted).toBe(false);
+  });
+
+  // Review (2026-10-31): the panel's deleted-driver line names the hand-over
+  // buttons, so the panel hears who may hand the order over by the link's own
+  // rule (handOverAllowed), never by orders:approve alone. Since security
+  // slice E (0416) a staff approver is shown the panel in transit only for an
+  // order in a warehouse they read (it carries no read there for anyone
+  // else), so the rule is heard by one who reads the order's warehouse but
+  // may not write to it; outside it, or with no read of their access, there
+  // is no panel at all. Each render is read on its own (the spy is cleared).
+  it("B23 review: the panel hears whether the viewer may hand the order over, by the link's rule", async () => {
+    const renderInTransit = async () => {
+      managerActionsProps.mockClear();
+      orderGet.mockResolvedValue(
+        detailFixture({
+          request: requestFixture({
+            status: 'in_transit',
+            fulfillment_type: 'delivery',
+            in_transit_at: '2026-10-20T15:04:05.000Z',
+            assigned_delivery_user_id: null,
+            signature_token: DIGEST,
+          }),
+        }),
+      );
+      await renderPage();
+    };
+    await renderInTransit();
+    expect(panelProps()?.viewerMayHandOver).toBe(true);
+
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: [],
+    });
+    await renderInTransit();
+    expect(panelProps()?.viewerMayHandOver).toBe(false);
+    expect(panelProps()?.signatureToken).toBeNull();
+
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: ['wh-1'],
+    });
+    await renderInTransit();
+    expect(panelProps()?.viewerMayHandOver).toBe(true);
+    expect(panelProps()?.signatureToken).toBe(RAW);
+
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-other'],
+      writableIds: ['wh-other'],
+    });
+    await renderInTransit();
+    expect(panelProps()).toBeUndefined();
+
+    getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
+    await renderInTransit();
+    expect(panelProps()).toBeUndefined();
   });
 
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {

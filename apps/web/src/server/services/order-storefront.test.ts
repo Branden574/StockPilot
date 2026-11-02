@@ -134,8 +134,8 @@ function ctxFor(
     'rpc:order_recent_requesters': {
       data: [
         {
-          name: 'Maria Lopez',
-          email: 'maria@example.org',
+          name: 'Pixie Quill',
+          email: 'pixie@example.org',
           lastOrderedAt: '2026-10-01T10:00:00+00:00',
           orders: 3,
           lastFulfillment: 'delivery',
@@ -315,8 +315,8 @@ describe('GET storefront', () => {
         status: 'ok',
         people: [
           {
-            name: 'Maria Lopez',
-            email: 'maria@example.org',
+            name: 'Pixie Quill',
+            email: 'pixie@example.org',
             lastOrderedAt: '2026-10-01T10:00:00+00:00',
             orders: 3,
             lastFulfillment: 'delivery',

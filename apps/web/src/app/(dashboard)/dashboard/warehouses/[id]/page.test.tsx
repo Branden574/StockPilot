@@ -225,3 +225,20 @@ describe('Warehouse page', () => {
     );
   });
 });
+
+// B63: a mistyped or cut-off link is Page not found before the warehouse is
+// read (its invalid-uuid error reached the error boundary).
+describe('Warehouse page: an id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    chartersList.mockClear();
+    listPairs.mockClear();
+    for (const id of ['not-a-uuid', WH.slice(0, -1)]) {
+      await expect(WarehouseDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'NEXT_NOT_FOUND',
+      );
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(chartersList).not.toHaveBeenCalled();
+    expect(listPairs).not.toHaveBeenCalled();
+  });
+});

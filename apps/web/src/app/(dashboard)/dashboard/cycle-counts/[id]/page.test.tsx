@@ -32,7 +32,7 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
-  usePathname: () => '/dashboard/cycle-counts/cc-1',
+  usePathname: () => '/dashboard/cycle-counts/5eed0000-0000-4000-8000-0000000000c1',
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
 }));
@@ -116,8 +116,10 @@ import { ServiceError } from '@/server/services/context';
 
 import CycleCountDetailPage from './page';
 
+const CC_ID = '5eed0000-0000-4000-8000-0000000000c1';
+
 const HEADER = {
-  id: 'cc-1',
+  id: CC_ID,
   count_number: 42,
   status: 'in_progress',
   warehouse_id: 'wh-north',
@@ -132,7 +134,7 @@ async function renderPage(header: Record<string, unknown> = HEADER) {
   detailHolder.header = header;
   render(
     await CycleCountDetailPage({
-      params: Promise.resolve({ id: 'cc-1' }),
+      params: Promise.resolve({ id: CC_ID }),
       searchParams: Promise.resolve({}),
     }),
   );
@@ -172,7 +174,7 @@ describe('cycle count page header', () => {
   it('prints the count sheet while open, in a new tab', async () => {
     await renderPage();
     const sheet = screen.getByRole('link', { name: 'Print count sheet' });
-    expect(sheet).toHaveAttribute('href', '/api/cycle-counts/cc-1/pdf');
+    expect(sheet).toHaveAttribute('href', `/api/cycle-counts/${CC_ID}/pdf`);
     expect(sheet).toHaveAttribute('target', '_blank');
     expect(sheet).toHaveAttribute('rel', 'noopener noreferrer');
   });
@@ -183,7 +185,7 @@ describe('cycle count page header', () => {
       await renderPage({ ...HEADER, status, completed_at: '2026-09-24T03:00:00Z' });
       expect(screen.getByRole('link', { name: 'Variance report PDF' })).toHaveAttribute(
         'href',
-        '/api/cycle-counts/cc-1/pdf',
+        `/api/cycle-counts/${CC_ID}/pdf`,
       );
       expect(screen.queryByRole('link', { name: 'Print count sheet' })).not.toBeInTheDocument();
     },
@@ -201,7 +203,7 @@ describe('cycle count page header', () => {
     await renderPage();
     expect(
       within(screen.getByTestId('count-detail-stub')).getByTestId('linked-exceptions-stub'),
-    ).toHaveTextContent('cc-1');
+    ).toHaveTextContent(CC_ID);
   });
 
   it('hands the count its gates: a manager assigns from the member list, staff only read the name', async () => {
@@ -225,10 +227,30 @@ describe('cycle count page header', () => {
     getDetailPage.mockRejectedValueOnce(new ServiceError('not_found', 'no such count'));
     await expect(
       CycleCountDetailPage({
-        params: Promise.resolve({ id: 'cc-x' }),
+        // A well-formed id the service does not find.
+        params: Promise.resolve({ id: '5eed0000-0000-4000-8000-0000000000c2' }),
         searchParams: Promise.resolve({}),
       }),
     ).rejects.toThrow('notFound');
     expect(notFound).toHaveBeenCalled();
+  });
+
+  // B63: a mistyped or cut-off link is Page not found before the count is
+  // read (its invalid-uuid error reached the error boundary), and ahead of
+  // the visibility redirect.
+  it('a count id that is not a uuid is a 404 with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    ctxHolder.current = { role: 'viewer', permissions: new Set<string>() };
+    for (const id of ['not-a-uuid', CC_ID.slice(0, -1)]) {
+      await expect(
+        CycleCountDetailPage({
+          params: Promise.resolve({ id }),
+          searchParams: Promise.resolve({}),
+        }),
+        id,
+      ).rejects.toThrow('notFound');
+    }
+    expect(getDetailPage).not.toHaveBeenCalled();
+    expect(requireOrgContext).not.toHaveBeenCalled();
   });
 });

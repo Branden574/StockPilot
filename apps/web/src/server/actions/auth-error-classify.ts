@@ -49,3 +49,59 @@ export function isBannedUserAuthError(
 ): boolean {
   return error?.code === 'user_banned';
 }
+
+/**
+ * How GoTrue refused `updateUser({ password })` on a reset link's session, so
+ * completePasswordResetAction can answer in plain words (docket B50). Same rule
+ * as above: the structured `code` only, never the message.
+ *
+ *   insufficient_aal          the account has a verified authenticator and the
+ *                             session is not AAL2 (as when the action skipped
+ *                             the code step because the factor list could not
+ *                             be read)
+ *   same_password             the new password is the current one
+ *   weak_password             the password rules; with 'pwned' in `reasons`, a
+ *                             password found in a known breach
+ *   session_not_found,        the link's session is gone: spent, expired, or
+ *   session_expired,          ended by a reset finished in another tab
+ *   refresh_token_not_found
+ *
+ * The one exception is the SDK's own session-missing error. auth-js turns
+ * GoTrue's session_not_found into AuthSessionMissingError, and raises it itself
+ * when there is no session at all, and that error carries no code, so it is
+ * matched by `name`: the field auth-js's own isAuthSessionMissingError() reads,
+ * set by the SDK and never by text, as the phone does
+ * (apps/mobile/src/lib/account-disabled-probe.ts).
+ *
+ * Anything else is null, and the caller keeps its own answer.
+ */
+export type PasswordUpdateRefusal =
+  | { kind: 'aal' }
+  | { kind: 'same' }
+  | { kind: 'weak'; breached: boolean }
+  | { kind: 'session_gone' };
+
+const SESSION_GONE_CODES: ReadonlySet<unknown> = new Set([
+  'session_not_found',
+  'session_expired',
+  'refresh_token_not_found',
+]);
+
+export function classifyPasswordUpdateError(
+  error:
+    | { code?: unknown; name?: unknown; reasons?: unknown; status?: unknown; message?: unknown }
+    | null
+    | undefined,
+): PasswordUpdateRefusal | null {
+  const code = error?.code;
+  if (code === 'insufficient_aal') return { kind: 'aal' };
+  if (code === 'same_password') return { kind: 'same' };
+  if (code === 'weak_password') {
+    const reasons = error?.reasons;
+    return { kind: 'weak', breached: Array.isArray(reasons) && reasons.includes('pwned') };
+  }
+  if (SESSION_GONE_CODES.has(code) || error?.name === 'AuthSessionMissingError') {
+    return { kind: 'session_gone' };
+  }
+  return null;
+}
