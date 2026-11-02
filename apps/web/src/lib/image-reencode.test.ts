@@ -193,6 +193,22 @@ describe('reencodeWithoutMetadata', () => {
     },
   );
 
+  it('turns sharp’s operation cache off, so no decoded photo is kept after its request (S45)', async () => {
+    // sharp's default keeps the last 100 operations and buffers it does not
+    // count against its 50 MB: on Linux, ten re-encodes of a progressive
+    // 7071 x 7071 JPEG passed 3 GB with it, and stayed near 470 MB without.
+    sharp.cache(true);
+    expect(sharp.cache()).toMatchObject({ memory: { max: 50 }, items: { max: 100 } });
+    expect(
+      await reencodeWithoutMetadata(new Uint8Array(await fixture('jpeg')), 'jpeg'),
+    ).not.toBeNull();
+    expect(sharp.cache()).toMatchObject({
+      memory: { current: 0, max: 0 },
+      files: { max: 0 },
+      items: { current: 0, max: 0 },
+    });
+  });
+
   it('png ignores `quality` (lossless)', async () => {
     const input = new Uint8Array(await fixture('png'));
     const byDefault = await reencodeWithoutMetadata(input, 'png');

@@ -96,6 +96,10 @@ export async function reencodeWithoutMetadata(
 ): Promise<ReencodedPhoto | null> {
   try {
     const { default: sharp } = await import('sharp');
+    // libvips' operation cache off, as in lib/image-decode.ts (loadSharp): it
+    // keeps a progressive JPEG's whole-image buffers after the request, and
+    // on Linux ten re-encodes of one at 7071 x 7071 passed 3 GB (S45).
+    sharp.cache(false);
     const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const quality = options.quality ?? DEFAULT_QUALITY;
     // rotate() with no angle applies the EXIF orientation to the pixels.
