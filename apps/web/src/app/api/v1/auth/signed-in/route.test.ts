@@ -1,0 +1,315 @@
+import { createHash } from 'node:crypto';
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ModuleId } from '@stockpilot/core';
+
+/**
+ * Security invariant: a phone sign-in is in the Audit log once per session,
+ * with a hashed session reference and never the session id, and only for a
+ * verified bearer token of the account the request authenticated as
+ * (S5, plans/S5.md 3.4 step 10).
+ *
+ * THE DEFECT. The phone signs in against GoTrue directly, so a phone sign-in
+ * wrote no user.signed_in row and sent no new-device email: /api/v1/auth had
+ * only password-reset, and noteLoginDevice had one caller, the web sign-in.
+ *
+ * Why the session id never goes into the row: managers read audit_logs
+ * (0272), and a live session id is what "sign out this device" acts on.
+ */
+
+const h = vi.hoisted(() => ({
+  withApiContext: vi.fn(),
+  readVerifiedTokenClaims: vi.fn(),
+  emitAuthAudit: vi.fn(async (_p: Record<string, unknown>) => undefined),
+  noteLoginDevice: vi.fn(async (_a: Record<string, unknown>) => undefined),
+  reportError: vi.fn(async (..._a: unknown[]) => undefined),
+  after: [] as Array<() => unknown>,
+  buckets: new Map<string, number>(),
+  rateCalls: [] as Array<{ key: string; limit: number; windowMs: number; mode?: string }>,
+}));
+
+vi.mock('@/lib/auth/api-context', () => ({ withApiContext: h.withApiContext }));
+vi.mock('@/lib/auth/verified-claims', () => ({
+  readVerifiedTokenClaims: h.readVerifiedTokenClaims,
+}));
+vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: h.emitAuthAudit }));
+vi.mock('@/lib/auth/login-device', () => ({ noteLoginDevice: h.noteLoginDevice }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: (cb: () => unknown) => h.after.push(cb) };
+});
+// The bucket table, in memory: allowed while the count stays within the limit.
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
+    h.rateCalls.push({ key, limit, windowMs, mode });
+    const count = (h.buckets.get(key) ?? 0) + 1;
+    h.buckets.set(key, count);
+    return { allowed: count <= limit, count, resetAt: Date.now() + windowMs };
+  }),
+}));
+
+import { POST } from './route';
+
+const USER = '11111111-1111-4111-8111-111111111111';
+const ORG = '44444444-4444-4444-8444-444444444444';
+const SESSION = '22222222-2222-4222-8222-222222222222';
+const INSTALL = '0f6c2d1e-8a4b-4c5d-9e6f-7a8b9c0d1e2f';
+const APP_UA = 'StockPilot/42 CFNetwork/1568.100.1 Darwin/24.0.0';
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+
+const BODY = {
+  installId: INSTALL,
+  device: { model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1', appVersion: '1.4.0' },
+};
+
+function ctx(over: Record<string, unknown> = {}) {
+  return {
+    organizationId: ORG,
+    userId: USER,
+    role: 'manager',
+    permissions: undefined,
+    supabase: { auth: {} },
+    mfaRequired: false,
+    mfaSatisfied: true,
+    mfaEnrolled: false,
+    enabledModules: new Set<ModuleId>(),
+    ...over,
+  };
+}
+
+function claims(over: Record<string, unknown> = {}) {
+  return {
+    userId: USER,
+    sessionId: SESSION,
+    aal: 'aal2',
+    amr: [],
+    email: 'member@example.com',
+    ...over,
+  };
+}
+
+function req(
+  body: unknown = BODY,
+  headers: Record<string, string> = { authorization: 'Bearer token-1' },
+) {
+  return new Request('http://localhost/api/v1/auth/signed-in', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'user-agent': APP_UA,
+      'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+      ...headers,
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.after.length = 0;
+  h.buckets.clear();
+  h.rateCalls.length = 0;
+  h.withApiContext.mockResolvedValue(ctx());
+  h.readVerifiedTokenClaims.mockResolvedValue(claims());
+});
+
+async function runAfter() {
+  for (const cb of h.after.splice(0)) await cb();
+}
+
+describe('POST /api/v1/auth/signed-in — who may write a row', () => {
+  it('a cookie session (no bearer token): 401, nothing written', async () => {
+    const res = await POST(req(BODY, {}));
+    expect(res.status).toBe(401);
+    expect(h.withApiContext).toHaveBeenCalledTimes(1);
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+    expect(h.after).toHaveLength(0);
+  });
+
+  it('withApiContext answers null (no accepted membership, disabled, bad token): 401', async () => {
+    h.withApiContext.mockResolvedValue(null);
+    const res = await POST(req());
+    expect(res.status).toBe(401);
+    expect(h.readVerifiedTokenClaims).not.toHaveBeenCalled();
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('the token’s claims cannot be verified, or name another account: 401', async () => {
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(null);
+    expect((await POST(req())).status).toBe(401);
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(
+      claims({ userId: '99999999-9999-4999-8999-999999999999' }),
+    );
+    expect((await POST(req())).status).toBe(401);
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('the claims are read from the bearer token itself', async () => {
+    await POST(req());
+    expect(h.readVerifiedTokenClaims).toHaveBeenCalledWith(expect.anything(), 'token-1');
+  });
+
+  it('a token with no session id: 200, and nothing written (nothing to count once by)', async () => {
+    h.readVerifiedTokenClaims.mockResolvedValue(claims({ sessionId: null }));
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+    expect(h.after).toHaveLength(0);
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — the row', () => {
+  it('one user.signed_in row, client mobile, in the request’s organization, with a session reference and never the session id', async () => {
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
+    expect(h.emitAuthAudit).toHaveBeenCalledWith({
+      event: 'user.signed_in',
+      userId: USER,
+      organizationId: ORG,
+      extra: {
+        client: 'mobile',
+        platform: 'iOS',
+        app_version: '1.4.0',
+        email: 'member@example.com',
+        role: 'manager',
+        mfa_required: false,
+        device_label: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+        session_ref: sha256(SESSION).slice(0, 16),
+      },
+    });
+    expect(JSON.stringify(h.emitAuthAudit.mock.calls)).not.toContain(SESSION);
+  });
+
+  it('a second note for the same session writes no row and no device note', async () => {
+    await POST(req());
+    const again = await POST(req());
+    expect(again.status).toBe(200);
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
+    expect(h.after).toHaveLength(1);
+    // Counted once per session, by a hash of its id, for a day, open on a
+    // store failure.
+    expect(h.rateCalls).toContainEqual({
+      key: `auth-note:in:${sha256(SESSION)}`,
+      limit: 1,
+      windowMs: 86_400_000,
+      mode: 'open',
+    });
+  });
+
+  it('an AAL1 token (the code not yet entered) is accepted, and the row says a code is owed', async () => {
+    h.withApiContext.mockResolvedValue(
+      ctx({ mfaEnrolled: true, mfaRequired: true, mfaSatisfied: false }),
+    );
+    h.readVerifiedTokenClaims.mockResolvedValue(claims({ aal: 'aal1' }));
+    expect((await POST(req())).status).toBe(200);
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { mfa_required: true } });
+  });
+
+  it('after the response: noteLoginDevice with this install’s id and the device’s label', async () => {
+    await POST(req());
+    expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    await runAfter();
+    expect(h.noteLoginDevice).toHaveBeenCalledWith({
+      userId: USER,
+      email: 'member@example.com',
+      userAgent: APP_UA,
+      ip: '203.0.113.7',
+      deviceKey: INSTALL,
+      deviceLabel: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+    });
+  });
+
+  it('the per-account limit: 30 an hour, then 429 and nothing written', async () => {
+    for (let i = 0; i < 30; i += 1) {
+      h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: `session-${i}` }));
+      expect((await POST(req())).status).toBe(200);
+    }
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: 'session-31' }));
+    const res = await POST(req());
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe('rate_limited');
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(30);
+    expect(h.rateCalls).toContainEqual({
+      key: `auth-note:user:${USER}`,
+      limit: 30,
+      windowMs: 3_600_000,
+      mode: 'open',
+    });
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — the body', () => {
+  it('a body that cannot be read: 400 with the fixed sentence', async () => {
+    const res = await POST(req('{not json'));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'invalid_body',
+      message: 'The request could not be read.',
+    });
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('a field outside the allowlist is dropped, not trusted: no label, no install id; the row is still written', async () => {
+    await POST(
+      req({
+        installId: 'not-a-uuid',
+        device: {
+          model: '<img src=x onerror=alert(1)>',
+          osName: 'iOS',
+          osVersion: '18.1',
+          appVersion: '1.4.0',
+        },
+      }),
+    );
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { device_label: null } });
+    await runAfter();
+    expect(h.noteLoginDevice).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceKey: null, deviceLabel: null }),
+    );
+  });
+
+  it('length caps: an over-long model is dropped', async () => {
+    await POST(req({ installId: INSTALL, device: { ...BODY.device, model: 'x'.repeat(65) } }));
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { device_label: null } });
+  });
+
+  it('a model with no system named: the label names the model alone', async () => {
+    await POST(req({ installId: INSTALL, device: { model: 'iPad Air (5th generation)' } }));
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({
+      extra: {
+        device_label: 'StockPilot app on iPad Air (5th generation)',
+        platform: null,
+        app_version: null,
+      },
+    });
+  });
+
+  it('a body that is not an object: 400 validation_error, nothing written', async () => {
+    const res = await POST(req('[1,2]'));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('validation_error');
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — an unexpected failure', () => {
+  it('answers the fixed sentence and reports it (S16)', async () => {
+    h.withApiContext.mockRejectedValue(
+      new Error('account status unreadable: relation "user_profiles" does not exist'),
+    );
+    const res = await POST(req());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(h.reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'auth.signed_in' }),
+    );
+  });
+});

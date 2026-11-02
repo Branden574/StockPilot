@@ -965,6 +965,23 @@ WEB_TESTS=(
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+  # S5a: the phone's sign-in and sign-out reach the server. Each is one Audit
+  # log row per session, with a hashed session reference and never the session
+  # id, written only for a verified bearer token of the account itself; the
+  # phone's sign-out revokes the account's other sessions and names them on
+  # the sessions channel only after the revoke answered. That channel is
+  # public, so no path names a live session on it: "Sign out all other devices",
+  # Change password and the phone name the sessions they ended, never the one
+  # that stays (the guard holds every server keepId to the literal null). The
+  # new-device email goes out only for a device the call itself recorded (one
+  # per phone install) and its webhook event reaches accepted, non-act-as
+  # memberships only. The auth audit helpers are server code, never Server
+  # Actions.
+  src/app/api/v1/auth/signed-in/route.test.ts
+  src/app/api/v1/auth/signed-out/route.test.ts
+  src/lib/auth/login-device.test.ts
+  src/test/session-revoked-payload.guard.test.ts
+  src/server/services/auth-audit.guard.test.ts
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
@@ -1546,6 +1563,21 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # S5a: a signed-out phone stops showing the account's notifications. Every
+  # deliberate sign-out deletes this phone's push token row while the session
+  # still exists (awaited, bounded, by the token it registered), and so does a
+  # sign-out from another device; registration is held for the whole sign-out
+  # (a token refresh re-running it binds nothing) and never runs while the
+  # session still owes its authenticator code. The registration goes through
+  # register_push_token (SP-073). The phone's install id lives in the Keychain
+  # only, outlives every sign-out, and is never made up when the Keychain
+  # refuses.
+  src/lib/push-unbind.test.ts
+  src/lib/use-push-notifications.test.ts
+  src/lib/push-register-wiring.test.ts
+  src/lib/use-session-revocation.test.ts
+  src/lib/install-id.test.ts
 
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another

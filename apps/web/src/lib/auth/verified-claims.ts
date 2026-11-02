@@ -57,6 +57,9 @@ export interface VerifiedSessionClaims {
   aal: 'aal1' | 'aal2' | null;
   /** Authentication method references: which methods, and when (seconds). */
   amr: unknown;
+  /** The token's email claim, or null when it has none. For Audit log rows
+   *  (the phone's sign-in and sign-out notes); never for authorization. */
+  email: string | null;
 }
 
 /** The slice of a Supabase client this reads. */
@@ -73,6 +76,7 @@ function toVerifiedClaims(claims: Record<string, unknown>): VerifiedSessionClaim
         : null,
     aal: claims.aal === 'aal2' ? 'aal2' : claims.aal === 'aal1' ? 'aal1' : null,
     amr: claims.amr,
+    email: typeof claims.email === 'string' && claims.email.length > 0 ? claims.email : null,
   };
 }
 
@@ -119,7 +123,25 @@ export async function readVerifiedSessionClaims(
     return null;
   }
   if (!token) return null;
+  return readVerifiedTokenClaims(supabase, token);
+}
 
+/**
+ * The verified claims of a token the caller already holds: the cookie
+ * session's (readVerifiedSessionClaims above), or a phone's bearer token on
+ * an /api/v1 route, which has no cookie session to load (S5: POST
+ * /api/v1/auth/signed-in and signed-out). The same checks either way:
+ * getClaims(token), then the Auth server only when getClaims() could not
+ * check the token at all.
+ *
+ * A token handed over is never refreshed: getClaims() with an explicit token
+ * loads no session, so an expired one is null. Never throws.
+ */
+export async function readVerifiedTokenClaims(
+  supabase: AuthReader,
+  token: string,
+): Promise<VerifiedSessionClaims | null> {
+  if (!token) return null;
   try {
     const { data, error } = await supabase.auth.getClaims(token);
     // No error: the claims of a token whose signature checked out.

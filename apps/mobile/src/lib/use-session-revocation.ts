@@ -1,6 +1,11 @@
 import * as React from 'react';
 import { Alert } from 'react-native';
 
+import {
+  clearDeliveredNotifications,
+  deviceSignOutSteps,
+  REVOKED_UNBIND_TIMEOUT_MS,
+} from './push-unbind';
 import { supabase } from './supabase';
 
 /**
@@ -30,6 +35,19 @@ import { supabase } from './supabase';
  * This listener stays deliberately dumb about that reason. It forwards it and
  * nothing more: the channel is public, so deciding whether to BELIEVE the claim
  * needs corroboration, and that judgement lives with the account gate.
+ *
+ * THIS PHONE'S PUSH TOKEN (S5, open question 5). A phone signed out from
+ * another device kept its push_tokens row, so it kept showing the account's
+ * notifications. Before anything else, while the access token the delete needs
+ * is still on the device, push registration is held and this phone's row is
+ * deleted (push-unbind.ts, at most 3 s). It runs BEFORE the account gate's
+ * probe, never beside it: the probe's getUser() holds auth-js's lock and, for
+ * a session the server has ended, removes the session from the device
+ * (auth-js 2.105.1 GoTrueClient.js:2472, 2508-2511), and a delete queued
+ * behind it reads its token through getSession() under that same lock
+ * (supabase-js index.cjs:520-525) and goes out with no session, as the anon
+ * key, which deletes nothing. Once signed out, Notification Center is cleared
+ * of what the account still showed there.
  */
 export function useSessionRevocation(
   userId: string | null,
@@ -79,26 +97,42 @@ export function useSessionRevocation(
           ('keepId' in p && !!mySessionId && p.keepId !== mySessionId);
         if (!targeted) return;
         void (async () => {
-          // First refusal, while the token is still on the device: if this
-          // revoke is really a platform disable, the account gate takes over
-          // and shows the disabled screen instead of the wrong sentence. The
-          // whole payload goes across — the gate needs the `reason` field, and
-          // narrowing it here would put the decision in the wrong module.
-          if (onTargetedRef.current) {
-            try {
-              if (await onTargetedRef.current(payload)) return;
-            } catch {
-              /* fall through to the ordinary force-logout */
-            }
-          }
-          // scope:'local' clears ONLY this device. The authoritative server-side
-          // revoke already happened (the broadcaster deleted our auth.sessions
-          // row); a default global signOut here would cascade and revoke the
-          // user's OTHER devices too — defeating "sign out just this one".
+          const deviceSteps = deviceSignOutSteps({
+            user: null,
+            unbindTimeoutMs: REVOKED_UNBIND_TIMEOUT_MS,
+          });
           try {
-            await supabase.auth.signOut({ scope: 'local' });
-          } catch {
-            /* the refresh token is already dead server-side either way */
+            // This phone's push token row, while the token the delete needs
+            // is still here, and before the gate's probe (see above).
+            try {
+              await deviceSteps.beforeSessionEnds();
+            } catch {
+              /* best effort: the sign-out goes on */
+            }
+            // First refusal, while the token is still on the device: if this
+            // revoke is really a platform disable, the account gate takes over
+            // and shows the disabled screen instead of the wrong sentence. The
+            // whole payload goes across — the gate needs the `reason` field, and
+            // narrowing it here would put the decision in the wrong module.
+            if (onTargetedRef.current) {
+              try {
+                if (await onTargetedRef.current(payload)) return;
+              } catch {
+                /* fall through to the ordinary force-logout */
+              }
+            }
+            // scope:'local' clears ONLY this device. The authoritative server-side
+            // revoke already happened (the broadcaster deleted our auth.sessions
+            // row); a default global signOut here would cascade and revoke the
+            // user's OTHER devices too — defeating "sign out just this one".
+            try {
+              await supabase.auth.signOut({ scope: 'local' });
+            } catch {
+              /* the refresh token is already dead server-side either way */
+            }
+            await clearDeliveredNotifications();
+          } finally {
+            deviceSteps.release();
           }
           Alert.alert(
             'Signed out',
