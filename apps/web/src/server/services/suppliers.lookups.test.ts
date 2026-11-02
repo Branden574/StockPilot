@@ -51,7 +51,10 @@ describe('SuppliersService.listForLookups', () => {
     const enabledModules = new Set<ModuleId>(DEFAULT_MODULE_IDS);
     enabledModules.add('suppliers');
     const stub = makeSupabaseStub({
-      'suppliers.select': { data: null, error: { message: 'canceling statement due to statement timeout' } },
+      'suppliers.select': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
     });
     const service = new SuppliersService(makeServiceContext(stub.client, { enabledModules }));
     await expect(service.listForLookups()).rejects.toMatchObject({ code: 'internal_error' });

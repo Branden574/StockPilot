@@ -74,7 +74,10 @@ describe('BundlesService.listForLookups', () => {
     const enabledModules = new Set<ModuleId>(DEFAULT_MODULE_IDS);
     enabledModules.add('bundles');
     const stub = makeSupabaseStub({
-      'bundles.select': { data: null, error: { message: 'canceling statement due to statement timeout' } },
+      'bundles.select': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
       'bundle_distributions.select': { data: [], error: null },
     });
     const service = new BundlesService(makeServiceContext(stub.client, { enabledModules }));
