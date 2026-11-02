@@ -22,7 +22,6 @@ describe('locationFor', () => {
       item_type: 'product',
       custom_fields: { rack_number: '2', rack_row: 'C' },
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 
   it('falls back to the bin_location-derived label when no holdings map is passed', () => {

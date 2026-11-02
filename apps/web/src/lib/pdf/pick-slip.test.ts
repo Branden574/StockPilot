@@ -83,7 +83,6 @@ const baseDetail = {
       },
     },
   ],
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
 describe('renderPickSlipPdf', () => {
@@ -104,12 +103,10 @@ describe('renderPickSlipPdf', () => {
     const claimed = await renderPickSlipPdf({
       ...baseDetail,
       assignedPickerName: 'Devon Keller',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     const unclaimed = await renderPickSlipPdf({
       ...baseDetail,
       assignedPickerName: null,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
     expect(claimed.subarray(0, 4).toString('ascii')).toBe('%PDF');
