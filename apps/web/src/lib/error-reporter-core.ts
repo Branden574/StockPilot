@@ -26,8 +26,17 @@
  * `/m/<token>` share link) in `error.message` and `error.stack`, and both
  * were previously shipped verbatim. GC 27 — never log a share token or a
  * signed URL.
+ *
+ * A VALUE THAT IS NOT AN ERROR (docket C21): a failed supabase-js call hands
+ * back its `error` as a plain object, and report sites pass it in as it is.
+ * String() of it was "[object Object]", so the alert lost the database's
+ * reason. The report's Error is now built by lib/error-text.ts: the message,
+ * a code, a hint and, for a request that got no answer, its first "Caused
+ * by:" line. A server error's `details` are never forwarded: a unique or
+ * check violation quotes the row's values there.
  */
 
+import { asReportableError } from './error-text';
 import { redactTokens, redactTokensDeep } from './redact-urls';
 
 export interface ErrorContext {
@@ -94,10 +103,7 @@ export function isNextControlFlowError(err: unknown): boolean {
  * Reports an error. Always console.errors; additionally posts to the
  * webhook if configured. Best-effort — never throws to the caller.
  */
-export async function reportError(
-  err: unknown,
-  context: ErrorContext,
-): Promise<void> {
+export async function reportError(err: unknown, context: ErrorContext): Promise<void> {
   if (isNextControlFlowError(err)) {
     // One quiet line for traceability; no console.error, no webhook.
     console.info(
@@ -105,7 +111,7 @@ export async function reportError(
     );
     return;
   }
-  const error = err instanceof Error ? err : new Error(String(err));
+  const error = asReportableError(err);
   const payload: ReportPayload = {
     ts: new Date().toISOString(),
     env: getEnv(),
@@ -128,12 +134,7 @@ export async function reportError(
   // Always log so we don't lose the trace even when the webhook fails.
   // The redacted message + stack, never the raw Error: console.error(err)
   // prints `err.stack`, which is exactly where a signed URL hides.
-  console.error(
-    `[error] ${context.tag}`,
-    payload.message,
-    payload.stack ?? '',
-    payload.extra,
-  );
+  console.error(`[error] ${context.tag}`, payload.message, payload.stack ?? '', payload.extra);
 
   const url = getWebhookUrl();
   if (!url) return;
@@ -142,8 +143,7 @@ export async function reportError(
   // unknown fields) — they want `{text}`. Detect them so pointing
   // ERROR_WEBHOOK_URL at a #alerts channel "just works"; any other endpoint
   // gets the full structured payload.
-  const isChatWebhook =
-    url.includes('hooks.slack.com') || url.includes('webhook.office.com');
+  const isChatWebhook = url.includes('hooks.slack.com') || url.includes('webhook.office.com');
   const body = isChatWebhook
     ? JSON.stringify({
         text:

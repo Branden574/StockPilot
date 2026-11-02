@@ -150,6 +150,18 @@ describe('nonErrorText: other values', () => {
   it('an object with no prototype, whose String() throws, still gets a text', () => {
     expect(() => String(Object.create(null))).toThrow(TypeError);
     expect(nonErrorText(Object.create(null))).toBe(NO_MESSAGE_TEXT);
+    expect(nonErrorText(Object.assign(Object.create(null), { status: 500 }))).toBe(
+      `${NO_MESSAGE_TEXT} (keys: status)`,
+    );
+  });
+
+  it('an object that throws when its message is read still gets a text', () => {
+    const hostile = {
+      get message(): string {
+        throw new Error('no reading');
+      },
+    };
+    expect(nonErrorText(hostile)).toBe(NO_MESSAGE_TEXT);
   });
 
   it('an object with its own text keeps it', () => {
