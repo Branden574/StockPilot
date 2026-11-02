@@ -235,3 +235,40 @@ describe('acceptInviteWithSignupAction never creates the account of a platform a
     expect(createUser).not.toHaveBeenCalled();
   });
 });
+
+describe('acceptInviteWithSignupAction refuses a withdrawn invitation (B94 review)', () => {
+  // Removing a member (0429) or deleting an account (0393) withdraws the
+  // invitations the person sent: revoked_at is set. A Resend from a page
+  // loaded before that used to renew expires_at, so the expiry alone cannot
+  // say the invitation is dead. This stub returns only the columns the
+  // action's select names, so the check fails here unless the action reads
+  // revoked_at.
+  function selectedColumnsOnly(call: Parameters<ReturnType<typeof servedLikePostgrest>>[0]) {
+    const result = servedLikePostgrest(() => h.invites)(call);
+    const cols = String(call.args[call.methods.indexOf('select')]?.[0] ?? '*');
+    if (cols.trim() === '*') return result;
+    const names = cols.split(',').map((c) => c.trim().split(/[:(\s]/)[0]!);
+    return {
+      ...result,
+      data: (result.data as Array<Record<string, unknown>>).map((r) =>
+        Object.fromEntries(names.filter((n) => n in r).map((n) => [n, r[n]])),
+      ),
+    };
+  }
+
+  it('creates no account for a withdrawn invitation whose expiry is still ahead', async () => {
+    stub = makeSupabaseStub({
+      'organization_invites.select': selectedColumnsOnly,
+      'rpc:auth_user_exists_by_email': () => ({ data: false, error: null }),
+    });
+    stub.client.auth.admin = { createUser };
+    h.adminClient = stub.client;
+    invite(TOKEN_MEMBER, 'new.member@example.com');
+    h.invites[h.invites.length - 1]!.revoked_at = new Date(Date.now() - 60_000).toISOString();
+
+    const res = await acceptInviteWithSignupAction({ token: TOKEN_MEMBER, password: PASSWORD });
+
+    expect(res).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+    expectNoAccount();
+  });
+});

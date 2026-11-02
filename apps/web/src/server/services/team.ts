@@ -13,6 +13,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
+import { inviteIsClosed } from '@/lib/people/invite-closed';
 import { orderBusyRefusal } from '@/server/services/lib/order-busy';
 import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
@@ -40,10 +41,20 @@ function formatInviteExpiry(iso: string): string {
 }
 
 /**
+ * B94 review: a withdrawn invitation (revoked_at set by a removal, 0429, or
+ * an account deletion, 0393) is terminal, whatever its expiry says. Resend
+ * refuses it with this answer.
+ */
+const WITHDRAWN_INVITE_MESSAGE =
+  'This invite was withdrawn when the person who sent it left the workspace. Send a new invite instead.';
+
+/**
  * B94: what removing one member releases in this organization, per kind, as
  * public.member_open_work (migration 0429) counts it with the release's own
- * predicates, and how many invitations they sent there that are not accepted
- * or revoked (the removal withdraws them, as account deletion does). The
+ * predicates, and how many invitations they sent there that are still
+ * pending: not accepted, not withdrawn and not expired, as Pending invites
+ * lists them (the removal withdraws them, as account deletion does, and the
+ * expired ones too). The
  * Remove dialog names the first three, and the maintenance requests,
  * warehouses and invitations when there are any.
  */
@@ -220,6 +231,9 @@ export class TeamService {
       .select('id, email, role, token, expires_at, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('accepted_at', null)
+      // A withdrawn invitation (revoked_at: a removal, 0429, or an account
+      // deletion, 0393) is never pending, whatever its expiry says.
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
@@ -298,13 +312,14 @@ export class TeamService {
       }
     }
 
-    // Already invited and not yet expired?
+    // Already invited, not withdrawn and not yet expired?
     const { data: existingInvite } = await this.ctx.supabase
       .from('organization_invites')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('email', normalizedEmail)
       .is('accepted_at', null)
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle();
     if (existingInvite) {
@@ -414,7 +429,7 @@ export class TeamService {
     const { data: invite, error: fetchErr } = await this.ctx.supabase
       .from('organization_invites')
       .select(
-        `id, email, role, token, accepted_at, organizations:organization_id (name)`,
+        `id, email, role, token, accepted_at, revoked_at, organizations:organization_id (name)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
@@ -427,19 +442,40 @@ export class TeamService {
         'This invite has already been accepted — no need to resend.',
       );
     }
+    // A withdrawn invitation is terminal (0098): removing the member who sent
+    // it (0429) or deleting their account (0393) set revoked_at and moved
+    // expires_at into the past. Renewing the expiry here would bring it back
+    // with the role and warehouse the removed person chose, so a Team page
+    // loaded before the removal must not be able to.
+    if (invite.revoked_at) {
+      throw new ServiceError('conflict', WITHDRAWN_INVITE_MESSAGE);
+    }
 
     // Refresh the expiry so a recipient who acts on a re-sent email
     // doesn't immediately hit "invite expired". The reminder email states
     // this NEW expiry (registry: invite-reminder).
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { error: updErr } = await this.ctx.supabase
+    // Only a row still open: the invitation can be withdrawn or accepted
+    // between the read above and this write. 0 rows is not a success
+    // (pattern #2), and nothing is sent then.
+    const { data: renewed, error: updErr } = await this.ctx.supabase
       .from('organization_invites')
       .update({
         expires_at: newExpiresAt,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
+      .eq('id', inviteId)
+      .is('accepted_at', null)
+      .is('revoked_at', null)
+      .select('id')
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!renewed) {
+      throw new ServiceError(
+        'conflict',
+        'This invite is no longer pending: it was accepted, withdrawn or revoked. Refresh the page.',
+      );
+    }
 
     // Inviter name: prefer current user's full_name, fallback to email.
     const { data: profile } = await this.ctx.supabase
@@ -1273,14 +1309,16 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, revoked_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
   if (inviteErr) throw new ServiceError('internal_error', inviteErr.message);
   if (!invite) throw new ServiceError('not_found', 'Invite not found');
   if (invite.accepted_at) throw new ServiceError('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // Withdrawn (revoked_at) or past its expiry: both answer as expired, as
+  // the invite page shows them (inviteIsClosed).
+  if (inviteIsClosed(invite)) {
     throw new ServiceError('validation_error', 'Invite has expired');
   }
 

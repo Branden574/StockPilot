@@ -21,6 +21,7 @@ import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
+import { inviteIsClosed } from '@/lib/people/invite-closed';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -532,13 +533,15 @@ export async function acceptInviteWithSignupAction(input: {
   //    to clean up later.
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, accepted_at, expires_at')
+    .select('id, organization_id, email, accepted_at, expires_at, revoked_at')
     .eq('token', parsed.data.token)
     .maybeSingle();
   if (inviteErr) return err('internal_error', inviteErr.message);
   if (!invite) return err('not_found', 'Invite not found');
   if (invite.accepted_at) return err('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // Withdrawn (revoked_at) or past its expiry: both answer as expired
+  // (inviteIsClosed), before any account is created.
+  if (inviteIsClosed(invite)) {
     return err('validation_error', 'Invite has expired');
   }
 

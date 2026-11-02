@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
+import { inviteIsClosed } from '@/lib/people/invite-closed';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { AcceptInviteButton } from './accept-button';
@@ -53,7 +54,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   const { data: invite } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, role, expires_at, accepted_at')
+    .select('id, organization_id, email, role, expires_at, accepted_at, revoked_at')
     .eq('token', token)
     .maybeSingle();
 
@@ -72,7 +73,8 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   }
 
   const session = await getServerSession();
-  const expired = invite ? new Date(invite.expires_at as string).getTime() < Date.now() : false;
+  // A withdrawn invitation (revoked_at) shows as expired too (inviteIsClosed).
+  const expired = invite ? inviteIsClosed(invite) : false;
   const accepted = Boolean(invite?.accepted_at);
 
   // NO auto-accept during render. Two reasons:
