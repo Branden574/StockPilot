@@ -1060,11 +1060,18 @@ select is(
   || pg_temp.attempt('authenticated', :mgr, format($q$select public.confirm_physical_signature(%L, 'Pat Doe')$q$, :oTrans)),
   'ok:1 / ok:1',
   'S1: the assigned driver and a manager record the paper signature');
+-- Re-pinned by 0429 (B94; was the removal alone): removing a member now
+-- releases their deliveries, so a removed driver is no longer the order's
+-- driver and would be refused here whatever confirm_physical_signature's
+-- membership term says. The driver is put back on the order after the
+-- removal (a row stranded before 0429, or assigned in the race 0429's
+-- header names), so S2 still fails if that term is removed.
 select is(
   pg_temp.attempt('authenticated', :drv, format($q$select public.confirm_physical_signature(%L, 'Pat Doe')$q$, :oTrans),
-                  format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :drv)),
+                  format('delete from public.organization_members where organization_id = %L and user_id = %L; '
+                         'update public.order_requests set assigned_delivery_user_id = %L where id = %L', :orgA, :drv, :drv, :oTrans)),
   '42501:-:forbidden',
-  'S2: a driver removed from the organization after the assignment is refused');
+  'S2: a driver removed from the organization after the assignment is refused (the delivery put back on them after the removal, as a row stranded before 0429 or assigned in the race)');
 select is(
   pg_temp.attempt('authenticated', :drv, format($q$select public.confirm_physical_signature(%L, 'Pat Doe')$q$, :oTrans),
                   format('update public.user_profiles set disabled_at = now() where id = %L', :drv)),

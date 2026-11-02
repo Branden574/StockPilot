@@ -756,7 +756,16 @@ select is(
   'public.confirm_public_order_request:postgres,public.generate_order_packing_slips:postgres,'
   'public.mark_order_in_transit:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
   'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres,'
-  'public.tg_auth_users_before_delete:postgres',
+  'public.tg_auth_users_before_delete:postgres,public.tg_organization_members_release_open_work:postgres',
+  -- Re-pinned by 0429 (B94; was 0393's 19, without
+  -- tg_organization_members_release_open_work): the membership trigger
+  -- releases a removed person's open picks and deliveries
+  -- (assigned_picker_id and picking_claimed_*, assigned_delivery_*) in the
+  -- organization being left, the release 0393 does for a deleted account,
+  -- reviewed for its own gate (it fires only inside a delete from
+  -- organization_members, which RLS, the role guard and the admin client
+  -- decide; 0429 suite R1-R5, G1, G2). It assigns no approval column (AL9a)
+  -- and is DEFINER (AL9b).
   -- Re-pinned by 0393 (was 0390's 18, without tg_auth_users_before_delete):
   -- the account trigger releases a deleted person's open picks and
   -- deliveries (assigned_picker_id and picking_claimed_*,
@@ -771,7 +780,7 @@ select is(
   -- warehouse write) and writes only picking_complete/packing_slip_generated
   -- -> packing_slip_generated, an edge the guard allows API roles anyway;
   -- 0389_order_secrets_expand.test.sql G1-G8 prove its gates.
-  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 19 (0389 added the packing-slip mint; 0390 added the delivery assignment and the in-transit mark; 0393 the account trigger''s release), owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
+  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 20 (0389 added the packing-slip mint; 0390 added the delivery assignment and the in-transit mark; 0393 the account trigger''s release; 0429 the membership trigger''s release), owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
 select is(
   (select coalesce(string_agg(f.fn || ':' || f.owner, ',' order by f.fn collate "C"), '')
      from fn_scope f

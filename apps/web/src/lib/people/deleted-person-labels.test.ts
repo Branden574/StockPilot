@@ -45,6 +45,38 @@ describe('orderTimelineActor (order page timeline)', () => {
       'Deleted user',
     );
   });
+  // B94 (0429): a release written with no actor (an Act-as seat ended, or the
+  // admin client removed the member) carries metadata.cause. It is the system,
+  // as the audit page already says, never a public-link step.
+  it('says "System" for a row with no user that names a cause, and keeps "Public" without one', () => {
+    expect(
+      orderTimelineActor(null, { user_id: null, metadata: { cause: 'act_as_seat_ended' } }),
+    ).toBe('System');
+    expect(orderTimelineActor(null, { user_id: null, metadata: { cause: 'member_removed' } })).toBe(
+      'System',
+    );
+    expect(orderTimelineActor(null, { user_id: null, metadata: {} })).toBe('Public');
+    expect(orderTimelineActor(null, { user_id: null, metadata: null })).toBe('Public');
+    expect(orderTimelineActor(null, { user_id: null, metadata: { cause: 42 } })).toBe('Public');
+  });
+  it('a stamped row stays "Deleted user" and a named actor keeps their name, whatever the cause', () => {
+    expect(
+      orderTimelineActor(null, {
+        user_id: null,
+        deleted_users: { user_id: STAMP },
+        metadata: { cause: 'member_left' },
+      }),
+    ).toBe('Deleted user');
+    expect(
+      orderTimelineActor(
+        { full_name: 'Lena', email: null },
+        { user_id: 'u1', metadata: { cause: 'member_removed' } },
+      ),
+    ).toBe('Lena');
+    expect(orderTimelineActor(null, { user_id: 'u1', metadata: { cause: 'member_left' } })).toBe(
+      'Unknown user',
+    );
+  });
 });
 
 describe('returnRequesterLabel (return detail)', () => {
