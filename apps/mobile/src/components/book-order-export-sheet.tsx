@@ -1,7 +1,8 @@
 import { Download, X } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Modal } from '@/components/ui/modal';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { BUTTON_RADIUS } from '@/components/ui/tones';
 import {

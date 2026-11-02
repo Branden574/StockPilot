@@ -146,19 +146,29 @@ describe('BundleForm checkboxes and lines (redesign: the shared Checkbox)', () =
 
   it('pre-boxing, Optional, a decimal Qty / kit and a removed line all reach the save', async () => {
     vi.mocked(updateBundleAction).mockResolvedValue({ ok: true, data: { id: 'b-1' } } as never);
-    render(<BundleForm initial={initial} />);
+    render(
+      <BundleForm
+        initial={{
+          ...initial,
+          components: [
+            ...initial.components,
+            { itemId: 'i-3', itemName: 'Ruler', itemSku: 'RUL', quantity: 1, isOptional: false },
+          ],
+        }}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enable pre-boxing' }));
     const optional = screen.getAllByRole('checkbox', { name: 'Mark component as optional' });
-    expect(optional).toHaveLength(2);
-    fireEvent.click(optional[0]!);
-    expect(optional[0]).toHaveAttribute('aria-checked', 'true');
+    expect(optional).toHaveLength(3);
+    fireEvent.click(optional[1]!);
+    expect(optional[1]).toHaveAttribute('aria-checked', 'true');
 
     const qty = within(screen.getByRole('table')).getAllByRole('spinbutton')[0]!;
     fireEvent.change(qty, { target: { value: '0.5' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Eraser' }));
-    expect(screen.queryByText('Eraser')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Ruler' }));
+    expect(screen.queryByText('Ruler')).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -169,8 +179,27 @@ describe('BundleForm checkboxes and lines (redesign: the shared Checkbox)', () =
       sku: 'KIT-1',
       description: null,
       preassemblyEnabled: true,
-      components: [{ itemId: 'i-1', quantity: 0.5, isOptional: true }],
+      components: [
+        { itemId: 'i-1', quantity: 0.5, isOptional: false },
+        { itemId: 'i-2', quantity: 2, isOptional: true },
+      ],
     });
+  });
+
+  // 0415: the database builds no kit from a bundle whose components are all
+  // optional, so the form says so before anything is sent.
+  it('refuses a kit whose components are all optional, and says what to do', async () => {
+    render(<BundleForm initial={initial} />);
+    for (const box of screen.getAllByRole('checkbox', { name: 'Mark component as optional' })) {
+      fireEvent.click(box);
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    });
+    expect(toast.error).toHaveBeenLastCalledWith(
+      'Mark at least one component as required. A kit made only of optional components could be built from nothing.',
+    );
+    expect(updateBundleAction).not.toHaveBeenCalled();
   });
 
   it('keeps its two refusals: a name, then at least one component', async () => {

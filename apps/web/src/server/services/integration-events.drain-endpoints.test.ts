@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { drainIntegrationDeliveries } from './integration-events';
@@ -60,6 +61,35 @@ describe('drainIntegrationDeliveries — endpoint read', () => {
       expect.objectContaining({ tag: 'integration-events.drain' }),
     );
   });
+
+  // docket S27: an answer with no error that is not a list (postgrest-js
+  // resolves an empty body with data null) read as "every endpoint was
+  // removed" too, and marked every due delivery dead.
+  it.each(NOT_A_LIST)(
+    '%s from the endpoint read marks nothing dead, sends nothing, and is reported',
+    async (_shape, answer) => {
+      const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const stub = makeSupabaseStub({
+        'integration_deliveries.select': { data: DUE_ROWS, error: null },
+        'integration_endpoints.select': answer,
+        'integration_deliveries.update': { data: [], error: null },
+      });
+
+      const summary = await drainIntegrationDeliveries(
+        stub.client,
+        new Date('2026-09-23T12:00:00Z'),
+      );
+
+      expect(stub.chainsAll.get('integration_deliveries.update') ?? []).toHaveLength(0);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(summary).toEqual({ attempted: 0, delivered: 0 });
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = reportError.mock.calls[0] as unknown as [Error, unknown];
+      expect(err.message).toBe(`integration_endpoints answered no list (status ${answer.status})`);
+      expect(context).toEqual({ tag: 'integration-events.drain' });
+    },
+  );
 
   it('still marks a delivery dead when the read succeeds and its endpoint is gone', async () => {
     vi.stubGlobal(

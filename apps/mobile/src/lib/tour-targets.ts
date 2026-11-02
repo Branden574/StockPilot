@@ -116,6 +116,34 @@ export function subscribeTourVisibility(fn: () => void): () => void {
 }
 
 /* ------------------------------------------------------------------ */
+/* The phone update pop-up (ota-update-prompt.ts) is a full member of   */
+/* this lock under UPDATE_PROMPT_LOCK_ID. It holds the slot while it is */
+/* open and while the app restarts, so What's New (isAnyTourVisible)    */
+/* and a tour's Modal (useTourVisible) wait for it, and it waits for    */
+/* any other holder before it shows (isAnyTourVisibleExcept).           */
+/* ------------------------------------------------------------------ */
+
+export { UPDATE_PROMPT_LOCK_ID } from './ota-update-prompt';
+
+/** True while any holder but `id` is in the lock (a tour's offer or run). */
+export function isAnyTourVisibleExcept(id: string): boolean {
+  for (const held of visibleTours) if (held !== id) return true;
+  return false;
+}
+
+/** Reactive isAnyTourVisibleExcept. */
+export function useAnyTourVisibleExcept(id: string): boolean {
+  const read = React.useCallback(() => isAnyTourVisibleExcept(id), [id]);
+  return React.useSyncExternalStore(subscribeTourVisibility, read);
+}
+
+/** Reactive: true while `id` holds a place in the lock. */
+export function useTourVisible(id: string): boolean {
+  const read = React.useCallback(() => visibleTours.has(id), [id]);
+  return React.useSyncExternalStore(subscribeTourVisibility, read);
+}
+
+/* ------------------------------------------------------------------ */
 /* What's New ↔ tour MUTUAL LOCK. isAnyTourVisible (above) lets What's  */
 /* New defer to a tour; this lets a tour defer to What's New — so       */
 /* whichever presents first holds the one interruption slot and the     */

@@ -108,6 +108,13 @@ PGTAP_TESTS=(
   supabase/tests/0218_lock_org_billing_columns.test.sql
   supabase/tests/0219_org_module_minplan_rls.test.sql
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
+  # Only a platform admin creates a workspace (S20): no signed-in or anonymous
+  # caller inserts an organization (RLS on, no INSERT policy since 0138), and
+  # nothing in the database creates one either: no function, whoever may run
+  # it (an INSERT or MERGE into the table, or dynamic SQL that names it), no
+  # trigger, and no view or rewrite rule a caller of the Data API can write
+  # through.
+  supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql
   supabase/tests/0282_cycle_count_assignment_lock.test.sql
@@ -765,6 +772,27 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
+  # Kit checks (0415, written as 0404; docket S4 with S9's component
+  # organization check):
+  # assemble_bundle and distribute_bundle build no kit from a bundle with no
+  # required component and refuse a component of another organization, whoever
+  # can see it; a distribution's event must be the kit organization's (its one
+  # distribution slot cannot be taken from outside); distribute_bundle refuses
+  # a direct call without bundles:distribute unless it is the Schedule's
+  # completion of a completed event naming that kit, quantity and warehouse;
+  # bundle_components_write needs the item in the bundle's organization and
+  # bundles:manage and refuses the bundle's own kit item; the bundle write
+  # policies follow bundles:manage; bundle_distributions takes no raw API write
+  # (ledger-only guard). Review fixes: both bodies refuse a component that is
+  # the kit's own item (no kit made from nothing through the stale kit-item
+  # copy) and a kit item that is not the kit's own (another organization's,
+  # not a kit item, or named by a second bundle); the bundles guard stops a
+  # raw API write of phantom_item_id and a move to another organization. Each
+  # fix is removed in an undone subtransaction to show its probe pass again,
+  # and the migration's own preflight is replayed from the recorded statements.
+  # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
+  # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
+  supabase/tests/0415_bundle_component_checks.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -966,6 +994,21 @@ WEB_TESTS=(
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
 
+  # Only a platform admin creates a workspace (S20, owner decision b.9):
+  # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
+  # before it reads its input, the real check against every caller type (each
+  # role, no membership, a portal user, a rewritten profile email, a failed
+  # verified-email lookup, a stale step-up); and every insert into
+  # organizations and every owner seat in apps/web/src runs after that check
+  # or is a reviewed entry whose callers do. A team invite never creates the
+  # account of an allowlisted address (the token is handed to the inviter, so
+  # it is not proof of the mailbox), and its refusal is the existing-account
+  # answer word for word. All three files carry the "Security invariant"
+  # marker.
+  src/server/actions/organization.create-gate.test.ts
+  src/server/organization-create-sites.guard.test.ts
+  src/server/actions/team.invite-signup-platform-admin.test.ts
+
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
   src/lib/safe-return-path.test.ts
@@ -1030,6 +1073,28 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S34: a member's session never leaves with an analytics request. PostHog's
+  # SDK sends to /ingest on our own origin, so the browser attaches every
+  # cookie of this host. app/ingest/[...path]/route.ts builds each request to
+  # PostHog from a list of headers: never a cookie, Authorization only as the
+  # app's own PostHog project key (Bearer <key>), no Set-Cookie back. It
+  # passes on only the requests posthog-js makes with the app's init options,
+  # each by the method the SDK uses (404 for any other path, 405 for another
+  # method; OPTIONS, PUT, PATCH and DELETE are answered by the route, not by
+  # Next), the remote config only for the app's own project key and with no
+  # query (another project's config.js would run that project's code as
+  # ours), a query token= or api_key= only when it is that key, PostHog's
+  # content type only when it is JSON, a script or text, every answer
+  # nosniff, and no body over the platform's request body limit (413); each
+  # refusal is logged with its path only. The census test fails when an
+  # installed posthog-js names a path or ships a bundle the list has not been
+  # checked against, and checks each request by every method. The guard
+  # fails if a /ingest rewrite (which forwards the browser's headers as they
+  # came) or a proxy matcher for /ingest comes back; it carries the
+  # "Security invariant" marker.
+  src/test/ingest-proxy.guard.test.ts
+  'src/app/ingest/[...path]/route.test.ts'
+  'src/app/ingest/[...path]/route.census.test.ts'
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1303,6 +1368,16 @@ WEB_TESTS=(
   src/server/services/db-guard-refusal.wiring.test.ts
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
+  # 0415: the kit refusals (no required component, another organization's
+  # item or event, a missing bundles:distribute, a component that is the kit's
+  # own item, a kit item that is not the kit's own) reach the Bundles page, the
+  # phone and the Schedule's completion as sentences; a component set with no
+  # required component is refused when it is saved, before anything is
+  # written; the Schedule hands out only the kit the event was saved with.
+  src/server/services/bundles.rpc-refusals.test.ts
+  src/server/services/bundles.save.test.ts
+  src/server/services/schedule.batching.test.ts
+  src/server/actions/bundles.test.ts
   # 0395 review: an approver's cancel asks write access to the order's
   # warehouse, as every other approver action does, and every refusal outside
   # the caller's warehouses (and a failed read of their own access) reads one

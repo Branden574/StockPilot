@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,6 +12,7 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import { SheetChip } from '@/components/move-stock-modal';
 // The write-off's crate verdict shares the move sheet's module deliberately:

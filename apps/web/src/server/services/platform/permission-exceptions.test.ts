@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
+
 /**
  * PermissionExceptionsService: StockPilot support's one write path for a
  * platform-managed permission (orders:manage_catalog_visibility, migration
@@ -247,6 +249,12 @@ describe('PermissionExceptionsService.set: the write', () => {
 });
 
 describe('PermissionExceptionsService.listForMembers', () => {
+  // The organization row decides the all-modules comp, and it is required
+  // (docket S27): every read below answers one unless a test says otherwise.
+  beforeEach(() => {
+    reads.organizations = { data: { all_modules_comp: false }, error: null };
+  });
+
   it('reads one page of members in one round and fills every member, row or not', async () => {
     reads.user_permission_overrides = {
       data: [
@@ -341,4 +349,53 @@ describe('PermissionExceptionsService.listForMembers', () => {
       await expect(PermissionExceptionsService.listForMembers(ORG, [TARGET])).rejects.toThrow(/timeout/);
     },
   );
+
+  /**
+   * docket S27: an answer with no error that is not a list (postgrest-js
+   * resolves an empty body with data null) was read as "no rows": every member
+   * showed Role default, the orders:request overrides vanished and the Orders
+   * module could read as off. It is a failed read like the ones above, and so
+   * is a missing organization row (an empty body for it reads the same as no
+   * row), which decided the all-modules comp.
+   */
+  describe('an answer that is not a list is a failed read', () => {
+    beforeEach(() => {
+      reads.user_permission_overrides = {
+        data: [{ user_id: TARGET, permission: KEY, granted: false }],
+        error: null,
+      };
+      reads.role_permission_overrides = { data: [], error: null };
+      reads.organization_modules = { data: [{ module_id: 'orders' }], error: null };
+      reads.organizations = { data: { all_modules_comp: false }, error: null };
+    });
+
+    it('with every read answered, the deny shows (unchanged); an empty body showed Role default', async () => {
+      const res = await PermissionExceptionsService.listForMembers(ORG, [TARGET]);
+      expect(res.members[TARGET]).toEqual({ exception: 'deny', ordersRequestOverride: null });
+      reads.user_permission_overrides = { data: null, error: null };
+      await expect(PermissionExceptionsService.listForMembers(ORG, [TARGET])).rejects.toThrow(
+        'listForMembers: user_permission_overrides answered no list (status none)',
+      );
+    });
+
+    it.each(
+      NOT_A_LIST.flatMap(([shape, answer]) =>
+        ['user_permission_overrides', 'role_permission_overrides', 'organization_modules'].map(
+          (table) => [table, shape, answer] as const,
+        ),
+      ),
+    )('%s: %s throws, naming the table and the status', async (table, _shape, answer) => {
+      reads[table] = answer as unknown as Read;
+      await expect(PermissionExceptionsService.listForMembers(ORG, [TARGET])).rejects.toThrow(
+        `listForMembers: ${table} answered no list (status ${answer.status})`,
+      );
+    });
+
+    it('a missing organization row throws (an empty body reads the same as none)', async () => {
+      reads.organizations = { data: null, error: null };
+      await expect(PermissionExceptionsService.listForMembers(ORG, [TARGET])).rejects.toThrow(
+        'listForMembers: organizations answered no row',
+      );
+    });
+  });
 });

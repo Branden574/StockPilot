@@ -158,6 +158,7 @@ import {
   uploadMaintenancePhoto,
 } from '@/lib/maintenance-upload';
 import { FONT } from '@/lib/theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -468,6 +469,13 @@ export default function MaintenanceRequestDetailScreen() {
   const [notesError, setNotesError] = React.useState<string | null>(null);
   const [noteBody, setNoteBody] = React.useState('');
   const [notePending, setNotePending] = React.useState(false);
+
+  // A typed note or a close-out not yet sent: the phone update pop-up waits
+  // (B44), so Restart now is never one tap away from losing it.
+  useHoldUpdatePrompt(
+    noteBody.trim() !== '' || resolveNote.trim() !== '' || resolvePhotos.length > 0,
+    'maintenance-draft',
+  );
 
   React.useEffect(() => {
     if (!enabled || !id) {
@@ -1189,13 +1197,17 @@ export default function MaintenanceRequestDetailScreen() {
                   icon={Camera}
                   label="CAMERA"
                   accessibilityLabel="Camera, take a photo for this request"
-                  onPress={() => void pickFromCamera().then(addRequestPhotos)}
+                  onPress={() =>
+                    void whileUpdatePromptHeld(() => pickFromCamera().then(addRequestPhotos))
+                  }
                 />
                 <PhotoSourceButton
                   icon={ImageIcon}
                   label="LIBRARY"
                   accessibilityLabel="Library, choose a photo from your library for this request"
-                  onPress={() => void pickFromLibrary().then(addRequestPhotos)}
+                  onPress={() =>
+                    void whileUpdatePromptHeld(() => pickFromLibrary().then(addRequestPhotos))
+                  }
                 />
               </View>
             </>
@@ -1480,13 +1492,17 @@ export default function MaintenanceRequestDetailScreen() {
                         icon={Camera}
                         label="CAMERA"
                         accessibilityLabel="Camera, take a proof photo"
-                        onPress={() => void pickFromCamera().then(addResolvePhotos)}
+                        onPress={() =>
+                          void whileUpdatePromptHeld(() => pickFromCamera().then(addResolvePhotos))
+                        }
                       />
                       <PhotoSourceButton
                         icon={ImageIcon}
                         label="LIBRARY"
                         accessibilityLabel="Library, choose a proof photo from your library"
-                        onPress={() => void pickFromLibrary().then(addResolvePhotos)}
+                        onPress={() =>
+                          void whileUpdatePromptHeld(() => pickFromLibrary().then(addResolvePhotos))
+                        }
                       />
                     </View>
 

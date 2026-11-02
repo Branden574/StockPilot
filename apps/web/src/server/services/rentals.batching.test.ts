@@ -158,12 +158,15 @@ describe('resolveMaintenanceAudience preference read', () => {
       'organization_members.select': { data: members, error: null },
       'role_permission_overrides.select': { data: [], error: null },
       'user_permission_overrides.select': { data: [], error: null },
+      // A list read (docket S27): the module's one settings row.
       'organization_modules.select': {
-        data: {
-          settings: {
-            notifyAudience: Object.fromEntries(members.map((m) => [m.user_id, 'all'])),
+        data: [
+          {
+            settings: {
+              notifyAudience: Object.fromEntries(members.map((m) => [m.user_id, 'all'])),
+            },
           },
-        },
+        ],
         error: null,
       },
       'notification_preferences.select': (call) => {

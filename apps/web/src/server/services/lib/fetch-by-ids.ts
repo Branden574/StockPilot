@@ -58,19 +58,20 @@ export type BatchOpts = {
  * Throws the `ServiceError('internal_error')` from `fetchAllRows` unchanged on
  * the first failed page: its public message is generic and the raw PostgREST
  * text is in `.internalDetail`. A caller whose read feeds a decision lets it
- * propagate; a cosmetic read catches it and reports it.
+ * propagate; a cosmetic read catches it and reports it. `requireList` goes to
+ * every batch's `fetchAllRows`: a page that is not a list is a failed page.
  */
 export async function fetchAllRowsByIds<Row, V extends string | number = string>(
   values: readonly (V | null | undefined)[],
   buildPage: (batch: V[]) => (from: number, to: number) => PromiseLike<PageResult<Row>>,
-  opts: BatchOpts = {},
+  opts: BatchOpts & { requireList?: string } = {},
 ): Promise<Row[]> {
   const batches = chunkInFilterValues(values, opts);
   if (batches.length === 0) return [];
   const perBatch = await mapWithConcurrency(
     batches,
     opts.concurrency ?? IN_FILTER_DEFAULT_CONCURRENCY,
-    (batch) => fetchAllRows<Row>(buildPage(batch)),
+    (batch) => fetchAllRows<Row>(buildPage(batch), { requireList: opts.requireList }),
   );
   const rows: Row[] = [];
   for (const batchRows of perBatch) for (const row of batchRows) rows.push(row);
