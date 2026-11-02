@@ -66,6 +66,8 @@ export * from './cycle-counts/capture-label';
 export * from './cycle-counts/start-summary';
 export * from './cycle-counts/close-gate';
 export * from './cycle-counts/count-text';
+export * from './labels/record-status-suffix';
+export * from './purchasing/bill-to-charter';
 export * from './pagination/list-page';
 export * from './orders/pick-shortfall';
 export * from './orders/cart-totals';
