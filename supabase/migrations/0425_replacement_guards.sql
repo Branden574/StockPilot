@@ -9,13 +9,13 @@
 -- file adds to a restated body ends in `-- S7`; every other line is the
 -- latest body's, byte for byte (the pgTAP file proves it by stripping the
 -- tagged lines and comparing md5, R1). The lines guard is rewritten and
--- pinned by its full md5 (R2).
+-- pinned by its full md5 (R2), and so is the new parent read it asks.
 --
--- No row is written. Every statement below creates one function (the gate
--- helper), replaces six function bodies and two trigger function bodies,
--- restates their comments and revokes, and replaces two trigger definitions
--- with CREATE OR REPLACE TRIGGER (never DROP: neither trigger is ever
--- absent).
+-- No row is written. Every statement below creates two functions (the gate
+-- helper and the lines guard's parent read), replaces six function bodies
+-- and two trigger function bodies, restates their comments, revokes and one
+-- grant, and replaces two trigger definitions with CREATE OR REPLACE TRIGGER
+-- (never DROP: neither trigger is ever absent).
 --
 -- ── WHAT IT CHANGES ────────────────────────────────────────────────────────
 --   1. A replacement's lines, for every role (review V7). The 0396 guard
@@ -31,23 +31,47 @@
 --      name, same sort position) and the guard asks, in order:
 --        a. an UPDATE that changes only the workflow columns (quantity_picked,
 --           picked_at, picked_by, quantity_packed, packed_at, packed_by,
---           quantity_fulfilled, returned_quantity) and keeps their four value
+--           quantity_fulfilled, returned_quantity) and keeps their six value
 --           rules (quantity_fulfilled and returned_quantity never go down;
 --           quantity_fulfilled <= quantity_requested; returned_quantity <=
---           quantity_fulfilled) passes at once: every role, every order, no
---           lookup. It compares to_jsonb(new) minus that list with
---           to_jsonb(old) minus it, so a column added later is guarded;
---        b. the RMA flag (item 4) passes, for a writer that is not an API
---           role;
---        c. a line of an ordinary order (an insert's order, or both orders of
---           an update) passes, as before;
---        d. a non-API INSERT while the replacement is still pending_approval
---           passes: only _return_replacement_issue does that, as postgres, in
---           the transaction that creates and approves the replacement;
---        e. anything else: 42501 replacement_lines_fixed.
+--           quantity_fulfilled; quantity_picked <= quantity_requested;
+--           quantity_packed <= quantity_picked), with nothing picked or
+--           packed going down, passes at once: every role, every order, no
+--           lookup. The one exception to "never down" is the hand-over, which
+--           moves what was picked into what was handed over: both signatures
+--           write quantity_fulfilled + quantity_picked and then
+--           quantity_picked null (confirm_order_signature 0248:69-72,
+--           confirm_physical_signature 0395:478-481). It compares
+--           to_jsonb(new) minus that list with to_jsonb(old) minus it, so a
+--           column added later is guarded;
+--        b. the RMA flag (item 4) passes, for postgres or the superuser
+--           only;
+--        c. the line's order (an insert's, or both of an update's) is read
+--           through _replacement_line_parents, SECURITY DEFINER, only in the
+--           row's own organization (the line's current order on an update,
+--           the order an insert names) and, for any writer but postgres,
+--           supabase_admin and service_role, only in an organization the
+--           writer is a member of; it fails closed: an order not found there
+--           (none, or another organization's) is 42501
+--           replacement_lines_fixed, whatever that order is. Until this
+--           round the guard read it under the writer's RLS, so an order the
+--           writer could not read counted as ordinary. A line of an ordinary
+--           order passes, as before (its item is not asked: a line whose
+--           item is another organization's is the insert policy's to refuse,
+--           and the 0377 to 0379 suites keep such rows as defence in depth);
+--        d. an INSERT by postgres or the superuser while the replacement is
+--           still pending_approval passes: only _return_replacement_issue
+--           does that, as postgres, in the transaction that creates and
+--           approves the replacement;
+--        e. an update of (a)'s columns within its value rules that lowers
+--           what was picked or packed passes while the replacement is
+--           picking_in_progress: reopen_picking rewinds a picked order there
+--           keeping quantity_picked (0416:637-642), and the re-pick
+--           (partial_pick_line, complete_picking) may lower it;
+--        f. anything else: 42501 replacement_lines_fixed.
 --      Every function that writes order_request_lines (12, pgTAP V7-9's
---      census) writes a replacement's lines only through (a), (b) or (d). No
---      DELETE arm: return_exchange_lines' foreign key already refuses
+--      census) writes a replacement's lines only through (a), (b), (d) or
+--      (e). No DELETE arm: return_exchange_lines' foreign key already refuses
 --      deleting a line it names, for every role.
 --   2. The replacement's warehouse (review V-1). Cancel replacement, Release
 --      early, Change replacement and the RMA cancel gated on the ORIGINAL
@@ -83,13 +107,17 @@
 --      now write its lines. Exactly three INVOKER helpers with no EXECUTE set
 --      it (_return_replacement_cancel_order, _return_replacement_close_partial
 --      and the cancel hook), always inside a SECURITY DEFINER RMA function,
---      so always as postgres. The flag now counts only for a writer that is
---      not an API role (current_user not anon, authenticated or
---      service_role): an API session that set it itself is refused like
---      anyone else. The header guard (0396:2478) and the lines guard ask
---      that. The status gate (tg_order_requests_replacement_status,
---      0396:2442) is SECURITY DEFINER, where current_user is always
---      postgres, so it cannot ask; instead the header trigger's WHEN now also
+--      so always as postgres. The flag now counts only when current_user is
+--      postgres (the RMA functions' owner) or supabase_admin (the
+--      superuser): an allowlist, as 0413's guards keep, never a list of the
+--      roles to refuse. Any other writer that set it is refused like anyone
+--      else: an API role (anon, authenticated, service_role), the API's own
+--      login role (authenticator) and any role added later. Both guards that
+--      ask are SECURITY INVOKER, where current_user is the writer: the header
+--      guard (0396:2478) and the lines guard. The status gate
+--      (tg_order_requests_replacement_status, 0396:2442) is SECURITY
+--      DEFINER, where current_user is always postgres, so a role test there
+--      would refuse no one; instead the header trigger's WHEN now also
 --      covers a move into cancelled or denied, and the INVOKER header guard,
 --      which sorts before the gate ("header" before "status"), asks first
 --      and refuses with the gate's own error and detail. The gate's body is
@@ -103,16 +131,22 @@
 --   * The helper's first read takes no lock (time of check against time of
 --     use); the call under the replacement's lock keeps it fail closed, and
 --     the header guard pins the replacement's warehouse.
+--   * The lines guard reads the line's order with no lock, as it did before
+--     (a lock there would wait behind the order functions, which lock the
+--     order and then write its lines). A writer racing a status change can
+--     therefore be judged on the status just before it: only the
+--     pending_approval and picking_in_progress exemptions read the status.
 --   * No role tells a flag an RMA function raised from one an API session
 --     raised before calling a SECURITY DEFINER function: inside that function
 --     both run as postgres. There the flag rests on no API role being able to
 --     set it: the Data API runs one statement per request and exposes no
 --     set_config, and no exposed function sets it from caller input.
 --   * A data fix that touches a replacement's header, status or lines runs as
---     the owner and raises the flag inside its own transaction first:
+--     postgres (SET ROLE postgres first when the session logs in as another
+--     role) and raises the flag inside its own transaction first:
 --       select set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
---     The header guard has asked for that since 0396; the lines guard now
---     does too.
+--     The header guard has asked for the flag since 0396; the lines guard
+--     now does too, and both ask the role.
 --
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- The functions (all plpgsql, none declaring a table's row type), their
@@ -135,15 +169,18 @@
 -- (scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh).
 --
 -- Cost: the lines guard now runs on every UPDATE of an order line (two
--- to_jsonb calls), and a non-workflow update or an insert reads its order by
--- primary key, ordinary orders included.
+-- to_jsonb calls), and an insert, a non-workflow update or one that lowers
+-- what was picked reads the line's order by primary key, twice, and for an
+-- API writer its membership (through _replacement_line_parents), ordinary
+-- orders included.
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- 42501 warehouse_write and 42501 replacement_lines_fixed (both mapped,
 -- packages/core/src/returns/return-error-map.ts), 42501
--- replacement_cancel_via_return as before, and 55P03 from the prelude. No
--- function here raises the two retryable classes PostgREST would re-run
--- forever (0367).
+-- replacement_cancel_via_return as before, and 55P03 from the prelude.
+-- _replacement_line_parents called other than from a trigger (an API RPC)
+-- answers 42501 trigger_only and nothing else. No function here raises the
+-- two retryable classes PostgREST would re-run forever (0367).
 
 set lock_timeout = '900ms';
 
@@ -225,10 +262,14 @@ begin
     v_bad := v_bad || ' trg_order_requests_zz_replacement_header is not 0396''s;';
   end if;
 
-  -- Already applied (or half applied by hand): the helper's name must be free.
+  -- Already applied (or half applied by hand): both new names must be free.
   if exists (select 1 from pg_proc p
               where p.pronamespace = 'public'::regnamespace and p.proname = '_return_replacement_warehouse_gate') then
     v_bad := v_bad || ' _return_replacement_warehouse_gate already exists;';
+  end if;
+  if exists (select 1 from pg_proc p
+              where p.pronamespace = 'public'::regnamespace and p.proname = '_replacement_line_parents') then
+    v_bad := v_bad || ' _replacement_line_parents already exists;';
   end if;
 
   if v_bad <> '' then
@@ -260,6 +301,55 @@ begin
   if v_wh is not null and not public.user_can_access_inventory(p_user, v_wh, null, 'write') then
     raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
   end if;
+end;
+$$;
+
+-- ── 1a'. The lines guard's parent read (V7; decisions round R1) ──────────
+-- The lines guard is SECURITY INVOKER, so that current_user is the writer
+-- (the role test, item 4), and so its own reads run under the writer's RLS.
+-- It reads the line's order here instead: SECURITY DEFINER, so what the
+-- writer may read does not decide. It answers only for the row's own
+-- organization: that of p_order_ids[1], the line's current order on an
+-- update and the order an insert names; every other order named (a move's
+-- new order) must be in it. For a writer the guard scopes (p_scoped: any
+-- role but postgres, supabase_admin and service_role, the roles that read
+-- every order anyway), only when that organization is one the writer is a
+-- member of (is_org_member, as the insert policy's orders:approve and
+-- requester terms need), so another organization's order is never answered
+-- and its class cannot be learned from the refusal. An order not found is
+-- left to the guard, which refuses the line (fail closed). o_found is how
+-- many of p_order_ids were found, o_replacement whether any is a
+-- replacement, o_status the order's status when exactly one was found. No
+-- lock (see WHAT STAYS). Every writer of order_request_lines calls it
+-- through the guard, so the two API roles that write lines hold EXECUTE
+-- (authenticated through create_order_request and the insert policy,
+-- service_role through the admin client); called other than from a trigger
+-- it answers 42501 trigger_only and nothing else, so an RPC learns nothing
+-- and cannot pass p_scoped false.
+create function public._replacement_line_parents(p_order_ids uuid[], p_scoped boolean,
+                                                 out o_found integer, out o_replacement boolean, out o_status text)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_org uuid;
+begin
+  if pg_trigger_depth() < 1 then
+    raise exception 'trigger_only' using errcode = '42501', hint = 'trigger_only';
+  end if;
+  select o.organization_id into v_org from public.order_requests o where o.id = p_order_ids[1];
+  if p_scoped and not coalesce(public.is_org_member(v_org), false) then
+    v_org := null;
+  end if;
+  select count(*)::integer,
+         coalesce(bool_or(o.replacement_for_return_id is not null), false),
+         case when count(*) = 1 then min(o.status) end
+    into o_found, o_replacement, o_status
+    from public.order_requests o
+   where o.id = any (p_order_ids)
+     and o.organization_id = v_org;
 end;
 $$;
 
@@ -1047,7 +1137,7 @@ $$;
 
 -- ── 1c. The guards ────────────────────────────────────────────────────────
 -- The lines guard, rewritten (item 1). Its trigger is replaced in section 3.
--- tg_order_request_lines_replacement_guard: rewritten (was 0396_returns_exchange_staff.sql:2378); md5(prosrc) 63027b8532d411eb1b4f03cc2d1fde9d -> 126e56113d8878330e48ded218cdab3f.
+-- tg_order_request_lines_replacement_guard: rewritten (was 0396_returns_exchange_staff.sql:2378); md5(prosrc) 63027b8532d411eb1b4f03cc2d1fde9d -> cb62201f9028436e5e54fe43252fa82f.
 create or replace function public.tg_order_request_lines_replacement_guard()
 returns trigger
 language plpgsql
@@ -1059,44 +1149,77 @@ declare
   -- budget. The order functions write nothing else on a replacement's line.
   c_flow   constant text[] := array['quantity_picked', 'picked_at', 'picked_by', 'quantity_packed',
                                     'packed_at', 'packed_by', 'quantity_fulfilled', 'returned_quantity'];
+  -- The roles RMA definer code runs as: postgres, its owner, and the
+  -- superuser. An allowlist, as 0413's: no other role, an API role least of
+  -- all, is ever one of them.
+  v_owner  constant boolean := current_user in ('postgres', 'supabase_admin');
+  -- The roles that read every order anyway hear about any order; every
+  -- other writer only about its own organization's (the parent read).
+  v_scoped constant boolean := current_user not in ('postgres', 'supabase_admin', 'service_role');
+  v_rules  boolean := false;
+  v_kept   boolean := false;
+  v_ids    uuid[];
+  v_found  integer;
   v_repl   boolean;
   v_status text;
 begin
-  -- 1. An update of the workflow columns only, within their four rules (what
+  -- 1. An update of the workflow columns only, within their six rules (what
   -- was handed over and what came back never go down; handed over stays
-  -- within the quantity requested, came back within handed over): every role,
-  -- every order, no lookup. A column added later is not a workflow column.
-  if tg_op = 'UPDATE'
-     and (to_jsonb(new) - c_flow) = (to_jsonb(old) - c_flow)
-     and new.quantity_fulfilled >= old.quantity_fulfilled
-     and new.quantity_fulfilled <= new.quantity_requested
-     and new.returned_quantity >= old.returned_quantity
-     and new.returned_quantity <= new.quantity_fulfilled then
+  -- within the quantity requested, came back within handed over; picked
+  -- stays within the quantity requested, packed within picked), with
+  -- nothing picked or packed going down: every role, every order, no
+  -- lookup. The hand-over is the one way down: it moves what was picked
+  -- into what was handed over (quantity_fulfilled + quantity_picked, then
+  -- quantity_picked null, as both signatures write it). A column added later
+  -- is not a workflow column.
+  if tg_op = 'UPDATE' and (to_jsonb(new) - c_flow) = (to_jsonb(old) - c_flow) then
+    v_rules := new.quantity_fulfilled >= old.quantity_fulfilled
+           and new.quantity_fulfilled <= new.quantity_requested
+           and new.returned_quantity >= old.returned_quantity
+           and new.returned_quantity <= new.quantity_fulfilled
+           and coalesce(new.quantity_picked, 0) <= new.quantity_requested
+           and coalesce(new.quantity_packed, 0) <= coalesce(new.quantity_picked, 0);
+    v_kept := coalesce(new.quantity_packed, 0) >= coalesce(old.quantity_packed, 0)
+          and (coalesce(new.quantity_picked, 0) >= coalesce(old.quantity_picked, 0)
+               or (new.quantity_picked is null
+                   and new.quantity_fulfilled = old.quantity_fulfilled + coalesce(old.quantity_picked, 0)));
+    if v_rules and v_kept then
+      return new;
+    end if;
+  end if;
+  -- 2. Under the RMA flag (this transaction's id), for postgres or the
+  -- superuser only: the header guard's rule, the one path for a data fix.
+  if v_owner and coalesce(current_setting('stockpilot.return_exchange', true), '') = pg_current_xact_id()::text then
     return new;
   end if;
-  -- 2. Under the RMA flag (this transaction's id), for a writer that is not
-  -- an API role: the header guard's rule, the one path for a data fix.
-  if coalesce(current_setting('stockpilot.return_exchange', true), '') = pg_current_xact_id()::text
-     and current_user not in ('authenticated', 'anon', 'service_role') then
-    return new;
+  -- 3. The order (an insert) or both orders (an update; the line's current
+  -- order first), read as their owner in the row's own organization, and
+  -- fail closed: every one must be found there before the line counts as an
+  -- ordinary order's, which passes as before, value rules included.
+  v_ids := array[new.order_request_id];
+  if tg_op = 'UPDATE' then
+    if old.order_request_id is distinct from new.order_request_id then
+      v_ids := array[old.order_request_id, new.order_request_id];
+    end if;
   end if;
-  -- 3. The order (an insert) or both orders (an update), by key: a line of
-  -- an ordinary order passes as before, value rules included.
-  if tg_op = 'INSERT' then
-    select o.replacement_for_return_id is not null, o.status into v_repl, v_status
-      from public.order_requests o where o.id = new.order_request_id;
-  else
-    select bool_or(o.replacement_for_return_id is not null) into v_repl
-      from public.order_requests o where o.id in (old.order_request_id, new.order_request_id);
+  select p.o_found, p.o_replacement, p.o_status into v_found, v_repl, v_status
+    from public._replacement_line_parents(v_ids, v_scoped) p;
+  if coalesce(v_found, 0) < cardinality(v_ids) then
+    raise exception 'replacement_lines_fixed' using errcode = '42501', hint = 'replacement_lines_fixed';
   end if;
-  if not coalesce(v_repl, false) then
+  if not v_repl then
     return new;
   end if;
   -- 4. The replacement's own lines: _return_replacement_issue inserts them as
   -- postgres while the new order is still pending approval, in the
   -- transaction that approves it.
-  if tg_op = 'INSERT' and v_status = 'pending_approval'
-     and current_user not in ('authenticated', 'anon', 'service_role') then
+  if tg_op = 'INSERT' and v_status = 'pending_approval' and v_owner then
+    return new;
+  end if;
+  -- 5. Picking again: reopen_picking rewinds a picked replacement to
+  -- picking_in_progress keeping what was picked, and the re-pick may lower
+  -- it (partial_pick_line, complete_picking), within the value rules.
+  if v_rules and v_status = 'picking_in_progress' then
     return new;
   end if;
   raise exception 'replacement_lines_fixed' using errcode = '42501', hint = 'replacement_lines_fixed';
@@ -1105,7 +1228,7 @@ $$;
 
 -- The header guard: 0396's body with the role term on the flag (item 4).
 -- Its trigger's WHEN gains the status gate's flagged edge in section 3.
--- tg_order_requests_replacement_header: restated from 0396_returns_exchange_staff.sql:2469; md5(prosrc) b7220c36c4f78792f698adfbd8da79ea -> 437f91dc9d1037c01233c62a79885689.
+-- tg_order_requests_replacement_header: restated from 0396_returns_exchange_staff.sql:2469; md5(prosrc) b7220c36c4f78792f698adfbd8da79ea -> 558b94ffe1cfd0f6278f2c9117ba9e91.
 create or replace function public.tg_order_requests_replacement_header()
 returns trigger
 language plpgsql
@@ -1115,11 +1238,11 @@ as $$
 declare
   v_no text;
 begin
-  -- S7: the flag counts only for a writer that is not an API role. An RMA
-  -- function raises it as postgres (SECURITY DEFINER); anon, authenticated
-  -- or the service role setting it themselves are refused like anyone else.
+  -- S7: the flag counts only for postgres, as which an RMA function raises
+  -- it (SECURITY DEFINER), or the superuser: an allowlist. Any other writer
+  -- that set it, an API role above all, is refused like anyone else.
   if coalesce(current_setting('stockpilot.return_exchange', true), '') = pg_current_xact_id()::text
-     and current_user not in ('authenticated', 'anon', 'service_role') then
+     and current_user in ('postgres', 'supabase_admin') then
     return new;
   end if;
   select r.return_number into v_no from public.returns r where r.id = new.replacement_for_return_id;
@@ -1129,6 +1252,10 @@ end;
 $$;
 
 revoke all on function public._return_replacement_warehouse_gate(uuid, uuid) from public, anon, authenticated, service_role;
+-- The lines guard runs as the writer and calls the parent read, so the two
+-- API roles that write order lines need EXECUTE on it (anon writes none).
+revoke all on function public._replacement_line_parents(uuid[], boolean) from public, anon, authenticated, service_role;
+grant execute on function public._replacement_line_parents(uuid[], boolean) to authenticated, service_role;
 revoke all on function public._return_exchange_on_cancel(uuid, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_request_lines_replacement_guard() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_requests_replacement_header() from public, anon, authenticated, service_role;
@@ -1136,6 +1263,8 @@ revoke all on function public.tg_order_requests_replacement_header() from public
 -- ═══ 2. Comments ═══════════════════════════════════════════════════════════
 comment on function public._return_replacement_warehouse_gate(uuid, uuid) is
   'S7 (review V-1; S4): the replacement''s own warehouse. Reads the RMA''s live replacement (not cancelled or denied) by its link, with no lock, and raises 42501 warehouse_write unless p_user may write its warehouse (user_can_access_inventory, write); with no live replacement it asks nothing. Release early, Cancel replacement, Change replacement, Close the rest and the RMA cancel call it before their first row lock, so a caller who may not act never waits on one; release, cancel and change call it again under the replacement''s row lock, the RMA cancel in its hook. The original''s warehouse is asked as well, so after an original moves the caller needs both warehouses. SECURITY INVOKER (its callers are SECURITY DEFINER), EXECUTE for nobody.';
+comment on function public._replacement_line_parents(uuid[], boolean) is
+  'S7 (review V7; decisions round R1): the parent read of tg_order_request_lines_replacement_guard. Answers only for the row''s own organization, that of p_order_ids[1] (the line''s current order on an update, the order an insert names), and when p_scoped (the guard passes it for any writer but postgres, supabase_admin and service_role) only if the caller is a member of that organization (is_org_member). Counts the orders of p_order_ids found there (o_found), says whether any is a replacement (o_replacement) and, when exactly one was found, its status (o_status). SECURITY DEFINER, so what the line''s writer may read does not decide; an order of another organization, or none, is not found, and the guard then refuses the line (fail closed), so the refusal says nothing about another organization''s order. No lock. Only from inside a trigger (pg_trigger_depth() >= 1); any other call is 42501 trigger_only and answers nothing. EXECUTE to authenticated and service_role only, because the guard runs as the writer and those two API roles write order lines; never anon or PUBLIC.';
 comment on function public.cancel_return_replacement(uuid, integer, text, text) is
   'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. The expected revision is required (22023 return_invalid without it); a stale one gives P0001 return_changed (desk check F7). p_shown_status is the replacement status the caller''s screen showed (review V1): a replacement picked or on its way since then gives P0001 return_changed (the screen reloads into its Staging and driver warnings); null is not checked. The answer carries drawn and inTransit. The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement, the replacement''s own warehouse included (S7). Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.release_return_replacement_early(uuid, uuid, text) is
@@ -1149,11 +1278,11 @@ comment on function public.cancel_return(uuid, integer, text) is
 comment on function public._return_exchange_on_cancel(uuid, uuid, text) is
   'RX-2 hook body (plan 3.3.5, cancel_return row; X-1, X-2): once an exchange was approved, cancelling the RMA needs the orders module (P0001 module_disabled), orders:approve (42501 orders_approve) and a reason (P0001 reason_required); the live replacement is locked FOR UPDATE after the RMA, its own warehouse is asked under that lock (S7, review V-1: 42501 warehouse_write; _return_replacement_warehouse_gate), and it is classified under that lock: picked, being packed, staged or in transit refuses the cancel (review S2: P0001 replacement_in_progress, detail its status; Cancel replacement is the path there); otherwise not handed over is cancelled in this transaction (every hold released, nothing restocked); handed over in full keeps its history and nothing moves (brief 34, D11); handed over in part is closed as delivered-partial when on backorder (close_partial under the exchange flag the header guard asks for) and its remainder cancelled when resumed into picking and not yet picked (desk check F3), so nothing more ships for a cancelled return. Requested lines are cancelled with the RMA. SECURITY INVOKER, no API EXECUTE.';
 comment on function public.tg_order_request_lines_replacement_guard() is
-  'RX-2 (plan 3.6.6), every role since S7 (review V7), BEFORE INSERT OR UPDATE on order_request_lines: a replacement''s lines come from its RMA. An UPDATE that changes only the workflow columns (quantity_picked, picked_at, picked_by, quantity_packed, packed_at, packed_by, quantity_fulfilled, returned_quantity) and keeps their value rules (quantity_fulfilled and returned_quantity never go down, quantity_fulfilled <= quantity_requested, returned_quantity <= quantity_fulfilled) passes for every order with no lookup; so does any write under the transaction-bound stockpilot.return_exchange flag by a writer that is not an API role (anon, authenticated, service_role), the one path for a data fix; a line of an ordinary order passes as before; and a non-API insert while the replacement is still pending_approval passes (only _return_replacement_issue, in the transaction that creates and approves it). Anything else on a replacement''s line, or moving a line into or out of one, is 42501 replacement_lines_fixed. SECURITY INVOKER, no EXECUTE.';
+  'RX-2 (plan 3.6.6), every role since S7 (review V7), BEFORE INSERT OR UPDATE on order_request_lines: a replacement''s lines come from its RMA. An UPDATE that changes only the workflow columns (quantity_picked, picked_at, picked_by, quantity_packed, packed_at, packed_by, quantity_fulfilled, returned_quantity), keeps their value rules (quantity_fulfilled and returned_quantity never go down, quantity_fulfilled <= quantity_requested, returned_quantity <= quantity_fulfilled, quantity_picked <= quantity_requested, quantity_packed <= quantity_picked) and lowers neither quantity_picked nor quantity_packed (except the hand-over, which moves quantity_picked into quantity_fulfilled and leaves quantity_picked null) passes for every order with no lookup. So does any write under the transaction-bound stockpilot.return_exchange flag when current_user is postgres or supabase_admin (an allowlist: an API role, authenticator or any other role that set the flag is refused), the one path for a data fix. Otherwise the line''s order (both orders of an update) is read through _replacement_line_parents (SECURITY DEFINER, only in the row''s own organization, and for any writer but postgres, supabase_admin and service_role only in an organization the writer is a member of) and the guard fails closed: an order not found there is 42501 replacement_lines_fixed. A line of an ordinary order passes as before; an insert by postgres or supabase_admin while the replacement is still pending_approval passes (only _return_replacement_issue, in the transaction that creates and approves it); and an update within the value rules that lowers what was picked or packed passes while the replacement is picking_in_progress (reopen_picking keeps quantity_picked and the re-pick may lower it). Anything else on a replacement''s line, or moving a line into or out of one, is 42501 replacement_lines_fixed. SECURITY INVOKER (current_user is the writer), no EXECUTE.';
 comment on function public.tg_order_requests_replacement_header() is
-  'RX-2 (security review F-1), BEFORE UPDATE on order_requests WHEN a replacement''s warehouse_id, delivery_charter_id or created_at changes, it goes from backordered to completed (close_partial), or since S7 it moves into cancelled or denied (the status gate''s flagged edge, asked here first because the gate is SECURITY DEFINER and cannot ask the role): allowed only under the transaction-bound stockpilot.return_exchange flag an RMA function raises (the RMA cancel closes a part-handed-over backorder that way), and since S7 only for a writer that is not an API role (anon, authenticated or service_role setting the flag themselves are refused); otherwise, for every role, 42501 replacement_cancel_via_return, detail the RMA number. Internal notes, needed-by, the pick slip, picking, staging and the hand-over are not guarded. SECURITY INVOKER, no EXECUTE.';
+  'RX-2 (security review F-1), BEFORE UPDATE on order_requests WHEN a replacement''s warehouse_id, delivery_charter_id or created_at changes, it goes from backordered to completed (close_partial), or since S7 it moves into cancelled or denied (the status gate''s flagged edge, asked here first because the gate is SECURITY DEFINER and cannot ask the role): allowed only under the transaction-bound stockpilot.return_exchange flag an RMA function raises (the RMA cancel closes a part-handed-over backorder that way), and since S7 only when current_user is postgres or supabase_admin (an allowlist: an API role, authenticator or any other role that set the flag itself is refused); otherwise, for every role, 42501 replacement_cancel_via_return, detail the RMA number. Internal notes, needed-by, the pick slip, picking, staging and the hand-over are not guarded. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_requests_replacement_status() is
-  'RX-2 (plan 3.6.5; C-5), the return-first gate and the cancel guard for replacement orders: into pick_slip_generated never while the RMA is cancelled or denied (P0001 replacement_return_cancelled, detail the RMA number; desk check F3), otherwise only when the RMA is received or closed or a released_early decision names this order (P0001 replacement_waiting_for_return, detail the RMA number); into cancelled or denied only under the transaction-bound stockpilot.return_exchange flag (42501 replacement_cancel_via_return). Since S7 the header guard (trg_order_requests_zz_replacement_header, SECURITY INVOKER, sorted before this gate) asks that flagged edge first and also refuses an API role that set the flag itself; this body, which runs as postgres and so cannot ask the role, is unchanged. Reads the RMA and the release by key and takes NO row lock (an RMA cancel holds the RMA and then waits for the order; generatePickSlip holds the order). SECURITY DEFINER (a picker without returns access is judged by the same facts), EXECUTE for nobody.';
+  'RX-2 (plan 3.6.5; C-5), the return-first gate and the cancel guard for replacement orders: into pick_slip_generated never while the RMA is cancelled or denied (P0001 replacement_return_cancelled, detail the RMA number; desk check F3), otherwise only when the RMA is received or closed or a released_early decision names this order (P0001 replacement_waiting_for_return, detail the RMA number); into cancelled or denied only under the transaction-bound stockpilot.return_exchange flag (42501 replacement_cancel_via_return). Since S7 the header guard (trg_order_requests_zz_replacement_header, SECURITY INVOKER, sorted before this gate) asks that flagged edge first and also refuses any writer but postgres or supabase_admin that set the flag itself; this body, which runs as postgres and so cannot ask the role, is unchanged. Reads the RMA and the release by key and takes NO row lock (an RMA cancel holds the RMA and then waits for the order; generatePickSlip holds the order). SECURITY DEFINER (a picker without returns access is judged by the same facts), EXECUTE for nobody.';
 
 -- ═══ 3. The lock prelude and the two triggers (see LOCKS above) ═══════════
 -- Inside DO because the CLI batch is not a transaction block (a top-level LOCK

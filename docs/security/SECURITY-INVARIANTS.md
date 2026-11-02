@@ -956,9 +956,9 @@ actually fire.
     replacement guards (0425, docket S7a) the guard also covers a
     replacement's move into `cancelled` or `denied` (the status gate's
     flagged edge, asked here because the gate is SECURITY DEFINER), and the
-    flag counts only for a writer that is not an API role (`anon`,
-    `authenticated` or `service_role` setting it themselves are refused);
-    see the flag below.
+    flag counts only when `current_user` is `postgres` or `supabase_admin`
+    (an allowlist: an API role, `authenticator` or any role added later that
+    set it itself is refused); see the flag below.
     **The replacement's warehouse** (verification V-1; fixed by 0425). The
     RMA's gates read the ORIGINAL order's warehouse, which this guard does
     not pin: `order_requests_update` lets an `orders:approve` holder who
@@ -1035,18 +1035,29 @@ actually fire.
     `_return_replacement_close_partial` (0397 A1b and 0425 P3 pin the list).
     They always run inside a SECURITY DEFINER RMA function, as `postgres`.
     Since 0425 the two INVOKER guards that read it (the header guard and the
-    lines guard) also ask that the writer is not an API role
-    (`current_user` not `anon`, `authenticated` or `service_role`), so an
-    API session that set the flag itself is refused a direct write; the
-    status gate, which runs as `postgres` and cannot ask,
-    has its flagged edge covered by the header guard (0425 FR1 to FR4 and
-    M1 to M3). Residual: inside a SECURITY DEFINER function every caller is
-    `postgres`, so no role tells a flag the RMA code raised from one an API
-    session raised before calling such a function; there the barrier is
-    still that no API role can set it. Keep it that way: never add an
-    API-callable function that sets this setting, or that takes a setting's
-    name from its input. A data fix on a replacement's header, status or
-    lines runs as the owner and raises the flag inside its own transaction:
+    lines guard) also ask the writer's role, by an allowlist as 0413's
+    guards do: the flag counts only when `current_user` is `postgres` (the
+    RMA functions' owner) or `supabase_admin` (the superuser). An API
+    session that set the flag itself is refused a direct write, and so is
+    any other role, `authenticator` or one added later with the service
+    role's rights included (0425 FR6, M16). The role test sits only in
+    SECURITY INVOKER guards, where `current_user` is the writer: inside a
+    SECURITY DEFINER function it is always the owner, so a role test there
+    would refuse no one. The status gate, which is SECURITY DEFINER and asks
+    no role, has its flagged edge covered by the INVOKER header guard,
+    which fires before it (0425 FR1 to FR4, M1 to M3 and P8). P9 pins the
+    roles that can log in or that the Data API becomes, so a role added or
+    granted fails the suite until the allowlist is reviewed. Never pair the
+    allowlist with the ledger, `order_submit` or `add_lines` flags: their
+    legitimate writers run as `authenticated` (0425 P10). Residual: inside a
+    SECURITY DEFINER function every caller is `postgres`, so no role tells a
+    flag the RMA code raised from one an API session raised before calling
+    such a function; there the barrier is still that no API role can set it.
+    Keep it that way: never add an API-callable function that sets this
+    setting, or that takes a setting's name from its input. A data fix on a
+    replacement's header, status or lines runs as `postgres` (first
+    `SET ROLE postgres` when the session logs in as another role) and
+    raises the flag inside its own transaction:
     `set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true)`.
   - **Fixed lines** (every role since 0425; verification V7).
     `trg_zz_order_request_lines_replacement_guard` fires BEFORE INSERT OR
@@ -1056,19 +1067,46 @@ actually fire.
     to a replacement or change one outside the exchange budget. Now, for
     every role: an UPDATE that changes only the workflow columns
     (`quantity_picked`, `picked_at`, `picked_by`, `quantity_packed`,
-    `packed_at`, `packed_by`, `quantity_fulfilled`, `returned_quantity`) and
+    `packed_at`, `packed_by`, `quantity_fulfilled`, `returned_quantity`),
     keeps their value rules (`quantity_fulfilled` and `returned_quantity`
     never go down, `quantity_fulfilled <= quantity_requested`,
-    `returned_quantity <= quantity_fulfilled`) passes with no lookup, on any
-    order; the flag passes a writer that is not an API role (the one path
-    for a data fix); a line of an ordinary order passes as before; a non-API
-    insert while the replacement is still `pending_approval` passes (only
+    `returned_quantity <= quantity_fulfilled`,
+    `quantity_picked <= quantity_requested`,
+    `quantity_packed <= quantity_picked`) and lowers neither
+    `quantity_picked` nor `quantity_packed` passes with no lookup, on any
+    order. The one way down is the hand-over: both signatures move what was
+    picked into what was handed over
+    (`quantity_fulfilled + quantity_picked`, then `quantity_picked` null),
+    and that exact shape passes. The flag passes `postgres` or `supabase_admin` (the one path for
+    a data fix). Otherwise the guard reads the line's order (both orders of
+    a move) through `_replacement_line_parents`: SECURITY DEFINER, so what
+    the writer may read does not decide. It answers only for the row's own
+    organization (the line's current order on an update, the order an
+    insert names; a move's new order must be in it) and, for any writer but
+    `postgres`, `supabase_admin` and `service_role`, only when the writer is
+    a member of that organization (`is_org_member`). An order not found
+    there (none, or another organization's) is refused, fail closed, with
+    the same refusal whatever that order is, so another organization's
+    replacement cannot be told from its ordinary order (0425 V7-12 to
+    V7-15, M13 to M15 and M18). The line's item is not asked: a line of
+    another organization's item is the insert policy's to refuse, and the
+    0377 to 0379 suites keep such rows as defence in depth. The parent read
+    answers only inside a trigger (`trigger_only` otherwise, P7); EXECUTE
+    is for `authenticated` and `service_role`, which write lines through
+    the guard. A line of an ordinary order passes
+    as before; an insert by `postgres` or `supabase_admin` while the
+    replacement is still `pending_approval` passes (only
     `_return_replacement_issue`, in the transaction that creates and
     approves it). An API role's insert there is refused: the service role
     may insert a replacement order at any status, and the insert policy
-    then lets its requester add a line (0425 FR5 and M6). Anything else on
-    a replacement's line, or moving a line
-    into or out of one, is `replacement_lines_fixed`. The comparison is the
+    then lets its requester add a line (0425 FR5 and M6). While the
+    replacement is `picking_in_progress` an update within the value rules
+    may lower what was picked or packed: `reopen_picking` rewinds there
+    keeping `quantity_picked`, and the re-pick may lower it (0425 V7-10,
+    V7-11, M8 to M12). Anything else on a replacement's line, or moving a
+    line into or out of one, is `replacement_lines_fixed`. The guard reads
+    the order with no lock, as before, so a writer racing a status change
+    can be judged on the status just before it. The comparison is the
     whole row minus the workflow columns, so a column added later is
     guarded. Every function that writes `order_request_lines` is pinned by
     the 0425 suite's census (V7-9, 12 writers): a new writer fails there

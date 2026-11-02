@@ -6,7 +6,9 @@
 -- migration number is fixed at push time: no check here reads it (the restated
 -- lines are tagged "-- S7", never with the file's number).
 --
--- Personas (one organization, two warehouses A and B):
+-- Personas (one organization, two warehouses A and B; a second organization
+-- with one warehouse, an item, an ordinary order and its manager outB, for
+-- the R1 checks):
 --   mgr    manager (every warehouse by role); builds every fixture
 --   req    staff (A), the requester of the originals
 --   stfA   staff assigned to A, granted returns:manage and orders:approve
@@ -17,16 +19,23 @@
 -- F.   The personas' write access is what the matrices assume.
 -- V7.  The lines guard holds for every role (red: the service role and
 --      postgres wrote a replacement's lines). An update of the workflow
---      columns within the four value rules passes with no lookup; anything
---      else on a replacement's line is 42501 replacement_lines_fixed unless
---      the RMA flag holds this transaction's id for a writer that is not an
---      API role, or it is the issue's own insert while the replacement is
---      pending approval. Controls: the issue, picking, the hand-over, Close
---      the rest, a flagged data fix, ordinary orders, the account deletion's
---      SET NULL. The 12 writers of the table and the columns each writes are
---      pinned (a new writer fails here and is reviewed against the guard;
+--      columns within the six value rules, lowering nothing picked or packed
+--      but at the hand-over, passes with no lookup; anything else on a
+--      replacement's line is 42501 replacement_lines_fixed unless the RMA
+--      flag holds this transaction's id for postgres or the superuser, it is
+--      the issue's own insert while the replacement is pending approval, or
+--      a re-pick lowers what was picked while it is picking_in_progress.
+--      Controls: the issue, picking, the hand-over, Close the rest, a
+--      flagged data fix, ordinary orders, the account deletion's SET NULL.
+--      The 12 writers of the table and the columns each writes are pinned (a
+--      new writer fails here and is reviewed against the guard;
 --      deliver_order_request, which the plan's offline count included, was
---      dropped by 0115).
+--      dropped by 0115). Decisions round: V7-10 and V7-11 (R2: picked within
+--      requested, packed within picked, neither lowered outside picking but
+--      by the hand-over; reopen still works), V7-12 to V7-15 (R1: the order
+--      is read as its owner, only in the row's own organization and, for an
+--      API writer, only in one it is a member of; an order not found there
+--      refuses, whatever it is).
 -- FR.  The RMA flag is never enough for an API role (the binding flag-role
 --      rule): anon, authenticated and the service role setting the correct
 --      transaction id are still refused by the lines guard and the header
@@ -40,6 +49,9 @@
 --      lines guard's pending-approval exemption asks the role too (FR5): the
 --      requester, a manager and the service role may not add a line to a
 --      replacement still pending approval; the issue (postgres) still may.
+--      FR6 (R3): the role test is an allowlist (postgres, supabase_admin), so
+--      a role added later with the service role's rights, which the old list
+--      of API roles to refuse did not name, is refused too.
 -- V.   V-1 and S4 / 13.18: after the original moves to warehouse B (by the
 --      superuser, inside the undone attempt, as 0397 B7), staff of B alone
 --      are refused 42501 warehouse_write by the replacement's own warehouse,
@@ -60,15 +72,25 @@
 --      lines guard's flag exemption, the header guard or the lines guard's
 --      pending-approval exemption (M6), the header trigger without its new
 --      edge, each function's first gate out (the second still refuses), and
---      the gate helper without its live filter (M7).
+--      the gate helper without its live filter (M7). Decisions round: each
+--      R2 term out (M8 to M12), the parent read as the writer, without its
+--      fail-closed count or without its organization (M13 to M15), the old
+--      list of roles to refuse back (M16), the parent read callable outside
+--      a trigger (M17), and without its membership scope (M18).
 -- R.   The six restated bodies minus their "-- S7" lines, and the header
 --      guard minus its two S7 blocks, are the bodies before (md5); the new
 --      bodies are pinned.
--- P.   Posture: the new helper is SECURITY INVOKER with search_path pinned
+-- P.   Posture: the gate helper is SECURITY INVOKER with search_path pinned
 --      and EXECUTE for nobody; the five functions keep SECURITY DEFINER, the
 --      5 s lock timeout and EXECUTE for authenticated only; the hook and both
 --      guards stay INVOKER with no EXECUTE; still exactly three functions set
---      the flag; each comment says the rule.
+--      the flag; each comment says the rule. Decisions round: the parent
+--      read is SECURITY DEFINER, EXECUTE for authenticated and service_role,
+--      and answers only inside a trigger (P7); every function that reads the
+--      flag and asks the role is SECURITY INVOKER and asks by the allowlist
+--      (P8, the binding note on the flag); the login and API roles are
+--      pinned (P9, R3); no reader of the ledger, order_submit or add_lines
+--      flag carries the allowlist (P10).
 --
 -- Roles: fixtures as the test superuser; every attempt through the 0397
 -- helpers (attempt / try_rpc undone; rpc / call_as / write_as kept), which
@@ -77,7 +99,7 @@
 
 begin;
 
-select plan(43);
+select plan(61);
 
 \set orgA    '\'04250000-0000-0000-0000-00000000000a\''
 \set own     '\'04250000-0000-0000-0000-0000000000a0\''
@@ -87,6 +109,7 @@ select plan(43);
 \set stfB    '\'04250000-0000-0000-0000-0000000000a4\''
 \set stfAB   '\'04250000-0000-0000-0000-0000000000a5\''
 \set pkr     '\'04250000-0000-0000-0000-0000000000a6\''
+\set outB    '\'04250000-0000-0000-0000-0000000000b1\''
 \set whA     '\'04250000-0000-0000-0000-0000000000d1\''
 \set whB     '\'04250000-0000-0000-0000-0000000000d2\''
 \set r31C    '\'04250000-0000-0000-0000-000000000c31\''
@@ -99,6 +122,7 @@ select plan(43);
 \set pY      '\'04250000-0000-0000-0000-000000000e08\''
 \set pZ      '\'04250000-0000-0000-0000-000000000e09\''
 \set pW      '\'04250000-0000-0000-0000-000000000e0a\''
+\set pX      '\'04250000-0000-0000-0000-000000000e0b\''
 \set bL      '\'04250000-0000-0000-0000-000000000e11\''
 \set oK1     '\'04250000-0000-0000-0000-000000000101\''
 \set oK2     '\'04250000-0000-0000-0000-000000000102\''
@@ -112,7 +136,14 @@ select plan(43);
 \set oK10    '\'04250000-0000-0000-0000-00000000010a\''
 \set oK11    '\'04250000-0000-0000-0000-00000000010b\''
 \set oK12    '\'04250000-0000-0000-0000-00000000010c\''
+\set oK13    '\'04250000-0000-0000-0000-00000000010d\''
 \set oOrd    '\'04250000-0000-0000-0000-000000000120\''
+\set oMiss   '\'04250000-0000-0000-0000-0000000009ff\''
+\set orgB    '\'04250000-0000-0000-0000-00000000000b\''
+\set whC     '\'04250000-0000-0000-0000-0000000000d3\''
+\set rC51    '\'04250000-0000-0000-0000-000000000c51\''
+\set cX      '\'04250000-0000-0000-0000-000000000e21\''
+\set oOrdB   '\'04250000-0000-0000-0000-000000000121\''
 \set oPend   '\'04250000-0000-0000-0000-000000000901\''
 \set lK1     '\'04250000-0000-0000-0000-000000000201\''
 \set lK2     '\'04250000-0000-0000-0000-000000000202\''
@@ -126,6 +157,7 @@ select plan(43);
 \set lK10    '\'04250000-0000-0000-0000-00000000020a\''
 \set lK11    '\'04250000-0000-0000-0000-00000000020b\''
 \set lK12    '\'04250000-0000-0000-0000-00000000020c\''
+\set lK13    '\'04250000-0000-0000-0000-00000000020d\''
 \set lOrd    '\'04250000-0000-0000-0000-000000000220\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -136,7 +168,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:stfA,  '0425-stfa@0425.test',  '{}'::jsonb),
   (:stfB,  '0425-stfb@0425.test',  '{}'::jsonb),
   (:stfAB, '0425-stfab@0425.test', '{}'::jsonb),
-  (:pkr,   '0425-pkr@0425.test',   '{}'::jsonb)
+  (:pkr,   '0425-pkr@0425.test',   '{}'::jsonb),
+  (:outB,  '0425-outb@0425.test',  '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them); returns is
 -- off by default and is turned on here.
@@ -187,6 +220,7 @@ insert into public.inventory_items
   (:pY, :orgA, :whA, '0425-PY', 'Guard Part Y',    1, 7, 'active', 'none', :r12B, null, null, null),
   (:pZ, :orgA, :whA, '0425-PZ', 'Guard Part Z',    1, 7, 'active', 'none', :r12B, null, null, null),
   (:pW, :orgA, :whA, '0425-PW', 'Guard Part W',    1, 7, 'active', 'none', :r12B, null, null, null),
+  (:pX, :orgA, :whA, '0425-PX', 'Guard Part X',   10, 7, 'active', 'none', :r12B, null, null, null),
   (:bL, :orgA, :whB, '0425-BL', 'Guard Shirt B',   5, 7, 'active', 'none', :rB1,  null, null, null);
 -- Handed-over originals and one approved ordinary order, by the superuser
 -- (the insert guard holds API roles only).
@@ -204,6 +238,7 @@ insert into public.order_requests
   (:oK10, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oK11, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oK12, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
+  (:oK13, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oOrd, :orgA, :whA, 'approved',  'internal', :req, 'Req Person', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
   (:lK1,  :oK1,  :gM, 4, 4),
@@ -218,7 +253,25 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   (:lK10, :oK10, :gM, 4, 4),
   (:lK11, :oK11, :gM, 4, 4),
   (:lK12, :oK12, :gM, 4, 4),
+  (:lK13, :oK13, :gM, 4, 4),
   (:lOrd, :oOrd, :gS, 2, 0);
+-- A second organization (R1): one warehouse, an item and an approved
+-- ordinary order with no lines, by the superuser; its manager outB is a
+-- member of it alone.
+insert into public.organizations (id, name, slug) values (:orgB, '0425 Other Workspace', '0425-other-workspace');
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orgB, :outB, 'manager', now());
+insert into public.warehouses (id, organization_id, name, code, status) values
+  (:whC, :orgB, '0425 Other', 'WH-0425C', 'active');
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at) values
+  (:rC51, :orgB, :whC, '51-A', 'shelf', 'rack', now() - interval '57 minutes');
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type,
+   primary_location_id, group_id, variant_size, variant_key) values
+  (:cX, :orgB, :whC, '0425-CX', 'Other Part X', 5, 7, 'active', 'none', :rC51, null, null, null);
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, requester_email, requester_name, fulfillment_type) values
+  (:oOrdB, :orgB, :whC, 'approved', 'internal', null, '0425-other@0425.test', 'Other Person', 'pickup');
 
 -- ══ Helpers (the 0397 file's, unchanged in shape) ═════════════════════════
 create function pg_temp.hint(p_hint text) returns text language sql immutable as $$
@@ -643,6 +696,107 @@ select is(
   'CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT OR UPDATE ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()',
   'V7-9 (red: BEFORE INSERT): the lines guard fires on insert and update, same name and sort position');
 
+-- ── Decisions round R2: what was picked and packed ────────────────────────
+-- rG: an exchange of 2 of lK13's units for pX (10 in stock), released early
+-- and picked: its replacement oG is at picking_complete with 2 of 2 picked
+-- (drawn) on line lG.
+select pg_temp.mk(:mgr, :oK13, pg_temp.xbody(:lK13, 2, jsonb_build_object('itemId', :pX))) as "rG" \gset
+select pg_temp.err(pg_temp.approve(:mgr, :'rG', pg_temp.xdec(:'rG'))) as "rGok" \gset
+select coalesce(pg_temp.live(:'rG'), '00000000-0000-0000-0000-000000000000'::uuid) as "oG" \gset
+select pg_temp.err(pg_temp.rpc('authenticated', :mgr,
+         format($q$select public.release_return_replacement_early(%L, %L, 'Customer is here today.')$q$, :'rG', :'oG'))) as "rGrel" \gset
+select pg_temp.pick(:mgr, :'oG') as "oGpick" \gset
+select coalesce((select l.id from public.order_request_lines l where l.order_request_id = :'oG'),
+                '00000000-0000-0000-0000-000000000000'::uuid) as "lG" \gset
+select is(
+  :'rGok' || ':' || :'rGrel' || ':' || :'oGpick' || ':'
+  || coalesce((select trim_scale(l.quantity_requested)::text || '/' || trim_scale(l.quantity_picked)::text
+                 from public.order_request_lines l where l.id = :'lG'), 'none')
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_picked = 1 where id = %L', :'lG'))
+  || ' | ' || pg_temp.attempt('postgres', null, format('update public.order_request_lines set quantity_picked = null where id = %L', :'lG'))
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_picked = 3 where id = %L', :'lG'))
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_packed = 3 where id = %L', :'lG'))
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format($q$update public.order_request_lines set quantity_packed = 2 where id = %L;
+              update public.order_request_lines set quantity_packed = 1 where id = %L$q$, :'lG', :'lG')),
+  'ok:ok:picking_complete:2/2'
+  || ' | 42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed'
+  || ' | 42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed'
+  || ' | 42501:replacement_lines_fixed:replacement_lines_fixed',
+  'V7-10 (decisions round R2; red: ok:1 each): on a replacement picked and drawn (2 of 2, picking_complete), the service role and definer code (postgres) may not lower what was picked (to 1, or to nothing), raise it above the quantity requested, raise what was packed above what was picked, or lower what was packed (2, then 1)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format($q$select public.reopen_picking(%L, 'Counted one part too many');
+              select public.partial_pick_line(%L, 1);
+              select public.complete_picking(%L)$q$, :'oG', :'lG', :'oG'), null,
+    format($q$select o.status || '/' || trim_scale(l.quantity_picked)::text
+                from public.order_requests o join public.order_request_lines l on l.order_request_id = o.id
+               where l.id = %L$q$, :'lG'))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr,
+    format($q$select (public.generate_order_packing_slips(%L)).status;
+              update public.order_requests set status = 'staged_for_pickup', staged_by = %L where id = %L;
+              select (public.confirm_physical_signature(%L, 'Guard tester')).status$q$, :'oG', :mgr, :'oG', :'oG'), null,
+    format($q$select o.status || '/' || trim_scale(l.quantity_fulfilled)::text || '/' || coalesce(l.quantity_picked::text, 'null')
+                from public.order_requests o join public.order_request_lines l on l.order_request_id = o.id
+               where l.id = %L$q$, :'lG'))
+  || ' | ' || pg_temp.e3(pg_temp.try_rpc('authenticated', :mgr,
+    format($q$select public.cancel_return_replacement(%L, %s, 'Not needed any more', null)$q$, :'rG', pg_temp.rev(:'rG'))))
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format($q$update public.order_request_lines set quantity_picked = 2 where id = %L;
+              update public.order_request_lines set quantity_picked = 0 where id = %L$q$, :lOrd, :lOrd)),
+  'ok:1:picking_complete/1 | ok:1:completed/2/null | changed=true | ok:1',
+  'V7-11 controls (R2): reopen still works on a replacement (reopen_picking keeps the 2 picked at picking_in_progress, the re-pick lowers it to 1, complete_picking draws 1); the hand-over still moves what was picked into what was handed over (2 handed over, picked cleared); Cancel replacement of a picked replacement still clears its picked batch under the RMA flag; an ordinary order''s picked count may still go down');
+
+-- ── Decisions round R1: the parent read, as its owner, fail closed ─────────
+-- The guard used to read the line's order under the writer's RLS, so an order
+-- the writer could not read counted as ordinary (fail open). No real role
+-- can write a line it cannot read today (the insert policy reads the same
+-- order; authenticated has no UPDATE), so V7-13 and V7-14 build that writer
+-- inside each undone attempt: a policy hides one order from authenticated,
+-- and another lets authenticated write any line.
+select format($q$create policy s7_hide_order on public.order_requests as restrictive for select to authenticated
+                   using (id <> %L::uuid);
+                 create policy s7_write_lines on public.order_request_lines for all to authenticated using (true) with check (true);
+                 grant update on public.order_request_lines to authenticated$q$, :'oA') as "hideA" \gset
+select format($q$create policy s7_hide_order on public.order_requests as restrictive for select to authenticated
+                   using (id <> %L::uuid);
+                 create policy s7_write_lines on public.order_request_lines for all to authenticated using (true) with check (true)$q$,
+              :oOrd) as "hideOrd" \gset
+select is(
+  pg_temp.attempt('service_role', null,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oMiss, :gS))
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format('update public.order_request_lines set order_request_id = %L where id = %L', :oOrdB, :lOrd))
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :cX))
+  || ' | ' || pg_temp.attempt('postgres', null,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :cX)),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed | ok:1 | ok:1',
+  'V7-12 (decisions round R1; red: 23503 from the foreign key after the guard let the line through, then ok:1): the guard fails closed. A line naming no order, and a line moved to another organization''s order, are refused: every order a line names must be found in the row''s own organization. Control: the item is not asked, so the service role and postgres may still add a line of another organization''s item to an ordinary order (the insert policy refuses it to API roles; the 0377 to 0379 suites keep such rows as defence in depth)');
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select 1 from public.order_requests where id = %L', :'oA'), :'hideA')
+  || ' | ' || pg_temp.attempt('authenticated', :mgr,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :'oA', :gS), :'hideA')
+  || ' | ' || pg_temp.attempt('authenticated', :mgr,
+    format('update public.order_request_lines set order_request_id = %L where id = %L', :'oA', :lOrd), :'hideA'),
+  'ok:0 | 42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed',
+  'V7-13 (decisions round R1; red: ok:1 twice): a member who may write a line but cannot read the replacement it names (reads 0 rows of it) may not add a line to it or move a line into it: the guard reads the order as its owner, not under the writer''s RLS');
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select 1 from public.order_requests where id = %L', :oOrd), :'hideOrd')
+  || ' | ' || pg_temp.attempt('authenticated', :mgr,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :gS), :'hideOrd'),
+  'ok:0 | ok:1',
+  'V7-14 control (R1): the same member may still add a line to an ordinary order they cannot read, where a policy lets them: the owner''s read finds it, so failing closed refuses only an order that is not there');
+select is(
+  pg_temp.attempt('authenticated', :outB,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :'oA', :gS))
+  || ' | ' || pg_temp.attempt('authenticated', :outB,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :gS))
+  || ' | ' || pg_temp.attempt('authenticated', :outB,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrdB, :cX)),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed | ok:1',
+  'V7-15 (R1, the row''s own organization; on the base the insert policy refuses both alike, because its read under RLS found nothing in another organization, so M18 is its red): a member of another organization naming this organization''s replacement or its ordinary order gets the same refusal for both, so the owner''s read never tells another organization''s replacement from an ordinary order; in their own organization the same member adds a line as before');
+
 -- ══ FR. The RMA flag is never enough for an API role ══════════════════════
 select is(
   pg_temp.attempt('authenticated', :mgr,
@@ -715,7 +869,23 @@ select is(
   || ' | ' || pg_temp.attempt('postgres', null, :'pendLine', :'pendPrep'),
   '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed'
   || ' | 42501:replacement_lines_fixed:replacement_lines_fixed | ok:1',
-  'FR5: the requester, a manager and the service role may not add a line to a replacement still pending approval; a writer that is not an API role (the issue, as postgres) still may');
+  'FR5: the requester, a manager and the service role may not add a line to a replacement still pending approval; postgres (the issue''s own writer) still may');
+-- FR6 (decisions round R3). The role test is an allowlist. s7_added_role
+-- stands for any role added later: created inside each undone attempt with
+-- the service role's rights (a member of service_role) and BYPASSRLS, but
+-- not named service_role, so the old list of API roles to refuse let it use
+-- a flag it set itself.
+\set addRole '\'set local createrole_self_grant to \'\'set, inherit\'\'; create role s7_added_role nologin bypassrls; grant service_role to s7_added_role\''
+select is(
+  pg_temp.attempt('s7_added_role', null,
+    :forge || format('update public.order_request_lines set quantity_requested = 9 where order_request_id = %L', :'oA'), :addRole)
+  || ' | ' || pg_temp.attempt('s7_added_role', null,
+    :forge || format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :'oA'), :addRole)
+  || ' | ' || pg_temp.attempt('s7_added_role', null,
+    :forge || format($q$update public.order_requests set status = 'cancelled' where id = %L$q$, :'oA'), :addRole),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | 42501:replacement_cancel_via_return:replacement_cancel_via_return',
+  'FR6 (decisions round R3; red: ok:1 each): a role added later with the service role''s rights, which the old list of API roles to refuse did not name, may not use a flag it set to change a replacement''s line, move the replacement or cancel it: the flag counts only for postgres and the superuser');
 
 -- ══ V. V-1 and S4 / 13.18: the replacement's own warehouse ═════════════════
 -- rV: an exchange approved (oV, approved in A). rV2: a replacement handed
@@ -837,14 +1007,14 @@ select is(
   pg_temp.attempt('authenticated', :mgr,
     :forge || format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :'oA', :gS),
     $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
-         E'pg_current_xact_id()::text\n     and current_user not in (''authenticated'', ''anon'', ''service_role'') then\n    return new;',
-         E'pg_current_xact_id()::text then\n    return new;')$p$),
+         'if v_owner and coalesce(current_setting(''stockpilot.return_exchange'', true), '''')',
+         'if coalesce(current_setting(''stockpilot.return_exchange'', true), '''')')$p$),
   'ok:1',
   'M1: the lines guard without its role term lets a manager who set the flag add a line to a replacement: FR1 rests on the role term');
 select is(
   pg_temp.attempt('authenticated', :mgr, :forge || format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :'oA'),
     $p$select pg_temp.repatch('public.tg_order_requests_replacement_header()',
-         E'\n     and current_user not in (''authenticated'', ''anon'', ''service_role'')', '')$p$),
+         E'\n     and current_user in (''postgres'', ''supabase_admin'')', '')$p$),
   'ok:1',
   'M2: the header guard without its role term lets a manager who set the flag move a replacement: FR2 rests on the role term');
 select is(
@@ -892,10 +1062,10 @@ select is(
          E'\n      perform public._return_replacement_warehouse_gate(p_return_id, p_user);  -- S7: under the replacement''s lock', '')$p$)),
   'changed=true,42501:warehouse_write:forbidden',
   'M5: with both gates out, release early goes through again and the RMA cancel is refused only inside cancel_order_request (0416), after the locks: V-1-1 and V-1-4 rest on the gates');
--- The pending-approval role term is matched from the text before it: the flag
--- exemption above it ends with the same role term (M1).
+-- The pending-approval role term is matched with the text before it: the
+-- flag exemption above it asks the same v_owner (M1).
 select :'pendPrep' || '; ' || $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
-         E'v_status = ''pending_approval''\n     and current_user not in (''authenticated'', ''anon'', ''service_role'') then',
+         E'v_status = ''pending_approval'' and v_owner then',
          E'v_status = ''pending_approval'' then')$p$ as "m6Prep" \gset
 select is(
   pg_temp.attempt('authenticated', :req, :'pendLine', :'m6Prep')
@@ -909,6 +1079,91 @@ select is(
   || ',' || pg_temp.e3(pg_temp.try_rpc('authenticated', :stfB, pg_temp.v_sql('cancel_rma', :'rQ'), :'m7Prep')),
   '42501:warehouse_write:warehouse_write,42501:warehouse_write:warehouse_write',
   'M7: the gate helper without its live filter reads the cancelled replacement in A and refuses staff of B the new replacement and the RMA cancel: V-1-8 rests on the filter');
+-- Decisions round. R2: each value term of the lines guard out in turn.
+select is(
+  pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_picked = 3 where id = %L', :'lG'),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         E'\n           and coalesce(new.quantity_picked, 0) <= new.quantity_requested', '')$p$)
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_packed = 3 where id = %L', :'lG'),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         E'\n           and coalesce(new.quantity_packed, 0) <= coalesce(new.quantity_picked, 0)', '')$p$)
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_request_lines set quantity_picked = 1 where id = %L', :'lG'),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()', 'if v_rules and v_kept then', 'if v_rules then')$p$),
+  'ok:1 | ok:1 | ok:1',
+  'M8 to M10 (R2): the lines guard without its picked bound, its packed bound or its never-lower term lets the service role record more picked than requested, more packed than picked, or less picked than was drawn on a replacement: V7-10 rests on each term');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format($q$select public.reopen_picking(%L, 'Counted one part too many');
+              select public.partial_pick_line(%L, 1)$q$, :'oG', :'lG'),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         E'if v_rules and v_status = ''picking_in_progress'' then', 'if false then')$p$)
+  || ' | ' || pg_temp.attempt('authenticated', :mgr,
+    format($q$select (public.generate_order_packing_slips(%L)).status;
+              update public.order_requests set status = 'staged_for_pickup', staged_by = %L where id = %L;
+              select (public.confirm_physical_signature(%L, 'Guard tester')).status$q$, :'oG', :mgr, :'oG', :'oG'),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         E'\n               or (new.quantity_picked is null\n                   and new.quantity_fulfilled = old.quantity_fulfilled + coalesce(old.quantity_picked, 0))', '')$p$),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:replacement_lines_fixed:replacement_lines_fixed',
+  'M11, M12 (R2): without the picking_in_progress exemption the re-pick after a reopen is refused, and without the hand-over''s way down the signature is refused: V7-11''s reopen and hand-over rest on them');
+-- R1: the parent read as the writer, without its fail-closed count, and
+-- without its organization.
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :gS),
+    :'hideOrd' || '; alter function public._replacement_line_parents(uuid[], boolean) security invoker'),
+  '42501:replacement_lines_fixed:replacement_lines_fixed',
+  'M13 (R1): with the parent read run as the writer (SECURITY INVOKER) the member who cannot read the ordinary order finds nothing and is refused: V7-14 rests on the owner''s read');
+select is(
+  split_part(pg_temp.attempt('service_role', null,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oMiss, :gS),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         'if coalesce(v_found, 0) < cardinality(v_ids) then', 'if false then')$p$), ':', 1)
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format('update public.order_request_lines set order_request_id = %L where id = %L', :oOrdB, :lOrd),
+    $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         'if coalesce(v_found, 0) < cardinality(v_ids) then', 'if false then')$p$)
+  || ' || ' || pg_temp.attempt('service_role', null,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oMiss, :gS),
+    $p$select pg_temp.repatch('public._replacement_line_parents(uuid[],boolean)',
+         E'\n     and o.organization_id = v_org', '')$p$)
+  || ' | ' || pg_temp.attempt('service_role', null,
+    format('update public.order_request_lines set order_request_id = %L where id = %L', :oOrdB, :lOrd),
+    $p$select pg_temp.repatch('public._replacement_line_parents(uuid[],boolean)',
+         E'\n     and o.organization_id = v_org', '')$p$),
+  '23503 | ok:1 || 42501:replacement_lines_fixed:replacement_lines_fixed | ok:1',
+  'M14, M15 (R1): without the fail-closed count the line naming no order reaches the foreign key and the line moved to another organization''s order goes through; without the row''s-organization term the moved line''s new order is found anywhere, so only the line naming no order is still refused: V7-12 rests on both');
+-- R1: the parent read without its membership scope (M18 is V7-15's red).
+select is(
+  pg_temp.attempt('authenticated', :outB,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :'oA', :gS),
+    $p$select pg_temp.repatch('public._replacement_line_parents(uuid[],boolean)',
+         E'\n  if p_scoped and not coalesce(public.is_org_member(v_org), false) then\n    v_org := null;\n  end if;', '')$p$)
+  || ' | ' || pg_temp.attempt('authenticated', :outB,
+    format('insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)', :oOrd, :gS),
+    $p$select pg_temp.repatch('public._replacement_line_parents(uuid[],boolean)',
+         E'\n  if p_scoped and not coalesce(public.is_org_member(v_org), false) then\n    v_org := null;\n  end if;', '')$p$),
+  '42501:replacement_lines_fixed:replacement_lines_fixed | 42501:-:new row violates row-level security policy for table "order_request_lines"',
+  'M18 (R1): without its membership scope the owner''s read answers a member of another organization, whose line naming this organization''s replacement is refused by the guard while one naming its ordinary order reaches the insert policy: the two answers differ, so the refusal would tell a replacement from an ordinary order. V7-15 rests on the scope');
+-- R3: the old list of API roles to refuse put back in both guards.
+select is(
+  pg_temp.attempt('s7_added_role', null,
+    :forge || format('update public.order_request_lines set quantity_requested = 9 where order_request_id = %L', :'oA'),
+    :addRole || '; ' || $p$select pg_temp.repatch('public.tg_order_request_lines_replacement_guard()',
+         'current_user in (''postgres'', ''supabase_admin'');', 'current_user not in (''authenticated'', ''anon'', ''service_role'');')$p$)
+  || ' | ' || pg_temp.attempt('s7_added_role', null,
+    :forge || format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :'oA'),
+    :addRole || '; ' || $p$select pg_temp.repatch('public.tg_order_requests_replacement_header()',
+         'current_user in (''postgres'', ''supabase_admin'')', 'current_user not in (''authenticated'', ''anon'', ''service_role'')')$p$),
+  'ok:1 | ok:1',
+  'M16 (R3): with the old list of API roles to refuse instead of the allowlist, the role added later uses its own flag on the line and on the header: FR6 rests on the allowlist');
+-- P7's trigger-only answer: the depth check out.
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select * from public._replacement_line_parents(array[%L]::uuid[], false)', :'oA'),
+    $p$select pg_temp.repatch('public._replacement_line_parents(uuid[],boolean)',
+         E'\n  if pg_trigger_depth() < 1 then\n    raise exception ''trigger_only'' using errcode = ''42501'', hint = ''trigger_only'';\n  end if;', '')$p$,
+    format($q$select o_found || '/' || o_replacement || '/' || o_status from public._replacement_line_parents(array[%L]::uuid[], false)$q$, :'oA')),
+  'ok:1:1/true/approved',
+  'M17: without its depth check the parent read answers a direct call, even one that passes p_scoped false (one order, a replacement, approved): P7''s refusal rests on that check');
 
 -- ══ R. The restated bodies ═════════════════════════════════════════════════
 select is(
@@ -920,10 +1175,10 @@ select is(
                                     to_regprocedure('public.cancel_return(uuid,integer,text)'),
                                     to_regprocedure('public._return_exchange_on_cancel(uuid,uuid,text)')))
   || ' | ' || (select md5(replace(replace(p.prosrc,
-       E'  -- S7: the flag counts only for a writer that is not an API role. An RMA\n'
-       || E'  -- function raises it as postgres (SECURITY DEFINER); anon, authenticated\n'
-       || E'  -- or the service role setting it themselves are refused like anyone else.\n', ''),
-       E'\n     and current_user not in (''authenticated'', ''anon'', ''service_role'')', ''))
+       E'  -- S7: the flag counts only for postgres, as which an RMA function raises\n'
+       || E'  -- it (SECURITY DEFINER), or the superuser: an allowlist. Any other writer\n'
+       || E'  -- that set it, an API role above all, is refused like anyone else.\n', ''),
+       E'\n     and current_user in (''postgres'', ''supabase_admin'')', ''))
      from pg_proc p where p.oid = to_regprocedure('public.tg_order_requests_replacement_header()')),
   '_return_exchange_on_cancel=a4ed07269153c41f8203d375ab2f7acc,cancel_return=11e8be3e7f3fe7899c6c919311fbf9c1,'
   || 'cancel_return_replacement=9e42b480d4a77b1ccde60f10fc858d44,change_return_replacement=b19cb3718a8e51b74caaecc1281b7aaa,'
@@ -940,13 +1195,15 @@ select is(
                                     to_regprocedure('public._return_exchange_on_cancel(uuid,uuid,text)'),
                                     to_regprocedure('public.tg_order_requests_replacement_header()'),
                                     to_regprocedure('public.tg_order_request_lines_replacement_guard()'),
-                                    to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'))),
-  '_return_exchange_on_cancel=01835cfd5a07a666afb26eb203cb9ff4,_return_replacement_warehouse_gate=57ad2ae472885c43bc1eba1c664efc78,'
+                                    to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'),
+                                    to_regprocedure('public._replacement_line_parents(uuid[],boolean)'))),
+  '_replacement_line_parents=3e1a0223b320b98c45e0e5507d262fcd,'
+  || '_return_exchange_on_cancel=01835cfd5a07a666afb26eb203cb9ff4,_return_replacement_warehouse_gate=57ad2ae472885c43bc1eba1c664efc78,'
   || 'cancel_return=d3c2d9348a85d9be74aa55b8a8c5f783,'
   || 'cancel_return_replacement=18760fd58c4f2445acaa930d2896ea33,change_return_replacement=eb49035fe40a6f441fde039e0f0ecc18,'
   || 'close_return_replacement_rest=6b0a7f57789b7adcd03233e9bf98c058,release_return_replacement_early=00fcc95f02e36c7be40db0deedd2c691,'
-  || 'tg_order_request_lines_replacement_guard=126e56113d8878330e48ded218cdab3f,tg_order_requests_replacement_header=437f91dc9d1037c01233c62a79885689',
-  'R2 (red: the bodies before, the helper missing): the eight bodies S7 replaces and the new helper are as written (the kit''s post-check values)');
+  || 'tg_order_request_lines_replacement_guard=cb62201f9028436e5e54fe43252fa82f,tg_order_requests_replacement_header=558b94ffe1cfd0f6278f2c9117ba9e91',
+  'R2 (red: the bodies before, the helpers missing): the eight bodies S7 replaces and the two new helpers are as written (the kit''s post-check values)');
 
 -- ══ P. Posture ═════════════════════════════════════════════════════════════
 select is(
@@ -1011,8 +1268,9 @@ select is(
                                     to_regprocedure('public.tg_order_requests_replacement_header()'),
                                     to_regprocedure('public.tg_order_requests_replacement_status()'),
                                     to_regprocedure('public.tg_order_request_lines_replacement_guard()'),
-                                    to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'))),
-  '_return_exchange_on_cancel=true,_return_replacement_warehouse_gate=true,cancel_return=true,cancel_return_replacement=true,'
+                                    to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'),
+                                    to_regprocedure('public._replacement_line_parents(uuid[],boolean)'))),
+  '_replacement_line_parents=true,_return_exchange_on_cancel=true,_return_replacement_warehouse_gate=true,cancel_return=true,cancel_return_replacement=true,'
   || 'change_return_replacement=true,close_return_replacement_rest=true,release_return_replacement_early=true,'
   || 'tg_order_request_lines_replacement_guard=true,tg_order_requests_replacement_header=true,tg_order_requests_replacement_status=true',
   'P4 (red: false each): every comment S7 restates says the rule it adds');
@@ -1034,6 +1292,7 @@ select is(
         p.oid, case when tr.rel is null then 0::oid::regclass else tr.rel::regclass end,
         fatal_errors => false, other_warnings => false, extra_warnings => false, performance_warnings => false) c
     where p.oid in (to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'),
+                    to_regprocedure('public._replacement_line_parents(uuid[],boolean)'),
                     to_regprocedure('public.cancel_return_replacement(uuid,integer,text,text)'),
                     to_regprocedure('public.release_return_replacement_early(uuid,uuid,text)'),
                     to_regprocedure('public.change_return_replacement(uuid,integer,jsonb,text,text,jsonb)'),
@@ -1044,6 +1303,7 @@ select is(
                     to_regprocedure('public.tg_order_request_lines_replacement_guard()'))
       and c.level = 'error')
   || ' | ' || (select count(*)::text from pg_proc p where p.oid in (to_regprocedure('public._return_replacement_warehouse_gate(uuid,uuid)'),
+                    to_regprocedure('public._replacement_line_parents(uuid[],boolean)'),
                     to_regprocedure('public.cancel_return_replacement(uuid,integer,text,text)'),
                     to_regprocedure('public.release_return_replacement_early(uuid,uuid,text)'),
                     to_regprocedure('public.change_return_replacement(uuid,integer,jsonb,text,text,jsonb)'),
@@ -1052,8 +1312,63 @@ select is(
                     to_regprocedure('public._return_exchange_on_cancel(uuid,uuid,text)'),
                     to_regprocedure('public.tg_order_requests_replacement_header()'),
                     to_regprocedure('public.tg_order_request_lines_replacement_guard()'))),
-  'none | 9',
-  'P6 (red: 8, the helper missing): plpgsql_check finds no error in the nine functions S7 creates or restates (the guards checked against their tables)');
+  'none | 10',
+  'P6 (red: 8, the helpers missing): plpgsql_check finds no error in the ten functions S7 creates or restates (the guards checked against their tables)');
+
+-- ══ Decisions round posture ═══════════════════════════════════════════════
+select is(
+  (select p.prosecdef::text || ':' || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
+          || ':' || has_function_privilege('service_role', p.oid, 'EXECUTE')::text
+          || ':' || has_function_privilege('anon', p.oid, 'EXECUTE')::text
+          || ':' || coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a)::text, 'false')
+          || ':' || pg_get_userbyid(p.proowner) || ':' || coalesce(array_to_string(p.proconfig, ';'), '')
+          || ':' || p.provolatile::text
+     from pg_proc p where p.oid = to_regprocedure('public._replacement_line_parents(uuid[],boolean)'))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format('select * from public._replacement_line_parents(array[%L]::uuid[], false)', :'oA'))
+  || ' | ' || pg_temp.attempt('service_role', null, format('select * from public._replacement_line_parents(array[%L]::uuid[], false)', :'oA'))
+  || ' | ' || pg_temp.attempt('anon', null, format('select * from public._replacement_line_parents(array[%L]::uuid[], false)', :'oA')),
+  'true:true:true:false:false:postgres:search_path=public, pg_temp:s | 42501:trigger_only:trigger_only | 42501:trigger_only:trigger_only'
+  || ' | 42501:-:permission denied for function _replacement_line_parents',
+  'P7 (R1; red: missing): the lines guard''s parent read is SECURITY DEFINER, search_path pinned, owned by postgres, STABLE, EXECUTE for authenticated and service_role only (the guard runs as the writer, and those two write order lines); called other than from a trigger it answers 42501 trigger_only and nothing else, and anon may not call it');
+select is(
+  (select string_agg(p.proname || ':' || case when p.prosecdef then 'definer' else 'invoker' end || ':'
+                     || case when p.prosrc ~ $re$current_user\s+in\s*\(\s*'postgres'\s*,\s*'supabase_admin'\s*\)$re$ then 'allowlist'
+                             when p.prosrc ~ '\mcurrent_user\M' then 'other'
+                             else '-' end, ',' order by p.proname collate "C")
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname not in ('pg_catalog', 'information_schema')
+      and p.prosrc ~ $re$current_setting\(\s*'stockpilot\.return_exchange'$re$)
+  || ' | ' || (select string_agg(t.tgname || ':' || case when p.prosecdef then 'definer' else 'invoker' end, ',' order by t.tgname collate "C")
+                 from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+                where t.tgrelid = 'public.order_requests'::regclass and not t.tgisinternal
+                  and p.prosrc ~ $re$current_setting\(\s*'stockpilot\.return_exchange'$re$),
+  '_return_exchange_on_cancel:invoker:-,_return_replacement_cancel_order:invoker:-,_return_replacement_close_partial:invoker:-,'
+  || 'tg_order_request_lines_replacement_guard:invoker:allowlist,tg_order_requests_replacement_header:invoker:allowlist,'
+  || 'tg_order_requests_replacement_status:definer:-'
+  || ' | trg_order_requests_zz_replacement_header:invoker,trg_order_requests_zz_replacement_status:definer',
+  'P8 (the binding note on the flag; red: no allowlist): every function that reads the RMA flag and asks the role is SECURITY INVOKER (inside SECURITY DEFINER current_user is always the owner, so a role test there refuses no one) and asks by the allowlist; the one SECURITY DEFINER reader, the status gate, asks no role, and on order_requests the INVOKER header trigger fires before it (same-timing triggers fire in name order), so FR3''s authenticated session with the right transaction id is refused there first');
+select is(
+  (select string_agg(r.rolname || ':' || r.rolcanlogin::text
+                     || ':' || (r.rolname <> 'authenticator' and pg_has_role('authenticator', r.oid, 'MEMBER'))::text
+                     || ':' || (pg_has_role(r.oid, 'postgres', 'MEMBER') or pg_has_role(r.oid, 'supabase_admin', 'MEMBER'))::text,
+                     ',' order by r.rolname collate "C")
+     from pg_roles r
+    where r.rolname !~ '^pg_'
+      and (r.rolcanlogin or pg_has_role('authenticator', r.oid, 'MEMBER')
+           or pg_has_role(r.oid, 'postgres', 'MEMBER') or pg_has_role(r.oid, 'supabase_admin', 'MEMBER'))),
+  'anon:false:true:false,authenticated:false:true:false,authenticator:true:false:false,pgbouncer:true:false:false,'
+  || 'postgres:true:false:true,service_role:false:true:false,supabase_admin:true:false:true,supabase_auth_admin:true:false:false,'
+  || 'supabase_etl_admin:true:false:false,supabase_functions_admin:true:false:false,supabase_read_only_user:true:false:false,'
+  || 'supabase_replication_admin:true:false:false,supabase_storage_admin:true:false:false',
+  'P9 (R3): the roles that can log in or that the Data API becomes (name:login:API:can become postgres or supabase_admin) are exactly these; only postgres and supabase_admin pass the guards'' allowlist and no API role can become either. A role added or granted here fails this pin first: review the allowlist (the flag, the lines guard, the header guard) before updating it');
+select is(
+  (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname, p.proname collate "C"), 'none')
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname not in ('pg_catalog', 'information_schema')
+      and p.prosrc ~ $re$current_setting\(\s*'stockpilot\.(ledger|order_submit|add_lines)'$re$
+      and p.prosrc ~ $re$current_user\s+in\s*\(\s*'postgres'\s*,\s*'supabase_admin'\s*\)$re$),
+  'none',
+  'P10 (the binding note on the flag): no reader of the ledger, order_submit or add_lines flag carries the RMA flag''s allowlist; their legitimate writers run as authenticated, so the pairing would refuse every stock change, order placement and Add items');
 
 select * from finish();
 rollback;

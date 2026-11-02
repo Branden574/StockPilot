@@ -10,8 +10,8 @@
 # (`do $lock$ ... end $lock$;`) and never waits holding one.
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
-#       catalogs (the preflight, the helper, the restated bodies, the revokes
-#       and the comments).
+#       catalogs (the preflight, the two helpers, the restated bodies, the
+#       revokes, the grant and the comments).
 #   1b. The prelude takes SHARE ROW EXCLUSIVE on order_request_lines and
 #       order_requests, and nothing else.
 #   1c. No statement after the prelude locks another existing table, and the
@@ -23,7 +23,7 @@
 #       retries, holds NO table lock whenever it is paused between attempts,
 #       and fails 55P03. 3b: a line writer held 0.6 s: the file retries past
 #       it and runs to the end.
-#   4.  Nothing was applied: the helper does not exist and both triggers keep
+#   4.  Nothing was applied: neither helper exists and both triggers keep
 #       0396's definitions.
 #
 # The migration sessions ALWAYS roll back. It needs the pre-0425 head (every
@@ -64,7 +64,8 @@ cleanup() { wait 2> /dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 LINES_DEF="CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()"
-STATE_SQL="select (select count(*) from pg_proc where proname = '_return_replacement_warehouse_gate')::text || '|'
+STATE_SQL="select (select count(*) from pg_proc
+                    where proname in ('_return_replacement_warehouse_gate', '_replacement_line_parents'))::text || '|'
        || (select regexp_replace(pg_get_triggerdef(t.oid), 'FUNCTION (public\\.)?', 'FUNCTION ') from pg_trigger t
             where t.tgname = 'trg_zz_order_request_lines_replacement_guard') || '|'
        || (select (pg_get_triggerdef(t.oid) !~ 'cancelled')::text from pg_trigger t
@@ -114,7 +115,7 @@ else
   PRELUDE="$(sed -n 's/^PRELUDE|//p' "$TMP/1.out")"
   END="$(sed -n 's/^END|//p' "$TMP/1.out")"
   MODES="$(sed -n 's/^MODES|//p' "$TMP/1.out")"
-  if [ "$BEFORE" = "none" ]; then ok "1a: the preflight, the helper, the restated bodies, the revokes and the comments lock no table"
+  if [ "$BEFORE" = "none" ]; then ok "1a: the preflight, the two helpers, the restated bodies, the revokes, the grant and the comments lock no table"
   else bad "1a: before the prelude the file already holds: $BEFORE"; fi
   if [ "$PRELUDE" = "public.order_request_lines:ShareRowExclusiveLock,public.order_requests:ShareRowExclusiveLock" ]; then
     ok "1b: the prelude takes exactly order_request_lines and order_requests (share row exclusive)"

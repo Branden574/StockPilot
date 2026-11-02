@@ -751,10 +751,10 @@ select is(
        ('public.close_partial(uuid)',                             '44852737eedc1959e887b8621925d157'),
        -- Re-pinned by S7 (replacement guards; were b7220c36c4f78792f698adfbd8da79ea and
        -- 9e42b480d4a77b1ccde60f10fc858d44): the header guard asks the role with the flag
-       -- (an API role that set it itself is refused), and the replacement cancel asks write
+       -- (only postgres or the superuser may use it, an allowlist), and the replacement cancel asks write
        -- access to the replacement's own warehouse before its locks and under them. Removing
        -- the added lines gives each body exactly (that suite's R1); the close is unchanged.
-       ('public.tg_order_requests_replacement_header()',          '437f91dc9d1037c01233c62a79885689'),
+       ('public.tg_order_requests_replacement_header()',          '558b94ffe1cfd0f6278f2c9117ba9e91'),
        ('public.cancel_return_replacement(uuid,integer,text,text)', '18760fd58c4f2445acaa930d2896ea33'),
        -- Re-pinned by 0413 (were c9a8b3ff98fa7e53e1befaeb39b52c55 and
        -- 60a9e392712860018a5c3d814aa285eb): a record hidden from ordering is
