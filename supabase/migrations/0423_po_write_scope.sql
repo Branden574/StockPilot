@@ -1123,8 +1123,8 @@ alter policy "po_attachments manage delete" on public.po_attachments
   );
 
 -- ═══ 8. The po-attachments bucket: the stored files follow it too ════════════
--- 0211's four policies, re-created as 0211 created them (supautils lets this
--- role manage policies on storage.objects), each now asking
+-- 0211's four policies, dropped and created again the way 0211 created them
+-- (supautils lets this role manage policies on storage.objects). Each now asks
 -- po_attachment_object_visible(name) first, so a name that is not a purchase
 -- order's folder is refused before the floor's cast; the writes keep 0211's
 -- floor on the organization folder.
