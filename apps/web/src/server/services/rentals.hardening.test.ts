@@ -32,7 +32,7 @@ vi.mock('@/lib/email/rentals', () => ({
 let afterCalls: Array<() => unknown> = [];
 vi.mock('next/server', () => ({ after: (fn: () => unknown) => afterCalls.push(fn) }));
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
 
@@ -63,8 +63,16 @@ const OUT_ROW = {
   warehouse_id: WAREHOUSE,
 };
 
+/**
+ * The rental's warehouse, in this context's organization ('org-test'): a
+ * checkout reads it there before create_rental (S39).
+ */
+const WAREHOUSE_IN_ORG = {
+  'warehouses.select': servedLikePostgrest([{ id: WAREHOUSE, organization_id: 'org-test' }]),
+};
+
 function service(results: Parameters<typeof makeSupabaseStub>[0]) {
-  const stub = makeSupabaseStub(results);
+  const stub = makeSupabaseStub({ ...WAREHOUSE_IN_ORG, ...results });
   return { stub, svc: new RentalsService(makeServiceContext(stub.client)) };
 }
 

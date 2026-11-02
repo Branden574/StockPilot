@@ -1160,6 +1160,27 @@ WEB_TESTS=(
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
 
+  # S39: a write named by a row id reads that row in the ACTIVE organization,
+  # through the caller's own client, before its function runs; a miss answers
+  # the site's not-found sentence and nothing runs (lib/in-active-org.ts). A
+  # member of two organizations whose page or phone screen was left open after
+  # a switch sent the other organization's id with this one's context: the
+  # function changed the row there while the audit row, the webhook, the
+  # outbox row and the notices were written here. Twelve sites: order cancel
+  # and paper signature, cycle count release and reassign, receipt post and
+  # reversal, rental checkout, kit save, assembly and hand-out, and the
+  # movement note (action and phone route). The guard classifies every .rpc(
+  # call under apps/web/src and removes each of the twelve reads in turn to
+  # prove it is what holds. Each file carries the "Security invariant" marker.
+  src/test/rpc-active-organization.guard.test.ts
+  src/server/services/lib/in-active-org.test.ts
+  src/server/services/order-requests.other-organization.test.ts
+  src/server/services/cycle-counts.other-organization.test.ts
+  src/server/services/receiving.other-organization.test.ts
+  src/server/services/rentals.other-organization.test.ts
+  src/server/services/bundles.other-organization.test.ts
+  src/server/actions/movements.other-organization.test.ts
+
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified
   # organization only, fixed error words, not_found for a hidden book, order
