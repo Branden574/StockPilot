@@ -7,8 +7,12 @@
 -- F.  The fixture: S holds, in organization A, a count in progress, a claimed
 --     pick, a staged and an in-transit delivery, a scheduled event, an open
 --     maintenance request, an escalation claim and warehouse A; closed work
---     in A; a count, a pick and warehouse B in organization B. A platform
---     admin's Act-as seat in A holds a claimed pick.
+--     in A, one row for each closed state the release must skip (a completed
+--     count, pick and event; a completed, a cancelled and a denied delivery;
+--     a resolved, a cancelled and an archived maintenance request; a
+--     resolved escalation claim); a count, a pick and warehouse B in
+--     organization B. A platform admin's Act-as seat in A holds a claimed
+--     pick.
 -- R.  The release, for each path that deletes a membership row: an admin
 --     through the API (Team), the member leaving on their own (0140's delete
 --     policy), the admin client with no subject, and an Act-as seat ended
@@ -19,9 +23,10 @@
 --     member_left or act_as_seat_ended, reason null (K1: the order page
 --     prints any string reason as "Reason: ..."), acting_as_platform; none
 --     when nothing was open.
--- C.  member_open_work, the Remove dialog's read: what R1 releases, per kind;
---     refused for a manager, staff, an admin without members:remove, an
---     outsider, anon and no subject.
+-- C.  member_open_work, the Remove dialog's read: what R1 releases, per kind
+--     (the closed rows above not counted); refused for a manager, a manager
+--     granted members:remove (the admin floor), staff, an admin without
+--     members:remove, an outsider, anon and no subject.
 -- P.  Posture: the trigger (AFTER DELETE FOR EACH ROW, enabled), both
 --     functions (SECURITY DEFINER, postgres, search_path pinned; the trigger
 --     function lock_timeout 5s and no EXECUTE for anyone; member_open_work
@@ -29,17 +34,21 @@
 --     body raises nothing and writes only the seven released tables and
 --     audit_logs, and the comments name the parity obligation.
 -- PAR. Removal from A and account deletion leave the same released set in A.
+--     Closed rows are pinned on the release paths (R1-R3, R5) and in C1, not
+--     here: deleting the account nulls them through their foreign keys
+--     whatever 0393's predicates say.
 -- M, O, D, N, G. Controls: without the trigger the count stays (today's
 --     behaviour); organization deletion and account deletion go through and
 --     this trigger writes nothing; no notification; the owner row is still
---     refused; a delete RLS refuses releases nothing.
+--     refused; a delete RLS refuses releases nothing, also for a manager
+--     granted members:remove (the app's gate passes; the row policy does not).
 --
 -- Roles: fixtures as the test superuser. Attempts run through
 -- pg_temp.attempt, which switches to the API role with a JWT subject and
 -- always undoes what it did (sentinel XXB94), so every test starts from the
 -- fixture.
 begin;
-select plan(31);
+select plan(32);
 
 \set orgA    '\'94940000-0000-0000-0000-00000000000a\''
 \set orgB    '\'94940000-0000-0000-0000-00000000000b\''
@@ -51,6 +60,7 @@ select plan(31);
 \set adm2    '\'94940000-0000-0000-0000-0000000000a4\''
 \set idle    '\'94940000-0000-0000-0000-0000000000a5\''
 \set pa      '\'94940000-0000-0000-0000-0000000000a6\''
+\set mgr2    '\'94940000-0000-0000-0000-0000000000a7\''
 \set outB    '\'94940000-0000-0000-0000-0000000000b1\''
 \set ownC    '\'94940000-0000-0000-0000-0000000000c0\''
 \set cs      '\'94940000-0000-0000-0000-0000000000c1\''
@@ -69,10 +79,17 @@ select plan(31);
 \set oDone   '\'94940000-0000-0000-0000-000000000204\''
 \set oPickB  '\'94940000-0000-0000-0000-000000000205\''
 \set oPickPA '\'94940000-0000-0000-0000-000000000206\''
+\set oDrvDone '\'94940000-0000-0000-0000-000000000207\''
+\set oDrvCanc '\'94940000-0000-0000-0000-000000000208\''
+\set oDrvDen  '\'94940000-0000-0000-0000-000000000209\''
 \set seOpen  '\'94940000-0000-0000-0000-000000000301\''
 \set seDone  '\'94940000-0000-0000-0000-000000000302\''
 \set mrOpen  '\'94940000-0000-0000-0000-000000000401\''
+\set mrDone  '\'94940000-0000-0000-0000-000000000402\''
+\set mrCanc  '\'94940000-0000-0000-0000-000000000403\''
+\set mrArch  '\'94940000-0000-0000-0000-000000000404\''
 \set exOpen  '\'94940000-0000-0000-0000-000000000501\''
+\set exDone  '\'94940000-0000-0000-0000-000000000502\''
 \set mSubA   '\'94940000-0000-0000-0000-000000000601\''
 \set mSubB   '\'94940000-0000-0000-0000-000000000602\''
 \set mPaA    '\'94940000-0000-0000-0000-000000000603\''
@@ -89,6 +106,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:adm2, 'b94-adm2@b94.test', '{}'::jsonb),
   (:idle, 'b94-idle@b94.test', '{}'::jsonb),
   (:pa,   'b94-pa@b94.test',   '{}'::jsonb),
+  (:mgr2, 'b94-mgr2@b94.test', '{}'::jsonb),
   (:outB, 'b94-outb@b94.test', '{}'::jsonb),
   (:ownC, 'b94-ownc@b94.test', '{}'::jsonb),
   (:cs,   'b94-cs@b94.test',   '{}'::jsonb)
@@ -104,11 +122,14 @@ insert into public.organization_members (id, organization_id, user_id, role, acc
   (:mSubB,  :orgB, :sub,  'staff',   now(), null);
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :adm, 'admin', now()), (:orgA, :adm2, 'admin', now()), (:orgA, :mgr, 'manager', now()),
+  (:orgA, :mgr2, 'manager', now()),
   (:orgB, :outB, 'owner', now()),
   (:orgC, :ownC, 'owner', now()), (:orgC, :cs, 'staff', now());
--- An admin whose Remove members permission is revoked (the app's gate).
+-- An admin whose Remove members permission is revoked, and a manager granted
+-- it (the app's gate; 0207 lets an admin grant it to anyone).
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
-  (:orgA, :adm2, 'members:remove', false);
+  (:orgA, :adm2, 'members:remove', false),
+  (:orgA, :mgr2, 'members:remove', true);
 insert into public.warehouses (id, organization_id, name, code, status, manager_user_id) values
   (:whA, :orgA, 'B94 A', 'WH-B94A', 'active', :sub),
   (:whB, :orgB, 'B94 B', 'WH-B94B', 'active', :sub),
@@ -135,7 +156,14 @@ insert into public.order_requests
   (:oPickB,  :orgB, :whB, 'picking_in_progress', 'internal', :outB, 'pickup', null,
    :outB, now(), :outB, now(), :sub, :sub, now(), null, null, null, null, null, null, null),
   (:oPickPA, :orgA, :whA, 'picking_in_progress', 'internal', :mgr, 'pickup', null,
-   :mgr, now(), :mgr, now(), :pa, :pa, now(), null, null, null, null, null, null, null);
+   :mgr, now(), :mgr, now(), :pa, :pa, now(), null, null, null, null, null, null, null),
+  -- S's closed deliveries: one per status the release skips.
+  (:oDrvDone, :orgA, :whA, 'completed', 'internal', :mgr, 'delivery', :chA,
+   :mgr, now(), :mgr, now(), null, null, null, :sub, :mgr, now(), now(), :mgr, now(), :mgr),
+  (:oDrvCanc, :orgA, :whA, 'cancelled', 'internal', :mgr, 'delivery', :chA,
+   :mgr, now(), :mgr, now(), null, null, null, :sub, :mgr, now(), null, null, null, null),
+  (:oDrvDen,  :orgA, :whA, 'denied', 'internal', :mgr, 'delivery', :chA,
+   null, null, null, null, null, null, null, :sub, :mgr, now(), null, null, null, null);
 insert into public.cycle_counts
   (id, organization_id, warehouse_id, status, scope, started_by, started_at, assigned_to, assignment_claimed_at,
    assignment_claimed_by, assignment_version, completed_by, completed_at) values
@@ -146,24 +174,33 @@ insert into public.cycle_counts
 insert into public.schedule_events (id, organization_id, title, starts_at, status, assigned_user_id, created_by, updated_by) values
   (:seOpen, :orgA, 'B94 scheduled', now() + interval '1 day', 'scheduled', :sub, :mgr, :mgr),
   (:seDone, :orgA, 'B94 done',      now() - interval '1 day', 'completed', :sub, :mgr, :mgr);
+-- The open request, then one closed request per closed state (each with only
+-- its own timestamp set, so each predicate is pinned on its own).
 insert into public.maintenance_requests
-  (id, organization_id, requester_user_id, requester_name_snapshot, subject, description, priority, status, local_owner_user_id) values
-  (:mrOpen, :orgA, :mgr, 'Mgr', 'B94 door', 'Sticks', 'normal', 'saved', :sub);
+  (id, organization_id, requester_user_id, requester_name_snapshot, subject, description, priority, status, local_owner_user_id,
+   resolved_at, resolved_by, resolved_by_name_snapshot, cancelled_at, archived_at) values
+  (:mrOpen, :orgA, :mgr, 'Mgr', 'B94 door', 'Sticks', 'normal', 'saved',     :sub, null,  null, null,       null,  null),
+  (:mrDone, :orgA, :mgr, 'Mgr', 'B94 lamp', 'Fixed',  'normal', 'resolved',  :sub, now(), :mgr, 'Resolver', null,  null),
+  (:mrCanc, :orgA, :mgr, 'Mgr', 'B94 sink', 'Gone',   'normal', 'cancelled', :sub, null,  null, null,       now(), null),
+  (:mrArch, :orgA, :mgr, 'Mgr', 'B94 vent', 'Old',    'normal', 'archived',  :sub, null,  null, null,       null,  now());
 insert into public.exception_occurrences
-  (id, organization_id, occurrence_number, rule, item_id, warehouse_id, first_seen_at, last_seen_at,
+  (id, organization_id, occurrence_number, rule, item_id, warehouse_id, first_seen_at, last_seen_at, resolved_at, resolved_reason,
    escalation_claimed_by, escalation_claimed_at) values
-  (:exOpen, :orgA, 1, 'label_mismatch', :itA, :whA, now(), now(), :sub, now());
+  (:exOpen, :orgA, 1, 'label_mismatch', :itA, :whA, now(), now(), null,  null,      :sub, now()),
+  (:exDone, :orgA, 2, 'label_mismatch', :itA, :whA, now(), now(), now(), 'cleared', :sub, now());
 
 -- Short names for the fixture's ids, so the pinned values read as words.
 create temp table b94_names (id uuid primary key, n text not null unique);
 insert into pg_temp.b94_names values
   (:orgA, 'orgA'), (:orgB, 'orgB'), (:orgC, 'orgC'),
-  (:own, 'own'), (:adm, 'adm'), (:mgr, 'mgr'), (:sub, 'sub'), (:adm2, 'adm2'), (:idle, 'idle'), (:pa, 'pa'),
+  (:own, 'own'), (:adm, 'adm'), (:mgr, 'mgr'), (:sub, 'sub'), (:adm2, 'adm2'), (:idle, 'idle'), (:pa, 'pa'), (:mgr2, 'mgr2'),
   (:outB, 'outB'), (:ownC, 'ownC'), (:cs, 'cs'),
   (:whA, 'whA'), (:whB, 'whB'), (:whC, 'whC'),
   (:ccOpen, 'ccOpen'), (:ccDone, 'ccDone'), (:ccB, 'ccB'), (:ccC, 'ccC'),
   (:oPick, 'oPick'), (:oDrv, 'oDrv'), (:oTrans, 'oTrans'), (:oDone, 'oDone'), (:oPickB, 'oPickB'), (:oPickPA, 'oPickPA'),
-  (:seOpen, 'seOpen'), (:seDone, 'seDone'), (:mrOpen, 'mrOpen'), (:exOpen, 'exOpen'),
+  (:oDrvDone, 'oDrvDone'), (:oDrvCanc, 'oDrvCanc'), (:oDrvDen, 'oDrvDen'),
+  (:seOpen, 'seOpen'), (:seDone, 'seDone'), (:mrOpen, 'mrOpen'), (:mrDone, 'mrDone'), (:mrCanc, 'mrCanc'), (:mrArch, 'mrArch'),
+  (:exOpen, 'exOpen'), (:exDone, 'exDone'),
   (:mSubA, 'mSubA'), (:mSubB, 'mSubB'), (:mPaA, 'mPaA'), (:mIdleA, 'mIdleA'), (:mOwnA, 'mOwnA');
 
 -- ══ Helpers (the 0393 helpers, sentinel XXB94) ═════════════════════════════
@@ -254,13 +291,22 @@ create function pg_temp.work() returns text language sql stable as $$
        from public.order_requests o where o.id = pg_temp.id('oPickPA')))
 $$;
 -- What must never move: A's closed rows (the completed count, the completed
--- order, the completed event), all of B (count/version, pick, warehouse) and
--- C's count.
+-- order's picker, the completed event; the completed, cancelled and denied
+-- deliveries' driver/assigned by/at; the resolved, cancelled and archived
+-- maintenance requests' local owner; the resolved escalation claim's
+-- claimer/at), all of B (count/version, pick, warehouse) and C's count.
 create function pg_temp.kept() returns text language sql stable as $$
   select concat_ws(' | ',
     (select pg_temp.who(c.assigned_to) from public.cycle_counts c where c.id = pg_temp.id('ccDone')),
     (select pg_temp.who(o.assigned_picker_id) from public.order_requests o where o.id = pg_temp.id('oDone')),
     (select pg_temp.who(e.assigned_user_id) from public.schedule_events e where e.id = pg_temp.id('seDone')),
+    (select string_agg(concat_ws('/', o.status, pg_temp.who(o.assigned_delivery_user_id), pg_temp.who(o.assigned_delivery_by),
+                                 pg_temp.at(o.assigned_delivery_at)), ' ' order by o.id)
+       from public.order_requests o where o.id in (pg_temp.id('oDrvDone'), pg_temp.id('oDrvCanc'), pg_temp.id('oDrvDen'))),
+    (select string_agg(q.status || '/' || pg_temp.who(q.local_owner_user_id), ' ' order by q.id)
+       from public.maintenance_requests q where q.id in (pg_temp.id('mrDone'), pg_temp.id('mrCanc'), pg_temp.id('mrArch'))),
+    (select concat_ws('/', pg_temp.who(x.escalation_claimed_by), pg_temp.at(x.escalation_claimed_at))
+       from public.exception_occurrences x where x.id = pg_temp.id('exDone')),
     (select concat_ws('/', pg_temp.who(c.assigned_to), c.assignment_version) from public.cycle_counts c where c.id = pg_temp.id('ccB')),
     (select pg_temp.who(o.assigned_picker_id) from public.order_requests o where o.id = pg_temp.id('oPickB')),
     (select pg_temp.who(w.manager_user_id) from public.warehouses w where w.id = pg_temp.id('whB')),
@@ -284,33 +330,34 @@ select is(pg_temp.work(),
   'sub/mgr/set/1 | sub/sub/set | staged_for_delivery/sub/mgr/set in_transit/sub/mgr/set | sub | sub | sub/set | sub | pa/pa',
   'F1: in A, S holds a count, a pick, two deliveries, a scheduled event, a maintenance request, an escalation claim and warehouse A; the Act-as seat holds a pick');
 select is(pg_temp.kept(),
-  'sub | sub | sub | sub/1 | sub | sub | cs',
-  'F2: S''s closed work in A, all of S''s work in B and C''s count');
+  'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | sub/1 | sub | sub | cs',
+  'F2: S''s closed work in A (a count, a pick, an event, three deliveries, three maintenance requests and a claim), all of S''s work in B and C''s count');
 
 -- ══ R. The release ═════════════════════════════════════════════════════════
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, 'select pg_temp.work() || '' # '' || pg_temp.kept()'),
   'ok:1:null/null/null/2 | null/null/null | staged_for_delivery/null/null/null in_transit/null/null/null | null | null | null/null | null | pa/pa # '
-  || 'sub | sub | sub | sub/1 | sub | sub | cs',
+  || 'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | sub/1 | sub | sub | cs',
   'R1: an admin removes S from A (Team''s delete): all seven kinds are released in A (the count''s assignee, claimer and claim time cleared, version + 1; the pick''s picker and claim; both deliveries'' driver, assigned by and at; the event, the local owner, the escalation claim and the manager); closed rows keep S; nothing in B or C moves; the Act-as seat''s pick stays');
 select is(
   pg_temp.attempt('authenticated', :sub, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format('select pg_temp.work() || '' # '' || pg_temp.kept() || '' # '' || pg_temp.audit(%L)', :orgA)),
   'ok:1:null/null/null/2 | null/null/null | staged_for_delivery/null/null/null in_transit/null/null/null | null | null | null/null | null | pa/pa # '
-  || 'sub | sub | sub | sub/1 | sub | sub | cs # '
+  || 'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | sub/1 | sub | sub | cs # '
   || 'cycle_count.released/ccOpen@sub:member_left,maintenance_request.owner_assigned/mrOpen@sub:member_left,'
   || 'order.delivery_unassigned/oDrv@sub:member_left,order.delivery_unassigned/oTrans@sub:member_left,'
   || 'order.picking_released/oPick@sub:member_left,user.open_work_released/mSubA@sub:member_left',
   'R2: S leaving A on their own (0140''s delete policy) releases the same set, with S as the actor and cause member_left');
 select is(
   pg_temp.attempt('service_role', null, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
-                  null, format('select pg_temp.work() || '' # '' || pg_temp.audit(%L)', :orgA)),
+                  null, format('select pg_temp.work() || '' # '' || pg_temp.kept() || '' # '' || pg_temp.audit(%L)', :orgA)),
   'ok:1:null/null/null/2 | null/null/null | staged_for_delivery/null/null/null in_transit/null/null/null | null | null | null/null | null | pa/pa # '
+  || 'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | sub/1 | sub | sub | cs # '
   || 'cycle_count.released/ccOpen@null:member_removed,maintenance_request.owner_assigned/mrOpen@null:member_removed,'
   || 'order.delivery_unassigned/oDrv@null:member_removed,order.delivery_unassigned/oTrans@null:member_removed,'
   || 'order.picking_released/oPick@null:member_removed,user.open_work_released/mSubA@null:member_removed',
-  'R3: the admin client with no subject (service_role) releases the same set, with no actor and cause member_removed');
+  'R3: the admin client with no subject (service_role) releases the same set, with no actor and cause member_removed; closed rows keep S');
 select is(
   pg_temp.attempt('service_role', null, format('delete from public.organization_members where id = %L and impersonation_expires_at is not null', :mPaA),
                   null, format('select pg_temp.work() || '' # '' || pg_temp.audit(%L)', :orgA)),
@@ -321,7 +368,7 @@ select is(
   pg_temp.attempt('authenticated', :outB, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgB, :sub),
                   null, format('select pg_temp.work() || '' # '' || pg_temp.kept() || '' # '' || pg_temp.audit(%L) || '' # '' || pg_temp.audit(%L)', :orgA, :orgB)),
   'ok:1:sub/mgr/set/1 | sub/sub/set | staged_for_delivery/sub/mgr/set in_transit/sub/mgr/set | sub | sub | sub/set | sub | pa/pa # '
-  || 'sub | sub | sub | null/2 | null | null | cs #  # '
+  || 'sub | sub | sub | completed/sub/mgr/set cancelled/sub/mgr/set denied/sub/mgr/set | resolved/sub cancelled/sub archived/sub | sub/set | null/2 | null | null | cs #  # '
   || 'cycle_count.released/ccB@outB:member_removed,order.picking_released/oPickB@outB:member_removed,user.open_work_released/mSubB@outB:member_removed',
   'R5: removing S from B releases only B''s count, pick and warehouse, audited in B; nothing in A moves');
 
@@ -413,7 +460,7 @@ select is(
 select is(
   pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L)::text', :mSubA)),
   '{"picks": 1, "deliveries": 2, "warehouses": 1, "cycleCounts": 1, "scheduleEvents": 1, "escalationClaims": 1, "maintenanceRequests": 1}',
-  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse)');
+  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse); S''s closed deliveries, maintenance requests and claim are not counted');
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format($q$select jsonb_build_object(
@@ -426,6 +473,7 @@ select is(
   'C1b: what the read says before the press is exactly what the removal releases, per kind (the summary row)');
 select is(
   pg_temp.call_as('authenticated', :mgr,  format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
+  || pg_temp.call_as('authenticated', :mgr2, format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', :sub,  format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', :adm2, format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', :outB, format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
@@ -433,9 +481,9 @@ select is(
   || pg_temp.call_as('authenticated', :adm,  format('select public.member_open_work(%L)::text', :mSubB)) || ' | '
   || pg_temp.call_as('anon', null,           format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', null,  format('select public.member_open_work(%L)::text', :mSubA)),
-  '42501:-:forbidden | 42501:-:forbidden | 42501:-:forbidden | P0002:-:member_not_found | P0002:-:member_not_found | '
+  '42501:-:forbidden | 42501:-:forbidden | 42501:-:forbidden | 42501:-:forbidden | P0002:-:member_not_found | P0002:-:member_not_found | '
   || 'P0002:-:member_not_found | 42501:-:permission denied for function member_open_work | 42501:-:unauthenticated',
-  'C2: refused for a manager, S (staff), an admin whose members:remove is revoked (42501 forbidden), an outsider, an unknown id and A''s admin asking about a membership in B (P0002), anon (no EXECUTE) and no subject (42501 unauthenticated)');
+  'C2: refused for a manager, a manager granted members:remove (the admin floor: the removal''s row policy refuses them too, G3), S (staff), an admin whose members:remove is revoked (42501 forbidden), an outsider, an unknown id and A''s admin asking about a membership in B (P0002), anon (no EXECUTE) and no subject (42501 unauthenticated)');
 select is(
   pg_temp.call_as('authenticated', :own, format('select (public.member_open_work(%L) ->> ''deliveries'')', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', :pa, format('select (public.member_open_work(%L) ->> ''deliveries'')', :mSubA)) || ' | '
@@ -541,6 +589,11 @@ select is(
                   null, format('select split_part(pg_temp.work(), '' | '', 1) || '' # '' || pg_temp.released_rows(%L)', :sub)),
   'ok:0:sub/mgr/set/1 # 0',
   'G2: a delete the row policy refuses (a manager) removes no row and releases nothing (the app reads this 0 as a refusal)');
+select is(
+  pg_temp.attempt('authenticated', :mgr2, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
+                  null, format('select split_part(pg_temp.work(), '' | '', 1) || '' # '' || pg_temp.released_rows(%L)', :sub)),
+  'ok:0:sub/mgr/set/1 # 0',
+  'G3: so does a manager granted members:remove (the app''s gate passes; 0140''s delete policy needs admin): 0 rows, nothing released');
 
 select * from finish();
 rollback;
