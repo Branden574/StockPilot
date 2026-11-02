@@ -56,11 +56,16 @@ const WITH_ADDRESS = {
   },
 };
 
-function renderManager(rows = [NO_ADDRESS, WITH_ADDRESS]) {
+function renderManager(
+  rows: Array<typeof NO_ADDRESS | typeof WITH_ADDRESS> = [NO_ADDRESS, WITH_ADDRESS],
+  { canManage = true, view = 'active' }: { canManage?: boolean; view?: 'active' | 'archived' } = {},
+) {
   return render(
     <ChartersManager
+      view={view}
       initial={rows}
       termSingular="Region"
+      canManage={canManage}
       eyebrow="Admin"
       title="Regions"
       subline="Top-level groupings for warehouses."
@@ -156,5 +161,49 @@ describe('ChartersManager', () => {
     fireEvent.click(create);
     await new Promise((r) => setTimeout(r, 50));
     expect(actions.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B99: only an owner's or an admin's change to a charter is saved (the write
+ * policy asks the admin role), so for anyone else the list is read-only: no
+ * New, no Edit, Archive or Restore, no Actions column and no dialog.
+ */
+describe('ChartersManager for someone who cannot change charters', () => {
+  it('shows the list with no New, no Actions column and no row actions', () => {
+    renderManager(undefined, { canManage: false });
+    expect(screen.getByRole('heading', { level: 1, name: 'Regions' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Active' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('button', { name: 'New region' })).toBeNull();
+    expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
+      'Name',
+      'Code',
+      'Warehouses',
+      'Users',
+      'Shipping address',
+    ]);
+    expect(screen.getByText('Harbor')).toBeInTheDocument();
+    expect(screen.getByText('Needed for shipping labels')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers no Restore in the archived view', () => {
+    renderManager([NO_ADDRESS], { canManage: false, view: 'archived' });
+    expect(screen.getByText('Harbor')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull();
+  });
+
+  it('an empty list does not point at New, or at archiving and restoring', () => {
+    const { unmount } = renderManager([], { canManage: false });
+    expect(screen.getByText('No regions yet')).toBeInTheDocument();
+    expect(screen.queryByText(/New region/)).toBeNull();
+    expect(screen.queryByText(/Create your first/)).toBeNull();
+    unmount();
+
+    renderManager([], { canManage: false, view: 'archived' });
+    expect(screen.getByText('No archived regions')).toBeInTheDocument();
+    expect(screen.queryByText(/you archive|restore them/i)).toBeNull();
   });
 });

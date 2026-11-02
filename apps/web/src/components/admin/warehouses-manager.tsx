@@ -92,6 +92,7 @@ export function WarehousesManager({
   managers,
   termSingular,
   charterSingular,
+  canManage,
   view = 'active',
   eyebrow,
   title,
@@ -102,6 +103,13 @@ export function WarehousesManager({
   managers: ManagerOption[];
   termSingular: string;
   charterSingular: string;
+  /**
+   * Whether to offer New, Edit, Archive and Restore: core
+   * canEditOrganizationSetup, owner or admin with organization:update. Every
+   * write policy on warehouses and their charter links asks the admin role,
+   * so for anyone else the list is read-only (B99).
+   */
+  canManage: boolean;
   view?: 'active' | 'archived';
   /** The page header's words, resolved by the page (terminology included). */
   eyebrow?: React.ReactNode;
@@ -125,7 +133,7 @@ export function WarehousesManager({
         subline={subline}
         actions={<ArchiveViewToggle view={view} />}
         primaryAction={
-          !isArchivedView ? (
+          canManage && !isArchivedView ? (
             <Button
               variant="gradient"
               onClick={() => {
@@ -144,13 +152,21 @@ export function WarehousesManager({
           <EmptyState
             icon={History}
             title={`No archived ${termSingular.toLowerCase()}s`}
-            description={`${termSingular}s you archive show up here so you can restore them later.`}
+            description={
+              canManage
+                ? `${termSingular}s you archive show up here so you can restore them later.`
+                : `Archived ${termSingular.toLowerCase()}s show up here.`
+            }
           />
         ) : (
           <EmptyState
             icon={Warehouse}
             title={`No ${termSingular.toLowerCase()}s yet`}
-            description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route orders. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+            description={
+              canManage
+                ? `Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route orders. Use the New ${termSingular.toLowerCase()} button above to add one.`
+                : `When an owner or admin adds a ${termSingular.toLowerCase()}, it shows up here.`
+            }
           />
         )
       ) : (
@@ -169,7 +185,9 @@ export function WarehousesManager({
                 {/* Below md the Actions column stays pinned to the card's right edge
                     while the other columns scroll under it, so Edit and Archive
                     are always on screen. */}
-                <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
+                {canManage ? (
+                  <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
+                ) : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -178,6 +196,7 @@ export function WarehousesManager({
                   key={row.id}
                   row={row}
                   isArchivedView={isArchivedView}
+                  canManage={canManage}
                   onEdit={() => {
                     setEditing(row);
                     setOpen(true);
@@ -189,14 +208,16 @@ export function WarehousesManager({
         </div>
       )}
 
-      <WarehouseDialog
-        open={open}
-        onOpenChange={setOpen}
-        editing={editing}
-        charters={charters}
-        managers={managers}
-        termSingular={termSingular}
-      />
+      {canManage ? (
+        <WarehouseDialog
+          open={open}
+          onOpenChange={setOpen}
+          editing={editing}
+          charters={charters}
+          managers={managers}
+          termSingular={termSingular}
+        />
+      ) : null}
     </>
   );
 }
@@ -204,10 +225,12 @@ export function WarehousesManager({
 function WarehouseTableRow({
   row,
   isArchivedView,
+  canManage,
   onEdit,
 }: {
   row: WarehouseRow;
   isArchivedView: boolean;
+  canManage: boolean;
   onEdit: () => void;
 }) {
   const router = useRouter();
@@ -274,70 +297,72 @@ function WarehouseTableRow({
       <TableCell className="text-ink-2">{row.manager_name ?? '—'}</TableCell>
       <TableCell className="text-right font-mono tabular-nums">{row.user_count}</TableCell>
       <TableCell className="text-right font-mono tabular-nums">{row.item_count}</TableCell>
-      <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
-        {/* The buttons sit in their own flex box: a flex table cell stops
+      {canManage ? (
+        <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
+          {/* The buttons sit in their own flex box: a flex table cell stops
             being a table cell (its row border and alignment break). */}
-        <div className="flex items-center justify-end gap-2">
-          {isArchivedView ? (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setConfirmError(null);
-                  setRestoreOpen(true);
-                }}
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> Restore
-              </Button>
-              <DestructiveConfirm
-                open={restoreOpen}
-                onOpenChange={setRestoreOpen}
-                title={`Restore "${row.name}"?`}
-                description="This brings the warehouse back into the active list."
-                confirmLabel="Restore"
-                tone="primary"
-                pending={restoreBusy}
-                error={confirmError}
-                onConfirm={confirmRestore}
-              />
-            </>
-          ) : (
-            <>
-              <Button variant="outline" size="sm" onClick={onEdit}>
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  setConfirmError(null);
-                  setArchiveOpen(true);
-                }}
-                aria-label="Archive"
-              >
-                <Trash2 className="text-muted-foreground h-4 w-4" />
-              </Button>
-              <DestructiveConfirm
-                open={archiveOpen}
-                onOpenChange={setArchiveOpen}
-                title={`Archive "${row.name}"?`}
-                description={
-                  <>
-                    Existing inventory in this warehouse stays put but the warehouse is hidden from
-                    pick lists and reports. You can restore it from the{' '}
-                    <strong>Archived view</strong>.
-                  </>
-                }
-                confirmLabel="Archive"
-                pending={archiveBusy}
-                error={confirmError}
-                onConfirm={confirmArchive}
-              />
-            </>
-          )}
-        </div>
-      </TableCell>
+          <div className="flex items-center justify-end gap-2">
+            {isArchivedView ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setRestoreOpen(true);
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Restore
+                </Button>
+                <DestructiveConfirm
+                  open={restoreOpen}
+                  onOpenChange={setRestoreOpen}
+                  title={`Restore "${row.name}"?`}
+                  description="This brings the warehouse back into the active list."
+                  confirmLabel="Restore"
+                  tone="primary"
+                  pending={restoreBusy}
+                  error={confirmError}
+                  onConfirm={confirmRestore}
+                />
+              </>
+            ) : (
+              <>
+                <Button variant="outline" size="sm" onClick={onEdit}>
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setArchiveOpen(true);
+                  }}
+                  aria-label="Archive"
+                >
+                  <Trash2 className="text-muted-foreground h-4 w-4" />
+                </Button>
+                <DestructiveConfirm
+                  open={archiveOpen}
+                  onOpenChange={setArchiveOpen}
+                  title={`Archive "${row.name}"?`}
+                  description={
+                    <>
+                      Existing inventory in this warehouse stays put but the warehouse is hidden
+                      from pick lists and reports. You can restore it from the{' '}
+                      <strong>Archived view</strong>.
+                    </>
+                  }
+                  confirmLabel="Archive"
+                  pending={archiveBusy}
+                  error={confirmError}
+                  onConfirm={confirmArchive}
+                />
+              </>
+            )}
+          </div>
+        </TableCell>
+      ) : null}
     </TableRow>
   );
 }

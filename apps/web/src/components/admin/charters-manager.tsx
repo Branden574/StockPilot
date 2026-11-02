@@ -117,6 +117,7 @@ function formatAddressLines(address: CharterAddress | null): string[] {
 export function ChartersManager({
   initial,
   termSingular,
+  canManage,
   view = 'active',
   eyebrow,
   title,
@@ -124,6 +125,13 @@ export function ChartersManager({
 }: {
   initial: CharterRow[];
   termSingular: string;
+  /**
+   * Whether to offer New, Edit, Archive and Restore: core
+   * canEditOrganizationSetup, owner or admin with organization:update.
+   * charters_admin_write asks the admin role, so for anyone else the list is
+   * read-only (B99).
+   */
+  canManage: boolean;
   view?: 'active' | 'archived';
   /** The page header's words, resolved by the page (terminology included). */
   eyebrow?: React.ReactNode;
@@ -147,7 +155,7 @@ export function ChartersManager({
         subline={subline}
         actions={<ArchiveViewToggle view={view} />}
         primaryAction={
-          !isArchivedView ? (
+          canManage && !isArchivedView ? (
             <Button
               variant="gradient"
               onClick={() => {
@@ -166,13 +174,21 @@ export function ChartersManager({
           <EmptyState
             icon={History}
             title={`No archived ${termSingular.toLowerCase()}s`}
-            description={`${termSingular}s you archive show up here so you can restore them later.`}
+            description={
+              canManage
+                ? `${termSingular}s you archive show up here so you can restore them later.`
+                : `Archived ${termSingular.toLowerCase()}s show up here.`
+            }
           />
         ) : (
           <EmptyState
             icon={Building2}
             title={`No ${termSingular.toLowerCase()}s yet`}
-            description={`Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing orders. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+            description={
+              canManage
+                ? `Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing orders. Use the New ${termSingular.toLowerCase()} button above to add one.`
+                : `When an owner or admin adds a ${termSingular.toLowerCase()}, it shows up here.`
+            }
           />
         )
       ) : (
@@ -190,7 +206,9 @@ export function ChartersManager({
                 {/* Below md the Actions column stays pinned to the card's right edge
                     while the other columns scroll under it, so Edit and Archive
                     are always on screen. */}
-                <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
+                {canManage ? (
+                  <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
+                ) : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -199,6 +217,7 @@ export function ChartersManager({
                   key={row.id}
                   row={row}
                   isArchivedView={isArchivedView}
+                  canManage={canManage}
                   onEdit={() => {
                     setEditing(row);
                     setOpen(true);
@@ -210,12 +229,14 @@ export function ChartersManager({
         </div>
       )}
 
-      <CharterDialog
-        open={open}
-        onOpenChange={setOpen}
-        editing={editing}
-        termSingular={termSingular}
-      />
+      {canManage ? (
+        <CharterDialog
+          open={open}
+          onOpenChange={setOpen}
+          editing={editing}
+          termSingular={termSingular}
+        />
+      ) : null}
     </>
   );
 }
@@ -223,10 +244,12 @@ export function ChartersManager({
 function CharterTableRow({
   row,
   isArchivedView,
+  canManage,
   onEdit,
 }: {
   row: CharterRow;
   isArchivedView: boolean;
+  canManage: boolean;
   onEdit: () => void;
 }) {
   const router = useRouter();
@@ -294,69 +317,71 @@ function CharterTableRow({
           </span>
         )}
       </TableCell>
-      <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
-        {/* The buttons sit in their own flex box: a flex table cell stops
+      {canManage ? (
+        <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
+          {/* The buttons sit in their own flex box: a flex table cell stops
             being a table cell (its row border and alignment break). */}
-        <div className="flex items-center justify-end gap-2">
-          {isArchivedView ? (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setConfirmError(null);
-                  setRestoreOpen(true);
-                }}
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> Restore
-              </Button>
-              <DestructiveConfirm
-                open={restoreOpen}
-                onOpenChange={setRestoreOpen}
-                title={`Restore "${row.name}"?`}
-                description="This brings the charter back into the active list."
-                confirmLabel="Restore"
-                tone="primary"
-                pending={restoreBusy}
-                error={confirmError}
-                onConfirm={confirmRestore}
-              />
-            </>
-          ) : (
-            <>
-              <Button variant="outline" size="sm" onClick={onEdit}>
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  setConfirmError(null);
-                  setArchiveOpen(true);
-                }}
-                aria-label="Archive"
-              >
-                <Trash2 className="text-muted-foreground h-4 w-4" />
-              </Button>
-              <DestructiveConfirm
-                open={archiveOpen}
-                onOpenChange={setArchiveOpen}
-                title={`Archive "${row.name}"?`}
-                description={
-                  <>
-                    Existing warehouses keep working. You can restore this from the{' '}
-                    <strong>Archived view</strong> later.
-                  </>
-                }
-                confirmLabel="Archive"
-                pending={archiveBusy}
-                error={confirmError}
-                onConfirm={confirmArchive}
-              />
-            </>
-          )}
-        </div>
-      </TableCell>
+          <div className="flex items-center justify-end gap-2">
+            {isArchivedView ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setRestoreOpen(true);
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Restore
+                </Button>
+                <DestructiveConfirm
+                  open={restoreOpen}
+                  onOpenChange={setRestoreOpen}
+                  title={`Restore "${row.name}"?`}
+                  description="This brings the charter back into the active list."
+                  confirmLabel="Restore"
+                  tone="primary"
+                  pending={restoreBusy}
+                  error={confirmError}
+                  onConfirm={confirmRestore}
+                />
+              </>
+            ) : (
+              <>
+                <Button variant="outline" size="sm" onClick={onEdit}>
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setArchiveOpen(true);
+                  }}
+                  aria-label="Archive"
+                >
+                  <Trash2 className="text-muted-foreground h-4 w-4" />
+                </Button>
+                <DestructiveConfirm
+                  open={archiveOpen}
+                  onOpenChange={setArchiveOpen}
+                  title={`Archive "${row.name}"?`}
+                  description={
+                    <>
+                      Existing warehouses keep working. You can restore this from the{' '}
+                      <strong>Archived view</strong> later.
+                    </>
+                  }
+                  confirmLabel="Archive"
+                  pending={archiveBusy}
+                  error={confirmError}
+                  onConfirm={confirmArchive}
+                />
+              </>
+            )}
+          </div>
+        </TableCell>
+      ) : null}
     </TableRow>
   );
 }
