@@ -82,12 +82,16 @@ interface Recorded {
  * The links as the table holds them, and the writes. The DELETE removes and
  * returns what `deleteRemoves` lets it (all it was asked for by default);
  * `beforeDelete` changes the table first, as another admin's save would;
- * `linkDelete` answers the DELETE with an error instead, removing nothing.
+ * `linkDelete` answers the DELETE with an error instead, removing nothing;
+ * `linksReRead` answers the links read with an `.in` filter (the re-read
+ * after a DELETE that answered fewer rows than it was asked to remove)
+ * instead of the table.
  */
 function stubWith(opts: {
   links: string[];
   linkInsert?: QueryResult;
   linkDelete?: QueryResult;
+  linksReRead?: QueryResult;
   deleteRemoves?: (asked: string[]) => string[];
   beforeDelete?: (links: string[]) => string[];
 }) {
@@ -109,7 +113,10 @@ function stubWith(opts: {
       recorded.warehouseUpdates.push(call);
       return { data: [{ id: WH }], error: null };
     },
-    'warehouse_charters.select': countedLikePostgrest(() => table),
+    'warehouse_charters.select': (call) =>
+      opts.linksReRead && call.methods.includes('in')
+        ? opts.linksReRead
+        : countedLikePostgrest(() => table)(call),
     'warehouse_charters.insert': (call) => {
       recorded.linkInserts.push(call);
       const result = opts.linkInsert ?? { data: null, error: null };
@@ -272,6 +279,102 @@ describe('a link DELETE that removes nothing', () => {
       before: { charterIds: [C1, C2, C3] },
       after: { charterIds: [C1] },
     });
+  });
+});
+
+describe('a link DELETE that removes some of the links and not the others', () => {
+  // Nothing added; the save removes C2 and C3, and the DELETE removes only C2.
+  const removesOnlyC2 = (asked: string[]) => asked.filter((id) => id !== C3);
+
+  it('the re-read finds the other still there: the audit row names the links now in place, then W4', async () => {
+    const { stub, links } = stubWith({ links: [C1, C2, C3], deleteRemoves: removesOnlyC2 });
+
+    await expect(
+      new WarehouseChartersService(memberCtx(stub, 'admin')).setForWarehouse(WH, [C1]),
+    ).rejects.toMatchObject({ code: 'conflict', message: W4 });
+
+    // The re-read asks for every link the save removes.
+    expect(inFilters(lastLinksRead(stub))).toEqual([['charter_id', [C2, C3]]]);
+    expect(links()).toEqual([C1, C3]);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]![0]).toEqual({
+      event: 'warehouse_charters.updated',
+      entityType: 'warehouse',
+      entityId: WH,
+      before: { charterIds: [C1, C2, C3] },
+      after: { charterIds: [C1, C3] },
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('the re-read fails: the link the DELETE did not answer for counts as still there, the save is not taken as done, and the failure is reported', async () => {
+    const DB_TEXT = 'canceling statement due to statement timeout on "warehouse_charters"';
+    const { stub, links } = stubWith({
+      links: [C1, C2, C3],
+      deleteRemoves: removesOnlyC2,
+      linksReRead: { data: null, error: { message: DB_TEXT, code: '57014' } },
+    });
+
+    await expect(
+      new WarehouseChartersService(memberCtx(stub, 'admin')).setForWarehouse(WH, [C1]),
+    ).rejects.toMatchObject({ code: 'conflict', message: W4 });
+
+    expect(links()).toEqual([C1, C3]);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]![0]).toMatchObject({
+      event: 'warehouse_charters.updated',
+      after: { charterIds: [C1, C3] },
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(String((reportError.mock.calls[0]![0] as Error).message)).toContain(DB_TEXT);
+    expect(reportError.mock.calls[0]![1]).toEqual({
+      tag: 'warehouse_charters.save_check',
+      extra: { warehouseId: WH, check: 'removed' },
+    });
+  });
+
+  it('the DELETE removes none and the re-read fails: W3, no audit row, and the failure is reported', async () => {
+    const { stub, links } = stubWith({
+      links: [C1, C2, C3],
+      deleteRemoves: () => [],
+      linksReRead: { data: null, error: { message: 'connection reset', code: '08006' } },
+    });
+
+    await expect(
+      new WarehouseChartersService(memberCtx(stub, 'admin')).setForWarehouse(WH, [C1]),
+    ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+    expect(links()).toEqual([C1, C2, C3]);
+    expect(audit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({ tag: 'warehouse_charters.save_check' });
+  });
+});
+
+describe('a link INSERT the policy refuses, with nothing of the save landed', () => {
+  it('setForWarehouse: W3, not the internal error, before the DELETE, and no audit row', async () => {
+    // Add C2, remove C1: the INSERT runs first and is refused.
+    const { stub, recorded, links } = stubWith({ links: [C1], linkInsert: REFUSED_BY_POLICY });
+
+    await expect(
+      new WarehouseChartersService(memberCtx(stub, 'admin')).setForWarehouse(WH, [C2]),
+    ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+    expect(recorded.linkInserts).toHaveLength(1);
+    expect(recorded.linkDeletes).toEqual([]);
+    expect(links()).toEqual([C1]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('through the action, a save of only the charter list: the answer is W3, not "An internal error occurred."', async () => {
+    const { stub, recorded } = stubWith({ links: [C1], linkInsert: REFUSED_BY_POLICY });
+    mockWithContext.mockResolvedValue(memberCtx(stub, 'admin'));
+
+    const res = await updateWarehouseAction(WH, { charterIds: [C1, C2] });
+
+    expect(res).toEqual({ ok: false, error: { code: 'conflict', message: W3 } });
+    expect(recorded.warehouseUpdates).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
   });
 });
 

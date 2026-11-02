@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { audit } = vi.hoisted(() => ({ audit: vi.fn(async (..._args: unknown[]) => {}) }));
+const { audit, reportError } = vi.hoisted(() => ({
+  audit: vi.fn(async (..._args: unknown[]) => {}),
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
 vi.mock('./audit', () => ({ audit }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import { effectivePermissions, type Role } from '@stockpilot/core';
 
@@ -44,7 +48,8 @@ function memberCtx(stub: SupabaseStub, role: Role, overrides = [] as typeof gran
   }) as never;
 }
 
-function stubWith(opts: { update?: QueryResult; insert?: QueryResult } = {}) {
+/** `read` answers the charter read instead of the rows below. */
+function stubWith(opts: { update?: QueryResult; insert?: QueryResult; read?: QueryResult } = {}) {
   const writes: MockCall[] = [];
   const reads: MockCall[] = [];
   const charters = servedLikePostgrest([
@@ -54,7 +59,7 @@ function stubWith(opts: { update?: QueryResult; insert?: QueryResult } = {}) {
   const stub = makeSupabaseStub({
     'charters.select': (call) => {
       reads.push(call);
-      return charters(call);
+      return opts.read ?? charters(call);
     },
     'charters.update': (call) => {
       writes.push(call);
@@ -70,6 +75,7 @@ function stubWith(opts: { update?: QueryResult; insert?: QueryResult } = {}) {
 
 beforeEach(() => {
   audit.mockClear();
+  reportError.mockClear();
 });
 
 describe('ChartersService refuses a member below admin before any write', () => {
@@ -142,6 +148,30 @@ describe('ChartersService.update asks its row back', () => {
       expect(audit).not.toHaveBeenCalled();
     },
   );
+
+  it('an update with no fields whose row check read fails: W3, the database text only in the server report, and no charter.updated', async () => {
+    const DB_TEXT = 'canceling statement due to statement timeout on "charters"';
+    const { stub, writes, reads } = stubWith({
+      read: { data: null, error: { message: DB_TEXT, code: '57014' } },
+    });
+
+    const refusal = await new ChartersService(memberCtx(stub, 'admin')).update(CHARTER, {}).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(refusal).toMatchObject({ code: 'conflict', message: W3 });
+    expect(JSON.stringify(refusal)).not.toContain('statement timeout');
+    expect(reads).toHaveLength(1);
+    expect(writes).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(String((reportError.mock.calls[0]![0] as Error).message)).toContain(DB_TEXT);
+    expect(reportError.mock.calls[0]![1]).toEqual({
+      tag: 'organization_setup.row_check',
+      extra: { table: 'charters', id: CHARTER },
+    });
+  });
 
   it("an admin's UPDATE that lands writes charter.updated as before", async () => {
     const { stub, writes, reads } = stubWith();

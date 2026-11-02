@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { audit } = vi.hoisted(() => ({ audit: vi.fn(async (..._args: unknown[]) => {}) }));
+const { audit, reportError } = vi.hoisted(() => ({
+  audit: vi.fn(async (..._args: unknown[]) => {}),
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
 vi.mock('./audit', () => ({ audit }));
-vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import { effectivePermissions, type Role } from '@stockpilot/core';
 
@@ -93,12 +96,14 @@ interface Recorded {
 /**
  * A stub that answers as the database does. `rowUpdate` answers the warehouse
  * UPDATE (its row back for an admin; none when the policy hides it),
- * `linkInsert` the link INSERT, and the link DELETE removes and returns the
- * rows it was asked for unless `deleteRemoves` says otherwise.
+ * `rowRead` the warehouse read instead of the rows below, `linkInsert` the
+ * link INSERT, and the link DELETE removes and returns the rows it was asked
+ * for unless `deleteRemoves` says otherwise.
  */
 function stubWith(opts: {
   links?: string[];
   rowUpdate?: QueryResult;
+  rowRead?: QueryResult;
   warehouseInsert?: QueryResult;
   linkInsert?: QueryResult;
   deleteRemoves?: (asked: string[]) => string[];
@@ -119,7 +124,7 @@ function stubWith(opts: {
   const stub = makeSupabaseStub({
     'warehouses.select': (call) => {
       recorded.warehouseReads.push(call);
-      return warehouses(call);
+      return opts.rowRead ?? warehouses(call);
     },
     'warehouses.update': (call) => {
       recorded.warehouseUpdates.push(call);
@@ -170,6 +175,7 @@ const auditEvents = () => audit.mock.calls.map((c) => (c[0] as { event: string }
 
 beforeEach(() => {
   audit.mockClear();
+  reportError.mockClear();
 });
 
 describe('WarehousesService refuses a member below admin before any read or write', () => {
@@ -195,6 +201,32 @@ describe('WarehousesService refuses a member below admin before any read or writ
     expect(recorded.itemCounts).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
   });
+
+  // No charter list in these saves, so the charter save's own check never
+  // runs: only update()'s own check stands between them and the database. A
+  // direct call to updateWarehouseAction can send either. The fields-only
+  // UPDATE changed no row for this manager, and the empty save passed the row
+  // read (warehouses_select lets a manager read it) and wrote warehouse.updated.
+  it.each([
+    ['a save of row fields with no charter list', { name: 'Renamed' }],
+    ['a save with nothing in it', {}],
+  ])(
+    'update: %s from a manager granted organization:update is refused, with nothing read, written or audited',
+    async (_label, patch) => {
+      const { stub, recorded } = stubWith({ links: [C1], rowUpdate: { data: null, error: null } });
+
+      await expect(
+        new WarehousesService(memberCtx(stub, 'manager', grant)).update(WH, patch),
+      ).rejects.toMatchObject({ code: 'forbidden', message: W1 });
+
+      expect(recorded.warehouseReads).toEqual([]);
+      expect(recorded.warehouseUpdates).toEqual([]);
+      expect(stub.chainsAll.get('warehouse_charters.select')).toBeUndefined();
+      expect(recorded.linkInserts).toEqual([]);
+      expect(recorded.linkDeletes).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
 
   it('create: staff granted organization:update for the role are refused before the INSERT', async () => {
     const { stub, recorded } = stubWith({ warehouseInsert: REFUSED_BY_POLICY });
@@ -324,6 +356,55 @@ describe('WarehousesService.update with no row field', () => {
     expect(links()).toEqual([C1, C2]);
     expect(auditEvents()).toEqual(['warehouse_charters.updated', 'warehouse.updated']);
   });
+
+  it("an admin's save of only the charter list whose link INSERT the policy refuses: W3, not the internal error, and no audit row", async () => {
+    // The row check is a read, so nothing of this save landed before the
+    // INSERT.
+    const { stub, recorded, links } = stubWith({ links: [C1], linkInsert: REFUSED_BY_POLICY });
+
+    await expect(
+      new WarehousesService(memberCtx(stub, 'admin')).update(WH, { charterIds: [C1, C2] }),
+    ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+    expect(recorded.warehouseUpdates).toEqual([]);
+    expect(recorded.linkInserts).toHaveLength(1);
+    expect(links()).toEqual([C1]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['only the charter list', { charterIds: [C1, C2] }],
+    ['nothing in it', {}],
+  ])(
+    "an admin's save of %s whose row check read fails: W3, the database text only in the server report, and no audit row",
+    async (_label, patch) => {
+      const DB_TEXT = 'canceling statement due to statement timeout on "warehouses"';
+      const { stub, recorded, links } = stubWith({
+        links: [C1],
+        rowRead: { data: null, error: { message: DB_TEXT, code: '57014' } },
+      });
+
+      const refusal = await new WarehousesService(memberCtx(stub, 'admin')).update(WH, patch).then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect(refusal).toMatchObject({ code: 'conflict', message: W3 });
+      expect(JSON.stringify(refusal)).not.toContain('statement timeout');
+      expect(recorded.warehouseReads).toHaveLength(1);
+      expect(stub.chainsAll.get('warehouse_charters.select')).toBeUndefined();
+      expect(recorded.warehouseUpdates).toEqual([]);
+      expect(recorded.linkInserts).toEqual([]);
+      expect(links()).toEqual([C1]);
+      expect(audit).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledTimes(1);
+      expect(String((reportError.mock.calls[0]![0] as Error).message)).toContain(DB_TEXT);
+      expect(reportError.mock.calls[0]![1]).toEqual({
+        tag: 'organization_setup.row_check',
+        extra: { table: 'warehouses', id: WH },
+      });
+    },
+  );
 
   it('a save with a row field sends no extra read: the UPDATE asks its row back', async () => {
     const { stub, recorded } = stubWith({ links: [C1] });
