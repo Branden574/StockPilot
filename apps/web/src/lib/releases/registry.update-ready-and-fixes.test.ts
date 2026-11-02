@@ -67,7 +67,15 @@ const NEWER_IDS = [
   'integration-retries-2026-11',
   'lists-delivery-sites-and-fixes-2026-11',
 ];
-const newerReads = NEWER_IDS.map((id) => ({
+/**
+ * Added by docs/whats-new-2026-11-02c (2026-11-02): the web fixes and archived
+ * charters releases, published later that evening, sit above NEWER_IDS and
+ * reach an owner. They are read with NEWER_IDS (newerReads) and stamped seen in
+ * each phone state below, so every notice and list these tests check is the
+ * one it checked before.
+ */
+const LATER_IDS = ['web-fixes-2026-11-02', 'archived-charters-2026-11'];
+const newerReads = [...LATER_IDS, ...NEWER_IDS].map((id) => ({
   release_id: id,
   revision: 1,
   dismissed_at: null,
@@ -88,11 +96,18 @@ const PUBLISHED_IDS = RELEASES.filter((r) => r.status === 'published').map((r) =
 const phoneSeen = (ids: readonly string[]): Record<string, unknown> =>
   Object.fromEntries(ids.map((id) => [id, { at: '2026-11-02T00:00:00Z', outcome: 'seen' }]));
 /** The published releases below this one. */
-const OLDER_IDS = PUBLISHED_IDS.filter((id) => id !== ID && !NEWER_IDS.includes(id));
+const OLDER_IDS = PUBLISHED_IDS.filter(
+  (id) => id !== ID && !NEWER_IDS.includes(id) && !LATER_IDS.includes(id),
+);
 /** Closed What's New before #461 went live (about 15:33Z): only the older releases. */
-const closedBefore461 = phoneSeen(OLDER_IDS);
+// Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without LATER_IDS): the releases published later are stamped seen, so the list is the one it was.
+const closedBefore461 = phoneSeen([...OLDER_IDS, ...LATER_IDS]);
 /** Closed it between #461 and #471 (about 17:33Z): the lists release too. */
-const closedBefore471 = phoneSeen([...OLDER_IDS, 'lists-delivery-sites-and-fixes-2026-11']);
+const closedBefore471 = phoneSeen([
+  ...OLDER_IDS,
+  ...LATER_IDS,
+  'lists-delivery-sites-and-fixes-2026-11',
+]);
 /** Closed it after #471 went live: every published release but this one. */
 const closedAfter471 = phoneSeen(PUBLISHED_IDS.filter((id) => id !== ID));
 
@@ -159,9 +174,9 @@ describe('the update-ready-and-fixes release', () => {
   // Renamed when main was merged in after #461 and #471 (2026-11-02; was: "is published once, at the top, ...", with ID at RELEASES[0]): the three releases in NEWER_IDS are dated later and sit above it. Claim kept: published once, at revision 1, with the B44 draft folded in and no draft left.
   it('is published once, directly below the lists-delivery-sites-and-fixes release and above the export fixes release, at revision 1, with the B44 draft folded in and no draft left', () => {
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES[0]): the three newer releases take 0 to 2, so this one is at 3.
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES.slice(0, 3).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[5]?.id).toBe(ID);
+    expect(RELEASES.slice(2, 5).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -181,10 +196,10 @@ describe('the update-ready-and-fixes release', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T04:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES.slice(1)): this release is at 3, so the releases below it start at 4; the three above it are dated later.
-    for (const r of RELEASES.slice(4)) {
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    for (const r of RELEASES.slice(0, 3)) {
+    for (const r of RELEASES.slice(2, 5)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -314,10 +329,11 @@ describe('the update-ready-and-fixes release', () => {
 
     // A member all three reach (whoever manages integrations with the
     // Integrations module on, here an owner with every permission and module).
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 4)): the web fixes and archived charters releases are published later, at the top.
     expect(
       visibleReleases(RELEASES, everyone)
         .map((r) => r.id)
-        .slice(0, 4),
+        .slice(2, 6),
     ).toEqual([...NEWER_IDS, ID]);
     // Phone last closed before #461 went live (about 15:33Z): the three newer
     // releases fill the list, and the close stamps this one, never shown.

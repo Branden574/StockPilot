@@ -28,6 +28,173 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'web-fixes-2026-11-02',
+    revision: 1,
+    // Two web fixes, published together at the top, the newest release:
+    // - B20a, #455 (squash 1ce98c290, live 2026-11-02 18:23:56Z; no phone
+    //   change, no migration), the entry from #455's What's New section;
+    // - S45, #468 (squash 3549b480d, live 20:20:50Z, web build b38578d2d81b;
+    //   no phone update, no migration), the entry from #468's draft.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - rental-cart-per-person: New rental's cart is saved under
+    //   rentalDraftPrefixFor(viewerUserId), 'rental-draft:v2:<user>:'
+    //   (components/orders/v2/cart-context.tsx:49-51; the form,
+    //   components/rentals/rental-create-form.tsx:544-549; the viewer,
+    //   app/(dashboard)/dashboard/rentals/new/page.tsx:363); before, the key
+    //   was 'rental-draft:<warehouse>' for whoever used the browser
+    //   (cart-context.tsx:33-35). The cart is restored from its own key when
+    //   New rental opens (cart-context.tsx:151-158). The old key is removed,
+    //   unread, each time New rental opens for a warehouse
+    //   (rental-create-form.tsx:532-538), so a cart started before #455 is
+    //   cleared. Only items and quantities were ever saved: the borrower,
+    //   return date and notes are the form's own state
+    //   (rental-create-form.tsx:159-166). Audience: New rental checks
+    //   rentals:create, then the Rentals module (rentals/new/page.tsx:69-71,
+    //   :81-84).
+    // - logo-too-large-to-print: setOrgLogoUrlAction refuses a PNG, JPEG or
+    //   WebP logo over DECODE_MAX_INPUT_PIXELS (50 million, lib/image-decode.ts
+    //   :54-60), removes the object and returns before the organization row
+    //   is changed, with the sentence the production check saw
+    //   (server/actions/profile.ts:488-508); owners and admins only
+    //   (profile.ts:424-426; settings/organization/page.tsx:17-19). The PDF
+    //   side refuses the same files (image-decode.ts:647-651), and
+    //   prefetchPdfLogo then gives no logo (lib/pdf/image-prefetch.ts:416-428),
+    //   so the header shows the organization name alone
+    //   (lib/pdf/branding.tsx:52-58). The six branded PDFs that print the logo
+    //   include purchase orders, cycle count sheets and reports
+    //   (app/api/purchase-orders/[id]/pdf, cycle-counts/[id]/pdf,
+    //   reports/[slug]/pdf).
+    // Checks: production check batch-1830 (New rental: the cart saved under
+    // the v2 per-person key and removed cleanly); production checks s45-logo
+    // and s45-pdf (a 10000 by 6000 PNG refused with the sentence; a 6000 by
+    // 1200 wordmark accepted and printed at 512 by 102 on a purchase order).
+    // Changed from the drafts: logo-too-large-to-print's howItAffectsYou said
+    // ordinary logos "upload and print as before": a logo over 1024 px now
+    // prints from a 512 px copy (image-prefetch.ts:226-247), so it says they
+    // are accepted as before and print. The summary is new.
+    // Not announced (each PR's own reasons): #455's tracking-key rule, photo
+    // route gate and retired route; #468's photo and export changes, and the
+    // WebP and AVIF logos that now print (B48's entry, the integrator's call).
+    // No phone update ships with this release.
+    status: 'published',
+    title: "New rental keeps each person's cart, and Settings refuses a logo too large to print",
+    summary:
+      'On the web, the items you add on New rental are now saved for your account only, so the next person to sign in on the same computer no longer sees them. Under Settings, Organization, a logo too large to print is now refused with its size, and your current logo stays.',
+    publishedAt: '2026-11-02T20:42:00Z',
+    entries: [
+      {
+        id: 'rental-cart-per-person',
+        category: 'fixed',
+        area: 'Rentals',
+        title: "New rental keeps each person's cart to themselves",
+        whatChanged:
+          'On the web, the items you add on New rental are now saved for your account only. Before, someone else who signed in on the same computer and opened New rental for the same warehouse saw the items and quantities you had added.',
+        whyItMatters:
+          "On a shared computer, the next person could check out a rental with someone else's items without noticing.",
+        howItAffectsYou:
+          'Items you added and did not check out are still there when you come back to New rental on the same computer. A cart started before this change is not kept: it is cleared the first time New rental opens for its warehouse, so add those items again.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'logo-too-large-to-print',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Settings tells you when a logo is too large to print',
+        whatChanged:
+          'Under Settings, Organization, Logo, a PNG, JPG or WebP image of more than 50 million pixels, such as one 8000 by 8000 pixels, is no longer accepted. Settings says the image is too large to print and gives its size, removes the file, and keeps your current logo.',
+        whyItMatters:
+          'Your logo prints at the top of PDFs such as purchase orders, cycle count sheets and reports. A logo that large is now left out of those PDFs, because preparing it takes too much time and memory. Settings tells you when you upload it, instead of the PDFs quietly showing only your organization name.',
+        howItAffectsYou:
+          'Logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs. If the logo you have now is larger than this, your PDFs show only your organization name until you upload a smaller copy.',
+        whatToDo:
+          'No action needed. If Settings says your logo is too large, save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+    ],
+  },
+  {
+    id: 'archived-charters-2026-11',
+    revision: 1,
+    // S44, #467 (squash c4323b76a, live 2026-11-02 18:29:46Z, web build
+    // 34b6ea9ad5d0; web only, no migration, no phone code), from the draft
+    // release in #467's description, published as its own release below the
+    // web fixes release, which is dated later.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - team-charters-archived-kept: the member Charters dialog lists every
+    //   charter the member holds that the active list lacks, named
+    //   '(archived)' or '(inactive)' (components/team/team-manager.tsx
+    //   :884-906, listed after the active rows at :947), and seeds its ticks
+    //   from every held id, never pruned (:908-914), so a Save with no change
+    //   sends the same set (:921-923). Before, the ticks were only the active
+    //   charters the warehouse links (team-manager.tsx at c4323b76a^,
+    //   :853-857), and Save sent those (:866). The dialog shows to owners and
+    //   admins (canManage, team-manager.tsx:310-311, :327); the Team page
+    //   checks members:invite (team/page.tsx:31-32).
+    // - item-form-archived-charter-named: new picks are the linked active
+    //   charters only (components/inventory/item-form.tsx:1130-1146); the
+    //   record's own charter is kept on its own warehouse and on any warehouse
+    //   that links it (:1149-1181), named '(archived)' or '(inactive)'
+    //   (:1186-1222), read by id on the edit pages
+    //   (inventory/[id]/edit/page.tsx:132-143, books/[id]/edit/page.tsx
+    //   :139-150). Before, every linked charter was offered, named
+    //   `charterById.get(id) ?? id` (item-form.tsx at c4323b76a^, :1123).
+    //   Restore: Admin, Charters, Archived view (components/admin/
+    //   charters-manager.tsx:301-316, :346-348). Duplicate keeps the
+    //   original's charter (server/services/inventory.ts:3826), and Add sizes
+    //   sends the source's (components/inventory/add-sized-variants-button.tsx
+    //   :121). The edit pages check items:update, the new pages items:create.
+    // Checks: the lab walk (walk-s44, synthetic data, PASS) for the archived
+    // and inactive cases; the production check batch-1830 (names only, never
+    // an id, in the Team dialog, New item and Edit; the demo workspace has no
+    // archived charter). The read-only production counts were not run, so no
+    // line says who was affected before this change.
+    // Changed from the draft: the summary said "instead of a long code" for
+    // both places: the Team dialog did not list such a charter at all, so the
+    // summary names each. item-form-archived-charter-named's whyItMatters
+    // said "picking it put new stock under the archived charter": it now
+    // says it could be picked for an item or book (the form offered it,
+    // item-form.tsx at c4323b76a^:1123). Its whatChanged last sentence says
+    // "as a new choice", as the record's own charter is still offered back.
+    status: 'published',
+    title: 'On the web, archived charters show by name and are kept when you save',
+    summary:
+      "On the web, a charter that has been archived now shows by its name, marked (archived), and saving keeps it: on the item and book forms, where it showed as a long code, and for owners and admins in a member's Charters dialog on Team, where it was not listed. The web no longer offers an archived charter as a new choice.",
+    publishedAt: '2026-11-02T19:00:00Z',
+    entries: [
+      {
+        id: 'team-charters-archived-kept',
+        category: 'fixed',
+        area: 'Team',
+        title: "Saving a member's charter access keeps their archived charters",
+        whatChanged:
+          "On Team, the Charters dialog in a member's menu now also lists any of their charters that has been archived, ticked and marked (archived). Saving keeps it unless you untick it.",
+        whyItMatters:
+          'An archived charter was not listed in the dialog, so a save did not keep it.',
+        howItAffectsYou: 'Saving changes only the charters you tick or untick.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/team', label: 'Open Team' },
+        audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
+      },
+      {
+        id: 'item-form-archived-charter-named',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Item and book forms name an archived charter instead of showing a long code',
+        whatChanged:
+          'On the web, when you edit an item or book whose charter has been archived, the Charter list shows that charter by name, marked (archived), and saving keeps it, also when you move the item or book to another warehouse that still serves that charter. The web no longer offers an archived charter as a new choice for an item or book.',
+        whyItMatters:
+          'A charter archived while a warehouse still served it showed in the Charter list as a long code, and it could be picked for an item or book.',
+        howItAffectsYou:
+          "To use an archived charter for new stock again, an admin restores it from the Archived view in Admin, Charters. A copy or a new size made from a record keeps that record's charter.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:create', 'items:update'] },
+      },
+    ],
+  },
+  {
     id: 'authenticator-code-requests-2026-11',
     revision: 1,
     // S43a, #447 (squash dd7cc1458, merged 2026-11-02 06:49Z; web only, no
