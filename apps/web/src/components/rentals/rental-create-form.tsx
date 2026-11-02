@@ -13,6 +13,7 @@ import {
   clearCartDraft,
   initialCartState,
   RENTAL_DRAFT_PREFIX,
+  rentalDraftPrefixFor,
   useCart,
 } from '@/components/orders/v2/cart-context';
 import { CatalogGrid } from '@/components/orders/v2/catalog-grid';
@@ -85,6 +86,9 @@ export interface RentalCreateFormProps {
   aisles: AisleSummary[];
   members: Member[];
   viewerRole: string;
+  /** The signed-in member. The cart is saved under their own key
+   *  (rentalDraftPrefixFor), never one the next person on the browser opens. */
+  viewerUserId: string;
 }
 
 // Inner component that has access to CartContext
@@ -94,6 +98,7 @@ function RentalCreateFormInner({
   items: rawItems,
   aisles,
   members,
+  viewerUserId,
 }: RentalCreateFormProps) {
   const router = useRouter();
   const { state, dispatch } = useCart();
@@ -277,7 +282,7 @@ function RentalCreateFormInner({
         return;
       }
 
-      clearCartDraft(warehouseId, RENTAL_DRAFT_PREFIX);
+      clearCartDraft(warehouseId, rentalDraftPrefixFor(viewerUserId));
       toast.success('Rental checked out.');
       router.push(`/dashboard/rentals/${res.data.id}`);
     });
@@ -510,11 +515,38 @@ export function RentalCreateForm(props: RentalCreateFormProps) {
     fulfillmentType: 'pickup',
   });
 
+  // ═══ THE OLD SHARED CART IS REMOVED, NEVER OPENED (review of B20a) ═══
+  //
+  // Before B20a this page saved its cart under `rental-draft:<warehouse>`, for
+  // whoever used the browser. A cart left there belongs to no account, so
+  // nobody can say whose it is: adopting it once (legacyDraftPrefix, as Place
+  // an order does with its own old drafts) handed it to whoever opened New
+  // rental first on that computer. So the cart is given no legacyDraftPrefix,
+  // and the old key is removed here, unread, each time New rental opens for a
+  // warehouse, whether or not the viewer has a cart of their own: it neither
+  // waits for the next person nor moves to anyone's account. A tab still on
+  // the previous build may save there again; this build never reads the key,
+  // and the next open removes it. The cost: a cart left unsent across the
+  // deploy is lost. This form stays mounted when the warehouse changes (only
+  // the keyed cart below starts again), hence the warehouse dependency.
+  React.useEffect(() => {
+    try {
+      localStorage.removeItem(`${RENTAL_DRAFT_PREFIX}${props.warehouseId}`);
+    } catch {
+      /* storage refused: this build never reads the key anyway */
+    }
+  }, [props.warehouseId]);
+
   return (
     // Keyed by the catalog's warehouse: switching warehouses (or going Back)
     // starts a fresh cart for that warehouse, restored from its own draft,
     // instead of carrying lines from a catalog that is no longer on screen.
-    <CartProvider key={props.warehouseId} initial={initial} draftPrefix={RENTAL_DRAFT_PREFIX}>
+    // The draft is the viewer's own (B20a).
+    <CartProvider
+      key={props.warehouseId}
+      initial={initial}
+      draftPrefix={rentalDraftPrefixFor(props.viewerUserId)}
+    >
       <RentalCreateFormInner {...props} />
     </CartProvider>
   );
