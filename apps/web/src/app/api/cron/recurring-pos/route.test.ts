@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
+import { NOT_A_LIST } from '@/test/postgrest-answers';
 import {
   inFilters,
   makeSupabaseStub,
@@ -171,13 +172,40 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     role: QueryResult | null;
     user: QueryResult | null;
   } = { role: null, user: null };
+  /** A failed read: its error, and the status line postgrest-js gives with it
+   *  when set (a gateway's 502 with an empty body has an empty message). */
+  type FailedRead = { error: QueryResult['error']; status?: number; statusText?: string };
   /** When set, the read of the creators' memberships (by user id) fails with
    *  this error. The owners and admins read (by role) still answers. */
-  const creatorsRead: { error: QueryResult['error'] } = { error: null };
+  const creatorsRead: FailedRead = { error: null };
+  /** When set, notifyAdmins' read of every owner and admin fails with this
+   *  error (buildSystemContext's read of one, with its limit, still answers). */
+  const adminsRead: FailedRead = { error: null };
+  /** The failed read as postgrest-js answers it. */
+  const failedAnswer = (read: FailedRead) =>
+    ({
+      data: null,
+      error: read.error,
+      status: read.status,
+      statusText: read.statusText,
+    }) as QueryResult;
+  /** When set, that read answers with no error and no list (docket S27):
+   *  the creators' memberships, the owners and admins, either override. */
+  const oddAnswer: Record<'creators' | 'admins' | 'role' | 'user', QueryResult | null> = {
+    creators: null,
+    admins: null,
+    role: null,
+    user: null,
+  };
   beforeEach(() => {
     overrides.role = null;
     overrides.user = null;
-    creatorsRead.error = null;
+    Object.assign(creatorsRead, { error: null, status: undefined, statusText: undefined });
+    Object.assign(adminsRead, { error: null, status: undefined, statusText: undefined });
+    oddAnswer.creators = null;
+    oddAnswer.admins = null;
+    oddAnswer.role = null;
+    oddAnswer.user = null;
   });
 
   /**
@@ -190,7 +218,14 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
    */
   function members(call: MockCall): QueryResult {
     if (creatorsRead.error && inFilters(call).some(([col]) => col === 'user_id')) {
-      return { data: null, error: creatorsRead.error };
+      return failedAnswer(creatorsRead);
+    }
+    if (oddAnswer.creators && inFilters(call).some(([col]) => col === 'user_id')) {
+      return oddAnswer.creators;
+    }
+    if (inFilters(call).some(([col]) => col === 'role') && !call.methods.includes('limit')) {
+      if (adminsRead.error) return failedAnswer(adminsRead);
+      if (oddAnswer.admins) return oddAnswer.admins;
     }
     let rows: Array<Record<string, unknown>> = [...MEMBERS];
     let columns: string[] = [];
@@ -245,8 +280,8 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
       'organization_modules.select': { data: [{ organization_id: 'org-1', module_id: 'purchase_orders' }], error: null },
       'organizations.select': { data: { plan: 'pro' }, error: null },
       'organization_members.select': members,
-      'role_permission_overrides.select': served(overrides.role),
-      'user_permission_overrides.select': served(overrides.user),
+      'role_permission_overrides.select': oddAnswer.role ?? served(overrides.role),
+      'user_permission_overrides.select': oddAnswer.user ?? served(overrides.user),
     }).client;
     return GET(
       new Request('https://test.local/api/cron/recurring-pos', {
@@ -484,6 +519,25 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
         },
       );
 
+      // A gateway's 502 with an empty body: postgrest-js reads the body as the
+      // error's message, so the message is empty and a report of it said
+      // nothing. The report names the status line instead (docket S27 review).
+      it("a gateway error with an empty body on the creators' read is reported with its status", async () => {
+        Object.assign(creatorsRead, {
+          error: { message: '' },
+          status: 502,
+          statusText: 'Bad Gateway',
+        });
+        await runManagerTemplate();
+
+        expect(told()).toEqual(['admin-1']);
+        const reports = permissionReports();
+        expect(reports).toHaveLength(1);
+        expect((reports[0]?.[0] as Error).message).toBe(
+          'HTTP 502 Bad Gateway (empty error message)',
+        );
+      });
+
       it('when every read fails, it is still reported once', async () => {
         overrides.role = { data: null, error: { message: 'role overrides unavailable' } };
         overrides.user = { data: null, error: { message: 'member overrides unavailable' } };
@@ -493,6 +547,118 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
         expect(told()).toEqual(['admin-1']);
         expect(permissionReports()).toHaveLength(1);
       });
+
+      // docket S27: an answer with no error that is not a list (postgrest-js
+      // resolves an empty body with data null) was read as "no rows". An
+      // override read so answered dropped the organization's revoke, so a
+      // manager whose purchase_orders:manage it took away was told; a
+      // membership read so answered told no creator, silently. It is a failed
+      // read like the ones above: no creator this run, the owners and admins
+      // as always, one report naming the table and the status.
+      describe('an answer that is not a list is a failed read too', () => {
+        function expectOneListReport(table: string, status: number) {
+          const reports = permissionReports();
+          expect(reports).toHaveLength(1);
+          expect((reports[0]?.[0] as Error).message).toBe(
+            `${table} answered no list (status ${status})`,
+          );
+          expect(reports[0]?.[1]).toEqual({
+            tag: 'cron.recurring-pos.creator_permissions',
+            level: 'warning',
+            extra: { orgId: 'org-1', table, status },
+          });
+        }
+
+        it.each(NOT_A_LIST)(
+          '%s from the role override read (the organization took the permission from managers): the manager creator is not told',
+          async (_shape, answer) => {
+            oddAnswer.role = answer;
+            await runManagerTemplate();
+            expect(told()).toEqual(['admin-1']);
+            expectOneListReport('role_permission_overrides', answer.status);
+          },
+        );
+
+        it.each(NOT_A_LIST)(
+          "%s from the member override read (the creator's own revoke): the manager creator is not told",
+          async (_shape, answer) => {
+            oddAnswer.user = answer;
+            await runManagerTemplate();
+            expect(told()).toEqual(['admin-1']);
+            expectOneListReport('user_permission_overrides', answer.status);
+          },
+        );
+
+        it.each(NOT_A_LIST)(
+          "%s from the read of the creators' memberships is reported, never a silent no one",
+          async (_shape, answer) => {
+            oddAnswer.creators = answer;
+            await runManagerTemplate();
+            expect(told()).toEqual(['admin-1']);
+            expectOneListReport('organization_members', answer.status);
+          },
+        );
+      });
+    });
+
+    // docket S27: notifyAdmins ignored its read of every owner and admin, so a
+    // failed or empty answer told no owner or admin, silently (the contract
+    // above says they are told as always). It is reported now, and a creator
+    // who can still edit templates is still told.
+    describe('the read of the owners and admins', () => {
+      const runManagerTemplate = () => runWith(skipped('manager-1'));
+      const adminReports = () =>
+        vi
+          .mocked(reportError)
+          .mock.calls.filter(([, context]) => context.tag === 'cron.recurring-pos.admins');
+
+      it('a failed read is reported, and the creator who can edit templates is still told', async () => {
+        adminsRead.error = { message: 'owners and admins unavailable' };
+        await runManagerTemplate();
+        expect(told()).toEqual(['manager-1']);
+        const reports = adminReports();
+        expect(reports).toHaveLength(1);
+        expect((reports[0]?.[0] as Error).message).toBe('owners and admins unavailable');
+        expect(reports[0]?.[1]).toEqual({
+          tag: 'cron.recurring-pos.admins',
+          level: 'warning',
+          extra: { orgId: 'org-1' },
+        });
+      });
+
+      it('a gateway error with an empty body is reported with its status, not an empty message', async () => {
+        Object.assign(adminsRead, {
+          error: { message: '' },
+          status: 502,
+          statusText: 'Bad Gateway',
+        });
+        await runManagerTemplate();
+        expect(told()).toEqual(['manager-1']);
+        const reports = adminReports();
+        expect(reports).toHaveLength(1);
+        expect((reports[0]?.[0] as Error).message).toBe(
+          'HTTP 502 Bad Gateway (empty error message)',
+        );
+      });
+
+      it.each(NOT_A_LIST)(
+        '%s is reported the same way, and the creator is still told',
+        async (_shape, answer) => {
+          oddAnswer.admins = answer;
+          await runManagerTemplate();
+          expect(told()).toEqual(['manager-1']);
+          const reports = adminReports();
+          expect(reports).toHaveLength(1);
+          expect((reports[0]?.[0] as Error).message).toBe(
+            `organization_members answered no list (status ${answer.status})`,
+          );
+          expect(reports[0]?.[1]).toEqual({
+            tag: 'cron.recurring-pos.admins',
+            level: 'warning',
+            extra: { orgId: 'org-1', table: 'organization_members', status: answer.status },
+          });
+        },
+      );
     });
   });
 });
