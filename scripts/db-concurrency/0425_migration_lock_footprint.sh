@@ -192,7 +192,7 @@ run_behind 3b-short-lines-writer "update public.order_request_lines set notes = 
 
 # ── 4. Nothing applied ───────────────────────────────────────────────────
 if [ "$(q "$STATE_SQL")" = "0|$LINES_DEF|true" ]; then
-  ok "4: nothing was applied (no helper; both triggers keep 0396's definitions)"
+  ok "4: nothing was applied (neither helper; both triggers keep 0396's definitions)"
 else
   bad "4: the stack changed: $(q "$STATE_SQL")"
 fi
