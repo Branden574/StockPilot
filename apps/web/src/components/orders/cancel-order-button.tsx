@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { orderCancelWords } from '@stockpilot/core';
+
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Label } from '@/components/ui/label';
@@ -18,9 +20,15 @@ const TERMINAL: OrderRequestStatus[] = ['completed', 'denied', 'cancelled'];
 interface Props {
   orderId: string;
   status: OrderRequestStatus;
+  /** Which cancel the viewer has (core orderCancelOffer's answer, never null
+   *  here: the page renders no button then). It picks the words. */
+  offer: 'approver' | 'requester';
+  /** Any line was delivered (quantity_fulfilled above zero): an approver's
+   *  confirm then says delivered items are not put back in stock. */
+  anythingDelivered: boolean;
 }
 
-export function CancelOrderButton({ orderId, status }: Props) {
+export function CancelOrderButton({ orderId, status, offer, anythingDelivered }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
@@ -39,6 +47,9 @@ export function CancelOrderButton({ orderId, status }: Props) {
 
   if (TERMINAL.includes(status)) return null;
 
+  // B51: every word is core's, the phone's words, so the two cannot drift.
+  const words = orderCancelWords(offer, { status, anythingDelivered });
+
   async function confirmCancel() {
     setBusy(true);
     const trimmed = reason.trim();
@@ -52,37 +63,27 @@ export function CancelOrderButton({ orderId, status }: Props) {
       return;
     }
     setOpen(false);
-    toast.success('Order request cancelled.');
+    toast.success(words.done);
     router.refresh();
   }
 
   return (
     <>
       <Button variant="ghost" onClick={() => setOpen(true)} disabled={busy}>
-        {busy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <X className="h-3.5 w-3.5" />
-        )}
-        Cancel request
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+        {words.label}
       </Button>
       <DestructiveConfirm
         open={open}
         onOpenChange={setOpen}
-        title="Cancel this order request?"
+        title={words.title}
         description={
           <div className="space-y-3">
-            <p>
-              The request is marked cancelled and any stock reservations
-              attached to it are released back to available stock. The
-              request stays on the record for the audit trail.
-            </p>
+            <p>{words.body}</p>
             <div className="space-y-1.5">
               <Label htmlFor="cancel-order-reason">
                 Reason
-                <span className="ml-1 font-normal text-muted-foreground">
-                  (optional)
-                </span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Textarea
                 id="cancel-order-reason"
@@ -96,8 +97,8 @@ export function CancelOrderButton({ orderId, status }: Props) {
             </div>
           </div>
         }
-        confirmLabel="Cancel request"
-        cancelLabel="Keep request"
+        confirmLabel={words.confirmLabel}
+        cancelLabel={words.keepLabel}
         pending={busy}
         onConfirm={confirmCancel}
       />

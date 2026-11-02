@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { orderCancelWords } from '@stockpilot/core';
+
 import { cancelReasonForPost, phoneOrderCancel } from './order-cancel-action';
 
 /**
@@ -29,7 +31,7 @@ const OPEN = [
 
 describe('phoneOrderCancel', () => {
   it('the requester: Cancel request, only while their order waits for approval, in the web words', () => {
-    const c = phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: true, canRequestOrders: true });
+    const c = phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: true, canRequestOrders: true, anythingDelivered: false });
     expect(c).toEqual({
       label: 'Cancel request',
       confirmTitle: 'Cancel this order request?',
@@ -39,25 +41,74 @@ describe('phoneOrderCancel', () => {
       keepLabel: 'Keep request',
     });
     for (const status of OPEN.filter((s) => s !== 'pending_approval')) {
-      expect(phoneOrderCancel({ status, canApproveOrders: false, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+      expect(phoneOrderCancel({ status, canApproveOrders: false, isOwnRequest: true, canRequestOrders: true, anythingDelivered: false })).toBeNull();
     }
   });
 
   it('an approver: Cancel order at every open status, never on a closed one', () => {
     for (const status of OPEN) {
-      const c = phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: false, canRequestOrders: true });
+      const c = phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: false, canRequestOrders: true, anythingDelivered: false });
       expect(c?.label).toBe('Cancel order');
       expect(c?.keepLabel).toBe('Keep order');
     }
     for (const status of ['completed', 'denied', 'cancelled']) {
-      expect(phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+      expect(phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true, anythingDelivered: false })).toBeNull();
     }
   });
 
-  it('a backordered order keeps its own words: delivered items are not restocked', () => {
-    expect(phoneOrderCancel({ status: 'backordered', canApproveOrders: true, isOwnRequest: false, canRequestOrders: true })?.confirmMessage).toBe(
+  // B51: the delivered sentence follows what was delivered (any line's
+  // quantity_fulfilled above zero), not the status: cancel_order_request never
+  // restocks delivered items at any status (0395; pgTAP 0290 D and E).
+  it('a backordered order with items delivered keeps its own words: delivered items are not restocked', () => {
+    expect(phoneOrderCancel({ status: 'backordered', canApproveOrders: true, isOwnRequest: false, canRequestOrders: true, anythingDelivered: true })?.confirmMessage).toBe(
       'The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released. Reason (optional):',
     );
+  });
+
+  it('a backordered order with nothing delivered: the default words, no delivered sentence', () => {
+    expect(phoneOrderCancel({ status: 'backordered', canApproveOrders: true, isOwnRequest: false, canRequestOrders: true, anythingDelivered: false })?.confirmMessage).toBe(
+      'The order is marked cancelled and the stock held for it is released. Anything already picked goes back into stock. The order stays on the record. Reason (optional):',
+    );
+  });
+
+  it('a resumed backorder (items delivered, back in picking) says delivered items are not restocked', () => {
+    expect(
+      phoneOrderCancel({ status: 'picking_in_progress', canApproveOrders: true, isOwnRequest: false, canRequestOrders: true, anythingDelivered: true })
+        ?.confirmMessage,
+    ).toContain('Already-delivered items are NOT restocked.');
+  });
+
+  // Mutation caught: a word changed in one app and not the other (pattern 26).
+  it('every word is core orderCancelWords, the web\'s, with the reason prompt after the body', () => {
+    for (const status of OPEN) {
+      for (const anythingDelivered of [false, true]) {
+        const offers: [boolean, 'approver' | 'requester'][] =
+          status === 'pending_approval' ? [[true, 'approver'], [false, 'requester']] : [[true, 'approver']];
+        for (const [canApproveOrders, kind] of offers) {
+          const w = orderCancelWords(kind, { status, anythingDelivered });
+          expect(
+            phoneOrderCancel({ status, canApproveOrders, isOwnRequest: true, canRequestOrders: true, anythingDelivered }),
+            `${status} ${kind} ${anythingDelivered}`,
+          ).toEqual({
+            label: w.label,
+            confirmTitle: w.title,
+            confirmMessage: `${w.body} Reason (optional):`,
+            confirmLabel: w.confirmLabel,
+            keepLabel: w.keepLabel,
+          });
+        }
+      }
+    }
+  });
+
+  it('holds no words of its own', () => {
+    const helper = readFileSync(path.resolve(__dirname, 'order-cancel-action.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(helper).toContain('orderCancelWords(');
+    for (const literal of ['Cancel this order', 'Already-delivered', 'Cancel request', 'Cancel order', 'Keep order', 'Keep request']) {
+      expect(helper, literal).not.toContain(literal);
+    }
   });
 
   // Desk check F3: every cancel needs orders:request (svc.cancel asserts it
@@ -65,7 +116,7 @@ describe('phoneOrderCancel', () => {
   it('without orders:request: nothing, for an approver or the requester', () => {
     for (const status of OPEN) {
       expect(
-        phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: false }),
+        phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: false, anythingDelivered: false }),
       ).toBeNull();
     }
     expect(
@@ -74,13 +125,14 @@ describe('phoneOrderCancel', () => {
         canApproveOrders: false,
         isOwnRequest: true,
         canRequestOrders: false,
+        anythingDelivered: false,
       }),
     ).toBeNull();
   });
 
   it('someone else, or no status yet: nothing', () => {
-    expect(phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: false, canRequestOrders: true })).toBeNull();
-    expect(phoneOrderCancel({ status: null, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+    expect(phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: false, canRequestOrders: true, anythingDelivered: false })).toBeNull();
+    expect(phoneOrderCancel({ status: null, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true, anythingDelivered: false })).toBeNull();
   });
 });
 
@@ -99,12 +151,13 @@ describe('order/[id].tsx wiring (L93)', () => {
     .replace(/^\s*\/\/.*$/gm, '');
 
   // Mutation caught: the offer decided on the screen again (by status or
-  // role), or the effective orders:request left out (desk check F3).
+  // role), or the effective orders:request left out (desk check F3). B51:
+  // or the delivered fact left out (the words then follow the status again).
   it('offers Cancel through the tested rule, with the effective approve, request and the requester', () => {
     expect(screen).toMatch(
       // Returns RX-2: a replacement order gets no offer (it is cancelled
       // from its RMA), as on the web.
-      /const cancelOffer = isReplacementOrder \? null : phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*\}\);/,
+      /const cancelOffer = isReplacementOrder \? null : phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*anythingDelivered: totalFulfilled > 0,\s*\}\);/,
     );
     expect(screen).toMatch(/\{cancelOffer \? \(/);
     expect(screen).toContain("actionBtn(cancelOffer.label, 'cancelorder', () => promptCancel(cancelOffer), 'danger')");

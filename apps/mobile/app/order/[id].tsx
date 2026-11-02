@@ -2306,6 +2306,8 @@ export default function OrderDetail() {
     canApproveOrders: rpApprove,
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
     canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
+    // B51: the confirm tells of delivered items when any were delivered.
+    anythingDelivered: totalFulfilled > 0,
   });
   // Returns RX-2 review (counter taps): the RMA's Hand over opens this
   // screen with ?focus=sign. The paper signature opens once, through the same

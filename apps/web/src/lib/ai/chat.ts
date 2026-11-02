@@ -258,10 +258,12 @@ Rules:
       reason, ask for one before calling). Only works on
       pending_approval orders. The reason shows up in the email.
     - cancelOrder: requesters can self-cancel their OWN order only
-      while pending_approval; managers+ can cancel any non-terminal
-      order. Automatically restores any stock that picking already
-      pulled (via the cancel_order_request RPC in migration 0137).
-      Terminal states (completed / denied / cancelled) are rejected.
+      while pending_approval; anyone with orders:approve can cancel
+      any non-terminal order in a warehouse they work in. Releases the
+      stock held for the order and puts back in stock what was picked
+      and not yet handed over; items already delivered are never put
+      back in stock. Terminal states (completed / denied / cancelled)
+      are rejected.
 
 - Bulk ISBN imports — workflow is strict:
     0. The chat composer has a paperclip + drag-drop. When the user
