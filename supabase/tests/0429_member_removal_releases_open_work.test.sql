@@ -32,7 +32,9 @@
 --     prints any string reason as "Reason: ..."), acting_as_platform; none
 --     when nothing was open.
 -- C.  member_open_work, the Remove dialog's read: what R1 releases, per kind
---     (the closed rows above not counted), invitations included; refused for a manager, a manager
+--     (the closed rows above not counted); invitations: the ones still open,
+--     as Team's Pending invites lists them (R1 also withdraws the expired
+--     one); refused for a manager, a manager
 --     granted members:remove (the admin floor), staff, an admin without
 --     members:remove, an outsider, anon and no subject.
 -- P.  Posture: the trigger (AFTER DELETE FOR EACH ROW, enabled), both
@@ -56,7 +58,7 @@
 -- always undoes what it did (sentinel XXB94), so every test starts from the
 -- fixture.
 begin;
-select plan(40);
+select plan(41);
 
 \set orgA    '\'94940000-0000-0000-0000-00000000000a\''
 \set orgB    '\'94940000-0000-0000-0000-00000000000b\''
@@ -551,19 +553,27 @@ select is(
 -- ══ C. member_open_work (the Remove dialog's read) ═════════════════════════
 select is(
   pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L)::text', :mSubA)),
-  '{"picks": 1, "deliveries": 2, "warehouses": 1, "cycleCounts": 1, "pendingInvites": 2, "scheduleEvents": 1, "escalationClaims": 1, "maintenanceRequests": 1}',
-  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse, 2 invitations not accepted or revoked); S''s closed deliveries, maintenance requests and claim, accepted and revoked invitations and B''s invitation are not counted');
+  '{"picks": 1, "deliveries": 2, "warehouses": 1, "cycleCounts": 1, "pendingInvites": 1, "scheduleEvents": 1, "escalationClaims": 1, "maintenanceRequests": 1}',
+  'C1: the admin reads S''s open work in A per kind (1 count, 1 pick, 2 deliveries, 1 event, 1 maintenance request, 1 claim, 1 warehouse, 1 invitation still open); S''s closed deliveries, maintenance requests and claim, the expired, accepted and revoked invitations and B''s invitation are not counted');
 select is(
   pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
                   null, format($q$select jsonb_build_object(
                                    'cycleCounts', m -> 'cycle_counts', 'picks', m -> 'picks', 'deliveries', m -> 'deliveries',
                                    'scheduleEvents', m -> 'schedule_events', 'maintenanceRequests', m -> 'maintenance_requests',
-                                   'escalationClaims', m -> 'escalation_claims', 'warehouses', m -> 'warehouses',
-                                   'pendingInvites', m -> 'pending_invites')::text
+                                   'escalationClaims', m -> 'escalation_claims', 'warehouses', m -> 'warehouses')::text
                                  from (select a.metadata m from public.audit_logs a
                                         where a.organization_id = %L and a.event = 'user.open_work_released') s$q$, :orgA)),
-  'ok:1:' || pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L)::text', :mSubA)),
-  'C1b: what the read says before the press is exactly what the removal releases, per kind (the summary row)');
+  'ok:1:' || pg_temp.call_as('authenticated', :adm, format('select (public.member_open_work(%L) - ''pendingInvites'')::text', :mSubA)),
+  'C1b: what the read says before the press is exactly what the removal releases, for each of the seven kinds (the summary row)');
+select is(
+  pg_temp.call_as('authenticated', :adm, format('select public.member_open_work(%L) ->> ''pendingInvites''', :mSubA)) || ' | '
+  || pg_temp.attempt('authenticated', :adm, format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :sub),
+                     null, format($q$select (select a.metadata ->> 'pending_invites' from public.audit_logs a
+                                              where a.organization_id = %L and a.event = 'user.open_work_released')
+                                         || ' ' || pg_temp.invites()$q$, :orgA)),
+  '1 | ok:1:2 invAdm=live/valid invAdm2=live/valid invPa=live/valid invSub=withdrawn/expired invSubAcc=live/valid/accepted invSubB=live/valid '
+  || 'invSubOld=withdrawn/expired invSubRev=revoked/expired',
+  'C1c: the read counts S''s one invitation still open in A (the one Pending invites lists); the removal withdraws it and the expired one nobody can see (the summary says 2), and nothing else');
 select is(
   pg_temp.call_as('authenticated', :mgr,  format('select public.member_open_work(%L)::text', :mSubA)) || ' | '
   || pg_temp.call_as('authenticated', :mgr2, format('select public.member_open_work(%L)::text', :mSubA)) || ' | '

@@ -42,7 +42,8 @@
 --      that are not accepted and not revoked, with 0393's own predicate and
 --      columns (revoked_at now, expires_at no later than a minute ago), so
 --      an invitation a removed member sent cannot be accepted later; the
---      expired ones too, because a resend renews expires_at. Not for an
+--      expired ones too, because a resend renews expires_at (the app now
+--      refuses to resend or accept a withdrawn one too). Not for an
 --      ended Act-as seat: a platform admin's invitation sent while acting is
 --      support work for the organization and stays valid.
 --      It never touches stock, a movement, a record's quantities or any other
@@ -82,7 +83,11 @@
 --      numbers and pendingInvites (0 for an Act-as seat) for one membership
 --      row, read before Remove is pressed (the Remove dialog names the
 --      counts, picks and deliveries, and maintenance requests, warehouses
---      and invitations when there are any). STABLE, SECURITY DEFINER,
+--      and invitations when there are any). pendingInvites counts only the
+--      invitations still open (not expired either), the ones Team lists
+--      under Pending invites; the release also withdraws expired ones no
+--      admin can see, so the summary's pending_invites can be larger.
+--      STABLE, SECURITY DEFINER,
 --      EXECUTE for authenticated only. Refusals: 42501 unauthenticated (no
 --      subject); P0002 member_not_found (no such row in an organization the
 --      caller belongs to); 42501 forbidden unless the caller is an admin
@@ -93,7 +98,8 @@
 -- predicate, now live in three places: 0393's tg_auth_users_before_delete,
 -- this trigger and member_open_work. A change to one (a new order status, a
 -- new kind of open work) changes all three; pgTAP C1b (the read equals the
--- release) and PAR (the release equals account deletion's) fail otherwise.
+-- release), C1c (the read's invitations are the release's still-open ones)
+-- and PAR (the release equals account deletion's) fail otherwise.
 --
 -- NOT RELEASED: work already stranded on people removed before this file
 -- (no bulk change; the read-only counts run before the push decide whether a
@@ -411,7 +417,8 @@ begin
     'pendingInvites', case when v_seat then 0 else
                         (select count(*) from public.organization_invites i
                           where i.organization_id = v_org and i.invited_by = v_user
-                            and i.accepted_at is null and i.revoked_at is null) end);
+                            and i.accepted_at is null and i.revoked_at is null
+                            and i.expires_at > now()) end);
 end;
 $$;
 
@@ -421,9 +428,10 @@ grant execute on function public.member_open_work(uuid) to authenticated;
 comment on function public.member_open_work(uuid) is
   '0429 (B94): what removing this membership would release, per kind (cycleCounts, picks, deliveries, '
   'scheduleEvents, maintenanceRequests, escalationClaims, warehouses), and the invitations it would withdraw '
-  '(pendingInvites; 0 for an Act-as seat), for the Remove dialog. Signed in; the row '
+  'that are still open (pendingInvites: not accepted, not revoked, not expired, as Team lists them; 0 for an Act-as '
+  'seat; the release also withdraws expired ones), for the Remove dialog. Signed in; the row '
   'in an organization the caller belongs to (else P0002 member_not_found); admin there AND members:remove (else '
-  '42501 forbidden). PARITY: the same seven predicates and the invitation predicate live in '
-  'tg_organization_members_release_open_work and tg_auth_users_before_delete (0393); change all three together.';
+  '42501 forbidden). PARITY: the same seven predicates and the invitation predicate (plus expires_at > now() '
+  'here) live in tg_organization_members_release_open_work and tg_auth_users_before_delete (0393); change all three together.';
 
 reset lock_timeout;

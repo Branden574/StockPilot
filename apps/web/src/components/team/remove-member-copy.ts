@@ -7,8 +7,9 @@ import type { MemberOpenWork, MemberOpenWorkResult } from '@/server/services/tea
  * progress, orders being picked and open deliveries always (a 0 included),
  * and one more line only when they are the local owner of a maintenance
  * request or the manager of a warehouse, and one more only when they sent
- * invitations here that are not accepted yet (the removal withdraws them, as
- * account deletion does). Escalation claims (two-minute
+ * invitations here that are still pending, the ones Team lists under Pending
+ * invites (the removal withdraws them, as account deletion does, and expired
+ * ones nobody can see too). Escalation claims (two-minute
  * leases) and schedule events (they follow the deliveries) are released too
  * and never named. Pure, so the words are tested here (pattern #8).
  *
