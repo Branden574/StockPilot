@@ -43,7 +43,7 @@ const STOREFRONT = {
   deliveryRecipients: { to: 'intake@example.org', cc: 'copy@example.org', toName: null, ccName: 'Copy' },
   recentRequesters: {
     status: 'ok',
-    people: [{ name: 'Maria', email: 'maria@example.org', lastOrderedAt: 'x', orders: 3, lastFulfillment: 'delivery', lastSiteId: 's1' }],
+    people: [{ name: 'Pixie', email: 'pixie@example.org', lastOrderedAt: 'x', orders: 3, lastFulfillment: 'delivery', lastSiteId: 's1' }],
   },
   later: 'ignored',
 };

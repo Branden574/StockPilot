@@ -1,4 +1,5 @@
-import { within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { hydrateAcrossClockShift } from '@/test/hydration';
@@ -29,7 +30,9 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  // prefetch: the rows of a busy day's list warm their event's route on
+  // intent (IntentLink).
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
   usePathname: () => '/dashboard/schedule',
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -56,14 +59,22 @@ vi.mock('@/server/services/schedule', () => ({
 
 import SchedulePage from './page';
 
-/** The page as the server builds it: its zone, its clock. */
-async function pageAt(at: number, serverZone: string, m?: string) {
+/**
+ * The page as the server builds it: its zone, its clock. `more` adds other
+ * search parameters to the address, next to ?m=.
+ */
+async function pageAt(
+  at: number,
+  serverZone: string,
+  m?: string,
+  more: Record<string, string> = {},
+) {
   const previousZone = process.env.TZ;
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(at);
   process.env.TZ = serverZone;
   try {
-    return await SchedulePage({ searchParams: Promise.resolve(m ? { m } : {}) });
+    return await SchedulePage({ searchParams: Promise.resolve(m ? { ...more, m } : more) });
   } finally {
     vi.useRealTimers();
     if (previousZone === undefined) delete process.env.TZ;
@@ -72,8 +83,8 @@ async function pageAt(at: number, serverZone: string, m?: string) {
 }
 
 /** Server render in UTC at `at`, hydrated in Los Angeles a minute later. */
-async function openCalendar(at: number, m?: string) {
-  const page = await pageAt(at, 'UTC', m);
+async function openCalendar(at: number, m?: string, more?: Record<string, string>) {
+  const page = await pageAt(at, 'UTC', m, more);
   return hydrateAcrossClockShift(() => page, { serverNow: at, browserNow: at + 60_000 });
 }
 
@@ -164,6 +175,24 @@ describe('the team calendar opens on the organization’s current month', () => 
     try {
       expect(heading(run.container)).toEqual(['March 2026']);
       expect(todayCells(run.container)).toEqual([]);
+    } finally {
+      run.unmount();
+    }
+  });
+
+  // The calendar's "+N more" sent ?day=, which this page never read (B46). It
+  // now opens a list in place and nothing sends ?day=; an address that still
+  // has it (a bookmark, a shared link) opens its month as before, with no
+  // list open.
+  it('an old address with ?day= still opens its month (?m=2026-10&day=2026-10-14)', async () => {
+    getOrgRowForRequest.mockResolvedValue({ timezone: 'America/Los_Angeles' });
+    const run = await openCalendar(Date.parse('2026-12-15T19:00:00.000Z'), '2026-10', {
+      day: '2026-10-14',
+    });
+    try {
+      expect(run.errors).toEqual([]);
+      expect(heading(run.container)).toEqual(['October 2026']);
+      expect(screen.queryByRole('dialog')).toBeNull();
     } finally {
       run.unmount();
     }
@@ -337,6 +366,39 @@ describe('the team calendar reads and draws the organization’s days', () => {
     // The range starts by Sydney's midnight on Sep 27 (14:00 UTC on Sep 26).
     const [from] = listInRange.mock.calls[0] as unknown as [Date, Date];
     expect(from.getTime()).toBeLessThanOrEqual(Date.parse('2026-09-26T14:00:00.000Z'));
+  });
+
+  // B46: a busy day's fourth and later events open from the calendar. "+N
+  // more" sent ?day=, which this page never reads, so it drew the same month
+  // again; it now opens a list of the day's events, which the page already
+  // passed.
+  it('a busy day lists all its events from "+2 more": five on Wed Oct 14 in Los Angeles', async () => {
+    getOrgRowForRequest.mockResolvedValue({ timezone: 'America/Los_Angeles' });
+    // 8 AM to noon on Oct 14 in Los Angeles, in start order (listInRange's).
+    const busy = [1, 2, 3, 4, 5].map((n) =>
+      ev(`ev-${n}`, `Delivery ${n}`, `2026-10-14T${14 + n}:00:00Z`),
+    );
+    servedFrom(busy);
+    const run = await openCalendar(Date.parse('2026-10-15T19:00:00.000Z'), '2026-10');
+    try {
+      expect(run.errors).toEqual([]);
+      expect(run.container.querySelector('a[href*="day="]')).toBeNull();
+      const more = within(cellOf(run.container, '2026-10-14')).getByRole('button', {
+        name: '2 more events on Wednesday, October 14',
+      });
+      await userEvent.setup().click(more);
+      const dialog = await screen.findByRole('dialog', { name: 'Wednesday, October 14' });
+      // In a portal on the body, outside the page's grid.
+      expect(document.body).toContainElement(dialog);
+      expect(run.container.contains(dialog)).toBe(false);
+      expect(
+        within(dialog)
+          .getAllByRole('link')
+          .map((a) => a.getAttribute('href')),
+      ).toEqual(busy.map((e) => `/dashboard/schedule/${e.id}`));
+    } finally {
+      run.unmount();
+    }
   });
 
   it("prints event times in the organization's zone: 2 PM in New York, not Pacific's 11 AM", async () => {

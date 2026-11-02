@@ -148,10 +148,10 @@ describe('the templated sentences', () => {
     expect(
       copy.successSentForApprovalCopy({
         self: false,
-        name: 'Maria Lopez',
-        email: 'maria@example.org',
+        name: 'Pixie Quill',
+        email: 'pixie@example.org',
       }),
-    ).toBe('Sent for approval. Emails about it go to Maria Lopez at maria@example.org.');
+    ).toBe('Sent for approval. Emails about it go to Pixie Quill at pixie@example.org.');
   });
 
   it('every function in copy.ts is read above', () => {
@@ -186,8 +186,8 @@ describe('the words rules (plan section 6)', () => {
       .map(([, v]) => v as string),
     copy.successSentForApprovalCopy({
       self: false,
-      name: 'Maria Lopez',
-      email: 'maria@example.org',
+      name: 'Pixie Quill',
+      email: 'pixie@example.org',
     }),
     copy.storefrontPickupHintCopy('DC4'),
     copy.kitsLoadFailedCopy('web'),

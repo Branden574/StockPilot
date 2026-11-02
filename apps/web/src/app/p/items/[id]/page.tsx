@@ -6,7 +6,10 @@ import { ExternalEyebrow, ExternalShell } from '@/components/auth/external-shell
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { getPublicItem } from '@/server/services/public-items';
+
+import { isUuid } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +32,9 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const item = await getPublicItem(id);
+  // A malformed id (a mistyped or cut-off link) is "Item not found" with no
+  // read, so no null is cached under it either (B63).
+  const item = isUuid(id) ? await getPublicItem(id) : null;
   // F8: noindex the public item page. The page is intentionally public
   // (anyone with a QR scan can land here) but should NOT be a crawled,
   // search-indexable surface — quantity-on-hand and cover images
@@ -62,6 +67,9 @@ export default async function PublicItemPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const item = await getPublicItem(id);
   if (!item) notFound();
 

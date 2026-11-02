@@ -6,6 +6,7 @@ import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
@@ -21,6 +22,9 @@ export default async function EditScheduleEventPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   // Manager+ only. notFound() (not redirect) keeps the surface invisible
   // to lower-role users instead of bouncing them through /dashboard.
   const ctx = await requireOrgContext();

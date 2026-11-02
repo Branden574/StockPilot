@@ -626,6 +626,89 @@ describe('AI chat: Send has a name, both buttons are 44pt frames', () => {
   });
 });
 
+// Docket B75: the screen resent its whole transcript as `history` with every
+// message and listened for a `session` event nothing sent, so about the 22nd
+// message of a chat was refused (and every message after a reply over 8,000
+// characters), each message became a chat of its own on the web, a refusal
+// showed "AI chat 400: " and the raw body, and there was no New chat. The
+// request and the answer are now built and read by lib/ai-chat.ts
+// (ai-chat.test.ts runs them); these pin the screen's wiring to it.
+describe('AI chat: one session per chat, a sentence for every failure, New chat', () => {
+  const code = codeOnly(sourceOf(CHAT));
+
+  it('builds the request and reads the answer through lib/ai-chat, never inline', () => {
+    for (const gone of [
+      "event.type === 'session'",
+      'JSON.parse(line)',
+      'const history = turns',
+      'AI chat ${res.status}',
+      'setSessionId',
+    ]) {
+      expect(code, gone).not.toContain(gone);
+    }
+    expect(code).toMatch(/from '@\/lib\/ai-chat'/);
+    const send = functionBody(CHAT, 'send');
+    expect(send).toContain('JSON.stringify(buildChatRequestBody(text, sessionRef.current, turns))');
+    expect(send).toContain('parseChatStream(await res.text())');
+  });
+
+  // A ref, not state: send() reads it when it runs, so the photo flow's send()
+  // (from the render attachPhoto started in) sends the chat's current id too.
+  // The id is kept before an error event is thrown: the route names the
+  // session in `done` after any error.
+  it('keeps the session id in a ref, taken from the answer before an error is thrown', () => {
+    expect(code).toContain('const sessionRef = React.useRef<string | null>(null);');
+    const send = functionBody(CHAT, 'send');
+    const keep = send.indexOf('sessionRef.current = answer.sessionId;');
+    expect(keep).toBeGreaterThan(-1);
+    expect(send.indexOf('throw new ChatFailure(answer.errorMessage)')).toBeGreaterThan(keep);
+  });
+
+  it('a refusal reads as a sentence, asks for the account probe, and anything else is the connection sentence', () => {
+    const send = functionBody(CHAT, 'send');
+    expect(send).toContain('notifyUnauthorized({ status: res.status });');
+    expect(send).toContain('throw new ChatFailure(chatRefusalSentence(res.status, raw));');
+    expect(send).toContain(
+      "Alert.alert('Chat error', err instanceof ChatFailure ? err.message : CONNECTION_FAILURE_COPY);",
+    );
+    expect(send).not.toMatch(/err instanceof Error \? err\.message/);
+  });
+
+  it('New chat: a + chip once the chat has started, hidden while an answer or a photo is pending', () => {
+    const { sf, els } = elements(
+      CHAT,
+      (el, s) => tagOf(el, s) === 'IconChip' && attrText(el, 'icon', s) === 'Plus',
+    );
+    expect(els).toHaveLength(1);
+    const chip = els[0]!.el;
+    expect(attrText(chip, 'onPress', sf)).toBe('startNewChat');
+    expect(attrText(chip, 'accessibilityLabel', sf)).toBe('New chat');
+    expect(attrText(chip, 'minTap', sf)).toBe('true');
+    // In the top bar, opposite Back, where the 44pt spacer was.
+    expect(els[0]!.ancestors.map((a) => attrText(a, 'style', sf))).toContain('styles.topbar');
+    let node: ts.Node | undefined = chip;
+    while (node && !ts.isConditionalExpression(node)) node = node.parent;
+    expect(node, 'the chip is shown under a condition').toBeDefined();
+    const shown = node as ts.ConditionalExpression;
+    expect(shown.condition.getText(sf)).toBe('turns.length > 0 && !busy && !uploading');
+    // Otherwise the spacer keeps the label centred.
+    let otherwise: ts.Expression = shown.whenFalse;
+    while (ts.isParenthesizedExpression(otherwise)) otherwise = otherwise.expression;
+    expect(otherwise.getText(sf)).toBe('<View style={{ width: 44 }} />');
+  });
+
+  // The chat counter keeps an answer still on its way out of the new chat;
+  // ai-chat-screen.test.ts runs send(), startNewChat() and attachPhoto().
+  it('New chat empties the chat, the box and the session; the old chat stays on the web', () => {
+    const start = functionBody(CHAT, 'startNewChat');
+    expect(start).toContain('chatRef.current += 1;');
+    expect(start).toContain('sessionRef.current = null;');
+    expect(start).toContain('setTurns([]);');
+    expect(start).toContain("setInput('');");
+    expect(wordsOf(CHAT)).toContain('New chat');
+  });
+});
+
 // ── The drawer lists: a failed read is said (D25) ───────────────────────────
 
 describe('drawer lists: a failed read is said in the list’s own words, never as empty', () => {

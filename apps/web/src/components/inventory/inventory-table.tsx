@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  BookOpen,
+  Boxes,
   ChevronDown,
   ChevronRight,
   Download,
@@ -62,6 +64,7 @@ import {
   groupCoverRow,
   shownUnderByRecord,
   ungroupableItemIds,
+  DELETED_USER_LABEL,
   DISPLAY_GROUP_FALLBACK_NAME,
   GROUP_COPY,
   groupingSelectionFacts,
@@ -116,6 +119,8 @@ import {
   isPagePartiallySelected,
   selectPage,
 } from '@/components/inventory/selection-utils';
+import { listEmptyMessage } from '@/lib/inventory/list-empty-message';
+import { itemsTypeNarrowing } from '@/lib/inventory/list-filter-active';
 import { rememberLastListUrl } from '@/lib/last-list-url';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -407,6 +412,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Viewer can start a cycle count (core countStartAllowed: a manager with
+   *  cycle_counts:assign and stock:adjust, the module on). Enables the bulk
+   *  'Cycle count' shortcut (B42). Default false → hidden. */
+  canStartCount?: boolean;
   /** Ungroup (0399): the viewer holds items:update, so the bulk bar may offer
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
@@ -527,6 +536,14 @@ export interface InventoryTableProps {
    * never reaches the URL, the derivation or isDefaultInventoryView.
    */
   initialView?: InventoryView;
+  /**
+   * The Items page's warehouse-scope sentence for a staff member or viewer
+   * ("You're viewing North DC only. An admin can adjust warehouse access from
+   * the Team page."), added after the description of a list's own empty
+   * message (listEmptyMessage), as the page added it to its empty states.
+   * Absent (managers and up, Books, Rentals items): nothing is added.
+   */
+  emptyNote?: string | null;
 }
 
 interface SavedViewSummary {
@@ -545,9 +562,14 @@ interface SavedViewSummary {
   /** True when shared with the whole org. Non-owner viewers see a
       read-only chip with a small Users icon. */
   isShared?: boolean;
-  /** Owner's user id. Only the owner sees the delete + share-toggle
-      controls on the chip; everyone else gets a click-to-apply chip. */
-  ownerId?: string;
+  /** Owner's user id. Only the owner sees the share toggle on the chip;
+      everyone else gets a click-to-apply chip. Null for a shared view whose
+      owner deleted their account (B23). */
+  ownerId?: string | null;
+  /** Whether this viewer may delete the view (the server's rule: the owner,
+      or an admin or owner for a shared view whose owner deleted their
+      account). Omitted: the owner only, as before. */
+  canRemove?: boolean;
 }
 
 type SparkMode = 'qty' | 'moves';
@@ -684,10 +706,15 @@ function interceptShallowNav(
   href: string,
   navigate: (href: string) => void,
 ): void {
-  if (e.defaultPrevented) return;
-  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!isPlainLeftClick(e)) return;
   e.preventDefault();
   navigate(href);
+}
+
+/** A plain left click that follows a link here (not one that opens a new tab or window). */
+function isPlainLeftClick(e: React.MouseEvent<HTMLAnchorElement>): boolean {
+  if (e.defaultPrevented) return false;
+  return !(e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
 }
 
 /**
@@ -756,6 +783,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canStartCount = false,
   canUngroup = false,
   canUnlinkFamilies = false,
   canRenameGroups = false,
@@ -776,6 +804,7 @@ export function InventoryTable({
   expectedCount = 0,
   productGroupUnits,
   initialView = 'table',
+  emptyNote = null,
 }: InventoryTableProps) {
   // Performance marker (lib/perf/marks.ts): "the list is useful". A mount-only
   // effect, so it fires when the INITIAL rows render — the cached page-1
@@ -936,6 +965,22 @@ export function InventoryTable({
   const filters = useInstantFilters({ params, basePath, replace: replaceUrl });
   const isFilterPending = filters.isPending;
   const [q, setQ] = React.useState(initialQuery);
+  // A SAVED VIEW'S SEARCH (grouping walk 2026-10-20, W4 shared-view). The
+  // box is this table's own state (seeded once from the URL), and a view's
+  // chip only navigates, so applying "Grade 2 readers" ({q: 'Grade 2'})
+  // landed on ?q=Grade+2 with the box still empty, and the box's URL sync
+  // below then wrote its empty value back over the view's search: the address
+  // lost q and the list never narrowed. Applying a view without a search kept
+  // a typed one the same way. The chip now hands the view's search over
+  // (SavedViewChip onApply: its words, or '' for none) and the box takes it
+  // here, in the render where the view's address lands, before any effect
+  // runs; until then nothing changes, so the sync cannot write a stale
+  // address over the navigation in flight. The view's state applies whole.
+  const [viewSearch, setViewSearch] = React.useState<string | null>(null);
+  if (viewSearch !== null && (params.get('q') ?? '').trim() === viewSearch.trim()) {
+    setViewSearch(null);
+    if (q !== viewSearch) setQ(viewSearch);
+  }
   // Server-authoritative search hits — populated after a debounced
   // fetch to /api/items/search. `null` means "no server result yet,
   // fall back to localMatches"; an empty array means "server says
@@ -949,6 +994,39 @@ export function InventoryTable({
   // is already on screen.
   const [serverHitsTotal, setServerHitsTotal] = React.useState<number | null>(null);
   const [serverLoading, setServerLoading] = React.useState(false);
+  // A SEARCH SOMETHING ELSE PUT IN THE ADDRESS (review 2026-10-20). The box
+  // writes the address itself (the instant-mode sync and the server search
+  // below), and it used to ignore every other change of the address's search:
+  // Books' scan shortcut (router.push('/dashboard/books?q=<ISBN>') when an ISBN
+  // names several records), Back and Forward, a link to the list with a search.
+  // The box stayed as it was, its sync then wrote its old value back over the
+  // new address (instant mode) or the search was never run (server mode): the
+  // search was lost and the list did not narrow. Now the box takes the
+  // address's search whenever it changes to something the box did not write and
+  // does not already hold. `agreedQ` is the search the box and the address last
+  // agreed on: set just BEFORE the box writes the address (or the table makes a
+  // navigation that drops the search: emptyBoxForOwnNavigation), and when the
+  // box takes the address's search. Only a change of the address acts (`seenQ`),
+  // never `agreedQ` running ahead of an address that is still landing, so the
+  // box never takes back a search it has just replaced. Both are state, read
+  // here in render. The saved-view handshake above stays for the one case this
+  // cannot see: a view without a search, applied while a typed search has not
+  // reached the address yet (the address's search does not change then).
+  const addressQ = params.get('q') ?? '';
+  const [seenQ, setSeenQ] = React.useState(addressQ.trim());
+  const [agreedQ, setAgreedQ] = React.useState(addressQ.trim());
+  if (addressQ.trim() !== seenQ) {
+    setSeenQ(addressQ.trim());
+    if (addressQ.trim() !== agreedQ) {
+      setAgreedQ(addressQ.trim());
+      if (addressQ.trim() !== q.trim()) {
+        setQ(addressQ);
+        // The last search's server answer is not this search's.
+        setServerHits(null);
+        setServerHitsTotal(null);
+      }
+    }
+  }
 
   // Instant local filter on every keystroke. Substring match against
   // name / sku / barcode of the rows already on this page. Renders
@@ -1014,6 +1092,14 @@ export function InventoryTable({
   // when the URL is already scoped to the Archived tab.
   const isArchivedView = params.get('status') === 'archived';
   const autoArchivedOnly = params.get('auto') === '1';
+  // Two narrowings the views row did not show (review 2026-10-20): the
+  // Discontinued view (?status=discontinued, from a typed address or a saved
+  // view) left the Active / Archived toggle on Active with nothing naming it,
+  // and the Items list's Asset, Consumable or Book type (?type=, which a saved
+  // view keeps) had no marker at all. Each is a pressed chip that drops it.
+  const isDiscontinuedView = params.get('status') === 'discontinued';
+  const typeNarrowing =
+    showBookFields || rentalsOnly ? null : itemsTypeNarrowing(params.get('type'));
   // Expected chip state (mig 0277): ?expected=1 shows ONLY items awaiting
   // their first receipt. The chip's count badge is server-computed in
   // server mode (expectedCount prop, countExpected with the page's active
@@ -1082,6 +1168,27 @@ export function InventoryTable({
     const next = new URLSearchParams(params.toString());
     if (next.get('auto') === '1') next.delete('auto');
     else next.set('auto', '1');
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // The pressed "Discontinued" chip: back to the Active view (as the Active
+  // toggle does, Auto-archived only goes with it).
+  function hrefWithoutDiscontinued(): string {
+    const next = new URLSearchParams(params.toString());
+    next.delete('status');
+    next.delete('auto');
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // The pressed type chip (Items): back to the products list. A server
+  // navigation in every mode, since another type is another dataset.
+  function hrefWithoutType(): string {
+    const next = new URLSearchParams(params.toString());
+    next.delete('type');
     next.delete('page');
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
@@ -1169,8 +1276,31 @@ export function InventoryTable({
     !!params.get('rack') ||
     (!!lifecycleParam && lifecycleParam !== 'active' && lifecycleParam !== 'all') ||
     params.get('expected') === '1';
-  function clearAllFilters() {
+  // ONE PRESS OF CLEAR (review 2026-10-20). In server mode (staff and viewers
+  // on Items and Books, everyone on Rentals items) the box's search effect
+  // below answers an emptied box with its own router.replace, built from the
+  // address as it was: the search dropped, the Category kept. It ran after the
+  // clear's navigation and superseded it, so one press of "Clear all filters"
+  // on a Category and a search left the Category on. The clear marks its own
+  // emptying of the box here, and the effect run it causes navigates nowhere.
+  const clearingSearchRef = React.useRef(false);
+  // The box's part of a navigation of this table's own that drops the search:
+  // "Clear all filters", and the way back under a list's own message ("Clear
+  // search", "Show all items" ...). The box empties now. Its emptying makes no
+  // navigation of its own (the mark above), since the caller makes the one
+  // navigation. That navigation writes the address's search (it drops it), so
+  // the box does not take it back when it lands (see agreedQ above), and a
+  // search typed while it is out stays. The way back used to do none of this
+  // in server mode and only the emptying in instant mode, so its landing wiped
+  // a search typed in the meantime (review of B1, 2026-11-01).
+  function emptyBoxForOwnNavigation() {
+    // Only when the box changes: the effect then runs and takes the mark.
+    if (q !== '') clearingSearchRef.current = true;
+    setAgreedQ('');
     setQ('');
+  }
+  function clearAllFilters() {
+    emptyBoxForOwnNavigation();
     // One navigation clears the three filter keys (the override) plus
     // sort + q, so two navigations can't race each other.
     filters.navigate((next) => {
@@ -1237,6 +1367,10 @@ export function InventoryTable({
     // instantMode flips true, this effect re-runs and early-returns, and
     // the SAME q re-derives locally over the full dataset (the search box
     // is preserved — the table never remounts).
+    // A clear's own emptying of the box (emptyBoxForOwnNavigation), taken by the
+    // run it causes whatever the mode, so it can never outlive that run.
+    const clearing = clearingSearchRef.current;
+    clearingSearchRef.current = false;
     if (instantMode) return;
     const needle = q.trim();
     if (!needle) {
@@ -1244,6 +1378,10 @@ export function InventoryTable({
       setServerHits(null);
       setServerHitsTotal(null);
       setServerLoading(false);
+      // The clear (or the way back) navigates itself, without the search and
+      // without the filters: a second navigation from the old address would
+      // put them back.
+      if (clearing) return;
       // Clear the q param from the URL when the user empties the box.
       // Use router.replace (not history.replaceState) so Next.js
       // re-runs the server component and re-fetches the FULL item
@@ -1267,6 +1405,8 @@ export function InventoryTable({
         next.delete('page');
         const qs = next.toString();
         const newUrl = qs ? `${basePath}?${qs}` : basePath;
+        // The box writes the address's search (see agreedQ).
+        setAgreedQ('');
         router.replace(newUrl, { scroll: false });
       }
       return;
@@ -1324,6 +1464,8 @@ export function InventoryTable({
         next.set('q', needle);
         next.delete('page');
         const newUrl = `${basePath}?${next.toString()}`;
+        // The box writes the address's search (see agreedQ).
+        setAgreedQ(needle);
         window.history.replaceState(null, '', newUrl);
       } catch (e) {
         if ((e as Error).name !== 'AbortError') {
@@ -1366,7 +1508,11 @@ export function InventoryTable({
     next.delete('page');
     const qs = next.toString();
     const newUrl = qs ? `${basePath}?${qs}` : basePath;
-    const timer = setTimeout(() => shallowReplace(newUrl), 150);
+    const timer = setTimeout(() => {
+      // The box writes the address's search (see agreedQ).
+      setAgreedQ(needle);
+      shallowReplace(newUrl);
+    }, 150);
     return () => clearTimeout(timer);
   }, [q, instantMode, params, basePath, shallowReplace]);
 
@@ -2244,8 +2390,76 @@ export function InventoryTable({
     };
   }
 
-  // What shows when the page has no rows: the quiet in-table line.
-  const noMatchLine = (
+  // What shows when the page has no rows (every view a filter or a search
+  // narrows, since batch D: the pages render the table for those). One
+  // narrowing on its own gets the list's own message, word for word as the
+  // pages wrote it, with its way back to the whole list (listEmptyMessage:
+  // "No items match your search", "No low-stock items", "Nothing is out of
+  // stock", "No expected items", the Books stock and Expected messages and
+  // Rentals items' "No rental items match your search"); anything else, the
+  // quiet general line. Read from what is on screen now: the box's search, the
+  // ticked filters (optimistic) and the address's stock view, Expected,
+  // Auto-archived only and rack, so it is right in instant mode the moment a
+  // filter is set, after a reload, from a pasted address and in server mode.
+  //
+  // In server mode the server answers the box's search, by the box's request
+  // (which then writes the search into the address) or by the page of an
+  // address that holds it. Until then the table filters only the rows of its
+  // page and the count line says "(searching…)", and while an emptied box's
+  // navigation is out the rows are still the old search's. A list's own
+  // message says what was found ("Nothing matched ..."), so in server mode it
+  // shows only while the box's search is the address's; otherwise the general
+  // line shows, as it did before batch D (review of B1, 2026-11-01). Instant
+  // mode answers each keystroke over the whole list.
+  const boxSearchAnswered = instantMode || q.trim() === addressQ.trim();
+  const emptyMessage =
+    displayed.length === 0 && boxSearchAnswered
+      ? listEmptyMessage(rentalsOnly ? 'rentals' : showBookFields ? 'books' : 'items', {
+          ...instantStateFromSearchParams(params),
+          q,
+          cat: [...categoryIds],
+          loc: [...locationIds],
+          charter: [...charterIds],
+        })
+      : null;
+  const noMatchLine = emptyMessage ? (
+    <StatePanel
+      kind="no-match"
+      surface="plain"
+      icon={showBookFields ? BookOpen : Boxes}
+      headingLevel={3}
+      title={emptyMessage.title}
+      description={
+        <p>{emptyNote ? `${emptyMessage.description} ${emptyNote}` : emptyMessage.description}</p>
+      }
+      action={
+        <Button asChild variant="gradient">
+          <Link
+            href={emptyMessage.cta.href}
+            prefetch={false}
+            onClick={(e) => {
+              // The way back drops the search with the rest, as "Clear all
+              // filters" does: the box empties now and makes no navigation of
+              // its own, and a search typed before the list lands stays
+              // (emptyBoxForOwnNavigation). A click that opens a new tab leaves
+              // this list as it is. Instant mode: the whole list derives here, so
+              // the way back is a shallow push. Server mode: the link navigates.
+              if (instantMode) {
+                interceptShallowNav(e, emptyMessage.cta.href, (href) => {
+                  emptyBoxForOwnNavigation();
+                  shallowPush(href);
+                });
+                return;
+              }
+              if (isPlainLeftClick(e)) emptyBoxForOwnNavigation();
+            }}
+          >
+            {emptyMessage.cta.label}
+          </Link>
+        </Button>
+      }
+    />
+  ) : (
     <StatePanel
       kind="no-match"
       surface="plain"
@@ -2674,6 +2888,33 @@ export function InventoryTable({
               Auto-archived only
             </Link>
           )}
+          {isDiscontinuedView && (
+            <Link
+              href={hrefWithoutDiscontinued()}
+              scroll={false}
+              prefetch={false}
+              onClick={
+                instantMode
+                  ? (e) => interceptShallowNav(e, hrefWithoutDiscontinued(), shallowPush)
+                  : undefined
+              }
+              aria-pressed
+              className={filterChipClass({ active: true })}
+            >
+              Discontinued
+            </Link>
+          )}
+          {typeNarrowing && (
+            <Link
+              href={hrefWithoutType()}
+              scroll={false}
+              prefetch={false}
+              aria-pressed
+              className={filterChipClass({ active: true })}
+            >
+              {typeNarrowing}
+            </Link>
+          )}
           {(effectiveExpectedCount > 0 || expectedOnly) && (
             // "Expected" chip (mig 0277): items auto-created from inbound
             // POs, hidden from every default view until their first
@@ -2712,6 +2953,8 @@ export function InventoryTable({
               scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
               basePath={basePath}
               isOwner={!!currentUserId && sv.ownerId === currentUserId}
+              canRemove={sv.canRemove ?? (!!currentUserId && sv.ownerId === currentUserId)}
+              onApply={(state) => setViewSearch(state.q ?? '')}
             />
           ))}
           {savedViewScope && (
@@ -2962,6 +3205,7 @@ export function InventoryTable({
             hasElsewhereSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && (i.elsewhere_quantity ?? 0) > 0,
             )}
+            canStartCount={canStartCount}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick
               // type from the base path so the confirm screen can group
@@ -3154,13 +3398,6 @@ export function InventoryTable({
                 </tr>
               </thead>
               <tbody>
-                {displayed.length === 0 && (
-                  <tr>
-                    <td colSpan={showBookFields ? 13 : 11} className="p-0">
-                      {noMatchLine}
-                    </td>
-                  </tr>
-                )}
                 {styledRenderItems.map((se) => {
                   // Size-run (apparel) header — one collapsed row per style
                   // base (e.g. "L4L - Pink Shirt"), stacked ABOVE the SKU
@@ -3402,6 +3639,13 @@ export function InventoryTable({
             </table>
           </div>
         )}
+        {/* The Table view's empty area sits OUTSIDE the sideways scroller (review
+            2026-10-20): inside, it was a row of the 900 px table, centred out
+            of sight at phone width (the box at x 381-553 of a 390 px screen),
+            so a filtered empty list showed the filter bar, "0 SKUs" and a
+            blank table. Here it spans the card at every width, under the
+            header row, as the Grid's empty area does. */}
+        {listView !== 'grid' && displayed.length === 0 ? noMatchLine : null}
 
         {showPagination || (plannedPageStranded && pageRange) || canCreate ? (
           <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">
@@ -5579,18 +5823,31 @@ function describeState(state: SavedViewSummary['state']): string {
   return parts.length === 0 ? 'No filters set' : parts.join(' · ');
 }
 
+/** Who shared a view, for its chip's title. B23: a shared view whose owner
+ *  deleted their account has no owner, so it never reads "a teammate". */
+function savedViewSharer(view: SavedViewSummary, isOwner: boolean): string {
+  if (isOwner) return 'you';
+  return view.ownerId === null ? `a ${DELETED_USER_LABEL.toLowerCase()}` : 'a teammate';
+}
+
 function SavedViewChip({
   view,
   isActive,
   scope,
   basePath,
   isOwner,
+  canRemove,
+  onApply,
 }: {
   view: SavedViewSummary;
   isActive: boolean;
   scope: 'inventory' | 'books';
   basePath: string;
   isOwner: boolean;
+  canRemove: boolean;
+  /** Told the view's state as the chip navigates to it: the table hands the
+   *  view's search to its box (or empties it) once the address lands. */
+  onApply?: (state: SavedViewSummary['state']) => void;
 }) {
   const router = useRouter();
   const [deleting, setDeleting] = React.useState(false);
@@ -5599,6 +5856,7 @@ function SavedViewChip({
 
   async function apply() {
     await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    onApply?.(view.state);
     const next = new URLSearchParams();
     if (view.state.q) next.set('q', view.state.q);
     if (view.state.status) next.set('status', view.state.status);
@@ -5667,7 +5925,7 @@ function SavedViewChip({
           ? 'border-foreground bg-foreground text-background'
           : 'hover:bg-muted border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]',
       )}
-      title={view.isShared ? `Shared by ${isOwner ? 'you' : 'a teammate'}` : undefined}
+      title={view.isShared ? `Shared by ${savedViewSharer(view, isOwner)}` : undefined}
     >
       <button
         type="button"
@@ -5701,7 +5959,7 @@ function SavedViewChip({
           )}
         </button>
       )}
-      {isOwner && (
+      {canRemove && (
         <button
           type="button"
           onClick={remove}

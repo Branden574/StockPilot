@@ -8,10 +8,12 @@ import { safeReturnPath } from '@/lib/safe-return-path';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
+import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemGroupingService } from '@/server/services/item-grouping';
 import { LocationsService } from '@/server/services/locations';
@@ -50,6 +52,9 @@ export default async function EditBookPage({
   searchParams: Promise<{ return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it, and before the items:update redirect (B63).
+  notFoundUnlessUuid(id);
   const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
   if (!can(ctx, 'items:update')) {
@@ -210,6 +215,10 @@ export default async function EditBookPage({
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             charters={charters.map((c) => ({ id: c.id, name: c.name }))}
             warehouseCharters={warehouseCharters}
+            // listPairs stops at LOOKUP_ROW_CEILING links (B47): at that many,
+            // a pair missing from the list may exist, so the form keeps the
+            // record's charter on a warehouse change and the save checks it.
+            warehouseChartersCapped={warehouseCharters.length >= LOOKUP_ROW_CEILING}
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}

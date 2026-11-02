@@ -255,6 +255,15 @@ interface ItemFormProps {
   warehouses: Array<{ id: string; name: string }>;
   /** Every (warehouse_id, charter_id) pair in the org. Used to filter charter options. */
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
+  /**
+   * True when `warehouseCharters` stopped at the lookup ceiling (B47:
+   * WarehouseChartersService.listPairs reads at most LOOKUP_ROW_CEILING
+   * links), so a pair missing from it may still exist. The form then never
+   * clears a charter because the list lacks its pair: the server checks the
+   * pair on save and refuses one the warehouse does not service, in plain
+   * words. Default false.
+   */
+  warehouseChartersCapped?: boolean;
   /** All charters in the org (for label lookup). */
   charters: Array<{ id: string; name: string }>;
   /** Forced warehouse (for warehouse-scoped users) — picker is hidden when set. */
@@ -337,6 +346,7 @@ export function ItemForm({
   initialTagIds = [],
   warehouses,
   warehouseCharters,
+  warehouseChartersCapped = false,
   charters,
   forcedWarehouseId,
   warehouseLabel,
@@ -1128,16 +1138,28 @@ export function ItemForm({
     warehouseId: watchedWarehouseId,
     charterId: watchedCharterId,
   });
+  // Nor when the page's pair list stopped at the lookup ceiling (B47): a pair
+  // missing from a cut list may exist, so clearing would change the record's
+  // charter from part of the list. The charter stays, and the server checks
+  // the pair on save (it refuses one the warehouse does not service).
   React.useEffect(() => {
     const ownCharter =
       isEdit &&
       watchedWarehouseId === loadedPlacementRef.current.warehouseId &&
       watchedCharterId === loadedPlacementRef.current.charterId;
     if (ownCharter) return;
+    if (warehouseChartersCapped) return;
     if (watchedCharterId && !allowedCharterIds.has(watchedCharterId)) {
       setValue('charterId', null);
     }
-  }, [isEdit, watchedWarehouseId, watchedCharterId, allowedCharterIds, setValue]);
+  }, [
+    isEdit,
+    watchedWarehouseId,
+    watchedCharterId,
+    allowedCharterIds,
+    warehouseChartersCapped,
+    setValue,
+  ]);
   const unlinkedCharter =
     watchedCharterId && !allowedCharterIds.has(watchedCharterId)
       ? {
@@ -2391,7 +2413,11 @@ export function ItemForm({
                 </SelectItem>
                 {unlinkedCharter ? (
                   <SelectItem value={unlinkedCharter.id}>
-                    {unlinkedCharter.name} (not linked to this {warehouseLabel.toLowerCase()})
+                    {unlinkedCharter.name}
+                    {/* A cut pair list cannot tell (B47); the save checks. */}
+                    {warehouseChartersCapped
+                      ? null
+                      : ` (not linked to this ${warehouseLabel.toLowerCase()})`}
                   </SelectItem>
                 ) : null}
                 {allowedCharters.length === 0 && watchedWarehouseId ? (
