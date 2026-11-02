@@ -268,6 +268,8 @@ function answerStream(sessionId: string) {
       line({ type: 'done', sessionId, reply: '', toolCallsUsed: [] });
       controller.close();
     },
+    /** The connection drops mid-answer: the browser's read rejects. */
+    cut: () => controller.error(new TypeError('network error')),
   };
 }
 
@@ -275,10 +277,13 @@ type ChatAnswer = 'stream' | 'no answer' | { status: number; message: string };
 
 /**
  * Stubs fetch with the panel's server. `hold` names requests that wait for
- * release(name): a chat's id (its read), `delete:<id>`, `extract` (the file
- * read) or `chat` (every message). `gone` chats are listed but answer 404, as
- * a chat deleted elsewhere does; `noAnswer` reads fail as a dropped connection
- * does. `chatAnswers` says how each message is answered (a stream if unset).
+ * release(name): a chat's id (its read), `reread:<id>` (that chat's later
+ * reads, answered with the chat as it was when asked, as a read the server
+ * finished before a delete but that arrives after it), `delete:<id>`,
+ * `extract` (the file read) or `chat` (every message). `gone` chats are listed
+ * but answer 404, as a chat deleted elsewhere does; `noAnswer` reads fail as a
+ * dropped connection does. `chatAnswers` says how each message is answered (a
+ * stream if unset).
  */
 function fakeServer({
   chats = [CHAT_B],
@@ -299,6 +304,7 @@ function fakeServer({
   const gates = new Map(hold.map((name) => [name, deferred()]));
   const listGate = holdList ? deferred() : null;
   let listReads = 0;
+  const chatReads = new Map<string, number>();
   const newChats = [...NEW_CHATS];
   const requests: string[] = [];
   const chatBodies: Array<{ message: string; sessionId?: string }> = [];
@@ -327,10 +333,23 @@ function fakeServer({
     }
     const chatId = /^\/api\/ai\/sessions\/([0-9a-f-]{36})$/.exec(url)?.[1];
     if (chatId && method === 'GET') {
+      const read = (chatReads.get(chatId) ?? 0) + 1;
+      chatReads.set(chatId, read);
+      const answer = () => {
+        if (noAnswer.includes(chatId)) throw new TypeError('Failed to fetch');
+        const chat = gone.includes(chatId) ? undefined : stored.get(chatId);
+        return chat
+          ? json({ ok: true, messages: chat.messages })
+          : json({ error: 'not_found' }, 404);
+      };
+      const reread = read > 1 ? gates.get(`reread:${chatId}`) : undefined;
+      if (reread) {
+        const reply = answer();
+        await reread.promise;
+        return reply;
+      }
       await gates.get(chatId)?.promise;
-      if (noAnswer.includes(chatId)) throw new TypeError('Failed to fetch');
-      const chat = gone.includes(chatId) ? undefined : stored.get(chatId);
-      return chat ? json({ ok: true, messages: chat.messages }) : json({ error: 'not_found' }, 404);
+      return answer();
     }
     if (chatId && method === 'DELETE') {
       await gates.get(`delete:${chatId}`)?.promise;
@@ -536,6 +555,55 @@ describe('ChatPanel while an answer is arriving (B84)', () => {
       // Its question is saved in that chat, so the rail is read again to list it.
       await waitFor(() => expect(server.count('GET /api/ai/sessions')).toBe(2));
       await waitFor(() => expect(railRow(SUGGESTION)).toBeInTheDocument());
+    });
+
+    it.each(['New chat', 'another chat opened'] as const)(
+      '%s, then the answer is cut off: nothing is said on screen, and the chat left is listed (R4c)',
+      async (change) => {
+        const server = fakeServer();
+        render(<ChatPanel />);
+        await within(rail()).findByText('Chat B');
+        fireEvent.click(screen.getByRole('button', { name: SUGGESTION }));
+        const answer = await answerTo(server, 1);
+        await act(async () => answer.text('Three items '));
+        await screen.findByText('Three items');
+        if (change === 'New chat') {
+          pressNewChat();
+        } else {
+          openChat('Chat B');
+          await screen.findByText('Two receipts came in this week.');
+        }
+        await act(async () => answer.cut());
+        await answerEnded();
+        expect(toast.error).not.toHaveBeenCalled();
+        // The route saved its question before it answered, so the rail is read
+        // again to list the chat left.
+        await waitFor(() => expect(server.count('GET /api/ai/sessions')).toBe(2));
+        await waitFor(() => expect(railRow(SUGGESTION)).toBeInTheDocument());
+        if (change === 'New chat') {
+          expect(emptyChat()).toBeInTheDocument();
+        } else {
+          expect(userTurns()).toEqual(['Show recent receipts.']);
+          expect(railRow('Chat B')).toHaveAttribute('aria-current', 'true');
+        }
+      },
+    );
+
+    it('an answer cut off in the chat on screen is still said there, as before (R4d)', async () => {
+      const server = fakeServer();
+      render(<ChatPanel />);
+      await within(rail()).findByText('Chat B');
+      fireEvent.click(screen.getByRole('button', { name: SUGGESTION }));
+      const answer = await answerTo(server, 1);
+      await act(async () => answer.text('Three items '));
+      await screen.findByText('Three items');
+      await act(async () => answer.cut());
+      await answerEnded();
+      expect(toast.error).toHaveBeenCalledTimes(1);
+      // The same words take the answer's place.
+      const said = String(vi.mocked(toast.error).mock.calls[0]![0]);
+      expect(within(conversation()).getByText(said)).toBeInTheDocument();
+      expect(userTurns()).toEqual([SUGGESTION]);
     });
 
     it('New chat, then an answer with tool calls and no text: no fallback reply in the new chat (R5)', async () => {
@@ -960,6 +1028,124 @@ describe('ChatPanel while an answer is arriving (B84)', () => {
       expect(within(rail()).queryByText('Chat A')).toBeNull();
       expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
     });
+
+    it('deleting the open chat, then opening it again before the delete answers, leaves a new chat (H4)', async () => {
+      window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+      const server = fakeServer({ chats: [CHAT_A, CHAT_B], hold: [`delete:${CHAT_A}`] });
+      render(<ChatPanel />);
+      await screen.findByText('Two shelves are low.');
+      deleteChat('Chat A');
+      openChat('Chat A');
+      await waitFor(() => expect(server.count(`GET /api/ai/sessions/${CHAT_A}`)).toBe(2));
+      await settle();
+      await act(async () => server.release(`delete:${CHAT_A}`));
+      await waitFor(() => expect(within(rail()).queryByText('Chat A')).toBeNull());
+      await settle();
+      expect(emptyChat()).toBeInTheDocument();
+      expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
+      expect(rail().querySelector('[aria-current]')).toBeNull();
+      typeAndSend('List warehouses we operate.');
+      await waitFor(() => expect(server.chatBodies).toHaveLength(1));
+      expect(server.chatBodies[0]!.sessionId).toBeUndefined();
+    });
+
+    it('opening the open chat again, then deleting it, the read landing first, leaves a new chat (H5)', async () => {
+      window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+      const server = fakeServer({
+        chats: [CHAT_A, CHAT_B],
+        hold: [`reread:${CHAT_A}`, `delete:${CHAT_A}`],
+      });
+      render(<ChatPanel />);
+      await screen.findByText('Two shelves are low.');
+      openChat('Chat A');
+      deleteChat('Chat A');
+      await act(async () => server.release(`reread:${CHAT_A}`));
+      await settle();
+      await act(async () => server.release(`delete:${CHAT_A}`));
+      await waitFor(() => expect(within(rail()).queryByText('Chat A')).toBeNull());
+      await settle();
+      expect(emptyChat()).toBeInTheDocument();
+      expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
+    });
+
+    it('deleting another chat, then opening it before the delete answers, leaves a new chat (H6)', async () => {
+      window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+      const server = fakeServer({ chats: [CHAT_A, CHAT_B], hold: [`delete:${CHAT_B}`] });
+      render(<ChatPanel />);
+      await screen.findByText('Two shelves are low.');
+      deleteChat('Chat B');
+      openChat('Chat B');
+      await screen.findByText('Two receipts came in this week.');
+      await act(async () => server.release(`delete:${CHAT_B}`));
+      await waitFor(() => expect(within(rail()).queryByText('Chat B')).toBeNull());
+      await settle();
+      expect(emptyChat()).toBeInTheDocument();
+      expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
+    });
+
+    it('a read of the open chat that arrives after its delete leaves the new chat (H7)', async () => {
+      window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+      const server = fakeServer({
+        chats: [CHAT_A, CHAT_B],
+        hold: [`reread:${CHAT_A}`, `delete:${CHAT_A}`],
+      });
+      render(<ChatPanel />);
+      await screen.findByText('Two shelves are low.');
+      // The read is answered before the delete runs, but arrives after it.
+      openChat('Chat A');
+      deleteChat('Chat A');
+      await waitFor(() => expect(server.count(`GET /api/ai/sessions/${CHAT_A}`)).toBe(2));
+      await act(async () => server.release(`delete:${CHAT_A}`));
+      await waitFor(() => expect(emptyChat()).toBeInTheDocument());
+      await act(async () => server.release(`reread:${CHAT_A}`));
+      await settle();
+      expect(emptyChat()).toBeInTheDocument();
+      expect(screen.queryByText('Two shelves are low.')).toBeNull();
+      expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
+    });
+
+    it.each(['New chat', 'a chat deleted elsewhere opened'] as const)(
+      'after %s, deleting the chat left there leaves the screen and the answer arriving as they are (H8)',
+      async (change) => {
+        window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+        const server = fakeServer({ chats: [CHAT_A, CHAT_B], gone: [CHAT_B] });
+        render(<ChatPanel />);
+        await screen.findByText('Two shelves are low.');
+        if (change === 'New chat') pressNewChat();
+        else openChat('Chat B');
+        await waitFor(() => expect(emptyChat()).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('button', { name: SUGGESTION }));
+        const answer = await answerTo(server, 1);
+        await act(async () => answer.text('Three items '));
+        deleteChat('Chat A');
+        await waitFor(() => expect(within(rail()).queryByText('Chat A')).toBeNull());
+        await act(async () => {
+          answer.text('are below reorder.');
+          answer.done();
+        });
+        await answerEnded();
+        expect(screen.getByText('Three items are below reorder.')).toBeInTheDocument();
+        expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBe(FIRST_NEW_CHAT);
+      },
+    );
+
+    it('deleting a chat started on this page while it is open opens a new chat, as before (H9)', async () => {
+      const server = fakeServer();
+      render(<ChatPanel />);
+      await within(rail()).findByText('Chat B');
+      fireEvent.click(screen.getByRole('button', { name: SUGGESTION }));
+      const answer = await answerTo(server, 1);
+      await act(async () => {
+        answer.text('Three items are below reorder.');
+        answer.done();
+      });
+      await answerEnded();
+      await waitFor(() => expect(railRow(SUGGESTION)).toHaveAttribute('aria-current', 'true'));
+      deleteChat(SUGGESTION);
+      await waitFor(() => expect(emptyChat()).toBeInTheDocument());
+      expect(window.localStorage.getItem(ACTIVE_CHAT_ITEM)).toBeNull();
+      expect(server.count(`DELETE /api/ai/sessions/${FIRST_NEW_CHAT}`)).toBe(1);
+    });
   });
 
   describe('a file being read', () => {
@@ -1028,6 +1214,40 @@ describe('ChatPanel while an answer is arriving (B84)', () => {
       await act(async () => server.release(CHAT_B));
       await screen.findByText('Two receipts came in this week.');
       expect(userTurns()).toEqual(['Show recent receipts.']);
+    });
+
+    it('a click on the open chat while a file is read changes no chat: the file is sent there, with no warning (U6)', async () => {
+      window.localStorage.setItem(ACTIVE_CHAT_ITEM, CHAT_A);
+      const server = fakeServer({ chats: [CHAT_A, CHAT_B], hold: ['extract'] });
+      render(<ChatPanel />);
+      await screen.findByText('Two shelves are low.');
+      attachFile();
+      await screen.findByPlaceholderText('Reading file…');
+      openChat('Chat A');
+      await settle();
+      await act(async () => server.release('extract'));
+      await fileReadEnded();
+      await settle();
+      expect(toast.warning).not.toHaveBeenCalled();
+      expect(server.chatBodies).toHaveLength(1);
+      expect(server.chatBodies[0]!.sessionId).toBe(CHAT_A);
+      expect(server.chatBodies[0]!.message).toContain('[Uploaded isbn-list.csv');
+      expect(userTurns()).toHaveLength(2);
+    });
+
+    it('New chat pressed in an empty new chat while a file is read counts as changing chats: nothing is sent, and it says so (U7)', async () => {
+      const server = fakeServer({ hold: ['extract'] });
+      render(<ChatPanel />);
+      await within(rail()).findByText('Chat B');
+      attachFile();
+      await screen.findByPlaceholderText('Reading file…');
+      pressNewChat();
+      await act(async () => server.release('extract'));
+      await fileReadEnded();
+      await settle();
+      expect(server.chatBodies).toHaveLength(0);
+      expect(toast.warning).toHaveBeenCalledWith(NOT_SENT);
+      expect(emptyChat()).toBeInTheDocument();
     });
 
     it('while a file is read, Send and the suggestions wait (U2, U2c)', async () => {
