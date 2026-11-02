@@ -449,9 +449,11 @@ export default function NewRental() {
       // checkout be refusable. Sent with no answer (offline, a dropped
       // connection, the timeout) or a 5xx: the POST may have landed, so the
       // alert says to look on the Rentals list before checking out again and
-      // never "try again". Never sent: it could not check out, and says why.
-      // Never the network layer's own text (rentalCheckoutFailure,
-      // lib/rental-view.ts).
+      // never "try again", except for the one 503 the server marks as refused
+      // before any write (its access check could not answer, docket S26):
+      // nothing was checked out, so it says to try again. Never sent: it could
+      // not check out, and says why. Never the network layer's own text
+      // (rentalCheckoutFailure, lib/rental-view.ts).
       const failure = rentalCheckoutFailure(e, sent);
       Alert.alert(failure.title, failure.message);
     } finally {

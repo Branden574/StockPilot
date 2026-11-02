@@ -31,7 +31,13 @@ vi.mock('@/server/services/maintenance-share-links', () => ({
 vi.mock('@/server/email/maintenance-resolved', () => ({ maybeSendMaintenanceResolvedEmail: vi.fn() }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => ({})) }));
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { reportError } from '@/lib/error-reporter';
+import { ExceptionEscalationService } from '@/server/services/exception-escalation';
 
 import { POST as ESCALATE } from './[id]/escalate/route';
 
@@ -168,5 +174,54 @@ describe('POST /api/v1/exceptions/[id]/escalate', () => {
     expect(res.headers.get('retry-after')).toBeTruthy();
     expect(user.rpcCalls).toEqual([]);
     expect(limiter.calls[0]?.slice(0, 3)).toEqual(['exceptions-escalate:u-1', 10, 60_000]);
+  });
+});
+
+// Docket S26. An escalation refused because the caller's access could not be
+// checked (withApiContext's backup reads) is refused before anything runs. It
+// used to escape as the framework's bare 500, the answer this route keeps for
+// "it is unknown whether a request was saved", and the phone said so. It now
+// answers the marker: nothing was saved, try again.
+describe('POST /api/v1/exceptions/[id]/escalate: access that cannot be checked is refused before any work', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it.each([
+    ['PermissionsUnavailableError', () => new PermissionsUnavailableError()],
+    ['AccountStatusUnavailableError', () => new AccountStatusUnavailableError()],
+  ])('%s from the context answers the marker; no rate limit, no service', async (_name, make) => {
+    vi.mocked(withApiContext).mockRejectedValueOnce(make());
+    const escalate = vi.spyOn(ExceptionEscalationService.prototype, 'escalate');
+    escalate.mockClear();
+
+    const res = await ESCALATE(post(BODY), params(OCC));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual(contextUnavailableBody());
+    expect(res.headers.get('retry-after')).toBe('5');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(escalate).not.toHaveBeenCalled();
+    expect(limiter.calls).toEqual([]);
+    escalate.mockRestore();
+  });
+
+  // The marker follows the step, not the class: from the service, after the
+  // context, the routes' one error shape answers as it always did.
+  it("the same refusal thrown by the service keeps the routes' 500", async () => {
+    ctxWith();
+    const escalate = vi
+      .spyOn(ExceptionEscalationService.prototype, 'escalate')
+      .mockRejectedValueOnce(new PermissionsUnavailableError());
+
+    const res = await ESCALATE(post(BODY), params(OCC));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    escalate.mockRestore();
   });
 });

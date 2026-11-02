@@ -813,6 +813,12 @@ export async function drainQueue(): Promise<{
   let ok = 0;
   let failed = 0;
   let rejected = 0;
+  // The organizations and accounts whose queued adjustment the server refused
+  // before any write in this pass (adjust-outbox.ts): their later adjustments
+  // wait for the next pass, where the refused one goes first again, so they
+  // still land in the order they were made.
+  const heldScopes = new Set<string>();
+  const scopeOf = (d: { orgId: string; userId: string }) => JSON.stringify([d.orgId, d.userId]);
 
   for (const action of pending) {
     // record_count rows are owned by the cycle-count sync engine
@@ -837,7 +843,10 @@ export async function drainQueue(): Promise<{
     // Otherwise the row is left exactly as it is, never handed off, and the
     // next pass sends it. Without this, one dropped connection parked every
     // adjustment behind it as "Not confirmed" although none reached the server.
+    // So is a row whose organization and account had an adjustment refused
+    // before any write earlier in this pass: it must not land before that one.
     if (action.kind === ADJUST_STOCK_KIND) {
+      if (heldScopes.has(scopeOf(decision))) continue;
       if (!adjustSendGate.canSend()) continue;
       if (!(await isOnline())) {
         adjustSendGate.noAnswer();
@@ -876,15 +885,25 @@ export async function drainQueue(): Promise<{
         continue;
       }
       const msg = e instanceof Error ? e.message : String(e);
-      // AT MOST ONCE. Retried only when provably not written; parked, never
-      // re-sent, when it may have been; each parked row names the item and
-      // the change, so the operator knows what to check.
+      // AT MOST ONCE. Retried only when provably not written (never handed
+      // off, answered before the route could write, or refused before any
+      // write by the server's own mark); parked, never re-sent, when it may
+      // have been; each parked row names the item and the change, so the
+      // operator knows what to check.
       if (action.kind === ADJUST_STOCK_KIND) {
         const verdict = adjustDrainVerdict(e, {
           accountDisabled: getAccountDisabled(),
           handedOff: handedOffAt !== null,
         });
         if (verdict === 'failed') {
+          await markFailed(action.id, msg);
+          failed += 1;
+        } else if (verdict === 'refused-before-write') {
+          // The server could not check this account's access here and refused
+          // before doing anything: nothing to label, and it did answer, so the
+          // send gate stays open. The row stays queued, and this scope's later
+          // adjustments wait for the next pass.
+          heldScopes.add(scopeOf(decision));
           await markFailed(action.id, msg);
           failed += 1;
         } else if (verdict === 'unconfirmed') {

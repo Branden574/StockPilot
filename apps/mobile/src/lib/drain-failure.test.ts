@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
 import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure } from './drain-failure';
 
 /**
@@ -65,6 +67,18 @@ describe('classifyDrainFailure — transient failures stay retryable', () => {
       ),
     ).toBe('failed');
     expect(classifyDrainFailure({ status: '403' }, { accountDisabled: true })).toBe('failed');
+  });
+});
+
+// Docket S26: the 503 the server marks as refused before any write is
+// retryable here like every 5xx, on a live account and on a disabled one. The
+// adjust_stock kind reads the mark itself (adjust-outbox.ts adjustDrainVerdict).
+describe('classifyDrainFailure — the refusal marked as before any write', () => {
+  it('is retryable, like every 5xx', () => {
+    const body = contextUnavailableBody();
+    const marker = { status: 503, code: body.error, details: body.details };
+    expect(classifyDrainFailure(marker, { accountDisabled: false })).toBe('failed');
+    expect(classifyDrainFailure(marker, { accountDisabled: true })).toBe('failed');
   });
 });
 
