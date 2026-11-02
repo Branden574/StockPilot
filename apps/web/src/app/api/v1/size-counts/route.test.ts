@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
@@ -79,7 +80,20 @@ describe('sizeCountError — S13, no raw DB text in the 500 body', () => {
   it('reports the swallowed detail server-side so the leak is not just deleted', async () => {
     createSession.mockRejectedValue(new Error(rlsText));
     await POST(buildRequest({}));
-    expect(vi.mocked(reportError)).toHaveBeenCalled();
+    // The route's tag, at the reporter's default level (error).
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'size-counts.api',
+    });
+  });
+
+  it('answers the body an internal_error ServiceError answers, so the two cannot be told apart', async () => {
+    const unexpected = await sizeCountError(new Error(rlsText)).json();
+    const sanitized = await sizeCountError(new ServiceError('internal_error', rlsText)).json();
+    expect(unexpected).toEqual({
+      error: 'internal_error',
+      message: 'An internal error occurred. Please try again.',
+    });
+    expect(sanitized).toEqual(unexpected);
   });
 
   it('still returns a human sentence so the phone does not render "internal_error"', () => {
@@ -110,5 +124,36 @@ describe('sizeCountError — app-authored ServiceError text is still verbatim', 
     expect(res.status).toBe(500);
     const body = (await res.json()) as { message?: string };
     expect(JSON.stringify(body)).not.toContain('permission denied');
+  });
+});
+
+/**
+ * B73: assertWarehouseAccess refuses with a ForbiddenError, which is not a
+ * ServiceError. It is a refusal, not a failure: never a reported 500.
+ * warehouse-refusal.test.ts drives the same answers through the real routes.
+ */
+describe('sizeCountError — a warehouse refusal is not an internal error (B73)', () => {
+  const words = 'User does not have write access to warehouse X.';
+
+  it('answers a refusal with a 403 and its own words, and does not report it', async () => {
+    const res = sizeCountError(new ForbiddenError(words));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: words });
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
+  });
+
+  it('answers access that could not be read with a 503 to retry, reported as a warning', async () => {
+    const e = new ForbiddenError(words, { accessUnreadable: true });
+    const res = sizeCountError(e);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('5');
+    expect(await res.json()).toEqual({
+      error: 'check_failed',
+      message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+    });
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(e, {
+      tag: 'size-counts.api',
+      level: 'warning',
+    });
   });
 });

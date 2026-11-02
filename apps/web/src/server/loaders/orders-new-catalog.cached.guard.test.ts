@@ -31,8 +31,25 @@ const PINS: Record<string, string> = {
   // checked at read time from the call site's list.
   loadCatalogItemsCached: '44e54eeed6837b7fca2492c2bfa3ced644137e2d05630a37fb4d84295a3ce142',
   loadCatalogThumbMapCached: '0ee26062232644ab2e21a3379c154d2333b751409951bc58cc1bff90218a3708',
+  // Re-pinned 2026-11-01 (B47 part B): the warehouse's links are read page by
+  // page, ordered by charter, and a failed page names its PostgREST cause, so
+  // a warehouse past 1000 links lists every delivery site (here and in the
+  // phone's order sites). The value's shape and the key parts are unchanged;
+  // the callback edit rotates the key once on deploy, and the first visit per
+  // warehouse after it is cold (the prewarm cron refills it).
+  // Re-pinned again in B47's review round: the sites are returned by name,
+  // then id (the returns chooser's rule), not in the charter order the pages
+  // are read in, because the web site picker and the phone's site sheet list
+  // them as given and a charter id is a random uuid. Same release as part B,
+  // so the key still rotates once on deploy; shape and key parts unchanged.
+  // Re-pinned a third time in B47's decisions round (2026-11-01): the read
+  // passes { cap: LOOKUP_ROW_CEILING } and reports reaching it, because
+  // paging removed the 1000-row bound PostgREST had put on it. unstable_cache
+  // hashes this callback's text, so the edit rotates the key; all of #443
+  // ships in one deploy, so it still rotates only once. Shape and key parts
+  // unchanged.
   loadChartersForWarehouseCached:
-    'fa6e125852a2258d819a6fe9fdd72b9179eb76afcca4adf82d0044379e1d512b',
+    '6c1bcb8667e5c395d5c8886b9f99d56e1d614658781708f0b42f633916ae2878',
 };
 
 function initializerHashes(): Record<string, string> {

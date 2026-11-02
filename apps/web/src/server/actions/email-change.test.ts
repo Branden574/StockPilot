@@ -6,11 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * they own the account-status guard. These tests pin that guard and the
  * translation between the service's errors and the ActionResult contract
  * the Profile page acts on (`rate_limited`, `aal2_required`).
+ *
+ * The MFA posture is the validated user's own (S50a): the factors come from
+ * the same getUser() answer, and the level from a verified session of that
+ * same user (readVerifiedSessionClaimsOf); anything else is not aal2.
  */
+
+import { verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
 
 const getUser = vi.fn();
 const listFactors = vi.fn();
 const getAuthenticatorAssuranceLevel = vi.fn();
+const cookie: { session: StubbedCookieSession } = { session: { sub: 'u-1', aal: 'aal1' } };
 const maybeSingle = vi.fn();
 const requestEmailChange = vi.fn();
 const resendEmailChange = vi.fn();
@@ -23,7 +30,11 @@ vi.mock('next/headers', () => ({
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
-    auth: { getUser, mfa: { listFactors, getAuthenticatorAssuranceLevel } },
+    auth: {
+      getUser,
+      ...verifiedSessionAuth(() => cookie.session),
+      mfa: { listFactors, getAuthenticatorAssuranceLevel },
+    },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
   }),
 }));
@@ -39,12 +50,13 @@ import { cancelEmailChangeAction, requestEmailChangeAction, resendEmailChangeAct
 
 const INPUT = { newEmail: 'new@example.com', currentPassword: 'test-only-current-password' };
 
+const VERIFIED_TOTP = { id: 'f-1', factor_type: 'totp', status: 'verified' };
+
 beforeEach(() => {
   vi.clearAllMocks();
   getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'old@example.com' } } });
+  cookie.session = { sub: 'u-1', aal: 'aal1' };
   maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
-  listFactors.mockResolvedValue({ data: { totp: [] } });
-  getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
   requestEmailChange.mockResolvedValue({
     pendingEmail: 'new@example.com',
     sentAt: '2026-08-25T16:00:00.000Z',
@@ -87,23 +99,69 @@ describe('requestEmailChangeAction — identity funnel', () => {
     expect(requestEmailChange).not.toHaveBeenCalled();
   });
 
-  it('fails CLOSED when the factor list cannot be read — never as "not enrolled"', async () => {
-    // auth-js RESOLVES a GoTrue failure as { data: null, error }. Reading that
-    // as "no verified factor" dropped the step-up an enrolled account needs.
-    listFactors.mockResolvedValue({ data: null, error: { name: 'AuthRetryableFetchError', message: 'x' } });
+  it('takes the factors from the getUser() answer that names the user: no second factor read', async () => {
+    // getUser() is the identity read, and GoTrue's answer lists the user's
+    // factors. An unreadable answer is "Sign in required", never "not enrolled".
+    getUser.mockResolvedValue({
+      data: { user: null },
+      error: { name: 'AuthRetryableFetchError', message: 'x' },
+    });
     const res = await requestEmailChangeAction(INPUT);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error.code).toBe('internal_error');
+    if (!res.ok) expect(res.error.code).toBe('unauthenticated');
     expect(requestEmailChange).not.toHaveBeenCalled();
+    expect(listFactors).not.toHaveBeenCalled();
   });
 
   it('passes the session MFA posture to the service (enrolled + AAL2)', async () => {
-    listFactors.mockResolvedValue({ data: { totp: [{ status: 'verified' }] } });
-    getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal2' } });
+    getUser.mockResolvedValue({
+      data: { user: { id: 'u-1', email: 'old@example.com', factors: [VERIFIED_TOTP] } },
+    });
+    cookie.session = { sub: 'u-1', aal: 'aal2' };
     const res = await requestEmailChangeAction(INPUT);
     expect(res.ok).toBe(true);
     expect(requestEmailChange).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u-1', newEmail: 'new@example.com', mfa: { enrolled: true, aal2: true }, source: 'web' }),
+    );
+    expect(listFactors).not.toHaveBeenCalled();
+    expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+  });
+
+  it('an enrolled user whose verified session is not theirs is not aal2', async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: 'u-1', email: 'old@example.com', factors: [VERIFIED_TOTP] } },
+    });
+    cookie.session = { sub: 'u-2', aal: 'aal2' };
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false } }),
+    );
+  });
+
+  it('an enrolled user with no verified session is not aal2', async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: 'u-1', email: 'old@example.com', factors: [VERIFIED_TOTP] } },
+    });
+    cookie.session = { sub: 'u-1', aal: 'aal2', read: 'error' };
+    await resendEmailChangeAction();
+    expect(resendEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false } }),
+    );
+  });
+
+  it('a factor that was never verified is not enrolled', async () => {
+    getUser.mockResolvedValue({
+      data: {
+        user: {
+          id: 'u-1',
+          email: 'old@example.com',
+          factors: [{ ...VERIFIED_TOTP, status: 'unverified' }],
+        },
+      },
+    });
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false } }),
     );
   });
 

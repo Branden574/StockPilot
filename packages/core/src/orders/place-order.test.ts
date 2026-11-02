@@ -136,7 +136,7 @@ describe('orderCreateRequestSchema: what is accepted', () => {
       body({
         fulfillmentType: 'delivery',
         deliveryCharterId: SITE,
-        onBehalfOf: { name: '  Maria Lopez ', email: ' maria@example.org\t' },
+        onBehalfOf: { name: '  Pixie Quill ', email: ' pixie@example.org\t' },
         notes: '\n  Room 12, by Friday  \n',
         neededByLocal: '2026-10-05T10:00',
         lines: [
@@ -148,7 +148,7 @@ describe('orderCreateRequestSchema: what is accepted', () => {
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.onBehalfOf).toEqual({ name: 'Maria Lopez', email: 'maria@example.org' });
+    expect(r.value.onBehalfOf).toEqual({ name: 'Pixie Quill', email: 'pixie@example.org' });
     expect(r.value.notes).toBe('Room 12, by Friday');
     expect(r.value.neededByLocal).toBe('2026-10-05T10:00');
     expect(r.value.kits).toEqual([{ bundleId: SITE, count: 2 }]);
@@ -274,35 +274,35 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
     ],
     [
       'a 121-character name',
-      body({ onBehalfOf: { name: 'n'.repeat(121), email: 'maria@example.org' } }),
+      body({ onBehalfOf: { name: 'n'.repeat(121), email: 'pixie@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'a blank name',
-      body({ onBehalfOf: { name: '   ', email: 'maria@example.org' } }),
+      body({ onBehalfOf: { name: '   ', email: 'pixie@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'an email with no @',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria.example.org' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie.example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'an email with two @',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria@x@example.org' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie@x@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'an email with a space',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria lopez@example.org' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie quill@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
@@ -311,7 +311,7 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
       'a 255-character email',
       body({
         onBehalfOf: {
-          name: 'Maria',
+          name: 'Pixie',
           email: `${'e'.repeat(255 - '@example.org'.length)}@example.org`,
         },
       }),
@@ -321,7 +321,7 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
     ],
     [
       'a name with no email',
-      body({ onBehalfOf: { name: 'Maria' } }),
+      body({ onBehalfOf: { name: 'Pixie' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
@@ -381,21 +381,21 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
     ],
     [
       'an email with a one-letter top-level domain (the web refuses it today)',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria@gmail.c' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie@gmail.c' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'an email with two dots in a row',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria..lopez@example.org' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie..quill@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'an email with a no-break space inside',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria lopez@example.org' } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie quill@example.org' } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
@@ -533,7 +533,7 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
     ],
     [
       'an unknown key on the requester',
-      body({ onBehalfOf: { name: 'Maria', email: 'maria@example.org', userId: OTHER_USER } }),
+      body({ onBehalfOf: { name: 'Pixie', email: 'pixie@example.org', userId: OTHER_USER } }),
       'on_behalf_invalid',
       undefined,
       ORDER_ON_BEHALF_INVALID_COPY,
@@ -595,35 +595,35 @@ describe('the on-behalf email: the rule the web applies today', () => {
   // so core must accept and refuse exactly what that accepts and refuses.
   const webToday = z.string().trim().email().max(254);
   const corpus = [
-    'maria@example.org',
-    'MARIA.LOPEZ@EXAMPLE.ORG',
+    'pixie@example.org',
+    'PIXIE.QUILL@EXAMPLE.ORG',
     "o'neil+orders@sub.example.co.uk",
     'a_b-c@x-y.org',
     'a@b.co',
     'a@xn--bcher-kva.example',
-    '  maria@example.org\t',
-    ' maria@example.org﻿',
-    ' maria@example.org ',
-    'maria@gmail.c',
-    'maria@example.o1',
-    'maria..lopez@example.org',
-    '.maria@example.org',
-    'maria.@example.org',
-    'maria@example..org',
-    '"maria"@example.org',
-    'maria@-example.org',
-    'maria@example_x.org',
-    'maría@example.org',
-    'maria@exämple.org',
-    'maria@1.2.3.4',
-    'maria@[10.0.0.1]',
-    'maria@localhost',
-    'maria lopez@example.org',
-    'maria lopez@example.org',
-    'maria@x@example.org',
-    'maria.example.org',
+    '  pixie@example.org\t',
+    ' pixie@example.org﻿',
+    ' pixie@example.org ',
+    'pixie@gmail.c',
+    'pixie@example.o1',
+    'pixie..quill@example.org',
+    '.pixie@example.org',
+    'pixie.@example.org',
+    'pixie@example..org',
+    '"pixie"@example.org',
+    'pixie@-example.org',
+    'pixie@example_x.org',
+    'pixíe@example.org',
+    'pixie@exämple.org',
+    'pixie@1.2.3.4',
+    'pixie@[10.0.0.1]',
+    'pixie@localhost',
+    'pixie quill@example.org',
+    'pixie quill@example.org',
+    'pixie@x@example.org',
+    'pixie.example.org',
     '@example.org',
-    'maria@',
+    'pixie@',
     '',
     `${'e'.repeat(242)}@example.org`,
     `${'e'.repeat(243)}@example.org`,
@@ -631,13 +631,13 @@ describe('the on-behalf email: the rule the web applies today', () => {
 
   it.each(corpus)('%j', (email) => {
     const web = webToday.safeParse(email).success;
-    const core = parseOrderCreateRequest(body({ onBehalfOf: { name: 'Maria', email } })).ok;
+    const core = parseOrderCreateRequest(body({ onBehalfOf: { name: 'Pixie', email } })).ok;
     expect(core).toBe(web);
   });
 
   it('refuses the addresses the plan sketch let through', () => {
-    for (const email of ['maria@gmail.c', 'maria..lopez@example.org', '"q"@x.yz', 'a@-x.yz']) {
-      expect(refusal(body({ onBehalfOf: { name: 'Maria', email } })).reason).toBe(
+    for (const email of ['pixie@gmail.c', 'pixie..quill@example.org', '"q"@x.yz', 'a@-x.yz']) {
+      expect(refusal(body({ onBehalfOf: { name: 'Pixie', email } })).reason).toBe(
         'on_behalf_invalid',
       );
     }
@@ -844,7 +844,7 @@ describe('parseOrderPlaceAnswer', () => {
         summary({
           orderNumber: null,
           orderLabel: null,
-          requestedFor: { name: 'Maria', email: 'maria@example.org' },
+          requestedFor: { name: 'Pixie', email: 'pixie@example.org' },
         }),
       ),
     );
@@ -852,8 +852,8 @@ describe('parseOrderPlaceAnswer', () => {
     expect(a.order.orderNumber).toBeNull();
     expect(a.order.requestedFor).toEqual({
       self: false,
-      name: 'Maria',
-      email: 'maria@example.org',
+      name: 'Pixie',
+      email: 'pixie@example.org',
     });
   });
 
@@ -892,7 +892,7 @@ describe('parseOrderPlaceAnswer', () => {
       parseOrderPlaceAnswer(placeAnswer(false, summary({ fulfillmentType: 'ship' }))),
     ).toThrow(/fulfillmentType/);
     expect(() =>
-      parseOrderPlaceAnswer(placeAnswer(false, summary({ requestedFor: { name: 'Maria' } }))),
+      parseOrderPlaceAnswer(placeAnswer(false, summary({ requestedFor: { name: 'Pixie' } }))),
     ).toThrow(/email/);
   });
 });

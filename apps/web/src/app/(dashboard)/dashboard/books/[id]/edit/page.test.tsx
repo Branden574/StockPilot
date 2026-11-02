@@ -62,13 +62,26 @@ vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: svc({ listNames: async () => [{ id: 'wh-1', name: 'North DC' }] }),
 }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: svc({ list: async () => [] }) }));
+// The page's warehouse charter pairs, and the shared LOOKUP_ROW_CEILING (a
+// getter, so a test can lower it: the page reads the binding on every render).
+const { pairs, ceiling } = vi.hoisted(() => ({
+  pairs: { current: [] as Array<{ warehouse_id: string; charter_id: string }> },
+  ceiling: { value: 10_000 },
+}));
 vi.mock('@/server/services/warehouse-charters', () => ({
-  WarehouseChartersService: svc({ listPairs: async () => [] }),
+  WarehouseChartersService: svc({ listPairs: async () => pairs.current }),
+}));
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: svc({
     get: async (id: string) => {
-      if (id === 'missing') {
+      // MISSING below: a well-formed id the service does not find.
+      if (id === '5eed0000-0000-4000-8000-0000000000e2') {
         const { ServiceError } = await import('@/server/services/context');
         throw new ServiceError('not_found', 'Not found');
       }
@@ -105,7 +118,10 @@ vi.mock('@/components/inventory/item-form', () => ({
 
 import EditBookPage, { metadata } from './page';
 
-const page = (id = 'rec-1', ret?: string) =>
+const REC = '5eed0000-0000-4000-8000-0000000000e1';
+const MISSING = '5eed0000-0000-4000-8000-0000000000e2';
+
+const page = (id = REC, ret?: string) =>
   EditBookPage({
     params: Promise.resolve({ id }),
     searchParams: Promise.resolve(ret === undefined ? {} : { return: ret }),
@@ -114,6 +130,8 @@ const page = (id = 'rec-1', ret?: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   ctxHolder.current = { role: 'manager' };
+  pairs.current = [];
+  ceiling.value = 10_000;
 });
 
 describe('Edit book page', () => {
@@ -125,18 +143,18 @@ describe('Edit book page', () => {
     render(await page());
     expect(screen.getByRole('link', { name: '← Back to book' })).toHaveAttribute(
       'href',
-      '/dashboard/books/rec-1',
+      `/dashboard/books/${REC}`,
     );
     expect(screen.getByRole('heading', { level: 1, name: 'Edit book' })).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Falcons Home Jersey' });
     expect(card).toContainElement(screen.getByTestId('item-form'));
     expect(formProps).toHaveBeenCalledWith(
-      expect.objectContaining({ returnHref: '/dashboard/books/rec-1' }),
+      expect.objectContaining({ returnHref: `/dashboard/books/${REC}` }),
     );
   });
 
   it('goes back to the list it came from when the link carried one', async () => {
-    render(await page('rec-1', '/dashboard/books?page=2'));
+    render(await page(REC, '/dashboard/books?page=2'));
     expect(screen.getByRole('link', { name: '← Back to book' })).toHaveAttribute(
       'href',
       '/dashboard/books?page=2',
@@ -144,8 +162,53 @@ describe('Edit book page', () => {
   });
 
   it('still sends someone without items:update to the record, and a missing one to not found', async () => {
-    await expect(page('missing')).rejects.toThrow('not-found');
+    await expect(page(MISSING)).rejects.toThrow('not-found');
     ctxHolder.current = { role: 'viewer' };
-    await expect(page()).rejects.toThrow('redirect:/dashboard/inventory/rec-1');
+    await expect(page()).rejects.toThrow(`redirect:/dashboard/inventory/${REC}`);
+  });
+
+  // B63: a mistyped or cut-off link is Page not found, before the edit gate
+  // sends anyone away and before anything is read.
+  it('an id that is not a uuid is the not-found page, ahead of the items:update redirect', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const role of ['manager', 'viewer'] as const) {
+      ctxHolder.current = { role };
+      vi.mocked(requireOrgContext).mockClear();
+      await expect(page('not-a-uuid'), role).rejects.toThrow('not-found');
+      await expect(page(REC.slice(0, -1)), role).rejects.toThrow('not-found');
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): listPairs stops at LOOKUP_ROW_CEILING
+ * links. At that many the list may be cut, so the page tells the form, which
+ * then keeps the record's charter on a warehouse change instead of clearing it
+ * from part of the list (the save checks the pair on the server).
+ */
+describe('Edit book page: the warehouse charter list at the ceiling', () => {
+  const pairsOf = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      warehouse_id: 'wh-1',
+      charter_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    }));
+
+  it('a list that reached the ceiling is passed as cut', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(5);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseCharters: pairs.current, warehouseChartersCapped: true }),
+    );
+  });
+
+  it('a list under the ceiling is passed as whole', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(4);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseChartersCapped: false }),
+    );
   });
 });

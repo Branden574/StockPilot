@@ -25,6 +25,10 @@ import ts from 'typescript';
 export const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const;
 export type WriteMethod = (typeof WRITE_METHODS)[number];
 
+/** Every method a route file can export a handler for (api-step-up.guard.test.ts reads them all). */
+export const ROUTE_METHODS = ['GET', 'HEAD', 'OPTIONS', ...WRITE_METHODS] as const;
+export type RouteMethod = (typeof ROUTE_METHODS)[number];
+
 const WEB_SRC = path.resolve(__dirname, '..');
 
 /**
@@ -71,6 +75,10 @@ export interface ContextCall {
   rebuildsOwnParameter: boolean;
   /** The answer is kept (a declaration, an assignment or a return), not dropped. */
   resultKept: boolean;
+  /** The answer is tested where it stands: the condition of an `if` or a `?:`, negated or not. */
+  resultTested: boolean;
+  /** The second argument as written, whitespace removed (null when there is none). */
+  options: string | null;
 }
 
 /** The headers a rebuilt request may set: the organization it asks a context in. */
@@ -93,6 +101,23 @@ function resultKept(call: ts.CallExpression): boolean {
   return false;
 }
 
+/** Is a call's value the condition of an `if` or a `?:`, through await, parentheses and `!`? */
+function resultTested(call: ts.CallExpression): boolean {
+  let n: ts.Node = call;
+  while (
+    ts.isAwaitExpression(n.parent) ||
+    ts.isParenthesizedExpression(n.parent) ||
+    (ts.isPrefixUnaryExpression(n.parent) && n.parent.operator === ts.SyntaxKind.ExclamationToken)
+  ) {
+    n = n.parent;
+  }
+  const p = n.parent;
+  return (
+    (ts.isIfStatement(p) && p.expression === n) ||
+    (ts.isConditionalExpression(p) && p.condition === n)
+  );
+}
+
 function scriptKind(fileName: string): ts.ScriptKind {
   return fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 }
@@ -106,10 +131,6 @@ function isExported(node: ts.Node): boolean {
     ts.canHaveModifiers(node) &&
     (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
   );
-}
-
-function isWriteMethod(name: string): name is WriteMethod {
-  return (WRITE_METHODS as readonly string[]).includes(name);
 }
 
 /**
@@ -131,8 +152,16 @@ export function moduleExists(target: string): boolean {
   return ['.ts', '.tsx', '.js', '.mjs'].some((ext) => existsSync(path.join(WEB_SRC, target + ext)));
 }
 
-/** local name -> the gate it imports, for imports of a gate from its own module. */
-function gateImports(sf: ts.SourceFile, fileName: string): Map<string, string> {
+/**
+ * local name -> the gate it imports, for imports of a gate from its own module.
+ * `modules` is GATE_MODULES unless a guard reads for another set of functions
+ * (api-step-up.guard.test.ts: the OAuth callbacks' step-up check).
+ */
+function gateImports(
+  sf: ts.SourceFile,
+  fileName: string,
+  modules: Readonly<Record<string, string>> = GATE_MODULES,
+): Map<string, string> {
   const out = new Map<string, string>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
@@ -141,7 +170,7 @@ function gateImports(sf: ts.SourceFile, fileName: string): Map<string, string> {
     const source = resolveModule(fileName, st.moduleSpecifier.text);
     for (const el of bindings.elements) {
       const imported = (el.propertyName ?? el.name).text;
-      if (GATE_MODULES[imported] !== undefined && GATE_MODULES[imported] === source) {
+      if (modules[imported] !== undefined && modules[imported] === source) {
         out.set(el.name.text, imported);
       }
     }
@@ -217,14 +246,55 @@ function gatesReached(
 
 /** The write handlers a route file exports, and what each one reaches. */
 export function readRouteFile(fileName: string, source: string): FileReading {
+  return readHandlers(fileName, source, WRITE_METHODS, GATE_MODULES);
+}
+
+/** A handler a route file exports, for any method, and what it reaches. */
+export interface RouteHandler {
+  method: RouteMethod;
+  /** The gates (or other listed functions) this handler calls, directly or through the file's own functions. */
+  gates: string[];
+  /** For `export { GET } from '...'`: the module (apps/web/src relative) and the name it re-exports. */
+  reexport?: { module: string; name: string };
+}
+
+/**
+ * Every handler a route file exports, whatever its method, and what each one
+ * reaches among `modules`: GATE_MODULES unless a guard asks about other
+ * functions (api-step-up.guard.test.ts asks whether the OAuth callbacks reach
+ * their step-up check). The same reading as readRouteFile, with the same
+ * unreadable shapes reported.
+ */
+export function readRouteHandlers(
+  fileName: string,
+  source: string,
+  modules: Readonly<Record<string, string>> = GATE_MODULES,
+): { handlers: RouteHandler[]; unreadable: string[] } {
+  return readHandlers(fileName, source, ROUTE_METHODS, modules);
+}
+
+function readHandlers<M extends RouteMethod>(
+  fileName: string,
+  source: string,
+  methods: readonly M[],
+  modules: Readonly<Record<string, string>>,
+): {
+  handlers: Array<{ method: M; gates: string[]; reexport?: { module: string; name: string } }>;
+  unreadable: string[];
+} {
+  const isMethod = (name: string): name is M => (methods as readonly string[]).includes(name);
   const sf = parse(fileName, source);
-  const gates = gateImports(sf, fileName);
+  const gates = gateImports(sf, fileName, modules);
   const locals = topLevelDeclarations(sf);
-  const handlers: WriteHandler[] = [];
+  const handlers: Array<{
+    method: M;
+    gates: string[];
+    reexport?: { module: string; name: string };
+  }> = [];
   const unreadable: string[] = [];
 
   for (const st of sf.statements) {
-    if (ts.isFunctionDeclaration(st) && st.name && isExported(st) && isWriteMethod(st.name.text)) {
+    if (ts.isFunctionDeclaration(st) && st.name && isExported(st) && isMethod(st.name.text)) {
       handlers.push({ method: st.name.text, gates: gatesReached(st, gates, locals) });
     }
     if (ts.isVariableStatement(st) && isExported(st)) {
@@ -233,7 +303,7 @@ export function readRouteFile(fileName: string, source: string): FileReading {
           unreadable.push(`destructured export: ${d.name.getText(sf)}`);
           continue;
         }
-        if (isWriteMethod(d.name.text) && d.initializer) {
+        if (isMethod(d.name.text) && d.initializer) {
           handlers.push({ method: d.name.text, gates: gatesReached(d.initializer, gates, locals) });
         }
       }
@@ -253,7 +323,7 @@ export function readRouteFile(fileName: string, source: string): FileReading {
       }
       for (const el of st.exportClause.elements) {
         const exported = el.name.text;
-        if (!isWriteMethod(exported)) continue;
+        if (!isMethod(exported)) continue;
         const local = (el.propertyName ?? el.name).text;
         if (specifier) {
           const target = resolveModule(fileName, specifier);
@@ -447,10 +517,18 @@ export function importsOf(
   return out;
 }
 
-/** Every call of a gate (GATE_MODULES, imported from its own module) in a file, and what it is given. */
-export function gateCalls(fileName: string, source: string): ContextCall[] {
+/**
+ * Every call of a gate (GATE_MODULES, imported from its own module) in a file,
+ * and what it is given. `modules` reads the calls of other functions the same
+ * way (api-step-up.guard.test.ts: the OAuth callbacks' step-up check).
+ */
+export function gateCalls(
+  fileName: string,
+  source: string,
+  modules: Readonly<Record<string, string>> = GATE_MODULES,
+): ContextCall[] {
   const sf = parse(fileName, source);
-  const gates = gateImports(sf, fileName);
+  const gates = gateImports(sf, fileName, modules);
   const out: ContextCall[] = [];
   const visit = (n: ts.Node): void => {
     const gate =
@@ -484,6 +562,8 @@ export function gateCalls(fileName: string, source: string): ContextCall[] {
         passesOwnParameter,
         rebuildsOwnParameter,
         resultKept: resultKept(n),
+        resultTested: resultTested(n),
+        options: n.arguments[1] ? n.arguments[1].getText(sf).replace(/\s+/g, '') : null,
       });
     }
     ts.forEachChild(n, visit);
@@ -495,4 +575,33 @@ export function gateCalls(fileName: string, source: string): ContextCall[] {
 /** Every withApiContext call in a file, and what it is given. */
 export function withApiContextCalls(fileName: string, source: string): ContextCall[] {
   return gateCalls(fileName, source).filter((c) => c.gate === 'withApiContext');
+}
+
+/**
+ * What reads a cookie session, by the module it comes from: the cookie-bound
+ * client, the request cookies, and the page-session helpers (INV-E4's list).
+ * '*' is any import from that module. Shared by the cross-site cookie guard
+ * (a route exempt from the cookie rule reads no session) and the step-up
+ * guard (a route that reads no session needs no authenticator check).
+ */
+export const SESSION_READERS: Readonly<Record<string, readonly string[]>> = {
+  '@/lib/supabase/server': ['*'],
+  'next/headers': ['cookies'],
+  '@/lib/auth/session': ['*'],
+  '@/lib/dashboard/request-cache': ['*'],
+  '@/lib/auth/api-context': ['*'],
+  '@/server/services/context': ['withContext'],
+  '@/server/services/portal': ['resolvePortalContext'],
+  '@/server/lib/sign-page-session': ['*'],
+};
+
+/** The session readers a file imports, as `name from specifier`. */
+export function sessionReadersIn(fileName: string, source: string): string[] {
+  return importsOf(fileName, source).flatMap(({ specifier, names }) => {
+    const banned = SESSION_READERS[specifier];
+    if (!banned) return [];
+    return names
+      .filter((n) => banned.includes('*') || banned.includes(n))
+      .map((n) => `${n} from ${specifier}`);
+  });
 }

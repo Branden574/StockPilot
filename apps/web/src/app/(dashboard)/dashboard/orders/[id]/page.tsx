@@ -67,6 +67,7 @@ import {
   describeUnpickedShortfall,
   formatOrderNumber,
   formatOrderReturnSummary,
+  isDeliveryDriverDeleted,
   isManagerOrAbove,
   isNeededByRevisable,
   isPickingSettled,
@@ -122,6 +123,7 @@ import {
   resolveReturnToken,
   signatureLinkToken,
 } from '@/server/lib/order-secrets';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
@@ -194,6 +196,11 @@ export default async function OrderDetailPage({
   const contextStarted = withContext();
   contextStarted.catch(() => {});
   const [{ id }, ctx] = await Promise.all([params, requireOrgContext()]);
+  // A malformed id (a mistyped or cut-off link) is Page not found before any
+  // read starts with it (B63): the order read's invalid-uuid error reached
+  // the error boundary. The service context above still starts first, so a
+  // real order opens exactly as before.
+  notFoundUnlessUuid(id);
   const canApprove = can(ctx, 'orders:approve');
 
   // ORDER READINESS (F2-1) starts HERE, beside the order read, not after it.
@@ -1115,9 +1122,12 @@ export default async function OrderDetailPage({
     approverWarehouseAccess && !isAssignedDriver
       ? await approverWarehouseAccess.catch(() => null)
       : null;
+  // The panel hears it too: its deleted-driver line (B23) names the hand-over
+  // buttons, so it is said only to a viewer this rule lets press one.
+  const viewerMayHandOver = handOverAllowed(ctx, request, handOverWarehouseAccess);
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
-    viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
+    viewerMayHandOver,
     mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
     status: request.status,
     signatureTokenColumn: request.signature_token,
@@ -1888,6 +1898,12 @@ export default async function OrderDetailPage({
                 hasRequesterNote={Boolean(request.notes?.trim())}
                 fulfillmentType={request.fulfillment_type}
                 assignedDeliveryUserId={request.assigned_delivery_user_id}
+                driverDeleted={isDeliveryDriverDeleted({
+                  fulfillmentType: request.fulfillment_type,
+                  inTransitAt: request.in_transit_at,
+                  assignedDeliveryUserId: request.assigned_delivery_user_id,
+                })}
+                viewerMayHandOver={viewerMayHandOver}
                 signatureToken={handOverLink}
                 handOverMfaMessage={
                   handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null

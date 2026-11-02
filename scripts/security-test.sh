@@ -882,6 +882,11 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # The webhook delivery's use of the same guard (docket B49), with the guard
+  # and safeFetch run for real: a refused URL (a private address, a scheme
+  # other than http or https, a Slack or Teams URL on another host) is final
+  # and never sent, while a failed lookup of the host is retried with backoff.
+  src/server/services/integration-events.delivery-lookup.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a
@@ -940,6 +945,25 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # A password alone reads nothing through the API (docket S43a): withApiContext
+  # refuses an account with a verified authenticator factor whose session is
+  # not aal2, on both paths, right after the identity check and before any
+  # read (the route's own 401); the phone's snapshot end to end; the client
+  # crash beacon, the one route on the AAL1 allowlist; the two OAuth callbacks
+  # that build their own principal ask the same question; and the sweep that
+  # holds every route handler under src/app to the rule or to a reviewed list
+  # (core's stepUpOwed truth table is in MANIFEST 4).
+  src/lib/auth/api-context.step-up.test.ts
+  # The level those refusals and the MFA label read is the validated user's
+  # own (S43a review round 1): a cookie carrying another account's refresh
+  # token, timed to refresh after getUser(), reads as not aal2. The real server
+  # client and auth-js against the fixture's Auth server.
+  src/lib/auth/api-context.refresh-swap.test.ts
+  src/app/api/v1/mobile/snapshot/route.step-up.test.ts
+  src/app/api/client-error/route.test.ts
+  src/app/api/integrations/quickbooks/callback/route.test.ts
+  src/app/api/integrations/sage_intacct/callback/route.test.ts
+  src/test/api-step-up.guard.test.ts
   # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
   # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
   # Origin names another host, or when neither header is present),
@@ -989,10 +1013,46 @@ WEB_TESTS=(
   src/lib/auth/verified-claims.test.ts
   src/lib/auth/server-session-reads.guard.test.ts
   src/lib/auth/platform-admin.gates.test.ts
+  # The claims count only for the account the request already validated (S43a
+  # review round 1): a cookie whose refresh token belongs to another account's
+  # session, timed to refresh between the identity read and the claims read,
+  # passed the console's fresh step-up with that account's claims. The
+  # withContext gate and assertCurrentAal2 cases are in
+  # context.verified-aal.test.ts.
+  src/lib/auth/platform-admin.refresh-swap.test.ts
   src/server/services/context.verified-aal.test.ts
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+  # The dashboard layout's gate for an enrolled member holds the claims to the
+  # member its context resolved (S43a): another account's aal2 session,
+  # refreshed in from the cookie's own refresh token, sends the member to the
+  # code page. The real server client, auth-js, requireOrgContext() and
+  # get_request_context(), with the shared claims read in both orders.
+  'src/app/(dashboard)/layout.refresh-swap.test.tsx'
+  # And the factor list, the gates' other input (S43a review round s43ar): a
+  # list that refreshed into an account with no authenticator read as "not
+  # enrolled". It now says whose list it is (lib/auth/mfa-factors.ts), and
+  # only the member's own counts: the layout sends them to the code page,
+  # withContext's gate fails closed, and the ownership transfer refuses before
+  # the service role moves the organization. The layout's cases are in
+  # layout.refresh-swap.test.tsx above.
+  src/lib/auth/mfa-factors.test.ts
+  src/server/services/context.factor-swap.test.ts
+  src/server/actions/team.transfer-refresh-swap.test.ts
+  # Each security check in the recovery codes, account deletion and the email
+  # change reads the factors and sign-in level of the account the action
+  # already validated (docket S50a). A recovery code is spent, and codes are
+  # minted, with that account's verified access token on a client that acts as
+  # it alone (lib/supabase/access-token-client.ts); account deletion reads that
+  # account's factors, level and email, and checks once more right before the
+  # delete (server/services/step-up-held.ts); the email change takes the
+  # factors from the getUser() answer that names the user. The real server
+  # client, auth-js and requireSession() in the three action files.
+  src/server/services/step-up-held.test.ts
+  src/server/actions/mfa-recovery.held-reads.test.ts
+  src/server/actions/profile.held-reads.test.ts
+  src/server/actions/email-change.held-reads.test.ts
   # S5a: the phone's sign-in and sign-out reach the server. Each is one Audit
   # log row per session, with a hashed session reference and never the session
   # id, written only for a verified bearer token of the account itself; the
@@ -1120,6 +1180,27 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+
+  # S39: a write named by a row id reads that row in the ACTIVE organization,
+  # through the caller's own client, before its function runs; a miss answers
+  # the site's not-found sentence and nothing runs (lib/in-active-org.ts). A
+  # member of two organizations whose page or phone screen was left open after
+  # a switch sent the other organization's id with this one's context: the
+  # function changed the row there while the audit row, the webhook, the
+  # outbox row and the notices were written here. Twelve sites: order cancel
+  # and paper signature, cycle count release and reassign, receipt post and
+  # reversal, rental checkout, kit save, assembly and hand-out, and the
+  # movement note (action and phone route). The guard classifies every .rpc(
+  # call under apps/web/src and removes each of the twelve reads in turn to
+  # prove it is what holds. Each file carries the "Security invariant" marker.
+  src/test/rpc-active-organization.guard.test.ts
+  src/server/services/lib/in-active-org.test.ts
+  src/server/services/order-requests.other-organization.test.ts
+  src/server/services/cycle-counts.other-organization.test.ts
+  src/server/services/receiving.other-organization.test.ts
+  src/server/services/rentals.other-organization.test.ts
+  src/server/services/bundles.other-organization.test.ts
+  src/server/actions/movements.other-organization.test.ts
 
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified
@@ -1755,6 +1836,9 @@ CORE_TESTS=(
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts
+  # S43a: the one rule for "this session still owes its authenticator code"
+  # (web API context now; the phone's code gate next).
+  src/auth/step-up.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone

@@ -54,6 +54,8 @@ const baseInput: PostReceiptInput = {
 
 function serviceWithRpcError(error: { message: string; code?: string }) {
   const stub = makeSupabaseStub({
+    // The PO, read in the organization before the function (S39).
+    'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
     'rpc:post_receipt_v2': { data: null, error },
     'purchase_order_items.select': { data: [], error: null },
     'inventory_items.select': { data: [], error: null },
@@ -128,6 +130,8 @@ describe('ReceivingService.postReceipt — serial_optional error mapping', () =>
     // The whole point of the 0296 branch: 2 serials against 4 accepted units is
     // a legitimate payload and must reach the RPC verbatim, not be padded.
     const stub = makeSupabaseStub({
+      // The PO, read in the organization before the function (S39).
+      'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
       'rpc:post_receipt_v2': { data: receiptRow, error: null },
       'purchase_order_items.select': { data: [], error: null },
       'inventory_items.select': { data: [], error: null },
