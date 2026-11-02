@@ -56,6 +56,7 @@ export * from './sports/tracking-modes';
 export * from './sports/variant-keys';
 export * from './orders/order-number';
 export * from './books/isbn';
+export * from './ids/uuid';
 export * from './reports/book-order-totals';
 export * from './reports/book-order-totals-copy';
 export * from './reports/report-calendar';

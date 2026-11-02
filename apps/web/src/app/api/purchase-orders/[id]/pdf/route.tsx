@@ -17,6 +17,7 @@ import {
   type PoPdfReceipt,
   type PoPdfReceiptLine,
 } from '@/lib/pdf/po';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { audit } from '@/server/services/audit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -45,6 +46,9 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
+    // A malformed id is a 400 before anything is read or spent (B63).
+    const invalidId = invalidPathIdResponse(id, 'That purchase order id is not valid.');
+    if (invalidId) return invalidId;
     // Route-level permission gate — defense in depth on top of the
     // service-layer check in `PurchaseOrdersService.get()`. We don't want
     // a permission regression here to let unauthorized users stream a

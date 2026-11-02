@@ -558,6 +558,21 @@ describe('orders/[id]: the order read', () => {
     orderGet.mockRejectedValue(failure);
     await expect(renderPage()).rejects.toBe(failure);
   });
+
+  // B63: a link whose id was mistyped or cut short named no order, but the
+  // order read's invalid-uuid error reached the error boundary ("Something
+  // broke loading this page") and filed a report. It is checked first now.
+  it('an order id that is not a uuid is the not-found page, with no order, attachments or readiness read', async () => {
+    for (const id of ['not-a-uuid', ORDER_ID.slice(0, -1)]) {
+      vi.clearAllMocks();
+      await expect(OrderDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+      expect(orderGet).not.toHaveBeenCalled();
+      expect(attachmentsList).not.toHaveBeenCalled();
+      expect(readinessForCurrentUser).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe('orders/[id]: the Collect signature link (migration 0389)', () => {
