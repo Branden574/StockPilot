@@ -31,8 +31,9 @@ import type { OrderRequestLineWithItem } from '@/server/services/order-requests'
  *
  * The column renders `primary` above `secondary`. `secondary` exists for exactly
  * one case — a book's crate SUMMARY sitting under its rack ("Rack 39-B" /
- * "Crate Red 5"), which says which box on the shelf. Every other resolution is
- * one line.
+ * "Crate Red 5", or "41-A ×3" / "Crate Red 5" when core's rule 0c names the
+ * one rack holding), which says which box on the shelf. Every other resolution
+ * is one line.
  *
  * Exported for direct unit testing: @react-pdf's rendered output is not
  * text-extractable in this suite (the render tests only assert buffer size and
@@ -56,7 +57,7 @@ export function locationFor(
     // to that embed changes every consumer of the detail payload, and the
     // holdings above already carry the crate by name for the case that matters.
     holdings: rackHoldingsByItemId?.get(item.id),
-    // B21: the slips name the ONE rack the stock is on when nothing is saved
+    // B21: the slips name the ONE rack the stock is on when no rack is saved
     // on the item ("No rack set" before) or its saved rack holds none of it,
     // as the return's "Get replacement ready" does. Core's rule 0c; this file
     // is its only caller (see placement-resolution.ts).
@@ -68,8 +69,14 @@ export function locationFor(
       // formatPlacementLabel IS formatRackHoldings for this branch — going
       // through it rather than re-spelling the join keeps the breakdown
       // byte-identical to the cycle-count sheet and the native scan sheet.
-      // Every reason renders the same: split, crate, or the single rack.
-      return { primary: formatPlacementLabel(res), secondary: null };
+      // Every reason renders the same first line: split, crate, or the
+      // single rack. B21 review: under the single rack, a book's crate
+      // summary keeps the second line it had under the saved rack (or under
+      // "No rack set"), the only clue to which box on that rack to open.
+      return {
+        primary: formatPlacementLabel(res),
+        secondary: res.reason === 'single' && res.crateLabel ? `Crate ${res.crateLabel}` : null,
+      };
     case 'structured':
       return {
         primary: res.rackLabel ? `Rack ${res.rackLabel}` : null,

@@ -70,11 +70,18 @@
  *      crate summary alongside).
  *
  *        c. SINGLE (opt-in, `singleHoldingCheck`; B21) — exactly one holding,
- *           a RACK, and the item has no saved rack, or its saved rack holds
- *           none of the stock (`holdingsContradictRack`). The fall-through
- *           above ASSUMES the label and the holding name the same shelf; this
- *           checks. A saved rack the holding sits on still answers STRUCTURED,
- *           so a book keeps its crate summary. The ONLY caller that opts in is
+ *           a RACK, and the item has no saved rack (a crate summary may still
+ *           be saved), or its saved rack holds none of the stock
+ *           (`holdingsContradictRack`). The fall-through above ASSUMES the
+ *           label and the holding name the same shelf; this checks. A saved
+ *           rack the holding sits on still answers STRUCTURED. Either way a
+ *           book keeps its crate summary: this answer carries it as
+ *           `crateLabel`, because a plain rack holding says nothing about
+ *           crates. A crate can be label-only, recorded nowhere but the
+ *           book's summary, and a put-away onto a plain rack keeps that
+ *           summary unless clearing it was shown and agreed (see
+ *           `syncBookCratePlacement` in the web app's inventory service).
+ *           The ONLY caller that opts in is
  *           apps/web/src/lib/pdf/slip-location.ts (the pick slip and the
  *           warehouse packing slip, which printed "No rack set", or a rack the
  *           stock had left, while the return named the holding). Every other
@@ -119,13 +126,26 @@ export type PlacementResolution =
    * The holdings contradict any single label. `reason` records WHICH
    * contradiction so a caller can label the row honestly (the native scan
    * sheet says "Split stock" for one and "In crate" for the other).
-   * 'single' (rule 0c) only for a caller that passed `singleHoldingCheck`,
-   * which the native rows never do.
    */
   | {
       source: 'holdings';
-      reason: 'split' | 'crate' | 'single';
+      reason: 'split' | 'crate';
       holdings: readonly RackHoldingLike[];
+    }
+  /**
+   * Rule 0c, only for a caller that passed `singleHoldingCheck` (the native
+   * rows never do): the one RACK holding names where the stock is.
+   * `crateLabel` is a book's crate summary, carried with it because a plain
+   * rack holding says nothing about crates (see rule 0c); null for a
+   * non-book or when none is saved. `formatPlacementLabel` names the holding
+   * alone, so a surface with a second line renders the crate there, as the
+   * order slips do.
+   */
+  | {
+      source: 'holdings';
+      reason: 'single';
+      holdings: readonly RackHoldingLike[];
+      crateLabel: string | null;
     }
   /**
    * The item's own structured rack/crate keys. At least one of the two is
@@ -151,8 +171,9 @@ export interface PlacementInput {
    */
   holdings?: readonly RackHoldingLike[];
   /**
-   * Rule 0c (B21): name the one rack holding when the saved rack is missing
-   * or holds none of the stock. Only the order slips pass it (slip-location.ts).
+   * Rule 0c (B21): name the one rack holding, with a book's crate summary,
+   * when the saved rack is missing or holds none of the stock. Only the
+   * order slips pass it (slip-location.ts).
    */
   singleHoldingCheck?: boolean;
 }
@@ -202,14 +223,16 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
   const { rackLabel, crateLabel } = readStructured(input.itemType, input.customFields);
 
   // Rule 0c (opt-in): one RACK holding, and no saved rack or a saved rack it
-  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's.
+  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's. A
+  // book's crate summary goes with the answer whether or not a crate is
+  // saved beside the missing or refuted rack.
   if (
     input.singleHoldingCheck === true &&
     holdings.length === 1 &&
     holdings[0]!.kind === 'rack' &&
     (!rackLabel || holdingsContradictRack(rackLabel, holdings))
   ) {
-    return { source: 'holdings', reason: 'single', holdings };
+    return { source: 'holdings', reason: 'single', holdings, crateLabel };
   }
 
   if (rackLabel || crateLabel) return { source: 'structured', rackLabel, crateLabel };

@@ -303,19 +303,44 @@ describe('resolvePlacement — the slips\' single-holding check (B21, opt-in)', 
   // ready" named the holding. Only the two order slips opt in
   // (apps/web/src/lib/pdf/slip-location.ts); every other caller keeps the
   // precedence above.
+  //
+  // B21 review (2026-11-02): a book's crate summary rides along with the
+  // rack (`crateLabel`). The slips printed "No rack set" over "Crate Red 5"
+  // for a book with only a crate saved, and the first cut of rule 0c dropped
+  // the crate, the only clue to which box on that rack to open.
   const ON_41A: RackHoldingLike[] = [{ name: '41-A', quantity: 3, kind: 'rack' }];
   const cases: Array<{ what: string; input: PlacementInput; withCheck: PlacementResolution; today: PlacementResolution }> = [
     {
       what: 'one rack holding, nothing saved',
       input: { itemType: 'product', customFields: {}, holdings: ON_41A },
-      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A, crateLabel: null },
       today: { source: 'none' },
     },
     {
       what: 'saved 38-A, the one holding on 41-A',
       input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: ON_41A },
-      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A, crateLabel: null },
       today: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+    },
+    {
+      what: 'a book with only crate Red 5 saved, on one rack: the rack, and the crate summary with it',
+      input: {
+        itemType: 'book',
+        customFields: { book_crate_color: 'red', book_crate_number: '5' },
+        holdings: ON_41A,
+      },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A, crateLabel: 'Red 5' },
+      today: { source: 'structured', rackLabel: null, crateLabel: 'Red 5' },
+    },
+    {
+      what: 'a book moved off its saved 39-B, crate Red 5 saved: the rack it is on, and the crate summary with it',
+      input: {
+        itemType: 'book',
+        customFields: { book_rack_number: '39', book_rack_row: 'B', book_crate_color: 'red', book_crate_number: '5' },
+        holdings: ON_41A,
+      },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A, crateLabel: 'Red 5' },
+      today: { source: 'structured', rackLabel: '39-B', crateLabel: 'Red 5' },
     },
     {
       what: 'saved 38-A, the one holding on 38-A',
@@ -387,6 +412,10 @@ describe('resolvePlacement — the slips\' single-holding check (B21, opt-in)', 
   it('names the rack and how many are there', () => {
     expect(label({ ...cases[0]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
     expect(label({ ...cases[1]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
+    // The one-line label names the holding alone, as for every holdings
+    // answer; a two-line surface (the slips) puts `crateLabel` under it.
+    expect(label({ ...cases[2]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
+    expect(label({ ...cases[3]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
   });
 
   it.each(cases.map((c) => [c.what, c] as const))('without it, today\'s answer: %s', (_what, c) => {
