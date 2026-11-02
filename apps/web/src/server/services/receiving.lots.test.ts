@@ -43,6 +43,8 @@ const baseInput: PostReceiptInput = {
 describe('ReceivingService.postReceipt — lots/serials forwarding', () => {
   it('maps per-line lots to snake_case in the post_receipt_v2 RPC', async () => {
     const stub = makeSupabaseStub({
+      // The PO, read in the organization before the function (S39).
+      'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
       'rpc:post_receipt_v2': { data: receiptRow, error: null },
       // follow-on selects inside maybeAutoUnarchive — return empty so it's a no-op
       'purchase_order_items.select': { data: [], error: null },

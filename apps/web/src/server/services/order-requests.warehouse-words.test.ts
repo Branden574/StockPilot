@@ -165,11 +165,13 @@ describe('cancel by an approver asks write access to the order\'s warehouse', ()
     expect(stub.rpcCalls).toHaveLength(0);
   });
 
-  it('a manager is not read at all: the role works in every warehouse', async () => {
-    const stub = makeSupabaseStub({ ...CANCELLED });
+  it("a manager's order is read in the organization, but no warehouse is checked: the role works in every warehouse", async () => {
+    const stub = makeSupabaseStub({ ...order(), ...CANCELLED });
     await svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
-    expect(stub.fromCalls).not.toContain('order_requests');
+    // S39: every caller's cancel reads the order in the organization first.
+    expect(stub.fromCalls).toContain('order_requests');
+    expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
   });
 });
 
