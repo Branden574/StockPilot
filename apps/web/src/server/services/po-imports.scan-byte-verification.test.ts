@@ -48,6 +48,7 @@ vi.mock('@/lib/po-scan/extract', () => ({
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mockAdmin }));
 
+import { ServiceError } from './context';
 import { PoImportsService } from './po-imports';
 
 const IMPORT_ID = 'imp-bytes-1';
@@ -198,5 +199,23 @@ describe('createFromScan — the bytes get the last word', () => {
       }),
     ).resolves.toMatchObject({ id: IMPORT_ID });
     expect(mockExtract).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createFromScan: the extractor's refusal reaches the route as it is (B80)", () => {
+  it('passes a page that is not a purchase order on with its code and sentence, and writes no import', async () => {
+    // A pin: the scan route shows a ServiceError's sentence, so a later try
+    // around the extraction call that rethrows anything else would bring back
+    // 'Something went wrong' for this page with every route test still green.
+    const notAPo =
+      "This doesn't look like a purchase order — try a clearer photo of the full document.";
+    mockExtract.mockRejectedValueOnce(new ServiceError('validation_error', notAPo));
+    const { service, stub } = svc();
+    await expect(
+      service.createFromScan({
+        files: [{ bytes: REAL_JPEG, mimeType: 'image/jpeg', fileName: 'IMG_0001.jpg' }],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: notAPo });
+    expect(insertedRow(stub)).toEqual({});
   });
 });

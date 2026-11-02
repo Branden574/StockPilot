@@ -12,6 +12,7 @@ import {
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { factorsOf, readMfaFactorList, type MfaFactor } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
@@ -358,14 +359,27 @@ export async function transferOwnershipAction(input: {
 
     // AAL2 step-up. If caller has any verified factor, they must have
     // completed the MFA challenge this session.
-    const { data: factorsData, error: factorsError } = await ctx.supabase.auth.mfa.listFactors();
-    // Unreadable is not "not enrolled": refuse rather than skip the step-up.
-    if (factorsError) {
+    //
+    // Decided from THIS owner's factor list only (S43a, review round s43ar).
+    // The list is read after the context settled the owner, and the read
+    // loads the cookie session again: a load refreshes it with the cookie's
+    // own refresh token when the cookie's own `expires_at` says so, and
+    // nothing signs either field. The owner's password-only (aal1) token beside
+    // the refresh token of an account with no factor (an insider's own) made
+    // this list come back empty, the step-up was skipped, the password check
+    // passed, and the organization moved to the insider. Unreadable, or the
+    // list of another account, is not "not enrolled": refuse rather than skip
+    // the step-up.
+    let ownFactors: MfaFactor[] | null = null;
+    try {
+      ownFactors = factorsOf(await readMfaFactorList(ctx.supabase), ctx.userId);
+    } catch {
+      ownFactors = null;
+    }
+    if (!ownFactors) {
       return err('internal_error', 'Could not check your two-factor status. Please try again.');
     }
-    const hasVerifiedFactor = (factorsData?.totp ?? []).some(
-      (f) => f.status === 'verified',
-    );
+    const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
     if (hasVerifiedFactor) {
       await assertCurrentAal2(ctx);
     }

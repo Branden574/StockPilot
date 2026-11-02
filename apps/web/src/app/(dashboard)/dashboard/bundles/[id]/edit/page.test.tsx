@@ -40,6 +40,8 @@ vi.mock('@/components/bundles/bundle-form', () => ({
 
 import EditBundlePage from './page';
 
+const BUNDLE_ID = '5eed0000-0000-4000-8000-0000000000b9';
+
 function as(role: Role) {
   ctx.role = role;
   ctx.permissions = effectivePermissions(role);
@@ -53,12 +55,12 @@ beforeEach(() => {
 });
 
 describe('Edit bundle page', () => {
-  const params = Promise.resolve({ id: 'b-1' });
+  const params = Promise.resolve({ id: BUNDLE_ID });
 
   it('draws the header with the back link to the bundle and passes the bundle to the form', async () => {
     get.mockResolvedValue({
       bundle: {
-        id: 'b-1',
+        id: BUNDLE_ID,
         name: 'Kit',
         sku: 'KIT-1',
         description: null,
@@ -71,12 +73,12 @@ describe('Edit bundle page', () => {
     render(await EditBundlePage({ params }));
     expect(screen.getByRole('link', { name: '← Back to bundle' })).toHaveAttribute(
       'href',
-      '/dashboard/bundles/b-1',
+      `/dashboard/bundles/${BUNDLE_ID}`,
     );
     expect(screen.getByRole('heading', { level: 1, name: 'Edit bundle' })).toBeTruthy();
     expect(formProps).toHaveBeenCalledWith({
       initial: {
-        id: 'b-1',
+        id: BUNDLE_ID,
         name: 'Kit',
         sku: 'KIT-1',
         description: null,
@@ -90,11 +92,28 @@ describe('Edit bundle page', () => {
 
   it('without bundles:manage it redirects to the bundle', async () => {
     as('staff');
-    await expect(EditBundlePage({ params })).rejects.toThrow('redirect:/dashboard/bundles/b-1');
+    await expect(EditBundlePage({ params })).rejects.toThrow(
+      `redirect:/dashboard/bundles/${BUNDLE_ID}`,
+    );
   });
 
   it('a bundle that cannot be loaded is a 404', async () => {
     get.mockRejectedValue(new Error('missing'));
     await expect(EditBundlePage({ params })).rejects.toThrow('notFound');
+  });
+
+  // B63: a mistyped or cut-off link is Page not found, ahead of the
+  // bundles:manage redirect and before the bundle is read.
+  it('an id that is not a uuid is a 404 with nothing read, even without bundles:manage', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    vi.mocked(requireOrgContext).mockClear();
+    as('staff');
+    for (const id of ['not-a-uuid', BUNDLE_ID.slice(0, -1)]) {
+      await expect(EditBundlePage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
   });
 });

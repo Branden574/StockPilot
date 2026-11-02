@@ -368,6 +368,33 @@ function makeCtx(opts: MakeCtxOpts = {}) {
         };
       }
 
+      // ----------------------------------------------------------------
+      // warehouses table — the rental's warehouse, read in the organization
+      // before create_rental (S39)
+      // ----------------------------------------------------------------
+      // The warehouse belongs to this suite's organization ('org-1'). Answers
+      // like PostgREST: the row comes back only when every .eq() filter
+      // matches it, so a read filtered to another organization finds nothing.
+      if (table === 'warehouses') {
+        const row: Record<string, unknown> = {
+          id: '00000000-0000-0000-0000-000000000099',
+          organization_id: 'org-1',
+        };
+        const filters: Array<[string, unknown]> = [];
+        const self: Record<string, unknown> = {
+          select: (_cols: string) => self,
+          eq: (col: string, val: unknown) => {
+            filters.push([col, val]);
+            return self;
+          },
+          maybeSingle: async () => ({
+            data: filters.every(([c, v]) => row[c] === v) ? { id: row.id } : null,
+            error: null,
+          }),
+        };
+        return self;
+      }
+
       throw new Error(`[rentals.test] unexpected table: ${table}`);
     },
   } as unknown;

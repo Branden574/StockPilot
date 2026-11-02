@@ -28,6 +28,8 @@ import {
   lineNeedsMappingConfirmation,
 } from '@stockpilot/core';
 
+import { ServiceError } from '@/server/services/context';
+
 import { extractPoFromMedia, MAX_SCAN_TEXT_LEN, PO_SCHEMA } from './extract';
 
 const MEDIA = [{ base64: 'AAAA', mimeType: 'image/jpeg' }];
@@ -354,5 +356,24 @@ describe('extractPoFromMedia: apparel names a size run can group', () => {
       '3-Ring Binder, 1 inch',
       'M: Son of the Century',
     ]);
+  });
+});
+
+describe('extractPoFromMedia: a page that is not a purchase order', () => {
+  it('is refused with the sentence written for the person, as a ServiceError the scan route answers as it is', async () => {
+    respond({ ...po([]), overallConfidence: 0.1 });
+    const err = await extractPoFromMedia(MEDIA).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      message:
+        "This doesn't look like a purchase order — try a clearer photo of the full document.",
+    });
+  });
+
+  it('still reads a page with no lines when the model is confident it is a purchase order', async () => {
+    respond({ ...po([]), overallConfidence: 0.3 });
+    const out = await extractPoFromMedia(MEDIA);
+    expect(out.lines).toEqual([]);
   });
 });

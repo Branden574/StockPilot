@@ -165,11 +165,18 @@ describe('cancel by an approver asks write access to the order\'s warehouse', ()
     expect(stub.rpcCalls).toHaveLength(0);
   });
 
-  it('a manager is not read at all: the role works in every warehouse', async () => {
-    const stub = makeSupabaseStub({ ...CANCELLED });
+  it("a manager's order is read in the organization, but no warehouse is checked: the role works in every warehouse", async () => {
+    const stub = makeSupabaseStub({ ...order(), ...CANCELLED });
     await svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
-    expect(stub.fromCalls).not.toContain('order_requests');
+    // S39: every caller's cancel reads the order in the organization first.
+    expect(stub.fromCalls).toContain('order_requests');
+    // No warehouse check. For a manager, getWarehouseAccess reads
+    // `warehouses` (roleSeesEveryWarehouse) and never the assignments, so
+    // `warehouses` is the read that would show a check; the assignments line
+    // covers the staff branch.
+    expect(stub.fromCalls).not.toContain('warehouses');
+    expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
   });
 });
 
@@ -354,8 +361,10 @@ describe("the functions' own warehouse refusal (slice E, 0416) is the one senten
   });
 
   it("cancel: a manager's cancel refused by the function the same way (an assignment-free role never meets it, but the words do not depend on who)", async () => {
-    const stub = makeSupabaseStub({ 'rpc:cancel_order_request': OUTSIDE });
+    // The order is read in the organization first (S39), then the function refuses.
+    const stub = makeSupabaseStub({ ...order(), 'rpc:cancel_order_request': OUTSIDE });
     const e = await refusal(svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null));
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
     expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
   });
 });

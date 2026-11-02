@@ -11,6 +11,7 @@ import {
   readRouteFile,
   REBUILD_MAY_SET,
   resolveModule,
+  sessionReadersIn,
   withApiContextCalls,
   WRITE_METHODS,
   type WriteHandler,
@@ -173,22 +174,6 @@ const EXEMPT: Record<string, Exemption> = {
   },
 };
 
-/**
- * What reads a cookie session, by the module it comes from: the cookie-bound
- * client, the request cookies, and the page-session helpers (INV-E4's list).
- * '*' is any import from that module.
- */
-const SESSION_READERS: Record<string, readonly string[]> = {
-  '@/lib/supabase/server': ['*'],
-  'next/headers': ['cookies'],
-  '@/lib/auth/session': ['*'],
-  '@/lib/dashboard/request-cache': ['*'],
-  '@/lib/auth/api-context': ['*'],
-  '@/server/services/context': ['withContext'],
-  '@/server/services/portal': ['resolvePortalContext'],
-  '@/server/lib/sign-page-session': ['*'],
-};
-
 function routeFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -282,13 +267,9 @@ describe('the reviewed exemptions are current', () => {
       expect(isCovered(h), `${h.method} reaches a gate`).toBe(false);
 
     const source = SOURCES.get(file)!;
-    const readers = importsOf(file, source).flatMap(({ specifier, names }) => {
-      const banned = SESSION_READERS[specifier];
-      if (!banned) return [];
-      return names
-        .filter((n) => banned.includes('*') || banned.includes(n))
-        .map((n) => `${n} from ${specifier}`);
-    });
+    // SESSION_READERS (route-write-handlers.ts): the cookie client, cookies()
+    // and the page-session helpers, shared with the step-up guard.
+    const readers = sessionReadersIn(file, source);
     if (exemption.session === 'none') {
       expect(readers, 'reads no cookie session').toEqual([]);
     } else {

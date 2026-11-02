@@ -107,6 +107,7 @@ import {
   submissionStatusFromRpc,
 } from './order-submission';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 import { isOrderBusyError, orderBusyRefusal } from './lib/order-busy';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import {
@@ -308,6 +309,12 @@ export interface OrderRequestSummary {
   updatedAt: string;
   approvedAt: string | null;
   deliveredAt: string | null;
+  /**
+   * When the order went out (in_transit_at), null until then. B23: with no
+   * driver on a delivery that went out, the driver deleted their account
+   * (core deliveryDriverLabel says "Deleted user").
+   */
+  inTransitAt: string | null;
   // Phase-2 list-page surface: passed through from list() so future
   // list-page enhancements (driver column, fulfillment-type filter)
   // don't require another schema sweep.
@@ -1022,7 +1029,7 @@ export class OrderRequestsService {
         // query lean.
         `id, order_number, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
-         created_at, updated_at, approved_at, delivered_at,
+         created_at, updated_at, approved_at, delivered_at, in_transit_at,
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
          replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
@@ -1169,6 +1176,7 @@ export class OrderRequestsService {
         updatedAt: r.updated_at as string,
         approvedAt: (r.approved_at as string | null) ?? null,
         deliveredAt: (r.delivered_at as string | null) ?? null,
+        inTransitAt: (r.in_transit_at as string | null | undefined) ?? null,
         fulfillmentType: (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         assignedPickerName: displayProfile(pickerProfile),
@@ -3077,6 +3085,28 @@ export class OrderRequestsService {
     // disabled; security slice E, 0416). Asking orders:request of an
     // approver too is this service's rule alone.
     assertPermission(this.ctx, 'orders:request');
+    // S39: the order is read in THIS organization, for every caller (managers
+    // included), and a miss refuses before anything runs. cancel_order_request
+    // decides on the ORDER's own organization (0395), so for a member of two
+    // organizations a page left open after a switch, a phone screen or the AI
+    // cancelOrder tool on such a page cancelled the other organization's order
+    // while the audit row, the order.cancelled webhook and the cache
+    // invalidation below went to this one. The same read DECIDES the
+    // requester's rules below; a failed read throws, so they are never skipped
+    // on a read that did not happen (a requester cancelling after approval
+    // released reservations or restocked units under the picker).
+    const order = await readInActiveOrg<{
+      status: OrderRequestStatus;
+      requester_user_id: string | null;
+      replacement_for_return_id: string | null;
+      warehouse_id: string;
+    }>(
+      this.ctx,
+      'order_requests',
+      id,
+      'Order request not found',
+      'status, requester_user_id, replacement_for_return_id, warehouse_id',
+    );
     // M7: requesters can only self-cancel a request that is still
     // pending approval. Once it has been approved (and stock has been
     // reserved) or moved into packing-slip/staged, a self-serve cancel could
@@ -3090,27 +3120,14 @@ export class OrderRequestsService {
     // orders:approve was revoked gets the requester's rule, and a staff member
     // granted it does not.
     if (!can(this.ctx, 'orders:approve')) {
-      const { data: row, error: rowErr } = await this.ctx.supabase
-        .from('order_requests')
-        .select('status, requester_user_id, replacement_for_return_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id)
-        .maybeSingle();
-      // This read DECIDES whether the requester may cancel, and the RPC does
-      // not repeat the rule (it accepts any owner-or-manager cancel of a
-      // non-terminal order). With the error discarded, a failed read left
-      // `row` null, skipped the rule, and let a requester cancel their order
-      // after approval: releasing its reservations, or restocking units out
-      // from under the picker who claimed it. Deny.
-      if (rowErr) throw new ServiceError('internal_error', rowErr.message);
       // Returns RX-2: an exchange replacement is cancelled only through its
       // RMA (0396's cancel guard refuses everyone else, the requester too).
       // The requester who cannot open the RMA is told who to ask (review fix
       // P9, core's banner rule); anyone else reads where it is changed.
-      if (row && (row as { replacement_for_return_id?: string | null }).replacement_for_return_id) {
+      if (order.replacement_for_return_id) {
         const canOpenRma =
           this.ctx.enabledModules.has('returns') && (can(this.ctx, 'returns:read') || can(this.ctx, 'returns:manage'));
-        const isRequester = (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId;
+        const isRequester = order.requester_user_id === this.ctx.userId;
         throw new ServiceError(
           'forbidden',
           isRequester && !canOpenRma
@@ -3119,17 +3136,11 @@ export class OrderRequestsService {
           { reason: 'replacement_cancel_via_return' },
         );
       }
-      if (
-        row &&
-        (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId
-      ) {
-        const status = (row as { status: OrderRequestStatus }).status;
-        if (status !== 'pending_approval') {
-          // 0395: the same answer cancel_order_request's own refusal maps to
-          // (hint requester_pending_only, below): 403 forbidden with the core
-          // sentence, so the refusal reads the same whichever layer answers.
-          throw new ServiceError('forbidden', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
-        }
+      if (order.requester_user_id === this.ctx.userId && order.status !== 'pending_approval') {
+        // 0395: the same answer cancel_order_request's own refusal maps to
+        // (hint requester_pending_only, below): 403 forbidden with the core
+        // sentence, so the refusal reads the same whichever layer answers.
+        throw new ServiceError('forbidden', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
       }
     } else if (!isManagerOrAbove(this.ctx.role)) {
       // An approver's cancel asks write access to the order's warehouse, as
@@ -3144,26 +3155,14 @@ export class OrderRequestsService {
       // the call is refused there: orderWarehouseRefusal below). Owners,
       // admins and managers work in every warehouse by role
       // (isManagerOrAbove, roleSeesEveryWarehouse's rule in
-      // lib/auth/warehouse), so nothing is read for them.
+      // lib/auth/warehouse), so their warehouse is not checked.
       //
       // The person who placed the order still cancels it while it waits for
       // approval with no warehouse check: that is the requester's cancel (the
       // rule above, which a viewer may use), whatever else they may do.
-      const { data: row, error: rowErr } = await this.ctx.supabase
-        .from('order_requests')
-        .select('status, requester_user_id, warehouse_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id)
-        .maybeSingle();
-      // Never decided on a read that did not happen.
-      if (rowErr) throw new ServiceError('internal_error', rowErr.message);
-      if (row) {
-        const r = row as { status: OrderRequestStatus; requester_user_id: string | null; warehouse_id: string };
-        const ownPending = r.requester_user_id === this.ctx.userId && r.status === 'pending_approval';
-        if (!ownPending) await this.assertOrderWarehouseAccess(r.warehouse_id, 'write');
-      }
-      // No row: not found or not visible. The function answers it, as it does
-      // for the requester's path above.
+      const ownPending =
+        order.requester_user_id === this.ctx.userId && order.status === 'pending_approval';
+      if (!ownPending) await this.assertOrderWarehouseAccess(order.warehouse_id, 'write');
     }
     // I2: NB — the *public-link* cancel path (anonymous external
     // requester) does NOT pass through this service. There is no
@@ -4247,12 +4246,24 @@ export class OrderRequestsService {
     const trimmed = signerName.trim();
     if (!trimmed) throw new ServiceError('validation_error', 'Signer name is required.');
 
+    // S39: the order is read in THIS organization first, and a miss refuses
+    // before the function. confirm_physical_signature decides on the ORDER's
+    // own organization (a manager there, or the assigned driver), so for a
+    // member of two organizations a page left open after a switch recorded the
+    // other organization's signature while the audit row (with the signer's
+    // name), the requester notices, the webhooks and the live update below
+    // went to this one. It runs beside the prior-shipped read; a miss rejects
+    // the pair, so not_found is decided before anything else.
+    //
     // Prior-shipped total BEFORE the hand-over — >0 means this completion is a
     // backorder remainder arriving, which gets its own requester notice.
-    const { data: priorLines } = await this.ctx.supabase
-      .from('order_request_lines')
-      .select('quantity_fulfilled')
-      .eq('order_request_id', id);
+    const [, { data: priorLines }] = await Promise.all([
+      readInActiveOrg(this.ctx, 'order_requests', id, 'Order not found.'),
+      this.ctx.supabase
+        .from('order_request_lines')
+        .select('quantity_fulfilled')
+        .eq('order_request_id', id),
+    ]);
     const priorFulfilled = ((priorLines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
       (s, l) => s + (Number(l.quantity_fulfilled) || 0),
       0,

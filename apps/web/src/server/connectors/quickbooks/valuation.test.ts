@@ -1,7 +1,7 @@
 import type { ConnectionRef } from '@stockpilot/core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildInventoryValuationJE, maybePostMonthlyValuation } from './valuation';
+import { buildInventoryValuationJE, maybePostMonthlyValuation, valuationDue } from './valuation';
 
 vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(),
@@ -302,5 +302,65 @@ describe('maybePostMonthlyValuation', () => {
       NOW,
     );
     expect(client.__posts[0]!.body.Line[0].Amount).toBe(2500);
+  });
+});
+
+/**
+ * docket B81 review (2026-11-02): the drain-outbox cron reports the valuation
+ * as left for the next tick only for a connection the pass has work for, so
+ * it asks the same question maybePostMonthlyValuation's own gates answer.
+ */
+describe('valuationDue', () => {
+  const RECORDED =
+    'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured';
+
+  it('is false once this month is posted, configured or not', () => {
+    expect(valuationDue({ ...CONFIGURED, lastValuationMonth: '2026-05' }, NOW)).toBe(false);
+    expect(valuationDue({ lastValuationMonth: '2026-05' }, NOW)).toBe(false);
+  });
+
+  it('is true for a configured connection that has not posted this month', () => {
+    expect(valuationDue(CONFIGURED, NOW)).toBe(true);
+    expect(valuationDue({ ...CONFIGURED, lastValuationMonth: '2026-04' }, NOW)).toBe(true);
+  });
+
+  it('without both accounts, is true only until the skip reason is recorded', () => {
+    expect(valuationDue({}, NOW)).toBe(true);
+    expect(valuationDue({ accountIds: { inventoryAsset: 'A' } }, NOW)).toBe(true);
+    expect(valuationDue({ lastValuationSkipReason: 'an older reason' }, NOW)).toBe(true);
+    expect(valuationDue({ lastValuationSkipReason: RECORDED }, NOW)).toBe(false);
+    expect(
+      valuationDue(
+        { accountIds: { valuationOffset: 'B' }, lastValuationSkipReason: RECORDED },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it('takes the month in UTC, as the posted month is stamped', () => {
+    const lastMomentOfMay = new Date('2026-05-31T23:59:59.999Z');
+    const firstMomentOfJune = new Date('2026-06-01T00:00:00.000Z');
+    const postedMay = { ...CONFIGURED, lastValuationMonth: '2026-05' };
+    expect(valuationDue(postedMay, lastMomentOfMay)).toBe(false);
+    expect(valuationDue(postedMay, firstMomentOfJune)).toBe(true);
+  });
+
+  it('answers what maybePostMonthlyValuation then does: nothing when false, a write when true', async () => {
+    const cases: Array<Record<string, unknown>> = [
+      { ...CONFIGURED, lastValuationMonth: '2026-05' },
+      { ...CONFIGURED, lastValuationSnapshotValue: 50 },
+      {},
+      { lastValuationSkipReason: RECORDED },
+    ];
+    for (const settings of cases) {
+      const admin = makeFakeAdmin({ inventoryRows: [{ quantity_on_hand: 2, unit_cost: 25 }] });
+      await maybePostMonthlyValuation(
+        admin as any,
+        makeConn(settings),
+        makeFakeClient() as any,
+        NOW,
+      );
+      expect(admin.__writes.length > 0).toBe(valuationDue(settings, NOW));
+    }
   });
 });

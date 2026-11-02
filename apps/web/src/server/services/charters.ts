@@ -4,6 +4,8 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import { fetchAllRows } from './lib/paginate';
 
 /**
  * Structured mailing address for a charter campus. Mirrors `WarehouseAddress`
@@ -82,23 +84,40 @@ export class ChartersService {
    * `status = 'active'`. When `opts.includeArchived` is true, returns
    * ONLY rows with `status = 'archived'`. Inactive rows don't appear in
    * either view by design.
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable (only the code is unique). It was one read, so
+   * PostgREST's 1000-row max_rows cut it off with no error: past 1000
+   * charters, every charter whose name sorts after them was missing from the
+   * Charter filter, the item forms, Team's member Charters dialog,
+   * Admin > Warehouses and the Charters page (B47). One request still answers
+   * an organization under 1000 charters. It stops at LOOKUP_ROW_CEILING rows
+   * (the first by name, then id), reported once.
    */
   async list(opts: { includeArchived?: boolean } = {}): Promise<CharterRow[]> {
     const targetStatus = opts.includeArchived ? 'archived' : 'active';
-    const { data, error } = await this.ctx.supabase
-      .from('charters')
-      .select(
-        `id, name, code, description, notes, status, created_at, updated_at,
-         address, contact_name, contact_email, contact_phone,
-         warehouses:warehouse_charters!charter_id (warehouse_id),
-         users:user_warehouse_assignments!charter_id (user_id)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', targetStatus)
-      .order('name', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = await fetchAllRows(
+      (from, to) =>
+        this.ctx.supabase
+          .from('charters')
+          .select(
+            `id, name, code, description, notes, status, created_at, updated_at,
+             address, contact_name, contact_email, contact_phone,
+             warehouses:warehouse_charters!charter_id (warehouse_id),
+             users:user_warehouse_assignments!charter_id (user_id)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('status', targetStatus)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('charters.list', { organizationId: this.ctx.organizationId });
+    }
 
-    return (data ?? []).map((r) => {
+    return rows.map((r) => {
       const warehouses = (r as { warehouses?: unknown }).warehouses;
       const users = (r as { users?: unknown }).users;
       return {

@@ -17,6 +17,8 @@ import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 
 import type { ServiceContext } from './context';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import { fetchAllRows } from './lib/paginate';
 import { fetchRackHoldingsByItem } from './rack-holdings';
 
 /**
@@ -210,21 +212,32 @@ export async function readExchangeTier2(
  * caller's RLS: the warehouse's charters whose status is active, the pair the
  * database checks for a delivery replacement. A failed read answers [] (the
  * chooser then offers pickup only; the database decides anyway).
+ *
+ * Every link, page by page, ordered by charter (B47): one read with no order
+ * and no range answered an arbitrary 1000 past 1000 links on the warehouse
+ * (archived charters' links count too; the status filter runs below). A
+ * failed page answers [], never a partial list. The read stops at
+ * LOOKUP_ROW_CEILING links (the first by charter), reported once; the chooser
+ * then offers those links' active sites, by name.
  */
 export async function readDeliverySites(ctx: ServiceContext, warehouseId: string | null): Promise<ReplacementDeliverySite[]> {
   if (!warehouseId) return [];
   try {
-    const { data, error } = await ctx.supabase
-      .from('warehouse_charters')
-      .select('charter:charters!charter_id (id, name, status)')
-      .eq('organization_id', ctx.organizationId)
-      .eq('warehouse_id', warehouseId);
-    if (error) {
-      reportDegradedRead('returns.workbench.delivery_sites', error, { warehouseId });
-      return [];
-    }
+    const data = await fetchAllRows<{ charter: unknown }>(
+      (from, to) =>
+        ctx.supabase
+          .from('warehouse_charters')
+          .select('charter:charters!charter_id (id, name, status)')
+          .eq('organization_id', ctx.organizationId)
+          .eq('warehouse_id', warehouseId)
+          .order('charter_id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (data.length >= LOOKUP_ROW_CEILING)
+      reportLookupCeiling('returns.workbench.delivery_sites', { warehouseId });
     const out: ReplacementDeliverySite[] = [];
-    for (const row of (data ?? []) as Array<{ charter: unknown }>) {
+    for (const row of data) {
       const c = (Array.isArray(row.charter) ? row.charter[0] : row.charter) as
         | { id?: unknown; name?: unknown; status?: unknown }
         | null

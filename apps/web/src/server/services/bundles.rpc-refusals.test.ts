@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn(async () => undefined) }));
 
-import { makeServiceContext } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import {
   BUNDLE_COMPONENT_NOT_IN_WAREHOUSE,
@@ -23,7 +23,12 @@ import {
 const rpc = vi.fn();
 
 function service() {
-  return new BundlesService(makeServiceContext({ rpc }, { role: 'manager' }));
+  // The kit is read in the organization before the function (S39) and is
+  // found; these tests are about the function's refusals after that read.
+  const reads = makeSupabaseStub({ 'bundles.select': { data: { id: 'b-1' }, error: null } });
+  return new BundlesService(
+    makeServiceContext({ rpc, from: reads.client.from }, { role: 'manager' }),
+  );
 }
 
 function raises(message: string, detail?: string) {
