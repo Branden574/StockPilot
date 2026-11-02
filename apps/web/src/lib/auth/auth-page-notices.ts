@@ -72,9 +72,10 @@ export const SIGN_IN_QUERY_NOTICES = {
     session_ended: SESSION_ENDED_NOTICE,
   },
   reset: {
-    // server/actions/auth.ts completePasswordResetAction. Nothing on purpose:
-    // the reset form shows "Password updated." as it sends the person here. A
-    // line on the card as well is an owner question (docket O4).
+    // server/actions/auth.ts completePasswordResetAction. Nothing on purpose,
+    // as decided (docket O4, decisions b.9 and a.29): the reset form's
+    // "Password updated." is the confirmation, shown as it sends the person
+    // here.
     success: null,
   },
 } as const satisfies NoticeTable;
