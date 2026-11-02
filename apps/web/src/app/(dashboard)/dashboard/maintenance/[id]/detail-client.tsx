@@ -24,12 +24,24 @@ import {
 export function MaintenancePhotosPanelClient({
   requestId,
   photos,
+  canRemove,
 }: {
   requestId: string;
   photos: PanelPhoto[];
+  /** B104: whether this viewer may remove the request's photos, the rule
+   *  MaintenanceAttachmentsService.remove() applies (the requester or a
+   *  manage-holder). False hides every Remove; the server re-checks. */
+  canRemove: boolean;
 }) {
   const router = useRouter();
-  return <MaintenancePhotosPanel requestId={requestId} photos={photos} onChange={() => router.refresh()} />;
+  const shown = photos.map((p) => ({ ...p, canRemove }));
+  return (
+    <MaintenancePhotosPanel
+      requestId={requestId}
+      photos={shown}
+      onChange={() => router.refresh()}
+    />
+  );
 }
 
 interface ActionsProps {
