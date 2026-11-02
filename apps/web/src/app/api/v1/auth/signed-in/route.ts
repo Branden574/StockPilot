@@ -34,7 +34,13 @@ export const dynamic = 'force-dynamic';
  *
  * Who may write: a verified bearer token of the account the request
  * authenticated as (lib/auth/session-note.ts). An AAL1 token is accepted, as
- * on the web, and the row says whether the code is still owed.
+ * on the web, and the row says whether the code is still owed: the note goes
+ * out before the code screen, so withApiContext is asked with
+ * allowStepUpPending (S43a; AAL1_ROUTES in src/test/api-step-up.guard.test.ts).
+ * Refused there, a stolen password used on a phone would write no row and send
+ * no email for exactly the accounts that have an authenticator. The context it
+ * gets is labelled unsatisfied, so no permission check passes it; the route
+ * needs none.
  *
  * Once per session: a second note for the same session (a retry, a relaunch)
  * writes nothing, by a hash of the session id, for a day. 30 notes an hour per
@@ -98,7 +104,7 @@ const unauthenticated = () => NextResponse.json({ error: 'unauthenticated' }, { 
 
 export async function POST(req: Request) {
   try {
-    const ctx = await withApiContext(req);
+    const ctx = await withApiContext(req, { allowStepUpPending: true });
     if (!ctx) return unauthenticated();
     const claims = await verifiedBearerClaims(req, ctx);
     if (!claims) return unauthenticated();

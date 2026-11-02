@@ -41,7 +41,15 @@ export const dynamic = 'force-dynamic';
  *
  * This session ends with the phone's own logout right after. An AAL1 token is
  * accepted: the Auth server's own global logout, and revoke_my_other_sessions
- * over the Data API, already accept one, so the route adds no power. A token
+ * over the Data API, already accept one, so the route adds no power. So
+ * withApiContext is asked with allowStepUpPending (S43a; AAL1_ROUTES in
+ * src/test/api-step-up.guard.test.ts): a phone can press Sign out with an
+ * aal1 session of an account with an authenticator (one added on another
+ * device while the app stayed open; the app asks for the code again only at
+ * its next launch), and refused there, its other devices would stay signed in
+ * for up to an hour and the row would be lost. The context it gets is
+ * labelled unsatisfied, so no permission check passes it; the route needs
+ * none. A token
  * with no session id revokes nothing (revoke_my_other_sessions(null) would end
  * EVERY session) and its row says so.
  */
@@ -50,7 +58,7 @@ const unauthenticated = () => NextResponse.json({ error: 'unauthenticated' }, { 
 
 export async function POST(req: Request) {
   try {
-    const ctx = await withApiContext(req);
+    const ctx = await withApiContext(req, { allowStepUpPending: true });
     if (!ctx) return unauthenticated();
     const claims = await verifiedBearerClaims(req, ctx);
     if (!claims) return unauthenticated();

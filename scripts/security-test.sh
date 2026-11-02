@@ -949,7 +949,7 @@ WEB_TESTS=(
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
   # read (the route's own 401); the phone's snapshot end to end; the client
-  # crash beacon, the one route on the AAL1 allowlist; the two OAuth callbacks
+  # crash beacon, on the AAL1 allowlist; the two OAuth callbacks
   # that build their own principal ask the same question; and the sweep that
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
@@ -961,6 +961,13 @@ WEB_TESTS=(
   src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
+  # The phone's sign-in and sign-out notes (S5a), the other two routes on the
+  # AAL1 allowlist: an aal1 session of an account with an authenticator writes
+  # the sign-in row (code owed) and the device note, and its sign-out revokes
+  # and names the other sessions, through the REAL withApiContext; the same
+  # session still gets 401 from the push registration beside them, and
+  # withApiContext without the opt-out still answers it null.
+  src/app/api/v1/auth/step-up-pending.test.ts
   src/app/api/integrations/quickbooks/callback/route.test.ts
   src/app/api/integrations/sage_intacct/callback/route.test.ts
   src/test/api-step-up.guard.test.ts
