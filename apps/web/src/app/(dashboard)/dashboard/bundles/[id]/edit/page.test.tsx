@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { effectivePermissions, type Role } from '@stockpilot/core';
 
+import { ServiceError } from '@/server/services/context';
+
 /**
  * The Edit bundle page in the redesign (P4.D2, matrix W-CA-12): the shared
  * page header with today's back link and title, the manage gate's redirect to
@@ -17,6 +19,10 @@ const ctx: { role: Role; permissions: ReadonlySet<string> } = {
 const get = vi.fn();
 const formProps = vi.fn();
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
@@ -97,9 +103,14 @@ describe('Edit bundle page', () => {
     );
   });
 
-  it('a bundle that cannot be loaded is a 404', async () => {
-    get.mockRejectedValue(new Error('missing'));
+  // B66: only a missing bundle is a 404; a failed read reaches the error page.
+  it('a missing bundle is a 404, and a failed read reaches the error page', async () => {
+    get.mockRejectedValue(new ServiceError('not_found', 'Bundle not found'));
     await expect(EditBundlePage({ params })).rejects.toThrow('notFound');
+
+    const failure = new ServiceError('internal_error', 'canceling statement due to timeout');
+    get.mockRejectedValue(failure);
+    await expect(EditBundlePage({ params })).rejects.toBe(failure);
   });
 
   // B63: a mistyped or cut-off link is Page not found, ahead of the

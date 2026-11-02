@@ -71,6 +71,10 @@ const locationRows = [
 ];
 const locationsRead = vi.fn(servedLikePostgrest(locationRows));
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);

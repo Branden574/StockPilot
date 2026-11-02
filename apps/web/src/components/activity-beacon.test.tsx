@@ -129,19 +129,26 @@ describe('ActivityBeacon', () => {
   });
 
   it('still works when storage is unavailable, throttling in memory instead', async () => {
-    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    // Replace localStorage whole. A spy on Storage.prototype never runs here:
+    // happy-dom binds each Storage method onto the instance the first time it
+    // is read, and beforeEach's clear() has already read them.
+    const refuse = vi.fn(() => {
       throw new Error('SecurityError');
     });
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('SecurityError');
-    });
-    render(<ActivityBeacon scope={SCOPE} />);
+    vi.stubGlobal('localStorage', { getItem: refuse, setItem: refuse, removeItem: refuse });
+    // Its own scope, so no other test's stamp can sit in the memory fallback.
+    const scope = 'user-1:org-storage-blocked';
+    render(<ActivityBeacon scope={scope} />);
     await act(async () => {});
     window.dispatchEvent(new Event('focus'));
     await act(async () => {});
+    expect(refuse).toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    getItem.mockRestore();
-    setItem.mockRestore();
+
+    vi.setSystemTime(Date.now() + BEACON_MIN_INTERVAL_MS + 1000);
+    window.dispatchEvent(new Event('focus'));
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('removes its listeners when it unmounts', async () => {
