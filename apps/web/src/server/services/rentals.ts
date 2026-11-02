@@ -12,6 +12,7 @@ import {
   withContext,
 } from './context';
 import { defer } from './lib/defer';
+import { readInActiveOrg } from './lib/in-active-org';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
 
@@ -218,6 +219,15 @@ export class RentalsService {
       throw new ServiceError('validation_error', 'Expected return date must be in the future.');
     }
 
+    // S39: the warehouse is read in THIS organization first, and a miss
+    // refuses before the function. create_rental decides on the WAREHOUSE's
+    // own organization (its module, its rentals:create, write on the
+    // warehouse), so for a member of two organizations a checkout left open
+    // after a switch made the rental in the other organization while the audit
+    // row below (the borrower's name, the line count and the dates) went to
+    // this one. It runs beside the borrower read; a miss rejects the pair, so
+    // not_found is decided before that read's own answer.
+    //
     // Resolve borrower name when a member is selected.
     //
     // The embed NAMES its foreign key: organization_members has two to
@@ -225,14 +235,19 @@ export class RentalsService {
     // that names neither with HTTP 300 PGRST201. Unnamed, this read failed on
     // every call and the rental silently kept the name the client sent. The
     // borrower's profile is the one this member row's user_id points at.
+    const [, memberRes] = await Promise.all([
+      readInActiveOrg(this.ctx, 'warehouses', input.warehouseId, 'Warehouse not found.'),
+      input.borrowerUserId
+        ? this.ctx.supabase
+            .from('organization_members')
+            .select('user:user_profiles!organization_members_user_id_fkey(full_name)')
+            .eq('user_id', input.borrowerUserId)
+            .eq('organization_id', this.ctx.organizationId)
+            .maybeSingle()
+        : null,
+    ]);
     let borrowerName = input.borrowerName;
-    if (input.borrowerUserId) {
-      const memberRes = await this.ctx.supabase
-        .from('organization_members')
-        .select('user:user_profiles!organization_members_user_id_fkey(full_name)')
-        .eq('user_id', input.borrowerUserId)
-        .eq('organization_id', this.ctx.organizationId)
-        .maybeSingle();
+    if (memberRes) {
       // A FAILED read refuses the rental. Dropping this error is what hid the
       // PGRST201 for months: every read failed and the rental silently kept
       // the name the client sent. No row (not a member here, or a profile the
@@ -240,9 +255,8 @@ export class RentalsService {
       if (memberRes.error) {
         throw new ServiceError('internal_error', postgrestErrorText(memberRes.error, memberRes));
       }
-      const member = memberRes.data;
       const memberFullName = (
-        member as { user?: { full_name?: string | null } | null } | null
+        memberRes.data as { user?: { full_name?: string | null } | null } | null
       )?.user?.full_name;
       if (memberFullName) borrowerName = memberFullName;
     }
