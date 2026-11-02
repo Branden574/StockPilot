@@ -14,7 +14,8 @@ import { describe, expect, it } from 'vitest';
  * (branding.test.tsx, book-order-totals.test.tsx), and every route that reads
  * logo_url for a PDF resolves it through the guarded image fetch first:
  * prefetchPdfLogo, or in Book Order Totals prefetchImagesAsDataUris, which it
- * has used since #291 and which also converts a WebP or AVIF logo to JPEG.
+ * has used since #291 and which also converts a WebP or AVIF logo to JPEG on
+ * white.
  * A route that skipped this would print no logo; this guard names it.
  */
 const WEB = path.resolve(__dirname, '..', '..', '..');

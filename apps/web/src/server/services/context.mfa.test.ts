@@ -15,6 +15,7 @@
  *      (the unattended-login path — e.g. the demo QA account has no factors
  *      and MUST keep signing in untouched)
  *  (e) org lookup throws                      -> required=true,  satisfied=false (fail-closed)
+ *  (i) factor list of ANOTHER account         -> required=true,  satisfied=false (fail-closed)
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -144,9 +145,11 @@ function arrange(opts: {
     if (opts.orgRowHidden) return null;
     return orgRow(opts.policy);
   });
-  vi.mocked(getMfaFactorsForRequest).mockResolvedValue(
-    opts.verifiedFactor ? [{ status: 'verified' }] : [{ status: 'unverified' }],
-  );
+  vi.mocked(getMfaFactorsForRequest).mockResolvedValue({
+    // The member's own list (the context's user).
+    userId: 'u-1',
+    factors: opts.verifiedFactor ? [{ status: 'verified' }] : [{ status: 'unverified' }],
+  });
   vi.mocked(getModulesForRequest).mockResolvedValue(new Set<ModuleId>(['orders']));
   return organizationId;
 }
@@ -288,6 +291,36 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     const ctx = await withContext();
     expect(ctx.mfaRequired).toBe(true);
     expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  // (i) S43a, review round s43ar: the list is a read of the cookie session,
+  // which can refresh into another account after the context resolved. The
+  // list of an account with NO factor read as "not enrolled": under 'optional'
+  // that was required=false, and assertPermission let an enrolled member
+  // through at AAL1. A list of another account is no answer about this member,
+  // either way: fail closed, as for an unreadable one.
+  it('(i) factor list of ANOTHER account with no factor -> required=true, satisfied=false (fail-closed)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1' });
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValue({ userId: 'u-other', factors: [] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+    expect(() => assertPermission(ctx, 'items:read')).toThrow(ServiceError);
+  });
+
+  it('(i2) factor list of ANOTHER account listing a factor -> required=true, satisfied=false, even at AAL2', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValue({
+      userId: 'u-other',
+      factors: [{ status: 'verified' }],
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+    // No answer about this member's enrollment, so no level read either.
+    expect(aalCalls).toBe(0);
   });
 
   it('(e) org lookup throws -> required=true, satisfied=false (fail CLOSED)', async () => {

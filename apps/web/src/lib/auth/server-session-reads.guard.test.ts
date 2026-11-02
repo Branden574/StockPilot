@@ -52,7 +52,10 @@ const AAL_ALLOWED: Record<string, { calls: number; why: string }> = {
   },
   'server/actions/profile.ts': { calls: 1, why: 'after listFactors()' },
   'server/actions/email-change.ts': { calls: 1, why: 'after getUser() and listFactors()' },
-  'lib/auth/api-context.ts': { calls: 1, why: 'cookie path, after getUser() on the same client' },
+  // Not lib/auth/api-context.ts any more (docket S43a, review round 1): its
+  // cookie path reads the level through readVerifiedSessionClaimsOf, held to
+  // the user getUser() validated, because the session this call loads can
+  // refresh into another account's after getUser().
 };
 
 function files(dir: string): string[] {

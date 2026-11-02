@@ -21,8 +21,10 @@ const SUP = {
   archived: '22222222-0000-4000-8000-000000000002',
 } as const;
 
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 const draft = vi.fn(() => ({
-  id: 'po-1',
+  id: PO_ID,
   status: 'draft',
   po_number: 'PO-001',
   supplier_id: SUP.active as string | null,
@@ -143,7 +145,7 @@ function findProps(node: unknown, type: unknown): Record<string, unknown> | null
 }
 
 async function formProps() {
-  const tree = await EditPoPage({ params: Promise.resolve({ id: 'po-1' }) });
+  const tree = await EditPoPage({ params: Promise.resolve({ id: PO_ID }) });
   return findProps(tree, PoForm) as {
     locations: Array<{ id: string; name: string }>;
     suppliers: Array<{ id: string; name: string }>;
@@ -242,5 +244,19 @@ describe('Edit purchase order: what the page tells the form the selects do not o
       expect.anything(),
       { ids: 1 },
     );
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found, ahead of the
+// purchase_orders:manage redirect and before the purchase order is read (its
+// invalid-uuid error reached the error boundary).
+describe('Edit purchase order: an id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', PO_ID.slice(0, -1)]) {
+      await expect(EditPoPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow('notFound');
+    }
+    expect(draft).not.toHaveBeenCalled();
+    expect(requireOrgContext).not.toHaveBeenCalled();
   });
 });

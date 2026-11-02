@@ -9,6 +9,13 @@ import { describe, expect, it } from 'vitest';
  * { data: null, error }, and five call sites read that as "not enrolled" until
  * 2026-09-22: the dashboard gate, the MFA challenge page, change password,
  * email change and ownership transfer.
+ *
+ * Two files no longer call it (S43a, review round s43ar): lib/dashboard/
+ * request-cache.ts (the list the dashboard gate and resolveMfaState read) and
+ * the ownership transfer in server/actions/team.ts now read it with
+ * readMfaFactorList (lib/auth/mfa-factors.ts), which says whose list it is and
+ * throws on an error (tested in mfa-factors.test.ts). Seven files remain for
+ * this scan.
  */
 
 const SRC = path.resolve(__dirname, '../..');
@@ -50,7 +57,7 @@ describe('an unreadable MFA factor list never reads as "not enrolled"', () => {
           : false;
       if (!checked) offenders.push(rel);
     }
-    expect(sites).toBeGreaterThanOrEqual(8);
+    expect(sites).toBeGreaterThanOrEqual(7);
     expect(offenders).toEqual([]);
   });
 });
