@@ -10,6 +10,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import {
@@ -64,6 +65,14 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     );
     if (error) throw new ServiceError('internal_error', error.message);
     const codes = ((data ?? []) as Array<{ code: string }>).map((r) => r.code);
+    // How many codes, never which.
+    const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
+    await emitAuthAudit({
+      event: 'mfa.recovery.generated',
+      userId: session.userId,
+      organizationId,
+      extra: { count: codes.length },
+    });
     revalidatePath('/dashboard/settings/security');
     return ok({ codes });
   } catch (e) {
@@ -172,7 +181,17 @@ export async function consumeMfaRecoveryCodeAction(input: {
       { p_code: input.code },
     );
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!ok_) return err('validation_error', 'That recovery code is invalid or already used.');
+    if (!ok_) {
+      // No organization, like a refused authenticator code (mfa.code_refused):
+      // not shown to the organization's admins, never the person's own last
+      // action. Never the code.
+      await emitAuthAudit({
+        event: 'mfa.recovery.failed',
+        userId: session.userId,
+        organizationId: null,
+      });
+      return err('validation_error', 'That recovery code is invalid or already used.');
+    }
 
     // Unenroll every TOTP factor for this user via the admin client.
     let admin;
@@ -204,6 +223,15 @@ export async function consumeMfaRecoveryCodeAction(input: {
       if (!r.error) unenrolled += 1;
     }
 
+    // A used code removes every authenticator of the account: the person's
+    // own act, recorded in their default organization. Never the code.
+    const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
+    await emitAuthAudit({
+      event: 'mfa.recovery.consumed',
+      userId: session.userId,
+      organizationId,
+      extra: { unenrolled },
+    });
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });
   } catch (e) {

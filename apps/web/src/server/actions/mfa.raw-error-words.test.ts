@@ -42,6 +42,19 @@ vi.mock('@/lib/rate-limit', () => ({
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn(async () => {}) }));
 vi.mock('@/server/services/integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// The sign-in and step-up code check (lib/auth/mfa-code-attempts, docket
+// S29-S32) reads the account from the session's verified claims, the client
+// address from the request, and writes refused-code rows through emitAuthAudit.
+vi.mock('@/lib/auth/verified-claims', () => ({
+  readVerifiedSessionClaims: vi.fn(async () => ({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    aal: 'aal1',
+    amr: [],
+  })),
+}));
+vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
+vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
 
 const mfaStub = {
   challenge: vi.fn(),
@@ -118,24 +131,50 @@ beforeEach(() => {
   vi.clearAllMocks();
   mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
   mfaStub.verify.mockResolvedValue({ data: null, error: null });
-  mfaStub.listFactors.mockResolvedValue({ data: { all: [], totp: [] }, error: null });
+  // f1 is the set-up just started: listed, not yet verified (S29-S32).
+  mfaStub.listFactors.mockResolvedValue({
+    data: { all: [{ id: 'f1', status: 'unverified', factor_type: 'totp' }], totp: [] },
+    error: null,
+  });
   mfaStub.unenroll.mockResolvedValue({ data: null, error: null });
   orgPolicy.read = { data: { mfa_policy: 'optional' }, error: null };
   orgPolicy.update = { data: { id: 'org-1' }, error: null };
 });
 
+/**
+ * The two code checks report differently: the set-up through mfaCodeFailure
+ * (S31), the sign-in and step-up through checkMfaCode (lib/auth/
+ * mfa-code-attempts, S29-S32), which reports an answer it does not know by its
+ * name, code and status, and answers a challenge that could not start without
+ * a report.
+ */
+const UNKNOWN_REPORTED = {
+  setUp: {
+    tag: 'actions.mfa.verify_enrollment',
+    level: 'warning',
+    extra: { code: 'mfa_challenge_expired' },
+  },
+  challenge: {
+    tag: 'mfa.verify_unclassified',
+    level: 'warning',
+    extra: { name: 'AuthApiError', code: 'mfa_challenge_expired', status: 422 },
+  },
+} as const;
+
 describe.each([
   [
     'the set-up code (verifyEnrollmentAction)',
     () => verifyEnrollmentAction(SETUP),
-    'actions.mfa.verify_enrollment',
+    UNKNOWN_REPORTED.setUp,
+    { tag: 'actions.mfa.verify_enrollment', extra: { code: 'mfa_challenge_expired' } },
   ],
   [
     'the sign-in and step-up code (challengeFactorAction)',
     () => challengeFactorAction({ factorId: 'f1', code: '123456' }),
-    'actions.mfa.challenge',
+    UNKNOWN_REPORTED.challenge,
+    null,
   ],
-] as const)("%s says how GoTrue answered, never GoTrue's text", (_label, act, tag) => {
+] as const)("%s says how GoTrue answered, never GoTrue's text", (_label, act, unknown, start) => {
   function verifyAnswers(error: unknown) {
     mfaStub.verify.mockResolvedValue({ data: null, error });
   }
@@ -180,23 +219,17 @@ describe.each([
     expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_CHECKED } });
     expect(JSON.stringify(res)).not.toContain('7c1e2a90');
     expect(reportError).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
-      tag,
-      level: 'warning',
-      extra: { code: 'mfa_challenge_expired' },
-    });
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual(unknown);
   });
 
-  it('a challenge that could not start: its own sentence, reported, and no verify', async () => {
+  it('a challenge that could not start: its own sentence, and no verify', async () => {
     mfaStub.challenge.mockResolvedValue({ data: null, error: UNKNOWN });
     const res = await act();
     expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
     expect(JSON.stringify(res)).not.toContain('7c1e2a90');
     expect(mfaStub.verify).not.toHaveBeenCalled();
-    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
-      tag,
-      extra: { code: 'mfa_challenge_expired' },
-    });
+    if (start === null) expect(reportError).not.toHaveBeenCalled();
+    else expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual(start);
   });
 
   it('a challenge refused for a gone session says so, unreported', async () => {

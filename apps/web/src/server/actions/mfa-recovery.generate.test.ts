@@ -47,6 +47,11 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: (...args: unknown[]) => checkRateLimit(...(args as [])),
 }));
 const rpc = vi.fn(async () => ({ data: [{ code: 'aaaa-bbbb' }], error: null }));
+const { emitAuthAudit } = vi.hoisted(() => ({ emitAuthAudit: vi.fn(async () => {}) }));
+vi.mock('@/server/services/auth-audit', () => ({
+  emitAuthAudit: (...args: unknown[]) => emitAuthAudit(...(args as [])),
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-1', role: 'admin' })),
+}));
 const cookieRpc = vi.fn(async () => ({ data: null, error: { message: 'not this client' } }));
 vi.mock('@/lib/supabase/server', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/supabase/server')>();
@@ -112,6 +117,7 @@ async function expectRefused() {
   // Refused before the rate limit is spent and before any code is minted.
   expect(checkRateLimit).not.toHaveBeenCalled();
   expect(rpc).not.toHaveBeenCalled();
+  expect(emitAuthAudit).not.toHaveBeenCalled();
   expect(createAccessTokenClient).not.toHaveBeenCalled();
   expect(cookieRpc).not.toHaveBeenCalled();
 }
@@ -123,6 +129,14 @@ describe('generateMfaRecoveryCodesAction — the AAL2 gate', () => {
     await signIn(claims, token);
     const res = await generateMfaRecoveryCodesAction();
     expect(res).toEqual({ ok: true, data: { codes: ['aaaa-bbbb'] } });
+    // The row says how many codes, never which.
+    expect(emitAuthAudit).toHaveBeenCalledWith({
+      event: 'mfa.recovery.generated',
+      userId: '11111111-1111-4111-8111-111111111111',
+      organizationId: 'org-1',
+      extra: { count: 1 },
+    });
+    expect(JSON.stringify(emitAuthAudit.mock.calls)).not.toContain('aaaa-bbbb');
     // With the very token whose claims passed the gate, never on the cookie client.
     expect(createAccessTokenClient).toHaveBeenCalledWith(token);
     expect(rpc).toHaveBeenCalledWith('generate_mfa_recovery_codes');

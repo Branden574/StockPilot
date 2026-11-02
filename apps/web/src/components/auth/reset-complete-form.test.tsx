@@ -182,6 +182,34 @@ describe('ResetCompleteForm: the authenticator code (B50)', () => {
     expect(h.replace).not.toHaveBeenCalled();
   });
 
+  // A spent code budget, or GoTrue's own limit on code checks, answers
+  // rate_limited with the same reason: an authenticator code changes every 30
+  // seconds, so the one in the box is stale once the wait is over, and sending
+  // it again could only be refused.
+  it.each([
+    'Too many code attempts. Wait a few minutes and try again.',
+    'Too many code checks right now. Wait a minute and try again.',
+  ])('a pause on the code step (%s) empties the box and says why on the form', async (message) => {
+    h.complete.mockResolvedValueOnce(asked()).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'rate_limited', message, details: { reason: 'aal2_required' } },
+    });
+    const user = userEvent.setup();
+    render(<ResetCompleteForm />);
+
+    await fillPasswords(user);
+    await press(user);
+    await user.type(await codeBox(), '123456');
+    await press(user);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    const box = await codeBox();
+    expect(box).toHaveValue('');
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(screen.getByLabelText('New password')).toHaveValue(TYPED_VALUE);
+    expect(h.replace).not.toHaveBeenCalled();
+  });
+
   it('a code pasted with a space is sent as six digits', async () => {
     h.complete.mockResolvedValueOnce(asked()).mockResolvedValueOnce(DONE);
     const user = userEvent.setup();
