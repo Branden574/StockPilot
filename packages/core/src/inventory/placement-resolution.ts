@@ -223,9 +223,9 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
   const { rackLabel, crateLabel } = readStructured(input.itemType, input.customFields);
 
   // Rule 0c (opt-in): one RACK holding, and no saved rack or a saved rack it
-  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's. A
-  // book's crate summary goes with the answer whether or not a crate is
-  // saved beside the missing or refuted rack.
+  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's. The
+  // answer carries a book's crate summary (null when none is saved), for a
+  // missing rack and a refuted one alike.
   if (
     input.singleHoldingCheck === true &&
     holdings.length === 1 &&
