@@ -174,6 +174,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Rate limit counters, keyed by the caller.',
   ],
+  'server/actions/auth.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions: a password change ends the account's other sessions in the database when the Auth server's sign-out of them answers an error.",
+  ],
   'server/actions/mfa-recovery.ts::consume_mfa_recovery_code': [
     'not_org_data',
     "The caller's own MFA recovery codes.",
