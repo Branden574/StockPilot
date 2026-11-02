@@ -264,8 +264,16 @@ interface ItemFormProps {
    * words. Default false.
    */
   warehouseChartersCapped?: boolean;
-  /** All charters in the org (for label lookup). */
+  /** Active charters (offered for a new pick, and their names). */
   charters: Array<{ id: string; name: string }>;
+  /**
+   * The record's own charter when `charters` lacks it (an archived or inactive
+   * charter keeps its warehouse links and the records that carry it), read by
+   * id on the edit pages for its name and status (S44). null when the list has
+   * it, on create, or when the read failed (the form then says "This record's
+   * charter"). A label only: the form keeps the record's charter either way.
+   */
+  recordCharter?: { id: string; name: string; status: 'active' | 'inactive' | 'archived' } | null;
   /** Forced warehouse (for warehouse-scoped users) — picker is hidden when set. */
   forcedWarehouseId?: string | null;
   warehouseLabel: string;
@@ -348,6 +356,7 @@ export function ItemForm({
   warehouseCharters,
   warehouseChartersCapped = false,
   charters,
+  recordCharter = null,
   forcedWarehouseId,
   warehouseLabel,
   charterLabel,
@@ -1106,7 +1115,8 @@ export function ItemForm({
   const watchedWarehouseId = watch('warehouseId') ?? forcedWarehouseId ?? null;
   const watchedCharterId = watch('charterId') ?? null;
   const charterById = React.useMemo(() => new Map(charters.map((c) => [c.id, c.name])), [charters]);
-  const allowedCharterIds = React.useMemo(
+  // Every charter the chosen warehouse links, at any status.
+  const linkedCharterIds = React.useMemo(
     () =>
       new Set(
         watchedWarehouseId
@@ -1117,56 +1127,107 @@ export function ItemForm({
       ),
     [warehouseCharters, watchedWarehouseId],
   );
-  const allowedCharters = React.useMemo(
+  // The ones offered for a new pick: linked AND active (in `charters`). An
+  // archived or inactive charter keeps its links, but new stock is not tagged
+  // to it (S44), as the database refuses a non-active charter for a new
+  // order; it used to be offered here under its id.
+  const offeredCharters = React.useMemo(
     () =>
-      [...allowedCharterIds]
-        .map((id) => ({ id, name: charterById.get(id) ?? id }))
+      [...linkedCharterIds]
+        .flatMap((id) => {
+          const name = charterById.get(id);
+          return name === undefined ? [] : [{ id, name }];
+        })
         .sort((a, b) => a.name.localeCompare(b.name)),
-    [allowedCharterIds, charterById],
+    [linkedCharterIds, charterById],
+  );
+  const offeredCharterIds = React.useMemo(
+    () => new Set(offeredCharters.map((c) => c.id)),
+    [offeredCharters],
   );
 
   // If the warehouse changes and the current charter no longer fits, clear it.
   //
-  // Except a record's OWN charter on its own warehouse when editing (B26).
-  // This used to run on load too, so a record whose charter its warehouse no
-  // longer lists (an admin unlinked it after the record got it) opened showing
-  // Generic, and saving any other field sent Generic and took the record's
-  // charter away. That charter now shows as the record's own
-  // (`unlinkedCharter`) and is sent back unchanged; the server checks the pair
-  // only when the charter or the warehouse changes.
+  // Except a record's OWN charter when editing, on its own warehouse (B26) or
+  // on any warehouse that links it, whatever its status (S44). This used to
+  // run on load too, so a record whose charter its warehouse no longer lists
+  // (an admin unlinked it after the record got it) opened showing Generic,
+  // and saving any other field sent Generic and took the record's charter
+  // away. That charter now shows as the record's own (`keptCharters`) and is
+  // sent back unchanged; the server checks the pair only when the charter or
+  // the warehouse changes. A record whose charter has been archived keeps it
+  // the same way, also on a move to another warehouse that links it.
   const loadedPlacementRef = React.useRef({
     warehouseId: watchedWarehouseId,
     charterId: watchedCharterId,
   });
+  const ownCharterId = isEdit ? loadedPlacementRef.current.charterId : null;
+  const onOwnWarehouse = isEdit && watchedWarehouseId === loadedPlacementRef.current.warehouseId;
+  const ownCharterKeptHere =
+    ownCharterId !== null && (linkedCharterIds.has(ownCharterId) || onOwnWarehouse);
   // Nor when the page's pair list stopped at the lookup ceiling (B47): a pair
   // missing from a cut list may exist, so clearing would change the record's
   // charter from part of the list. The charter stays, and the server checks
   // the pair on save (it refuses one the warehouse does not service).
   React.useEffect(() => {
-    const ownCharter =
-      isEdit &&
-      watchedWarehouseId === loadedPlacementRef.current.warehouseId &&
-      watchedCharterId === loadedPlacementRef.current.charterId;
-    if (ownCharter) return;
+    if (!watchedCharterId || offeredCharterIds.has(watchedCharterId)) return;
+    if (watchedCharterId === ownCharterId && ownCharterKeptHere) return;
     if (warehouseChartersCapped) return;
-    if (watchedCharterId && !allowedCharterIds.has(watchedCharterId)) {
-      setValue('charterId', null);
-    }
+    setValue('charterId', null);
   }, [
-    isEdit,
-    watchedWarehouseId,
     watchedCharterId,
-    allowedCharterIds,
+    offeredCharterIds,
+    ownCharterId,
+    ownCharterKeptHere,
     warehouseChartersCapped,
     setValue,
   ]);
-  const unlinkedCharter =
-    watchedCharterId && !allowedCharterIds.has(watchedCharterId)
-      ? {
-          id: watchedCharterId,
-          name: charterById.get(watchedCharterId) ?? `This record's ${charterLabel.toLowerCase()}`,
-        }
-      : null;
+
+  // What the list shows besides Generic and the offered charters: the
+  // record's own charter where it is kept and not offered, so it shows by
+  // name and can be picked back after another pick; and, with a cut pair
+  // list (B47), whatever charter is kept and not offered. Never an id: a
+  // name from the active list or `recordCharter`, else "This record's
+  // charter".
+  const recordCharterWords = `This record's ${charterLabel.toLowerCase()}`;
+  const keptCharters: Array<{ id: string; name: string }> = [];
+  if (
+    ownCharterId &&
+    !offeredCharterIds.has(ownCharterId) &&
+    (ownCharterKeptHere || (warehouseChartersCapped && watchedCharterId === ownCharterId))
+  ) {
+    const read =
+      recordCharter && recordCharter.id.toLowerCase() === ownCharterId.toLowerCase()
+        ? recordCharter
+        : null;
+    const listedName = charterById.get(ownCharterId);
+    const name = listedName ?? (read?.name.trim() || null);
+    const status = listedName !== undefined ? 'active' : (read?.status ?? null);
+    keptCharters.push({
+      id: ownCharterId,
+      name:
+        // Its own warehouse no longer links it (B26); a cut pair list cannot
+        // tell (B47), and the save checks.
+        !linkedCharterIds.has(ownCharterId) && !warehouseChartersCapped
+          ? `${name ?? recordCharterWords} (not linked to this ${warehouseLabel.toLowerCase()})`
+          : name === null
+            ? recordCharterWords
+            : status === 'archived' || status === 'inactive'
+              ? `${name} (${status})`
+              : name,
+    });
+  }
+  if (
+    warehouseChartersCapped &&
+    watchedCharterId &&
+    !offeredCharterIds.has(watchedCharterId) &&
+    watchedCharterId !== keptCharters[0]?.id
+  ) {
+    keptCharters.push({
+      id: watchedCharterId,
+      name: charterById.get(watchedCharterId) ?? recordCharterWords,
+    });
+  }
 
   async function uploadStagedImages(itemId: string) {
     if (staged.length === 0) return { uploaded: 0, failed: 0 };
@@ -2411,22 +2472,30 @@ export function ItemForm({
                 <SelectItem value="__generic">
                   Generic — any {charterLabel.toLowerCase()}
                 </SelectItem>
-                {unlinkedCharter ? (
-                  <SelectItem value={unlinkedCharter.id}>
-                    {unlinkedCharter.name}
-                    {/* A cut pair list cannot tell (B47); the save checks. */}
-                    {warehouseChartersCapped
-                      ? null
-                      : ` (not linked to this ${warehouseLabel.toLowerCase()})`}
+                {keptCharters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
                   </SelectItem>
-                ) : null}
-                {allowedCharters.length === 0 && watchedWarehouseId ? (
+                ))}
+                {offeredCharters.length === 0 && watchedWarehouseId ? (
                   <div className="text-muted-foreground px-3 py-2 text-[12px]">
-                    No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}{' '}
-                    yet — admins can configure them in Admin → {warehouseLabel}s.
+                    {linkedCharterIds.size === 0 ? (
+                      <>
+                        No {charterLabel.toLowerCase()}s linked to this{' '}
+                        {warehouseLabel.toLowerCase()} yet — admins can configure them in Admin →{' '}
+                        {warehouseLabel}s.
+                      </>
+                    ) : (
+                      // It links only archived or inactive charters.
+                      <>
+                        No active {charterLabel.toLowerCase()}s linked to this{' '}
+                        {warehouseLabel.toLowerCase()} — admins can restore one in Admin →{' '}
+                        {charterLabel}s or link one in Admin → {warehouseLabel}s.
+                      </>
+                    )}
                   </div>
                 ) : (
-                  allowedCharters.map((c) => (
+                  offeredCharters.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.name}
                     </SelectItem>
