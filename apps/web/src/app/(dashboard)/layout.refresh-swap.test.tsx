@@ -43,7 +43,18 @@ let jar = new Map<string, string>();
 vi.mock('next/headers', async () => {
   const f = await import('@/test/auth-session-fixture');
   return {
-    cookies: async () => f.cookieStoreOver(jar),
+    // A Server Component's cookie store: Next refuses writes outside a Server
+    // Action or Route Handler, and lib/supabase/server.ts swallows the refusal.
+    // So a client that refreshes keeps the new session to itself, as in a
+    // real render; a writable store would let one client's refresh cancel
+    // another's (auth-js discards a refresh when the stored session changed
+    // while it was in flight).
+    cookies: async () => ({
+      ...f.cookieStoreOver(jar),
+      set: () => {
+        throw new Error('Cookies can only be modified in a Server Action or Route Handler.');
+      },
+    }),
     // What the proxy forwarded once it had validated the cookie: the member.
     headers: async () =>
       new Headers({
@@ -241,6 +252,11 @@ beforeEach(() => {
       authCalls.push(url.pathname.replace('/auth/v1', ''));
       answer = await server.fetch(input, init);
     }
+    // A network answer arrives in a later turn of the event loop, after every
+    // read the render started in this one has loaded the session. Answered in
+    // the same turn, the key-set fetch (paid by whichever test runs first)
+    // would move the clock between two of the render's loads.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     vi.setSystemTime(Date.now() + ROUND_TRIP_MS);
     if (url.pathname === '/rest/v1/rpc/get_request_context') onContextAnswered?.();
     return answer;
