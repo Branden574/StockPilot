@@ -7,6 +7,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
+import { asReportableError } from '@/lib/error-text';
 
 /**
  * The sentence an API route answers for a failure it did not expect: the one
@@ -123,12 +124,11 @@ export function unreadableRequestResponse(code = 'invalid_body'): NextResponse {
  * The thrown value as an Error for the report, with its text. A supabase-js
  * read returns its `error` as a plain object, and code that throws that
  * object as it is (`if (advErr) throw advErr;`) throws something whose
- * String() is "[object Object]".
+ * String() is "[object Object]". The reporter's own rule (lib/error-text.ts,
+ * docket C21): its message and code, never its details.
  */
 function asError(e: unknown): Error {
-  if (e instanceof Error) return e;
-  const message = (e as { message?: unknown } | null | undefined)?.message;
-  return new Error(typeof message === 'string' ? message : String(e));
+  return asReportableError(e);
 }
 
 function reportContext(tag: string, opts: InternalErrorResponseOptions): ErrorContext {

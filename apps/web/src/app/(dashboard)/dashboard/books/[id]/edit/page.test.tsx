@@ -61,7 +61,23 @@ vi.mock('@/server/services/tags', () => ({
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: svc({ listNames: async () => [{ id: 'wh-1', name: 'North DC' }] }),
 }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: svc({ list: async () => [] }) }));
+// The page's active charters, the record's charter and the by-id names read
+// for a record charter the active list lacks (S44).
+const { charterState, reportError } = vi.hoisted(() => ({
+  charterState: {
+    list: [] as Array<{ id: string; name: string; status: string }>,
+    recordCharterId: null as string | null,
+    namesByIds: (async () => []) as (ids: readonly string[]) => Promise<unknown[]>,
+  },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: svc({
+    list: async () => charterState.list,
+    namesByIds: (ids: readonly string[]) => charterState.namesByIds(ids),
+  }),
+}));
 // The page's warehouse charter pairs, and the shared LOOKUP_ROW_CEILING (a
 // getter, so a test can lower it: the page reads the binding on every render).
 const { pairs, ceiling } = vi.hoisted(() => ({
@@ -98,6 +114,8 @@ vi.mock('@/server/services/inventory', () => ({
         status: 'active',
         item_type: 'book',
         custom_fields: {},
+        warehouse_id: 'wh-1',
+        charter_id: charterState.recordCharterId,
       };
     },
   }),
@@ -132,6 +150,9 @@ beforeEach(() => {
   ctxHolder.current = { role: 'manager' };
   pairs.current = [];
   ceiling.value = 10_000;
+  charterState.list = [];
+  charterState.recordCharterId = null;
+  charterState.namesByIds = async () => [];
 });
 
 describe('Edit book page', () => {
@@ -210,5 +231,77 @@ describe('Edit book page: the warehouse charter list at the ceiling', () => {
     expect(formProps).toHaveBeenCalledWith(
       expect.objectContaining({ warehouseChartersCapped: false }),
     );
+  });
+});
+
+/**
+ * S44: the page lists active charters only. A record whose own charter has
+ * been archived (or set inactive) still carries it, so the page reads that
+ * charter's name and status by id and passes it to the form as
+ * `recordCharter`, which names it '(archived)' instead of showing its id. A
+ * label read: only when the active list lacks the record's charter, and a
+ * failed read is a warning with a neutral label, never an error page.
+ */
+describe("Edit book page: the record's charter the active list lacks", () => {
+  const ARCH = '66666666-6666-4666-8666-666666666666';
+  const NORTH = '22222222-2222-4222-8222-222222222222';
+
+  it('reads its name and status once and passes them as recordCharter', async () => {
+    charterState.recordCharterId = ARCH;
+    charterState.list = [{ id: NORTH, name: 'North Campus', status: 'active' }];
+    const namesByIds = vi.fn(async () => [{ id: ARCH, name: 'Old Campus', status: 'archived' }]);
+    charterState.namesByIds = namesByIds;
+
+    render(await page());
+
+    expect(namesByIds).toHaveBeenCalledTimes(1);
+    expect(namesByIds).toHaveBeenCalledWith([ARCH]);
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordCharter: { id: ARCH, name: 'Old Campus', status: 'archived' },
+        defaults: expect.objectContaining({ charterId: ARCH }),
+      }),
+    );
+  });
+
+  it('an active charter, or none, sends no read and passes recordCharter null', async () => {
+    const namesByIds = vi.fn(async () => []);
+    charterState.namesByIds = namesByIds;
+    charterState.list = [{ id: NORTH, name: 'North Campus', status: 'active' }];
+
+    charterState.recordCharterId = NORTH;
+    render(await page());
+    expect(formProps).toHaveBeenLastCalledWith(expect.objectContaining({ recordCharter: null }));
+
+    charterState.recordCharterId = null;
+    render(await page());
+    expect(formProps).toHaveBeenLastCalledWith(expect.objectContaining({ recordCharter: null }));
+
+    expect(namesByIds).not.toHaveBeenCalled();
+  });
+
+  it('a failed read still renders the form, with recordCharter null and one warning report', async () => {
+    charterState.recordCharterId = ARCH;
+    charterState.namesByIds = async () => {
+      throw new Error('upstream connect error');
+    };
+
+    render(await page());
+
+    expect(screen.getByTestId('item-form')).toBeInTheDocument();
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordCharter: null,
+        defaults: expect.objectContaining({ charterId: ARCH }),
+      }),
+    );
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [, opts] = reportError.mock.calls[0] as [
+      Error,
+      { tag: string; level: string; extra: Record<string, unknown> },
+    ];
+    expect(opts.tag).toBe('books.edit.record_charter');
+    expect(opts.level).toBe('warning');
+    expect(String(opts.extra.detail)).toContain('upstream connect error');
   });
 });
