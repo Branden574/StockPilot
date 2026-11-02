@@ -299,7 +299,7 @@ select is(
   pg_temp.run('authenticated', :member,
     format('select public.consume_mfa_recovery_code(%L)::text', (select split_part(codes, ',', 1) from _sets where k = 'c')), 'aal1'),
   'true/false',
-  'C2: consume_mfa_recovery_code() answers as it did before: true once for the owner''s unused code, then false');
+  'C2: consume_mfa_recovery_code() answers as it did before for the person''s own call');
 select is(
   pg_temp.run('authenticated', :other,
     format('select public.consume_mfa_recovery_code(%L)::text', (select split_part(codes, ',', 2) from _sets where k = 'c')), 'aal2')
@@ -307,7 +307,7 @@ select is(
               where user_id = :member and used_at is null
                 and code_hash = pg_temp.hashes((select split_part(codes, ',', 2) from _sets where k = 'c')))::text,
   'false/1',
-  'C3: another account''s call with that person''s code answers false, and the code is left as it was');
+  'C3: consume_mfa_recovery_code() answers as it did before for another account''s call, and the person''s codes are left as they were');
 
 -- ══ M, A: undone attempts ═════════════════════════════════════════════════
 create temp table _snap on commit drop as select pg_temp.state(:member) as v;
