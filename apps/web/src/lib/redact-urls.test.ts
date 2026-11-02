@@ -324,4 +324,58 @@ describe('error report text for a value that is not an Error', () => {
     expect(text).toContain('hint: Sign again');
     for (const run of runsOf(SIGNED_URL_JWT)) expect(text).not.toContain(run);
   });
+
+  it('a 200-character cut that falls inside a share token in a hint leaves no part of it', () => {
+    const lead = `${'h'.repeat(178)} /orders/sign/`;
+    // The hint's 200-character cut falls 8 characters into the token.
+    expect(lead.length + 8).toBe(200);
+    const refusal = {
+      message: 'signature refused',
+      code: 'P0001',
+      hint: `${lead}${SHARE_TOKEN} x`,
+    };
+    const made = asReportableError(refusal);
+    expect(made.message).toContain(`hint: ${lead}`);
+    expect(made.message).toMatch(/…\)$/);
+    for (const text of [nonErrorText(refusal), made.message, made.stack ?? '']) {
+      for (const run of runsOf(SHARE_TOKEN)) expect(text).not.toContain(run);
+    }
+  });
+
+  it('a 200-character cut that falls inside a share token in a cause line leaves no part of it', () => {
+    const cause = `Error: ${'c'.repeat(171)} /orders/sign/`;
+    // The cause's 200-character cut falls 8 characters into the token.
+    expect(cause.length + 8).toBe(200);
+    const shape = {
+      message: 'TypeError: fetch failed',
+      details: `TypeError: fetch failed\n\nCaused by: ${cause}${SHARE_TOKEN} x`,
+      hint: '',
+      code: '',
+    };
+    const made = asReportableError(shape);
+    expect(made.message).toContain(`cause: ${cause}`);
+    expect(made.message).toMatch(/…\)$/);
+    for (const text of [nonErrorText(shape), made.message, made.stack ?? '']) {
+      for (const run of runsOf(SHARE_TOKEN)) expect(text).not.toContain(run);
+    }
+  });
+
+  it.each([
+    ['a server error with a code', '42501'],
+    ['a value with no code', undefined],
+  ])("%s never gives up a 'Caused by:' line from its details", (_label, code) => {
+    // Only postgrest-js's own no-answer shape (code '') has a cause line to keep.
+    const refusal = {
+      message: 'permission denied for table order_signatures',
+      code,
+      details: 'x\n\nCaused by: Error: someone@example.com',
+      hint: null,
+    };
+    const made = asReportableError(refusal);
+    for (const text of [nonErrorText(refusal), made.message, made.stack ?? '']) {
+      expect(text).not.toContain('someone@example.com');
+      expect(text).not.toContain('Caused by');
+      expect(text).not.toContain('cause:');
+    }
+  });
 });

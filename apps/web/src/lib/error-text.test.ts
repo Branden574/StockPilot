@@ -130,6 +130,24 @@ describe('nonErrorText: a request that got no answer (real postgrest-js shapes)'
     );
   });
 
+  it('cuts a long cause to 200 characters', async () => {
+    const error = await noAnswer(fetchFailed(new Error('c'.repeat(1_000))));
+    expect(nonErrorText(error)).toBe(`TypeError: fetch failed (cause: Error: ${'c'.repeat(193)}…)`);
+  });
+
+  it("keeps only the first 'Caused by:' line when the cause's own text has another", async () => {
+    // The library writes the cause's message on its line, then the cause's
+    // stack, so a cause whose text runs onto a "Caused by:" line puts a second
+    // one below the first.
+    const error = await noAnswer(
+      fetchFailed(new Error('connect ECONNREFUSED\nCaused by: Error: socket hang up')),
+    );
+    expect((error as { details: string }).details.match(/^Caused by: /gm)).toHaveLength(3);
+    expect(nonErrorText(error)).toBe(
+      'TypeError: fetch failed (cause: Error: connect ECONNREFUSED)',
+    );
+  });
+
   it("an aborted request keeps the library's hint and has no cause", async () => {
     const error = await noAnswer(new DOMException('This operation was aborted', 'AbortError'));
     expect(nonErrorText(error)).toBe(
@@ -167,6 +185,11 @@ describe('nonErrorText: other values', () => {
 
   it('an object with its own text keeps it', () => {
     expect(nonErrorText({ toString: () => 'lock not available' })).toBe('lock not available');
+  });
+
+  it("cuts an object's own long text, and a long string, to 500 characters", () => {
+    expect(nonErrorText({ toString: () => 't'.repeat(10_000) })).toBe(`${'t'.repeat(500)}…`);
+    expect(nonErrorText('s'.repeat(10_000))).toBe(`${'s'.repeat(500)}…`);
   });
 
   it.each([
@@ -214,6 +237,12 @@ describe('reportedMessage', () => {
     expect(reportedMessage(new ServiceError('internal_error', ''))).toBe(
       'An internal error occurred. Please try again.',
     );
+  });
+
+  it('an internal error whose detail is only spaces keeps the sentence', () => {
+    const blank = new ServiceError('internal_error', '   ');
+    expect(blank.internalDetail).toBe('   ');
+    expect(reportedMessage(blank)).toBe('An internal error occurred. Please try again.');
   });
 
   it('cuts a long internal detail to 500 characters', () => {
