@@ -66,9 +66,13 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 // An enrolled member under the 'optional' policy: enrollment alone requires
-// AAL2 (HI-6), so the level is read.
+// AAL2 (HI-6), so the level is read. The list is the member's own (the
+// context's user); context.factor-swap.test.ts runs the real list.
 vi.mock('@/lib/dashboard/request-cache', () => ({
-  getMfaFactorsForRequest: vi.fn(async () => [{ status: 'verified' }]),
+  getMfaFactorsForRequest: vi.fn(async () => ({
+    userId: '11111111-1111-4111-8111-111111111111',
+    factors: [{ status: 'verified' }],
+  })),
   getModulesForRequest: vi.fn(async () => new Set(['orders'])),
   getOrgRowForRequest: vi.fn(async () => ({
     terminology: null,

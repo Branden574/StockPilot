@@ -18,9 +18,9 @@ import {
   getMfaFactorsForRequest,
   getModulesForRequest,
   getOrgRowForRequest,
-  type MfaFactor,
   type OrgRow,
 } from '@/lib/dashboard/request-cache';
+import { factorsOf, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
@@ -115,8 +115,9 @@ export interface ServiceContext {
 async function resolveMfaState(
   role: Role,
   readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
-  factorsRead: Promise<MfaFactor[]>,
-  // The member the context resolved: the claims count only as THEIR session's.
+  factorsRead: Promise<MfaFactorList>,
+  // The member the context resolved: the factor list and the claims count
+  // only as THEIR session's.
   userId: string,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   try {
@@ -124,7 +125,18 @@ async function resolveMfaState(
     // context when it can, else from the request-cached helper the dashboard
     // layout shares. The factor list has been in flight since before the
     // context resolved (see withContext).
-    const [org, factors] = await Promise.all([readOrgRow(), factorsRead]);
+    const [org, factorList] = await Promise.all([readOrgRow(), factorsRead]);
+    // Only THIS member's list says whether they have an authenticator (S43a,
+    // review round s43ar). The list is a read of the cookie session, and a load
+    // can refresh it into another account (see the claims note below): the
+    // list of an account with no factor read as "not enrolled", which under an
+    // 'optional' policy is "not required", and assertPermission let the
+    // enrolled member through at AAL1. Started before the context, the list
+    // loads alongside its identity read; this holds whatever the order. A list
+    // of another account is no answer, so the gate fails CLOSED, as for an
+    // unreadable one.
+    const factors = factorsOf(factorList, userId);
+    if (!factors) return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
     // A row this member cannot read is held to the STRICTEST policy, never
     // 'optional' (see lib/auth/mfa-policy.ts). A read ERROR already threw above.
     const policy = enforcedMfaPolicy(org);

@@ -23,6 +23,7 @@ import {
   getOrgRowForRequest,
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
+import { factorsOf } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
@@ -52,6 +53,13 @@ export const metadata: Metadata = {
     template: '%s · StockPilot',
   },
 };
+
+/** The MFA challenge, coming back to this dashboard page once the code is in. */
+async function mfaChallengePath(): Promise<string> {
+  const pathname = (await headers()).get('x-pathname') ?? '';
+  const qs = pathname.startsWith('/dashboard') ? `?redirect=${encodeURIComponent(pathname)}` : '';
+  return `/signin/mfa${qs}`;
+}
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   // STARTED BEFORE THE CONTEXT RESOLVES, for the same reason as in
@@ -170,7 +178,16 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const policy = enforcedMfaPolicy(orgRow);
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
   const mfaRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
-  const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
+  // Whether this member has an authenticator comes from THEIR factor list only
+  // (S43a, review round s43ar). The list is a read of the cookie session, like
+  // the claims the gate below reads, so a load of the session can refresh it
+  // into another account (see the gate's note). The list of an account with no
+  // factor would read as "no authenticator" and skip that gate entirely. A list
+  // that is not this member's says nothing about them, so they go to the MFA
+  // challenge, as any session that has not shown its code does.
+  const ownFactors = factorsOf(mfaFactors, ctx.userId);
+  if (!ownFactors) redirect(await mfaChallengePath());
+  const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
   const showMfaBanner = mfaRequired && !hasVerifiedFactor;
 
   // Hard gate for the strictest policy: when policy === 'all_required'
@@ -208,18 +225,14 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // own refresh token when the cookie's own `expires_at` says so; nothing
   // signs either field. A member's password alone (an aal1 token) beside the
   // refresh token of another enrolled account's session would verify THAT
-  // account's aal2. Started where it is, the read loads alongside the
-  // context's identity read, which then refutes such a session; the gate does
-  // not rely on that order.
+  // account's aal2. Started where they are, the claims read and the factor
+  // list load alongside the context's identity read, which then refutes such
+  // a session; with both inputs held to the context's user, the gate does not
+  // rely on that order.
   if (hasVerifiedFactor) {
     const claims = await claimsRead;
     if (claims?.userId !== ctx.userId || claims.aal !== 'aal2') {
-      const h = await headers();
-      const pathname = h.get('x-pathname') ?? '';
-      const qs = pathname.startsWith('/dashboard')
-        ? `?redirect=${encodeURIComponent(pathname)}`
-        : '';
-      redirect(`/signin/mfa${qs}`);
+      redirect(await mfaChallengePath());
     }
   }
 

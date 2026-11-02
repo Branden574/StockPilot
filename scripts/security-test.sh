@@ -1025,12 +1025,15 @@ WEB_TESTS=(
   # code page. The real server client, auth-js, requireOrgContext() and
   # get_request_context(), with the shared claims read in both orders.
   'src/app/(dashboard)/layout.refresh-swap.test.tsx'
-  # The ownership transfer decides its step-up from the owner's own factor
-  # list (S43a review round s43ar): a list that refreshed into an account with
-  # no authenticator read as "not enrolled", and the service role moved the
-  # organization without the code. The list now says whose it is
-  # (lib/auth/mfa-factors.ts), and only the owner's own counts.
+  # And the factor list, the gates' other input (S43a review round s43ar): a
+  # list that refreshed into an account with no authenticator read as "not
+  # enrolled". It now says whose list it is (lib/auth/mfa-factors.ts), and
+  # only the member's own counts: the layout sends them to the code page,
+  # withContext's gate fails closed, and the ownership transfer refuses before
+  # the service role moves the organization. The layout's cases are in
+  # layout.refresh-swap.test.tsx above.
   src/lib/auth/mfa-factors.test.ts
+  src/server/services/context.factor-swap.test.ts
   src/server/actions/team.transfer-refresh-swap.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):

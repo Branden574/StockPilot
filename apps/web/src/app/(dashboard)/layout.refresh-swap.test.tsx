@@ -33,10 +33,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  *   that started it first would, it verified the other account's aal2 token,
  *   and the gate let the member through on it until it compared the claims'
  *   subject with the context's user.
+ * - The gate's other input, the factor list, is a read of the same kind
+ *   (review round s43ar). Started after the context's round trip, it listed
+ *   the factors of an account with NO authenticator, so the enrolled member
+ *   read as "no authenticator" and the gate was skipped at aal1, until the
+ *   layout took the list only as the context user's own. The last block runs
+ *   the REAL factor list; the blocks before it stub the member's own.
  */
 
 const hoisted = vi.hoisted(() => ({
   realClaimsRead: null as null | (() => Promise<unknown>),
+  realFactorsRead: null as null | (() => Promise<unknown>),
 }));
 
 let jar = new Map<string, string>();
@@ -102,21 +109,30 @@ vi.mock('@/lib/auth/session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth/session')>()),
   getSessionMemberships: vi.fn(async () => []),
 }));
-// An enrolled member: the gate applies under the 'optional' policy.
-vi.mock('@/lib/dashboard/request-cache', () => ({
-  getMfaFactorsForRequest: vi.fn(async () => [{ status: 'verified' }]),
-  getModulesForRequest: vi.fn(async () => new Set()),
-  getOrgRowForRequest: vi.fn(async () => ({
-    terminology: null,
-    mfa_policy: 'optional',
-    logo_url: null,
-    timezone: null,
-    nav_overrides: null,
-    dashboard_layout: null,
-    order_status_config: null,
-  })),
-  getWarehousesForRequest: vi.fn(async () => []),
-}));
+// An enrolled member: the gate applies under the 'optional' policy. The claims
+// cases stub the member's own list; the factor list cases read the REAL one.
+vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/dashboard/request-cache')>();
+  const f = await import('@/test/auth-session-fixture');
+  hoisted.realFactorsRead = real.getMfaFactorsForRequest;
+  return {
+    getMfaFactorsForRequest: vi.fn(async () => ({
+      userId: f.FIXTURE_USER_ID,
+      factors: [{ status: 'verified' }],
+    })),
+    getModulesForRequest: vi.fn(async () => new Set()),
+    getOrgRowForRequest: vi.fn(async () => ({
+      terminology: null,
+      mfa_policy: 'optional',
+      logo_url: null,
+      timezone: null,
+      nav_overrides: null,
+      dashboard_layout: null,
+      order_status_config: null,
+    })),
+    getWarehousesForRequest: vi.fn(async () => []),
+  };
+});
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({
     readableIds: [],
@@ -149,6 +165,7 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
+import { getMfaFactorsForRequest } from '@/lib/dashboard/request-cache';
 
 import DashboardLayout from './layout';
 
@@ -160,6 +177,10 @@ const OTHER_SESSION = '44444444-4444-4444-8444-444444444444';
 const ORG = 'aaaaaaaa-1111-4111-8111-111111111111';
 const OTHER_REFRESH = 'other-account-refresh';
 const MEMBER_REFRESH = 'member-own-refresh';
+/** An account of the caller's own with NO authenticator. */
+const NO_FACTOR = '55555555-5555-4555-8555-555555555555';
+const NO_FACTOR_SESSION = '66666666-6666-4666-8666-666666666666';
+const NO_FACTOR_REFRESH = 'no-factor-account-refresh';
 
 /** Every round trip, to the Auth server or PostgREST: the clock moves on while it is answered. */
 const ROUND_TRIP_MS = 300;
@@ -173,6 +194,8 @@ const TO_CHALLENGE = 'REDIRECT:/signin/mfa?redirect=%2Fdashboard%2Fpurchase-orde
 let projectKey: SigningKey;
 let server: FakeAuthServer;
 let authCalls: string[];
+/** Who each Auth request was made as, in order (`/user as <sub>`). */
+let authAs: string[];
 let restSubjects: string[];
 let onContextAnswered: (() => void) | null;
 
@@ -234,6 +257,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-02T03:00:00.000Z'));
   authCalls = [];
+  authAs = [];
   restSubjects = [];
   onContextAnswered = null;
   server = fakeAuthServer(projectKey);
@@ -249,7 +273,11 @@ beforeEach(() => {
       restSubjects.push(subject ?? '(none)');
       answer = rest(url, subject);
     } else {
-      authCalls.push(url.pathname.replace('/auth/v1', ''));
+      const path = url.pathname.replace('/auth/v1', '');
+      const bearer =
+        new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+      authCalls.push(path);
+      authAs.push(`${path} as ${subOf(bearer) ?? '-'}`);
       answer = await server.fetch(input, init);
     }
     // A network answer arrives in a later turn of the event loop, after every
@@ -369,6 +397,99 @@ describe('the layout gate with the real session reads: the shared claims read st
 
   it("control: the member's own aal2 session refreshing between the context and the claims read renders the dashboard", async () => {
     startClaimsReadAfterTheContext();
+    await memberCookie('aal2', MEMBER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await memberOwnRefresh();
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(restSubjects).toEqual([MEMBER]);
+    expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+  });
+});
+
+/** GoTrue knows the no-factor account's own session (aal1) under NO_FACTOR_REFRESH. */
+async function noFactorAccountSession() {
+  const claims = sessionClaims({
+    aal: 'aal1',
+    sub: NO_FACTOR,
+    sessionId: NO_FACTOR_SESSION,
+    email: 'nofactor@example.test',
+  });
+  server.unenrolledUsers.add(NO_FACTOR);
+  server.refreshGrants.set(
+    NO_FACTOR_REFRESH,
+    refreshGrant(await signAccessToken(projectKey, claims), claims, 'no-factor-refresh-2', false),
+  );
+}
+
+/** GoTrue renews the member's own aal1 session under MEMBER_REFRESH. */
+async function memberOwnAal1Refresh() {
+  const renewed = sessionClaims({ aal: 'aal1' });
+  server.refreshGrants.set(
+    MEMBER_REFRESH,
+    refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'member-own-refresh-2'),
+  );
+}
+
+/** The REAL factor list, started where the layout starts it (first thing). */
+function readTheRealFactorList() {
+  vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(
+    () => hoisted.realFactorsRead!() as ReturnType<typeof getMfaFactorsForRequest>,
+  );
+}
+
+/**
+ * The REAL factor list, started only once get_request_context() has answered:
+ * the same late start as the claims read's case above. The list is a
+ * request-cached read the page's withContext() shares too.
+ */
+function startFactorsReadAfterTheContext() {
+  vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => {
+      onContextAnswered = resolve;
+    });
+    return (await hoisted.realFactorsRead!()) as Awaited<
+      ReturnType<typeof getMfaFactorsForRequest>
+    >;
+  });
+}
+
+/**
+ * The gate's OTHER input (S43a, review round s43ar). Whether the member has a
+ * verified factor decides whether the gate applies at all, and the list comes
+ * from a read of the cookie session like the claims. A list that refreshed
+ * into an account with NO factor read as "not enrolled", and the enrolled
+ * member at aal1 skipped the gate. Only the member's own list may say that.
+ */
+describe("the layout gate with the real session reads: the factor list is the member's own", () => {
+  it("today's order (the list first): the member's aal1 token with a no-factor account's refresh token goes to the MFA challenge", async () => {
+    readTheRealFactorList();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it('the list started after the context, refreshed into a no-factor account, sends the member to the MFA challenge, not into the dashboard', async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+    // The context is the member's (the proxy's header, confirmed)...
+    expect(restSubjects).toEqual([MEMBER]);
+    // ...and the list did refresh into the no-factor account.
+    expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+    expect(authAs).toContain(`/user as ${NO_FACTOR}`);
+  });
+
+  it("control: the member's own aal1 session refreshing before the late list goes to the MFA challenge", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', MEMBER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await memberOwnAal1Refresh();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+    expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+  });
+
+  it("control: the member's own aal2 session refreshing before the late list renders the dashboard", async () => {
+    startFactorsReadAfterTheContext();
     await memberCookie('aal2', MEMBER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
     await memberOwnRefresh();
     await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
