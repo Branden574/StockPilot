@@ -280,6 +280,11 @@ function remoteConfig(path: string): Target | null {
  * laundered through our origin) is left to an edge rate limit (docket
  * S38), the refusal of the paths S22 turns off, the Conversations ones
  * among them (S38 part 2), and a check of the payload's key (S38 part 3).
+ *
+ * NOR ANY OTHER QUERY PARAMETER. Apart from token= and api_key=, the query
+ * is passed on as it came, unread, on the paths that take one (the remote
+ * config gets none). A list per path of the parameter names posthog-js
+ * sends, refusing any other, is S38 part 4.
  */
 function ownTokens(query: URLSearchParams): boolean {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
