@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { env } from '@/lib/env';
 import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
@@ -7,9 +8,17 @@ import { ZendeskClient } from '@/server/connectors/zendesk/client';
 import { deleteConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { audit } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertAnyPermission,
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
+import { INTEGRATION_WRITE_REFUSED, integrationWriteError } from './integration-events';
 
-import { CONNECTOR_REGISTRY, hasPermission, type ConnectorProviderId } from '@stockpilot/core';
+import { CONNECTOR_REGISTRY, type ConnectorProviderId, type Permission } from '@stockpilot/core';
 
 /**
  * Non-secret QBO chart-of-accounts ids stored under
@@ -172,39 +181,28 @@ export class ConnectionsService {
 
   /**
    * Shared gate for the operator dead-letter surface (list + replay). Reading
-   * or replaying a failed sync is an ADMIN action — broader than the
+   * or replaying a failed sync is a MANAGE action — broader than the
    * member-level `list()` health read — because it exposes raw `last_error`
-   * strings and lets the operator re-trigger an external export. Require the
-   * `integrations:manage` OR `shipping:manage` capability (the surface spans
-   * QBO exports and EasyPost shipping), gated by which module is enabled.
+   * strings and lets the operator re-trigger an external export. The surface
+   * spans QBO exports and EasyPost shipping, so it takes the manage key of each
+   * ENABLED module: `integrations:manage` when integrations is on,
+   * `shipping:manage` when shipping is on, either one passing. That is the
+   * Integrations page's own `showQbo || showEasyPost`, which loads this view
+   * whenever a card shows. Picking the key by the static role instead crashed
+   * the page for a manager given Manage shipping, and for an admin whose
+   * Manage integrations was taken away (docket S27).
    *
    * FAIL-CLOSED: if NEITHER module is enabled, throw module_disabled
-   * (assertModuleEnabled names `integrations` as the primary owner). If a module
-   * IS enabled but the caller holds NEITHER manage permission, throw forbidden.
-   * assertPermission also applies the MFA step-up gate.
+   * (assertModuleEnabled names `integrations` as the primary owner). If the
+   * caller holds none of the keys, throw forbidden. assertAnyPermission applies
+   * the MFA step-up gate first.
    */
   private assertSyncLogManage(): void {
-    const hasIntegrations = this.ctx.enabledModules.has('integrations');
-    const hasShipping = this.ctx.enabledModules.has('shipping');
-    if (!hasIntegrations && !hasShipping) {
-      assertModuleEnabled(this.ctx, 'integrations');
-    }
-    // Require AT LEAST ONE manage permission. Try the permission that matches an
-    // enabled module first so the thrown message is the relevant one; an admin
-    // with either capability passes. assertPermission throws forbidden (or the
-    // MFA-required forbidden) when the role lacks the permission.
-    const canIntegrations =
-      hasIntegrations && hasPermission(this.ctx.role, 'integrations:manage');
-    const canShipping = hasShipping && hasPermission(this.ctx.role, 'shipping:manage');
-    if (canIntegrations || canShipping) {
-      // Still run the MFA gate via assertPermission against a permission the
-      // caller demonstrably holds (no extra failure surface).
-      assertPermission(this.ctx, canIntegrations ? 'integrations:manage' : 'shipping:manage');
-      return;
-    }
-    // Neither manage permission held: surface forbidden naming the enabled
-    // module's manage permission.
-    assertPermission(this.ctx, hasIntegrations ? 'integrations:manage' : 'shipping:manage');
+    const keys: Permission[] = [];
+    if (this.ctx.enabledModules.has('integrations')) keys.push('integrations:manage');
+    if (this.ctx.enabledModules.has('shipping')) keys.push('shipping:manage');
+    if (keys.length === 0) assertModuleEnabled(this.ctx, 'integrations');
+    assertAnyPermission(this.ctx, keys);
   }
 
   /**
@@ -255,6 +253,14 @@ export class ConnectionsService {
    * 0152 admin-only RLS policy (org-scoped, with-check status='pending') is the
    * load-bearing boundary; the .eq(organization_id)/.in(status) filters here are
    * defense in depth + give a clean not_found when the row isn't eligible.
+   *
+   * A replay the row rule refused changes 0 rows too, but the row is on the
+   * member's screen: the sync log's select rule is member-level, and this view
+   * opens to every member given either key (assertSyncLogManage). So a 0-row
+   * replay takes a second look with the same client: a failed sync the member
+   * can still see was refused, and says so (docket S27). Anything else, or a
+   * second look that fails or answers nothing, stays not_found; nothing
+   * changed either way.
    */
   async replaySync(id: string): Promise<void> {
     this.assertSyncLogManage();
@@ -275,8 +281,18 @@ export class ConnectionsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     // No row updated → the id doesn't exist for this org, isn't in a replayable
-    // state, or RLS hid it. Surface not_found rather than a silent success.
+    // state, or the row rule refused it. Surface it rather than a silent success.
     if (!data) {
+      const { data: seen } = await this.ctx.supabase
+        .from('connection_sync_log')
+        .select('id, status')
+        .eq('id', id)
+        .eq('organization_id', this.ctx.organizationId)
+        .maybeSingle();
+      const status = (seen as { status?: string } | null)?.status;
+      if (status === 'error' || status === 'dead') {
+        throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
+      }
       throw new ServiceError('not_found', 'No replayable failed sync was found for that id.');
     }
 
@@ -376,7 +392,8 @@ export class ConnectionsService {
       },
       { onConflict: 'organization_id,provider_id' },
     );
-    if (error) throw new ServiceError('internal_error', error.message);
+    // A row rule's refusal is the member's to hear, not an internal error (docket S27).
+    if (error) throw integrationWriteError(error);
 
     const redirectUri = `${env.NEXT_PUBLIC_APP_URL}/api/integrations/${provider}/callback`;
     const url = new URL(meta.oauth.authorizeBase);
@@ -461,14 +478,21 @@ export class ConnectionsService {
     const createdBy =
       ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
 
-    // Write the secret blob to Vault via the SERVICE-ROLE admin client. The
+    // 1. The member's own write of the row, which the database checks, before
+    //    anything reaches Vault (docket S27): connector_secret_put updates a
+    //    secret in place by name, so writing the key first replaced a live key
+    //    before the database refused the member.
+    const connectionId = await this.writeConnectionRow(provider, createdBy);
+
+    // 2. Write the secret blob to Vault via the SERVICE-ROLE admin client,
+    // named by that row as the OAuth callbacks and the drainer name it. The
     // ConnectorSecrets type wants accessToken/refreshToken/expiresAt; we satisfy
     // it (apiKey mirrored into accessToken for the connector framework) but the
     // real carrier secret is `apiKey` + `webhookSecret`. `as never` mirrors the
     // disconnect()/drainer cast: secret-store types `admin` to the minimal rpc
     // shape, narrower than the full SupabaseClient.
-    const secretName = `connector:${(existing as { id: string } | null)?.id ?? `${this.ctx.organizationId}:${provider}`}`;
-    const secretId = await putConnectionSecret(createAdminClient() as never, secretName, {
+    const admin = createAdminClient();
+    const secretId = await putConnectionSecret(admin as never, `connector:${connectionId}`, {
       apiKey: key,
       webhookSecret: webhookSecret?.trim() ? webhookSecret.trim() : null,
       accessToken: key,
@@ -476,30 +500,17 @@ export class ConnectionsService {
       expiresAt: '',
     });
 
-    const { data: upserted, error: upsertError } = await this.ctx.supabase
-      .from('org_connections')
-      .upsert(
-        {
-          organization_id: this.ctx.organizationId,
-          provider_id: provider,
-          status: 'active',
-          secret_id: secretId,
-          oauth_state: null,
-          settings: { ...currentSettings, mode },
-          created_by: createdBy,
-          last_connected_at: new Date().toISOString(),
-        },
-        { onConflict: 'organization_id,provider_id' },
-      )
-      .select('id')
-      .maybeSingle();
-    if (upsertError) throw new ServiceError('internal_error', upsertError.message);
+    // 3. The service role activates the row with the secret's id.
+    await this.activateConnection(admin, connectionId, provider, {
+      secret_id: secretId,
+      settings: { ...currentSettings, mode },
+    });
 
     void audit(
       {
         event: 'integration.connected',
         entityType: 'org_connection',
-        entityId: (upserted as { id: string } | null)?.id ?? (existing as { id: string } | null)?.id ?? null,
+        entityId: connectionId,
         extra: { provider, mode },
       },
       this.ctx,
@@ -539,45 +550,90 @@ export class ConnectionsService {
     const currentSettings = ((existing as { settings: Record<string, unknown> | null } | null)?.settings) ?? {};
     const createdBy = ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
 
-    const secretName = `connector:${(existing as { id: string } | null)?.id ?? `${this.ctx.organizationId}:zendesk`}`;
-    const secretId = await putConnectionSecret(createAdminClient() as never, secretName, {
+    // The same order as connectApiKey (docket S27): the member's row write the
+    // database checks, then Vault named by that row, then the service role
+    // activates it.
+    const connectionId = await this.writeConnectionRow('zendesk', createdBy);
+    const admin = createAdminClient();
+    const secretId = await putConnectionSecret(admin as never, `connector:${connectionId}`, {
       accessToken: apiToken,
       refreshToken: '',
       expiresAt: '',
     });
-
-    const { data: upserted, error: upErr } = await this.ctx.supabase
-      .from('org_connections')
-      .upsert(
-        {
-          organization_id: this.ctx.organizationId,
-          provider_id: 'zendesk',
-          status: 'active',
-          secret_id: secretId,
-          external_account_id: subdomain,
-          oauth_state: null,
-          settings: { ...currentSettings, subdomain, email },
-          created_by: createdBy,
-          last_connected_at: new Date().toISOString(),
-        },
-        { onConflict: 'organization_id,provider_id' },
-      )
-      .select('id')
-      .maybeSingle();
-    if (upErr) throw new ServiceError('internal_error', upErr.message);
+    await this.activateConnection(admin, connectionId, 'zendesk', {
+      secret_id: secretId,
+      external_account_id: subdomain,
+      settings: { ...currentSettings, subdomain, email },
+    });
 
     void audit(
       {
         event: 'integration.connected',
         entityType: 'org_connection',
-        entityId:
-          (upserted as { id: string } | null)?.id ??
-          (existing as { id: string } | null)?.id ??
-          null,
+        entityId: connectionId,
         extra: { provider: 'zendesk' },
       },
       this.ctx,
     );
+  }
+
+  /**
+   * Step 1 of an API-key connect (docket S27): the member's own write of the
+   * connection row (organization, provider and its original establisher),
+   * which the database checks against the table's row rule. It sets no status
+   * and no secret_id. Returns the row's id, which names the Vault secret.
+   */
+  private async writeConnectionRow(
+    provider: ConnectorProviderId,
+    createdBy: string,
+  ): Promise<string> {
+    const { data, error } = await this.ctx.supabase
+      .from('org_connections')
+      .upsert(
+        { organization_id: this.ctx.organizationId, provider_id: provider, created_by: createdBy },
+        { onConflict: 'organization_id,provider_id' },
+      )
+      .select('id')
+      .single();
+    if (error) throw integrationWriteError(error);
+    const id = (data as { id?: string } | null)?.id;
+    if (!id) throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
+    return id;
+  }
+
+  /**
+   * Step 3 of an API-key connect: the service role activates the row step 1
+   * wrote, by id and organization, with the Vault secret's id (a member's own
+   * write never sets secret_id), the status and the non-secret settings. A
+   * failure is reported and refused, never audited as connected; the secret
+   * step 2 wrote is named by this row, so connecting again repairs it.
+   */
+  private async activateConnection(
+    admin: ReturnType<typeof createAdminClient>,
+    connectionId: string,
+    provider: ConnectorProviderId,
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    const { data, error } = await admin
+      .from('org_connections')
+      .update({
+        ...values,
+        status: 'active',
+        oauth_state: null,
+        last_connected_at: new Date().toISOString(),
+      })
+      .eq('id', connectionId)
+      .eq('organization_id', this.ctx.organizationId)
+      .select('id')
+      .maybeSingle();
+    if (error || !data) {
+      const detail = error ? error.message : 'the activation updated no row';
+      void reportError(new Error(`org_connections activate: ${detail}`), {
+        tag: 'integrations.connect.activate',
+        extra: { connectionId, provider },
+      });
+      throw new ServiceError('internal_error', detail);
+    }
   }
 
   /**
@@ -623,7 +679,7 @@ export class ConnectionsService {
         },
         { onConflict: 'organization_id,provider_id' },
       );
-    if (upErr) throw new ServiceError('internal_error', upErr.message);
+    if (upErr) throw integrationWriteError(upErr);
 
     void audit(
       { event: 'integration.connected', entityType: 'org_connection', entityId: null, extra: { provider: 'zendesk', mode: 'subdomain_only' } },
@@ -700,12 +756,18 @@ export class ConnectionsService {
     const secretId = (row as { secret_id: string | null }).secret_id;
 
     // Null the row FIRST so secret_id never dangles past a deleted Vault entry.
-    const { error: updateError } = await this.ctx.supabase
+    // The update asks for the row it changed (docket S27): one the row rule
+    // refused changes 0 rows with no error, and the Vault delete and the audit
+    // ran anyway, leaving an active row whose secret was gone.
+    const { data: updated, error: updateError } = await this.ctx.supabase
       .from('org_connections')
       .update({ status: 'disconnected', secret_id: null, oauth_state: null })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('provider_id', provider);
+      .eq('provider_id', provider)
+      .select('id')
+      .maybeSingle();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
+    if (!updated) throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
 
     // Then destroy the Vault token via the SERVICE-ROLE admin client. The user
     // request client (authenticated role) is not granted the secret RPCs.
@@ -761,12 +823,16 @@ export class ConnectionsService {
       },
     };
 
-    const { error: updateError } = await this.ctx.supabase
+    // A save the row rule refused changes 0 rows with no error (docket S27).
+    const { data: updated, error: updateError } = await this.ctx.supabase
       .from('org_connections')
       .update({ settings: nextSettings })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('provider_id', provider);
+      .eq('provider_id', provider)
+      .select('id')
+      .maybeSingle();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
+    if (!updated) throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
   }
 
   /**
@@ -817,11 +883,15 @@ export class ConnectionsService {
       },
     };
 
-    const { error: updateError } = await this.ctx.supabase
+    // A save the row rule refused changes 0 rows with no error (docket S27).
+    const { data: updated, error: updateError } = await this.ctx.supabase
       .from('org_connections')
       .update({ settings: nextSettings })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('provider_id', 'sage_intacct');
+      .eq('provider_id', 'sage_intacct')
+      .select('id')
+      .maybeSingle();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
+    if (!updated) throw new ServiceError('forbidden', INTEGRATION_WRITE_REFUSED);
   }
 }

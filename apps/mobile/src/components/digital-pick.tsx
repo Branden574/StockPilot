@@ -35,6 +35,7 @@ import {
   PICK_QTY_PADDING_X,
 } from '@/lib/pick-qty-field';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
+import { useHoldUpdatePrompt } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -171,6 +172,9 @@ export function DigitalPick({
   function isDirty(line: OrderDetailLine): boolean {
     return clampFor(line, qty[line.id] ?? '0') !== (saved[line.id] ?? 0);
   }
+
+  // A picked quantity not yet saved: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt((lines ?? []).some(isDirty), 'pick');
 
   async function saveLine(line: OrderDetailLine) {
     const n = clampFor(line, qty[line.id] ?? '0');

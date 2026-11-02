@@ -16,6 +16,7 @@ import { reportError } from '@/lib/error-reporter';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 
 /**
  * StockPilot support's per-member exceptions for a PLATFORM-MANAGED permission
@@ -237,7 +238,9 @@ async function set(input: SetPermissionExceptionInput): Promise<SetPermissionExc
  * rows for the key and for orders:request, the organization's orders:request
  * role rows, and whether the Orders module is on, so the access preview needs
  * no per-member call. Throws on any failed read: the column is then shown as
- * unavailable, never guessed.
+ * unavailable, never guessed. An answer that is not a list is a failed read,
+ * and so is a missing organization row (docket S27): read as "no rows", every
+ * member showed Role default and the Orders module could read as off.
  */
 async function listForMembers(
   organizationId: string,
@@ -277,10 +280,24 @@ async function listForMembers(
   for (const res of [userRes, roleRes, modulesRes, orgRes]) {
     if (res.error) throw new Error(`listForMembers: ${res.error.message}`);
   }
+  let userRows: Array<{ user_id: string; permission: string; granted: boolean }>;
+  let roleRows: Array<{ role: string; granted: boolean }>;
+  let moduleRows: Array<{ module_id: string }>;
+  try {
+    userRows = listRows('user_permission_overrides', userRes);
+    roleRows = listRows('role_permission_overrides', roleRes);
+    moduleRows = listRows('organization_modules', modulesRes);
+  } catch (err) {
+    if (err instanceof ListReadError) throw new Error(`listForMembers: ${err.message}`);
+    throw err;
+  }
+  // The comp below is read from it: an empty body reads the same as no row.
+  const org = orgRes.data as { all_modules_comp?: boolean | null } | null;
+  if (!org) throw new Error('listForMembers: organizations answered no row');
 
   const members: Record<string, PermissionExceptionMember> = {};
   for (const id of ids) members[id] = { exception: 'default', ordersRequestOverride: null };
-  for (const row of (userRes.data ?? []) as Array<{ user_id: string; permission: string; granted: boolean }>) {
+  for (const row of userRows) {
     const member = members[row.user_id];
     if (!member || typeof row.granted !== 'boolean') continue;
     if (row.permission === permission) member.exception = permissionExceptionFromGranted(row.granted);
@@ -288,15 +305,12 @@ async function listForMembers(
   }
 
   const ordersRequestRoleOverrides: Partial<Record<Role, boolean>> = {};
-  for (const row of (roleRes.data ?? []) as Array<{ role: string; granted: boolean }>) {
+  for (const row of roleRows) {
     if (isRole(row.role) && typeof row.granted === 'boolean') ordersRequestRoleOverrides[row.role] = row.granted;
   }
 
-  const comped = (orgRes.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
-  const ordersModuleEnabled = effectiveModules(
-    (modulesRes.data ?? []) as Array<{ module_id: string }>,
-    comped,
-  ).has('orders');
+  const comped = org.all_modules_comp === true;
+  const ordersModuleEnabled = effectiveModules(moduleRows, comped).has('orders');
 
   return { permission, ordersModuleEnabled, ordersRequestRoleOverrides, members };
 }

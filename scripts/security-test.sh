@@ -108,6 +108,13 @@ PGTAP_TESTS=(
   supabase/tests/0218_lock_org_billing_columns.test.sql
   supabase/tests/0219_org_module_minplan_rls.test.sql
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
+  # Only a platform admin creates a workspace (S20): no signed-in or anonymous
+  # caller inserts an organization (RLS on, no INSERT policy since 0138), and
+  # nothing in the database creates one either: no function, whoever may run
+  # it (an INSERT or MERGE into the table, or dynamic SQL that names it), no
+  # trigger, and no view or rewrite rule a caller of the Data API can write
+  # through.
+  supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql
   supabase/tests/0282_cycle_count_assignment_lock.test.sql
@@ -1004,6 +1011,21 @@ WEB_TESTS=(
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
 
+  # Only a platform admin creates a workspace (S20, owner decision b.9):
+  # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
+  # before it reads its input, the real check against every caller type (each
+  # role, no membership, a portal user, a rewritten profile email, a failed
+  # verified-email lookup, a stale step-up); and every insert into
+  # organizations and every owner seat in apps/web/src runs after that check
+  # or is a reviewed entry whose callers do. A team invite never creates the
+  # account of an allowlisted address (the token is handed to the inviter, so
+  # it is not proof of the mailbox), and its refusal is the existing-account
+  # answer word for word. All three files carry the "Security invariant"
+  # marker.
+  src/server/actions/organization.create-gate.test.ts
+  src/server/organization-create-sites.guard.test.ts
+  src/server/actions/team.invite-signup-platform-admin.test.ts
+
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
   src/lib/safe-return-path.test.ts
@@ -1068,6 +1090,28 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S34: a member's session never leaves with an analytics request. PostHog's
+  # SDK sends to /ingest on our own origin, so the browser attaches every
+  # cookie of this host. app/ingest/[...path]/route.ts builds each request to
+  # PostHog from a list of headers: never a cookie, Authorization only as the
+  # app's own PostHog project key (Bearer <key>), no Set-Cookie back. It
+  # passes on only the requests posthog-js makes with the app's init options,
+  # each by the method the SDK uses (404 for any other path, 405 for another
+  # method; OPTIONS, PUT, PATCH and DELETE are answered by the route, not by
+  # Next), the remote config only for the app's own project key and with no
+  # query (another project's config.js would run that project's code as
+  # ours), a query token= or api_key= only when it is that key, PostHog's
+  # content type only when it is JSON, a script or text, every answer
+  # nosniff, and no body over the platform's request body limit (413); each
+  # refusal is logged with its path only. The census test fails when an
+  # installed posthog-js names a path or ships a bundle the list has not been
+  # checked against, and checks each request by every method. The guard
+  # fails if a /ingest rewrite (which forwards the browser's headers as they
+  # came) or a proxy matcher for /ingest comes back; it carries the
+  # "Security invariant" marker.
+  src/test/ingest-proxy.guard.test.ts
+  'src/app/ingest/[...path]/route.test.ts'
+  'src/app/ingest/[...path]/route.census.test.ts'
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts

@@ -40,6 +40,7 @@ import { bookReportExportMode } from './book-order-totals-view';
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
+import { whileUpdatePromptHeld } from './update-prompt-holds';
 
 /** A large PDF with covers is rendered on the server before a byte arrives. */
 export const REPORT_EXPORT_TIMEOUT_MS = 90_000;
@@ -270,7 +271,9 @@ export async function shareReportFile(uri: string, title: string): Promise<void>
   if (bookReportExportMode(Platform.OS) !== 'share') {
     throw new ReportExportError(REPORT_EXPORT_SHARE_UNAVAILABLE, null);
   }
-  await Share.share({ url: uri, title });
+  // The share sheet holds the phone update pop-up until it closes
+  // (update-prompt-holds.ts): a restart would take the sheet away mid-save.
+  await whileUpdatePromptHeld(() => Share.share({ url: uri, title }));
 }
 
 /** Download, then share. The whole export flow a screen calls. */

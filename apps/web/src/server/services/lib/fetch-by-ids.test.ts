@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
+
 import { ServiceError } from '../context';
 import {
   fetchAllRowsByIds,
@@ -97,6 +99,26 @@ describe('fetchAllRowsByIds', () => {
     expect(await peakFor()).toBe(6);
     expect(await peakFor(20)).toBe(20);
   });
+
+  // docket S27: the digest's assignment, category and member override reads
+  // decide what each recipient is sent, so they pass requireList through to
+  // every batch's fetchAllRows.
+  it.each(NOT_A_LIST)(
+    '%s from any batch throws with requireList, naming the table, never "no rows"',
+    async (_shape, answer) => {
+      const err = await fetchAllRowsByIds(
+        ids(250),
+        (batch) => async () =>
+          batch[0] === uuid(100) ? (answer as never) : { data: [], error: null, status: 200 },
+        { requireList: 'user_permission_overrides' },
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('internal_error');
+      expect((err as ServiceError).internalDetail).toBe(
+        `user_permission_overrides answered no list (status ${answer.status})`,
+      );
+    },
+  );
 });
 
 describe('mapIdBatches', () => {
