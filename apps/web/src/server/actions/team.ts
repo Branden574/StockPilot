@@ -10,7 +10,11 @@ import {
   withContext,
 } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
-import { TeamService, acceptInviteWithToken } from '@/server/services/team';
+import {
+  TeamService,
+  acceptInviteWithToken,
+  type MemberOpenWorkResult,
+} from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { factorsOf, readMfaFactorList, type MfaFactor } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
@@ -158,6 +162,24 @@ export async function removeMemberAction(memberId: string): Promise<ActionResult
     await svc.removeMember(parsed.data.memberId);
     revalidatePath('/dashboard/team');
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * B94: what Remove would release (counts in progress, picks, deliveries, and
+ * the rest), for the Remove dialog when it opens. Read only; the database
+ * decides who may ask (TeamService.openWork).
+ */
+export async function getMemberOpenWorkAction(
+  memberId: string,
+): Promise<ActionResult<MemberOpenWorkResult>> {
+  const parsed = removeMemberSchema.safeParse({ memberId });
+  if (!parsed.success) return err('validation_error', 'Invalid member id');
+  try {
+    const svc = await TeamService.forCurrentUser();
+    return ok(await svc.openWork(parsed.data.memberId));
   } catch (e) {
     return toResult(e);
   }

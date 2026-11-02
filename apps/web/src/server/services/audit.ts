@@ -264,6 +264,20 @@ export type AuditEvent =
   | 'order.staged_for_pickup'
   | 'order.staged_for_delivery'
   | 'order.delivery_assigned'
+  /**
+   * B94 (0429): the order's delivery driver was cleared because they left the
+   * organization (removed, left, or an Act-as seat ended). Written by
+   * tg_organization_members_release_open_work itself, in the same transaction
+   * as the membership delete, one row per order: entity order_request,
+   * warehouse_id, before/after {assigned_delivery_user_id}, status (the
+   * order's status then), reason null, cause (member_removed, member_left or
+   * act_as_seat_ended), released_user_id, membership_id, acting_as_platform.
+   * The release's picks reuse order.picking_released, its counts
+   * cycle_count.released and its maintenance requests
+   * maintenance_request.owner_assigned, with the same keys. No ip or user
+   * agent (SQL-written rows).
+   */
+  | 'order.delivery_unassigned'
   | 'order.in_transit'
   | 'order.fulfillment_resumed'
   // F2-2 (0378): hold_order_stock held stock for an order (the manual "Hold
@@ -331,6 +345,16 @@ export type AuditEvent =
   | 'member.password_reset_sent'
   | 'user.profile.updated'
   | 'user.session.invalidated'
+  /**
+   * B94 (0429): one summary per membership delete that released open work,
+   * written by tg_organization_members_release_open_work after its per-object
+   * rows (none when nothing was open): entity organization_member (the
+   * deleted row), reason null, cause, released_user_id, membership_id, the
+   * seven numbers (cycle_counts, picks, deliveries, schedule_events,
+   * maintenance_requests, escalation_claims, warehouses) and
+   * acting_as_platform. user_id is the caller, null for the admin client.
+   */
+  | 'user.open_work_released'
   // Verified self-service email change (mig 0345). 'changed' is written by
   // the auth.users trigger (or the idempotent app reconcile), never by the
   // request flow, so it exists exactly once per real change.

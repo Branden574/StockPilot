@@ -492,6 +492,9 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     "The caller's own sessions.",
   ],
+  'server/services/team.ts::member_open_work': RO(
+    "B94's Remove dialog read: counts only, gated in its body (admin and members:remove in the row's organization).",
+  ),
   'server/services/user-categories.ts::set_user_category_access': [
     'takes_org',
     'Passes the active organization.',

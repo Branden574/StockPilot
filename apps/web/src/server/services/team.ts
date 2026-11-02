@@ -13,9 +13,11 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
+import { orderBusyRefusal } from '@/server/services/lib/order-busy';
 import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
 import { type Role } from '@stockpilot/core';
+import { z } from 'zod';
 
 import { audit, insertAuditRowReported } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -36,6 +38,37 @@ function formatInviteExpiry(iso: string): string {
     timeZone: 'UTC',
   });
 }
+
+/**
+ * B94: what removing one member releases in this organization, per kind, as
+ * public.member_open_work (migration 0429) counts it with the release's own
+ * predicates. The Remove dialog names the first three, and the maintenance
+ * requests and warehouses when there are any.
+ */
+export interface MemberOpenWork {
+  cycleCounts: number;
+  picks: number;
+  deliveries: number;
+  scheduleEvents: number;
+  maintenanceRequests: number;
+  escalationClaims: number;
+  warehouses: number;
+}
+
+/** The dialog's read: the numbers, a refusal, or a read that failed. */
+export type MemberOpenWorkResult =
+  { kind: 'ok'; counts: MemberOpenWork } | { kind: 'forbidden' } | { kind: 'failed' };
+
+const openWorkCount = z.number().int().nonnegative();
+const memberOpenWorkSchema = z.object({
+  cycleCounts: openWorkCount,
+  picks: openWorkCount,
+  deliveries: openWorkCount,
+  scheduleEvents: openWorkCount,
+  maintenanceRequests: openWorkCount,
+  escalationClaims: openWorkCount,
+  warehouses: openWorkCount,
+});
 
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -573,12 +606,35 @@ export class TeamService {
       );
     }
     const removedUserId = target.user_id as string;
-    const { error } = await this.ctx.supabase
+    // B94: the delete also releases the person's open work in this
+    // organization (migration 0429's trigger, in the same statement), so it
+    // can wait on a count or order row another request holds: lock_timeout
+    // 5 s gives 55P03, nothing is kept, and the same press is safe to repeat.
+    // It returns the row it removed, because 0 rows is not a success
+    // (pattern #2): the row policy refused it (members:remove granted below
+    // admin; 0140's delete policy needs admin), or another admin removed the
+    // person first. Both answers come before any side effect below.
+    const { data: deleted, error } = await this.ctx.supabase
       .from('organization_members')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', memberId);
-    if (error) throw new ServiceError('internal_error', error.message);
+      .eq('id', memberId)
+      .select('id');
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
+    if ((deleted ?? []).length === 0) {
+      const { data: still, error: stillError } = await this.ctx.supabase
+        .from('organization_members')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', memberId)
+        .maybeSingle();
+      if (!stillError && !still) {
+        throw new ServiceError('not_found', 'This member was already removed.');
+      }
+      // The Remove dialog says the same when its read is refused
+      // (REMOVE_MEMBER_COPY.forbidden).
+      throw new ServiceError('forbidden', 'Only an owner or admin can remove a member.');
+    }
 
     // Belt-and-braces cleanup of per-warehouse access grants for the
     // removed user inside THIS organization. Most other org-scoped
@@ -727,6 +783,35 @@ export class TeamService {
         this.ctx,
       );
     }
+  }
+
+  /**
+   * B94: what Remove would release, read when the dialog opens. The database
+   * decides who may ask (an admin holding members:remove in the row's
+   * organization, as the removal itself needs), so a refusal is its own
+   * answer. Any other failure (the function missing before migration 0429 is
+   * pushed, a network error, an answer of the wrong shape) fails closed
+   * (pattern #1): logged, "failed", never a throw and never a zero.
+   */
+  async openWork(memberId: string): Promise<MemberOpenWorkResult> {
+    const { data, error } = await this.ctx.supabase.rpc('member_open_work', {
+      p_member_id: memberId,
+    });
+    if (error) {
+      if (error.code === '42501' && error.message === 'forbidden') return { kind: 'forbidden' };
+      console.error(
+        `[team.openWork] member_open_work failed for ${memberId}: ${postgrestErrorText(error)}`,
+      );
+      return { kind: 'failed' };
+    }
+    const parsed = memberOpenWorkSchema.safeParse(data);
+    if (!parsed.success) {
+      console.error(
+        `[team.openWork] member_open_work answered an unexpected shape for ${memberId}`,
+      );
+      return { kind: 'failed' };
+    }
+    return { kind: 'ok', counts: parsed.data };
   }
 
   /**

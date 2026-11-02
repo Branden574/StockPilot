@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
 import { CategoryAccessCard } from '@/components/team/category-access-card';
+import { openWorkLines, REMOVE_MEMBER_COPY } from '@/components/team/remove-member-copy';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -50,6 +51,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import {
+  getMemberOpenWorkAction,
   inviteMemberAction,
   removeMemberAction,
   resendInviteAction,
@@ -61,7 +63,9 @@ import {
   transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
+import { isControlFlow } from '@/lib/control-flow';
 import { formatRelative } from '@/lib/utils';
+import type { MemberOpenWorkResult } from '@/server/services/team';
 
 import {
   formatOrgDateTime,
@@ -275,6 +279,16 @@ function MemberRow({
   const router = useRouter();
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [removeBusy, setRemoveBusy] = React.useState(false);
+  // B94: Remove releases the person's open work here (migration 0429), so the
+  // dialog reads how much when it opens. The ref drops an answer from an
+  // earlier opening that lands after a newer one was asked.
+  const [openWork, setOpenWork] = React.useState<{ kind: 'loading' } | MemberOpenWorkResult>({
+    kind: 'loading',
+  });
+  const openWorkAsk = React.useRef(0);
+  // Why the last Remove was refused, shown inside the dialog: a toast alone
+  // sits behind it (pattern #20). Cleared on open and on each try.
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
   const [transferOpen, setTransferOpen] = React.useState(false);
   const [transferPassword, setTransferPassword] = React.useState('');
   const [transferAck, setTransferAck] = React.useState(false);
@@ -346,11 +360,30 @@ function MemberRow({
     }
   }
 
+  async function openRemove() {
+    setRemoveError(null);
+    setOpenWork({ kind: 'loading' });
+    setRemoveOpen(true);
+    const ask = ++openWorkAsk.current;
+    let next: MemberOpenWorkResult;
+    try {
+      const res = await getMemberOpenWorkAction(member.id);
+      next = res.ok ? res.data : { kind: 'failed' };
+    } catch (e) {
+      // A signed-out session redirects: the router is already navigating.
+      if (isControlFlow(e)) return;
+      next = { kind: 'failed' };
+    }
+    if (ask === openWorkAsk.current) setOpenWork(next);
+  }
+
   async function confirmRemove() {
+    setRemoveError(null);
     setRemoveBusy(true);
     const res = await removeMemberAction(member.id);
     setRemoveBusy(false);
     if (!res.ok) {
+      setRemoveError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -511,7 +544,7 @@ function MemberRow({
                   Transfer ownership…
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => setRemoveOpen(true)} className="text-destructive">
+              <DropdownMenuItem onClick={() => void openRemove()} className="text-destructive">
                 <Trash2 className="mr-2 h-4 w-4" /> Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -521,9 +554,24 @@ function MemberRow({
           open={removeOpen}
           onOpenChange={setRemoveOpen}
           title="Remove member?"
-          description={`${displayName} will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them anytime.`}
+          description={
+            <div className="space-y-2">
+              <p>{REMOVE_MEMBER_COPY.description(displayName)}</p>
+              {(openWork.kind === 'loading'
+                ? [REMOVE_MEMBER_COPY.checking]
+                : openWork.kind === 'failed'
+                  ? [REMOVE_MEMBER_COPY.failed]
+                  : openWork.kind === 'forbidden'
+                    ? [REMOVE_MEMBER_COPY.forbidden]
+                    : openWorkLines(openWork.counts, warehouseSingular)
+              ).map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+          }
           confirmLabel="Remove"
           pending={removeBusy}
+          error={removeError}
           onConfirm={confirmRemove}
         />
         <DestructiveConfirm
