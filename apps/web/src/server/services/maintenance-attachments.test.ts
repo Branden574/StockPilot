@@ -1091,6 +1091,125 @@ describe('remove', () => {
     expect(adminRemoveMock).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
+
+  // B104: who may remove a photo. The delete policy (0317) also admits a
+  // manager by role whatever maintenance_requests:manage says, so a manager
+  // whose manage permission is switched off could remove another member's
+  // photos, and once the database refuses that delete (docket S47's photo
+  // guard, 42501) remove() would answer it as internal_error (500). The rule
+  // is the one edits and uploads already apply: the request's requester or a
+  // manage holder, anyone else 'Not your request.', before anything is deleted.
+  describe('who may remove (B104): the requester or a manage holder', () => {
+    /** The manager defaults (submit, read_all, manage) with manage switched off. */
+    const MANAGE_OFF_MANAGER = {
+      role: 'manager' as const,
+      permissions: new Set(['maintenance_requests:submit', 'maintenance_requests:read_all']),
+    };
+
+    function arrange(requesterUserId: string | null, overrides: Parameters<typeof build>[1]) {
+      return build(
+        {
+          'maintenance_request_attachments.select': {
+            data: {
+              id: 'att-1',
+              storage_path: 'org-test/req/a.jpg',
+              thumbnail_path: 'org-test/req/a-thumb.webp',
+            },
+            error: null,
+          },
+          // The delete answers as the policy does today: its role arm lets a
+          // manager through.
+          'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+          'maintenance_requests.select': {
+            data: {
+              requester_user_id: requesterUserId,
+              archived_at: null,
+              cancelled_at: null,
+              resolved_at: null,
+            },
+            error: null,
+          },
+        },
+        overrides,
+      );
+    }
+
+    it.each([
+      ['another member', 'someone-else'],
+      // A deleted account leaves requester_user_id null (0314 ON DELETE SET
+      // NULL): a missing requester is never the caller.
+      ['a member whose account was deleted', null],
+    ])(
+      'a manager whose manage permission is switched off is refused on a request filed by %s, before any delete, storage removal or audit',
+      async (_who, requesterUserId) => {
+        const { stub, ctx } = arrange(requesterUserId, MANAGE_OFF_MANAGER);
+
+        await expect(
+          new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1'),
+        ).rejects.toMatchObject({
+          code: 'forbidden',
+          message: 'Not your request.',
+        });
+        expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toBeUndefined();
+        expect(adminRemoveMock).not.toHaveBeenCalled();
+        expect(audit).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a failed read of the requester refuses (internal_error) and deletes nothing', async () => {
+      const { stub, ctx } = build(
+        {
+          'maintenance_request_attachments.select': {
+            data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+            error: null,
+          },
+          'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+          'maintenance_requests.select': { data: null, error: { message: 'connection reset' } },
+        },
+        MANAGE_OFF_MANAGER,
+      );
+
+      await expect(
+        new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1'),
+      ).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toBeUndefined();
+      expect(adminRemoveMock).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the requester (staff: submit only)', 'user-test', { role: 'staff' as const }],
+      [
+        'a manager whose manage permission is switched off, on their own request',
+        'user-test',
+        MANAGE_OFF_MANAGER,
+      ],
+      [
+        'a manage holder, on a request they did not file',
+        'someone-else',
+        { role: 'manager' as const },
+      ],
+    ])('%s still removes the photo', async (_who, requesterUserId, overrides) => {
+      const { stub, ctx } = arrange(requesterUserId, overrides);
+
+      await new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1');
+
+      expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toHaveLength(1);
+      expect(adminRemoveMock).toHaveBeenCalledWith([
+        'org-test/req/a.jpg',
+        'org-test/req/a-thumb.webp',
+      ]);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'maintenance_request.attachment_removed',
+          entityId: REQ_ID,
+        }),
+        ctx,
+      );
+    });
+  });
 });
 
 describe('signedViewUrls', () => {
