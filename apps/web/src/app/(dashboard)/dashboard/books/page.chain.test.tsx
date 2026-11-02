@@ -64,6 +64,7 @@ const m = vi.hoisted(() => ({
   toggleProps: vi.fn(),
   emptyStateProps: vi.fn(),
   getWarehousesForRequest: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -183,7 +184,11 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: lookupSvc('listForLookups'),
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: async () => ({ list: async () => [], listLabels: m.charterLabels }),
+  },
+}));
 vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
   // As the real readers do, the client (a promise) is awaited inside a try.
@@ -212,7 +217,14 @@ const BOOK = {
   quantity_on_hand: 3,
   awaiting_first_receipt: false,
 };
-const LOOKUPS = { categories: [], locations: [], suppliers: [], tags: [], charters: [] };
+const LOOKUPS = {
+  categories: [],
+  locations: [],
+  suppliers: [],
+  tags: [],
+  charters: [],
+  unlistedCharters: [],
+};
 
 function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
   events.push(`${name}:start`);
@@ -276,6 +288,7 @@ beforeEach(() => {
   );
   m.loadInventoryList.mockImplementation(() => logged('list', async () => null));
   m.loadInventoryLookups.mockImplementation(async () => LOOKUPS);
+  m.charterLabels.mockImplementation(async () => []);
   m.loadInventoryTrendBuckets.mockImplementation(async () => ({}));
   m.resolveInventoryListImages.mockImplementation((_org: string, items: unknown[]) =>
     logged('images', async () => items),
@@ -309,6 +322,42 @@ afterEach(() => {
 function callPage(params: Record<string, string> = {}) {
   return BooksPage({ searchParams: Promise.resolve(params) });
 }
+
+/**
+ * B97 part 1: the table's charter lookup also names the archived and inactive
+ * charters, so a book tagged to one is no longer called "Generic"; the
+ * Charter filter keeps the active ones.
+ */
+describe('Books page: the Charter cell names archived charters (B97)', () => {
+  const ACTIVE = { id: 'ch-1', name: 'North Campus', code: 'NC' };
+  const ARCHIVED = { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' as const };
+  const charterLookup = () =>
+    (m.tableProps.mock.calls[0]![0] as { lookups: { charters: Map<string, unknown> } }).lookups
+      .charters;
+
+  it('manager: from the cached lookups', async () => {
+    m.loadInventoryLookups.mockImplementation(async () => ({
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+    }));
+    render(await callPage());
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it("staff: from the member's own read of the archived and inactive charters", async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => [ARCHIVED]);
+    render(await callPage());
+    expect(m.charterLabels).toHaveBeenCalledWith({ exceptActive: true });
+    expect(charterLookup().get('ch-9')).toMatchObject({ name: 'Old Campus', status: 'archived' });
+  });
+});
 
 describe('Books page: server chain before rows', () => {
   it('the price_tracking check runs alongside the books gate, not after it', async () => {

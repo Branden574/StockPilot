@@ -310,6 +310,9 @@ describe('the cached lookups read every page of categories, tags, charters and s
       const served = servedLikePostgrest(TABLES[table]);
       let calls = 0;
       results[`${table}.select`] = (call) => {
+        // The archived and inactive charters' read (B97) is its own list, not
+        // a page of the active one.
+        if (isUnlistedChartersRead(call)) return served(call);
         calls += 1;
         return table === failing && calls === 2
           ? { data: null, error: { message: 'statement timeout' } }
@@ -326,14 +329,28 @@ describe('the cached lookups read every page of categories, tags, charters and s
     });
   }
 
+  /** The loader's read of the archived and inactive charters (B97). */
+  function isUnlistedChartersRead(call: Pick<MockCall, 'methods' | 'args'>) {
+    return call.methods.some((m, i) => m === 'neq' && call.args[i]?.[0] === 'status');
+  }
+
+  /** A lookup's pages, as [methods, args]; for charters, the active list's. */
+  function pagesOf(stub: ReturnType<typeof makeSupabaseStub>, table: Lookup, unlisted = false) {
+    const chains = stub.chainsAll.get(`${table}.select`) ?? [];
+    const args = stub.chainArgsAll.get(`${table}.select`) ?? [];
+    return chains
+      .map((methods, i) => ({ methods, args: args[i] ?? [] }))
+      .filter((p) => isUnlistedChartersRead(p) === unlisted);
+  }
+
   function argsOf(
     stub: ReturnType<typeof makeSupabaseStub>,
     table: Lookup,
     page: number,
     method: string,
+    unlisted = false,
   ) {
-    const methods = stub.chainsAll.get(`${table}.select`)?.[page] ?? [];
-    const args = stub.chainArgsAll.get(`${table}.select`)?.[page] ?? [];
+    const { methods, args } = pagesOf(stub, table, unlisted)[page] ?? { methods: [], args: [] };
     return methods.flatMap((m, i) => (m === method ? [args[i]] : []));
   }
 
@@ -400,7 +417,7 @@ describe('the cached lookups read every page of categories, tags, charters and s
     await loadInventoryLookups(ORG);
 
     for (const table of Object.keys(TABLES) as Lookup[]) {
-      expect(stub.chainsAll.get(`${table}.select`), table).toHaveLength(2);
+      expect(pagesOf(stub, table), table).toHaveLength(2);
       expect(
         argsOf(stub, table, 0, 'order').map((a) => a![0]),
         table,
@@ -416,6 +433,29 @@ describe('the cached lookups read every page of categories, tags, charters and s
       expect(argsOf(stub, 'suppliers', page, 'is')).toContainEqual(['deleted_at', null]);
       expect(argsOf(stub, 'charters', page, 'eq')).toContainEqual(['status', 'active']);
     }
+    // The archived and inactive charters (B97): one read here, by name then
+    // id, from row 0, never the active ones.
+    expect(pagesOf(stub, 'charters', true)).toHaveLength(1);
+    expect(argsOf(stub, 'charters', 0, 'neq', true)).toEqual([['status', 'active']]);
+    expect(argsOf(stub, 'charters', 0, 'eq', true)).toContainEqual(['organization_id', ORG]);
+    expect(argsOf(stub, 'charters', 0, 'order', true).map((a) => a![0])).toEqual(['name', 'id']);
+    expect(argsOf(stub, 'charters', 0, 'range', true)).toEqual([[0, 999]]);
+  });
+
+  it("names this organization's archived and inactive charters for the Charter cell, as the live service lists them (B97)", async () => {
+    const stub = stubFor();
+    h.admin = stub.client;
+
+    const lookups = await loadInventoryLookups(ORG);
+
+    expect(lookups.unlistedCharters).toEqual([
+      { id: uuid('eeeeeeee', 3), name: 'B archived', code: null, status: 'archived' },
+      { id: uuid('eeeeeeee', 4), name: 'B inactive', code: null, status: 'inactive' },
+    ]);
+    const live = await new ChartersService(
+      makeServiceContext(stubFor().client) as never,
+    ).listLabels({ exceptActive: true });
+    expect(lookups.unlistedCharters).toEqual(live);
   });
 
   it.each(['categories', 'tags', 'charters', 'suppliers'] as const)(

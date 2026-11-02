@@ -11,7 +11,7 @@ import {
   type UnofferedSupplier,
 } from '@/lib/purchase-orders/unoffered-choice';
 
-import type { CharterNameRow } from '../charters';
+import type { CharterLabelRow, CharterNameRow } from '../charters';
 import { fetchAllRowsByIds, reportDegradedRead } from './fetch-by-ids';
 
 /**
@@ -155,6 +155,28 @@ export async function readCharterLabels(
     return await namesByIds(wanted);
   } catch (err) {
     reportDegradedRead(tag, err, { ids: wanted.length });
+    return [];
+  }
+}
+
+/**
+ * The charters a list's Charter cell names besides the active ones it offers
+ * (Items, Books, Rentals > Items; B97): `listLabels` is a
+ * ChartersService.listLabels call. A record tagged to an archived charter was
+ * called "Generic" because the list knew active charters only.
+ *
+ * A LABEL read: a failed read is reported (`tag` names the caller) and answers
+ * [], and the cell then shows nothing for those records, never Generic. Never
+ * thrown (recurring pattern #1).
+ */
+export async function readCharterCellLabels(
+  listLabels: () => Promise<CharterLabelRow[]>,
+  tag: string,
+): Promise<CharterLabelRow[]> {
+  try {
+    return await listLabels();
+  } catch (err) {
+    reportDegradedRead(tag, err);
     return [];
   }
 }
