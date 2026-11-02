@@ -47,7 +47,7 @@ const PENDING: PendingOrderSubmission = {
     warehouseId: WH,
     fulfillmentType: 'delivery',
     deliveryCharterId: '66666666-6666-4666-8666-666666666666',
-    onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+    onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
     notes: 'Room 12, call Sam',
     neededByLocal: '2026-10-05T10:00',
     lines: [
@@ -62,7 +62,7 @@ describe('the hold marker (plan 3.6)', () => {
     const hold = holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING });
     expect(hold).toEqual({ orgId: ORG, warehouseId: WH, key: KEY, sentAt: '2026-10-04T12:00:00.000Z', lineCount: 2, unitCount: 5 });
     const raw = serializeHolds([hold])!;
-    for (const secret of ['Maria', 'maria@example.org', 'Room 12', ITEM, 'call Sam', '66666666']) {
+    for (const secret of ['Pixie', 'pixie@example.org', 'Room 12', ITEM, 'call Sam', '66666666']) {
       expect(raw).not.toContain(secret);
     }
   });
@@ -508,7 +508,7 @@ describe('every account’s live order request becomes its owner’s marker befo
     await holdEveryDeviceSend(store);
     expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })]);
     expect(parseHolds(store.data.get(orderHoldKey(OTHER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: otherPending })]);
-    for (const secret of ['Maria', 'maria@example.org', 'Room 12', ITEM]) {
+    for (const secret of ['Pixie', 'pixie@example.org', 'Room 12', ITEM]) {
       expect(store.data.get(orderHoldKey(OTHER))).not.toContain(secret);
     }
   });

@@ -68,7 +68,8 @@ vi.mock('@/server/services/warehouse-charters', () => ({
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: svc({
     get: async (id: string) => {
-      if (id === 'missing') {
+      // MISSING below: a well-formed id the service does not find.
+      if (id === '5eed0000-0000-4000-8000-0000000000e2') {
         const { ServiceError } = await import('@/server/services/context');
         throw new ServiceError('not_found', 'Not found');
       }
@@ -105,7 +106,10 @@ vi.mock('@/components/inventory/item-form', () => ({
 
 import EditItemPage, { metadata } from './page';
 
-const page = (id = 'rec-1', ret?: string) =>
+const REC = '5eed0000-0000-4000-8000-0000000000e1';
+const MISSING = '5eed0000-0000-4000-8000-0000000000e2';
+
+const page = (id = REC, ret?: string) =>
   EditItemPage({
     params: Promise.resolve({ id }),
     searchParams: Promise.resolve(ret === undefined ? {} : { return: ret }),
@@ -125,18 +129,18 @@ describe('Edit item page', () => {
     render(await page());
     expect(screen.getByRole('link', { name: '← Back to item' })).toHaveAttribute(
       'href',
-      '/dashboard/inventory/rec-1',
+      `/dashboard/inventory/${REC}`,
     );
     expect(screen.getByRole('heading', { level: 1, name: 'Edit item' })).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Falcons Home Jersey' });
     expect(card).toContainElement(screen.getByTestId('item-form'));
     expect(formProps).toHaveBeenCalledWith(
-      expect.objectContaining({ returnHref: '/dashboard/inventory/rec-1' }),
+      expect.objectContaining({ returnHref: `/dashboard/inventory/${REC}` }),
     );
   });
 
   it('goes back to the list it came from when the link carried one', async () => {
-    render(await page('rec-1', '/dashboard/inventory?page=2'));
+    render(await page(REC, '/dashboard/inventory?page=2'));
     expect(screen.getByRole('link', { name: '← Back to item' })).toHaveAttribute(
       'href',
       '/dashboard/inventory?page=2',
@@ -144,8 +148,21 @@ describe('Edit item page', () => {
   });
 
   it('still sends someone without items:update to the record, and a missing one to not found', async () => {
-    await expect(page('missing')).rejects.toThrow('not-found');
+    await expect(page(MISSING)).rejects.toThrow('not-found');
     ctxHolder.current = { role: 'viewer' };
-    await expect(page()).rejects.toThrow('redirect:/dashboard/inventory/rec-1');
+    await expect(page()).rejects.toThrow(`redirect:/dashboard/inventory/${REC}`);
+  });
+
+  // B63: a mistyped or cut-off link is Page not found, before the edit gate
+  // sends anyone away and before anything is read.
+  it('an id that is not a uuid is the not-found page, ahead of the items:update redirect', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const role of ['manager', 'viewer'] as const) {
+      ctxHolder.current = { role };
+      vi.mocked(requireOrgContext).mockClear();
+      await expect(page('not-a-uuid'), role).rejects.toThrow('not-found');
+      await expect(page(REC.slice(0, -1)), role).rejects.toThrow('not-found');
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
   });
 });

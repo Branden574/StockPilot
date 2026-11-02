@@ -56,12 +56,14 @@ vi.mock('@/server/services/warehouses', () => ({
 
 import ScheduleEventDetailPage from './page';
 
+const EVENT_ID = '5eed0000-0000-4000-8000-0000000000b1';
+
 /** 1:30 AM on Wed Oct 21 in New York; 10:30 PM on Tue Oct 20 in Los Angeles. */
 const STARTS_AT = '2026-10-21T05:30:00.000Z';
 
 function event(startsAt: string, endsAt: string | null = null) {
   return {
-    id: 'ev-1',
+    id: EVENT_ID,
     title: 'Dock pickup',
     status: 'scheduled',
     startsAt,
@@ -81,7 +83,7 @@ function event(startsAt: string, endsAt: string | null = null) {
 }
 
 async function renderPage() {
-  const ui = await ScheduleEventDetailPage({ params: Promise.resolve({ id: 'ev-1' }) });
+  const ui = await ScheduleEventDetailPage({ params: Promise.resolve({ id: EVENT_ID }) });
   return render(ui);
 }
 

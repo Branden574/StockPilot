@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { ShippingService } from '@/server/services/shipping';
 
@@ -30,6 +31,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
 
   try {
     const shipment = await ShippingService.forApiContext(ctx).reconcilePurchasing(id);
