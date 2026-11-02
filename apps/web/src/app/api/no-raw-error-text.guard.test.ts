@@ -204,12 +204,16 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     lines: 1,
     why: 'mapRecountError matches our RAISE codes and hints and answers app sentences, else internal_error',
   },
+  'lib/error-text.ts': {
+    lines: 1,
+    why: 'reportedMessage is the text an error report carries (docket C21): read only by lib/error-reporter-core.ts, never answered',
+  },
   'lib/ssrf-guard.ts': {
     lines: 1,
     why: "a failed host lookup's text in SsrfLookupFailedError, for the server: the webhook test and the ISBN lookup answer their own sentences",
   },
   'server/services/lib/fetch-by-ids.ts': {
-    lines: 2,
+    lines: 1,
     why: 'rawErrorText is for server logs: every caller passes it to reportError, new Error or an internal_error ServiceError',
   },
   'server/services/lib/postgrest-error.ts': {
