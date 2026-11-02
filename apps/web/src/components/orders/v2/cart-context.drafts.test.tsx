@@ -215,7 +215,7 @@ describe('CartProvider — the New order draft is per account', () => {
   const legacy = () =>
     JSON.stringify({
       ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }),
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       lines: [{ itemId: 'stapler', quantity: 3 }],
     });
 

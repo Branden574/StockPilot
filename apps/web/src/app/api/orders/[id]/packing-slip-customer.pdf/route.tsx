@@ -8,6 +8,7 @@ import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderCustomerPackingSlipPdf } from '@/lib/pdf/packing-slip-customer';
 import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -32,6 +33,9 @@ export async function GET(
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+  // A malformed id is a 400 before anything is read or spent (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
   try {
     const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);

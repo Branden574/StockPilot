@@ -15,6 +15,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { formatRelative } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ProceduresService } from '@/server/services/procedures';
 import { ServiceError } from '@/server/services/context';
 
@@ -22,6 +23,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function ProcedureDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
   const canEdit = can(ctx, 'categories:manage');
   const canModerate = isAdminRole(ctx.role);

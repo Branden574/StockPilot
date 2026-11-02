@@ -374,10 +374,10 @@ describe('POST /api/v1/orders', () => {
 
   it('a fault is reported under its tag, with no body content in the report', async () => {
     setup({ data: null, error: { message: 'fetch failed' } });
-    await POST(req({ ...BODY, notes: 'Room 12 for Maria Lopez' }));
+    await POST(req({ ...BODY, notes: 'Room 12 for Pixie Quill' }));
     expect(reportError).toHaveBeenCalledTimes(1);
     const [err, ctx] = vi.mocked(reportError).mock.calls[0] ?? [];
     expect(ctx).toEqual({ tag: 'api.v1.orders.create', organizationId: ORG });
-    expect(String((err as Error).message)).not.toContain('Maria');
+    expect(String((err as Error).message)).not.toContain('Pixie');
   });
 });

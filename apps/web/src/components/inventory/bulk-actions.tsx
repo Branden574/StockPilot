@@ -131,6 +131,11 @@ interface BulkActionsProps {
   /** Push the selected rows into the cycle-count selection and navigate to
       the New cycle count screen. Wired by InventoryTable. */
   onCycleCount: () => void;
+  /** Shows the Cycle count action (B42). Pages pass core countStartAllowed
+      (the server's assertCountStartFloors as a yes/no), so it is offered only
+      to someone who can start a count. Default false → hidden for callers
+      that never start counts (rental equipment is never counted). */
+  canStartCount?: boolean;
   /** Public-catalog visibility (P3): shows the "Set public visibility" bulk
       action. Pages pass can(ctx, 'public_links:manage'); the server action
       re-asserts. Default false → hidden for older callers. */
@@ -223,6 +228,7 @@ export function BulkActions({
   hasSplitRackSelection,
   hasElsewhereSelection,
   onCycleCount,
+  canStartCount = false,
   canSetPublicVisibility = false,
   itemType = 'all',
   ungroupItemIds = [],
@@ -608,9 +614,11 @@ export function BulkActions({
           <Download aria-hidden strokeWidth={1.6} /> Export
         </Button>
 
-        <Button type="button" variant="ghost" size="sm" className={ACTION} onClick={onCycleCount}>
-          <ClipboardCheck aria-hidden strokeWidth={1.6} /> Cycle count
-        </Button>
+        {canStartCount ? (
+          <Button type="button" variant="ghost" size="sm" className={ACTION} onClick={onCycleCount}>
+            <ClipboardCheck aria-hidden strokeWidth={1.6} /> Cycle count
+          </Button>
+        ) : null}
 
         {groupItemIds.length > 0 ? (
           <Button

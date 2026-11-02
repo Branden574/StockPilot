@@ -14,7 +14,7 @@ import { PageHeader } from '@/components/patterns/page-header';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { can, countStartAllowed, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { expandPlacementRows } from '@/lib/placements';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
@@ -487,6 +487,17 @@ async function inventoryTableSection({
   const canStartOrder =
     can(sessionCtx, 'orders:request') &&
     (await getModulesForRequest(sessionCtx.organizationId)).has('orders');
+  // The bulk "Cycle count" shortcut (B42): only for someone who can start a
+  // count, by the server's floors (core countStartAllowed: a manager with
+  // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
+  // staff were sent to Start a count and refused. Core rather than
+  // withContext, which this page keeps off its first paint; the module set is
+  // the same request-cached read.
+  const canStartCount = countStartAllowed({
+    role: sessionCtx.role as Role,
+    permissions: sessionCtx.permissions,
+    cycleCountsEnabled: (await getModulesForRequest(sessionCtx.organizationId)).has('cycle_counts'),
+  });
 
   // INSTANT MODE (AWAITED) — DEEP LINKS ONLY (see the streaming note
   // below for the default view). For a manager+ deep link at or under
@@ -649,6 +660,7 @@ async function inventoryTableSection({
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
+        canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -1005,6 +1017,7 @@ async function inventoryTableSection({
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
+      canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

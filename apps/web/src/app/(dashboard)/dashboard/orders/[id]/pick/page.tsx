@@ -9,6 +9,7 @@ import { detailRequesterName } from '@/lib/orders/requester-name';
 import { createClient } from '@/lib/supabase/server';
 import { isManagerOrAbove, type OrderReadinessResult } from '@stockpilot/core';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { LotsService } from '@/server/services/lots';
 import type { FefoSuggestion } from '@/server/services/lots';
 import { OrderReadinessService } from '@/server/services/order-readiness';
@@ -18,6 +19,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function DigitalPickPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const ctx = await requireOrgContext();
   // ORDER READINESS (F2-2): the completion confirm projects complete_picking
   // over it with what the picker enters (core digitalPickCompletionConfirm).
