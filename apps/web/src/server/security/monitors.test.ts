@@ -9,6 +9,7 @@ import {
   detectMassMutations,
   detectPasswordResetBursts,
   detectPrivilegeEscalations,
+  detectRefusedCodeBursts,
   isCertExpiringSoon,
 } from './monitors';
 
@@ -343,5 +344,68 @@ describe('detectExportAbuse', () => {
 
   it('does not flag below threshold', () => {
     expect(detectExportAbuse([trip('org-1', 'user-a'), trip('org-1', 'user-a')], 3)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectRefusedCodeBursts
+// ---------------------------------------------------------------------------
+
+describe('detectRefusedCodeBursts', () => {
+  const refused = (user: string | null, ip: string | null) =>
+    auditRow({ event: 'mfa.code_refused', user_id: user, ip });
+  const recoveryFailed = (user: string | null, ip: string | null) =>
+    auditRow({ event: 'mfa.recovery.failed', user_id: user, ip });
+  const OPTS = { userThreshold: 5, ipThreshold: 15 };
+
+  it('flags an account at 5 refusals, counting authenticator and recovery codes together', () => {
+    const rows = [
+      refused('user-a', '198.51.100.1'),
+      refused('user-a', '198.51.100.2'),
+      refused('user-a', '198.51.100.3'),
+      recoveryFailed('user-a', '198.51.100.4'),
+      recoveryFailed('user-a', '198.51.100.5'),
+    ];
+    expect(detectRefusedCodeBursts(rows, OPTS)).toEqual({
+      byUser: [{ userId: 'user-a', count: 5 }],
+      byIp: [],
+    });
+  });
+
+  it('does not flag an account at 4', () => {
+    const rows = Array.from({ length: 4 }, (_, i) => refused('user-a', `198.51.100.${i}`));
+    expect(detectRefusedCodeBursts(rows, OPTS).byUser).toEqual([]);
+  });
+
+  it('flags an address at 15 refusals across accounts, and not at 14', () => {
+    const rows = Array.from({ length: 15 }, (_, i) => refused(`user-${i}`, '203.0.113.9'));
+    expect(detectRefusedCodeBursts(rows, OPTS)).toEqual({
+      byUser: [],
+      byIp: [{ ip: '203.0.113.9', count: 15 }],
+    });
+    expect(detectRefusedCodeBursts(rows.slice(1), OPTS).byIp).toEqual([]);
+  });
+
+  it('ignores failed sign-ins and other events', () => {
+    const rows = Array.from({ length: 20 }, () =>
+      auditRow({ event: 'user.sign_in_failed', user_id: 'user-a', ip: '203.0.113.9' }),
+    );
+    expect(detectRefusedCodeBursts(rows, OPTS)).toEqual({ byUser: [], byIp: [] });
+  });
+
+  it('skips rows with no account for the per-account count, and rows with no address for the per-address count', () => {
+    const rows = [
+      ...Array.from({ length: 5 }, () => refused(null, '203.0.113.9')),
+      ...Array.from({ length: 15 }, () => refused('user-b', null)),
+    ];
+    expect(detectRefusedCodeBursts(rows, OPTS)).toEqual({
+      byUser: [{ userId: 'user-b', count: 15 }],
+      byIp: [],
+    });
+  });
+
+  it('defaults to 5 per account and 15 per address', () => {
+    const rows = Array.from({ length: 5 }, () => refused('user-a', null));
+    expect(detectRefusedCodeBursts(rows).byUser).toEqual([{ userId: 'user-a', count: 5 }]);
   });
 });
