@@ -24,6 +24,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { BUNDLE_NO_REQUIRED_COMPONENT, componentsHaveRequired } from '@/lib/bundles/component-set';
 import { generateSku } from '@/lib/utils';
 import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
 
@@ -90,6 +91,10 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
     }
     if (components.length === 0) {
       toast.error('Add at least one component to the bundle.');
+      return;
+    }
+    if (!componentsHaveRequired(components)) {
+      toast.error(BUNDLE_NO_REQUIRED_COMPONENT);
       return;
     }
     setSubmitting(true);
@@ -222,6 +227,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
       <DetailSection title="Components" bodyClassName="flex flex-col gap-3">
         <p className="text-muted-foreground -mt-1 text-[12px]">
           Items + per-kit quantities. Optional items don't block distribution when stock is short.
+          At least one item must be required.
         </p>
 
         <BundleComponentPicker addedIds={addedIds} onAdd={addComponent} />
