@@ -899,6 +899,11 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # The webhook delivery's use of the same guard (docket B49), with the guard
+  # and safeFetch run for real: a refused URL (a private address, a scheme
+  # other than http or https, a Slack or Teams URL on another host) is final
+  # and never sent, while a failed lookup of the host is retried with backoff.
+  src/server/services/integration-events.delivery-lookup.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a

@@ -8,13 +8,25 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
-import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
+import {
+  CONNECTOR_START_RESERVE_MS,
+  DRAIN_OUTBOX_DEADLINE_MS,
+  enabledIntegrationOrgIds,
+  runDrain,
+} from '@/server/connectors/drainer';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
-import { drainIntegrationDeliveries } from '@/server/services/integration-events';
+import {
+  drainIntegrationDeliveries,
+  WEBHOOK_DRAIN_SHARE_MS,
+} from '@/server/services/integration-events';
 import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
-import { maybePostMonthlyValuation } from '@/server/connectors/quickbooks/valuation';
+import {
+  maybePostMonthlyValuation,
+  valuationDue,
+  type ValuationSettings,
+} from '@/server/connectors/quickbooks/valuation';
 import { getConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
 
 export const runtime = 'nodejs';
@@ -48,11 +60,22 @@ function secretsEqual(a: string, b: string): boolean {
  * FAIL-OPEN: any failure here is reported and swallowed — it must NEVER fail the
  * drain response. The drain already did the load-bearing work; a valuation hiccup
  * shouldn't 500 the cron.
+ *
+ * No connection is started with less than CONNECTOR_START_RESERVE_MS left before
+ * the run's `deadlineAt` (docket B81). The pass is month-gated and posts with a
+ * fixed requestid, so a connection skipped now is posted at a later tick.
+ * Answers true when the deadline left a connection with valuation work for the
+ * next tick (valuationDue). One that already posted this month, or has no
+ * accounts and its skip reason recorded, is still visited when time allows
+ * (this pass is what refreshes the token of a connection with nothing to
+ * export), but skipping it leaves nothing waiting, so it is not reported.
  */
 async function runMonthlyValuation(
   admin: ReturnType<typeof createAdminClient>,
   now: Date,
-): Promise<void> {
+  deadlineAt: number,
+): Promise<boolean> {
+  let left = false;
   const { data: conns, error } = await admin
     .from('org_connections')
     .select('*')
@@ -62,7 +85,7 @@ async function runMonthlyValuation(
     void reportError(new Error(`valuation org_connections select: ${error.message}`), {
       tag: 'cron.drain-outbox.valuation',
     });
-    return;
+    return false;
   }
 
   // Module-enabled gate (same as runDrain): an org that disabled the
@@ -75,17 +98,23 @@ async function runMonthlyValuation(
     enabledOrgIds = await enabledIntegrationOrgIds(admin, orgIds);
   } catch (gateErr) {
     void reportError(gateErr, { tag: 'cron.drain-outbox.valuation.module-gate' });
-    return;
+    return false;
   }
 
   for (const c of (conns ?? []) as Array<Record<string, any>>) {
+    // Skip orgs whose integrations module is disabled — no JournalEntry post.
+    if (!enabledOrgIds.has(c.organization_id)) continue;
+    // An active connection without a Vault handle is malformed (the OAuth
+    // callback must set secret_id). Skip rather than throwing the whole pass.
+    if (!c.secret_id || !c.external_account_id) continue;
+    // A connection left for time is posted at a later tick. It is work left
+    // only when it has this month's valuation still to do: on most ticks every
+    // connection has already posted, and a tick reporting it would be noise.
+    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) {
+      if (valuationDue((c.settings ?? {}) as ValuationSettings, now)) left = true;
+      continue;
+    }
     try {
-      // Skip orgs whose integrations module is disabled — no JournalEntry post.
-      if (!enabledOrgIds.has(c.organization_id)) continue;
-      // An active connection without a Vault handle is malformed (the OAuth
-      // callback must set secret_id). Skip rather than throwing the whole pass.
-      if (!c.secret_id || !c.external_account_id) continue;
-
       const conn: ConnectionRef = {
         id: c.id,
         organizationId: c.organization_id,
@@ -125,6 +154,31 @@ async function runMonthlyValuation(
       });
     }
   }
+  return left;
+}
+
+type WebhookDrainResult = Awaited<ReturnType<typeof drainIntegrationDeliveries>>;
+
+/**
+ * The webhook drain's second pass, to the run's deadline, after its share
+ * left due deliveries unstarted. Its counts add to the share's, and whether
+ * it left any decides the answer's `skipped`. Never throws: should the drain
+ * ever reject, the rows the share left are counted as still waiting.
+ */
+async function drainRest(
+  admin: ReturnType<typeof createAdminClient>,
+  now: Date,
+  deadlineAt: number,
+  share: WebhookDrainResult,
+): Promise<WebhookDrainResult> {
+  const rest: WebhookDrainResult = await drainIntegrationDeliveries(admin, now, undefined, {
+    deadlineAt,
+  }).catch(() => ({ attempted: 0, delivered: 0, skipped: 'deadline' as const }));
+  return {
+    attempted: share.attempted + rest.attempted,
+    delivered: share.delivered + rest.delivered,
+    ...(rest.skipped ? { skipped: rest.skipped } : {}),
+  };
 }
 
 /**
@@ -151,23 +205,56 @@ export async function GET(req: Request) {
   try {
     const admin = createAdminClient();
     const now = new Date();
-    const result = await runDrain(admin, CONNECTORS, now);
+    // One deadline for this run (docket B81): no stage starts anything it
+    // could not finish before it, inside maxDuration. The webhook drain's
+    // share ends earlier.
+    const deadlineAt = now.getTime() + DRAIN_OUTBOX_DEADLINE_MS;
+    // Retry any pending webhook/Slack/Teams deliveries with backoff. FIRST, and
+    // inside its own share of the run: run last, it was left no time whenever
+    // the exports used the run (docket B81). Self-contained + never throws
+    // (mirrors the valuation fail-open posture).
+    const share: WebhookDrainResult = await drainIntegrationDeliveries(admin, now, undefined, {
+      deadlineAt: now.getTime() + WEBHOOK_DRAIN_SHARE_MS,
+    }).catch(() => ({ attempted: 0, delivered: 0 }));
+    const result = await runDrain(admin, CONNECTORS, now, { deadlineAt });
     // Monthly valuation runs AFTER the drain and must never fail the response —
     // runMonthlyValuation swallows + reports its own errors.
-    await runMonthlyValuation(admin, now);
-    // Retry any pending webhook/Slack/Teams deliveries with backoff. Self-
-    // contained + never throws (mirrors the valuation fail-open posture).
-    const webhooks = await drainIntegrationDeliveries(admin, now).catch(() => ({
-      attempted: 0,
-      delivered: 0,
-    }));
+    const valuationSkipped = await runMonthlyValuation(admin, now, deadlineAt);
     // Safety net: revoke any expired platform-admin "act as" grants globally,
     // so an impersonation that was never explicitly exited still auto-expires.
-    // Fail-open — never blocks the drain response.
+    // Fail-open — never blocks the drain response. Before the webhook drain's
+    // second pass, so it never waits on deliveries.
     await sweepExpiredImpersonations(now.getTime()).catch((e) =>
       reportError(e, { tag: 'cron.impersonation-sweep' }),
     );
-    return NextResponse.json({ ...result, webhooks });
+    // The webhook drain takes back the time the exports and the valuation left
+    // (docket B81 review). Its share starts deliveries for its first 7 s only:
+    // ten to a host that hangs to the 8 s timeout fill it, so drained only
+    // once, every other due alert would wait a tick even when the exports had
+    // nothing to do (run last, the drain had 30 s of its own). When the share
+    // left due deliveries unstarted, it drains again to the run's deadline,
+    // from the same `now`: the rows the share started are leased or backed off
+    // by now, so this pass reads only the ones left. It starts nothing with
+    // less than CLAIM_LEASE_MS left (and reads nothing then), so it ends inside
+    // the run.
+    const webhooks = share.skipped ? await drainRest(admin, now, deadlineAt, share) : share;
+    // NO SILENT CUTS: a stage the deadline cut short says so, in the answer
+    // (skipped: 'deadline') and in one log line, never as an empty success.
+    const cut = [
+      webhooks.skipped ? 'webhooks' : null,
+      result.skipped ? 'exports' : null,
+      valuationSkipped ? 'valuation' : null,
+    ].filter((stage) => stage !== null);
+    if (cut.length > 0) {
+      console.warn(
+        `[drain-outbox] stopped at the run deadline, the rest waits for the next tick: ${cut.join(', ')}`,
+      );
+    }
+    return NextResponse.json({
+      ...result,
+      webhooks,
+      ...(valuationSkipped ? { valuation: { skipped: 'deadline' } } : {}),
+    });
   } catch (err) {
     return internalErrorResponse(err, 'cron.drain-outbox');
   }

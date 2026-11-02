@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
-import { NOT_A_LIST } from '@/test/postgrest-answers';
+import { json, NOT_A_LIST, realSupabaseClient } from '@/test/postgrest-answers';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
@@ -449,5 +449,150 @@ describe("the requester's exchange messages (returns RX-3)", () => {
     });
     await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null, kind: 'exchange' });
     expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({ title: 'New exchange request', type: 'return.requested' }));
+  });
+});
+
+/**
+ * docket B82: a gateway answering 502 with an empty body gives postgrest-js an
+ * error whose message is the empty string, and each of these reads threw that
+ * empty text: the report had no cause and no status.
+ */
+describe('a failed read is reported with its status, not an empty message', () => {
+  const BAD_GATEWAY = {
+    data: null,
+    error: { message: '', code: '' },
+    status: 502,
+    statusText: 'Bad Gateway',
+  };
+  const EXPECTED = 'HTTP 502 Bad Gateway (empty error message)';
+  const reportedMessages = () =>
+    vi.mocked(reportError).mock.calls.map(([e]) => (e as Error).message);
+
+  it.each([
+    'organization_members.select',
+    'role_permission_overrides.select',
+    'user_permission_overrides.select',
+    'user_warehouse_assignments.select',
+  ])('the audience read %s', async (read) => {
+    admin({
+      'organization_members.select': { data: [{ user_id: 'mgr', role: 'manager' }], error: null },
+      'role_permission_overrides.select': { data: [], error: null },
+      'user_permission_overrides.select': { data: [], error: null },
+      'user_warehouse_assignments.select': { data: [], error: null },
+      [read]: BAD_GATEWAY,
+    });
+    await expect(
+      resolveReturnStaffAudience({ organizationId: ORG, warehouseId: WH, actorUserId: null }),
+    ).resolves.toEqual([]);
+    expect(reportedMessages()).toEqual([EXPECTED]);
+  });
+
+  it('the order read of the staff notice', async () => {
+    admin({ 'order_requests.select': BAD_GATEWAY });
+    await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null });
+    expect(reportedMessages()).toEqual([EXPECTED]);
+    expect(createNotification).not.toHaveBeenCalled();
+  });
+
+  it("the order read of the requester's message", async () => {
+    admin({ 'order_requests.select': BAD_GATEWAY });
+    await notifyRequesterReturnEvent({
+      ...RMA,
+      event: 'approved',
+      source: 'requester',
+      channel: 'staff',
+    });
+    expect(reportedMessages()).toEqual([EXPECTED]);
+    expect(createNotification).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * docket B82 (integrator decision, plan open question 19): the two order reads
+ * used maybeSingle(), and postgrest-js resolves an empty body (a 2xx, or a 404
+ * it rewrites to 204) as data null with no error, which read as "no order":
+ * the notice was skipped in silence. Each is a list read now, as the drainer's
+ * mapping read is: an answer that is not a list is a failed read, reported
+ * with the read's tag. The notice stays best-effort (no retry), but we are
+ * told. Driven through a real supabase-js client whose fetch is local, so the
+ * library's own handling of each answer is what is tested.
+ */
+describe('an order read that answers no list is reported, never read as "no order"', () => {
+  const ANSWERS: Array<[string, () => Response, number]> = [
+    ['an empty 2xx body', () => new Response('', { status: 200 }), 200],
+    ['an empty 404 body (status rewritten to 204)', () => new Response('', { status: 404 }), 204],
+    ['a JSON object', () => json({ id: 'not-a-list' }), 200],
+  ];
+
+  /** The order read answers `answer`; any other read answers no rows. */
+  function orderReadAnswers(answer: () => Response) {
+    adminHolder.client = realSupabaseClient((req) =>
+      req.url.pathname.endsWith('/order_requests') ? answer() : json([]),
+    );
+  }
+
+  it.each(ANSWERS)(
+    '%s: the staff notice reports under returns_notify.staff_new_request and tells nobody',
+    async (_shape, answer, status) => {
+      orderReadAnswers(answer);
+      await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null });
+      expect(createNotification).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((err as Error).message).toBe(`order_requests answered no list (status ${status})`);
+      expect(context).toEqual({
+        tag: 'returns_notify.staff_new_request',
+        extra: { organizationId: ORG, returnId: 'ret-1' },
+      });
+    },
+  );
+
+  it.each(ANSWERS)(
+    "%s: the requester's message reports under returns_notify.requester_event and sends nothing",
+    async (_shape, answer, status) => {
+      orderReadAnswers(answer);
+      await notifyRequesterReturnEvent({
+        ...RMA,
+        event: 'approved',
+        source: 'requester',
+        channel: 'staff',
+      });
+      expect(createNotification).not.toHaveBeenCalled();
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((err as Error).message).toBe(`order_requests answered no list (status ${status})`);
+      expect(context).toEqual({
+        tag: 'returns_notify.requester_event',
+        extra: { organizationId: ORG, returnId: 'ret-1', event: 'approved' },
+      });
+    },
+  );
+
+  it('no order (an empty list) is still a quiet skip, and two orders are no answer either', async () => {
+    orderReadAnswers(() => json([]));
+    await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null });
+    await notifyRequesterReturnEvent({
+      ...RMA,
+      event: 'approved',
+      source: 'requester',
+      channel: 'staff',
+    });
+    expect(reportError).not.toHaveBeenCalled();
+    expect(createNotification).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+
+    const order = {
+      id: 'ord-1',
+      warehouse_id: WH,
+      order_number: 103,
+      requester_name: 'Pat',
+      requester_email: null,
+    };
+    orderReadAnswers(() => json([order, order]));
+    await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(createNotification).not.toHaveBeenCalled();
   });
 });

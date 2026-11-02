@@ -14,6 +14,7 @@ import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
 import { listRows } from './lib/list-rows';
+import { postgrestErrorText } from './lib/postgrest-error';
 import { createNotification } from './notifications';
 
 /**
@@ -200,10 +201,16 @@ export async function resolveMaintenanceAudience(args: {
         .eq('module_id', 'maintenance_requests'),
     ]);
 
-    if (membersRes.error) throw new Error(membersRes.error.message);
-    if (roleOverridesRes.error) throw new Error(roleOverridesRes.error.message);
-    if (userOverridesRes.error) throw new Error(userOverridesRes.error.message);
-    if (moduleRes.error) throw new Error(moduleRes.error.message);
+    // postgrestErrorText: a gateway 5xx with an empty body has an empty
+    // message, and the report said nothing (docket B82).
+    if (membersRes.error) throw new Error(postgrestErrorText(membersRes.error, membersRes));
+    if (roleOverridesRes.error) {
+      throw new Error(postgrestErrorText(roleOverridesRes.error, roleOverridesRes));
+    }
+    if (userOverridesRes.error) {
+      throw new Error(postgrestErrorText(userOverridesRes.error, userOverridesRes));
+    }
+    if (moduleRes.error) throw new Error(postgrestErrorText(moduleRes.error, moduleRes));
 
     const members = listRows<{ user_id: string; role: Role }>('organization_members', membersRes);
     const roleOverrides = listRows<PermissionOverride & { role: Role }>(
