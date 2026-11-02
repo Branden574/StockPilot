@@ -50,8 +50,9 @@ const AAL_ALLOWED: Record<string, { calls: number; why: string }> = {
     calls: 3,
     why: 'sign in: after signInWithPassword(); password reset and change password: after getUser() and listFactors()',
   },
-  'server/actions/profile.ts': { calls: 1, why: 'after listFactors()' },
-  'server/actions/email-change.ts': { calls: 1, why: 'after getUser() and listFactors()' },
+  // Not server/actions/profile.ts or server/actions/email-change.ts any more
+  // (docket S50a): account deletion and the email change read the level
+  // through readVerifiedSessionClaimsOf, as the account the action validated.
   // Not lib/auth/api-context.ts any more (docket S43a, review round 1): its
   // cookie path reads the level through readVerifiedSessionClaimsOf, held to
   // the user getUser() validated, because the session this call loads can
