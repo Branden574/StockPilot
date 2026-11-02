@@ -25,6 +25,7 @@ vi.mock('node:dns/promises', () => ({
 
 import {
   assertSafeFetchUrl,
+  isSsrfRefusal,
   safeFetch,
   SsrfBlockedError,
   SsrfLookupFailedError,
@@ -232,5 +233,22 @@ describe("safeFetch — the caller's abort ends a lookup that has not answered",
     expect(mockFetch.mock.calls[0]![1]).toEqual(
       expect.objectContaining({ signal: controller.signal }),
     );
+  });
+});
+
+/**
+ * docket B49: the one rule for a caller that retries network failures (the
+ * webhook delivery and the export image fetch). A refusal of the URL is final;
+ * a failed lookup is a network failure, and so is anything that is not the
+ * guard's at all.
+ */
+describe('isSsrfRefusal', () => {
+  it('is true for a refusal of the URL, false for a failed lookup and for any other error', () => {
+    expect(isSsrfRefusal(new SsrfBlockedError('private IPv4 literal: 10.0.0.1'))).toBe(true);
+    expect(isSsrfRefusal(new SsrfLookupFailedError('DNS returned no addresses for x.test'))).toBe(
+      false,
+    );
+    expect(isSsrfRefusal(new TypeError('fetch failed'))).toBe(false);
+    expect(isSsrfRefusal(undefined)).toBe(false);
   });
 });

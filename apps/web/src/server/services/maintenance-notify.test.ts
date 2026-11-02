@@ -360,6 +360,46 @@ describe('resolveMaintenanceAudience — permission resolution (never _notify_re
     });
   });
 
+  /**
+   * docket B82: a gateway answering 502 with an empty body gives postgrest-js
+   * an error whose message is the empty string, and each of these reads threw
+   * that empty text: the report had no cause and no status.
+   */
+  it.each([
+    'organization_members.select',
+    'role_permission_overrides.select',
+    'user_permission_overrides.select',
+    'organization_modules.select',
+  ])('a failed %s read is reported with its status, not an empty message', async (read) => {
+    buildAdmin({
+      members: [{ user_id: 'manager-1', role: 'manager' }],
+      notifyAudience: { 'manager-1': 'all' },
+      answers: {
+        [read]: {
+          data: null,
+          error: { message: '', code: '' },
+          status: 502,
+          statusText: 'Bad Gateway',
+        },
+      },
+    });
+
+    const result = await resolveMaintenanceAudience({
+      organizationId: ORG,
+      event: 'new_request',
+      actorUserId: 'someone-else',
+    });
+
+    expect(result).toEqual([]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((err as Error).message).toBe('HTTP 502 Bad Gateway (empty error message)');
+    expect(context).toEqual({
+      tag: 'maintenance_notify.resolve_audience',
+      extra: { organizationId: ORG, event: 'new_request' },
+    });
+  });
+
   it('query-shape pin: role/user override reads are scoped to this organization and narrowed to the two maintenance permissions', async () => {
     const stub = buildAdmin({
       members: [{ user_id: 'admin-1', role: 'admin' }],

@@ -71,10 +71,13 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
+import { verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
+
 import {
   getVerifiedSessionClaimsForRequest,
   readVerifiedSessionClaims,
   readVerifiedSessionClaimsOf,
+  readVerifiedSessionTokenOf,
 } from './verified-claims';
 
 let projectKey: SigningKey;
@@ -439,5 +442,85 @@ describe('readVerifiedSessionClaimsOf', () => {
     expect(
       warn.mock.calls.filter((c: unknown[]) => String(c[0]).startsWith('[verified-claims]')),
     ).toHaveLength(0);
+  });
+});
+
+/**
+ * readVerifiedSessionTokenOf (docket S50a): the same held read, with the
+ * access token the claims are of, so the caller can make its database call
+ * with exactly that token (lib/supabase/access-token-client). It is the same
+ * one session load as readVerifiedSessionClaims: getSession() once, then the
+ * check of that token.
+ */
+describe('readVerifiedSessionTokenOf', () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  const verifiedClaimsLines = () =>
+    warn.mock.calls.filter((c: unknown[]) => String(c[0]).startsWith('[verified-claims]'));
+
+  it("the validated account's own session: its access token, with that token's verified claims", async () => {
+    const claims = sessionClaims({ aal: 'aal2' });
+    const token = await signAccessToken(projectKey, claims);
+    jar = sessionCookies(token, claims);
+    expect(await readVerifiedSessionTokenOf(await createClient(), FIXTURE_USER_ID)).toMatchObject({
+      token,
+      claims: { userId: FIXTURE_USER_ID, sessionId: FIXTURE_SESSION_ID, aal: 'aal2' },
+    });
+    expect(server.calls['/user']).toBeUndefined();
+    expect(verifiedClaimsLines()).toHaveLength(0);
+  });
+
+  it("another account's verified session: null, with the one fixed line and no id", async () => {
+    const other = sessionClaims({ aal: 'aal2', sub: OTHER, email: 'other@example.test' });
+    jar = sessionCookies(await signAccessToken(projectKey, other), other);
+    expect(await readVerifiedSessionTokenOf(await createClient(), FIXTURE_USER_ID)).toBeNull();
+    expect(verifiedClaimsLines()).toHaveLength(1);
+    expect(JSON.stringify(verifiedClaimsLines())).not.toContain(OTHER);
+    expect(JSON.stringify(verifiedClaimsLines())).not.toContain(FIXTURE_USER_ID);
+  });
+
+  it('a token that does not verify: null, with no line', async () => {
+    const real = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+    const forged = sessionClaims({ aal: 'aal2' });
+    jar = sessionCookies(withEditedPayload(real, forged), forged);
+    expect(await readVerifiedSessionTokenOf(await createClient(), FIXTURE_USER_ID)).toBeNull();
+    expect(verifiedClaimsLines()).toHaveLength(0);
+  });
+
+  it('no session: null, and no request', async () => {
+    expect(await readVerifiedSessionTokenOf(await createClient(), FIXTURE_USER_ID)).toBeNull();
+    expect(server.calls).toEqual({});
+  });
+
+  it('one session load: getSession() once, then the check of that same token, which is the token returned', async () => {
+    const calls: string[] = [];
+    const session: StubbedCookieSession = { sub: FIXTURE_USER_ID, aal: 'aal1' };
+    const auth = verifiedSessionAuth(
+      () => session,
+      (call) => calls.push(call),
+    );
+    const checked: string[] = [];
+    const client = {
+      auth: {
+        ...auth,
+        getClaims: async (token: string) => {
+          checked.push(token);
+          return auth.getClaims(token);
+        },
+      },
+    };
+    const held = await readVerifiedSessionTokenOf(client as never, FIXTURE_USER_ID);
+    expect(calls).toEqual(['getSession', 'getClaims']);
+    expect(checked).toHaveLength(1);
+    expect(held?.token).toBe(checked[0]);
+    expect(held?.claims).toMatchObject({ userId: FIXTURE_USER_ID, aal: 'aal1' });
+  });
+
+  it('readVerifiedSessionClaimsOf answers with the claims of the same held read', async () => {
+    const claims = sessionClaims({ aal: 'aal2' });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims);
+    const held = await readVerifiedSessionTokenOf(await createClient(), FIXTURE_USER_ID);
+    expect(await readVerifiedSessionClaimsOf(await createClient(), FIXTURE_USER_ID)).toEqual(
+      held?.claims,
+    );
   });
 });

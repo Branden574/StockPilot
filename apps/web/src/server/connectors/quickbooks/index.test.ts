@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionRef, ConnectorDeps, OutboxEvent } from '@stockpilot/core';
 
 import { runDrain } from '../drainer';
-import { QboClient } from './client';
+import { QboApiError, QboClient } from './client';
 import { quickbooksConnector } from './index';
 
 // QboClient is constructed inside handleOutboxEvent; mock the module so each test
 // can inject a spy-able post/query without hitting the network. vi.hoisted keeps
-// the spies defined before the hoisted vi.mock factory references them.
+// the spies defined before the hoisted vi.mock factory references them. The
+// real QboApiError stays: the connector classifies a failure by that class.
 const { postSpy, querySpy } = vi.hoisted(() => ({ postSpy: vi.fn(), querySpy: vi.fn() }));
-vi.mock('./client', () => ({ QboClient: vi.fn() }));
+vi.mock('./client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client')>()),
+  QboClient: vi.fn(),
+}));
 
 // The global test setup runs vi.restoreAllMocks() in afterEach, which strips a
 // module mock's implementation between tests. Re-establish the QboClient → spy
@@ -575,7 +579,7 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → JournalEnt
   });
 
   it('classifies a 5xx JournalEntry POST error as retryable', async () => {
-    postSpy.mockReset().mockRejectedValue(Object.assign(new Error('qbo down'), { status: 503 }));
+    postSpy.mockReset().mockRejectedValue(new QboApiError('qbo down', 503, null));
     const admin = makeAdmin({
       tables: {
         returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
@@ -595,7 +599,7 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → JournalEnt
   });
 
   it('classifies a 400 JournalEntry POST error as NON-retryable', async () => {
-    postSpy.mockReset().mockRejectedValue(Object.assign(new Error('bad request'), { status: 400 }));
+    postSpy.mockReset().mockRejectedValue(new QboApiError('bad request', 400, null));
     const admin = makeAdmin({
       tables: {
         returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
@@ -612,5 +616,36 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → JournalEnt
       makeDeps({ admin }),
     );
     expect(res).toMatchObject({ ok: false, retryable: false });
+  });
+
+  // docket B81: a failure that is no Intuit answer (here a refused connection,
+  // which fetch throws with no status) read as status 0, a caller error, and
+  // the export went to dead on its first try. Every create carries a fixed
+  // requestid, so posting again cannot create a second journal entry.
+  it('classifies a JournalEntry POST that got no Intuit answer as retryable', async () => {
+    postSpy.mockReset().mockRejectedValue(
+      new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ECONNREFUSED 203.0.113.5:443'), {
+          code: 'ECONNREFUSED',
+          syscall: 'connect',
+        }),
+      }),
+    );
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: {
+          data: [{ quantity: 1, order_request_line: { unit_cost_at_request: 9 } }],
+          error: null,
+        },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      returnConn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toMatchObject({ ok: false, retryable: true, error: 'fetch failed' });
   });
 });

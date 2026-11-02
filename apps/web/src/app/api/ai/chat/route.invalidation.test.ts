@@ -9,7 +9,7 @@ import type { ModuleId } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { runRouteThroughNext } from '@/test/next-route-harness';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
  * The AI chat route runs every write tool INSIDE its streamed body, after
@@ -74,6 +74,24 @@ import * as route from './route';
 
 const ORG = 'org-1';
 
+/**
+ * The order the model cancels, in this organization: cancel reads it here
+ * before cancel_order_request (S39), so the function's answer is what each
+ * case below is about.
+ */
+const ORDER_IN_ORG = {
+  'order_requests.select': servedLikePostgrest([
+    {
+      id: 'ord-1',
+      organization_id: ORG,
+      status: 'approved',
+      requester_user_id: 'staff-1',
+      replacement_for_return_id: null,
+      warehouse_id: 'wh-1',
+    },
+  ]),
+};
+
 function ctxFor(stub: ReturnType<typeof makeSupabaseStub>) {
   return {
     organizationId: ORG,
@@ -137,6 +155,7 @@ describe('/api/ai/chat write tools expire the Items/Books cache for real', () =>
 
   it('cancelOrder: the restock the RPC made reaches the cache once the stream closes', async () => {
     const stub = makeSupabaseStub({
+      ...ORDER_IN_ORG,
       'rpc:cancel_order_request': {
         data: { id: 'ord-1', status: 'cancelled', order_number: 7 },
         error: null,
@@ -191,6 +210,7 @@ describe('/api/ai/chat write tools expire the Items/Books cache for real', () =>
 
   it('a refused write expires nothing (nothing moved)', async () => {
     const stub = makeSupabaseStub({
+      ...ORDER_IN_ORG,
       'rpc:cancel_order_request': {
         data: null,
         error: { message: 'invalid_status_transition' },
@@ -202,6 +222,7 @@ describe('/api/ai/chat write tools expire the Items/Books cache for real', () =>
     const { events, expired } = await runChat();
 
     expect(events).toContainEqual({ type: 'tool', name: 'cancelOrder', ok: false });
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
     expect(inventoryExpiries(expired)).toEqual([]);
   });
 });
