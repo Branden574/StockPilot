@@ -223,9 +223,10 @@ describe('reportedMessage', () => {
   });
 
   it('a credential in the internal detail is redacted before the cut', () => {
-    const token = 'a3f9c1d20b7e4856f10c9d2e3b4a5f6708192a3b4c5d6e7f8091a2b3c4d5e6f7';
+    // A signing link's path segment (64 characters, as minted), low entropy.
+    const segment = '0123456789abcdef'.repeat(4);
     const lead = `${'x'.repeat(478)} /orders/sign/`;
-    const text = reportedMessage(new ServiceError('internal_error', `${lead}${token} failed`));
-    expect(text).not.toContain(token.slice(0, 8));
+    const text = reportedMessage(new ServiceError('internal_error', `${lead}${segment} failed`));
+    expect(text).not.toContain(segment.slice(0, 8));
   });
 });
