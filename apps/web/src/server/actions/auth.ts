@@ -158,7 +158,10 @@ async function resolveDefaultOrgAndRole(
 
 /**
  * Public self-signup is disabled — this is an internal-company tool.
- * Account creation happens via the invite-acceptance flow only.
+ * Accounts are created only by a team invite (acceptInviteWithSignupAction in
+ * actions/team.ts), Platform > Provision (createOrgForCustomerAction in
+ * actions/platform-admin.ts) and the B2B portal invite
+ * (CustomersService.inviteUser in services/customers.ts).
  *
  * The function is kept exported (rather than deleted) so the existing
  * /signup page can render a "request access from your admin" notice

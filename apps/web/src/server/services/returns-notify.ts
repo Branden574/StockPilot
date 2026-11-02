@@ -16,6 +16,7 @@ import { resolveReturnToken } from '@/server/lib/order-secrets';
 import { sendReturnUpdateEmail, type ReturnUpdateEmailEvent } from '@/server/email/return-update';
 
 import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
+import { listRows } from './lib/list-rows';
 import { createNotification } from './notifications';
 
 /**
@@ -92,7 +93,9 @@ async function prefFlags(admin: Admin, userIds: string[], key: string): Promise<
 /**
  * The staff audience for a new requester return: effective returns:manage,
  * read access to the order's warehouse, actor excluded, preference honoured.
- * Never throws; a resolution failure is reported and resolves to [].
+ * Never throws; a resolution failure is reported and resolves to []. So is a
+ * read that answers with no list (an empty body, docket S27): read as "no
+ * rows", it dropped a revoke, or everyone, or the assigned staff, silently.
  */
 export async function resolveReturnStaffAudience(args: {
   organizationId: string;
@@ -131,11 +134,17 @@ export async function resolveReturnStaffAudience(args: {
     if (userOvRes.error) throw new Error(userOvRes.error.message);
     if (assignRes.error) throw new Error(assignRes.error.message);
 
-    const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
-    const roleOv = (roleOvRes.data ?? []) as Array<PermissionOverride & { role: Role }>;
-    const userOv = (userOvRes.data ?? []) as Array<PermissionOverride & { user_id: string }>;
+    const members = listRows<{ user_id: string; role: Role }>('organization_members', membersRes);
+    const roleOv = listRows<PermissionOverride & { role: Role }>(
+      'role_permission_overrides',
+      roleOvRes,
+    );
+    const userOv = listRows<PermissionOverride & { user_id: string }>(
+      'user_permission_overrides',
+      userOvRes,
+    );
     const assigned = new Set(
-      ((assignRes.data ?? []) as Array<{ user_id: string; warehouse_id: string }>)
+      listRows<{ user_id: string; warehouse_id: string }>('user_warehouse_assignments', assignRes)
         .filter((a) => a.warehouse_id === warehouseId)
         .map((a) => a.user_id),
     );

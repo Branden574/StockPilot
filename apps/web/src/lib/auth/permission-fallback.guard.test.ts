@@ -84,10 +84,6 @@ const STATIC_CHECKS: Record<string, Allowed> = {
     count: 2,
     why: "the editable matrix's default for each role, under the overrides it shows.",
   },
-  'server/services/connections.ts': {
-    count: 2,
-    why: 'assertSyncLogManage picks which key to assert by static role, then asserts it on the effective set: it can refuse an admin who holds only the other key, never widen. Follow-up.',
-  },
   'components/rentals/rentals-list-table.tsx': {
     count: 2,
     why: 'which actions to offer, by static role; the server gates each one. Follow-up.',
@@ -119,21 +115,145 @@ const RESOLVERS: Record<string, Allowed> = {
   },
   'server/services/returns-notify.ts': {
     count: 1,
-    why: 'who is told about a return: the rows it read with the service role; a failed read tells no one.',
+    why: 'who is told about a return: the rows it read with the service role; a failed read, or an answer that is not a list, tells no one.',
   },
   'server/services/maintenance-notify.ts': {
     count: 1,
-    why: 'who is told about a maintenance request: the rows it read with the service role; a failed read tells no one.',
+    why: 'who is told about a maintenance request: the rows it read with the service role; a failed read, or an answer that is not a list, tells no one.',
   },
   'app/api/cron/recurring-pos/route.ts': {
     count: 1,
-    why: 'which template creators are told: the rows it read with the service role; a failed read tells no creator.',
+    why: 'which template creators are told: the rows it read with the service role; a failed read, or an answer that is not a list, tells no creator.',
   },
   'components/settings/role-permission-matrix.tsx': {
     count: 1,
     why: "the editable matrix's preview of a role under the role overrides it shows.",
   },
 };
+
+/**
+ * Every read of an override table refuses an answer that is not a list
+ * (docket S27). postgrest-js resolves an empty body with data null and no
+ * error; read with `data ?? []` that is "no overrides", so a revoke the
+ * organization made disappears (it fails open) and so does a grant. These
+ * reads decide a request, or run with the service role where no row rule
+ * stands behind them: their answer is the decision.
+ *
+ * The census is exact, per file and per table. Each `.from('<table>')` read
+ * is matched by a strict check that names the table: `listRows('<table>'`,
+ * `requireList: '<table>'` (paginated reads), `readOverrides('<table>'`, or
+ * an annotated `Array.isArray(` site. A new read, or a reader put back to
+ * `?? []`, fails here. It never matches "any `?? []` in the file": the Roles
+ * page keeps one after its check, and unrelated fallbacks sit next to these
+ * reads (recurring-pos route, digest).
+ */
+const OVERRIDE_TABLES = [
+  'role_permission_overrides',
+  'user_permission_overrides',
+  'role_default_permissions',
+] as const;
+type OverrideTable = (typeof OVERRIDE_TABLES)[number];
+type PerTable = Partial<Record<OverrideTable, number>>;
+
+interface OverrideTableSites {
+  /** `.from('<table>')` followed by `.select(`, per table. */
+  reads: PerTable;
+  /** `.from('<table>')` followed by a write (`.upsert(`, `.delete(`, ...), per table. */
+  writes?: PerTable;
+  /** The file's `Array.isArray(` sites and the reads they check, per table. */
+  isArray?: { sites: number; checks: PerTable };
+  why: string;
+}
+
+const OVERRIDE_TABLE_SITES: Record<string, OverrideTableSites> = {
+  'lib/auth/effective-permissions.ts': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 2 },
+    isArray: { sites: 2, checks: { user_permission_overrides: 1 } },
+    why: "the backup loader: readOverrides refuses an answer that is not a list (its own Array.isArray), and the owner's platform-managed read checks with Array.isArray.",
+  },
+  'app/(dashboard)/dashboard/settings/roles/page.tsx': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
+    isArray: { sites: 1, checks: { role_permission_overrides: 1, user_permission_overrides: 1 } },
+    why: 'the editable matrix: one Array.isArray check over its three reads throws to the settings boundary before the rows are used.',
+  },
+  'app/api/cron/recurring-pos/route.ts': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
+    why: 'which template creators are told: listRows; an answer that is not a list tells no creator and is reported.',
+  },
+  'server/services/returns-notify.ts': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
+    why: 'who is told about a return: listRows; the catch reports and tells no one.',
+  },
+  'server/services/maintenance-notify.ts': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
+    why: 'who is told about a maintenance request: listRows; the catch reports and tells no one.',
+  },
+  'server/services/digest.ts': {
+    reads: {
+      role_permission_overrides: 1,
+      user_permission_overrides: 1,
+      role_default_permissions: 1,
+    },
+    why: 'what each digest recipient may read: listRows on the role reads, requireList on the paginated member read; the organization is skipped and reported.',
+  },
+  'server/services/platform/permission-exceptions.ts': {
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
+    why: "the console's Users tab: listRows; the column shows as unavailable.",
+  },
+  'server/actions/permissions.ts': {
+    reads: {},
+    writes: { role_permission_overrides: 3, user_permission_overrides: 2 },
+    why: "writes only: the Roles page's grant, revoke and clear.",
+  },
+};
+
+const TABLES = OVERRIDE_TABLES.join('|');
+const OVERRIDE_TABLE_FROM = new RegExp(
+  `\\.from\\(\\s*['"](${TABLES})['"]\\s*\\)\\s*\\.(\\w+)\\s*\\(`,
+  'g',
+);
+/**
+ * A strict check that names the table, by mechanism. `listRows` may carry a
+ * row type (`listRows<{ role: string; granted: boolean }>(`), so the optional
+ * type argument is skipped up to its closing `>`; it holds no parentheses.
+ */
+const STRICT_CHECKS = [
+  new RegExp(`\\blistRows\\s*(?:<[^()]*?>)?\\s*\\(\\s*['"](${TABLES})['"]`, 'g'),
+  new RegExp(`\\brequireList\\s*:\\s*['"](${TABLES})['"]`, 'g'),
+  new RegExp(`\\breadOverrides\\s*\\(\\s*['"](${TABLES})['"]`, 'g'),
+];
+
+/** Per file: the override-table reads and writes, the strict checks, the Array.isArray sites. */
+function overrideTableCensus() {
+  const out: Record<
+    string,
+    { reads: PerTable; writes: PerTable; strict: PerTable; isArray: number }
+  > = {};
+  for (const file of sourceFiles(SRC)) {
+    if (isTestFile(file)) continue;
+    const code = codeOnly(readFileSync(file, 'utf8'));
+    const reads: PerTable = {};
+    const writes: PerTable = {};
+    for (const [, table, method] of code.matchAll(OVERRIDE_TABLE_FROM)) {
+      const into = method === 'select' ? reads : writes;
+      into[table as OverrideTable] = (into[table as OverrideTable] ?? 0) + 1;
+    }
+    if (Object.keys(reads).length === 0 && Object.keys(writes).length === 0) continue;
+    const strict: PerTable = {};
+    for (const pattern of STRICT_CHECKS) {
+      for (const [, table] of code.matchAll(pattern)) {
+        strict[table as OverrideTable] = (strict[table as OverrideTable] ?? 0) + 1;
+      }
+    }
+    out[path.relative(SRC, file).split(path.sep).join('/')] = {
+      reads,
+      writes,
+      strict,
+      isArray: [...code.matchAll(/\bArray\.isArray\s*\(/g)].length,
+    };
+  }
+  return out;
+}
 
 /**
  * A context written in place for can() or canDistributeBundles() with no
@@ -164,5 +284,47 @@ describe("no request falls back to a role's static permissions (docket S19)", ()
     expect(
       sitesOf(/\b(?:can|canDistributeBundles)\s*\(\s*\{(?![^{}]*\bpermissions\b)[^{}]*\}/g),
     ).toEqual(counts(IN_PLACE_CONTEXTS));
+  });
+});
+
+describe('every override-table read refuses an answer that is not a list (docket S27)', () => {
+  it('reads the override tables only at the census sites, each read with a strict check naming its table', () => {
+    const census = overrideTableCensus();
+    const found = Object.fromEntries(
+      Object.entries(census).map(([file, c]) => {
+        const site = OVERRIDE_TABLE_SITES[file];
+        // A strict check by mechanism, plus the reads an annotated
+        // Array.isArray site checks (only annotated sites count: digest.ts has
+        // others, for embedded relations).
+        const checked: PerTable = {};
+        for (const table of OVERRIDE_TABLES) {
+          const n = (c.strict[table] ?? 0) + (site?.isArray?.checks[table] ?? 0);
+          if (n > 0) checked[table] = n;
+        }
+        return [
+          file,
+          {
+            reads: c.reads,
+            writes: c.writes,
+            checked,
+            isArraySites: site?.isArray ? c.isArray : null,
+          },
+        ];
+      }),
+    );
+    expect(found).toEqual(
+      Object.fromEntries(
+        Object.entries(OVERRIDE_TABLE_SITES).map(([file, site]) => [
+          file,
+          {
+            reads: site.reads,
+            writes: site.writes ?? {},
+            // Exactly one strict check per read.
+            checked: site.reads,
+            isArraySites: site.isArray ? site.isArray.sites : null,
+          },
+        ]),
+      ),
+    );
   });
 });
