@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { dbPermissionRefusedCopy } from '@stockpilot/core';
+import { dbPermissionRefusedCopy, isUuid } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
@@ -317,6 +317,19 @@ export default function PoReceiveScreen() {
   // both itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no PO:
+    // the not-found state at once, with nothing read. Postgres refuses it,
+    // so the reads could only fail, and the screen showed their raw text
+    // with a Try again that could never work.
+    if (!isUuid(id)) {
+      setHeader(null);
+      setLines([]);
+      setGroups({});
+      setReceipts([]);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
