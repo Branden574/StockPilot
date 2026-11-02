@@ -59,6 +59,8 @@ export default async function AdminOverviewPage() {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', ctx.organizationId)
       .is('accepted_at', null)
+      // Withdrawn (a removal or an account deletion) is never pending.
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString()),
     supabase
       .from('audit_logs')

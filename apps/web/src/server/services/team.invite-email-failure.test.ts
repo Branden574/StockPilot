@@ -54,7 +54,8 @@ function existingInviteStub() {
       },
       error: null,
     },
-    'organization_invites.update': { data: null, error: null },
+    // The renewal returns the row it renewed (0 rows: withdrawn or accepted meanwhile).
+    'organization_invites.update': { data: { id: 'invite-1' }, error: null },
     'user_profiles.select': {
       data: { full_name: 'Carsten Hartley Fowler', email: 'carsten@north.example' },
       error: null,

@@ -793,6 +793,21 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Member removal releases open work (0429, B94; number provisional): an
+  # AFTER DELETE trigger on organization_members (SECURITY DEFINER, owned by
+  # postgres, EXECUTE for nobody) releases the deleted row's person's counts
+  # in progress, picks, open deliveries, scheduled events, maintenance local
+  # owner, escalation claims and warehouse manager in THAT organization only,
+  # on every path that deletes the row (Team, a member leaving, an Act-as
+  # seat ended), and returns at once inside an organization or account
+  # deletion. It audits each release with reason null and a cause, keys the
+  # actor on auth.uid() (never current_user), touches no stock, and agrees
+  # with account deletion's release (PAR). member_open_work, the Remove
+  # dialog's read (EXECUTE to authenticated only), answers only an admin
+  # holding members:remove in the row's organization. The race and lock
+  # proofs are scripts/db-concurrency/0429_member_release_race.sh and
+  # 0429_migration_lock_footprint.sh.
+  supabase/tests/0429_member_removal_releases_open_work.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

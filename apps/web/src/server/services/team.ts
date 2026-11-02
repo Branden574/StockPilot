@@ -13,9 +13,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
+import { inviteIsClosed } from '@/lib/people/invite-closed';
+import { orderBusyRefusal } from '@/server/services/lib/order-busy';
 import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
 import { type Role } from '@stockpilot/core';
+import { z } from 'zod';
 
 import { audit, insertAuditRowReported } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -36,6 +39,59 @@ function formatInviteExpiry(iso: string): string {
     timeZone: 'UTC',
   });
 }
+
+/**
+ * B94 review: a withdrawn invitation (revoked_at set by a removal, 0429, or
+ * an account deletion, 0393) is terminal, whatever its expiry says. Resend
+ * refuses it with this answer.
+ */
+const WITHDRAWN_INVITE_MESSAGE =
+  'This invite was withdrawn when the person who sent it left the workspace. Send a new invite instead.';
+
+/**
+ * B94: what removing one member releases in this organization, per kind, as
+ * public.member_open_work (migration 0429) counts it with the release's own
+ * predicates, and how many invitations they sent there that are still
+ * pending: not accepted, not withdrawn and not expired, as Pending invites
+ * lists them (the removal withdraws them, as account deletion does, and the
+ * expired ones too). The
+ * Remove dialog names the first three, and the maintenance requests,
+ * warehouses and invitations when there are any.
+ */
+export interface MemberOpenWork {
+  cycleCounts: number;
+  picks: number;
+  deliveries: number;
+  scheduleEvents: number;
+  maintenanceRequests: number;
+  escalationClaims: number;
+  warehouses: number;
+  pendingInvites: number;
+}
+
+/**
+ * The dialog's read: the numbers, a refusal, a read that failed, or no read
+ * function at all ("unavailable": migration 0429 not pushed yet, or rolled
+ * back; its trigger and its read are created and dropped together, so then
+ * removing releases nothing and the dialog must not say it does).
+ */
+export type MemberOpenWorkResult =
+  | { kind: 'ok'; counts: MemberOpenWork }
+  | { kind: 'forbidden' }
+  | { kind: 'failed' }
+  | { kind: 'unavailable' };
+
+const openWorkCount = z.number().int().nonnegative();
+const memberOpenWorkSchema = z.object({
+  cycleCounts: openWorkCount,
+  picks: openWorkCount,
+  deliveries: openWorkCount,
+  scheduleEvents: openWorkCount,
+  maintenanceRequests: openWorkCount,
+  escalationClaims: openWorkCount,
+  warehouses: openWorkCount,
+  pendingInvites: openWorkCount,
+});
 
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -175,6 +231,9 @@ export class TeamService {
       .select('id, email, role, token, expires_at, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('accepted_at', null)
+      // A withdrawn invitation (revoked_at: a removal, 0429, or an account
+      // deletion, 0393) is never pending, whatever its expiry says.
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
@@ -253,13 +312,14 @@ export class TeamService {
       }
     }
 
-    // Already invited and not yet expired?
+    // Already invited, not withdrawn and not yet expired?
     const { data: existingInvite } = await this.ctx.supabase
       .from('organization_invites')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('email', normalizedEmail)
       .is('accepted_at', null)
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle();
     if (existingInvite) {
@@ -369,7 +429,7 @@ export class TeamService {
     const { data: invite, error: fetchErr } = await this.ctx.supabase
       .from('organization_invites')
       .select(
-        `id, email, role, token, accepted_at, organizations:organization_id (name)`,
+        `id, email, role, token, accepted_at, revoked_at, organizations:organization_id (name)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
@@ -382,19 +442,40 @@ export class TeamService {
         'This invite has already been accepted — no need to resend.',
       );
     }
+    // A withdrawn invitation is terminal (0098): removing the member who sent
+    // it (0429) or deleting their account (0393) set revoked_at and moved
+    // expires_at into the past. Renewing the expiry here would bring it back
+    // with the role and warehouse the removed person chose, so a Team page
+    // loaded before the removal must not be able to.
+    if (invite.revoked_at) {
+      throw new ServiceError('conflict', WITHDRAWN_INVITE_MESSAGE);
+    }
 
     // Refresh the expiry so a recipient who acts on a re-sent email
     // doesn't immediately hit "invite expired". The reminder email states
     // this NEW expiry (registry: invite-reminder).
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { error: updErr } = await this.ctx.supabase
+    // Only a row still open: the invitation can be withdrawn or accepted
+    // between the read above and this write. 0 rows is not a success
+    // (pattern #2), and nothing is sent then.
+    const { data: renewed, error: updErr } = await this.ctx.supabase
       .from('organization_invites')
       .update({
         expires_at: newExpiresAt,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
+      .eq('id', inviteId)
+      .is('accepted_at', null)
+      .is('revoked_at', null)
+      .select('id')
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!renewed) {
+      throw new ServiceError(
+        'conflict',
+        'This invite is no longer pending: it was accepted, withdrawn or revoked. Refresh the page.',
+      );
+    }
 
     // Inviter name: prefer current user's full_name, fallback to email.
     const { data: profile } = await this.ctx.supabase
@@ -573,12 +654,43 @@ export class TeamService {
       );
     }
     const removedUserId = target.user_id as string;
-    const { error } = await this.ctx.supabase
+    // B94: the delete also releases the person's open work in this
+    // organization (migration 0429's trigger, in the same statement), so it
+    // can wait on a count or order row another request holds: lock_timeout
+    // 5 s gives 55P03, nothing is kept, and the same press is safe to repeat.
+    // It returns the row it removed, because 0 rows is not a success
+    // (pattern #2): the row policy refused it (members:remove granted below
+    // admin; 0140's delete policy needs admin), or another admin removed the
+    // person first. Both answers come before any side effect below.
+    const { data: deleted, error } = await this.ctx.supabase
       .from('organization_members')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', memberId);
-    if (error) throw new ServiceError('internal_error', error.message);
+      .eq('id', memberId)
+      .select('id');
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
+    if ((deleted ?? []).length === 0) {
+      const { data: still, error: stillError } = await this.ctx.supabase
+        .from('organization_members')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', memberId)
+        .maybeSingle();
+      // A re-read that failed answers neither question: never tell an admin
+      // only an owner or admin can remove a member because a read failed.
+      // Nothing was written, so busy is safe to repeat (orderBusyRefusal).
+      if (stillError) {
+        const detail = `[team.removeMember] the delete removed no row and the re-read failed for ${memberId}: ${postgrestErrorText(stillError)}`;
+        console.error(detail);
+        throw orderBusyRefusal(stillError) ?? new ServiceError('internal_error', detail);
+      }
+      if (!still) {
+        throw new ServiceError('not_found', 'This member was already removed.');
+      }
+      // The Remove dialog says the same when its read is refused
+      // (REMOVE_MEMBER_COPY.forbidden).
+      throw new ServiceError('forbidden', 'Only an owner or admin can remove a member.');
+    }
 
     // Belt-and-braces cleanup of per-warehouse access grants for the
     // removed user inside THIS organization. Most other org-scoped
@@ -727,6 +839,43 @@ export class TeamService {
         this.ctx,
       );
     }
+  }
+
+  /**
+   * B94: what Remove would release, read when the dialog opens. The database
+   * decides who may ask (an admin holding members:remove in the row's
+   * organization, as the removal itself needs), so a refusal is its own
+   * answer. A missing function (PGRST202 from PostgREST's schema cache, 42883
+   * from Postgres) is "unavailable": migration 0429 is not there (the web
+   * live before the push, or a rollback, which drops the read and the release
+   * trigger together), so removing releases nothing and the dialog says
+   * nothing about releasing. Any other failure (a network error, an answer of
+   * the wrong shape) fails closed (pattern #1): logged, "failed", never a
+   * throw and never a zero.
+   */
+  async openWork(memberId: string): Promise<MemberOpenWorkResult> {
+    const { data, error } = await this.ctx.supabase.rpc('member_open_work', {
+      p_member_id: memberId,
+    });
+    if (error) {
+      if (error.code === '42501' && error.message === 'forbidden') return { kind: 'forbidden' };
+      if (error.code === 'PGRST202' || error.code === '42883') {
+        console.warn('[team.openWork] member_open_work is missing (migration 0429 not applied)');
+        return { kind: 'unavailable' };
+      }
+      console.error(
+        `[team.openWork] member_open_work failed for ${memberId}: ${postgrestErrorText(error)}`,
+      );
+      return { kind: 'failed' };
+    }
+    const parsed = memberOpenWorkSchema.safeParse(data);
+    if (!parsed.success) {
+      console.error(
+        `[team.openWork] member_open_work answered an unexpected shape for ${memberId}`,
+      );
+      return { kind: 'failed' };
+    }
+    return { kind: 'ok', counts: parsed.data };
   }
 
   /**
@@ -1160,14 +1309,16 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, revoked_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
   if (inviteErr) throw new ServiceError('internal_error', inviteErr.message);
   if (!invite) throw new ServiceError('not_found', 'Invite not found');
   if (invite.accepted_at) throw new ServiceError('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // Withdrawn (revoked_at) or past its expiry: both answer as expired, as
+  // the invite page shows them (inviteIsClosed).
+  if (inviteIsClosed(invite)) {
     throw new ServiceError('validation_error', 'Invite has expired');
   }
 

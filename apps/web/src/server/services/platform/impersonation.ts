@@ -66,13 +66,24 @@ export async function sweepExpiredImpersonations(
       .update({ default_organization_id: row.previous_organization_id })
       .eq('id', row.admin_user_id)
       .eq('default_organization_id', row.target_organization_id);
-    // Delete only the impersonation grant (never a real membership).
-    await admin
+    // Delete only the impersonation grant (never a real membership). Since
+    // migration 0429 the delete also releases the work the seat held, so it
+    // can wait on a busy row and fail (B94). Then the session stays open:
+    // this sweep reads only sessions that have not ended, so the next one
+    // tries again. Ending it here would leave the seat with nothing to
+    // remove it.
+    const { error: seatError } = await admin
       .from('organization_members')
       .delete()
       .eq('organization_id', row.target_organization_id)
       .eq('user_id', row.admin_user_id)
       .not('impersonation_expires_at', 'is', null);
+    if (seatError) {
+      console.error(
+        `[impersonation.sweep] could not remove the Act-as seat of session ${row.id}; left open for the next sweep: ${seatError.message}`,
+      );
+      continue;
+    }
     await admin
       .from('platform_impersonation_sessions')
       .update({ ended_at: nowIso })
@@ -227,13 +238,18 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
   };
 
   // Delete ONLY the impersonation grant (never a real membership): scoped to
-  // impersonation_expires_at not null.
-  await admin
+  // impersonation_expires_at not null. Since migration 0429 the delete also
+  // releases the work the seat held, so it can fail on a busy row (B94).
+  // Then stop here, before the active organization is put back and the
+  // session ended: an ended session with its owner seat still in place would
+  // outlive the stop until its expiry, and no sweep would come back for it.
+  const { error: seatError } = await admin
     .from('organization_members')
     .delete()
     .eq('organization_id', s.target_organization_id)
     .eq('user_id', input.adminUserId)
     .not('impersonation_expires_at', 'is', null);
+  if (seatError) throw new Error(`impersonation seat: ${seatError.message}`);
 
   // Restore the admin's previous active org.
   await admin

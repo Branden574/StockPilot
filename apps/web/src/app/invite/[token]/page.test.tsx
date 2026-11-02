@@ -13,6 +13,7 @@ type Invite = {
   role: string;
   expires_at: string;
   accepted_at: string | null;
+  revoked_at?: string | null;
 } | null;
 
 let invite: Invite = null;
@@ -23,11 +24,24 @@ vi.mock('@/lib/auth/session', () => ({ getServerSession: async () => session }))
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     from: (table: string) => ({
-      select: () => ({
+      // Only the columns the page's select names come back, as from
+      // PostgREST: a state the page reads from a column it never selected
+      // fails here.
+      select: (cols: string) => ({
         eq: () => ({
           maybeSingle: async () =>
             table === 'organization_invites'
-              ? { data: invite }
+              ? {
+                  data: invite
+                    ? Object.fromEntries(
+                        cols
+                          .split(',')
+                          .map((c) => c.trim())
+                          .filter((c) => c in invite!)
+                          .map((c) => [c, invite![c as keyof NonNullable<Invite>]]),
+                      )
+                    : null,
+                }
               : { data: { name: 'Lab Charter School' } },
         }),
       }),
@@ -102,6 +116,22 @@ describe('/invite/[token]', () => {
     expect(
       screen.getByText('Ask someone at Lab Charter School to invite you again.'),
     ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to sign in' })).toBeInTheDocument();
+  });
+
+  it('withdrawn (B94 review): the expired answer even when an old Resend moved the expiry ahead', async () => {
+    // Removing a member or deleting an account withdraws the invitations the
+    // person sent (revoked_at). A Resend from a page loaded before that used
+    // to renew expires_at; the invitation must stay closed anyway.
+    invite = makeInvite({ revoked_at: PAST, expires_at: FUTURE });
+    session = { email: 'new.person@example.test' };
+    await open();
+    expect(screen.getByRole('heading', { level: 1, name: 'Invite expired' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Ask someone at Lab Charter School to invite you again.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept invite' })).toBeNull();
+    expect(screen.queryByRole('form')).toBeNull();
     expect(screen.getByRole('link', { name: 'Go to sign in' })).toBeInTheDocument();
   });
 

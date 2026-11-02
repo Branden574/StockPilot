@@ -454,3 +454,105 @@ describe('OrderTimeline — a paper hand-over and the legacy status change (B22)
     expect(screen.queryByText('Physical signature recorded')).toBeNull();
   });
 });
+// B94 (migration 0429): removing a member releases the orders they were picking
+// and the deliveries assigned to them, and the release writes the order's
+// history rows itself: order.picking_released and order.delivery_unassigned,
+// with metadata.cause (member_removed, member_left or act_as_seat_ended) and
+// reason null. The history says why in words, never the slug; a delivery says
+// who can move it on from where it stands; and the support session's rows,
+// which name no actor, read "System", never "Public".
+describe('OrderTimeline — work released when a member leaves (B94)', () => {
+  function released(
+    id: string,
+    event: 'order.picking_released' | 'order.delivery_unassigned',
+    md: Record<string, unknown>,
+    userId: string | null = 'u1',
+  ) {
+    return {
+      id,
+      event,
+      created_at: '2026-11-02T17:00:00Z',
+      user_id: userId,
+      metadata: { entity_type: 'order_request', entity_id: 'order-1', reason: null, ...md },
+    };
+  }
+
+  it('names a cleared driver, and says a manager can assign one while the order is staged for delivery', async () => {
+    await renderTimeline([
+      released('a', 'order.delivery_unassigned', {
+        cause: 'member_removed',
+        status: 'staged_for_delivery',
+      }),
+    ]);
+    expect(screen.getByText('Delivery driver cleared')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'No driver is assigned now. A manager can assign one while the order is staged for delivery.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Released because the person was removed from the workspace.'),
+    ).toBeInTheDocument();
+  });
+
+  it('for a delivery already on its way, says who can finish the hand-over instead', async () => {
+    await renderTimeline([
+      released('a', 'order.delivery_unassigned', { cause: 'member_removed', status: 'in_transit' }),
+    ]);
+    expect(screen.getByText('No driver is assigned now.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'A manager, or anyone who can approve orders here, can finish the hand-over.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/while the order is staged for delivery/)).toBeNull();
+  });
+
+  it('says why a pick was released, for each cause, in words', async () => {
+    await renderTimeline([
+      released('a', 'order.picking_released', { cause: 'member_removed' }),
+      released('b', 'order.picking_released', { cause: 'member_left' }),
+      released('c', 'order.picking_released', { cause: 'act_as_seat_ended' }, null),
+    ]);
+    expect(screen.getAllByText('Picking released')).toHaveLength(3);
+    expect(
+      screen.getByText('Released because the person was removed from the workspace.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Released because the person left the workspace.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Released when a StockPilot support session ended.'),
+    ).toBeInTheDocument();
+  });
+
+  it('never prints the cause slug or a Reason line, and the support session reads System, not Public', async () => {
+    await renderTimeline([
+      released('a', 'order.picking_released', { cause: 'member_removed' }),
+      released(
+        'b',
+        'order.delivery_unassigned',
+        { cause: 'act_as_seat_ended', status: 'staged_for_delivery' },
+        null,
+      ),
+    ]);
+    expect(document.body.textContent).not.toMatch(/member_removed|act_as_seat_ended|Reason:/);
+    const entries = document.querySelectorAll('[data-slot="timeline-entry"]');
+    expect(entries[1]).toHaveTextContent('System');
+    expect(entries[1]).not.toHaveTextContent('Public');
+  });
+
+  it('an ordinary release by a picker keeps its one line, with no cause line', async () => {
+    await renderTimeline([
+      {
+        id: 'a',
+        event: 'order.picking_released',
+        created_at: '2026-11-02T17:00:00Z',
+        user_id: 'u1',
+        metadata: { entity_type: 'order_request', entity_id: 'order-1' },
+      },
+    ]);
+    expect(
+      screen.getByText('The picking lock was released — any teammate can claim it now.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Released (because|when)/)).toBeNull();
+  });
+});

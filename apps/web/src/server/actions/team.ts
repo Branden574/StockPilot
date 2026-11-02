@@ -10,13 +10,18 @@ import {
   withContext,
 } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
-import { TeamService, acceptInviteWithToken } from '@/server/services/team';
+import {
+  TeamService,
+  acceptInviteWithToken,
+  type MemberOpenWorkResult,
+} from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { factorsOf, readMfaFactorList, type MfaFactor } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
+import { inviteIsClosed } from '@/lib/people/invite-closed';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -158,6 +163,24 @@ export async function removeMemberAction(memberId: string): Promise<ActionResult
     await svc.removeMember(parsed.data.memberId);
     revalidatePath('/dashboard/team');
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * B94: what Remove would release (counts in progress, picks, deliveries, and
+ * the rest), for the Remove dialog when it opens. Read only; the database
+ * decides who may ask (TeamService.openWork).
+ */
+export async function getMemberOpenWorkAction(
+  memberId: string,
+): Promise<ActionResult<MemberOpenWorkResult>> {
+  const parsed = removeMemberSchema.safeParse({ memberId });
+  if (!parsed.success) return err('validation_error', 'Invalid member id');
+  try {
+    const svc = await TeamService.forCurrentUser();
+    return ok(await svc.openWork(parsed.data.memberId));
   } catch (e) {
     return toResult(e);
   }
@@ -510,13 +533,15 @@ export async function acceptInviteWithSignupAction(input: {
   //    to clean up later.
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, accepted_at, expires_at')
+    .select('id, organization_id, email, accepted_at, expires_at, revoked_at')
     .eq('token', parsed.data.token)
     .maybeSingle();
   if (inviteErr) return err('internal_error', inviteErr.message);
   if (!invite) return err('not_found', 'Invite not found');
   if (invite.accepted_at) return err('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // Withdrawn (revoked_at) or past its expiry: both answer as expired
+  // (inviteIsClosed), before any account is created.
+  if (inviteIsClosed(invite)) {
     return err('validation_error', 'Invite has expired');
   }
 

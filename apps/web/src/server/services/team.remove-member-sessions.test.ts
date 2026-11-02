@@ -49,7 +49,9 @@ function makeCtxStub() {
       data: { role: 'admin', user_id: REMOVED_USER },
       error: null,
     },
-    'organization_members.delete': { data: null, error: null },
+    // B94: the delete returns the row it removed; 0 rows is a refusal
+    // (team.remove-member-zero-rows.test.ts), so these cases remove one.
+    'organization_members.delete': { data: [{ id: MEMBER_ROW_ID }], error: null },
   });
 }
 

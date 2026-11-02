@@ -70,6 +70,8 @@ const EVENT_LABELS: Record<string, string> = {
   'order.staged_for_pickup': 'Staged for pickup',
   'order.staged_for_delivery': 'Staged for delivery',
   'order.delivery_assigned': 'Delivery assigned',
+  // B94 (0429): the driver left the organization and the release cleared them.
+  'order.delivery_unassigned': 'Delivery driver cleared',
   'order.in_transit': 'In transit',
   'order.signature_collected': 'Signature collected',
   'order.completed': 'Completed',
@@ -154,6 +156,18 @@ function eventLabel(event: string, metadata: Record<string, unknown> | null): st
 
 const prettyStatus = (v: unknown): string =>
   typeof v === 'string' ? v.replace(/_/g, ' ') : String(v);
+
+/**
+ * B94 (0429): why a pick or a delivery was released, when the release wrote
+ * it because its person left the organization (metadata.cause). Never the
+ * slug itself, and never as a "Reason:" line: the release writes reason null,
+ * because reason is for words a person typed.
+ */
+const RELEASE_CAUSE_LINES: Readonly<Record<string, string>> = {
+  member_removed: 'Released because the person was removed from the workspace.',
+  member_left: 'Released because the person left the workspace.',
+  act_as_seat_ended: 'Released when a StockPilot support session ended.',
+};
 
 /**
  * Human-readable detail lines (owner request 2026-07-12): regular members
@@ -260,6 +274,20 @@ function humanDetails(
     case 'order.delivery_assigned':
       lines.push('A delivery driver was assigned.');
       break;
+    case 'order.delivery_unassigned':
+      // A delivery can be given a new driver only while it is staged for
+      // delivery (assign_order_delivery); one already on its way is finished
+      // by an approver collecting the signature or a manager recording a
+      // paper one.
+      if (md.status === 'in_transit') {
+        lines.push('No driver is assigned now.');
+        lines.push('A manager, or anyone who can approve orders here, can finish the hand-over.');
+      } else {
+        lines.push(
+          'No driver is assigned now. A manager can assign one while the order is staged for delivery.',
+        );
+      }
+      break;
     case 'order.in_transit':
       lines.push('Out for delivery.');
       break;
@@ -313,6 +341,14 @@ function humanDetails(
     }
     default:
       break;
+  }
+
+  if (
+    (event === 'order.picking_released' || event === 'order.delivery_unassigned') &&
+    typeof md.cause === 'string' &&
+    RELEASE_CAUSE_LINES[md.cause]
+  ) {
+    lines.push(RELEASE_CAUSE_LINES[md.cause]!);
   }
 
   // Facts that read well regardless of event type.
@@ -391,7 +427,8 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
         const label = eventLabel(row.event, row.metadata);
         const profile = row.user_id ? (usersById.get(row.user_id) ?? null) : null;
         // An event with no user is a public-link step ("Public"), unless its
-        // marker records that the actor deleted their account (0393).
+        // marker records that the actor deleted their account (0393) or the
+        // release wrote it with no actor (B94: "System").
         const actor = orderTimelineActor(profile, row);
         const details = humanDetails(row.event, row.metadata, actor, zone);
         return (

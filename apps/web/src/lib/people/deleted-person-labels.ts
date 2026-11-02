@@ -22,12 +22,19 @@ export function auditActorName(row: {
 
 /**
  * An order timeline entry's actor: the member's name, else email; "Unknown
- * user" for a member the reader cannot see; "Public" for a public-link step
- * (no user); "Deleted user" when the row names no user and is stamped.
+ * user" for a member the reader cannot see; "Deleted user" when the row names
+ * no user and is stamped; "System" for a row with no user that names a cause
+ * (B94: the release migration 0429 writes when a member leaves, with no actor
+ * for the admin client and an ended Act-as seat), as the audit page says;
+ * else "Public" for a public-link step.
  */
 export function orderTimelineActor(
   profile: { full_name: string | null; email: string | null } | null,
-  row: { user_id: string | null; deleted_users?: unknown },
+  row: {
+    user_id: string | null;
+    deleted_users?: unknown;
+    metadata?: Record<string, unknown> | null;
+  },
 ): string {
   return (
     profile?.full_name ??
@@ -36,7 +43,9 @@ export function orderTimelineActor(
       ? 'Unknown user'
       : isDeletedPerson(row.user_id, row.deleted_users, 'user_id')
         ? DELETED_USER_LABEL
-        : 'Public')
+        : typeof row.metadata?.cause === 'string'
+          ? 'System'
+          : 'Public')
   );
 }
 
