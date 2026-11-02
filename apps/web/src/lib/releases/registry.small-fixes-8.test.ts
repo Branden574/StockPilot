@@ -512,9 +512,14 @@ describe('the small fixes slice 8 release', () => {
     // The run's notification, and the audit log's System row for a template
     // whose purchase order could not be saved.
     const runs = source('server/services/recurring-pos.ts');
+    // Re-pinned by fix/recurring-po-auto-order-words-b64-b105 (B64, B105, 2026-11-02; was: "created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it."): the notice names Mark as ordered, on the web, as this release's line does, and says what the run did: it marks a purchase order as ordered and sends nothing to the supplier ("1 marked as ordered", was "1 sent"). A template is edited on the web, in Recurring POs (was: "Edit or disable it.").
     expect(runs).toContain(
-      'created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
+      'created its purchase order as a draft, but it could not be marked as ordered. Open it in Purchase orders on the web and select Mark as ordered.',
     );
+    expect(runs).not.toContain('and send it.');
+    expect(runs).not.toContain('and send them.');
+    expect(runs).not.toContain('Edit or disable');
+    expect(runs).not.toMatch(/\$\{summary\.sent\} sent\b/);
     // Re-pinned in review of this publish (was: "open it in Purchase orders
     // and send it", the notification's own words): a draft's page has no
     // Send. Its button is Mark as ordered, the same status change the
@@ -536,10 +541,12 @@ describe('the small fixes slice 8 release', () => {
       'If it says a purchase order could not be sent, open it in Purchase orders on the web and select Mark as ordered.',
     );
     expect(entry('recurring-run-says-why').howItAffectsYou).not.toContain('send it');
-    // The template's mode is called Auto-send in its form and its list.
+    // The template's mode was called Auto-send in its form and its list.
+    // Re-pinned by fix/recurring-po-auto-order-words-b64-b105 (B105, 2026-11-02; was: '<SelectItem value="send">Auto-send to supplier</SelectItem>' and "{tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}"): the mode only marks the purchase order as ordered and sends nothing to the supplier, so the form and the list now name what it does. This published line keeps the name the mode had when it was published; the new name is told in its own What's New entry.
     const panel = source('components/po/recurring-templates-panel.tsx');
-    expect(panel).toContain('<SelectItem value="send">Auto-send to supplier</SelectItem>');
-    expect(panel).toContain("{tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}");
+    expect(panel).toContain('<SelectItem value="send">Mark as ordered automatically</SelectItem>');
+    expect(panel).toContain("{tpl.send_mode === 'send' ? 'Auto-order' : 'Draft'}");
+    expect(panel).not.toContain('Auto-send');
     expect(entry('recurring-run-says-why').whatChanged).toContain(
       'It also names a template set to Auto-send whose purchase order could not be sent, kept as a draft.',
     );

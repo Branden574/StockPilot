@@ -408,7 +408,13 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
     });
   });
 
-  it('a purchase order created as a draft that could not be sent is named, and needs attention', () => {
+  // Re-pinned by fix/recurring-po-auto-order-words-b64-b105 (B64, B105,
+  // 2026-11-02; was: "..., 1 sent. ... could not be sent. Open it in Purchase
+  // orders and send it." and "... Open them in Purchase orders and send
+  // them."): the run marks a purchase order as ordered and sends nothing, and
+  // a draft's page has no Send. Its button is Mark as ordered, on the web
+  // (the phone shows a draft read-only).
+  it('a purchase order created as a draft that could not be marked as ordered is named, and needs attention', () => {
     expect(
       recurringRunNotice({
         ...base,
@@ -419,13 +425,13 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
       }),
     ).toEqual({
       title: 'Recurring purchase orders need attention',
-      body: 'Recurring purchase orders created 2 purchase orders, 1 sent. "Weekly Supplies" created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
+      body: 'Recurring purchase orders created 2 purchase orders, 1 marked as ordered. "Weekly Supplies" created its purchase order as a draft, but it could not be marked as ordered. Open it in Purchase orders on the web and select Mark as ordered.',
     });
     expect(
       recurringRunNotice({ ...base, created: 2, failures: 2, templatesSendFailed: ['A', 'B'] })
         ?.body,
     ).toContain(
-      '"A" and "B" created their purchase orders as drafts, but they could not be sent. Open them in Purchase orders and send them.',
+      '"A" and "B" created their purchase orders as drafts, but they could not be marked as ordered. Open each in Purchase orders on the web and select Mark as ordered.',
     );
   });
 
