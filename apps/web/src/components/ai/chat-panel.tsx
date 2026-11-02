@@ -240,6 +240,13 @@ export function ChatPanel() {
   // opening a chat, New chat, sending a message and attaching a file. A chat
   // that finishes loading after the count moved no longer replaces the screen.
   const askRef = React.useRef(0);
+  // The id of the chat on screen, or null for a new chat, set beside every
+  // setSessionId (B84). A delete empties the screen only if the chat it
+  // deleted is the one on screen when it answers.
+  const openIdRef = React.useRef<string | null>(null);
+  // Chats deleted on this page (B84). A read of one that arrives after its
+  // delete, answered before the delete ran, finds it gone.
+  const deletedRef = React.useRef(new Set<string>());
 
   // Load persisted session list + restore active session on mount.
   //
@@ -306,12 +313,14 @@ export function ChatPanel() {
       // Another chat was opened, New chat chosen, or a message or a file sent
       // while this chat loaded: that stays on screen (B84).
       if (askRef.current !== ask) return;
-      if (!res.ok || !json.ok) {
-        // Stored id is stale (expired or deleted elsewhere). Clear it.
+      if (deletedRef.current.has(id) || !res.ok || !json.ok) {
+        // Stored id is stale (expired or deleted elsewhere, or deleted here
+        // while this read was on its way, B84). Clear it.
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
         chatRef.current += 1;
+        openIdRef.current = null;
         setSessionId(null);
         setTurns([]);
         return;
@@ -323,6 +332,7 @@ export function ChatPanel() {
           toolCalls: Array<{ name: string; ok: boolean }> | null;
         }>) ?? [];
       chatRef.current += 1;
+      openIdRef.current = id;
       setSessionId(id);
       setTurns(
         messages.map((m) => ({
@@ -347,6 +357,7 @@ export function ChatPanel() {
 
   function startNewChat() {
     chatRef.current += 1;
+    openIdRef.current = null;
     setSessionId(null);
     setTurns([]);
     setInput('');
@@ -369,18 +380,18 @@ export function ChatPanel() {
   }
 
   async function deleteSession(id: string) {
-    // The chat on screen when Delete was pressed (B84).
-    const chat = chatRef.current;
     try {
       const res = await fetch(`/api/ai/sessions/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         toast.error("Couldn't delete this chat. Try again in a moment.");
         return;
       }
+      deletedRef.current.add(id);
       setSessions((cur) => cur.filter((s) => s.id !== id));
-      // Empty the screen only if that chat is still on it: a chat opened
-      // while the delete ran stays (B84).
-      if (id === sessionId && chatRef.current === chat) startNewChat();
+      // Empty the screen only if the deleted chat is the one on it now: a chat
+      // opened while the delete ran stays, and the deleted chat opened again
+      // meanwhile does not (B84).
+      if (openIdRef.current === id) startNewChat();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't delete this chat. Try again in a moment.",
@@ -469,6 +480,9 @@ export function ChatPanel() {
     const chat = chatRef.current;
     const onScreen = () => chatRef.current === chat;
     askRef.current += 1;
+    // Set once the answer's stream is open: by then the route has saved the
+    // question in its chat (B84).
+    let answerBegan = false;
     // Push the user turn AND a placeholder assistant turn — the
     // placeholder is what we mutate as text deltas stream in. The
     // index of the assistant turn in the array stays stable across
@@ -547,6 +561,7 @@ export function ChatPanel() {
       }
 
       const reader = res.body.getReader();
+      answerBegan = true;
       const decoder = new TextDecoder();
       let buf = '';
       let streamErrored = false;
@@ -589,6 +604,7 @@ export function ChatPanel() {
           } else if (event.type === 'done' && typeof event.sessionId === 'string') {
             const newSessionId = event.sessionId;
             if (onScreen() && newSessionId !== sessionId) {
+              openIdRef.current = newSessionId;
               setSessionId(newSessionId);
               if (typeof window !== 'undefined') {
                 window.localStorage.setItem(ACTIVE_SESSION_KEY, newSessionId);
@@ -622,12 +638,20 @@ export function ChatPanel() {
       // question is saved there (B84).
       if (!streamErrored || !onScreen()) void refreshSessions();
     } catch (err) {
+      // An answer cut off after it began (a dropped connection) in a chat the
+      // person has left: its question is saved there, so nothing is said on
+      // screen, and the rail is read again to list that chat, as for a stream
+      // error (B84).
+      if (answerBegan && !onScreen()) {
+        void refreshSessions();
+        return;
+      }
       const msg =
         err instanceof Error
           ? err.message
           : "Couldn't reach the assistant. Check your network and try again.";
-      // Said even after a chat change (B84): the message may not have
-      // reached the route at all.
+      // Said even after a chat change when no answer began (B84): the message
+      // may not have reached the route at all.
       toast.error(msg);
       replaceAssistantWithError(msg);
     } finally {
@@ -681,7 +705,13 @@ export function ChatPanel() {
                     >
                       <button
                         type="button"
-                        onClick={() => void loadSession(s.id)}
+                        onClick={() => {
+                          // While a file is read, a click on the chat already
+                          // open changes no chat, so the file's ISBNs still go
+                          // to it (B84).
+                          if (uploading && active) return;
+                          void loadSession(s.id);
+                        }}
                         aria-current={active ? 'true' : undefined}
                         className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col rounded-md px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
                       >
