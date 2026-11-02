@@ -276,7 +276,9 @@ describe('completePasswordResetAction', () => {
     });
     expect(reportError).toHaveBeenCalledTimes(1);
     const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
-    expect((reported as Error).message).toBe(refusal.message);
+    // The report carries GoTrue's text and code (lib/error-text.ts, C21).
+    expect((reported as Error).message).toContain(refusal.message);
+    expect((reported as Error).message).toContain(refusal.code);
     expect(context).toEqual({ tag: 'actions.auth.password_reset' });
     expect(signOut).not.toHaveBeenCalled();
   });

@@ -242,7 +242,8 @@ describe('enroll, remove and the policy say the fixed sentence (S31)', () => {
     const res = await unenrollFactorAction({ factorId: 'f1' });
     expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: UNEXPECTED } });
     const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
-    expect((reported as Error).message).toBe('Factor f1 not found');
+    // The report carries GoTrue's text and code (lib/error-text.ts, C21).
+    expect((reported as Error).message).toBe('Factor f1 not found (code mfa_factor_not_found)');
     expect(context).toEqual({
       tag: 'actions.mfa.unenroll',
       organizationId: 'org-1',

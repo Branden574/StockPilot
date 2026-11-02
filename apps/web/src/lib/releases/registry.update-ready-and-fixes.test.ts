@@ -535,8 +535,13 @@ describe('the update-ready-and-fixes release', () => {
     expect(panel).toContain('const res = await disconnectEasyPostAction();');
     expect(intacct).toContain("const res = await disconnectAction({ provider: 'sage_intacct' });");
     expect(intacct).toContain('const res = await saveIntacctSettingsAction({');
+    // S31: through actionErrorResult, which answers a ServiceError other than
+    // internal_error with its own code and words.
     expect(source('server/actions/connections.ts')).toContain(
-      'if (e instanceof ServiceError) return err(e.code, e.message, e.details);',
+      "return actionErrorResult(e, 'actions.connections');",
+    );
+    expect(source('server/lib/action-error-result.ts')).toContain(
+      'return err(e.code, e.message, details);',
     );
     // The plan's other example, rotating a webhook secret, has no button.
     expect(e.whatChanged).not.toMatch(/webhook|rotat/i);
