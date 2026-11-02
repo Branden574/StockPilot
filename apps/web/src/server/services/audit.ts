@@ -412,9 +412,11 @@ export type AuditEvent =
   // Ownership transfer — the action doesn't exist yet but the event
   // type lets the fixer agent emit it when the missing flow lands.
   | 'organization.ownership.transferred'
-  // Platform-admin provisioned a brand-new tenant org for a customer
-  // via /dashboard/admin/orgs/new. Cross-org event: organization_id
-  // is the NEW org's id; user_id is the platform admin who acted.
+  // Platform-admin provisioned a brand-new tenant org: for a customer
+  // (Platform > Provision, createOrgForCustomerAction), or their own
+  // (/onboarding, createOrganizationAction, metadata.via 'onboarding').
+  // Cross-org event: organization_id is the NEW org's id; user_id is the
+  // platform admin who acted.
   | 'organization.provisioned_by_platform_admin'
   // Integrations module (Phase 3a connector framework). Connect lands when
   // the OAuth callback writes the token to Vault (status active); disconnect

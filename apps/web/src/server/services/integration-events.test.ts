@@ -2,7 +2,17 @@ import { createHmac } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import { buildRequest, describeEvent, signWebhook } from './integration-events';
+import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+
+import type { ModuleId } from '@stockpilot/core';
+
+import {
+  buildRequest,
+  describeEvent,
+  INTEGRATION_WRITE_REFUSED,
+  IntegrationEndpointsService,
+  signWebhook,
+} from './integration-events';
 
 const webhookEndpoint = {
   id: 'ep-1',
@@ -136,5 +146,90 @@ describe('buildRequest', () => {
       expect(parsed.text).toContain('ORD-9');
       expect(parsed).not.toHaveProperty('data'); // chat shape, not the webhook envelope
     }
+  });
+});
+
+/**
+ * docket S27: the webhook and alert endpoints report what the database did.
+ * The service gates on the member's effective Manage integrations, but the
+ * table's row rule (0169) still asks for the admin role, so a member given
+ * the key passed the gate and the database changed nothing: turning an
+ * endpoint off, removing it and rotating its secret all reported success on 0
+ * rows, and rotating returned a secret that was never stored (the old one,
+ * perhaps leaked, stayed live). Creating one read the refusal as an internal
+ * error.
+ */
+describe('IntegrationEndpointsService: writes report what the database did', () => {
+  const service = (results: Record<string, unknown>) => {
+    const stub = makeSupabaseStub(results as never);
+    return {
+      stub,
+      svc: new IntegrationEndpointsService(
+        makeServiceContext(stub.client, {
+          role: 'manager',
+          permissions: new Set(['integrations:manage']),
+          enabledModules: new Set<ModuleId>(['integrations']),
+        }),
+      ),
+    };
+  };
+  const NOT_FOUND = { code: 'not_found', message: 'Endpoint not found.' };
+
+  it('turning an endpoint on or off: 0 rows is not found; the row it changed is done', async () => {
+    await expect(
+      service({ 'integration_endpoints.update': { data: [], error: null } }).svc.setEnabled(
+        'ep-1',
+        false,
+      ),
+    ).rejects.toMatchObject(NOT_FOUND);
+    const { stub, svc } = service({
+      'integration_endpoints.update': { data: [{ id: 'ep-1' }], error: null },
+    });
+    await expect(svc.setEnabled('ep-1', false)).resolves.toBeUndefined();
+    expect(stub.chainArgs.get('integration_endpoints.update')).toContainEqual(['id', 'ep-1']);
+  });
+
+  it('removing an endpoint: 0 rows is not found; the row it removed is done', async () => {
+    await expect(
+      service({ 'integration_endpoints.delete': { data: [], error: null } }).svc.remove('ep-1'),
+    ).rejects.toMatchObject(NOT_FOUND);
+    await expect(
+      service({
+        'integration_endpoints.delete': { data: [{ id: 'ep-1' }], error: null },
+      }).svc.remove('ep-1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rotating a secret returns no secret when none was stored, and the stored one when it was', async () => {
+    await expect(
+      service({ 'integration_endpoints.update': { data: [], error: null } }).svc.rotateSecret(
+        'ep-1',
+      ),
+    ).rejects.toMatchObject(NOT_FOUND);
+    const { stub, svc } = service({
+      'integration_endpoints.update': { data: [{ id: 'ep-1' }], error: null },
+    });
+    const { secret } = await svc.rotateSecret('ep-1');
+    expect(secret).toMatch(/^whsec_[0-9a-f]{48}$/);
+    expect(stub.chainArgs.get('integration_endpoints.update')?.[0]?.[0]).toMatchObject({ secret });
+  });
+
+  it('creating an endpoint the database refused (42501) is a refusal, not an internal error', async () => {
+    const { svc } = service({
+      'integration_endpoints.insert': {
+        data: null,
+        error: {
+          code: '42501',
+          message: 'new row violates row-level security policy for table "integration_endpoints"',
+        },
+      },
+    });
+    await expect(
+      svc.create({
+        type: 'webhook',
+        url: 'https://example.com/hook',
+        eventTypes: ['order.created'],
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: INTEGRATION_WRITE_REFUSED });
   });
 });
