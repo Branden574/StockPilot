@@ -793,6 +793,47 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Approver warehouse scope (0416, security slice E): approve_order_request,
+  # approve_partial, close_partial, resume_fulfillment and reopen_picking
+  # refuse a caller without write access to the order's warehouse
+  # (user_can_access_warehouse 'write', the order update policy's term;
+  # 42501 forbidden, hint warehouse_write), so a staff member granted
+  # orders:approve acts only where they work and a viewer granted it
+  # nowhere; owners, admins and managers are unaffected. cancel_order_request
+  # asks it on the approver's path only, decided on the row it locks (the
+  # requester's own pending cancel asks no warehouse), and an order with no
+  # requester account (a public link, a deleted account) is nobody's own
+  # order, so only an approver cancels it; the person who placed an order
+  # cancels it as its requester only while they hold orders:request there
+  # (has_permission: a member removed from the organization, a disabled
+  # account, a revoked member and a portal customer are refused). Every
+  # restated body is production's with its added blocks removed, and taking
+  # each block out lets the refused call through. The two-session proofs are
+  # scripts/db-concurrency/0416_cancel_scope_race.sh; the lock footprint is
+  # scripts/db-concurrency/0416_migration_lock_footprint.sh.
+  supabase/tests/0416_order_functions_warehouse_scope.test.sql
+  # Replacement guards (0425, docket S7a, INV-C7): a replacement order's
+  # lines are fixed for every role: only the workflow columns change, within
+  # their value rules (what was handed over and what came back never go
+  # down, and stay within what was asked and handed over; what was picked
+  # stays within what was asked and what was packed within what was picked,
+  # neither lowered outside picking but by the hand-over), unless an RMA
+  # function holds the transaction-bound flag. The guard reads the line's
+  # order as its owner, only in the line's own organization (and for an API
+  # writer only in one it is a member of), and refuses when it is not there.
+  # The flag, in the lines guard and the header guard (both SECURITY
+  # INVOKER), counts only for postgres and supabase_admin, an allowlist, and
+  # the header guard now also asks it of a replacement's move into cancelled
+  # or denied (the status gate is SECURITY DEFINER and cannot ask the role).
+  # The login and API roles are pinned. Release early, Cancel replacement,
+  # Change replacement, Close the rest and the RMA cancel ask write access to
+  # the replacement's own warehouse before their first row lock, and again
+  # under the replacement's lock. Each restated body is the one before with
+  # its added lines removed, and taking each addition out lets the refused
+  # write or call through. The two-session proofs are
+  # scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh; the lock
+  # footprint is scripts/db-concurrency/0425_migration_lock_footprint.sh.
+  supabase/tests/0425_replacement_guards.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

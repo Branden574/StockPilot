@@ -27,6 +27,14 @@ export interface OrderManagerActionsInput {
   fulfillmentType: string | null | undefined;
   /** can(orders:approve): the effective set, static role defaults while it loads. */
   canApproveOrders: boolean;
+  /** The viewer may write to the ORDER's warehouse (order-warehouse-scope.ts
+   *  orderWarehouseAccess `writes`): every warehouse for an owner, admin or
+   *  manager, the assigned ones for staff, none for a viewer. Security slice
+   *  E (0416): every approval-class action here asks it (the six order
+   *  functions since 0416; the pick slip, packing slips, staging, delivery and
+   *  the hand-over link before), so an approver outside the order's warehouse
+   *  is offered none of them. An assigned driver's own steps do not ask it. */
+  writesOrderWarehouse: boolean;
   /** can(orders:assign_delivery): the permission assignDelivery checks. */
   canAssignDelivery: boolean;
   /** Owner, admin or manager by role: only confirm_physical_signature still
@@ -111,8 +119,9 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
   const st = input.status ?? '';
   const ft = input.fulfillmentType ?? '';
   // Approval-class actions: the effective orders:approve, never for a viewer
-  // (every one of them asks warehouse write, which the app never gives one).
-  const approves = input.canApproveOrders && !input.isViewerRole;
+  // (every one of them asks warehouse write, which the app never gives one),
+  // and only in a warehouse the viewer writes to (slice E).
+  const approves = input.canApproveOrders && !input.isViewerRole && input.writesOrderWarehouse;
   const approver = approves && APPROVER_STATUSES.has(st);
   const driverHere = input.isAssignedDriver && DRIVER_STATUSES.has(st);
   // The web's showActionsPanel audience for these statuses.

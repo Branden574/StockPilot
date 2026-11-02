@@ -813,11 +813,16 @@ select is(
       and not t.tgisinternal),
   'trg_order_requests_notify=CREATE TRIGGER trg_order_requests_notify AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NULL)) EXECUTE FUNCTION _notify_order_request_changes()' || E'\n'
   || 'trg_order_requests_notify_replacement=CREATE TRIGGER trg_order_requests_notify_replacement AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION _notify_replacement_order_changes()' || E'\n'
-  || 'trg_order_requests_zz_replacement_header=CREATE TRIGGER trg_order_requests_zz_replacement_header BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND ((old.warehouse_id IS DISTINCT FROM new.warehouse_id) OR (old.delivery_charter_id IS DISTINCT FROM new.delivery_charter_id) OR (old.created_at IS DISTINCT FROM new.created_at) OR ((old.status = ''backordered''::text) AND (new.status = ''completed''::text))))) EXECUTE FUNCTION tg_order_requests_replacement_header()' || E'\n'
+  -- Re-pinned by S7 (replacement guards): the header guard also covers a
+  -- replacement's move into cancelled or denied, so the role is asked of
+  -- the status gate's flagged edge (the gate is SECURITY DEFINER).
+  || 'trg_order_requests_zz_replacement_header=CREATE TRIGGER trg_order_requests_zz_replacement_header BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND ((old.warehouse_id IS DISTINCT FROM new.warehouse_id) OR (old.delivery_charter_id IS DISTINCT FROM new.delivery_charter_id) OR (old.created_at IS DISTINCT FROM new.created_at) OR ((old.status = ''backordered''::text) AND (new.status = ''completed''::text)) OR ((old.status IS DISTINCT FROM new.status) AND (new.status = ANY (ARRAY[''cancelled''::text, ''denied''::text])))))) EXECUTE FUNCTION tg_order_requests_replacement_header()' || E'\n'
   || 'trg_order_requests_zz_replacement_status=CREATE TRIGGER trg_order_requests_zz_replacement_status BEFORE UPDATE OF status ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND (old.status IS DISTINCT FROM new.status))) EXECUTE FUNCTION tg_order_requests_replacement_status()' || E'\n'
   || 'trg_return_decisions_exchange_requested=CREATE TRIGGER trg_return_decisions_exchange_requested AFTER INSERT ON public.return_decisions FOR EACH ROW WHEN ((new.kind = ''created''::text)) EXECUTE FUNCTION tg_return_decisions_exchange_requested()' || E'\n'
   || 'trg_return_exchange_lines_validate=CREATE TRIGGER trg_return_exchange_lines_validate BEFORE INSERT OR UPDATE ON public.return_exchange_lines FOR EACH ROW EXECUTE FUNCTION tg_return_exchange_lines_validate()' || E'\n'
-  || 'trg_zz_order_request_lines_replacement_guard=CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()' || E'\n'
+  -- Re-pinned by S7 (replacement guards): the lines guard holds for every
+  -- role and fires on UPDATE too (same name, same sort position).
+  || 'trg_zz_order_request_lines_replacement_guard=CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT OR UPDATE ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_ins=CREATE TRIGGER trg_zz_order_requests_replacement_link_ins BEFORE INSERT ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION tg_order_requests_replacement_link()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_upd=CREATE TRIGGER trg_zz_order_requests_replacement_link_upd BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN ((old.replacement_for_return_id IS DISTINCT FROM new.replacement_for_return_id)) EXECUTE FUNCTION tg_order_requests_replacement_link()',
   'A8: the notify split (ordinary orders keep _notify_order_request_changes behind a WHEN; replacements get their own), the gate on status changes of replacements only, the header guard on a replacement''s warehouse, site, created_at and close-partial only (security review F-1), the link guards, the lines guard, the exchange-line validation and the exchange requests logged after the creation (desk check F9), each exactly as pinned');
@@ -1109,12 +1114,17 @@ select is(
     format($q$update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_by = %L where id = %L$q$, :mgr, :'oRepE')),
   'P0001:replacement_waiting_for_return:replacement_waiting_for_return',
   'E3: the replacement''s pick slip is refused while the returned item has not arrived (the return-first gate, brief 23)');
+-- The fixture's backordered replacement line is written as the owner under
+-- the RMA flag, the data-fix path: since S7 (replacement guards) the lines
+-- guard refuses every other writer of a replacement's lines.
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select public.resume_fulfillment(%L)', '03970000-0000-0000-0000-000000000901'),
     format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, replacement_for_return_id)
               values ('03970000-0000-0000-0000-000000000901', %L, %L, 'backordered', 'internal', %L, 'pickup', %L);
+              select set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
               insert into public.order_request_lines (order_request_id, item_id, quantity_requested, quantity_fulfilled)
-              values ('03970000-0000-0000-0000-000000000901', %L, 2, 1)$q$, :orgA, :whA, :req, :'rBq', :gS)),
+              values ('03970000-0000-0000-0000-000000000901', %L, 2, 1);
+              select set_config('stockpilot.return_exchange', '', true)$q$, :orgA, :whA, :req, :'rBq', :gS)),
   'P0001:replacement_waiting_for_return:replacement_waiting_for_return',
   'E4: resuming a backordered replacement re-enters picking through the same gate (resume_fulfillment is the second way into picking)');
 select pg_temp.call_as('authenticated', :mgr, format('select (public.receive_return(%L))->>''status''', :'rE')) as "eRecv" \gset
@@ -2260,13 +2270,40 @@ select is(
        ('public.tg_order_requests_insert_guard()',                'caf69f8a23d03b9bfa6ea87a9cf94077'),
        ('public.tg_order_request_lines_guard()',                  'd899924c0f8fc1dfae4e8be7bd4c5cad'),
        ('public.tg_order_requests_workflow_guard()',              '55bceafc13d599f8d77d6a4180c28140'),
-       ('public.approve_partial(uuid)',                           '40ca0878733b08a649773fe9b7efd4e0'),
-       ('public.cancel_order_request(uuid,text)',                 '535fc49935f15adc8d7dfa78836a06af'),
+       -- Re-pinned by 0416 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0416 R2: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. The replacement issuer calls it only after asking write
+       -- access to the original order's warehouse itself, where it places the replacement.
+       ('public.approve_partial(uuid)',                           '897c53295f88b0bac7dcc03edd07211f'),
+       -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an
+       -- approver's cancel outside the order's warehouses, counts an order with no
+       -- requester account as nobody's own, and gives the requester's cancel only to
+       -- someone who may still place orders in the organization (0416 R6: removing the
+       -- three gives this body exactly); the cancel and its restocks are unchanged. Every
+       -- RMA cancel of a replacement runs as an approver who passed the RMA's own write
+       -- check on the original order's warehouse, where the replacement is placed and the
+       -- header guard keeps it.
+       ('public.cancel_order_request(uuid,text)',                 'dfbd31ed1083df82ae6de3cbb13b6c27'),
        ('public.complete_picking(uuid)',                          'b8f1ef1fb01efa5c04c916c178129541'),
-       ('public.close_partial(uuid)',                             'a519c3e58fb577c3ff1b30fb3a6cc0ad'),
-       ('public.resume_fulfillment(uuid)',                        '2e2d5aab1db5392250879bfa9ff4bccd'),
+       -- Re-pinned by 0416 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0416 R3: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. The RMA cancel and the rest-close call it only after the
+       -- RMA's own write check on the original order's warehouse, where the replacement is
+       -- placed and the header guard keeps it.
+       ('public.close_partial(uuid)',                             '44852737eedc1959e887b8621925d157'),
+       -- Re-pinned by 0416 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0416 R4: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. No RMA function calls it.
+       ('public.resume_fulfillment(uuid)',                        'ce593a9203c41c1a7311b1af27d4cbd3'),
        ('public.hold_order_stock(uuid)',                          '3b0691d604823164daaa7f248616f00f'),
-       ('public.reopen_picking(uuid,text)',                       '14e49293fa670dc2e05a1c1b6930bce5'),
+       -- Re-pinned by 0416 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0416 R5: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. No RMA function calls it.
+       ('public.reopen_picking(uuid,text)',                       'b62fbb68ee0d0eb44a9e641921a757e5'),
        ('public.order_readiness_facts(uuid)',                     '2f3fb057bacda8143377ecd9c2c5e6e2'),
        ('public.order_items_orderable(uuid,uuid[])',              'b4df95d74e32850923a430769f96f246'),
        ('public.assign_order_request_number()',                   '03097df3cded3d0ea42676855abc6a25'),
@@ -2278,7 +2315,10 @@ select is(
        ('public.approve_return(uuid,integer,jsonb,boolean)',      'edf25c49264c74d8597fa87d6260112b'),
        ('public.deny_return(uuid,text)',                          'f94e717d62b1e24df5e46fb83f305e1c'),
        ('public.receive_return(uuid)',                            'c44f3942d4ae1028ed86e6ad305866d0'),
-       ('public.cancel_return(uuid,integer,text)',                '11e8be3e7f3fe7899c6c919311fbf9c1'),
+       -- Re-pinned by S7 (replacement guards; was 11e8be3e7f3fe7899c6c919311fbf9c1): one
+       -- added line asks write access to the live replacement's own warehouse before the
+       -- RMA's row lock (that suite's R1: removing it gives this body exactly).
+       ('public.cancel_return(uuid,integer,text)',                'd3c2d9348a85d9be74aa55b8a8c5f783'),
        ('public.plan_return_dispositions(uuid,jsonb)',            'ba1399f851f4882a3e66b8f4c8763743'),
        ('public.close_return(uuid,jsonb,bigint)',                 'dfdb2be52dfb3be08b42b0cdb6ca2d6e'),
        ('public.return_restock_options(uuid)',                    '22f0eef799df683558507a42ea45a8d8'),
